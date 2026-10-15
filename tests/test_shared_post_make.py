@@ -87,6 +87,7 @@ from flask import g
 
 from app import db
 from app.constants import (
+    COMMUNITY_KIND_VIDEO_CHANNEL,
     POST_TYPE_ARTICLE,
     POST_TYPE_LINK,
     POST_TYPE_VIDEO,
@@ -99,6 +100,7 @@ from app.models import Community, Domain, Post, PostVote, User, utcnow
 from tests.factories import (
     bearer,
     make_community,
+    make_community_member,
     make_domain,
     make_instance,
     make_site,
@@ -850,148 +852,69 @@ def test_a_video_upload_is_refused_when_video_uploads_are_off(db_session):
     assert db.session.query(Post).count() == 0
 
 
-def test_a_video_upload_is_accepted_when_video_uploads_are_enabled(db_session):
-    """`:200`'s true arm -- arc `200->201` -- both conjuncts TRUE.
+def test_a_video_file_outside_a_video_channel_is_refused_even_with_uploads_on(db_session):
+    """Spec A13.6 replaced the extension widening `if type == POST_TYPE_VIDEO and can_upload_video(user)`: a video
+    file is taken only from a moderator of a `video_channel` community whom the switch admits. With the switch on
+    for everyone ('yes') but an ordinary community, the file reaches the image extension list and is refused.
 
-    `allow_video_file_uploads` is set to `'yes'` via `set_setting`, the
-    mechanism this suite already uses (e.g. tests/test_utils_upload_video.py,
-    tests/test_ap_actor_json_group.py:812). `can_upload_video`
-    (app/utils.py:2586-2596) reads that setting through `get_setting`, finds
-    it neither `'no'`, `'user 1'`, `'admins'` nor `'users'`, and falls through
-    to `return True` at `:2596` without ever touching `current_user` -- so
-    this needs no `web_ctx` even though the call happens through the SRC_API
-    arm with no request context. `:201` then extends the allowed list with
-    `.mp4`, so `:203` is false and no exception is raised: this is the
-    positive control for the test above, and together the pair separates
-    `:200`'s two conjuncts, which coverage.py otherwise scores as a single
-    arc pair.
-
-    `edit_post` IS STUBBED TO IDENTITY, for the same `uploaded_file.seek(0)`
-    `AttributeError` reason as `test_an_allowed_image_extension_passes` --
-    the setting is genuinely 'yes' here, so `edit_post`'s own copy of the
-    check (`:464`) would also take the true arm and attempt to actually save
-    and process the fake file.
-
-    The setting IS restored to its actual default, not merely to whatever
-    `get_setting` happened to return before this test ran (final-review
-    MINOR 1, corrected): `get_setting(name, default=None)`
-    (app/utils.py:203-212) returns `default` when no `Settings` row exists,
-    and no such row exists here -- `make_site()` (tests/factories.py) creates
-    only the `Site` row, and `db_session` truncates `Settings` before every
-    test -- so an earlier draft's bare `get_setting('allow_video_file_uploads')`
-    captured `None`, and the `finally` then did
-    `set_setting('allow_video_file_uploads', None)`, which CREATES a row
-    holding the string `"null"`. `can_upload_video` (app/utils.py:2586) reads
-    `get_setting('allow_video_file_uploads', 'no')` -- with that row present
-    its own default is never used, `upload_access` is `None`, none of the
-    four `elif` branches match, and it falls through to `return True`: the
-    "restore" flipped video uploads from off to permanently ON. `original_setting`
-    is therefore captured with the SAME default the call site under test
-    uses (`'no'`), so the `finally` restores the real default rather than
-    inverting it. This was harmless only by coincidence: nothing runs after
-    the `finally` inside this test, and `db_session`'s teardown -- a
-    `DELETE FROM` every table in `db.metadata.sorted_tables`
-    (tests/conftest.py:126-127) including `Settings`, executed via
-    `exec_driver_sql` (tests/conftest.py:191) -- deletes the wrong row before
-    the next test could observe it. `cache.delete_memoized(get_setting)` at
-    `app/utils.py:222` cannot cause staleness either, for a different reason
-    than teardown: the test config sets `CACHE_TYPE = 'NullCache'`
-    (tests/conftest.py:68), so `get_setting`'s `@cache.memoize` is inert and
-    every call already reads the database directly.
-    """
+    `edit_post` IS STUBBED TO IDENTITY, as in the tests above, so the refusal witnessed is `make_post`'s own."""
     s = seed_make_context()
 
-    original_setting = get_setting('allow_video_file_uploads', 'no')
     set_setting('allow_video_file_uploads', 'yes')
     original_edit_post = post_module.edit_post
     post_module.edit_post = lambda *args, **kwargs: args[1]
     try:
-        user_id, post = make_post(_api_input(), s.community, POST_TYPE_VIDEO,
-                                  SRC_API, auth=bearer(s.author),
-                                  uploaded_file=SimpleNamespace(filename='clip.mp4'))
+        with pytest.raises(Exception, match='filetype not allowed'):
+            make_post(_api_input(), s.community, POST_TYPE_VIDEO, SRC_API, auth=bearer(s.author),
+                      uploaded_file=SimpleNamespace(filename='clip.mp4'))
     finally:
         post_module.edit_post = original_edit_post
-        set_setting('allow_video_file_uploads', original_setting)
 
-    assert post.title == 'a title'
-    assert db.session.query(Post).count() == 1
-
+    assert db.session.query(Post).count() == 0
 
 def test_a_video_upload_is_judged_against_the_api_caller(db_session):
-    """F12, fixed. `make_post` called `can_upload_video()` with no user, so
-    under the 'users' policy the token's owner was judged as the ambient
-    `current_user` (anonymous, or absent outside a request) and refused. It
-    now passes the real user. `edit_post` is stubbed as in the tests above."""
+    """F12, kept through A13.6. The permission is the token's owner's, not the ambient `current_user` (anonymous,
+    or absent outside a request): a moderator of a video_channel under the 'users' policy passes, so the
+    extension list is skipped and the bytes decide later. `edit_post` is stubbed as in the tests above."""
     s = seed_make_context()
+    s.community.kind = COMMUNITY_KIND_VIDEO_CHANNEL
+    make_community_member(s.author, s.community, is_moderator=True)
 
-    original_setting = get_setting('allow_video_file_uploads', 'no')
     set_setting('allow_video_file_uploads', 'users')
     original_edit_post = post_module.edit_post
     post_module.edit_post = lambda *args, **kwargs: args[1]
     try:
-        user_id, post = make_post(_api_input(), s.community, POST_TYPE_VIDEO,
-                                  SRC_API, auth=bearer(s.author),
-                                  uploaded_file=SimpleNamespace(filename='clip.mp4'))
+        make_post(_api_input(), s.community, POST_TYPE_VIDEO, SRC_API, auth=bearer(s.author),
+                  uploaded_file=SimpleNamespace(filename='clip.mp4'))
     finally:
         post_module.edit_post = original_edit_post
-        set_setting('allow_video_file_uploads', original_setting)
 
     assert db.session.query(Post).count() == 1
 
-
-def test_a_webm_upload_is_accepted_when_video_uploads_are_enabled(db_session):
-    """`:201`'s full extension list, not just `.mp4`.
-
-    Verified empirically as a real hole (final-review MAJOR 4): mutating
-    `:201` from `allowed_extensions.extend(['.mp4', '.webm', '.mov'])` to
-    `allowed_extensions.extend(['.mp4'])` -- dropping `.webm` and `.mov` --
-    survived all 33 other tests, because none of them uploads anything but a
-    `.mp4` file. This test is a near-copy of
-    `test_a_video_upload_is_accepted_when_video_uploads_are_enabled` above
-    with a `.webm` filename instead, closing that gap; `.mov` is left
-    unwitnessed since one additional extension already distinguishes
-    "the whole list" from "just `.mp4`" and a third near-identical copy would
-    add nothing `.webm` doesn't already prove.
-    """
+def test_a_media_upload_is_not_judged_by_its_extension(db_session):
+    """A13.6: a media upload is checked by its bytes (`sniff_media_mime`), never its name, so a name the image
+    list does not hold passes `make_post`. `edit_post` is stubbed as in the tests above."""
     s = seed_make_context()
+    s.community.kind = COMMUNITY_KIND_VIDEO_CHANNEL
+    make_community_member(s.author, s.community, is_moderator=True)
 
-    original_setting = get_setting('allow_video_file_uploads', 'no')
-    set_setting('allow_video_file_uploads', 'yes')
+    set_setting('allow_video_file_uploads', 'users')
     original_edit_post = post_module.edit_post
     post_module.edit_post = lambda *args, **kwargs: args[1]
     try:
-        user_id, post = make_post(_api_input(), s.community, POST_TYPE_VIDEO,
-                                  SRC_API, auth=bearer(s.author),
-                                  uploaded_file=SimpleNamespace(filename='clip.webm'))
+        user_id, post = make_post(_api_input(), s.community, POST_TYPE_VIDEO, SRC_API, auth=bearer(s.author),
+                                  uploaded_file=SimpleNamespace(filename='clip.bin'))
     finally:
         post_module.edit_post = original_edit_post
-        set_setting('allow_video_file_uploads', original_setting)
 
     assert post.title == 'a title'
     assert db.session.query(Post).count() == 1
 
-
 def test_a_non_video_post_ignores_can_upload_video_even_when_enabled(db_session):
-    """`:200`'s FIRST conjunct taken false, with the SECOND conjunct TRUE --
-    the short-circuit witness `and` requires but `or` would not.
-
-    `type` is POST_TYPE_ARTICLE, not POST_TYPE_VIDEO, so `:200`'s first
-    conjunct is false and Python's `and` never evaluates `can_upload_video()`
-    at all -- yet the setting is forced to `'yes'` anyway, so a mutant that
-    weakened `:200` to `or` (`if type == POST_TYPE_VIDEO or
-    can_upload_video():`) would flip this arm: `.mp4` would join the allowed
-    list for an ARTICLE post and the raise below would not happen. Neither
-    of the two tests above can catch that particular mutation on its own --
-    `test_a_video_upload_is_accepted_when_video_uploads_are_enabled` has
-    `type == POST_TYPE_VIDEO` already true, and
-    `test_a_video_upload_is_refused_when_video_uploads_are_off` has the
-    setting already 'no' -- only holding `type` false and the setting true
-    at once separates `and` from `or`.
-
-    `edit_post` IS STUBBED TO IDENTITY for the same reason as the other
-    raise tests in this group: `edit_post:464` reimplements the identical
-    compound against its own re-derived `type`, so leaving it live would let
-    its copy mask a mutation to `make_post`'s own `:200`.
+    """An ARTICLE post with an `.mp4` is refused with uploads switched on for everyone. Before spec A13.6 this
+    separated `and` from `or` in `if type == POST_TYPE_VIDEO and can_upload_video()`; that widening is gone, and
+    `media_upload_kind` also requires the post type its community's kind takes. `edit_post` is stubbed to identity
+    as in the tests above, so the refusal witnessed is `make_post`'s own.
     """
     s = seed_make_context()
 

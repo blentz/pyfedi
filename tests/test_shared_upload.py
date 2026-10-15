@@ -33,6 +33,7 @@ from app import db
 from app.constants import IMAGE_PIXEL_CAP
 from app.models import File
 from app.shared.upload import process_file_delete, process_upload
+from app.utils import set_setting
 from tests.factories import make_instance, make_user
 from tests.image_samples import MALFORMED_EXIF, assert_no_metadata, jpeg_with_gps_exif, jpeg_with_malformed_exif
 
@@ -141,45 +142,27 @@ class TestExtensionRejection:
                 process_upload(bad)
 
 
-class TestCanUploadVideoGate:
-    """`:22` -- `if user is not None and can_upload_video(user): allowed_extensions.extend(...)`.
+class TestNoVideoThroughProcessUpload:
+    """Spec A13.6: the user-file and API image upload take images only. Video and audio are uploaded with a post,
+    by moderators of media communities, so `process_upload` no longer widens its list for `can_upload_video`."""
 
-    `can_upload_video` is imported by name into app.shared.upload's module
-    globals (`from app.utils import can_upload_video, ...`), so patching
-    `app.utils.can_upload_video` would not intercept the call this module
-    makes -- rebinding must happen on `app.shared.upload.can_upload_video`
-    (global-constraints.md's "Patching: rebind on the module that uses the
-    name").
-    """
-
-    def test_video_extension_rejected_when_user_lacks_permission(self, app, db_session, monkeypatch):
-        monkeypatch.setattr('app.shared.upload.can_upload_video', lambda user: False)
-        instance = make_instance('novideo.test')
-        user = make_user(instance, 'novideoperm', local=True)
+    def test_a_video_extension_is_refused_even_for_a_user_the_switch_admits(self, app, db_session):
+        instance = make_instance('yesvideo.test')
+        user = make_user(instance, 'videoperm', local=True)
+        set_setting('allow_video_file_uploads', 'users')
         with app.app_context():
             video = FileStorage(stream=io.BytesIO(b'not really a video'), filename='clip.mp4')
             with pytest.raises(Exception, match='filetype not allowed'):
                 process_upload(video, user=user)
 
-    def test_video_extension_allowed_when_user_has_permission(self, app, db_session, monkeypatch):
-        """True arm of :22, the VIDEO FALSE ARM of :67's gate (mp4 is recognised
-        by app.utils.is_video_url, so `not is_video_url(...)` is False, the whole
-        conjunction is False, and the Pillow re-encode is SKIPPED -- the same
-        short-circuit TestPillowReencodeGate below names as the video False arm),
-        and the True arm of :112's `if user:` (a real File/user_file row is
-        written).
-        """
-        monkeypatch.setattr('app.shared.upload.can_upload_video', lambda user: True)
-        instance = make_instance('yesvideo.test')
-        user = make_user(instance, 'videoperm', local=True)
+    def test_an_image_from_a_user_is_linked_to_them(self, app, db_session):
+        """The True arm of `if user:`: a File row and its `user_file` link are written."""
+        instance = make_instance('imageuser.test')
+        user = make_user(instance, 'imageuser', local=True)
         before = files_under(MEDIA_ROOT)
         with app.app_context():
-            video = FileStorage(stream=io.BytesIO(b'not really a video, but its extension is allowed'),
-                                filename='clip.mp4')
             try:
-                url = process_upload(video, user=user)
-                assert url.endswith('.mp4')
-
+                url = process_upload(_image(), user=user)
                 file_row = File.query.filter_by(source_url=url).first()
                 assert file_row is not None
                 link = db.session.execute(
@@ -196,10 +179,8 @@ class TestPillowReencodeGate:
 
     The True arm (a plain image) is exercised throughout this file. This
     covers the '.gif' False arm specifically -- the SVG False arm is already
-    covered by tests/test_utils_security.py and the video False arm by
-    TestCanUploadVideoGate above, so each of the gate's three short-circuit
-    reasons has its own witness rather than all three being exercised only in
-    lockstep by one file type.
+    covered by tests/test_utils_security.py. The video False arm is no longer
+    reachable: process_upload refuses video extensions (spec A13.6).
     """
 
     def test_a_gif_upload_skips_the_pillow_reencode(self, app):

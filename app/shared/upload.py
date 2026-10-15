@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from app import db
 from app.models import File, User, user_file, served_path
-from app.utils import can_upload_video, gibberish, ensure_directory_exists, is_video_url, store_files_in_s3, guess_mime_type, sanitize_svg, \
+from app.utils import gibberish, ensure_directory_exists, is_video_url, store_files_in_s3, guess_mime_type, sanitize_svg, \
     save_image_without_metadata
 
 
@@ -58,9 +58,8 @@ def process_upload(image_file, destination='posts', user: User | None = None):
     if not image_file or image_file.filename == '':
         raise Exception('file not uploaded')
 
+    # Images only: video and audio are uploaded with a post, by moderators of media communities (spec A13.6)
     allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.mpo', '.avif', '.svg']
-    if user is not None and can_upload_video(user):
-        allowed_extensions.extend(['.mp4', '.webm', '.mov'])
     file_ext = os.path.splitext(image_file.filename)[1]
     if file_ext.lower() not in allowed_extensions:
         raise Exception('filetype not allowed')

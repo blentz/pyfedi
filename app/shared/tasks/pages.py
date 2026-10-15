@@ -8,6 +8,7 @@ from app.constants import POST_TYPE_LINK, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, PO
 from app.models import Instance, Notification, Poll, PollChoice, Post, User, UserFollower, utcnow, Event, \
     Community, more_info_link
 from app.mentions import mentioned_users_found_by
+from app.shared.media import media_of
 from app.user.utils import search_for_user
 from app.visibility import can_view, follower_instances, followers_only_addressing, is_open
 from app.utils import user_banned_from_community, gibberish, instance_banned, ap_datetime, get_recipient_language, get_task_session, \
@@ -158,6 +159,9 @@ def send_microblog_note(post, user, community, recipients: list, edit: bool) -> 
 
 def send_post(post_id, edit=False, session=None):
     post = session.get(Post, post_id)
+    media = media_of(post)
+    if media is not None and media.get('status') != 'ready':   # spec §5.3: media federates only when ready
+        return
     user = post.author
     community = post.community
 

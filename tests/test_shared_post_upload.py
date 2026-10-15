@@ -93,6 +93,7 @@ message must also assert whether a file exists under `chdir_upload` --
 absent for `:468`, present for `:533`.
 """
 
+import os
 import sys
 from io import BytesIO
 from types import SimpleNamespace
@@ -104,12 +105,16 @@ from werkzeug.datastructures import FileStorage
 
 import app.shared.post as post_module
 from app import db
-from app.constants import IMAGE_PIXEL_CAP, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_VIDEO, SRC_API
+from app.constants import COMMUNITY_KIND_VIDEO_CHANNEL, IMAGE_PIXEL_CAP, POST_STATUS_PROCESSING, POST_TYPE_ARTICLE, \
+    POST_TYPE_IMAGE, POST_TYPE_VIDEO, SRC_API
 from app.models import File
 from app.shared.post import edit_post
 from app.utils import get_setting, set_setting
 from tests.image_samples import MALFORMED_EXIF, assert_no_metadata, jpeg_with_gps_exif, jpeg_with_malformed_exif
+from tests.factories import make_community_member
 from tests.test_shared_post_edit import _api_input, _seed
+
+MEDIA_FIXTURES = os.path.join(os.path.dirname(__file__), 'fixtures', 'media')
 
 
 class _RecordingS3Client:
@@ -426,10 +431,9 @@ def test_a_video_upload_is_refused_when_video_uploads_are_off(db_session, chdir_
     `:465` never runs and `.mp4` stays out of `:463`'s list; `:467` then
     finds `.mp4` not allowed and `:468` raises. A regression dropping the
     `can_upload_video()` conjunct (e.g. `and` weakened so only `type` is
-    checked) would let this through -- see
-    `test_a_video_upload_is_accepted_when_video_uploads_are_enabled` below
-    for the positive control showing `.mp4` IS accepted once the setting is
-    on.
+    checked) would let this through. Since spec A13.6 the setting no longer
+    widens the list at all: `test_a_video_file_is_refused_by_the_image_path_even_with_uploads_on`
+    below shows `.mp4` refused with the setting on too.
 
     No `http_mock`: the raise happens before any network call. No file
     exists afterward, confirming `:468` fired rather than `:533`.
@@ -452,7 +456,7 @@ def test_a_non_video_post_ignores_can_upload_video_even_when_enabled(db_session,
     weakening `:464`'s `and` to `or`: neither
     `test_a_video_upload_is_refused_when_video_uploads_are_off` (setting
     already `'no'`) nor
-    `test_a_video_upload_is_accepted_when_video_uploads_are_enabled` (`type`
+    the former `test_a_video_upload_is_accepted_when_video_uploads_are_enabled` (`type`
     already `POST_TYPE_VIDEO`) can distinguish `and` from `or`, because both
     already take the same branch either way. Here, an `or` would wrongly
     extend `:463`'s list with `.mp4` despite the non-video `type`; the real
@@ -488,80 +492,33 @@ def test_a_non_video_post_ignores_can_upload_video_even_when_enabled(db_session,
     assert written == []
 
 
-def test_a_video_upload_is_accepted_when_video_uploads_are_enabled(db_session, chdir_upload, http_mock):
-    """`:464`'s TRUE arm, arc `464->465` -- both conjuncts TRUE.
-
-    `type` is `POST_TYPE_VIDEO` and the setting is forced to `'yes'`, so
-    `.mp4` joins `:463`'s list and `:467`'s check passes; the call runs to
-    completion instead of raising. Positive control for
-    `test_a_video_upload_is_refused_when_video_uploads_are_off`; together
-    the two separate `:464`'s two conjuncts, which coverage.py otherwise
-    scores as a single arc pair.
-
-    `.mp4` makes `:513`'s `is_video_url(final_place)` True, so the Pillow
-    re-encode at `:514-533` is skipped entirely -- this call never reaches
-    `:533`'s raise, so the file-presence check below is unambiguous: only
-    `:487`'s original save could have produced it. Needs `http_mock` for the
-    same reason as `test_an_allowed_extension_passes`: this call reaches
-    `:601`'s HEAD request in `edit_post`'s shared tail.
-
-    DELIBERATELY NO `post.image_id` ASSERTION. An earlier version of this
-    test asserted `post.image_id is not None` here, which passed only
-    because `http_mock`'s route reports `Content-Type: image/png` for this
-    `.mp4` url -- a deliberate lie needed to keep every full `edit_post`
-    call in this file off the `opengraph_parse` arms (see the module
-    docstring). `:601`'s `is_image_url` classifies on that header via
-    `mime_type_using_head`; a real server serving an actual `.mp4` would
-    answer `video/mp4`, `'.mp4'` is not in `common_image_extensions`,
-    `is_image_url` would be False, `:601`'s arm would never run, and
-    `post.image_id` would stay `None` -- so that assertion would FAIL
-    against a real collaborator. The target arc (`:464`, both conjuncts
-    True) is already soundly witnessed by the file-existence assertion
-    below, which does not depend on the stub's lie. This test's sibling,
-    `test_a_video_upload_skips_image_hashing_even_when_the_endpoint_is_configured`,
-    makes the same call shape and correctly asserts only on its spy and the
-    file, with no `image_id` claim -- that is the pattern this test now
-    follows instead of the stub-propped one.
-    """
-    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+def test_a_video_file_is_refused_by_the_image_path_even_with_uploads_on(db_session, chdir_upload):
+    """Spec A13.6 removed `:464`'s widening (`if type == POST_TYPE_VIDEO and can_upload_video(user)`): a video file
+    is stored only as media, from a moderator of a video_channel creating a post. Everything else reaches the image
+    extension list, so an edit's `.mp4` is refused with uploads switched on for everyone, and nothing is written."""
     s = _seed()
-    original = get_setting('allow_video_file_uploads')
-    try:
-        set_setting('allow_video_file_uploads', 'yes')
+    set_setting('allow_video_file_uploads', 'yes')
+    with pytest.raises(Exception, match='filetype not allowed'):
         edit_post(_api_input(), s.post, POST_TYPE_VIDEO, SRC_API, user=s.user,
                   uploaded_file=make_upload(filename='clip.mp4'))
-    finally:
-        set_setting('allow_video_file_uploads', original)
 
     written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
-    assert len(written) == 1
+    assert written == []
 
 
-def test_a_mov_upload_is_kept_as_a_video(db_session, chdir_upload, http_mock):
-    """D476, fixed. `.mov` was an allowed video upload that `is_video_url` did
-    not recognise, so the bytes went to `Image.open` and a QuickTime container
-    raised `UnidentifiedImageError` out of `edit_post` -- a 500. `.mov` is now a
-    video extension like `.mp4` and `.webm`, so the Pillow block is skipped
-    and the file is saved as uploaded (owner ruling 2026-09-30).
-
-    The bytes are a QuickTime `ftyp` header, not an image, so a regression
-    that sent them to Pillow again would raise rather than pass quietly.
-    """
-    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'video/quicktime'})
+def test_a_mov_upload_never_reaches_pillow(db_session, chdir_upload):
+    """D476's shape, after A13.6. `.mov` reached `Image.open` and a QuickTime container raised
+    `UnidentifiedImageError` -- a 500. The image path no longer takes video at all, so it is refused by name
+    before any bytes are read; an uploaded `.mov` is stored as media (`store_uploaded_media`, sniffed as
+    `video/quicktime`) instead."""
     s = _seed()
     upload = FileStorage(stream=BytesIO(b'\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  '),
                          filename='clip.mov', content_type='video/quicktime')
-    original = get_setting('allow_video_file_uploads')
-    try:
-        set_setting('allow_video_file_uploads', 'yes')
-        edit_post(_api_input(), s.post, POST_TYPE_VIDEO, SRC_API, user=s.user,
-                  uploaded_file=upload)
-    finally:
-        set_setting('allow_video_file_uploads', original)
+    set_setting('allow_video_file_uploads', 'yes')
+    with pytest.raises(Exception, match='filetype not allowed'):
+        edit_post(_api_input(), s.post, POST_TYPE_VIDEO, SRC_API, user=s.user, uploaded_file=upload)
 
-    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
-    assert [p.suffix for p in written] == ['.mov']
-    assert s.post.type == POST_TYPE_VIDEO
+    assert list(chdir_upload.rglob('app/static/media/posts/*/*/*')) == []
 
 
 @pytest.mark.parametrize('name', ['pic.heic', 'pic.heif'])
@@ -584,22 +541,34 @@ def test_a_genuine_heic_upload_is_accepted(db_session, chdir_upload, http_mock, 
     assert len(written) == 1
 
 
-def test_a_video_upload_is_judged_against_the_api_caller(db_session, chdir_upload, http_mock):
-    """F12, fixed. `edit_post` called `can_upload_video()` with no user, so
-    under the 'users' policy an API caller was judged as the anonymous web
-    `current_user` and refused. It now passes the real user."""
-    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+def media_channel_seed(monkeypatch):
+    """`_seed`'s post in a video_channel its author moderates, with uploads open to users and `queue_probe` (whose
+    task Task 5 writes) recorded instead of queued."""
     s = _seed()
-    original = get_setting('allow_video_file_uploads', 'no')
-    try:
-        set_setting('allow_video_file_uploads', 'users')
-        edit_post(_api_input(), s.post, POST_TYPE_VIDEO, SRC_API, user=s.user,
-                  uploaded_file=make_upload(filename='clip.mp4'))
-    finally:
-        set_setting('allow_video_file_uploads', original)
+    s.community.kind = COMMUNITY_KIND_VIDEO_CHANNEL
+    make_community_member(s.user, s.community, is_moderator=True)
+    set_setting('allow_video_file_uploads', 'users')
+    probes = []
+    monkeypatch.setattr(post_module, 'queue_probe', probes.append)
+    s.probes = probes
+    return s
+
+
+def h264_upload():
+    with open(os.path.join(MEDIA_FIXTURES, 'video_h264.mp4'), 'rb') as f:
+        return FileStorage(stream=BytesIO(f.read()), filename='clip.mp4')
+
+
+def test_a_video_upload_is_judged_against_the_api_caller(db_session, chdir_upload, monkeypatch):
+    """F12, kept through A13.6: the permission is the passed user's (`can_upload_media(user, community)`), not the
+    ambient `current_user`, which is absent here. The file is stored as media and the probe queued."""
+    s = media_channel_seed(monkeypatch)
+    edit_post(_api_input(), s.post, POST_TYPE_VIDEO, SRC_API, user=s.user, uploaded_file=h264_upload(),
+              from_scratch=True)
 
     written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
-    assert len(written) == 1
+    assert [p.suffix for p in written] == ['.mp4']
+    assert s.post.status == POST_STATUS_PROCESSING and s.probes == [s.post.id]
 
 
 def test_an_upload_lands_in_the_per_post_media_directory(db_session, chdir_upload, http_mock):
@@ -1073,10 +1042,9 @@ def test_a_gif_path_skips_the_pil_reencode_block(db_session, chdir_upload, http_
     `:513` is `if not X.endswith('.svg') and not X.endswith('.gif') and not
     is_video_url(X):` -- three conditions folded into one arc pair by
     coverage.py. `test_svg_extension_is_sanitized_successfully` above
-    already witnesses the FIRST conjunct's false arm (an `.svg` path) and
-    `test_a_video_upload_is_accepted_when_video_uploads_are_enabled` already
-    witnesses the THIRD (an `.mp4` path taking `is_video_url` True) -- both
-    named here rather than duplicated. This test supplies the missing
+    already witnesses the FIRST conjunct's false arm (an `.svg` path). The
+    THIRD (an `.mp4` path taking `is_video_url` True) is no longer reachable:
+    spec A13.6 keeps video out of the image path. This test supplies the
     SECOND: a genuine `.gif` upload.
 
     `post_module.Image.open` -- the ONLY call site for `Image.open` in this
@@ -1723,49 +1691,21 @@ def test_image_hashing_endpoint_disabled_by_default_skips_hash_retrieval(
 
 
 def test_a_video_upload_skips_image_hashing_even_when_the_endpoint_is_configured(
-        db_session, chdir_upload, http_mock, app, monkeypatch):
-    """`:537`'s FALSE arm via its SECOND conjunct, arc `537->543` -- the
-    other half of the compound's false-arm pair, alongside
-    `test_image_hashing_endpoint_disabled_by_default_skips_hash_retrieval`
-    above.
+        db_session, chdir_upload, app, monkeypatch):
+    """A media upload never reaches the image path, so it is never sent to `IMAGE_HASHING_ENDPOINT` even when one
+    is configured. (Before A13.6 a video went through the image path and was excluded by `:537`'s
+    `not is_video_url(final_place)`.)
 
-    `IMAGE_HASHING_ENDPOINT` is set to a non-empty value here -- the
-    OPPOSITE of the other test's setup -- so this test isolates the SECOND
-    conjunct (`not is_video_url(final_place)`) as what makes `:537` False:
-    a `.mp4` upload makes `is_video_url(final_place)` True, so `not
-    is_video_url(...)` is False regardless of the endpoint. Without a
-    dedicated test for this conjunct, a mutation weakening `:537`'s `and`
-    to `or` could still pass every other test in this file (which either
-    leave the endpoint empty, or upload a non-video file), since neither
-    condition alone would then matter for those inputs.
-
-    Video uploads are enabled via the same `set_setting`/`finally`
-    mechanism as `test_a_video_upload_is_accepted_when_video_uploads_are_enabled`
-    above, restoring the original value afterward.
-
-    `post_module.retrieve_image_hash` is spied and asserted UNCALLED.
-    Positive control:
-    `test_image_hashing_retrieves_a_hash_for_a_configured_endpoint_and_non_video_upload`
-    below shows the SAME spy called once for a non-video upload with the
-    SAME endpoint configured -- ruling out "the spy never installed" or
-    "the patch targeted the wrong name" as explanations for the empty list
-    here (D451 mechanism 3).
+    `post_module.retrieve_image_hash` is spied and asserted UNCALLED. Positive control:
+    `test_image_hashing_retrieves_a_hash_for_a_configured_endpoint_and_non_video_upload` below shows the SAME spy
+    called once for an image upload with the SAME endpoint configured (D451 mechanism 3).
     """
     monkeypatch.setitem(app.config, 'IMAGE_HASHING_ENDPOINT', 'https://hash.example.test')
-
     hash_calls = []
-    monkeypatch.setattr(post_module, 'retrieve_image_hash',
-                        lambda url: hash_calls.append(url))
-
-    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
-    s = _seed()
-    original = get_setting('allow_video_file_uploads')
-    try:
-        set_setting('allow_video_file_uploads', 'yes')
-        edit_post(_api_input(), s.post, POST_TYPE_VIDEO, SRC_API, user=s.user,
-                  uploaded_file=make_upload(filename='clip.mp4'))
-    finally:
-        set_setting('allow_video_file_uploads', original)
+    monkeypatch.setattr(post_module, 'retrieve_image_hash', lambda url: hash_calls.append(url))
+    s = media_channel_seed(monkeypatch)
+    edit_post(_api_input(), s.post, POST_TYPE_VIDEO, SRC_API, user=s.user, uploaded_file=h264_upload(),
+              from_scratch=True)
 
     assert hash_calls == []
     written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
