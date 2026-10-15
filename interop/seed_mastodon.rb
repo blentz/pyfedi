@@ -5,6 +5,8 @@ unless account
                        confirmed_at: Time.now.utc, approved: true, account_attributes: { username: 'bob' })
   account = owner.account
 end
+# approved: true on create is only a registration hint; with approval-required registration the login stays pending
+account.user.approve! unless account.user.approved?
 app = Doorkeeper::Application.find_or_create_by!(name: 'interop') do |a|
   a.redirect_uri = 'urn:ietf:wg:oauth:2.0:oob'
   a.scopes = 'read write follow'
