@@ -47,16 +47,25 @@ def link_hashtags(body_html: str) -> tuple:
     """(html, names): the body with each `#word` in its text nodes linked the way Mastodon marks up a hashtag, and
     the lowercased names in order of first use. Text inside <a>, <code> and <pre> and attribute values are never
     touched. Markup with no hashtag comes back byte for byte."""
+    html, spellings = _link_hashtags(body_html)
+    return html, list(spellings)
+
+
+def body_hashtags(body_html: str) -> dict:
+    """The hashtags link_hashtags finds in `body_html`: lowercased name -> the spelling first used, in order."""
+    return _link_hashtags(body_html)[1]
+
+
+def _link_hashtags(body_html: str) -> tuple:
     soup = BeautifulSoup(body_html, 'html.parser')
-    names = []
+    spellings = {}
     for text in soup.find_all(string=True):
         if type(text) is not NavigableString or text.find_parent(NOT_HASHTAG_PARENTS) is not None:
             continue    # a comment or doctype, or text that is already a link or code
         parts, last = [], 0
         for match in HASHTAG_RE.finditer(str(text)):
             name = match.group(1).lower()
-            if name not in names:
-                names.append(name)
+            spellings.setdefault(name, match.group(1))
             link = soup.new_tag('a', href=_hashtag_href(name), rel='tag')
             link['class'] = 'mention hashtag'
             link.append('#')
@@ -68,7 +77,7 @@ def link_hashtags(body_html: str) -> tuple:
         if parts:
             parts.append(NavigableString(str(text)[last:]))
             text.replace_with(*parts)
-    return (str(soup), names) if names else (body_html, names)
+    return (str(soup), spellings) if spellings else (body_html, spellings)
 
 
 def uses_microblog_note(post) -> bool:

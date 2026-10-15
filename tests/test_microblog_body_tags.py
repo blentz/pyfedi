@@ -86,3 +86,10 @@ def test_a_body_hashtag_longer_than_a_tag_name_is_not_stored(db_session, monkeyp
     longest, too_long = 'a' * 256, 'b' * 257
     _, post = _create(monkeypatch, f'#{longest} #{too_long} #cats')
     assert _names(post) == sorted([longest, 'cats'])
+
+
+def test_a_new_body_tag_keeps_the_spelling_first_used(db_session, monkeypatch):
+    """link_hashtags matches case-blind; the Tag it creates shows #SolarStorm as written, not as solarstorm."""
+    _, post = _create(monkeypatch, 'a #SolarStorm, then #solarstorm')
+    tags = db.session.get(Post, post.id).tags
+    assert [(tag.name, tag.display_as) for tag in tags] == [('solarstorm', 'SolarStorm')]
