@@ -199,3 +199,4 @@ scratch_*
 # Interop harness secrets and tokens
 interop/.env.interop
 interop/.tokens.json
+!tests/fixtures/media/

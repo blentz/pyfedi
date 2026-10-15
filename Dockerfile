@@ -2,6 +2,7 @@
 FROM python:3.14-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
     gcc \
     libc6-dev \
     libpq-dev \
@@ -50,6 +51,7 @@ RUN adduser --disabled-password --gecos "" python
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tini \
+    ffmpeg \
     curl \
     ca-certificates \
     procps \

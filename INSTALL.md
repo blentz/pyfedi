@@ -116,6 +116,7 @@ For installation environments that use 'apt' as a package manager:
 sudo apt install redis-server
 sudo apt install git
 sudo apt install tesseract-ocr
+sudo apt install ffmpeg
 ```
 
 Developers might want to use `ruff` as a pre-commit linter. Install it with `pip install ruff` then use `ruff check` to analyze code.
