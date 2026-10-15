@@ -211,3 +211,18 @@ def test_non_microblog_community_still_uses_page_path(db_session, http_mock):
     send_post(post.id, session=db.session)
     assert any(b['object'].get('type') == 'Note' and b['object']['content'].startswith('<p>Hello</p>')
                for b in _bodies(route) if isinstance(b.get('object'), dict))
+
+
+def test_community_announce_skips_only_the_instance_the_author_blocked(db_session, http_mock, deliveries):
+    alice, community, post = _seed()
+    blocked, carol = _remote('blocked.example', 'lemmy', 'carol')
+    open_instance, dave = _remote('open.example', 'lemmy', 'dave')
+    for member in (carol, dave):
+        db.session.add(CommunityMember(user_id=member.id, community_id=community.id))
+    db.session.commit()
+    make_instance_block(alice, blocked)
+    route = http_mock.post('https://open.example/inbox').respond(202)
+    send_post(post.id, session=db.session)
+    (announce,) = _bodies(route)
+    assert announce['type'] == 'Announce' and announce['actor'] == community.public_url()
+    assert deliveries == ['https://open.example/inbox']
