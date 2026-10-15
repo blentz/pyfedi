@@ -19,7 +19,7 @@ from app.models import Site, utcnow
 from app.utils import getmtime, gibberish, shorten_string, shorten_url, digits, user_access, community_membership, joined_server_views, \
     can_upvote, can_downvote, shorten_number, ap_datetime, current_theme, community_link_to_href, \
     in_sorted_list, role_access, first_paragraph, person_link_to_href, feed_membership, html_to_text, remove_images, \
-    notif_id_to_string, feed_link_to_href, get_setting, set_setting, show_explore, human_filesize, can_upload_video, \
+    notif_id_to_string, feed_link_to_href, get_setting, set_setting, show_explore, human_filesize, can_upload_video, can_upload_audio, \
     debug_checkpoint, compaction_level, humanize_number, round_invisible_digits, get_site_as_dict, localize_datetime, \
     display_back_button, favorite_communities, get_event_start, reply_filter_keyword, user_banned_from_community
 from app.quotes import prime_quotes, quote_state
@@ -63,6 +63,7 @@ def register_request_hooks(app):
     app.jinja_env.globals['can_upvote'] = can_upvote
     app.jinja_env.globals['can_downvote'] = can_downvote
     app.jinja_env.globals['can_upload_video'] = can_upload_video
+    app.jinja_env.globals['can_upload_audio'] = can_upload_audio
     app.jinja_env.globals['show_explore'] = show_explore
     app.jinja_env.globals['in_sorted_list'] = in_sorted_list
     app.jinja_env.globals['theme'] = current_theme

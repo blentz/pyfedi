@@ -478,6 +478,7 @@ class TestAdminFormRoundTrip:
             'csrf_token': token,
             'redirect_policy': REDIRECT_POLICY_TRUSTED_SERVERS,
             'allow_video_file_uploads': 'no',
+            'allow_audio_file_uploads': 'no',
             'default_filter': 'popular',
             'default_theme': 'piefed',
             'registration_mode': 'Open',

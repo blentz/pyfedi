@@ -3861,12 +3861,13 @@ def can_create_post_reply(user, content: Community) -> bool:
     return True
 
 
-def can_upload_video(user: User | None = None):
-    """Checks if the user can upload a video.
+def upload_access_allows(setting: str, user: User | None = None) -> bool:
+    """One rule for every upload switch (spec §5.1): 'no', 'user 1', 'admins' or 'users'.
 
+    :param setting: The name of the Setting that holds the switch.
     :param user: The user to check, e.g. for API contexts. If not provided, uses the current_user from flask_login.
     """
-    upload_access = get_setting('allow_video_file_uploads', 'no')
+    upload_access = get_setting(setting, 'no')
     upload_user = user or current_user
     if upload_access == 'no':
         return False
@@ -3877,6 +3878,19 @@ def can_upload_video(user: User | None = None):
     elif upload_access == 'users' and not upload_user.is_authenticated:
         return False
     return True
+
+
+def can_upload_video(user: User | None = None):
+    """Checks if the user can upload a video.
+
+    :param user: The user to check, e.g. for API contexts. If not provided, uses the current_user from flask_login.
+    """
+    return upload_access_allows('allow_video_file_uploads', user)
+
+
+def can_upload_audio(user: User | None = None):
+    """Checks if the user can upload an audio file. Same rule as `can_upload_video`, its own switch."""
+    return upload_access_allows('allow_audio_file_uploads', user)
 
 
 def reply_already_exists(user_id, post_id, parent_id, body) -> bool:

@@ -610,7 +610,7 @@ def test_jinja_globals_and_filters_are_registered(app):
     expected_globals = {
         'len', 'digits', 'str', 'shorten_number', 'community_membership',
         'feed_membership', 'json_loads', 'user_access', 'role_access',
-        'ap_datetime', 'can_upvote', 'can_downvote', 'can_upload_video',
+        'ap_datetime', 'can_upvote', 'can_downvote', 'can_upload_video', 'can_upload_audio',
         'show_explore', 'in_sorted_list', 'theme', 'file_exists',
         'first_paragraph', 'ngettext', 'html_to_text', 'csrf_token',
         'debug_checkpoint', 'compaction_level', 'humanize_number',

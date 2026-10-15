@@ -384,6 +384,11 @@ def admin_misc():
         set_setting('auto_decline_countries', form.auto_decline_countries.data.strip())
         set_setting('cache_remote_images_locally', form.cache_remote_images_locally.data)
         set_setting('allow_video_file_uploads', form.allow_video_file_uploads.data)
+        set_setting('allow_audio_file_uploads', form.allow_audio_file_uploads.data)
+        if form.max_video_upload_mb.data is not None:
+            set_setting('max_video_upload_bytes', form.max_video_upload_mb.data * 1048576)
+        if form.max_audio_upload_mb.data is not None:
+            set_setting('max_audio_upload_bytes', form.max_audio_upload_mb.data * 1048576)
         set_setting(REDIRECT_POLICY_SETTING, form.redirect_policy.data)
         set_setting('enable_report_em_dash_replies', form.enable_report_em_dash_replies.data)
         set_setting('limit_one_em_report_per_user', form.limit_one_em_report_per_user.data)
@@ -441,6 +446,9 @@ def admin_misc():
         form.honeypot.data = site.honeypot
         form.cache_remote_images_locally.data = get_setting('cache_remote_images_locally', True)
         form.allow_video_file_uploads.data = get_setting('allow_video_file_uploads', 'no')
+        form.allow_audio_file_uploads.data = get_setting('allow_audio_file_uploads', 'no')
+        form.max_video_upload_mb.data = get_setting('max_video_upload_bytes', 524288000) // 1048576
+        form.max_audio_upload_mb.data = get_setting('max_audio_upload_bytes', 209715200) // 1048576
         form.redirect_policy.data = get_setting(REDIRECT_POLICY_SETTING, REDIRECT_POLICY_SAME_ORIGIN)
         form.enable_report_em_dash_replies.data = get_setting('enable_report_em_dash_replies', True)
         form.limit_one_em_report_per_user.data = get_setting('limit_one_em_report_per_user', False)

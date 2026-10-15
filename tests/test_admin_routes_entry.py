@@ -105,7 +105,8 @@ def _valid_misc_payload(language):
             assert field.choices, f'{field.name} has no choices; seed its table'
             data[field.name] = str(field.choices[0][0])
         elif isinstance(field, IntegerField):
-            data[field.name] = '0'
+            # The upload limits are NumberRange(min=1); the rest take 0.
+            data[field.name] = '1' if field.name.endswith('_upload_mb') else '0'
         elif isinstance(field, (StringField, TextAreaField)) and field.name != 'csrf_token':
             data[field.name] = ''
     return data

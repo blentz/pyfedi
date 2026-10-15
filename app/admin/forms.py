@@ -44,6 +44,12 @@ class SiteMiscForm(FlaskForm):
                ]
     allow_video_file_uploads = SelectField(_l('Allow video file uploads'), choices=video_upload_options,
                                            validators=[DataRequired()], render_kw={'class': 'form-select'})
+    allow_audio_file_uploads = SelectField(_l('Allow audio file uploads'), choices=video_upload_options,
+                                           validators=[DataRequired()], render_kw={'class': 'form-select'})
+    max_video_upload_mb = IntegerField(_l('Largest video upload (MB)'),
+                                       validators=[Optional(), NumberRange(min=1, max=10240)])
+    max_audio_upload_mb = IntegerField(_l('Largest audio upload (MB)'),
+                                       validators=[Optional(), NumberRange(min=1, max=10240)])
     redirect_policy_options = [
         (REDIRECT_POLICY_SAME_ORIGIN, _l('This server only (recommended)')),
         (REDIRECT_POLICY_TRUSTED_SERVERS, _l('This server and trusted servers')),
