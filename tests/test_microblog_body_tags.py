@@ -73,12 +73,19 @@ def test_an_edit_keeps_an_explicit_tag_the_body_no_longer_names(db_session, monk
     assert _names(post) == ['cats']
 
 
-def test_the_note_lists_the_stored_tags(db_session, monkeypatch):
+def test_the_note_lists_the_stored_tags_and_no_other_body_word(db_session, monkeypatch):
+    """The Note's tag list is post.tags (A12): a body #word that is not stored -- a post saved before A12, here one
+    whose tag was removed afterwards -- is linked in content and absent from the list."""
     from app.activitypub.serializers import microblog_note
-    _, post = _create(monkeypatch, 'hello #cats', tags='news')
-    tags = [entry['name'] for entry in microblog_note(db.session.get(Post, post.id), [])['tag']
-            if entry['type'] == 'Hashtag']
-    assert sorted(tags) == ['#cats', '#news']
+    _, post = _create(monkeypatch, 'hello #cats and #dogs', tags='news')
+    post = db.session.get(Post, post.id)
+    post.tags = [tag for tag in post.tags if tag.name != 'dogs']
+    db.session.commit()
+
+    note = microblog_note(post, [])
+
+    assert sorted(entry['name'] for entry in note['tag'] if entry['type'] == 'Hashtag') == ['#cats', '#news']
+    assert 'tag/dogs' in note['content']
 
 
 def test_a_body_hashtag_longer_than_a_tag_name_is_not_stored(db_session, monkeypatch):
