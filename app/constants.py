@@ -29,6 +29,12 @@ VISIBILITY_FOLLOWERS = 'followers'
 VISIBILITY_DIRECT = 'direct'
 VISIBILITIES = (VISIBILITY_PUBLIC, VISIBILITY_UNLISTED, VISIBILITY_FOLLOWERS, VISIBILITY_DIRECT)
 
+# Community.kind (spec 2026-10-14 §3.1). Only video_channel is read so far: its Group names the owner Person (§6.2).
+COMMUNITY_KIND_DISCUSSION = 'discussion'
+COMMUNITY_KIND_MICROBLOGS = 'microblogs'
+COMMUNITY_KIND_VIDEO_CHANNEL = 'video_channel'
+COMMUNITY_KIND_PODCAST = 'podcast'
+
 DATETIME_MS_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 # Community subscription levels

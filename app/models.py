@@ -1275,6 +1275,7 @@ class Community(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     name = db.Column(db.String(256), index=True)
     title = db.Column(db.String(256))
+    kind = db.Column(db.String(20), nullable=False, server_default='discussion')   # COMMUNITY_KIND_*
     description = db.Column(db.Text)  # markdown
     description_html = db.Column(db.Text)  # html equivalent of above markdown
     theme = db.Column(db.String(20), default='')
