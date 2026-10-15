@@ -9,6 +9,7 @@ from app import celery, db
 from app.activitypub.signature import signed_get_request, send_post_request
 from app.activitypub.util import actor_json_to_model, canonical_handle, is_user_actor, webfinger_self_link_allowed
 from app.constants import AP_FETCH_ACCEPT, POST_STATUS_REVIEWING
+from app.mentions import stored_user, user_address_parts
 from app.models import User, CommunityMember, Community, Site, BannedInstances, Post, \
     PostVote, ArchivedPostReply, PostReply, UserNote
 from app.shared.tasks import task_selector
@@ -90,38 +91,18 @@ def unsubscribe_from_community(community, user):
 def search_for_user(address: str, allow_fetch: bool = True, retry: bool = False):
     """The user `address` names, fetched through WebFinger when it is not known yet. Only a Celery caller passes
     retry: a request path makes one attempt at each URL and never sleeps (D738/D775)."""
-    if address.startswith('@'):
-        address = address[1:]
-    if '@' in address:
-        # `name, server = address.split('@')` unpacked whatever it was given,
-        # and this address comes from a URL segment or a search box.
-        parts = address.lower().split('@')
-        if len(parts) != 2 or not parts[0] or not parts[1]:
-            return None
-        name, server = parts
-    else:
-        name = address
-        server = ''
-
-    if server:
-        banned = db.session.query(BannedInstances).filter_by(domain=server).first()
-        if banned:
-            reason = f" Reason: {banned.reason}" if banned.reason is not None else ''
-            raise Exception(f"{server} is blocked.{reason}")
-        # `name` and `server` were lowercased above; `address` was not, so
-        # this lookup was case-sensitive and a handle typed with any capital
-        # letter in it found nobody.
-        already_exists = db.session.query(User).filter_by(ap_id=f'{name}@{server}').first()
-    else:
-        already_exists = db.session.query(User).filter_by(user_name=name, ap_id=None).first()
-    
+    already_exists = stored_user(address)   # raises for a banned server
     if already_exists:
         return already_exists
     elif not allow_fetch:
         return None
 
-    if not server:
+    parts = user_address_parts(address)
+    if parts is None or not parts[1]:
         return None
+    name, server = parts
+    if address.startswith('@'):
+        address = address[1:]
 
     # Look up the profile address of the user using WebFinger
     # todo: try, except block around every get_request

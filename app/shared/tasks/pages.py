@@ -7,6 +7,7 @@ from app.constants import POST_TYPE_LINK, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, PO
     POST_TYPE_POLL, MICROBLOG_APPS, NOTIF_MENTION, POST_TYPE_EVENT
 from app.models import Instance, Notification, Poll, PollChoice, Post, User, UserFollower, utcnow, Event, \
     Community, more_info_link
+from app.mentions import mentioned_users_found_by
 from app.user.utils import search_for_user
 from app.visibility import can_view, follower_instances, followers_only_addressing, is_open
 from app.utils import user_banned_from_community, gibberish, instance_banned, ap_datetime, get_recipient_language, get_task_session, \
@@ -15,7 +16,6 @@ from app.utils import user_banned_from_community, gibberish, instance_banned, ap
 from flask import current_app
 from flask_babel import _, force_locale, gettext
 
-import re
 
 
 """ Post JSON format
@@ -96,36 +96,8 @@ def can_deliver_to(user, instance) -> bool:
 
 def mentioned_users(post, allow_fetch=True) -> list:
     """The users a post's body Mentions with @user@instance syntax, once each, leaving out its author."""
-    user = post.author
-    recipients = []
-    if post.body:
-        pattern = r"@([a-zA-Z0-9_.-]*)@([a-zA-Z0-9_.-]*)\b"
-        matches = re.finditer(pattern, post.body)
-        for match in matches:
-            recipient = None
-            if match.group(2) == current_app.config['SERVER_NAME']:
-                user_name = match.group(1)
-                if user_name != user.user_name:
-                    try:
-                        recipient = search_for_user(user_name, allow_fetch=allow_fetch, retry=True)
-                    except:
-                        pass
-            else:
-                ap_id = f"{match.group(1)}@{match.group(2)}"
-                try:
-                    recipient = search_for_user(ap_id, allow_fetch=allow_fetch, retry=True)
-                except:
-                    pass
-            if recipient:
-                add_recipient = True
-                for existing_recipient in recipients:
-                    if ((not recipient.ap_id and recipient.user_name == existing_recipient.user_name) or
-                        (recipient.ap_id and recipient.ap_id == existing_recipient.ap_id)):
-                        add_recipient = False
-                        break
-                if add_recipient:
-                    recipients.append(recipient)
-    return recipients
+    return mentioned_users_found_by(
+        post, lambda address: search_for_user(address, allow_fetch=allow_fetch, retry=True))
 
 
 def reply_recipients(reply, parent, allow_fetch=True) -> list:

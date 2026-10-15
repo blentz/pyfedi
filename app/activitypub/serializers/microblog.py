@@ -114,7 +114,7 @@ def note_attachments(post) -> list:
 
 def microblog_note(post, mentions: list) -> dict:
     """The Note, without @context. `mentions` are the users the body Mentions: the push finds them with fetching
-    allowed, a fetch with it refused (mentioned_users(post, allow_fetch=False)), as for followers-only addressing."""
+    allowed, a fetch with it refused (stored_mentioned_users(post)), as for followers-only addressing."""
     server_url = current_app.config['SERVER_URL']
     addressing = note_addressing(post, mentions)
     content = note_content(post)

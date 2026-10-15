@@ -60,6 +60,7 @@ import urllib.parse
 from app.utils import random_chars, site_language_id, is_hex_color, save_image_without_metadata, \
     refuse_over_remote_thumbnail_cap
 from app.visibility import OPEN_VISIBILITIES, can_view, is_open, post_title_for
+from app.mentions import stored_mentioned_users
 from app.discovery.podcast import ensure_podcast_community, podcast_twin_named_by_other
 from app.interop.workarounds import is_castopod_podcast
 import app as app_pkg
@@ -371,9 +372,7 @@ def post_to_page(post: Post):
     # Spec 2026-10-14 §10 A1: a local microblogs post is a Note, built by the same function send_post pushes with.
     # Mentions are resolved among stored actors only: answering a fetch never fetches.
     if microblog_serializer.uses_microblog_note(post):
-        # cycle: app.shared.tasks.pages imports from app.activitypub
-        from app.shared.tasks.pages import mentioned_users
-        return microblog_serializer.microblog_note(post, mentioned_users(post, allow_fetch=False))
+        return microblog_serializer.microblog_note(post, stored_mentioned_users(post))
     activity_data = {
         "type": "Page",
         "id": post.ap_id,
