@@ -468,3 +468,52 @@ def test_a_block_by_the_author_also_stops_an_announcer_a_local_user_follows(db_s
 
     assert process_microblog_announce(announce(booster.ap_public_url, post.ap_id), 'b3', False) is None
     assert PostBoost.query.filter_by(post_id=post.id).count() == 0
+
+
+def test_a_deleted_post_gets_no_boost(db_session, fetch_spy, log_spy):
+    from app import db
+    from app.activitypub.util import process_microblog_announce
+    from app.models import PostBoost
+    _, booster, post = _local_microblogger_and_follower()
+    post.deleted = True
+    db.session.commit()
+
+    assert process_microblog_announce(announce(booster.ap_public_url, post.ap_id), 'd1', False) is None
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 0
+    assert log_spy[-1][2] == 'Boosted post is deleted or not visible to the announcer'
+
+
+def test_a_followers_only_post_is_not_boosted_even_by_an_accepted_follower(db_session, fetch_spy, log_spy):
+    """can_view reads a viewer's accepted OUTWARD follow (a local user following the author). A remote follower of a
+    local author is an inward row, so can_view is False for them: the boost is refused, which is the safe side."""
+    from app import db
+    from app.activitypub.util import process_microblog_announce
+    from app.constants import VISIBILITY_FOLLOWERS
+    from app.models import PostBoost
+    from app.visibility import can_view
+    _, booster, post = _local_microblogger_and_follower()
+    post.visibility = VISIBILITY_FOLLOWERS
+    db.session.commit()
+    assert not can_view(post, booster.id)
+
+    assert process_microblog_announce(announce(booster.ap_public_url, post.ap_id), 'v1', False) is None
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 0
+    assert log_spy[-1][2] == 'Boosted post is deleted or not visible to the announcer'
+
+
+def test_a_followers_only_post_is_not_boosted_by_a_non_follower_who_passed_another_gate(db_session, fetch_spy, log_spy):
+    from app import db
+    from app.activitypub.util import process_microblog_announce
+    from app.constants import VISIBILITY_FOLLOWERS
+    from app.models import PostBoost
+    elsewhere = make_instance('elsewhere.example')      # first, so a local user's instance_id=1 resolves
+    author = make_user(None, 'alice', local=True)
+    followed = make_user(elsewhere, 'dana')
+    make_follow(make_user(None, 'carol', local=True), followed)    # announcer_is_followed opens the gate
+    post = make_post(make_community(), author, 'https://piefed.example/post/9')
+    post.visibility = VISIBILITY_FOLLOWERS
+    db.session.commit()
+
+    assert process_microblog_announce(announce(followed.ap_public_url, post.ap_id), 'v2', False) is None
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 0
+    assert log_spy[-1][2] == 'Boosted post is deleted or not visible to the announcer'
