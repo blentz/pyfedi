@@ -150,6 +150,8 @@ link posts) use `page`.
 
 (Amended: see §10 A2.)
 
+(Amended: see §10 A7, A8.)
+
 - `type: Note`. `content` is the body HTML only, with no title. `contentMap` is set when the post has a language.
 - Public posts: `to: [as:Public]`, `cc: [author followers collection URL, mentioned actors]`.
 - Followers-only posts: the existing `followers_only_addressing` (Amendment B), unchanged.
@@ -269,6 +271,8 @@ Tests assert no file remains, following the static-tree leak gate (`tests/static
 
 (Amended: see §10 A6.)
 
+(Amended: see §10 A9.)
+
 Recipients are filtered as they are today: `can_deliver_to`, instance bans, user blocks, and
 `local_only`/`private` communities never federate.
 
@@ -296,6 +300,8 @@ or as an `Announce` from the channel. This table changes to match before step 4.
 - A Mastodon follow of a local user is handled by the existing `User` follow handling.
 
 ### 6.4 Inbound interactions
+
+(Amended: see §10 A10.)
 
 These go through the existing handlers, keyed by our object id:
 
@@ -400,3 +406,7 @@ Each step gets its own implementation plan and its own commits, and each ends wi
 - **A4 (§8.1):** the harness tests live in a top-level `interop/` directory, not `tests/interop/`. `tests/conftest.py` blocks all outbound HTTP for everything under `tests/`, and the interop tests need real HTTP.
 - **A5 (§7):** new env `ALLOWED_PRIVATE_NETWORKS`, a comma-separated list of CIDRs, empty by default. `is_refused_address` admits addresses inside these networks. Only the harness sets it, so containers can reach each other on the podman network. Production leaves it unset.
 - **A6 (§6.1):** for microblogs, the author's `Create`/`Update` goes to every follower and mention instance, whether or not that instance also gets the community's `Announce`. Receivers dedupe by object id. Today's cross-dedupe can leave a Mastodon follower with only a boost.
+- **A7 (§4.2):** `sensitive` is true also when `content_warning` is set. This matches `post_to_page` and Mastodon's CW semantics.
+- **A8 (§4.2):** body `#words` in a microblogs post become `Hashtag` tags and are linked in `content`. This is serialization-only; nothing is stored. The rule is the `HASHTAG_RE` regex in `app/activitypub/serializers/microblog.py` (a `#` at the start or after a non-alphanumeric, then a Unicode word that starts with a letter or digit and holds at least one letter, so `#1` is no hashtag), applied to text nodes outside `a`, `code` and `pre`, and deduped against explicit tags.
+- **A9 (§6.1):** the group `Announce` copy sent to threadiverse community followers carries `audience` (the community) on both its inner activity and the inner object, so Lemmy and mbin can file the post. The author's `Create`/`Update`, the microblog `Announce` of the id, and the fetched object carry none.
+- **A10 (§6.4):** an `Announce` of a local post is accepted from an accepted inward follower of its author, unless the author blocked the announcer or the announcer's instance, the post is deleted, or the announcer cannot view it (`can_view`). A followers-only post is therefore never boosted by a remote follower: `can_view` reads outward follows only.
