@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 from app import db
 from app.activitypub.serializers import (microblog_note, note_addressing, note_attachments, note_content,
                                          uses_microblog_note)
+from app.activitypub.serializers.microblog import link_hashtags
 from app.constants import (POST_TYPE_ARTICLE, POST_TYPE_EVENT, POST_TYPE_IMAGE, POST_TYPE_LINK, POST_TYPE_POLL,
                            POST_TYPE_VIDEO, VISIBILITY_FOLLOWERS)
 from app.models import File
@@ -286,11 +287,17 @@ def _hashtags(note):
     return [entry for entry in note['tag'] if entry['type'] == 'Hashtag']
 
 
-def test_body_hashtag_becomes_a_tag_and_is_linked(db_session):
+def _names(body_html):
+    """The hashtags a body holds, as the post create and edit store them in post.tags (§10 A12)."""
+    return link_hashtags(body_html)[1]
+
+
+def test_body_hashtag_is_linked_and_its_tag_comes_from_post_tags(db_session):
+    """A12 replaces A8: the Note's tag list is post.tags; the body is not scanned for it. A post stored before A12,
+    whose body tags were never stored, links them in content and lists none."""
     post = _local(title='Hi', body='x #interop', body_html='<p>x #interop</p>')
     note = microblog_note(post, [])
-    assert _hashtags(note) == [{'type': 'Hashtag', 'href': 'https://test.piefed.local/tag/interop',
-                                'name': '#interop'}]
+    assert _hashtags(note) == []
     assert note['content'] == f'<p>Hi</p><p>x {_hashtag_link("interop")}</p>'
 
 
@@ -317,52 +324,50 @@ def test_hashtag_inside_a_link_or_code_is_ignored(db_session):
     html = ('<p><a href="https://e.example/page#frag">see #linked</a> <code>#coded</code></p>'
             '<pre>#pre</pre><p><img alt="#alt" src="https://e.example/i.png#img"></p>')
     note = microblog_note(_local(title='Hi', body='b', body_html=html), [])
-    assert _hashtags(note) == []
+    assert _names(html) == []
     assert note['content'] == '<p>Hi</p>' + html
 
 
 def test_hashtag_glued_to_a_word_is_ignored(db_session):
-    note = microblog_note(_local(title='Hi', body='a#b', body_html='<p>a#b and 9#c</p>'), [])
-    assert _hashtags(note) == []
+    assert _names('<p>a#b and 9#c</p>') == []
 
 
 def test_hashtag_after_punctuation_counts(db_session):
-    note = microblog_note(_local(title='Hi', body='b', body_html='<p>(#one) "#two", #_no #3</p>'), [])
-    assert [t['name'] for t in _hashtags(note)] == ['#one', '#two']
+    assert _names('<p>(#one) "#two", #_no #3</p>') == ['one', 'two']
 
 
 def test_an_all_digit_hashtag_is_not_a_hashtag(db_session):
     note = microblog_note(_local(title='Hi', body='b', body_html='<p>#1 and #2024</p>'), [])
-    assert _hashtags(note) == []
+    assert _names('<p>#1 and #2024</p>') == []
     assert note['content'] == '<p>Hi</p><p>#1 and #2024</p>'
 
 
 def test_a_hashtag_with_a_letter_among_digits_is_one(db_session):
     note = microblog_note(_local(title='Hi', body='b', body_html='<p>#2024cats #café</p>'), [])
-    assert [t['name'] for t in _hashtags(note)] == ['#2024cats', '#café']
+    assert _names('<p>#2024cats #café</p>') == ['2024cats', 'café']
     assert _hashtag_link('2024cats') in note['content'] and _hashtag_link('café') in note['content']
 
 
 def test_hashtags_differing_in_case_are_one_tag_and_both_linked(db_session):
     post = _local(title='Hi', body='b', body_html='<p>#Foo then #foo</p>')
     note = microblog_note(post, [])
-    assert [t['name'] for t in _hashtags(note)] == ['#foo']
+    assert _names(post.body_html) == ['foo']
     assert _hashtag_link('foo', 'Foo') in note['content'] and _hashtag_link('foo') in note['content']
 
 
 def test_unicode_hashtag(db_session):
     note = microblog_note(_local(title='Hi', body='b', body_html='<p>#Café!</p>'), [])
-    assert [t['name'] for t in _hashtags(note)] == ['#café']
+    assert _names('<p>#Café!</p>') == ['café']
     assert _hashtag_link('café', 'Café') + '!' in note['content']
 
 
-def test_hashtag_matching_an_explicit_tag_adds_no_second_entry(db_session):
+def test_the_tag_list_is_post_tags_only(db_session):
     from app.models import Tag
     post = _local(title='Hi', body='b', body_html='<p>#Interop and #other</p>')
     post.tags.append(Tag(name='interop'))
     db.session.commit()
     note = microblog_note(post, [])
-    assert [t['name'] for t in _hashtags(note)] == ['#interop', '#other']
+    assert [t['name'] for t in _hashtags(note)] == ['#interop']
     assert note['tag'][0]['href'] == 'https://test.piefed.local/tag/interop'
 
 
@@ -372,5 +377,4 @@ def test_title_only_post_has_no_derived_tags(db_session):
 
 
 def test_html_comment_is_not_scanned(db_session):
-    note = microblog_note(_local(title='Hi', body='b', body_html='<p>x</p><!-- #hidden -->'), [])
-    assert _hashtags(note) == []
+    assert _names('<p>x</p><!-- #hidden -->') == []
