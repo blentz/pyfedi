@@ -1,0 +1,114 @@
+{
+    "@context": [
+        "https://www.w3.org/ns/activitystreams",
+        {
+            "ostatus": "http://ostatus.org#",
+            "atomUri": "ostatus:atomUri",
+            "inReplyToAtomUri": "ostatus:inReplyToAtomUri",
+            "conversation": "ostatus:conversation",
+            "sensitive": "as:sensitive",
+            "toot": "http://joinmastodon.org/ns#",
+            "votersCount": "toot:votersCount",
+            "quote": {
+                "@id": "https://w3id.org/fep/044f#quote",
+                "@type": "@id"
+            },
+            "quoteUri": "http://fedibird.com/ns#quoteUri",
+            "_misskey_quote": "https://misskey-hub.net/ns#_misskey_quote",
+            "quoteAuthorization": {
+                "@id": "https://w3id.org/fep/044f#quoteAuthorization",
+                "@type": "@id"
+            },
+            "gts": "https://gotosocial.org/ns#",
+            "interactionPolicy": {
+                "@id": "gts:interactionPolicy",
+                "@type": "@id"
+            },
+            "canQuote": {
+                "@id": "gts:canQuote",
+                "@type": "@id"
+            },
+            "automaticApproval": {
+                "@id": "gts:automaticApproval",
+                "@type": "@id"
+            },
+            "manualApproval": {
+                "@id": "gts:manualApproval",
+                "@type": "@id"
+            },
+            "blurhash": "toot:blurhash",
+            "focalPoint": {
+                "@container": "@list",
+                "@id": "toot:focalPoint"
+            },
+            "Hashtag": "as:Hashtag"
+        }
+    ],
+    "id": "https://mastodon.test/ap/users/117442380804252808/statuses/117442451885974957",
+    "type": "Note",
+    "summary": "cw text",
+    "inReplyTo": null,
+    "published": "2026-10-15T02:00:00Z",
+    "url": "https://mastodon.test/@bob/117442451885974957",
+    "attributedTo": "https://mastodon.test/ap/users/117442380804252808",
+    "to": [
+        "https://www.w3.org/ns/activitystreams#Public"
+    ],
+    "cc": [
+        "https://mastodon.test/ap/users/117442380804252808/followers"
+    ],
+    "sensitive": true,
+    "atomUri": "https://mastodon.test/ap/users/117442380804252808/statuses/117442451885974957",
+    "inReplyToAtomUri": null,
+    "conversation": "https://mastodon.test/contexts/117442380804252808-117442451885974957",
+    "context": "https://mastodon.test/contexts/117442380804252808-117442451885974957",
+    "content": "<p>Hello from bob <a href=\"https://mastodon.test/tags/fixture\" class=\"mention hashtag\" rel=\"tag\">#<span>fixture</span></a></p>",
+    "contentMap": {
+        "en": "<p>Hello from bob <a href=\"https://mastodon.test/tags/fixture\" class=\"mention hashtag\" rel=\"tag\">#<span>fixture</span></a></p>"
+    },
+    "interactionPolicy": {
+        "canQuote": {
+            "automaticApproval": [
+                "https://www.w3.org/ns/activitystreams#Public"
+            ]
+        }
+    },
+    "attachment": [
+        {
+            "type": "Document",
+            "mediaType": "image/png",
+            "url": "https://mastodon.test/system/media_attachments/files/117/442/451/682/121/765/original/624846f6e1923702.png",
+            "name": "a red square",
+            "blurhash": "U2TI:j|cfQ|c|cjtfQjtfQfQfQfQ|cjtfQjt",
+            "width": 4,
+            "height": 4
+        }
+    ],
+    "tag": [
+        {
+            "type": "Hashtag",
+            "href": "https://mastodon.test/tags/fixture",
+            "name": "#fixture"
+        }
+    ],
+    "replies": {
+        "id": "https://mastodon.test/ap/users/117442380804252808/statuses/117442451885974957/replies",
+        "type": "Collection",
+        "first": {
+            "type": "CollectionPage",
+            "next": "https://mastodon.test/ap/users/117442380804252808/statuses/117442451885974957/replies?only_other_accounts=true&page=true",
+            "partOf": "https://mastodon.test/ap/users/117442380804252808/statuses/117442451885974957/replies",
+            "items": []
+        }
+    },
+    "likes": {
+        "id": "https://mastodon.test/ap/users/117442380804252808/statuses/117442451885974957/likes",
+        "type": "Collection",
+        "totalItems": 0
+    },
+    "shares": {
+        "id": "https://mastodon.test/ap/users/117442380804252808/statuses/117442451885974957/shares",
+        "type": "Collection",
+        "totalItems": 0
+    }
+}
