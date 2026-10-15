@@ -150,7 +150,7 @@ link posts) use `page`.
 
 (Amended: see §10 A2.)
 
-(Amended: see §10 A7, A8.)
+(Amended: see §10 A7, A8, A12.)
 
 - `type: Note`. `content` is the body HTML only, with no title. `contentMap` is set when the post has a language.
 - Public posts: `to: [as:Public]`, `cc: [author followers collection URL, mentioned actors]`.
@@ -340,7 +340,7 @@ community.
   may delete them (§6.1). `moderators` keeps the moderators collection URL. PieFed reads moderators from
   `moderators` when `attributedTo` is not a string. Lemmy 0.19 parses this list as its PeerTube form and then
   has no moderators URL.
-- (Amended: see §10 A11.) The `Accept` (or `Reject`) of a `Follow` of a `video_channel` community goes to the
+- (Amended: see §10 A11, A12.) The `Accept` (or `Reject`) of a `Follow` of a `video_channel` community goes to the
   follower's own `inbox`, not to its shared inbox. PeerTube ignores an `Accept` that arrives at its shared inbox,
   so the subscription stays pending. Today PieFed stores only the shared inbox of a remote user and sends the
   `Accept` there.
@@ -354,7 +354,7 @@ community.
 
 ### 6.4 Inbound interactions
 
-(Amended: see §10 A10.)
+(Amended: see §10 A10, A12.)
 
 These go through the existing handlers, keyed by our object id:
 
@@ -464,7 +464,7 @@ Each step gets its own implementation plan and its own commits, and each ends wi
 - **A5 (§7):** new env `ALLOWED_PRIVATE_NETWORKS`, a comma-separated list of CIDRs, empty by default. `is_refused_address` admits addresses inside these networks. Only the harness sets it, so containers can reach each other on the podman network. Production leaves it unset.
 - **A6 (§6.1):** for microblogs, the author's `Create`/`Update` goes to every follower and mention instance, whether or not that instance also gets the community's `Announce`. Receivers dedupe by object id. Today's cross-dedupe can leave a Mastodon follower with only a boost.
 - **A7 (§4.2):** `sensitive` is true also when `content_warning` is set. This matches `post_to_page` and Mastodon's CW semantics.
-- **A8 (§4.2):** body `#words` in a microblogs post become `Hashtag` tags and are linked in `content`. This is serialization-only; nothing is stored. The rule is the `HASHTAG_RE` regex in `app/activitypub/serializers/microblog.py` (a `#` at the start or after a non-alphanumeric, then a Unicode word that starts with a letter or digit and holds at least one letter, so `#1` is no hashtag), applied to text nodes outside `a`, `code` and `pre`, and deduped against explicit tags.
+- **A8 (§4.2), replaced by A12:** body `#words` in a microblogs post become `Hashtag` tags and are linked in `content`. This is serialization-only; nothing is stored. The rule is the `HASHTAG_RE` regex in `app/activitypub/serializers/microblog.py` (a `#` at the start or after a non-alphanumeric, then a Unicode word that starts with a letter or digit and holds at least one letter, so `#1` is no hashtag), applied to text nodes outside `a`, `code` and `pre`, and deduped against explicit tags.
 - **A9 (§6.1):** the group `Announce` copy sent to threadiverse community followers carries `audience` (the community) on both its inner activity and the inner object, so Lemmy and mbin can file the post. The author's `Create`/`Update`, the microblog `Announce` of the id, and the fetched object carry none.
 - **A10 (§6.4):** an `Announce` of a local post is accepted from an accepted inward follower of its author, unless the author blocked the announcer or the announcer's instance, the post is deleted, or the announcer cannot view it (`can_view`). A followers-only post is therefore never boosted by a remote follower: `can_view` reads outward follows only.
 - **A11 (§4.3, §6.1, §6.2, §6.4), PeerTube spike (step 2), approved by the owner 2026-10-15, including its rulings (owner `Person` is `Community.user_id`, titles cut to 120 characters, author-signed `Create(Video)` with no `Announce`, owner-signed `Delete`):** PeerTube v8.3.1 shows a PieFed
@@ -480,6 +480,26 @@ Each step gets its own implementation plan and its own commits, and each ends wi
   - Inbound comments, likes and dislikes already work, and `View` is ignored. PeerTube's reused rating ids make
     PieFed drop a repeated like as a duplicate (§6.4).
   - Evidence: §11.
+- **A12 (§4.2, §6.2, §6.4), owner rulings 2026-10-15:**
+  - **Boosts (§6.4, amends A10):** an `Announce` of a post this instance holds is recorded only when the post is
+    public or unlisted (`is_open`). A followers-only post is never boosted, whoever the announcer is. `can_view` is
+    not the test: it admits the post's author and the users the post Mentions. Refused announces log
+    `Boosted post is not public`; a deleted post logs `Boosted post is deleted`.
+  - **Follow answers (§6.2, widens A11):** the `Accept` or `Reject` of every `Follow` goes to the follower
+    actor's own `inbox`: follows of a community, a feed or a local user, answered on receipt or by hand. A remote
+    user's own inbox is stored in `user.ap_own_inbox_url`, beside the shared inbox in `ap_inbox_url`, under the
+    same own-host rule. It is stored when the actor is created, and for an actor stored earlier on its next
+    refresh; there is no bulk backfill. Until then the answer goes to `ap_inbox_url`. Everything else is still
+    delivered to the shared inbox. Mastodon and Lemmy accept either inbox; PeerTube only the actor's own.
+    `Community.kind` (§3.1) lands with this change, because the §6.2 `attributedTo` rule of a `video_channel`
+    community is what lets PeerTube subscribe at all. Only the column and its constants are added: no form sets
+    the kind yet, and the microblogs row is not marked (step 4).
+  - **Hashtags (§4.2, replaces A8):** when a local post in the microblogs community is created or edited, each
+    body `#word` is stored in `post.tags`, beside the explicit tags and once per name. The words are the ones
+    A8's `HASHTAG_RE` rule links in `content` (`link_hashtags`). An edit recomputes them, so a word taken out of
+    the body drops its tag unless it is also an explicit tag. The Note's `tag` list is built from `post.tags`
+    only; nothing is derived from the body at serialization. Content linking is unchanged. Posts written before
+    A12 are not backfilled.
 
 ## 11. Evidence: PeerTube spike (2026-10-15)
 
