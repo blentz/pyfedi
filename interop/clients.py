@@ -91,3 +91,29 @@ class PieFed:
 
     def replies(self, post_id):
         return self.http.get('/comment/list', params={'post_id': post_id}).raise_for_status().json()['comments']
+
+
+class PeerTube:
+    """REST API v1 routes as PeerTube v8.3 documents them (https://docs.joinpeertube.org/api-rest-reference.html)."""
+
+    def __init__(self, token):
+        self.http = httpx.Client(base_url='https://peertube.test/api/v1', verify=ssl.create_default_context(cafile=CA),
+                                 timeout=10, headers={'Authorization': f'Bearer {token}'})
+
+    def me(self):
+        return self.http.get('/users/me').raise_for_status().json()
+
+    def subscribe(self, handle):
+        """Subscribe to a channel by handle (`name@host`); PeerTube resolves it by webfinger and sends Follow."""
+        self.http.post('/users/me/subscriptions', json={'uri': handle}).raise_for_status()
+
+    def subscription(self, handle):
+        r = self.http.get(f'/users/me/subscriptions/{handle}')
+        return None if r.status_code == 404 else r.raise_for_status().json()
+
+    def channel_videos(self, handle):
+        return self.http.get(f'/video-channels/{handle}/videos').raise_for_status().json()['data']
+
+    def video(self, video_id):
+        r = self.http.get(f'/videos/{video_id}')
+        return None if r.status_code == 404 else r.raise_for_status().json()

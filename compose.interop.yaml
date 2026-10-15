@@ -1,5 +1,5 @@
-# Interop harness (spec 2026-10-14 §8.1): PieFed built from this tree, and Mastodon, behind Caddy with an internal
-# CA on *.test names. Run via interop/run.sh, never by hand. Nothing here is published to the host network.
+# Interop harness (spec 2026-10-14 §8.1): PieFed built from this tree, Mastodon and PeerTube, behind Caddy with an
+# internal CA on *.test names. Run via interop/run.sh, never by hand. Nothing here is published to the host network.
 x-trust: &trust
   volumes:
     - caddy-data:/caddy-data:ro
@@ -18,7 +18,7 @@ services:
       - caddy-data:/data
     networks:
       interop:
-        aliases: [piefed.test, mastodon.test]
+        aliases: [piefed.test, mastodon.test, peertube.test]
 
   piefed-db:
     image: docker.io/library/postgres:17.11@sha256:3cec7eb015ba8adb28139fa5c83b8489cdf0e666e53dfdf20f598ae0cc8739e3
@@ -71,8 +71,53 @@ services:
     <<: *trust
     image: ghcr.io/mastodon/mastodon:v4.5@sha256:c64a30678a0e6591d7dbcb0924b4aa98eb1fe54ced5b8fe558449d00915bdb42
     entrypoint: ["/trust_ca.sh"]
-    command: ["bundle", "exec", "sidekiq"]
+    # depends_on only orders the starts: wait (at most 180s) until mastodon-web has finished db:prepare and serves
+    # /health, or sidekiq boots against a half-migrated database and exits
+    command:
+      - bash
+      - -c
+      - >-
+        for i in $$(seq 1 180); do
+        ruby -rnet/http -e 'exit Net::HTTP.start("mastodon-web", 3000) { |h| h.get("/health", "Host" => "mastodon.test") }.is_a?(Net::HTTPSuccess)' 2>/dev/null
+        && exec bundle exec sidekiq; sleep 1; done; echo "mastodon-web never became healthy" >&2; exit 1
     depends_on: [mastodon-web]
+
+  peertube-db:
+    image: docker.io/library/postgres:17.11@sha256:3cec7eb015ba8adb28139fa5c83b8489cdf0e666e53dfdf20f598ae0cc8739e3
+    environment: {POSTGRES_USER: peertube, POSTGRES_PASSWORD: peertube, POSTGRES_DB: peertube}
+    tmpfs: [/var/lib/postgresql/data]
+    networks: [interop]
+
+  peertube-redis:
+    image: docker.io/library/redis:8.10@sha256:6e9101032a2126aeeb4b1e862ac77d2fcf26b831ae37e5ff2e69169f82ddd411
+    networks: [interop]
+
+  peertube-web:
+    <<: *trust
+    # v8.3.1 (production-trixie), the newest stable release on 2026-10-15
+    image: docker.io/chocobozzz/peertube:v8.3.1-trixie@sha256:1f161d08b113d77410b8051f764d16a05267692f3b0a3a7b2f0cf887f80ed082
+    environment:
+      PEERTUBE_WEBSERVER_HOSTNAME: peertube.test
+      PEERTUBE_WEBSERVER_PORT: "443"
+      PEERTUBE_WEBSERVER_HTTPS: "true"
+      PEERTUBE_TRUST_PROXY: '["loopback", "uniquelocal"]'   # Caddy reaches it from 10.90.0.0/16
+      PEERTUBE_DB_HOSTNAME: peertube-db
+      PEERTUBE_DB_USERNAME: peertube
+      PEERTUBE_DB_PASSWORD: peertube
+      PEERTUBE_REDIS_HOSTNAME: peertube-redis
+      PEERTUBE_ADMIN_EMAIL: root@peertube.test
+      PT_INITIAL_ROOT_PASSWORD: interop-root-pw
+      PEERTUBE_FEDERATION_PREVENT_SSRF: "false"   # harness only: every peer is on the private 10.90.0.0/16
+      PEERTUBE_RATES_LIMIT_API_MAX: "100000"
+      PEERTUBE_RATES_LIMIT_LOGIN_MAX: "100000"
+      PEERTUBE_RATES_LIMIT_ACTIVITY_PUB_MAX: "100000"
+      PEERTUBE_PLUGINS_INDEX_ENABLED: "false"
+      PEERTUBE_PEERTUBE_CHECK_LATEST_VERSION_ENABLED: "false"
+      NODE_EXTRA_CA_CERTS: /caddy-data/harness-root.crt   # Node ignores SSL_CERT_FILE; trust_ca.sh waits for this file
+    # trust_ca.sh first, then the image's own entrypoint (which drops to user peertube) and command
+    entrypoint: ["/trust_ca.sh", "/usr/local/bin/entrypoint.sh"]
+    command: ["node", "dist/server"]
+    depends_on: [caddy, peertube-db, peertube-redis]
 
   interop-runner:
     <<: *trust

@@ -1,11 +1,16 @@
 import pytest
 
-from interop.clients import Mastodon, PieFed, tokens, wait_for
+from interop.clients import Mastodon, PeerTube, PieFed, tokens, wait_for
 
 
 @pytest.fixture(scope='session')
 def mastodon():
     return Mastodon(tokens()['mastodon_bob'])
+
+
+@pytest.fixture(scope='session')
+def peertube():
+    return PeerTube(tokens()['peertube_carol'])
 
 
 @pytest.fixture(scope='session')

@@ -2,8 +2,8 @@
 # Generate interop/.env.interop (gitignored) with fresh secrets. Idempotent.
 set -euo pipefail
 cd "$(dirname "$0")"
-[ -f .env.interop ] && exit 0
 hex() { openssl rand -hex "$1"; }
+if [ ! -f .env.interop ]; then
 cat > .env.interop <<EOT
 # PieFed
 SERVER_NAME=piefed.test
@@ -29,3 +29,8 @@ ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY=$(hex 16)
 ALLOWED_PRIVATE_ADDRESSES=10.90.0.0/16
 EOT
 echo "gen_env: wrote interop/.env.interop (VAPID keys are added by run.sh up)"
+fi
+# PeerTube joined the harness later: add its secret to an older .env.interop too
+if ! grep -q '^PEERTUBE_SECRET=' .env.interop; then
+    printf '# PeerTube\nPEERTUBE_SECRET=%s\n' "$(hex 32)" >> .env.interop
+fi
