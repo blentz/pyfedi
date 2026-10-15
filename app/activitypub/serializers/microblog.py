@@ -4,7 +4,7 @@ from urllib.parse import urlsplit
 from flask import current_app
 from markupsafe import escape
 
-from app.activitypub.util import post_count_collections
+import app.activitypub.util as activitypub_util   # the module: app.activitypub.util imports this one
 from app.constants import POST_TYPE_EVENT, POST_TYPE_IMAGE, POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO
 from app.utils import ap_datetime, guess_mime_type, html_to_text, is_local_microblogs
 from app.visibility import followers_only_addressing, is_open
@@ -103,7 +103,7 @@ def microblog_note(post, mentions: list) -> dict:
     if post.edited_at is not None:
         note['updated'] = ap_datetime(post.edited_at)
     if is_open(post):
-        note.update(post_count_collections(post))
+        note.update(activitypub_util.post_count_collections(post))
         if post.indexable:
             note['searchableBy'] = PUBLIC
     return note

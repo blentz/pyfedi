@@ -55,6 +55,7 @@ from app.utils import strip_quote_fallback, FETCH_MAX_BYTES, get_request, get_re
     moderating_communities_ids_all_users
 import app.activitypub.actor as activitypub_actor
 import app.discovery.credits as discovery_credits   # the module: app.discovery.credits imports this one
+import app.activitypub.serializers.microblog as microblog_serializer   # the module: it imports this one
 import urllib.parse
 from app.utils import random_chars, site_language_id, is_hex_color, save_image_without_metadata, \
     refuse_over_remote_thumbnail_cap
@@ -367,6 +368,12 @@ def comment_count_collections(reply: PostReply) -> dict:
 
 
 def post_to_page(post: Post):
+    # Spec 2026-10-14 §10 A1: a local microblogs post is a Note, built by the same function send_post pushes with.
+    # Mentions are resolved among stored actors only: answering a fetch never fetches.
+    if microblog_serializer.uses_microblog_note(post):
+        # cycle: app.shared.tasks.pages imports from app.activitypub
+        from app.shared.tasks.pages import mentioned_users
+        return microblog_serializer.microblog_note(post, mentioned_users(post, allow_fetch=False))
     activity_data = {
         "type": "Page",
         "id": post.ap_id,
