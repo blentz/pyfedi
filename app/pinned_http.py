@@ -18,6 +18,7 @@ fetch for as long as it liked.
 This module imports nothing from app, so app/__init__.py can build its client with it.
 """
 import ipaddress
+import os
 import socket
 import threading
 import time
@@ -28,11 +29,25 @@ import httpx
 from flask import current_app, has_app_context
 
 
+def parse_networks(value: str) -> tuple:
+    """The networks a comma-separated CIDR list names. A malformed entry raises ValueError, so a typo in
+    ALLOWED_PRIVATE_NETWORKS stops the process at import instead of silently admitting nothing (spec §10 A5)."""
+    return tuple(ipaddress.ip_network(part.strip(), strict=False) for part in value.split(',') if part.strip())
+
+
+# Private networks this instance may fetch from anyway: set only by the interop harness (compose.interop.yaml),
+# whose containers reach each other on a podman network. Unset in production.
+ALLOWED_PRIVATE_NETWORKS = parse_networks(os.environ.get('ALLOWED_PRIVATE_NETWORKS', ''))
+
+
 def is_refused_address(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """An address this instance does not fetch from. D1358: `not ip.is_global` alone
     lets IPv4-compatible and NAT64 spellings of loopback and private addresses through
     (`is_reserved` covers them) and multicast (`is_multicast`). IPv6 site-local (fec0::/10) is deprecated but still
-    routed to a site's own hosts where configured, and ipaddress calls it global (`is_site_local`)."""
+    routed to a site's own hosts where configured, and ipaddress calls it global (`is_site_local`).
+    An address inside ALLOWED_PRIVATE_NETWORKS is admitted."""
+    if any(ip in network for network in ALLOWED_PRIVATE_NETWORKS):
+        return False
     return not ip.is_global or ip.is_reserved or ip.is_multicast or getattr(ip, 'is_site_local', False)
 
 
