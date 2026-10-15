@@ -153,9 +153,13 @@ def send_microblog_note(post, user, community, recipients: list, edit: bool) -> 
     if not followers_only:
         announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
         inner = {key: value for key, value in activity.items() if key != '@context'}
-        group_announce = {'id': announce_id, 'type': 'Announce', 'actor': community.public_url(), 'object': inner,
-                          'to': note['to'], 'cc': [community.ap_followers_url], '@context': default_context()}
-        microblog_announce = dict(group_announce, object=post.ap_id)
+        microblog_announce = {'id': announce_id, 'type': 'Announce', 'actor': community.public_url(),
+                              'object': post.ap_id, 'to': note['to'], 'cc': [community.ap_followers_url],
+                              '@context': default_context()}
+        # Lemmy and mbin file a post by its audience: only the copy for them names the community (spec §10 A9)
+        audience = community.public_url()
+        group_announce = dict(microblog_announce,
+                              object=dict(inner, audience=audience, object=dict(note, audience=audience)))
         for instance in community.following_instances():
             if not can_deliver_to(user, instance):
                 continue
