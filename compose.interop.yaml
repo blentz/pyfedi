@@ -34,6 +34,8 @@ services:
     <<: *trust
     environment:
       DATABASE_URL: postgresql+psycopg2://piefed:piefed@piefed-db/piefed   # not in .env.interop: Mastodon reads DATABASE_URL too
+      LOG_ACTIVITYPUB_TO_DB: "1"   # inbound activities and why they were ignored land in activity_pub_log
+      RATELIMIT_ENABLED: "False"   # the alpha API allows 3 posts a minute; the suite posts one per test
     build: {context: ., target: runtime}
     image: localhost/piefed-interop:latest
     entrypoint: ["/trust_ca.sh", "/usr/bin/tini", "--", "/app/entrypoint.sh"]
@@ -42,6 +44,7 @@ services:
   piefed-celery:
     <<: *trust
     environment:
+      LOG_ACTIVITYPUB_TO_DB: "1"
       DATABASE_URL: postgresql+psycopg2://piefed:piefed@piefed-db/piefed   # not in .env.interop: Mastodon reads DATABASE_URL too
     image: localhost/piefed-interop:latest
     entrypoint: ["/trust_ca.sh", "/app/entrypoint_celery.sh"]
