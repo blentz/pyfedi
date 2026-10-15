@@ -15,7 +15,7 @@ from sqlalchemy import text, Integer
 from sqlalchemy.orm.exc import NoResultFound
 
 from app import db, cache, plugins, limiter
-from app.activitypub.serializers.microblog import link_hashtags
+from app.activitypub.serializers.microblog import body_hashtags
 from app.activitypub.util import find_hashtag_or_create, make_image_sizes, notify_about_post, host_of
 from app.community.util import tags_from_string_old, end_poll_date, flair_from_form, flairs_from_string
 from app.constants import *
@@ -226,12 +226,13 @@ TAG_NAME_MAX = 256
 
 def with_body_hashtags(tags: list, body_html) -> list:
     """`tags` and then each `#word` of `body_html` that is not among them, as stored Tags (spec 2026-10-14 §10 A12).
-    The words are the ones the Note links in its content (link_hashtags), so what is linked is what is tagged."""
+    The words are the ones the Note links in its content (link_hashtags), so what is linked is what is tagged.
+    A new Tag keeps the first spelling used; matching is case-blind."""
     names = {tag.name for tag in tags}
-    for name in link_hashtags(body_html or '')[1]:
+    for name, spelling in body_hashtags(body_html or '').items():
         if name not in names and len(name) <= TAG_NAME_MAX:
             names.add(name)
-            tags.append(find_hashtag_or_create(name))
+            tags.append(find_hashtag_or_create(spelling))   # a new Tag shows the spelling first used
     return tags
 
 
