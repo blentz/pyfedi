@@ -14,8 +14,9 @@ from app.visibility import followers_only_addressing, is_open
 PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 
 # `#` at the start of the text or after anything that is not a letter or digit, then a Unicode word that does not
-# start with an underscore. `a#b` and a URL fragment inside text are therefore not hashtags.
-HASHTAG_RE = re.compile(r'(?<![^\W_])#([^\W_]\w*)')
+# start with an underscore and holds a letter (Mastodon does not treat `#1` as a hashtag). `a#b` and a URL fragment
+# inside text are therefore not hashtags.
+HASHTAG_RE = re.compile(r'(?<![^\W_])#(?=\w*[^\W\d_])([^\W_]\w*)')
 NOT_HASHTAG_PARENTS = ('a', 'code', 'pre')
 
 
