@@ -129,14 +129,19 @@ def refuse_invisible_ids(post_id=None, reply_id=None):
         refuse_invisible(db.session.get(PostReply, reply_id) or abort(404))
 
 
-def refused_media_replacement(post) -> bool:
-    """A13.7: an edit cannot replace a media post's file. Its edit form shows no file field, so a file sent anyway
-    is refused with a message on the redisplayed form, and nothing is saved."""
-    uploaded = request.files.get('image_file')
-    if media_of(post) is None or not uploaded:
+def refused_media_change(post, url_field) -> bool:
+    """A13.7: an edit cannot change a media post's media. `url_field` is the form's read-only URL field, or None
+    for a post that has no media. A file, or a changed URL, sent anyway is refused with a message on the
+    redisplayed form, and nothing is saved."""
+    if url_field is None:
         return False
-    flash(_('The file of a media post cannot be replaced.'), 'error')
-    return True
+    if request.files.get('image_file'):
+        flash(_('The file of a media post cannot be replaced.'), 'error')
+        return True
+    if (url_field.data or '').strip() != post.url:
+        flash(_('The media of this post cannot be changed.'), 'error')
+        return True
+    return False
 
 
 def refuse_unpublished_post(post):
@@ -1318,6 +1323,11 @@ def post_edit(post_id: int):
     del form.communities
     del form.visibility     # Amendment B: visibility is fixed at creation
 
+    media_url_field = None
+    if media_of(post) is not None:   # A13.7: the media's URL is shown, not edited
+        media_url_field = form.video_url if post_type == POST_TYPE_VIDEO else form.link_url
+        media_url_field.render_kw = {**(media_url_field.render_kw or {}), 'readonly': True}
+
     flair_choices = flair_for_form(post.community_id)
     if len(flair_choices):
         form.flair.choices = flair_choices
@@ -1349,7 +1359,7 @@ def post_edit(post_id: int):
 
         form.language_id.choices = languages_for_form()
 
-        if form.validate_on_submit() and not refused_media_replacement(post):
+        if form.validate_on_submit() and not refused_media_change(post, media_url_field):
             try:
                 # A13.6/A13.7: video is uploaded only with a new post, never by an edit
                 uploaded_file = request.files.get('image_file') if post_type == POST_TYPE_IMAGE or post_type == POST_TYPE_EVENT else None

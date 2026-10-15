@@ -424,69 +424,17 @@ def test_an_mpo_upload_is_stored_as_rgb(db_session, chdir_upload, http_mock):
 
 
 def test_a_video_upload_is_refused_when_video_uploads_are_off(db_session, chdir_upload):
-    """`:464`'s SECOND conjunct taken FALSE with the first TRUE, arc
-    `464->466`.
+    """A video file sent down the image path is refused with `allow_video_file_uploads` at its default ('no').
 
-    `can_upload_video` returns False on the default (unset) setting, so
-    `:465` never runs and `.mp4` stays out of `:463`'s list; `:467` then
-    finds `.mp4` not allowed and `:468` raises. A regression dropping the
-    `can_upload_video()` conjunct (e.g. `and` weakened so only `type` is
-    checked) would let this through. Since spec A13.6 the setting no longer
-    widens the list at all: `test_a_video_file_is_refused_by_the_image_path_even_with_uploads_on`
-    below shows `.mp4` refused with the setting on too.
-
-    No `http_mock`: the raise happens before any network call. No file
-    exists afterward, confirming `:468` fired rather than `:533`.
+    Since spec A13.6 the switch no longer widens the image extension list at all: a video file is stored only as
+    media, from a moderator of a video_channel creating a post (`media_upload_kind`). This is the default-setting
+    half; the setting-on half is the `..._even_with_uploads_on` test in this file. `edit_post` is stubbed or the
+    file is checked so that the refusal witnessed is the extension list's, and nothing is written.
     """
     s = _seed()
     with pytest.raises(Exception, match='filetype not allowed'):
         edit_post(_api_input(), s.post, POST_TYPE_VIDEO, SRC_API, user=s.user,
                   uploaded_file=make_upload(filename='clip.mp4'))
-
-    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
-    assert written == []
-
-
-def test_a_non_video_post_ignores_can_upload_video_even_when_enabled(db_session, chdir_upload):
-    """`:464`'s FIRST conjunct taken FALSE with the SECOND TRUE.
-
-    `type` is `POST_TYPE_ARTICLE`, so Python's `and` short-circuits and never
-    calls `can_upload_video()` -- yet the setting is forced to `'yes'`
-    anyway. This is the only test in this group that would catch a mutation
-    weakening `:464`'s `and` to `or`: neither
-    `test_a_video_upload_is_refused_when_video_uploads_are_off` (setting
-    already `'no'`) nor
-    the former `test_a_video_upload_is_accepted_when_video_uploads_are_enabled` (`type`
-    already `POST_TYPE_VIDEO`) can distinguish `and` from `or`, because both
-    already take the same branch either way. Here, an `or` would wrongly
-    extend `:463`'s list with `.mp4` despite the non-video `type`; the real
-    `and` does not, so `.mp4` stays disallowed and `:468` raises.
-
-    Uses the `set_setting`/`get_setting` mechanism established in
-    sub-project 37 (`.superpowers/sdd/2026-09-12-coverage-post-d-37/task-4-report.md`)
-    and already in use in this suite (`tests/test_utils_upload_video.py`),
-    restoring the original value in `finally` -- defensive and conventional,
-    not required for isolation, since `db_session`'s teardown already clears
-    the `Settings` table and `CACHE_TYPE = 'NullCache'` makes `get_setting`'s
-    memoize inert (both recorded in that report).
-
-    No `http_mock`: the raise happens before any network call. No file
-    exists afterward, confirming `:468` fired rather than `:533`. Same-glob
-    positive control for the emptiness itself (distinct from the two named
-    tests above, which control for the `and`-vs-`or` argument, not for this
-    glob returning a non-empty list): `test_an_allowed_extension_passes`
-    asserts `len(written) == 1` on this exact glob
-    (`app/static/media/posts/*/*/*`).
-    """
-    s = _seed()
-    original = get_setting('allow_video_file_uploads')
-    try:
-        set_setting('allow_video_file_uploads', 'yes')
-        with pytest.raises(Exception, match='filetype not allowed'):
-            edit_post(_api_input(), s.post, POST_TYPE_ARTICLE, SRC_API, user=s.user,
-                      uploaded_file=make_upload(filename='clip.mp4'))
-    finally:
-        set_setting('allow_video_file_uploads', original)
 
     written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
     assert written == []
