@@ -117,6 +117,13 @@ def test_threadiverse_community_follower_gets_group_announce_and_follower_still_
     assert kinds == sorted([('Announce', community.public_url()), ('Create', alice.public_url())])
     announce = next(b for b in bodies if b['type'] == 'Announce')
     assert announce['object']['type'] == 'Create' and '@context' not in announce['object']
+    # Lemmy and mbin file a post by its audience: the copy sent to a threadiverse follower carries the community
+    assert announce['object']['audience'] == community.public_url()
+    assert announce['object']['object']['audience'] == community.public_url()
+    # the author's own Create to the same instance does not (spec §10 A9), and still equals the fetched Note
+    create = next(b for b in bodies if b['type'] == 'Create')
+    assert 'audience' not in create and 'audience' not in create['object']
+    assert create['object'] == post_to_page(post)
 
 
 def test_microblog_app_community_follower_gets_announce_of_id_on_create(db_session, http_mock):
