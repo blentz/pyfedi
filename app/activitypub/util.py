@@ -5849,9 +5849,13 @@ def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, N
             log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json,
                             'Boosted post belongs to a private or local_only community')
             return None
-        if post.deleted or not can_view(post, announcer.id):
-            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json,
-                            'Boosted post is deleted or not visible to the announcer')
+        if post.deleted:
+            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Boosted post is deleted')
+            return None
+        # Only a public or unlisted post is boosted (spec 2026-10-14 §10 A12). can_view is no test here: it admits
+        # the author and the users the post Mentions, and a boost of a followers-only post would widen its audience.
+        if not is_open(post):
+            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Boosted post is not public')
             return None
         # A block outlives the follow it was made after: the accepted UserFollower row is still there
         if post.author.has_blocked_user(announcer.id) or post.author.has_blocked_instance(announcer.instance_id):
