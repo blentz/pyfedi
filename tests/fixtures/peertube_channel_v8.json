@@ -1,0 +1,73 @@
+{
+    "@context": [
+        "https://www.w3.org/ns/activitystreams",
+        "https://w3id.org/security/v1",
+        {
+            "RsaSignature2017": "https://w3id.org/security#RsaSignature2017"
+        },
+        {
+            "pt": "https://joinpeertube.org/ns#",
+            "sc": "http://schema.org/",
+            "playerSettings": "pt:playerSettings",
+            "playlists": {
+                "@id": "pt:playlists",
+                "@type": "@id"
+            },
+            "support": {
+                "@type": "sc:Text",
+                "@id": "pt:support"
+            },
+            "lemmy": "https://join-lemmy.org/ns#",
+            "postingRestrictedToMods": "lemmy:postingRestrictedToMods",
+            "toot": "http://joinmastodon.org/ns#",
+            "indexable": "toot:indexable",
+            "discoverable": "toot:discoverable",
+            "email": "sc:email"
+        }
+    ],
+    "type": "Group",
+    "id": "https://peertube.test/video-channels/carol_channel",
+    "following": "https://peertube.test/video-channels/carol_channel/following",
+    "followers": "https://peertube.test/video-channels/carol_channel/followers",
+    "playlists": "https://peertube.test/video-channels/carol_channel/playlists",
+    "inbox": "https://peertube.test/video-channels/carol_channel/inbox",
+    "outbox": "https://peertube.test/video-channels/carol_channel/outbox",
+    "preferredUsername": "carol_channel",
+    "name": "Main carol channel",
+    "endpoints": {
+        "sharedInbox": "https://peertube.test/inbox"
+    },
+    "publicKey": {
+        "id": "https://peertube.test/video-channels/carol_channel#main-key",
+        "owner": "https://peertube.test/video-channels/carol_channel",
+        "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqzQnx7nR6yi9zapnMM+2\neYMJX/3DwwpOh2pmr0DoCdme6BVDZvYpGovvhLZDp72KjRb5+wRZIebD5EFg5FG1\ntLD7ivcIRM9kra+cwht2n+aVg42hcXUB/r01C7l7Bl5wH5ZKV6zuUHWDyrYvomQ9\nlRXivUxktZIdeopCEiDI3DFjhEfZWcT6Vsb8P4YEl0n5ZsSMe0fy7K/w9hbAEIEz\nFXd4mbFsb1HmresiU9bHdiAhEOuNLUjztWzZL2NGgCaBIk74GHW2BIMNlxVd6lEl\n4j/J7q5wwjb/58TuykqZsoZUeRW5c5zb2MbJWz8rFVXjJxUSLjBDk5mlMb56SWUB\njwIDAQAB\n-----END PUBLIC KEY-----\n"
+    },
+    "published": "2026-10-15T13:37:07.605Z",
+    "indexable": true,
+    "discoverable": true,
+    "url": [
+        {
+            "type": "Link",
+            "mediaType": "text/html",
+            "href": "https://peertube.test/c/carol_channel/videos"
+        },
+        {
+            "type": "Link",
+            "mediaType": "text/html",
+            "href": "https://peertube.test/c/carol_channel"
+        },
+        {
+            "type": "Link",
+            "mediaType": "text/html",
+            "href": "https://peertube.test/video-channels/carol_channel"
+        }
+    ],
+    "playerSettings": "https://peertube.test/video-channels/carol_channel/player-settings",
+    "summary": null,
+    "support": null,
+    "postingRestrictedToMods": true,
+    "email": null,
+    "attributedTo": [
+        "https://peertube.test/accounts/carol"
+    ]
+}

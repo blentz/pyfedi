@@ -1,0 +1,19 @@
+{
+    "@context": [
+        "https://www.w3.org/ns/activitystreams",
+        "https://w3id.org/security/v1",
+        {
+            "RsaSignature2017": "https://w3id.org/security#RsaSignature2017"
+        }
+    ],
+    "actor": "https://peertube.test/accounts/root",
+    "id": "https://peertube.test/accounts/root/follows/8",
+    "object": "https://piefed.test/c/vc2",
+    "signature": {
+        "created": "2026-10-15T14:13:44.058Z",
+        "creator": "https://peertube.test/accounts/root",
+        "signatureValue": "c02J1p6AVDHpUGJ6K+bHM3KIuA2DGCsAin2ISHWf+dS6taPdIOUV7+cq1yIpxHx0zq+dhUxWwuu3ih0q7mJPcVmC9QkclnP0jobQGWyPniaF5DM5an7lejgfJagk8YonwDQIc23lERr8sYrRXm2EtEKPNof0LV4SlLay8URH4RDiRnRrFBv4zauPIorNXLhKY+oa3bbVFLC4KTI/OqIPpHu6Z7NC+Vg+zZgqN4f4yQv1I/PoT7bgsdlYOKWfgbyVl7LlDSNQqWkROyZA3IQhCs6DuVjsvXDdf4F2+tZOOPkgyK2Jeh93jZr3EthRly35DTeoUQHslov7Ghco7C1Zpg==",
+        "type": "RsaSignature2017"
+    },
+    "type": "Follow"
+}

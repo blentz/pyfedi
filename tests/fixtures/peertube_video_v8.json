@@ -1,0 +1,403 @@
+{
+    "@context": [
+        "https://www.w3.org/ns/activitystreams",
+        "https://w3id.org/security/v1",
+        {
+            "RsaSignature2017": "https://w3id.org/security#RsaSignature2017"
+        },
+        {
+            "pt": "https://joinpeertube.org/ns#",
+            "sc": "http://schema.org/",
+            "Hashtag": "as:Hashtag",
+            "category": "sc:category",
+            "licence": "sc:license",
+            "subtitleLanguage": "sc:subtitleLanguage",
+            "automaticallyGenerated": "pt:automaticallyGenerated",
+            "sensitive": "as:sensitive",
+            "language": "sc:inLanguage",
+            "identifier": "sc:identifier",
+            "isLiveBroadcast": "sc:isLiveBroadcast",
+            "liveSaveReplay": {
+                "@type": "sc:Boolean",
+                "@id": "pt:liveSaveReplay"
+            },
+            "permanentLive": {
+                "@type": "sc:Boolean",
+                "@id": "pt:permanentLive"
+            },
+            "latencyMode": {
+                "@type": "sc:Number",
+                "@id": "pt:latencyMode"
+            },
+            "dvrWindow": {
+                "@type": "sc:Duration",
+                "@id": "pt:dvrWindow"
+            },
+            "Infohash": "pt:Infohash",
+            "SensitiveTag": "pt:SensitiveTag",
+            "tileWidth": {
+                "@type": "sc:Number",
+                "@id": "pt:tileWidth"
+            },
+            "tileHeight": {
+                "@type": "sc:Number",
+                "@id": "pt:tileHeight"
+            },
+            "tileDuration": {
+                "@type": "sc:Number",
+                "@id": "pt:tileDuration"
+            },
+            "aspectRatio": {
+                "@type": "sc:Float",
+                "@id": "pt:aspectRatio"
+            },
+            "uuid": {
+                "@type": "sc:identifier",
+                "@id": "pt:uuid"
+            },
+            "originallyPublishedAt": "sc:datePublished",
+            "schedules": "sc:eventSchedule",
+            "startDate": "sc:startDate",
+            "embedUrl": "sc:embedUrl",
+            "uploadDate": "sc:uploadDate",
+            "hasParts": "sc:hasParts",
+            "playerSettings": "pt:playerSettings",
+            "views": {
+                "@type": "sc:Number",
+                "@id": "pt:views"
+            },
+            "downloads": {
+                "@type": "sc:Number",
+                "@id": "pt:downloads"
+            },
+            "state": {
+                "@type": "sc:Number",
+                "@id": "pt:state"
+            },
+            "size": {
+                "@type": "sc:Number",
+                "@id": "pt:size"
+            },
+            "fps": {
+                "@type": "sc:Number",
+                "@id": "pt:fps"
+            },
+            "canReply": "pt:canReply",
+            "commentsPolicy": {
+                "@type": "sc:Number",
+                "@id": "pt:commentsPolicy"
+            },
+            "downloadEnabled": {
+                "@type": "sc:Boolean",
+                "@id": "pt:downloadEnabled"
+            },
+            "waitTranscoding": {
+                "@type": "sc:Boolean",
+                "@id": "pt:waitTranscoding"
+            },
+            "support": {
+                "@type": "sc:Text",
+                "@id": "pt:support"
+            },
+            "likes": {
+                "@id": "as:likes",
+                "@type": "@id"
+            },
+            "dislikes": {
+                "@id": "as:dislikes",
+                "@type": "@id"
+            },
+            "shares": {
+                "@id": "as:shares",
+                "@type": "@id"
+            },
+            "comments": {
+                "@id": "as:comments",
+                "@type": "@id"
+            },
+            "PropertyValue": "sc:PropertyValue",
+            "value": "sc:value"
+        }
+    ],
+    "to": [
+        "https://www.w3.org/ns/activitystreams#Public",
+        "https://peertube.test/video-channels/carol_channel"
+    ],
+    "cc": [
+        "https://peertube.test/accounts/carol/followers"
+    ],
+    "type": "Video",
+    "id": "https://peertube.test/videos/watch/bbd7d4cc-e112-482d-a264-a42aa22ed402",
+    "name": "Golden capture video",
+    "duration": "PT10S",
+    "uuid": "bbd7d4cc-e112-482d-a264-a42aa22ed402",
+    "category": {
+        "identifier": "15",
+        "name": "Science & Technology"
+    },
+    "licence": {
+        "identifier": "1",
+        "name": "Attribution"
+    },
+    "language": {
+        "identifier": "en",
+        "name": "English"
+    },
+    "views": 0,
+    "downloads": 0,
+    "sensitive": false,
+    "summary": null,
+    "waitTranscoding": false,
+    "state": 1,
+    "canReply": null,
+    "commentsPolicy": 1,
+    "downloadEnabled": true,
+    "published": "2026-10-15T14:11:48.564Z",
+    "originallyPublishedAt": null,
+    "schedules": [],
+    "updated": "2026-10-15T14:11:48.564Z",
+    "tag": [
+        {
+            "type": "Hashtag",
+            "name": "golden"
+        },
+        {
+            "type": "Hashtag",
+            "name": "interop"
+        }
+    ],
+    "mediaType": "text/markdown",
+    "content": "A video uploaded **natively** to PeerTube for the golden fixture.",
+    "support": null,
+    "subtitleLanguage": [],
+    "icon": [
+        {
+            "type": "Image",
+            "url": "https://peertube.test/lazy-static/thumbnails/87ad7b8b-7959-491d-940e-0b68be47c71b.jpg",
+            "mediaType": "image/jpeg",
+            "width": 280,
+            "height": 157
+        },
+        {
+            "type": "Image",
+            "url": "https://peertube.test/lazy-static/thumbnails/24f517d5-794f-43e8-bee4-bd2029dfbfa4.jpg",
+            "mediaType": "image/jpeg",
+            "width": 850,
+            "height": 480
+        },
+        {
+            "type": "Image",
+            "url": "https://peertube.test/lazy-static/thumbnails/34bdd34e-cdd3-4106-891f-aa3ae5c58582.jpg",
+            "mediaType": "image/jpeg",
+            "width": 1280,
+            "height": 720
+        },
+        {
+            "type": "Image",
+            "url": "https://peertube.test/lazy-static/thumbnails/33ba0e9e-eabc-45b7-8c66-df74201cfc72.jpg",
+            "mediaType": "image/jpeg",
+            "width": 1400,
+            "height": 1400
+        },
+        {
+            "type": "Image",
+            "url": "https://peertube.test/lazy-static/thumbnails/839cd685-8cb5-4ece-9001-803fa5a4646b.jpg",
+            "mediaType": "image/jpeg",
+            "width": 1920,
+            "height": 1080
+        }
+    ],
+    "preview": [
+        {
+            "type": "Image",
+            "rel": [
+                "storyboard"
+            ],
+            "url": [
+                {
+                    "mediaType": "image/jpeg",
+                    "href": "https://peertube.test/lazy-static/storyboards/eebc9ee1-7235-407d-ab9a-625405d8969d.jpg",
+                    "width": 1920,
+                    "height": 108,
+                    "tileWidth": 192,
+                    "tileHeight": 108,
+                    "tileDuration": "PT1S"
+                }
+            ]
+        }
+    ],
+    "aspectRatio": 1.7778,
+    "url": [
+        {
+            "type": "Link",
+            "mediaType": "text/html",
+            "href": "https://peertube.test/w/pcmdHNQRSn3ucHMQgsY42u"
+        },
+        {
+            "type": "Link",
+            "mediaType": "text/html",
+            "href": "https://peertube.test/videos/watch/bbd7d4cc-e112-482d-a264-a42aa22ed402"
+        },
+        {
+            "type": "Link",
+            "mediaType": "video/mp4",
+            "href": "https://peertube.test/static/web-videos/ba5bfbcd-6602-4b06-8c1b-48e74d788b6e-0.mp4",
+            "height": 0,
+            "width": 0,
+            "size": 89315,
+            "fps": 0,
+            "attachment": [
+                {
+                    "type": "PropertyValue",
+                    "name": "ffprobe_codec_type",
+                    "value": "audio"
+                },
+                {
+                    "type": "PropertyValue",
+                    "name": "peertube_format_flag",
+                    "value": "web-video"
+                }
+            ]
+        },
+        {
+            "type": "Link",
+            "rel": [
+                "metadata",
+                "video/mp4"
+            ],
+            "mediaType": "application/json",
+            "href": "https://peertube.test/api/v1/videos/bbd7d4cc-e112-482d-a264-a42aa22ed402/metadata/34",
+            "height": 0,
+            "width": 0,
+            "fps": 0
+        },
+        {
+            "type": "Link",
+            "mediaType": "application/x-bittorrent",
+            "href": "https://peertube.test/lazy-static/torrents/be3d547e-2fa9-47f1-8dfd-8cd326c4a994-0.torrent",
+            "height": 0,
+            "width": 0,
+            "fps": 0
+        },
+        {
+            "type": "Link",
+            "mediaType": "application/x-bittorrent;x-scheme-handler/magnet",
+            "href": "magnet:?xs=https%3A%2F%2Fpeertube.test%2Flazy-static%2Ftorrents%2Fbe3d547e-2fa9-47f1-8dfd-8cd326c4a994-0.torrent&xt=urn:btih:75e989829a87fddab48701be0f26d405565d2477&dn=Golden+capture+video&tr=https%3A%2F%2Fpeertube.test%2Ftracker%2Fannounce&tr=wss%3A%2F%2Fpeertube.test%3A443%2Ftracker%2Fsocket&ws=https%3A%2F%2Fpeertube.test%2Fstatic%2Fweb-videos%2Fba5bfbcd-6602-4b06-8c1b-48e74d788b6e-0.mp4",
+            "height": 0,
+            "width": 0,
+            "fps": 0
+        },
+        {
+            "type": "Link",
+            "mediaType": "application/x-mpegURL",
+            "href": "https://peertube.test/static/streaming-playlists/hls/bbd7d4cc-e112-482d-a264-a42aa22ed402/a862cd9a-caa2-49f2-9e49-15dbee3084d0-master.m3u8",
+            "tag": [
+                {
+                    "type": "Infohash",
+                    "name": "CQW23pGj9ajXGRYTLmHr"
+                },
+                {
+                    "type": "Link",
+                    "name": "sha256",
+                    "mediaType": "application/json",
+                    "href": "https://peertube.test/static/streaming-playlists/hls/bbd7d4cc-e112-482d-a264-a42aa22ed402/0c7689e4-f113-4b2f-b193-18eed4f1e5ba-segments-sha256.json"
+                },
+                {
+                    "type": "Link",
+                    "mediaType": "video/mp4",
+                    "href": "https://peertube.test/static/streaming-playlists/hls/bbd7d4cc-e112-482d-a264-a42aa22ed402/fa510a30-c006-433f-b145-a8e691b1605f-360-fragmented.mp4",
+                    "height": 360,
+                    "width": 640,
+                    "size": 1077666,
+                    "fps": 30,
+                    "attachment": [
+                        {
+                            "type": "PropertyValue",
+                            "name": "ffprobe_codec_type",
+                            "value": "audio"
+                        },
+                        {
+                            "type": "PropertyValue",
+                            "name": "ffprobe_codec_type",
+                            "value": "video"
+                        },
+                        {
+                            "type": "PropertyValue",
+                            "name": "peertube_format_flag",
+                            "value": "fragmented"
+                        }
+                    ]
+                },
+                {
+                    "type": "Link",
+                    "rel": [
+                        "metadata",
+                        "video/mp4"
+                    ],
+                    "mediaType": "application/json",
+                    "href": "https://peertube.test/api/v1/videos/bbd7d4cc-e112-482d-a264-a42aa22ed402/metadata/33",
+                    "height": 360,
+                    "width": 640,
+                    "fps": 30
+                },
+                {
+                    "type": "Link",
+                    "mediaType": "application/x-bittorrent",
+                    "href": "https://peertube.test/lazy-static/torrents/29a3de35-26a1-4e42-8ca9-4ec68af50279-360-hls.torrent",
+                    "height": 360,
+                    "width": 640,
+                    "fps": 30
+                },
+                {
+                    "type": "Link",
+                    "mediaType": "application/x-bittorrent;x-scheme-handler/magnet",
+                    "href": "magnet:?xs=https%3A%2F%2Fpeertube.test%2Flazy-static%2Ftorrents%2F29a3de35-26a1-4e42-8ca9-4ec68af50279-360-hls.torrent&xt=urn:btih:05e8a9c6c6a9215c78120b957d62902a2f897eb6&dn=Golden+capture+video&tr=https%3A%2F%2Fpeertube.test%2Ftracker%2Fannounce&tr=wss%3A%2F%2Fpeertube.test%3A443%2Ftracker%2Fsocket&ws=https%3A%2F%2Fpeertube.test%2Fstatic%2Fstreaming-playlists%2Fhls%2Fbbd7d4cc-e112-482d-a264-a42aa22ed402%2Ffa510a30-c006-433f-b145-a8e691b1605f-360-fragmented.mp4",
+                    "height": 360,
+                    "width": 640,
+                    "fps": 30
+                }
+            ]
+        },
+        {
+            "type": "Link",
+            "name": "tracker-http",
+            "rel": [
+                "tracker",
+                "http"
+            ],
+            "href": "https://peertube.test/tracker/announce"
+        },
+        {
+            "type": "Link",
+            "name": "tracker-websocket",
+            "rel": [
+                "tracker",
+                "websocket"
+            ],
+            "href": "wss://peertube.test:443/tracker/socket"
+        }
+    ],
+    "likes": "https://peertube.test/videos/watch/bbd7d4cc-e112-482d-a264-a42aa22ed402/likes",
+    "dislikes": "https://peertube.test/videos/watch/bbd7d4cc-e112-482d-a264-a42aa22ed402/dislikes",
+    "shares": "https://peertube.test/videos/watch/bbd7d4cc-e112-482d-a264-a42aa22ed402/announces",
+    "comments": "https://peertube.test/videos/watch/bbd7d4cc-e112-482d-a264-a42aa22ed402/comments",
+    "hasParts": "https://peertube.test/videos/watch/bbd7d4cc-e112-482d-a264-a42aa22ed402/chapters",
+    "playerSettings": "https://peertube.test/videos/watch/bbd7d4cc-e112-482d-a264-a42aa22ed402/player-settings",
+    "embedUrl": "https://peertube.test/videos/embed/pcmdHNQRSn3ucHMQgsY42u",
+    "attributedTo": [
+        {
+            "type": "Person",
+            "id": "https://peertube.test/accounts/carol"
+        },
+        {
+            "type": "Group",
+            "id": "https://peertube.test/video-channels/carol_channel"
+        }
+    ],
+    "audience": "https://peertube.test/video-channels/carol_channel",
+    "isLiveBroadcast": false,
+    "liveSaveReplay": null,
+    "permanentLive": null,
+    "latencyMode": null,
+    "dvrWindow": null
+}

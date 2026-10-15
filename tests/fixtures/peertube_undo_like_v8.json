@@ -1,0 +1,34 @@
+{
+    "@context": [
+        "https://www.w3.org/ns/activitystreams",
+        "https://w3id.org/security/v1",
+        {
+            "RsaSignature2017": "https://w3id.org/security#RsaSignature2017"
+        }
+    ],
+    "actor": "https://peertube.test/accounts/carol",
+    "cc": [],
+    "id": "https://peertube.test/accounts/carol/likes/32/undo",
+    "object": {
+        "actor": "https://peertube.test/accounts/carol",
+        "cc": [
+            "https://peertube.test/accounts/carol/followers"
+        ],
+        "id": "https://peertube.test/accounts/carol/likes/32",
+        "object": "https://piefed.test/c/vc2@piefed.test/p/1/real-post-video",
+        "to": [
+            "https://www.w3.org/ns/activitystreams#Public"
+        ],
+        "type": "Like"
+    },
+    "signature": {
+        "created": "2026-10-15T14:09:45.804Z",
+        "creator": "https://peertube.test/accounts/carol",
+        "signatureValue": "lVt5z5rDQZV8k2ibMfc1SpRs0xVTsEensoNQoW5JnoMWqPympwrpxQK40uymbqPoZRyWhJlTIAWv7eBTfZ/ZYgJeGMLepa04CcGx6q/TXL5gugEaU/ZP3KSxEYN34rTNN8DWc1wS90ZZq+hiX9LPrDRfWhhUNDWASo+dj9EaCN6DcAJvIX05lsVaQCIc9XT1hW/WHPhCJHjYOys87gBTNBGvk18KlB00iSW111JoaqF96Ty+eKGOSmnynhmSOuTaFqoVluF65tWkgtrr7dUHxrXlask7wfNnXFTKGkepQwX3fA0IKEVXR3qToub6+FI6foor1ZYxS/Nkp3pWtXD6uw==",
+        "type": "RsaSignature2017"
+    },
+    "to": [
+        "https://piefed.test/u/alice"
+    ],
+    "type": "Undo"
+}
