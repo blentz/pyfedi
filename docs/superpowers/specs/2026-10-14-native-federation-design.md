@@ -61,6 +61,8 @@ that already has posts.
 
 ### 3.1 `Community.kind`
 
+(Amended: see §10 A3.)
+
 - New column `kind = String(20)`, not null, server default `'discussion'`.
 - Values: `discussion`, `microblogs`, `video_channel`, `podcast`, held in constants in `app/constants.py`.
 - The migration sets `kind='microblogs'` on the row `find_microblogging_community` matches
@@ -124,6 +126,8 @@ All four are on the admin misc settings form.
 
 ### 4.1 Dispatcher
 
+(Amended: see §10 A1.)
+
 `serialize_post(post, edit=False) -> dict` returns the AP object for a post. `send_post` wraps that object
 in `Create` or `Update`. `post_to_page` returns it on fetch. Push and fetch therefore come from the same
 function.
@@ -143,6 +147,8 @@ Posts in `video_channel` or `podcast` communities that have no ready media (text
 link posts) use `page`.
 
 ### 4.2 `microblog_note`
+
+(Amended: see §10 A2.)
 
 - `type: Note`. `content` is the body HTML only, with no title. `contentMap` is set when the post has a language.
 - Public posts: `to: [as:Public]`, `cc: [author followers collection URL, mentioned actors]`.
@@ -261,6 +267,8 @@ Tests assert no file remains, following the static-tree leak gate (`tests/static
 
 ### 6.1 Delivery
 
+(Amended: see §10 A6.)
+
 Recipients are filtered as they are today: `can_deliver_to`, instance bans, user blocks, and
 `local_only`/`private` communities never federate.
 
@@ -301,6 +309,8 @@ Any gap found by the harness is fixed in the inbound handler, test-first.
 
 ## 7. Security
 
+(Amended: see §10 A5.)
+
 - Uploads: server-side role and switch checks, streamed size limit, magic-byte type check, and a global
   `MAX_CONTENT_LENGTH`.
 - ffmpeg/ffprobe run only on local files under `-protocol_whitelist file`, with timeout and memory caps,
@@ -314,6 +324,8 @@ Any gap found by the harness is fixed in the inbound handler, test-first.
 ## 8. Testing
 
 ### 8.1 Interop harness
+
+(Amended: see §10 A4.)
 
 - `compose.interop.yaml` plus `tests/interop/`, run with `podman compose`.
 - Services: PieFed (web, celery, postgres, redis) built from the working tree, Mastodon, PeerTube and
@@ -375,3 +387,16 @@ Each step gets its own implementation plan and its own commits, and each ends wi
    episodes. If it does, the findings replace §4.4 and §6.1 for podcasts. If it does not, podcast scope
    becomes RSS (§4.5) plus `Audio` objects for Mastodon and PieFed, and the owner decides before step 6.
 6. Podcasts: `podcast_episode`, the episode route, RSS, and Castopod delivery as decided after step 5.
+
+## 10. Amendments (2026-10-14, plan for steps 0–1)
+
+- **A1 (§4.1):** there is no separate `serialize_post`.
+  - `post_to_page` stays the single fetch-side entry point and returns `microblog_note(...)` for microblog posts.
+  - `send_post` branches to `send_microblog_note`.
+  - The existing `Page`/`Question`/`Event` code stays where it is and is not moved. Its push and fetch versions already differ (D298–D300), and fixing that is outside this feature.
+  - "Push equals fetch" applies to the new builders.
+- **A2 (§4.2):** local microblog posts carry a title the user typed, because the form requires one. The Note `content` starts with the title as its own paragraph, except when the body's text already starts with the title. A link or video-link post's title paragraph links to `post.url`. The duplication the spec feared happens only when the title was derived from the body, which this test catches.
+- **A3 (§3.1):** `Community.kind` lands in step 4, where it is first used. Step 1 keys on the existing `is_local_microblogs(community)`.
+- **A4 (§8.1):** the harness tests live in a top-level `interop/` directory, not `tests/interop/`. `tests/conftest.py` blocks all outbound HTTP for everything under `tests/`, and the interop tests need real HTTP.
+- **A5 (§7):** new env `ALLOWED_PRIVATE_NETWORKS`, a comma-separated list of CIDRs, empty by default. `is_refused_address` admits addresses inside these networks. Only the harness sets it, so containers can reach each other on the podman network. Production leaves it unset.
+- **A6 (§6.1):** for microblogs, the author's `Create`/`Update` goes to every follower and mention instance, whether or not that instance also gets the community's `Announce`. Receivers dedupe by object id. Today's cross-dedupe can leave a Mastodon follower with only a boost.
