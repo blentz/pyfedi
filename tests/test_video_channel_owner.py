@@ -76,3 +76,15 @@ def test_the_migration_adds_the_column_and_reverses(app, db_session):
             migration.upgrade()
         assert "'discussion'" in columns()['kind']['default']
         connection.rollback()
+
+
+def test_only_a_video_channel_looks_its_owner_up(app, db_session):
+    """community_actor_data serves every community's Group; the owner row is read only when it is used."""
+    from unittest.mock import patch
+    from app.models import User
+    _, community = _community(COMMUNITY_KIND_DISCUSSION)
+
+    with patch.object(db.session, 'get', wraps=db.session.get) as get:
+        community_actor_data(community)
+
+    assert not [call for call in get.call_args_list if call.args and call.args[0] is User]
