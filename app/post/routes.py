@@ -41,7 +41,7 @@ from app.visibility import can_view, is_open, post_title_for, visible_to_clause
 from app.post.forms import NewReplyForm, ReportPostForm, MeaCulpaForm, CrossPostForm, ConfirmationForm, \
     ConfirmationMultiDeleteForm, EditReplyForm, FlairPostForm, DeleteConfirmationForm, NewReminderForm, \
     ShareMastodonForm, ChooseEmojiForm, MovePostForm
-from app.post.util import post_replies, get_comment_branch, tags_to_string, url_needs_archive, \
+from app.post.util import post_replies, get_comment_branch, form_tags_string, url_needs_archive, \
     generate_archive_link, body_has_no_archive_link, retrieve_archived_post
 from app.post.util import post_type_to_form_url_type
 # The module, not the names: app.shared.post reaches this file through a blueprint
@@ -1365,7 +1365,7 @@ def post_edit(post_id: int):
             form.ai_generated.data = post.ai_generated
             form.sticky.data = post.sticky
             form.language_id.data = post.language_id
-            form.tags.data = tags_to_string(post)
+            form.tags.data = form_tags_string(post)
             form.repeat.data = post.repeat
             form.scheduled_for.data = post.scheduled_for
             form.timezone.data = post.timezone if post.timezone else current_user.timezone

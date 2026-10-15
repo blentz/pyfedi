@@ -47,7 +47,7 @@ from app.models import User, Community, CommunityMember, CommunityJoinRequest, C
     CommunityWikiPageRevision, read_posts, Feed, FeedItem, CommunityBlock, CommunityFlair, post_flair, UserFlair, \
     post_tag, Tag, hidden_posts, CommunityInvitation, CommunityFlairBlock, RssFeed
 from app.community import bp
-from app.post.util import tags_to_string
+from app.post.util import form_tags_string
 # The module, not the names: app.shared.community reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
@@ -1397,7 +1397,7 @@ def add_post(actor, type=None):
                 form.link_url.data = source_post.url
             elif post_type == POST_TYPE_VIDEO:
                 form.video_url.data = source_post.url
-            form.tags.data = tags_to_string(source_post)
+            form.tags.data = form_tags_string(source_post)
 
         if (post_type == POST_TYPE_LINK or post_type == POST_TYPE_VIDEO) and request.args.get('link'):
             if post_type == POST_TYPE_LINK:
