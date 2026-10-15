@@ -524,7 +524,7 @@ def test_a_processing_post_is_not_listed_anywhere(env, monkeypatch):
     assert 'SHOWNCLIP' in titles and 'HIDDENCLIP' not in titles
 
     home = author.get('/', query_string={'sort': 'new'}).data
-    assert b'HIDDENCLIP' not in home
+    assert b'SHOWNCLIP' in home and b'HIDDENCLIP' not in home
     assert post.status == POST_STATUS_PROCESSING
 
 
