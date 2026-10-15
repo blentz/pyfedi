@@ -37,13 +37,16 @@ def test_status_text_has_title_once_and_body(note):
     assert f'Body {marker}' in status['content']
 
 
-def test_status_is_not_a_link_card_and_hashtag_is_live(note, mastodon, piefed):
+def test_status_is_not_a_link_card_and_hashtag_is_live(note):
     post, status, marker = note
     assert status['card'] is None
-    # PieFed hashtags are the post's tags, not words parsed out of the body, and POST /post takes no tags: set them
-    # by an edit, which pushes an Update carrying the Hashtag.
-    piefed.edit(post['post']['id'], tags='interop')
-    wait_for(lambda: any(tag['name'] == 'interop' for tag in (mastodon.status(status['id']) or {}).get('tags', [])))
+    assert any(tag['name'] == 'interop' for tag in status['tags'])
+
+
+def test_hashtag_set_by_an_edit_reaches_the_status(note, mastodon, piefed):
+    post, status, marker = note
+    piefed.edit(post['post']['id'], tags=f'edit{marker}')
+    wait_for(lambda: any(tag['name'] == f'edit{marker}' for tag in (mastodon.status(status['id']) or {}).get('tags', [])))
 
 
 def test_fetch_by_url_resolves_to_the_same_status(note, mastodon):
