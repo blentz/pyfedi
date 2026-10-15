@@ -1,5 +1,9 @@
 # Interop harness (spec 2026-10-14 §8.1): PieFed built from this tree, Mastodon and PeerTube, behind Caddy with an
 # internal CA on *.test names. Run via interop/run.sh, never by hand. Nothing here is published to the host network.
+# Its own project and pod: unnamed, it would be `pyfedi` like compose.test.yaml's stack, and each stack's `down`
+# would remove the other's containers.
+name: pyfedi-interop
+
 x-trust: &trust
   volumes:
     - caddy-data:/caddy-data:ro
