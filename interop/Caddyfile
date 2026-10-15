@@ -10,3 +10,7 @@ piefed.test {
 mastodon.test {
 	reverse_proxy mastodon-web:3000
 }
+
+peertube.test {
+	reverse_proxy peertube-web:9000
+}

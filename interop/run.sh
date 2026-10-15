@@ -28,6 +28,7 @@ up() {
     $COMPOSE up -d
     wait_http piefed-web https://piefed.test/health
     wait_http piefed-web https://mastodon.test/health   # piefed-web has curl; the Mastodon image may not
+    wait_http piefed-web https://peertube.test/api/v1/ping
     # init-db drops every table first, so run it only on an empty instance table (a re-run of `up` keeps the data)
     if [ "$($COMPOSE exec -T piefed-db psql -U piefed -tAc 'select count(*) from instance' | tr -d '[:space:]')" = 0 ]; then
         $COMPOSE exec -T piefed-web sh -c 'FLASK_APP=pyfedi.py flask init-db --interactive no'
@@ -36,7 +37,9 @@ up() {
     { printf 'from pyfedi import app\napp.app_context().push()\n'; cat interop/seed_piefed.py; } \
         | $COMPOSE exec -T piefed-web python -
     token=$($COMPOSE exec -T mastodon-web bin/rails runner - < interop/seed_mastodon.rb | tail -n 1)
-    printf '{"mastodon_bob": "%s"}\n' "$token" > interop/.tokens.json
+    peertube=$($COMPOSE exec -T piefed-web python - < interop/seed_peertube.py | tail -n 1)
+    printf '%s' "$peertube" | python3 -c 'import json, sys; t = json.load(sys.stdin); t["mastodon_bob"] = sys.argv[1]; print(json.dumps(t))' \
+        "$token" > interop/.tokens.json
 }
 
 case "${1:-}" in
