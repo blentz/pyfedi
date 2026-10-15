@@ -22,8 +22,8 @@ from app.constants import *
 from app.models import File, Notification, NotificationSubscription, Poll, PollChoice, PollChoiceVote, Post, \
     PostBookmark, PostVote, Report, Site, User, utcnow, Instance, Event, Community, CommunityFlair, \
     votes_cast_today, adjust_domain_post_count, served_path, _as_url
-from app.shared.media import MediaRefused, can_upload_media, media_kind_for, media_local_path, media_of, \
-    queue_probe, store_uploaded_media
+from app.shared.media import MediaRefused, can_upload_media, media_kind_for, media_of, queue_probe, \
+    store_uploaded_media
 from app.shared.tasks import task_selector
 from app.shared.upload import open_uploaded_image
 from app.visibility import is_open, post_title_for
@@ -341,8 +341,9 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None):
     try:    # federation is done in edit_post
         post = edit_post(input, post, type, src, user, auth, uploaded_file, from_scratch=True)
     except Exception as e:
-        stored_media = media_local_path(post)
-        if stored_media is not None:   # store_uploaded_media wrote it before the failure: nothing refers to it now
+        # Only the file store_uploaded_media wrote during this call, never a path derived from post.url
+        stored_media = getattr(post, 'stored_media_path', None)
+        if stored_media is not None:
             os.unlink(stored_media)
         db.session.delete(vote)
         db.session.delete(post)
