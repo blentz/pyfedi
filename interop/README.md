@@ -24,6 +24,8 @@ Seeded: PieFed `alice` / `interop-alice-pw` and the local `microblogs` community
 
 ## Notes
 
+- The stack is the podman-compose project `pyfedi-interop` (`name:` in `compose.interop.yaml`), apart from
+  `run_tests.sh`'s `pyfedi` stack, so the two can run at once without either's teardown removing the other.
 - Nothing is published to the host. Reach the apps from inside the network, e.g.
   `podman-compose -f compose.interop.yaml exec -T piefed-web curl -fsS --cacert /tmp/harness-ca.crt https://mastodon.test/health`.
 - Caddy's CA root is published to every app container as `/caddy-data/harness-root.crt`; `trust_ca.sh` adds it to
