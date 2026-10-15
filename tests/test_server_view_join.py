@@ -87,6 +87,11 @@ class TestJoinAndLeave:
 
         assert send(client, UNSUBSCRIBE).status_code == 302
 
+    def test_leaving_a_host_no_instance_row_names_is_refused(self, client, live):
+        from app.community.live import leave_server_view
+
+        assert leave_server_view(live.viewer.id, 'microblogs@unknown.example') is False
+
     def test_htmx_join_swaps_in_leave(self, client, live):
         login(client, live.viewer)
 
