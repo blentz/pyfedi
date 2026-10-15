@@ -480,12 +480,12 @@ def test_a_deleted_post_gets_no_boost(db_session, fetch_spy, log_spy):
 
     assert process_microblog_announce(announce(booster.ap_public_url, post.ap_id), 'd1', False) is None
     assert PostBoost.query.filter_by(post_id=post.id).count() == 0
-    assert log_spy[-1][2] == 'Boosted post is deleted or not visible to the announcer'
+    assert log_spy[-1][2] == 'Boosted post is deleted'
 
 
 def test_a_followers_only_post_is_not_boosted_even_by_an_accepted_follower(db_session, fetch_spy, log_spy):
-    """can_view reads a viewer's accepted OUTWARD follow (a local user following the author). A remote follower of a
-    local author is an inward row, so can_view is False for them: the boost is refused, which is the safe side."""
+    """A followers-only post is not public, so its boost is refused (A12). can_view would also refuse this one: it
+    reads a viewer's accepted OUTWARD follow, and a remote follower of a local author is an inward row."""
     from app import db
     from app.activitypub.util import process_microblog_announce
     from app.constants import VISIBILITY_FOLLOWERS
@@ -498,7 +498,7 @@ def test_a_followers_only_post_is_not_boosted_even_by_an_accepted_follower(db_se
 
     assert process_microblog_announce(announce(booster.ap_public_url, post.ap_id), 'v1', False) is None
     assert PostBoost.query.filter_by(post_id=post.id).count() == 0
-    assert log_spy[-1][2] == 'Boosted post is deleted or not visible to the announcer'
+    assert log_spy[-1][2] == 'Boosted post is not public'
 
 
 def test_a_followers_only_post_is_not_boosted_by_a_non_follower_who_passed_another_gate(db_session, fetch_spy, log_spy):
@@ -516,4 +516,79 @@ def test_a_followers_only_post_is_not_boosted_by_a_non_follower_who_passed_anoth
 
     assert process_microblog_announce(announce(followed.ap_public_url, post.ap_id), 'v2', False) is None
     assert PostBoost.query.filter_by(post_id=post.id).count() == 0
-    assert log_spy[-1][2] == 'Boosted post is deleted or not visible to the announcer'
+    assert log_spy[-1][2] == 'Boosted post is not public'
+
+
+# --------------------------------------------------------------------------
+# A boost of a post that is not public (followers-only, or any other non-open visibility) is refused, whoever the
+# announcer is (spec 2026-10-14 §10 A12). can_view is not the test: it is true for the author and for Mentioned users.
+# --------------------------------------------------------------------------
+
+
+def test_a_followers_only_post_that_mentions_its_follower_is_not_boosted_by_them(db_session, fetch_spy, log_spy):
+    from app import db
+    from app.activitypub.util import process_microblog_announce
+    from app.constants import VISIBILITY_FOLLOWERS
+    from app.models import PostBoost
+    _, booster, post = _local_microblogger_and_follower()
+    post.visibility = VISIBILITY_FOLLOWERS
+    post.body = f'hello @{booster.user_name}@{booster.instance.domain}'
+    db.session.commit()
+
+    assert process_microblog_announce(announce(booster.ap_public_url, post.ap_id), 'm1', False) is None
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 0
+    assert log_spy[-1][2] == 'Boosted post is not public'
+
+
+def test_a_followers_only_post_is_not_boosted_by_a_mentioned_user(db_session, fetch_spy, log_spy, monkeypatch):
+    """can_view admits a Mentioned user. Its Mention match counts only local names today, so the Mention is forced
+    here: a boost of a non-public post is refused even when can_view admits the announcer."""
+    from app import db
+    from app.activitypub.util import process_microblog_announce
+    from app.constants import VISIBILITY_FOLLOWERS
+    from app.models import PostBoost
+    from app.visibility import can_view
+    monkeypatch.setattr('app.visibility._mentions', lambda obj, viewer_id: True)    # as if Mentioned in the body
+    _, booster, post = _local_microblogger_and_follower()
+    post.visibility = VISIBILITY_FOLLOWERS
+    db.session.commit()
+    assert can_view(post, booster.id)
+
+    assert process_microblog_announce(announce(booster.ap_public_url, post.ap_id), 'm2', False) is None
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 0
+    assert log_spy[-1][2] == 'Boosted post is not public'
+
+
+def test_a_remote_authors_boost_of_its_own_followers_only_post_is_not_recorded(db_session, fetch_spy, log_spy):
+    """can_view is true for the author, so before A12 a followed remote author's self-boost of a followers-only post
+    we hold was recorded."""
+    from app import db
+    from app.activitypub.util import process_microblog_announce
+    from app.constants import VISIBILITY_FOLLOWERS
+    from app.models import PostBoost
+    remote = make_instance('mastodon.example')
+    author = make_user(remote, 'bob')
+    make_follow(make_user(None, 'carol', local=True), author)     # announcer_is_followed opens the gate
+    post = make_post(make_community(), author, 'https://mastodon.example/users/bob/statuses/7')
+    post.visibility = VISIBILITY_FOLLOWERS
+    db.session.commit()
+
+    assert process_microblog_announce(announce(author.ap_public_url, post.ap_id), 'm3', False) is None
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 0
+    assert log_spy[-1][2] == 'Boosted post is not public'
+
+
+@pytest.mark.parametrize('visibility', ['public', 'unlisted'])
+def test_a_public_or_unlisted_post_is_still_boosted_by_a_follower(db_session, fetch_spy, visibility):
+    from app import db
+    from app.activitypub.util import process_microblog_announce
+    from app.constants import VISIBILITY_PUBLIC, VISIBILITY_UNLISTED
+    from app.models import PostBoost
+    _, booster, post = _local_microblogger_and_follower()
+    post.visibility = VISIBILITY_PUBLIC if visibility == 'public' else VISIBILITY_UNLISTED
+    db.session.commit()
+
+    result = process_microblog_announce(announce(booster.ap_public_url, post.ap_id), 'p1', False)
+
+    assert result is not None and result.id == post.id
+    assert PostBoost.query.filter_by(post_id=post.id, user_id=booster.id).count() == 1
