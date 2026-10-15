@@ -421,3 +421,50 @@ def test_a_follower_of_the_local_author_still_cannot_boost_into_a_private_commun
     assert result is None
     assert PostBoost.query.filter_by(post_id=post.id).count() == 0
     assert log_spy[-1][2] == 'Boosted post belongs to a private or local_only community'
+
+
+# --------------------------------------------------------------------------
+# A boost of a local post is refused when the author blocked the announcer, the post is gone or cannot be viewed
+# (spec 2026-10-14 §10 A10)
+# --------------------------------------------------------------------------
+
+
+def test_an_author_who_blocked_the_announcer_after_the_follow_gets_no_boost(db_session, fetch_spy, log_spy):
+    from app.activitypub.util import process_microblog_announce
+    from app.models import PostBoost, UserFollower
+    from tests.factories import make_user_block
+    author, booster, post = _local_microblogger_and_follower()
+    make_user_block(author, booster)    # the accepted inward UserFollower row is still there
+    assert UserFollower.query.filter_by(local_user_id=author.id, remote_user_id=booster.id, is_accepted=True).count() == 1
+
+    result = process_microblog_announce(announce(booster.ap_public_url, post.ap_id), 'b1', False)
+
+    assert result is None
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 0
+    assert log_spy[-1][2] == 'Boosted post author has blocked the announcer or its instance'
+
+
+def test_an_author_who_blocked_the_announcers_instance_gets_no_boost(db_session, fetch_spy, log_spy):
+    from app.activitypub.util import process_microblog_announce
+    from app.models import PostBoost
+    from tests.factories import make_instance_block
+    author, booster, post = _local_microblogger_and_follower()
+    make_instance_block(author, booster.instance)
+
+    result = process_microblog_announce(announce(booster.ap_public_url, post.ap_id), 'b2', False)
+
+    assert result is None
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 0
+    assert log_spy[-1][2] == 'Boosted post author has blocked the announcer or its instance'
+
+
+def test_a_block_by_the_author_also_stops_an_announcer_a_local_user_follows(db_session, fetch_spy, log_spy):
+    from app.activitypub.util import process_microblog_announce
+    from app.models import PostBoost
+    from tests.factories import make_user_block
+    author, booster, post = _local_microblogger_and_follower()
+    make_follow(make_user(None, 'carol', local=True), booster)     # announcer_is_followed opens the gate too
+    make_user_block(author, booster)
+
+    assert process_microblog_announce(announce(booster.ap_public_url, post.ap_id), 'b3', False) is None
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 0
