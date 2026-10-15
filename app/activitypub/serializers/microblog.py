@@ -21,9 +21,13 @@ NOT_HASHTAG_PARENTS = ('a', 'code', 'pre')
 
 def _web_url(post):
     """The post's url when it is http or https, else None: anything else (javascript:, data:) is never linked."""
-    if post.url and urlsplit(post.url).scheme.lower() in ('http', 'https'):
-        return post.url
-    return None
+    if not post.url:
+        return None
+    try:
+        scheme = urlsplit(post.url).scheme.lower()
+    except ValueError:      # `http://[x`: the API only checks the prefix
+        return None
+    return post.url if scheme in ('http', 'https') else None
 
 
 def _starts_with_title(text: str, title: str) -> bool:

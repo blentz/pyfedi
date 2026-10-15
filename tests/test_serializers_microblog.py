@@ -265,6 +265,16 @@ def test_uppercase_https_scheme_is_linked(db_session):
     assert note_attachments(post) == [{'type': 'Link', 'href': 'HTTPS://example.com/x'}]
 
 
+def test_malformed_url_is_not_linked_and_does_not_crash(db_session):
+    from app.activitypub.util import post_to_page
+    post = _local(title='A site', post_type=POST_TYPE_LINK)
+    post.url = 'http://[x'     # the API accepts any string starting with http
+    note = microblog_note(post, [])
+    assert note['content'] == '<p>A site</p>'
+    assert note['attachment'] == []
+    assert post_to_page(post)['type'] == 'Note'
+
+
 # ----------------------------------------------------------------- hashtags in the body (spec §1: hashtags live)
 
 def _hashtag_link(name, shown=None):
