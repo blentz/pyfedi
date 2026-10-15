@@ -1,6 +1,8 @@
 """A post in the local microblogs community as a Mastodon-native Note (spec 2026-10-14 §4.2, amended §10 A2)."""
+import re
 from urllib.parse import urlsplit
 
+from bs4 import BeautifulSoup, NavigableString
 from flask import current_app
 from markupsafe import escape
 
@@ -10,6 +12,11 @@ from app.utils import ap_datetime, guess_mime_type, html_to_text, is_local_micro
 from app.visibility import followers_only_addressing, is_open
 
 PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
+
+# `#` at the start of the text or after anything that is not a letter or digit, then a Unicode word that does not
+# start with an underscore. `a#b` and a URL fragment inside text are therefore not hashtags.
+HASHTAG_RE = re.compile(r'(?<![^\W_])#([^\W_]\w*)')
+NOT_HASHTAG_PARENTS = ('a', 'code', 'pre')
 
 
 def _web_url(post):
@@ -27,6 +34,38 @@ def _starts_with_title(text: str, title: str) -> bool:
     return not rest or not rest[0].isalnum()
 
 
+def _hashtag_href(name: str) -> str:
+    return f"{current_app.config['SERVER_URL']}/tag/{name}"
+
+
+def link_hashtags(body_html: str) -> tuple:
+    """(html, names): the body with each `#word` in its text nodes linked the way Mastodon marks up a hashtag, and
+    the lowercased names in order of first use. Text inside <a>, <code> and <pre> and attribute values are never
+    touched. Markup with no hashtag comes back byte for byte."""
+    soup = BeautifulSoup(body_html, 'html.parser')
+    names = []
+    for text in soup.find_all(string=True):
+        if type(text) is not NavigableString or text.find_parent(NOT_HASHTAG_PARENTS) is not None:
+            continue    # a comment or doctype, or text that is already a link or code
+        parts, last = [], 0
+        for match in HASHTAG_RE.finditer(str(text)):
+            name = match.group(1).lower()
+            if name not in names:
+                names.append(name)
+            link = soup.new_tag('a', href=_hashtag_href(name), rel='tag')
+            link['class'] = 'mention hashtag'
+            link.append('#')
+            span = soup.new_tag('span')
+            span.string = match.group(1)
+            link.append(span)
+            parts += [NavigableString(str(text)[last:match.start()]), link]
+            last = match.end()
+        if parts:
+            parts.append(NavigableString(str(text)[last:]))
+            text.replace_with(*parts)
+    return (str(soup), names) if names else (body_html, names)
+
+
 def uses_microblog_note(post) -> bool:
     """A post goes out as a Note when it is in the local microblogs community. Polls and events keep their
     Question and Event shapes."""
@@ -36,9 +75,10 @@ def uses_microblog_note(post) -> bool:
 def note_content(post) -> str:
     """The title as its own paragraph, then the body. A Note has no title, and the form requires one, so leaving it
     out would lose what the author wrote. Left out only when the body's text already starts with it as whole words."""
-    body = post.body_html or ''
+    original = post.body_html or ''
+    body = link_hashtags(original)[0]
     title = (post.title or '').strip()
-    if not title or _starts_with_title(html_to_text(body).strip(), title):
+    if not title or _starts_with_title(html_to_text(original).strip(), title):
         return body
     if post.type in (POST_TYPE_LINK, POST_TYPE_VIDEO) and _web_url(post):
         return f'<p><a href="{escape(post.url)}">{escape(title)}</a></p>{body}'
@@ -74,6 +114,10 @@ def microblog_note(post, mentions: list) -> dict:
     addressing = note_addressing(post, mentions)
     content = note_content(post)
     tag = post.tags_for_activitypub()
+    explicit = {entry['name'].lower() for entry in tag if entry.get('type') == 'Hashtag'}
+    for name in link_hashtags(post.body_html or '')[1]:
+        if f'#{name}' not in explicit:
+            tag.append({'type': 'Hashtag', 'href': _hashtag_href(name), 'name': f'#{name}'})
     for mention in mentions:
         tag.append({'href': mention.public_url(), 'name': mention.mention_tag(), 'type': 'Mention'})
     note = {
