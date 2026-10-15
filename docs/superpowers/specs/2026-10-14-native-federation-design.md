@@ -500,6 +500,19 @@ Each step gets its own implementation plan and its own commits, and each ends wi
     the body drops its tag unless it is also an explicit tag. The Note's `tag` list is built from `post.tags`
     only; nothing is derived from the body at serialization. Content linking is unchanged. Posts written before
     A12 are not backfilled.
+  - **Fix round 1 (2026-10-15):**
+    - A boosted post fetched because we did not hold it is stored with the visibility its audience gives, and the
+      boost is refused unless that is public or unlisted, as for a held post.
+    - A body `#word` longer than 256 characters (`Tag.name` and `display_as` are `String(256)`) is linked in
+      `content` but not stored as a tag.
+    - The web edit form, and the crosspost form filled from a source post, fill the tags field of a local
+      microblogs post with `post.tags` minus its body hashtags. A tag that was both explicit and in the body
+      becomes body-only.
+    - A new Tag made from a body hashtag shows the spelling first used (`#SolarStorm`); matching stays case-blind.
+    - When a follower stored before `ap_own_inbox_url` existed follows again, its actor document is fetched once,
+      synchronously, before the answer. The document must name the follower and pass the own-host rule of
+      `delivery_inbox_of`. Its `inbox` is then stored and used. If the fetch fails, the answer goes to the shared
+      inbox.
 
 ## 11. Evidence: PeerTube spike (2026-10-15)
 
