@@ -1,0 +1,12 @@
+{
+	local_certs
+	skip_install_trust
+}
+
+piefed.test {
+	reverse_proxy piefed-web:5000
+}
+
+mastodon.test {
+	reverse_proxy mastodon-web:3000
+}

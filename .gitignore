@@ -195,3 +195,7 @@ tests/fuzz/.work/
 # .gitignore has no effect on a file git already tracks, so this does not
 # change its tracked status.
 scratch_*
+
+# Interop harness secrets and tokens
+interop/.env.interop
+interop/.tokens.json
