@@ -165,20 +165,54 @@ link posts) use `page`.
 
 ### 4.3 `peertube_video`
 
-The starting shape below is confirmed or corrected by the PeerTube spike (§9 step 2), and the confirmed
-shape replaces this section before step 4 begins.
+(Amended: see §10 A11.) Confirmed against PeerTube v8.3.1 by the spike (§9 step 2). Evidence: §11. "Required"
+means PeerTube rejects the object, crashes, or stores a video that cannot be listed or played without it.
 
-- `type: Video`, `id: post.public_url()`, `uuid`, `name: post.title`.
-- `duration: "PT{duration_s}S"`.
-- `content`: the description as markdown, with `mediaType: text/markdown`.
-- `url`: a list holding
-  - a `Link` with `mediaType: text/html` and `href` set to the post page, and
-  - a `Link` with `mediaType` set to the file mime, `href` set to the file URL, and `height`, `size` and `fps`.
-- `icon`: `[{type: Image, url: <thumbnail URL>, mediaType, width, height}]`.
-- `attributedTo: [{type: Person, id: <author>}, {type: Group, id: <community>}]`.
-- `commentsEnabled: post.comments_enabled`, `downloadEnabled: true`, `sensitive`, `state: 1`,
-  `isLiveBroadcast: false`, `waitTranscoding: false`, `published`, and `updated` on edit.
-- Addressing: `to: [as:Public]`, `cc: [community followers URL]`.
+Required:
+
+- `type: Video`. `id`: the post's AP id. When a `Create` or `Announce` names a video PeerTube does not
+  hold yet, PeerTube fetches the object from this id and uses the fetched copy. The id must therefore serve this
+  same `Video` (push equals fetch) as `application/activity+json`. The id must be
+  on the community's host: the channel is looked up by host.
+- `uuid`: the media `uuid` (§3.4). It must be a version 4 UUID; a version 7 UUID is rejected.
+- `name`: `post.title`. PeerTube rejects names shorter than 3 or longer than 120 characters, so the builder
+  truncates longer titles to 120.
+- `duration: "PT{duration_s}S"`, a string of whole seconds. PeerTube rejects an integer. It reads only the leading
+  digits, so `PT1M5S` would become 1 second.
+- `published` and `updated`, both always, not only on edit. Either one missing rejects the object.
+- `views: 0`. A missing count rejects the object.
+- `likes` and `dislikes`: the post's existing count collections, `/post/<id>/likes` and `/post/<id>/dislikes`.
+  Without them PeerTube v8.3.1 stores the video and then crashes its whole process.
+- `url`: a list holding a `Link` with `mediaType` set to the file mime (`video/mp4`, `video/webm` or `video/ogg`),
+  `href` set to the file URL, `height` and `size`, plus `width` and `fps` when known. A plain mp4 `Link` plays in
+  PeerTube's player: no HLS playlist, torrent or `streamingPlaylists` entry is needed. Without `height` or `size`,
+  PeerTube drops the `Link` and keeps a video with no file, which cannot play. The file name in `href` must be
+  unique among all videos the PeerTube instance knows, because PeerTube stores the remote file under that name.
+  `<uuid>-<height>.<ext>` meets this.
+- `icon`: `[{type: Image, url: <thumbnail URL>, mediaType, width, height}]`. A missing icon, or one without
+  `width` and `height`, rejects the object.
+- `attributedTo: [{type: Person, id: <author>}, {type: Group, id: <community>}]`. Only the `Group` is required;
+  without it the video is rejected. The order and the string or object form do not matter. PeerTube credits the
+  video to the community owner (§6.2), not to the `Person` named here.
+- `to: [as:Public]` written in full as `https://www.w3.org/ns/activitystreams#Public`. Without it the video is
+  stored as unlisted and is not listed under the channel. `cc: [community followers URL]`.
+- `commentsPolicy: 1` when `post.comments_enabled`, else `2`. PeerTube v8 ignores `commentsEnabled`. A missing
+  `commentsPolicy` means comments are disabled.
+
+Optional (checked, accepted, no effect on listing or playback):
+
+- `content`: the description as markdown, with `mediaType: text/markdown`. `text/html` is also accepted. If
+  `content` is present it must be at least 3 characters and `mediaType` must be one of these two; otherwise the
+  object is rejected. Without `content` the video has no description.
+- A `Link` with `mediaType: text/html` and `href` set to the post page.
+- `sensitive` (sets PeerTube's NSFW flag), `downloadEnabled`, `isLiveBroadcast: false`, `waitTranscoding: false`
+  and `state: 1`. PeerTube defaults each of these when missing (`state` defaults to published).
+- `support` (stored and shown as the support text), `language: {identifier, name}` and `tag` (`Hashtag` entries
+  of 2 to 30 characters).
+
+Media files must be served with `Access-Control-Allow-Origin` (for example `*`). PeerTube's player loads them
+with `crossorigin="anonymous"`, and without the header the browser blocks playback. Flask-served static files
+already send it (`app/request_hooks.py`); a reverse proxy or S3 bucket that serves media directly must add it.
 
 ### 4.4 `podcast_episode`
 
@@ -279,18 +313,37 @@ Recipients are filtered as they are today: `can_deliver_to`, instance bans, user
 | Kind | Activity | Signed by | Recipients |
 |---|---|---|---|
 | `microblogs` | `Create(Note)` / `Update(Note)` | author | shared inboxes of the author's followers' instances and mentioned actors' instances. Threadiverse instances following `/c/microblogs` keep today's community `Announce`. |
-| `video_channel` | `Create(Video)` / `Update(Video)` by the author, then `Announce` by the community | author, then community | the community's follower instances. `MICROBLOG_APPS` get `Announce(<id>)` as today. |
+| `video_channel` | `Create(Video)` / `Update(Video)`; `Delete` of a video post | author for `Create` and `Update`; the community owner for `Delete` | the shared inboxes of the community's follower instances. `MICROBLOG_APPS` get `Announce(<id>)` as today. |
 | `podcast` | `Create(Note)` announcement | community | the community's follower instances |
 
-The PeerTube spike decides whether PeerTube needs the `Create(Video)` from the account, from the channel,
-or as an `Announce` from the channel. This table changes to match before step 4.
+(Amended: see §10 A11.) For `video_channel`, PeerTube v8.3.1 lists the video under the subscribed channel for
+each of these deliveries: `Create(Video)` signed by the author, `Create(Video)` signed by the community, or
+`Create` by the author followed by `Announce(<id>)` by the community. One `Create(Video)` signed by the author is
+enough, so the community sends no `Announce` to PeerTube. An `Announce` by the community is accepted and recorded
+as a share. An `Announce` that wraps the `Create`, which is the form threadiverse followers get today, is ignored
+by PeerTube. For a video it does not hold yet, PeerTube fetches the `Video` from its `id` on `Create` and
+`Announce` and uses the fetched copy. An `Update` is applied from the embedded object without a fetch. An `Update` is accepted from any actor on the community's host.
+A `Delete` of a video is accepted only from the community owner, the `Person` in the community's `attributedTo`
+(§6.2). PeerTube rejects a `Delete` signed by the author, unless the author is the owner, and one signed by the
+community.
 
 ### 6.2 Actors
 
 - `video_channel` and `podcast` communities keep their `Group` actor, keys, inbox and follower handling.
-- The spikes list any actor properties PeerTube or Castopod require, such as `attributedTo` naming the
-  owner `Person` on a PeerTube channel. Only properties a spike proves required are added, and only to
-  the community kinds that need them.
+- The spikes list any actor properties PeerTube or Castopod require. Only properties a spike proves required
+  are added, and only to the community kinds that need them.
+- (Amended: see §10 A11.) A `video_channel` community's `Group` sets `attributedTo: [{type: Person, id: <owner>}]`,
+  where the owner is the community's creator, `Community.user_id`. A PeerTube channel has exactly one account, and
+  the `Person` must be on the community's host. PeerTube refuses to subscribe to a `Group` without such a
+  `Person`; today's `attributedTo`, the moderators collection URL, fails.
+  PeerTube makes this `Person` the channel's account: every video in the channel is shown under it, and only it
+  may delete them (§6.1). `moderators` keeps the moderators collection URL. PieFed reads moderators from
+  `moderators` when `attributedTo` is not a string. Lemmy 0.19 parses this list as its PeerTube form and then
+  has no moderators URL.
+- (Amended: see §10 A11.) The `Accept` (or `Reject`) of a `Follow` of a `video_channel` community goes to the
+  follower's own `inbox`, not to its shared inbox. PeerTube ignores an `Accept` that arrives at its shared inbox,
+  so the subscription stays pending. Today PieFed stores only the shared inbox of a remote user and sends the
+  `Accept` there.
 - No new actor types, inboxes or URL namespaces, apart from the episode route in §4.4.
 
 ### 6.3 Following
@@ -310,6 +363,10 @@ These go through the existing handlers, keyed by our object id:
 - `Like` becomes an upvote, and `Dislike` (PeerTube) a downvote.
 - `Announce` of our object counts as a boost.
 - PeerTube `View` and `CacheFile` stay ignored.
+- (Amended: see §10 A11.) PeerTube reuses its rating ids: a `Like` is always
+  `<account>/likes/<PeerTube video id>`, and the `Undo` of it is that id plus `/undo`. After a like, an unlike and
+  a second like, PieFed drops the second `Like` as a duplicate activity id, so the upvote is lost. `Dislike` ids
+  behave the same way.
 
 Any gap found by the harness is fixed in the inbound handler, test-first.
 
@@ -410,3 +467,137 @@ Each step gets its own implementation plan and its own commits, and each ends wi
 - **A8 (§4.2):** body `#words` in a microblogs post become `Hashtag` tags and are linked in `content`. This is serialization-only; nothing is stored. The rule is the `HASHTAG_RE` regex in `app/activitypub/serializers/microblog.py` (a `#` at the start or after a non-alphanumeric, then a Unicode word that starts with a letter or digit and holds at least one letter, so `#1` is no hashtag), applied to text nodes outside `a`, `code` and `pre`, and deduped against explicit tags.
 - **A9 (§6.1):** the group `Announce` copy sent to threadiverse community followers carries `audience` (the community) on both its inner activity and the inner object, so Lemmy and mbin can file the post. The author's `Create`/`Update`, the microblog `Announce` of the id, and the fetched object carry none.
 - **A10 (§6.4):** an `Announce` of a local post is accepted from an accepted inward follower of its author, unless the author blocked the announcer or the announcer's instance, the post is deleted, or the announcer cannot view it (`can_view`). A followers-only post is therefore never boosted by a remote follower: `can_view` reads outward follows only.
+- **A11 (§4.3, §6.1, §6.2, §6.4), PeerTube spike (step 2), owner review pending:** PeerTube v8.3.1 shows a PieFed
+  community's uploaded video as a native, playable video under the subscribed channel, given four changes.
+  - The `Group` of a `video_channel` community names its owner `Person` in `attributedTo` (§6.2). Without it
+    PeerTube cannot subscribe.
+  - The `Accept` of a `Follow` goes to the follower's own inbox (§6.2). PeerTube ignores one at its shared inbox.
+  - The `Video` carries the fields §4.3 now lists as required. The draft lacked `views`, `likes`, `dislikes`,
+    `commentsPolicy` and an always-present `updated`. Missing `likes` and `dislikes` crash PeerTube. Media is
+    served with `Access-Control-Allow-Origin`.
+  - Delivery is one `Create(Video)` / `Update(Video)` signed by the author. A `Delete` is signed by the community
+    owner, because PeerTube accepts a video `Delete` only from the channel's account (§6.1).
+  - Inbound comments, likes and dislikes already work, and `View` is ignored. PeerTube's reused rating ids make
+    PieFed drop a repeated like as a duplicate (§6.4).
+  - Evidence: §11.
+
+## 11. Evidence: PeerTube spike (2026-10-15)
+
+PeerTube `docker.io/chocobozzz/peertube:v8.3.1-trixie@sha256:1f161d08b113d77410b8051f764d16a05267692f3b0a3a7b2f0cf887f80ed082`
+(source tag `v8.3.1`, commit `3324876`), run in the interop harness (`compose.interop.yaml`). Hand-made objects were
+served from `piefed.test` and signed with PieFed's own `send_post_request` (`app/activitypub/signature.py`). A
+PeerTube user subscribed to probe communities. Captures are in `tests/fixtures/peertube_*_v8.json`. Source citations
+are paths in the PeerTube repository at `v8.3.1`.
+
+### 11.1 Subscription
+
+| Probe | Result |
+|---|---|
+| Subscribe to `microblogs@piefed.test` and `vc1@piefed.test`, actor as today | Refused: `Cannot find account attributed to video channel https://piefed.test/c/vc1` |
+| `attributedTo: [{type: Person, id: <owner>}]` | `Follow` sent; PieFed records the member and sends `Accept` to `https://peertube.test/inbox` |
+| `attributedTo: "<owner URL>"` | Same as the row above |
+| `attributedTo: [<moderators URL>, <owner URL>]` | Same as the row above |
+| `Accept` at PeerTube's shared inbox (PieFed today) | Ignored: `Need to accept on explicit inbox.`; subscription stays `pending` |
+| The same `Accept`, signed by the community and posted to `https://peertube.test/accounts/carol/inbox` | Subscription `accepted`; the channel shows `ownerAccount` alice |
+
+Source: `server/core/lib/activitypub/actors/get.ts:59-60` and `:87-91` (a `Group` needs an owner),
+`:105-134` (`findOwner`: same host, `type: Person`); `server/core/helpers/custom-validators/activitypub/actor.ts:83-85`;
+`server/core/lib/activitypub/process/process-accept.ts:9` and `process-reject.ts:9` (explicit inbox only). PieFed:
+`app/activitypub/util.py:2175` stores the shared inbox as `ap_inbox_url`; `app/activitypub/routes.py:1295` sends the
+`Accept` there. Lemmy 0.19.13 `crates/apub/src/protocol/objects/mod.rs:132-151` parses a list of `{type, id}` as
+`AttributedTo::Peertube`, which yields no moderators URL.
+
+### 11.2 Delivery
+
+All variants used one subscribed community and the shared inbox `https://peertube.test/inbox`.
+
+| Variant | Listed under the channel | Fetch |
+|---|---|---|
+| (a) `Create(Video)` signed by the author | yes | re-fetched from its `id` on `piefed.test` |
+| (b) `Create(Video)` signed by the community | yes | re-fetched from its `id` |
+| (c) (a), then `Announce(<id>)` by the community | yes; the `Announce` is stored as a share | re-fetched from its `id` |
+| `Announce(<id>)` by the community only | yes | re-fetched from its `id` |
+| `Announce(Create(Video))` by the community (today's threadiverse form) | no | PeerTube fetched the `Create` id as a video and gave up |
+| (a) by a non-owner author | yes, shown under the owner's account | re-fetched from its `id` |
+| `Update(Video)` by the owner, by the community, or by a non-owner author | applied in each case | not fetched; the embedded object is used |
+| `Delete` by a non-owner author | refused: `Account https://piefed.test/u/dave does not own video channel` | |
+| `Delete` by the community | refused: `Account https://piefed.test/c/vc2 does not own video channel` | |
+| `Delete` by the owner | video removed | |
+
+Source: `server/core/helpers/custom-validators/activitypub/activity.ts:109-121` (a `Create` must embed a valid
+object); `server/core/lib/activitypub/videos/get.ts:78` and `videos/shared/url-to-object.ts:12-14` (fetch by id, same
+host); `videos/shared/abstract-builder.ts:47-58` (channel from the `Group` in `attributedTo`, or `audience`);
+`process/process-announce.ts:22` (only a `Group` or `Application` announce counts) and `:44`;
+`process/process-update.ts:90-93` and `:100-104`; `process/process-delete.ts:92-94`. PeerTube itself signs a video's
+`Create` and `Delete` with the channel's account (`send/send-create.ts:43`, `send/send-delete.ts:33`) and
+`Announce`s it from the channel (`share.ts:102`).
+
+### 11.3 The Video object
+
+Base object: the §4.3 required fields. Each probe changed one field and was delivered as (a). The validator is
+`sanitizeAndCheckVideoTorrentObject` in `server/core/helpers/custom-validators/activitypub/videos.ts:44-108`. Its
+debug log names the failing field, quoted below.
+
+| Probe | Result | Source |
+|---|---|---|
+| no `uuid`; a version 7 UUID | rejected: `uuid` | `videos.ts:88`, `misc.ts` (`custom-validators`) `:65-67` |
+| no `duration`; `duration: 10` | rejected: `duration format` | `activitypub/misc.ts:91-97`, `videos.ts:82-83` |
+| `PT1M5S` | not probed; parsed as 1 | `server/core/lib/activitypub/activity.ts:17-18` |
+| no `icon`; `icon` without `width`/`height` | rejected: `icons` | `videos.ts:57`, `activitypub/misc.ts:65-89` |
+| `icon` as one object, not a list | accepted | `activitypub/misc.ts:66` |
+| no `views` | rejected: `views` | `videos.ts:93` |
+| no `updated`; no `published` | rejected: `updated`; `published` | `videos.ts:94-95` |
+| no `likes` (with `dislikes`); neither | accepted, stored, then the PeerTube process exits: `Named replacement ":count" has no entry in the replacement map` | `videos/shared/video-sync-attributes.ts:31`, `:56-72`; `server/core/models/video/video.ts:1624-1635`; `server/core/helpers/logger.ts:196-199` |
+| `likes`/`dislikes` set to PieFed's `/post/<id>/likes` and `/dislikes` | accepted; PeerTube synced `likes = 1` | `app/activitypub/routes.py:2859` |
+| no `content` and no `mediaType` | accepted, no description | `videos.ts:99` |
+| `content` without `mediaType`; `content: "ab"` | rejected: `mediaType/content` | `videos.ts:99`, `:222-224`; `server/core/initializers/constants.ts:497` |
+| `mediaType: text/html` | accepted | `videos.ts:223` |
+| no `state`; no `downloadEnabled`, `isLiveBroadcast`, `waitTranscoding`, `sensitive` | accepted with defaults | `videos.ts:62-68` |
+| `sensitive: true` | accepted, `nsfw = true` | |
+| no `commentsEnabled` and no `commentsPolicy`; `commentsEnabled: true` | accepted, comments disabled | `videos.ts:71-77`; policy enum `packages/models/src/videos/comment/video-comment-policy.enum.ts:1-5` |
+| `commentsPolicy: 1` | accepted, comments enabled | |
+| `support` | accepted and stored | |
+| `name` of 121 characters; of 2 characters | rejected: `name` | `videos.ts:80`, `constants.ts:494` |
+| only the mp4 `Link` (no `text/html` `Link`) | accepted, 1 file | |
+| mp4 `Link` without `height`; without `size` | accepted with 0 files | `videos.ts:110-119`, `:226-249` (bad links are dropped, not rejected) |
+| mp4 `Link` without `fps`; `mediaType: video/webm` | accepted, 1 file | `videos.ts:118`, `constants.ts:907-913` |
+| only the `text/html` `Link` | accepted with 0 files | |
+| a second video using the same file name | refused: `filename must be unique` | `videos/shared/object-to-model-attributes.ts:100`, `server/core/models/video/video-file.ts:116-119` |
+| `attributedTo` `[Group, Person]`; `[Group]` only; plain URL strings | accepted | `activitypub/misc.ts:56-63` |
+| `attributedTo: [Person]` only | refused: `Cannot find associated video channel` | `abstract-builder.ts:55` |
+| `attributedTo: [Person]` plus `audience: <Group>` | accepted | `actors/get.ts:115` |
+| no `to` and no `cc` | accepted as unlisted (privacy 2), not listed under the channel | `videos/shared/object-to-model-attributes.ts:270-273` |
+| `tag` with `Hashtag`s; `language` | accepted, stored | `videos.ts:169-184` |
+
+Playback: `GET /api/v1/videos/{uuid}` for the base object showed `duration: 10`, one 360p file with `fileUrl` on
+`piefed.test`, no streaming playlists, and a thumbnail that PeerTube served from `/lazy-static/thumbnails/`
+(200, `image/jpeg`). From the PeerTube container the file answered a `Range` request with 206, and `ffprobe`
+read h264 640x360 and aac, 10 s. Headless Chromium (Playwright 1.63.0), logged in as the PeerTube user, opened
+`/w/{uuid}`. Without `Access-Control-Allow-Origin` on the file, the browser blocked it and the player failed with
+`MEDIA_ERR_SRC_NOT_SUPPORTED`. With the header, the video played to `currentTime 9.47` of `duration 10`, at
+640x360. The player sets `crossorigin="anonymous"` (`client/src/standalone/player/src/shared/web-video/web-video-plugin.ts:32`)
+and uses web-video mode when there is no streaming playlist (`client/src/standalone/videos/shared/player-options-builder.ts:175-176`).
+Anonymous visitors get 403 for remote videos of a host the instance does not follow
+(`server/core/middlewares/validators/videos/videos.ts:298-305`); this is PeerTube's default and applies to any
+remote video.
+
+### 11.4 Inbound
+
+A real PieFed post served a `Video` at its own id. The PeerTube user then acted on it.
+
+| PeerTube action | Activity PieFed received | PieFed today |
+|---|---|---|
+| subscribe | `Follow` (`peertube_follow_v8.json`) | accepted; `Accept` sent to the shared inbox (11.1) |
+| comment | `Create(Note)`, `inReplyTo` the post id (`peertube_comment_v8.json`) | accepted; a reply in the post's thread |
+| like | `Like` (`peertube_like_v8.json`) | accepted; upvote |
+| dislike | `Undo(Like)`, then `Dislike` (`peertube_undo_like_v8.json`, `peertube_dislike_v8.json`) | accepted; the upvote becomes a downvote |
+| remove rating | `Undo(Dislike)` (`peertube_undo_dislike_v8.json`) | accepted; vote removed |
+| like again after an undo | `Like` with the same id as before | ignored: `Already aware of this activity`; no vote |
+| view | `View` from the instance actor `https://peertube.test/accounts/peertube` (`peertube_view_v8.json`) | ignored: `PeerTube View or CacheFile activity` |
+
+### 11.5 Golden captures
+
+`tests/fixtures/peertube_video_v8.json` is a video uploaded to PeerTube itself and fetched from its id. It has an HLS
+playlist and a web-video mp4, five icons, `attributedTo` naming the account and the channel, and `commentsPolicy`.
+`tests/fixtures/peertube_channel_v8.json` is its channel. Its `attributedTo` is a list of URL strings naming the
+account.
