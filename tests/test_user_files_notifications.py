@@ -567,6 +567,7 @@ def test_accepting_a_remote_follow_request_sends_an_accept(app, env):
     remote = make_user(make_instance('other.example', software='piefed'),
                        'remote')
     remote.ap_inbox_url = 'https://other.example/u/remote/inbox'
+    remote.ap_own_inbox_url = remote.ap_inbox_url   # where a follow is answered (A12)
     db.session.commit()
     a_follow_request(owner, remote)
     token = csrf(app, client)
@@ -633,6 +634,7 @@ def test_rejecting_a_remote_follow_request_sends_a_reject(app, env):
     remote = make_user(make_instance('other.example', software='piefed'),
                        'remote')
     remote.ap_inbox_url = 'https://other.example/u/remote/inbox'
+    remote.ap_own_inbox_url = remote.ap_inbox_url   # where a follow is answered (A12)
     db.session.commit()
     a_follow_request(owner, remote)
     token = csrf(app, client)

@@ -28,17 +28,21 @@ OWN = 'https://peer.example/users/alice/own-inbox'
 MIGRATION = Path(__file__).resolve().parent.parent / 'migrations' / 'versions' / 'b7e3c9a1f5d2_user_own_inbox.py'
 
 
-def _with_own_inbox(user):
-    user.ap_own_inbox_url = OWN
+def _with_own_inbox(user, own_inbox=OWN):
+    user.ap_own_inbox_url = own_inbox
     db.session.commit()
     return user
+
+
+def _stored_before_a12(user):
+    """An actor stored before ap_own_inbox_url existed."""
+    return _with_own_inbox(user, None)
 
 
 # --- which inbox answers a follow ---
 
 def test_a_follower_whose_own_inbox_is_unknown_is_answered_at_its_delivery_inbox(app, db_session):
-    user = make_user(make_instance('peer.example'), 'alice')
-    assert user.ap_own_inbox_url is None
+    user = _stored_before_a12(make_user(make_instance('peer.example'), 'alice'))
     assert user.follow_answer_inbox() == user.ap_inbox_url
 
 
@@ -155,9 +159,8 @@ def test_a_person_is_created_with_its_own_inbox_beside_the_shared_one(app, db_se
 
 def test_a_refresh_stores_the_own_inbox_of_an_actor_created_without_one(app, db_session, monkeypatch):
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
-    user = _known_remote_user()
+    user = _stored_before_a12(_known_remote_user())
     user_id = user.id
-    assert user.ap_own_inbox_url is None
 
     dispatch(_actor_update(user, _person_document(fields={
         'inbox': f'https://{PEER}/u/wakko/inbox', 'endpoints': {'sharedInbox': f'https://{PEER}/inbox'}})))
@@ -217,3 +220,82 @@ def test_the_migration_adds_the_column_and_reverses(app, db_session):
             migration.upgrade()
         assert 'ap_own_inbox_url' in _columns(connection)
         connection.rollback()
+
+
+# --- a follower stored before ap_own_inbox_url: fetched once, synchronously, before the answer (A12) ---
+
+def _fetch_returns(monkeypatch, document):
+    calls = []
+
+    def fake(uri, retry_delay=3):
+        calls.append(uri)
+        return document
+    monkeypatch.setattr('app.activitypub.util.remote_object_to_json', fake)
+    return calls
+
+
+def _follower_document(follower, **fields):
+    return {'id': follower.ap_profile_id, 'type': 'Person', 'inbox': OWN,
+            'endpoints': {'sharedInbox': 'https://peer.example/inbox'}, **fields}
+
+
+def test_an_unknown_own_inbox_is_fetched_before_the_answer(app, db_session, monkeypatch):
+    sends = record_sends(monkeypatch)
+    follower, community = _seed_follow_of_local_community()
+    follower_id = _stored_before_a12(follower).id
+    calls = _fetch_returns(monkeypatch, _follower_document(follower))
+
+    dispatch(inbox_activity(follower, activity_type='Follow', object_uri=community.ap_profile_id))
+
+    assert calls == [follower.ap_public_url]
+    assert [(uri, body['type']) for uri, body, _ in sends] == [(OWN, 'Accept')]
+    db.session.expire_all()
+    assert db.session.get(User, follower_id).ap_own_inbox_url == OWN
+
+
+@pytest.mark.parametrize('document', [
+    None,
+    'not a document',
+    {'id': 'https://peer.example/users/someone-else', 'inbox': OWN},
+    {'inbox': 'https://elsewhere.example/inbox'},
+    {'endpoints': {'sharedInbox': 'https://elsewhere.example/inbox'}},
+    {'inbox': None, 'endpoints': {'sharedInbox': 'https://peer.example/inbox'}},
+], ids=['fetch-failed', 'not-a-dict', 'another-actor', 'off-host-inbox', 'off-host-shared-inbox', 'no-own-inbox'])
+def test_a_failed_fetch_answers_at_the_shared_inbox_as_before(app, db_session, monkeypatch, document):
+    sends = record_sends(monkeypatch)
+    follower, community = _seed_follow_of_local_community()
+    follower_id = _stored_before_a12(follower).id
+    if isinstance(document, dict):
+        document = {**_follower_document(follower), **document}
+    _fetch_returns(monkeypatch, document)
+
+    dispatch(inbox_activity(follower, activity_type='Follow', object_uri=community.ap_profile_id))
+
+    assert [(uri, body['type']) for uri, body, _ in sends] == [(follower.ap_inbox_url, 'Accept')]
+    db.session.expire_all()
+    assert db.session.get(User, follower_id).ap_own_inbox_url is None
+
+
+def test_a_known_own_inbox_is_not_fetched(app, db_session, monkeypatch):
+    sends = record_sends(monkeypatch)
+    follower, community = _seed_follow_of_local_community()
+    _with_own_inbox(follower)
+    calls = _fetch_returns(monkeypatch, None)
+
+    dispatch(inbox_activity(follower, activity_type='Follow', object_uri=community.ap_profile_id))
+
+    assert calls == []
+    assert [uri for uri, _, _ in sends] == [OWN]
+
+
+def test_a_follow_request_answered_by_hand_fetches_an_unknown_own_inbox(app, site, env, monkeypatch):
+    client, owner, _ = env
+    remote = _stored_before_a12(make_user(make_instance('peer.example', software='piefed'), 'alice'))
+    a_follow_request(owner, remote)
+    _fetch_returns(monkeypatch, _follower_document(remote))
+    token = csrf(app, client)
+
+    with patch('app.user.routes.send_post_request') as send:
+        client.post(f'/user/follow_request/{remote.id}/accept', data={'csrf_token': token})
+
+    assert send.call_args.args[0] == OWN
