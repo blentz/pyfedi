@@ -741,3 +741,74 @@ def test_a_failed_release_does_not_hide_the_error_that_caused_it(env, monkeypatc
     with pytest.raises(RuntimeError, match='a bug'):
         probe_media(False, post.id)
     assert 'the database went away' in caplog.text
+
+
+# ---------------------------------------------------------------- the claim token: a stale run writes nothing
+
+
+def reclaimed_while_probing(monkeypatch, post, then_raise=None):
+    """While this run is inside ffprobe, the sweep takes the upload back and a second run claims it: committed from
+    another session, the media record now carries the second run's token."""
+    real = media_tasks.run_ffprobe
+
+    def probing(path):
+        with Session(bind=db.engine) as other:
+            row = other.get(Post, post.id)
+            row.extensions = {**row.extensions, 'media': {**row.extensions['media'], 'status': 'probing',
+                                                          'probing_since': 'the second run'}}
+            other.commit()
+        if then_raise is not None:
+            raise then_raise
+        return real(path)
+    monkeypatch.setattr(media_tasks, 'run_ffprobe', probing)
+
+
+def assert_left_to_the_second_run(env, post, media_file):
+    media = media_of(post)
+    assert (media['status'], media['probing_since']) == ('probing', 'the second run')
+    assert post.status == POST_STATUS_PROCESSING and post.image_id is None
+    assert env.tasks == [] and env.notified == [] and Notification.query.count() == 0
+    assert File.query.count() == 0
+    assert files_on_disk() == [media_file]   # its thumbnail is gone; the media is the second run's to probe
+
+
+def test_a_run_that_lost_its_claim_does_not_publish(env, monkeypatch):
+    post = stored_post(env)
+    media_file = media_local_path(post)
+    reclaimed_while_probing(monkeypatch, post)
+    post = run(post)
+    assert_left_to_the_second_run(env, post, media_file)
+    assert post.url.startswith(env.app.config['SERVER_URL'])
+
+
+def test_a_run_that_lost_its_claim_does_not_fail_the_post(env, monkeypatch):
+    post = stored_post(env, 'video_mpeg4.mp4')
+    media_file = media_local_path(post)
+    reclaimed_while_probing(monkeypatch, post)
+    post = run(post)
+    assert_left_to_the_second_run(env, post, media_file)
+    assert 'error' not in media_of(post)
+
+
+def test_a_run_that_lost_its_claim_after_moving_to_s3_removes_only_its_thumbnail(env, s3, monkeypatch):
+    """Both runs upload the media under the same key, so the loser leaves that object, and the local file the
+    winner may still be reading; it removes the thumbnail object it uploaded under its own name."""
+    post = stored_post(env)
+    media_file = media_local_path(post)
+    name = os.path.basename(media_file)
+    reclaimed_while_probing(monkeypatch, post)
+    post = run(post)
+    assert_left_to_the_second_run(env, post, media_file)
+    keys = [o['Key'] for o in s3.list_objects_v2(Bucket='pyfedi-test').get('Contents', [])]
+    assert keys == [f'posts/{name[0:2]}/{name[2:4]}/{name}']
+    assert post.url.startswith(env.app.config['SERVER_URL'])
+
+
+def test_a_stale_release_leaves_the_live_claim_alone(env, monkeypatch):
+    post = stored_post(env)
+    media_file = media_local_path(post)
+    reclaimed_while_probing(monkeypatch, post, then_raise=RuntimeError('a bug'))
+    with pytest.raises(RuntimeError, match='a bug'):
+        probe_media(False, post.id)
+    db.session.expire_all()
+    assert_left_to_the_second_run(env, db.session.get(Post, post.id), media_file)

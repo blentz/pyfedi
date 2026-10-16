@@ -8,7 +8,7 @@ import pillow_avif  # NOQA  # registers Pillow's AVIF plugin, for an instance wh
 from boto3.exceptions import Boto3Error
 from botocore.exceptions import BotoCoreError, ClientError
 from flask import current_app
-from sqlalchemy import or_, text
+from sqlalchemy import or_, select, text
 from flask_babel import force_locale, gettext
 from PIL import Image, ImageOps
 
@@ -81,31 +81,34 @@ def validate_probe(probe: dict, kind: str) -> dict:
     return {'duration_s': math.ceil(duration), 'codec': audio['codec_name']}
 
 
-# One UPDATE moves the media status, only from `from_status` and only for an undeleted post, and merges `fields` and the
-# attempt count into the media record. Postgres re-reads the WHERE of a row another UPDATE changed meanwhile, so of
+# One UPDATE moves the media status, only from `from_status` (and, given a token, only for the run that claimed with it)
+# and only for an undeleted post, and merges `fields` and the attempt count into the media record. Postgres re-reads the WHERE of a row another UPDATE changed meanwhile, so of
 # two runs racing for one upload exactly one moves it: the compare-and-set is the statement, no read-check-write.
 _MOVE_MEDIA_STATUS = text(
     "UPDATE post SET extensions = jsonb_set(extensions::jsonb, '{media}', (extensions::jsonb -> 'media')"
     " || CAST(:fields AS jsonb)"
     " || jsonb_build_object('attempts', COALESCE((extensions -> 'media' ->> 'attempts')::int, 0) + :bump))::json"
-    " WHERE id = :post_id AND deleted = false AND extensions -> 'media' ->> 'status' = :from_status")
+    " WHERE id = :post_id AND deleted = false AND extensions -> 'media' ->> 'status' = :from_status"
+    " AND (CAST(:token AS text) IS NULL OR extensions -> 'media' ->> 'probing_since' = CAST(:token AS text))")
 STUCK_AFTER = timedelta(minutes=30)   # a probe is bounded by its tools' 60 s limits and one S3 upload
 MAX_ATTEMPTS = 3
 
 
-def _move_media_status(post_id, from_status: str, to_status: str, bump: int = 0, **stamps) -> bool:
+def _move_media_status(post_id, from_status: str, to_status: str, bump: int = 0, token: str | None = None,
+                       **stamps) -> bool:
     moved = db.session.execute(_MOVE_MEDIA_STATUS, {
-        'post_id': post_id, 'from_status': from_status, 'bump': bump,
+        'post_id': post_id, 'from_status': from_status, 'bump': bump, 'token': token,
         'fields': json.dumps({'status': to_status, **stamps})})
     db.session.commit()
     return moved.rowcount == 1
 
 
-def _release(post_id) -> None:
-    """Put a claimed upload back to processing after an unexpected error, so no run leaves it claimed. If that fails
-    too, it is logged and not raised: the caller re-raises the error that broke the run, and the sweep recovers it."""
+def _release(post_id, token: str) -> None:
+    """Put a claimed upload back to processing after an unexpected error, so no run leaves it claimed; only this run's
+    claim, so a stale run never frees the live one's. If that fails too, it is logged and not raised: the caller
+    re-raises the error that broke the run, and the sweep recovers it."""
     try:
-        _move_media_status(post_id, 'probing', 'processing')
+        _move_media_status(post_id, 'probing', 'processing', token=token)
     except Exception as error:
         db.session.rollback()
         current_app.logger.error(f'probe_media: post {post_id}: could not release the claim: {error!r}')
@@ -116,15 +119,17 @@ def probe_media(send_async, post_id):
     session = get_task_session()
     try:
         with patch_db_session(session):
-            # 'probing' while this run works: a second delivery of the task finds it claimed and leaves it alone
-            if not _move_media_status(post_id, 'processing', 'probing', bump=1,
-                                      probing_since=utcnow().isoformat()):
+            # 'probing' while this run works: a second delivery of the task finds it claimed and leaves it alone. The
+            # claim's probing_since is this run's token: if the sweep takes the upload back from a run it thinks lost
+            # and another run claims it, this one sees a different token and writes nothing.
+            token = utcnow().isoformat()
+            if not _move_media_status(post_id, 'processing', 'probing', bump=1, probing_since=token):
                 return
             try:
-                _probe(post_id)
+                _probe(post_id, token)
             except Exception:
                 db.session.rollback()
-                _release(post_id)
+                _release(post_id, token)
                 raise
     except Exception:
         session.rollback()
@@ -133,12 +138,14 @@ def probe_media(send_async, post_id):
         session.close()
 
 
-def _probe(post_id) -> None:
-    """The claimed upload of an undeleted local post: ready and published, or failed with a reason."""
+def _probe(post_id, token: str) -> None:
+    """The claimed upload of an undeleted local post: ready and published, or failed with a reason, by the run that
+    still holds the claim; a run that lost it removes its own files and writes nothing."""
     post = db.session.get(Post, post_id)
     media = media_of(post)
     written = []        # every image file this run has started to write, so a failure can remove it
     thumbnail = None    # the thumbnail's File row, once it exists
+    moved = False       # the media is in the bucket and post.url names it; the local copy goes once that is committed
     try:
         path = media_local_path(post)
         if path is None or not os.path.isfile(path):
@@ -153,18 +160,27 @@ def _probe(post_id) -> None:
             raise MediaToolError('the thumbnail could not be made') from error
         if store_files_in_s3():   # only once the file is known good and its thumbnail made
             _move_to_s3(post, path, thumbnail, written)
+            moved = True
     except MediaToolError as error:
+        if not _holds_claim(post, token):
+            _abandon(post, thumbnail, written)
+            return
         _fail(post, thumbnail, written, str(error))
+        return
+    if not _holds_claim(post, token):
+        _abandon(post, thumbnail, written)
         return
     refusal = publish_refusal(post)
     if refusal is not None:
         _fail(post, thumbnail, written, refusal)
-        return
-    if thumbnail is not None:
-        meta['thumbnail_file_id'] = post.image_id
-    with_media(post, status='ready', **meta)
-    publish_ready_post(post)
-    if thumbnail is not None:
+    else:
+        if thumbnail is not None:
+            meta['thumbnail_file_id'] = post.image_id
+        with_media(post, status='ready', **meta)
+        publish_ready_post(post)
+    if moved:
+        _drop_local_copy(post, path)
+    if refusal is None and thumbnail is not None:
         make_image_sizes(thumbnail.id, 512, 1200, 'posts', post.community.low_quality)
 
 
@@ -228,11 +244,33 @@ def _move_to_s3(post, path, thumbnail, written) -> None:
             image_place = written[-1]
             thumbnail.source_url = upload_file_to_s3(image_place, _s3_key(image_place), guess_mime_type(image_place))
             _drop_local_copy(post, image_place)
-        post.url = upload_file_to_s3(path, _s3_key(path), media_of(post)['mime'])   # named before the unlink
+        post.url = upload_file_to_s3(path, _s3_key(path), media_of(post)['mime'])
     except _STORE_ERRORS as error:
         current_app.logger.warning(f'probe_media: post {post.id}: S3 refused it: {error!r}')
         raise MediaToolError('the file could not be stored') from error
-    _drop_local_copy(post, path)
+
+
+def _holds_claim(post, token: str) -> bool:
+    """Whether this run still holds the claim, read under a row lock that the next commit releases: the sweep cannot
+    take the upload back between this check and the run's own ready or failed write."""
+    db.session.flush()
+    # The lock is taken by a plain select of the row: Post's joined eager loads refuse FOR UPDATE on a refresh
+    db.session.execute(select(Post.id).where(Post.id == post.id).with_for_update())
+    db.session.refresh(post)
+    media = media_of(post) or {}
+    return media.get('status') == 'probing' and media.get('probing_since') == token
+
+
+def _abandon(post, thumbnail, written) -> None:
+    """A run that lost its claim: another run owns the upload now. Only this run's thumbnail and image files go. The
+    media object in the bucket and the local media file stay: the winner uploads under the same key and may still
+    be reading the file."""
+    current_app.logger.warning(f'probe_media: post {post.id}: the claim was taken back; this run stops')
+    if thumbnail is not None:
+        thumbnail.delete_from_disk()
+    db.session.rollback()
+    for image_place in written:
+        _remove(image_place)
 
 
 def _drop_local_copy(post, path) -> None:
@@ -267,9 +305,9 @@ def publish_refusal(post) -> str | None:
     time: the author, the community or the post can change before it is ready. The scheduled publisher re-checks
     can_create_post at publish time for the same reason (app/cli.py, F7). The rows are read again, so a change another
     transaction committed while probing is seen, and moderator status is read from its row, not from the cached
-    Community.moderators list."""
+    Community.moderators list. The post itself the caller has just read again, under lock (_holds_claim)."""
     db.session.flush()
-    for row in (post, post.author, post.community):
+    for row in (post.author, post.community):
         db.session.refresh(row)
     author, community = post.author, post.community
     if post.deleted:
