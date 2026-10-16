@@ -784,3 +784,32 @@ def test_an_upload_is_probed_and_published_in_one_eager_request(env, monkeypatch
     assert notified == [post.id]
     image = post.image
     os.unlink(image.local_path_for_url(image.source_url))
+
+
+# ---------------------------------------------------------------- final review #1: a media post never repeats
+
+
+@pytest.mark.parametrize('repeat', ['daily', 'weekly', 'monthly'])
+def test_an_upload_with_a_repeating_schedule_is_a_form_error(env, repeat):
+    """A repeat copies every column of the post, the media record and its file with them: an upload is refused a
+    repeat, on the form, and nothing is stored."""
+    response = submit(env, env.mod, env.chan, 'video', 'clip.mp4', fixture_bytes('video_h264.mp4'),
+                      scheduled_for='2099-01-01T10:00', repeat=repeat)
+
+    assert response.status_code == 200
+    assert b'A post with an uploaded file cannot repeat.' in response.data
+    assert Post.query.count() == 0 and stored_files() == [] and env.probes == []
+
+
+def test_an_upload_with_no_repeat_is_still_accepted(env):
+    response = submit(env, env.mod, env.chan, 'video', 'clip.mp4', fixture_bytes('video_h264.mp4'), repeat='none')
+    assert response.status_code == 302 and Post.query.one().status == POST_STATUS_PROCESSING
+
+
+def test_an_edit_cannot_give_a_media_post_a_repeat(env):
+    post = ready_post(env)
+    response = edit(env, post, scheduled_for='2099-01-01T10:00', repeat='weekly')
+
+    db.session.expire_all()
+    assert response.status_code == 302
+    assert db.session.get(Post, post.id).repeat in (None, '', 'none')

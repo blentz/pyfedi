@@ -86,3 +86,23 @@ def test_a_repeating_post_by_an_author_who_may_post_publishes_a_copy(app, schedu
     _publish(app)
 
     assert Post.query.filter_by(status=POST_STATUS_PUBLISHED).count() == 1
+
+
+def test_a_repeating_media_post_is_published_once_and_never_copied(app, scheduled, caplog):
+    """Final review #1: a copy took every column, the media record (same uuid), url and image_id with them, so
+    purging any copy removed the file and thumbnail every other copy showed. A media post never repeats: it is
+    published once, as a one-shot post, and the skipped repeat is logged."""
+    post = scheduled.post
+    post.repeat = 'daily'
+    post.url = 'https://test.piefed.local/static/media/posts/ab/cd/abcdefghijklmno.mp4'
+    post.extensions = {'media': {'status': 'ready', 'uuid': '5b0c1a7e-0000-4000-8000-000000000000',
+                                 'mime': 'video/mp4', 'bytes': 10}}
+    db.session.commit()
+
+    with caplog.at_level('INFO'):
+        _publish(app)
+
+    assert Post.query.count() == 1
+    published = db.session.get(Post, post.id)
+    assert published.status == POST_STATUS_PUBLISHED and published.scheduled_for is None
+    assert f'Scheduled post {post.id} has uploaded media: published once, not repeated' in caplog.text

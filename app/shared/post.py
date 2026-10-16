@@ -527,6 +527,8 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         url = post.url
         uploaded_file = None
     media_kind = media_upload_kind(user, post.community, type, uploaded_file) if from_scratch else None
+    if media_of(post) is not None or media_kind is not None:
+        repeat = None   # a repeat copies the post, and every copy would share its one media file and thumbnail
 
     post.indexable = user.indexable
     if can_mod_post(post, user):

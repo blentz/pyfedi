@@ -36,7 +36,7 @@ from app.email import send_email
 from app.models import CronJobLog, Settings, BannedInstances, Role, User, RolePermission, Domain, ActivityPubLog, utcnow, \
     utcnow, Site, Instance, File, Notification, Post, CommunityMember, NotificationSubscription, PostReply, Language, \
     Community, SendQueue, _store_files_in_s3, PostVote, Poll, \
-    ActivityBatch, Reminder, RssFeed, RssFeedItem, Feed
+    ActivityBatch, Reminder, RssFeed, RssFeedItem, Feed, media_of
 from app.shared.tasks import task_selector
 from app.visibility import listable_clause, post_title_for
 from app.shared.tasks.maintenance import add_remote_communities, remove_old_bot_content, pwn_bots
@@ -1071,7 +1071,12 @@ def register(app):
                     date_with_tz = post.scheduled_for.replace(tzinfo=ZoneInfo(post.timezone))
                     if date_with_tz.astimezone(ZoneInfo('UTC')) > utcnow(naive=False):
                         continue
-                    if post.repeat and post.repeat != 'none':
+                    if post.repeat and post.repeat != 'none' and media_of(post) is not None:
+                        # A copy takes every column, the media record, url and image_id with them: every copy
+                        # would share one file and thumbnail, and purging any one would remove them for all
+                        logger.info(f'Scheduled post {post.id} has uploaded media: published once, not repeated')
+                        next_occurrence = None
+                    elif post.repeat and post.repeat != 'none':
                         next_occurrence = post.scheduled_for + find_next_occurrence(post)
                     else:
                         next_occurrence = None

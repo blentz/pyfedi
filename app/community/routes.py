@@ -1212,6 +1212,17 @@ def join_then_add(actor):
         abort(401)
 
 
+def refused_media_repeat(form, media_upload) -> bool:
+    """An uploaded file never repeats. A repeat copies every column of the post, the media record, url and image_id
+    with them: every copy would share one file and thumbnail, and purging any one would remove them for all. The
+    repeat is refused with a field error on the redisplayed form, and nothing is stored."""
+    uploaded_file = request.files.get('image_file') if media_upload else None
+    if not (uploaded_file and uploaded_file.filename) or form.repeat.data in (None, '', 'none'):
+        return False
+    form.repeat.errors.append(_('A post with an uploaded file cannot repeat.'))
+    return True
+
+
 @bp.route('/<actor>/submit/<string:type>', methods=['GET', 'POST'])
 @bp.route('/<actor>/submit', methods=['GET', 'POST'])
 @login_required
@@ -1288,7 +1299,7 @@ def add_post(actor, type=None):
     if type in (MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO) and not media_upload:
         del form.image_file
 
-    if form.validate_on_submit():
+    if form.validate_on_submit() and not refused_media_repeat(form, media_upload):
         if type == 'image' or type == 'event' or media_upload:
             uploaded_file = request.files.get('image_file')
         else:
