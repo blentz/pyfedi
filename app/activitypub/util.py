@@ -910,6 +910,26 @@ def release_activity(activity_id, actor_url) -> None:
     app_pkg.redis_client.delete(activity_dedupe_key(activity_id, actor_url))
 
 
+def release_undone_activity(undo: dict, announced: bool) -> None:
+    """Forget the claim of the activity an accepted Undo took back (R-UNDORELEASE, spec §6.4, amendment A14), so a
+    later activity reusing its id is processed: PeerTube re-sends a Follow with the same id after an unsubscribe, and
+    a Like after an Undo(Like) with the same id.
+
+    Called only once the Undo's handler really undid something. Released only when the Undo is the verified
+    top-level activity (not `announced`: one inside an Announce was verified as the announcer's), the undone
+    activity is embedded with a string id other than the Undo's own, its actor is the Undo's actor, and the id
+    lives on that actor's host -- the claim being scoped to the host, no other host's id is ever touched."""
+    actor = undo['actor']
+    undone = undo['object']
+    if announced or not isinstance(actor, str) or not isinstance(undone, dict):
+        return
+    undone_id = undone.get('id')
+    if not isinstance(undone_id, str) or undone_id == undo.get('id') or undone.get('actor') != actor or \
+            host_of(undone_id) != host_of(actor):
+        return
+    release_activity(undone_id, actor)
+
+
 def served_by_us(url: str, file) -> bool:
     """Whether `url` is an image this instance serves itself: any URL on our own host, or one of the URLs `file`
     (the image a community holds now, or None) renders as.
@@ -5276,6 +5296,12 @@ def _take_back_vote(voted_on, existing_vote):
     if had_emoji:
         voted_on.update_reaction_cache()
         db.session.commit()
+
+
+def has_vote_on(target_ap_id, user) -> bool:
+    """Whether `user` has a vote on the post or comment at `target_ap_id`: an Undo of it takes something back."""
+    voted_on = find_liked_object(target_ap_id)
+    return isinstance(voted_on, (Post, PostReply)) and _users_vote(voted_on, user) is not None
 
 
 def undo_vote(comment, post, target_ap_id, user):

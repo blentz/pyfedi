@@ -25,7 +25,7 @@ from app.activitypub.util import MEDIA_OBJECT_TYPES, follow_answer_inbox, MEDIA_
     post_to_activity, post_count_collections, comment_count_collections, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
-    update_post_from_activity, undo_vote, post_to_page, find_reported_object, \
+    update_post_from_activity, undo_vote, has_vote_on, release_undone_activity, post_to_page, find_reported_object, \
     process_report, ensure_domains_match, refresh_community_profile, \
     comment_model_to_json, restore_post_or_comment, ban_user, unban_user, \
     log_incoming_ap, find_community, site_ban_remove_data, community_ban_remove_data, verify_object_from_source, \
@@ -2029,6 +2029,8 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                 session.delete(join_request)
                             session.commit()
                             cache.delete_memoized(community_membership, user, community)
+                            if member or join_request:   # R-UNDORELEASE: a re-sent Follow may reuse the id
+                                release_undone_activity(core_activity, announced)
                             log_incoming_ap(id, APLOG_UNDO_FOLLOW, APLOG_SUCCESS, saved_json)
                             return
                         if isinstance(target, Feed):
@@ -2042,6 +2044,8 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                 session.delete(join_request)
                             session.commit()
                             cache.delete_memoized(feed_membership, user, feed)
+                            if member or join_request:   # R-UNDORELEASE
+                                release_undone_activity(core_activity, announced)
                             log_incoming_ap(id, APLOG_UNDO_FOLLOW, APLOG_SUCCESS, saved_json)
                             return
                         if isinstance(target, User):
@@ -2054,6 +2058,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                             if follower:
                                 session.delete(follower)
                                 session.commit()
+                                release_undone_activity(core_activity, announced)   # R-UNDORELEASE
                                 log_incoming_ap(id, APLOG_UNDO_FOLLOW, APLOG_SUCCESS, saved_json)
                             return
                         if not target:
@@ -2101,8 +2106,11 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                                 'Undo EmojiReact: no reaction to take back')
                                 return
                         else:
+                            undone = has_vote_on(target_ap_id, user)
                             post_or_comment = undo_vote(comment, post, target_ap_id, user)
                         if post_or_comment:
+                            if undone:   # R-UNDORELEASE: a re-sent Like may reuse the id
+                                release_undone_activity(core_activity, announced)
                             log_incoming_ap(id, APLOG_UNDO_VOTE, APLOG_SUCCESS, saved_json)
                             if not announced and post_or_comment.visibility in OPEN_VISIBILITIES:
                                 announce_activity_to_followers(post_or_comment.community, user, request_json, can_batch=True)
