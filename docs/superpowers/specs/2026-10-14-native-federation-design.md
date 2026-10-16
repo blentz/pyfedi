@@ -61,7 +61,7 @@ that already has posts.
 
 ### 3.1 `Community.kind`
 
-(Amended: see §10 A3.)
+(Amended: see §10 A3, A15.)
 
 - New column `kind = String(20)`, not null, server default `'discussion'`.
 - Values: `discussion`, `microblogs`, `video_channel`, `podcast`, held in constants in `app/constants.py`.
@@ -77,6 +77,8 @@ that already has posts.
   behaviour, and only for local communities.
 
 ### 3.2 Who sets `kind`
+
+(Amended: see §10 A15.)
 
 - On create and edit of a local community, a moderator may choose `discussion`, `video_channel` or `podcast`.
 - On edit, the choice is offered and accepted only while the community has zero posts, deleted ones included.
@@ -165,7 +167,7 @@ link posts) use `page`.
 
 ### 4.3 `peertube_video`
 
-(Amended: see §10 A11.) Confirmed against PeerTube v8.3.1 by the spike (§9 step 2). Evidence: §11. "Required"
+(Amended: see §10 A11, A15.) Confirmed against PeerTube v8.3.1 by the spike (§9 step 2). Evidence: §11. "Required"
 means PeerTube rejects the object, crashes, or stores a video that cannot be listed or played without it.
 
 Required:
@@ -303,7 +305,7 @@ Tests assert no file remains, following the static-tree leak gate (`tests/static
 
 ### 6.1 Delivery
 
-(Amended: see §10 A6.)
+(Amended: see §10 A6, A15.)
 
 (Amended: see §10 A9.)
 
@@ -577,6 +579,56 @@ Each step gets its own implementation plan and its own commits, and each ends wi
   - A later duplicate replaces the parked one. When an Undo releases the id, the parked request is taken; the release that deletes it is the one that acts, as for the marker and the recorded Undo. It runs through `shared_inbox` again in the `rerun_parked_request` celery task, with the signature check and the claim, only if its id, actor and type match the undone activity and it was signed no earlier than the Undo (the Undo's own signed time). In PeerTube's race the new activity is signed after its Undo and only lands first; a sender's retry of the old activity was signed before the Undo, and is discarded. Either time missing: discarded. A re-run answered with anything but 200 is logged as a failure, and a re-run does not write the instance's `ip_address`.
   - A vote is marked accepted only when, after `Post.vote`, a vote stands and differs from the one before; a toggle that takes a vote back, or a refused vote, is not marked.
   - Evidence: `tests/test_ap_security_undo_release.py`. `interop/test_peertube_subscribe.py` passes on a fresh stack and on three consecutive reused-stack runs, with no wait between the unsubscribe and the subscribe.
+- **A15 (§3.1, §3.2, §4.3, §6.1, §6.2, §8.3), step 4 video channels; code survey 2026-10-16:** the survey found these gaps between the spec and the code. Rulings:
+  1. **Owner.** No local community records an owner in `Community.user_id` today: `add_local` and `make_community` leave it NULL, and ownership lives only in `CommunityMember.is_owner`. A video channel without it has no `attributedTo` Person, and PeerTube cannot subscribe (§6.2).
+     - Every new local community, web or API, stores its creator in `Community.user_id`.
+     - When an existing community becomes `video_channel` and its `user_id` is NULL, `user_id` is set to its owner member with the lowest `CommunityMember.id`, or to the editing user when it has no owner member.
+     - Moving ownership later does not change `user_id`. PeerTube cannot change a channel's account either.
+  2. **Kind rules (§3.2).**
+     - Create (web form and API `kind`) offers `discussion`, `video_channel` and `podcast`; the default is `discussion`.
+     - Edit accepts a different kind only while the community has no `Post` rows, deleted ones included. Otherwise:
+       - the web form refuses the POST with a form error on `kind`, and saves nothing;
+       - the API refuses it with the error `kind can change only while the community has no posts`.
+     - Once the community has posts, the web form shows the kind as a disabled select. A disabled select is not submitted, so a POST without `kind` keeps the stored kind.
+     - A community of kind `microblogs` never changes kind, and `microblogs` is never accepted as a choice.
+     - `podcast` is offered now because step 3 audio uploads need it. Until step 6, a podcast community's posts federate as `Page`.
+  3. **Microblogs marking (§3.1, A12).**
+     - Migration `d4a7c1e9b3f6` sets `kind='microblogs'` on the row `find_microblogging_community` matches (`instance_id=1, user_id=1, name='microblogs'`). Its downgrade sets that row back to `discussion`.
+     - `find_microblogging_community` creates the row with `kind='microblogs'`, and still finds it by name.
+     - Both `is_local_microblogs` functions read `kind`: `app/utils.py` (`kind == 'microblogs' and is_local()`) and `app/community/live.py` (`kind == 'microblogs' and ap_id is None`).
+     - Every other `'microblogs'` name test is kept. Each one deliberately also matches the `microblogs` communities of remote PieFed servers, which keep `kind='discussion'`:
+       - the post-destination list (`app/utils.py`, `Community.name != 'microblogs'`);
+       - the share page (`app/main/routes.py`);
+       - relay expiry (`app/relays/expiry.py`);
+       - `hide_community_actions` (`app/community/routes.py`, `app/post/routes.py`);
+       - `Post.is_microblog`;
+       - `LIVE_COMMUNITY` and the joined-server SQL (`app/community/live.py`, `app/utils.py` `JOINED_SERVER_SQL`).
+  4. **The `Video` builder (§4.3).**
+     - `uses_peertube_video(post)` holds only when all of these are true:
+       - the post is a `POST_TYPE_VIDEO` in a local `video_channel` community;
+       - `is_open(post)` is true;
+       - its media is `ready` with a `video/*` mime;
+       - `post.image` has `width` and `height`.
+     - Any other post in that community uses the `Page` path (§4.1).
+     - `name` is the stripped title cut to 120 characters. A title shorter than 3 characters is padded with `.` to 3. The web forms already require 3; the API's edit may not.
+     - `content` is `post.body` as `text/markdown`, sent only when the stripped body has at least 3 characters.
+     - `tag` holds only the post's `Hashtag` entries whose name, without `#`, has 2 to 30 characters. Flair entries (`lemmy:CommunityTag`) are left out.
+     - `url` holds the file `Link` and a `text/html` `Link` to the post page.
+     - The file `Link`'s `mediaType` is the media mime, except that `video/quicktime` (MOV) is sent as `video/mp4`. PeerTube keeps a remote file `Link` only for `video/mp4`, `video/webm` and `video/ogg`, and a MOV holds the same streams.
+     - The file name in `href` is the upload's random 15-character name (A13.4). It is unique, which is what §4.3 asks of `<uuid>-<height>.<ext>`.
+     - The thumbnail `File` gets `width` and `height` when `probe_media` writes it, from the saved image. Before this, it had only `source_url`.
+     - `likes` and `dislikes` are the collection URLs as strings, as in the spike.
+     - `sensitive` is `nsfw or nsfl or content_warning` (A7). `language` is sent when the post has one.
+  5. **Delivery (§6.1).** `send_post` hands a post `uses_peertube_video` accepts to `send_peertube_video`. Each of the community's follower instances gets one activity:
+     - `peertube`: the author's `Create(Video)`, or `Update(Video)` on edit.
+     - `MICROBLOG_APPS`: on create, the community's `Announce` of the id; on edit, the author's `Update`. Both are as today.
+     - Every other instance: the community's `Announce` of the author's activity, with `audience` on the activity and on the `Video` (A9).
+     - Then each mentioned user's instance, and each instance where the author has followers, gets the author's activity once, if it got nothing above.
+  6. **Delete and restore (§6.1, §4.6).** For a post `uses_peertube_video` accepts, in a local community:
+     - Delete: each `peertube` follower instance gets a `Delete` signed by the community's owner, `Community.user_id`, instead of the community's `Announce(Delete)`. A community without an owner sends PeerTube nothing.
+     - Restore: each `peertube` follower instance gets the author's `Create(Video)` again, because PeerTube has no `Undo(Delete)`.
+     - Every other instance keeps today's shapes.
+  7. **Fuzz (§8.3).** Atheris targets for `peertube_video` (over a fuzzed media record and title) and for `validate_probe` (over fuzzed ffprobe JSON) join the fuzz registry.
 
 ## 11. Evidence: PeerTube spike (2026-10-15)
 
