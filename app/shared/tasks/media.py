@@ -70,7 +70,7 @@ def validate_probe(probe: dict, kind: str) -> dict:
         if video.get('codec_name') not in VIDEO_CODECS:
             raise MediaToolError(f"video codec {video.get('codec_name')} is not h264, vp9 or av1")
         width, height = video.get('width') or 0, video.get('height') or 0
-        if width <= 0 or height <= 0:
+        if not all(type(side) is int and side > 0 for side in (width, height)):   # ffprobe writes integers
             raise MediaToolError('the video has no dimensions')
         meta = {'duration_s': math.ceil(duration), 'width': width, 'height': height, 'codec': video['codec_name']}
         fps = _fps(video.get('avg_frame_rate'))

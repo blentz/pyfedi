@@ -1,0 +1,42 @@
+{
+    "streams": [
+        {
+            "index": 0,
+            "codec_name": "vp9",
+            "codec_long_name": "Google VP9",
+            "profile": "Profile 1",
+            "codec_type": "video",
+            "codec_tag_string": "[0][0][0][0]",
+            "codec_tag": "vp09.01.10.08",
+            "width": {"at":{"r":""},"streams":[]},
+            "coded_width": 64,
+            "coded_height": 64,
+     "color_space": "gbr",
+            "field_order": "progressive",
+            "r_frame_rate": "10/1",
+            "avg_frame_rate": "10/1",
+            "time_base": "1/1000",
+            "start_pts": 0,
+            "start_time": "0.000000",
+            "disposition": {
+           "still_image": 0,
+                "multilayer": 0
+       },
+            "tags": {
+                "ENCODER": "Lavc libvpx-vp9",
+                "DURATION": "00:00:01.000000000"
+            }
+        }
+    ],
+    "format": {
+        "filename": "tests/fska / WebM",
+        "start_time": "0.000000",
+        "duration": "1.000000",
+        "size": "2988",
+        "bit_rate": "23904",
+        "probe_score": 100,
+        "tags": {
+            "ENCODER": "Lavf61.7.#03"
+        }
+    }
+}
