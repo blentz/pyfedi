@@ -161,6 +161,7 @@ def add_local():
                                            get_setting('meme_comms_low_quality', False),
                               question_answer=form.question_answer.data, first_federated_at=utcnow(),
                               kind=form.kind.data, user_id=current_user.id)
+        shared_community.apply_podcast_category(community, form.podcast_category.data)
         icon_file = request.files.get('icon_file')
         if icon_file and icon_file.filename != '':
             file = save_icon_file(icon_file)
@@ -1553,6 +1554,7 @@ def community_edit(community_id: int):
                 form.kind.errors = list(form.kind.errors) + [refusal]
                 return render_template('community/community_edit.html', title=_('Edit community'), form=form,
                                        current_app=current_app, current="edit_settings", community=community)
+            shared_community.apply_podcast_category(community, form.podcast_category.data)   # choices already vetted it
             # D641: one implementation, shared with the API.
             shared_community.edit_community(form, community, SRC_WEB, uploaded_icon_file=request.files.get('icon_file'),
                            uploaded_banner_file=request.files.get('banner_file'))
@@ -1568,6 +1570,7 @@ def community_edit(community_id: int):
             form.title.data = community.title
             form.description.data = community.description
             form.kind.data = community.kind
+            form.podcast_category.data = community.podcast_category or ''
             form.theme.data = community.theme
             form.posting_warning.data = community.posting_warning
             form.nsfw.data = community.nsfw

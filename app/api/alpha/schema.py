@@ -3,7 +3,7 @@ import re
 from datetime import datetime
 from marshmallow import Schema, fields, validate, ValidationError, EXCLUDE, validates_schema, INCLUDE
 
-from app.constants import COMMUNITY_KINDS_OFFERED
+from app.constants import APPLE_PODCAST_CATEGORIES, COMMUNITY_KINDS_OFFERED
 from app.utils import is_hex_color
 
 
@@ -804,6 +804,7 @@ class CreateCommunityRequest(DefaultSchema):
     restricted_to_mods = fields.Boolean()
     rules = fields.String()
     kind = fields.String(validate=validate.OneOf(COMMUNITY_KINDS_OFFERED))
+    podcast_category = fields.String(validate=validate.OneOf(('',) + APPLE_PODCAST_CATEGORIES))
 
 
 class CommunityResponse(DefaultSchema):
@@ -838,6 +839,7 @@ class EditCommunityRequest(DefaultSchema):
     downvote_accept_mode = fields.Integer()
     post_url_type = fields.String()
     kind = fields.String(validate=validate.OneOf(COMMUNITY_KINDS_OFFERED))
+    podcast_category = fields.String(validate=validate.OneOf(('',) + APPLE_PODCAST_CATEGORIES))
 
 
 class DeleteCommunityRequest(DefaultSchema):

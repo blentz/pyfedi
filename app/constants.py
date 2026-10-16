@@ -39,6 +39,10 @@ COMMUNITY_KIND_MICROBLOGS = 'microblogs'
 COMMUNITY_KIND_VIDEO_CHANNEL = 'video_channel'
 COMMUNITY_KIND_PODCAST = 'podcast'
 COMMUNITY_KINDS_OFFERED = (COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_VIDEO_CHANNEL, COMMUNITY_KIND_PODCAST)
+# Apple Podcasts' top-level categories (spec §3.3, §10 A17.5); subcategories are not offered
+APPLE_PODCAST_CATEGORIES = ('Arts', 'Business', 'Comedy', 'Education', 'Fiction', 'Government', 'Health & Fitness',
+                            'History', 'Kids & Family', 'Leisure', 'Music', 'News', 'Religion & Spirituality',
+                            'Science', 'Society & Culture', 'Sports', 'Technology', 'True Crime', 'TV & Film')
 
 DATETIME_MS_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 

@@ -1309,6 +1309,7 @@ class Community(db.Model):
     name = db.Column(db.String(256), index=True)
     title = db.Column(db.String(256))
     kind = db.Column(db.String(20), nullable=False, server_default='discussion')   # COMMUNITY_KIND_*
+    podcast_category = db.Column(db.String(64))   # APPLE_PODCAST_CATEGORIES; read by a podcast's feed (§4.5)
     description = db.Column(db.Text)  # markdown
     description_html = db.Column(db.Text)  # html equivalent of above markdown
     theme = db.Column(db.String(20), default='')

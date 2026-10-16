@@ -243,10 +243,24 @@ def apply_kind(community, kind, user) -> str | None:
     return None
 
 
+def apply_podcast_category(community, value) -> str | None:
+    """Set `community.podcast_category` (spec §3.3, §10 A17.5); the error message, or None once applied. An empty
+    value clears it."""
+    if not value:
+        community.podcast_category = None
+        return None
+    if value not in APPLE_PODCAST_CATEGORIES:
+        return 'podcast_category must be one of the Apple Podcasts categories'
+    community.podcast_category = value
+    return None
+
+
 def make_community(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_file=None):
+    podcast_category = None
     kind = COMMUNITY_KIND_DISCUSSION   # the create form's kind is set by add_local, which does not come through here
     if src == SRC_API:
         kind = input.get('kind', COMMUNITY_KIND_DISCUSSION)
+        podcast_category = input.get('podcast_category', '')
         input['name'] = slugify(input['name'], separator='_').lower()
 
         name = input['name']
@@ -301,7 +315,7 @@ def make_community(input, src, auth=None, uploaded_icon_file=None, uploaded_bann
                           ap_domain=current_app.config['SERVER_NAME'],
                           subscriptions_count=1, instance_id=1, low_quality='memes' in name,
                           question_answer=question_answer, first_federated_at=utcnow(),
-                          kind=kind, user_id=user.id)
+                          kind=kind, podcast_category=podcast_category or None, user_id=user.id)
     try:
         db.session.add(community)
         db.session.commit()
@@ -431,6 +445,11 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
 
         if src == SRC_API and 'kind' in input:
             refusal = apply_kind(community, input['kind'], user)
+            if refusal is not None:
+                raise Exception(refusal)
+
+        if src == SRC_API and 'podcast_category' in input:
+            refusal = apply_podcast_category(community, input['podcast_category'])
             if refusal is not None:
                 raise Exception(refusal)
 
