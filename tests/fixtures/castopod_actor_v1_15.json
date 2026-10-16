@@ -1,0 +1,34 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/activitystreams",
+    "https://w3id.org/security/v1"
+  ],
+  "id": "https://castopod.test/@dave",
+  "type": "Person",
+  "to": [
+    "https://www.w3.org/ns/activitystreams#Public"
+  ],
+  "name": "Dave talks",
+  "preferredUsername": "dave",
+  "summary": "<p>A harness podcast.</p>\n",
+  "inbox": "https://castopod.test/@dave/inbox",
+  "outbox": "https://castopod.test/@dave/outbox",
+  "followers": "https://castopod.test/@dave/followers",
+  "url": "https://castopod.test/@dave",
+  "nodeInfo2Url": "https://castopod.test/.well-known/x-nodeinfo2",
+  "image": {
+    "type": "Image",
+    "mediaType": "image/png",
+    "url": "https://castopod.test/media/podcasts/dave/banner_federation.png"
+  },
+  "icon": {
+    "type": "Image",
+    "mediaType": "image/png",
+    "url": "https://castopod.test/media/podcasts/dave/cover_federation.png"
+  },
+  "publicKey": {
+    "id": "https://castopod.test/@dave#main-key",
+    "owner": "https://castopod.test/@dave",
+    "publicKeyPem": "-----BEGIN PUBLIC KEY-----\r\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwbWBl8gGwVMBfQRugKZK\r\nLH3EnxwDafTvw9Kk11eBuUUj6Cu1l0Uqu6r8lXCJzdSRurASKzXC6LBn/32ibuUY\r\n4IPgl1OjlNM7+CAwYg/YsbmXuHUpjISKTxMo98xvoIrhj+vTZA6Z499bxo/6EaHF\r\n4MqYC3dn9jTPjXU37KklTFCy/3gSOmIPh7KUP3FESia1RV8p+fU8y178ftBTg601\r\nO+HJdTEGNkU/gigsQUecwCiESAf3miQkUq0Gnd8Xd5U64hy+6pUoIOgKED+DZv7M\r\n18xrKsjGEMb/viBZjywoL+zPZXtDXWR7C/jgdtqj85WVzoBEZp+uA+n0XI8QROOB\r\nxQIDAQAB\r\n-----END PUBLIC KEY-----"
+  }
+}
