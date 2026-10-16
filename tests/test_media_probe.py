@@ -345,20 +345,20 @@ def test_upload_file_to_s3_passes_the_storage_class_and_acl(env, s3, monkeypatch
     assert os.path.exists('app/static/tmp/x.ogg')   # the caller removes the local copy
 
 
-@pytest.mark.parametrize('post_id', [None, 'no media record', 'already ready', 'deleted', 'being probed'])
-def test_a_post_with_nothing_to_probe_is_left_alone(env, post_id):
-    if post_id is None:
+@pytest.mark.parametrize('case', [None, 'no media record', 'already ready', 'deleted', 'being probed'])
+def test_a_post_with_nothing_to_probe_is_left_alone(env, case):
+    if case is None:
         probe_media(False, 999999)
         assert env.tasks == []
         return
-    if post_id == 'no media record':
+    if case == 'no media record':
         post = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/plain', title='plain')
         before = (post.status, post.extensions)
     else:
         post = stored_post(env)
-        if post_id == 'already ready':
+        if case == 'already ready':
             with_media(post, status='ready')
-        elif post_id == 'being probed':
+        elif case == 'being probed':
             with_media(post, status='probing')
         else:
             post.deleted = True

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 from typing import List
 from zoneinfo import ZoneInfo
@@ -349,7 +350,8 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None):
         # Only the file store_uploaded_media wrote during this call, never a path derived from post.url
         stored_media = getattr(post, 'stored_media_path', None)
         if stored_media is not None:
-            os.unlink(stored_media)
+            with contextlib.suppress(FileNotFoundError):   # an eager probe_media may have moved it to S3 already
+                os.unlink(stored_media)
         db.session.delete(vote)
         db.session.delete(post)
         community.post_count -= 1   # undo the increments above, or a post that never existed is counted (D463)
