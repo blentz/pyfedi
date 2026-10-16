@@ -100,6 +100,11 @@ def test_an_absurd_frame_rate_is_left_out(rate):
     assert 'fps' not in validate_probe(probe({**V, 'avg_frame_rate': rate}, A), 'video')
 
 
+@pytest.mark.parametrize('rate', ['-30/1', '0/1', '30/-1', '1/1000'])
+def test_a_frame_rate_that_rounds_to_zero_or_less_is_left_out(rate):
+    assert 'fps' not in validate_probe(probe({**V, 'avg_frame_rate': rate}, A), 'video')
+
+
 def test_an_unhashable_audio_codec_is_refused():
     with pytest.raises(MediaToolError, match='codec'):
         validate_probe(probe({'codec_type': 'audio', 'codec_name': ['aac']}), 'audio')
