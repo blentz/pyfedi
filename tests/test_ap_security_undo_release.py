@@ -27,7 +27,7 @@ from app.models import ActivityPubLog, CommunityMember, FeedMember, PostVote, Us
 from app.activitypub import signature_rfc9421
 from app.activitypub.signature import http_date_seconds
 from tests.conftest import ld_signed_body, unsigned_but_precheck_clean_headers
-from tests.factories import cavage_signed_headers, make_community, make_feed, make_instance, make_post, make_site, make_user, signed_inbox_post
+from tests.factories import cavage_signed_headers, make_community, make_instance_block, make_feed, make_instance, make_post, make_site, make_user, signed_inbox_post
 
 DUPLICATE = 'Already aware of this activity'   # the start of both messages: before and after the signature check
 
@@ -832,3 +832,40 @@ def test_a_recorded_undo_already_taken_is_not_released_again(app, redis_double, 
     mark_accepted({'id': FOLLOW_ID, 'type': 'Follow', 'actor': ACTOR}, announced=False)
 
     assert redis_double.exists(activity_dedupe_key(f'{ACTOR}/undo', ACTOR)) == 1
+
+
+# --- round 3, M3: a vote is marked accepted only when it made or changed a vote ---
+
+
+def test_a_like_that_takes_a_standing_vote_back_is_not_marked(app, inline, scene, redis_double):
+    """Post.vote toggles: a second upvote, under another id, removes the first. Nothing stands, so nothing is marked."""
+    _, _, post, carol, _ = scene
+    _post(app, _like(carol, post), carol)
+    second = dict(_like(carol, post), id=f'{carol.ap_profile_id}/likes/second')
+
+    _post(app, second, carol)
+
+    assert PostVote.query.filter_by(user_id=carol.id, post_id=post.id).count() == 0
+    assert redis_double.exists(activity_accepted_key(second['id'], carol.ap_profile_id)) == 0
+
+
+def test_a_dislike_refused_by_post_vote_is_not_marked(app, inline, scene, redis_double):
+    """The author blocked carol's instance: Post.vote does nothing for a downvote, and nothing is marked."""
+    _, _, post, carol, _ = scene
+    make_instance_block(post.author, carol.instance)
+    dislike = _like(carol, post, 'Dislike')
+
+    _post(app, dislike, carol)
+
+    assert PostVote.query.filter_by(user_id=carol.id, post_id=post.id).count() == 0
+    assert redis_double.exists(activity_accepted_key(dislike['id'], carol.ap_profile_id)) == 0
+
+
+def test_a_like_that_turns_a_downvote_up_is_marked(app, inline, scene, redis_double):
+    _, _, post, carol, _ = scene
+    _post(app, _like(carol, post, 'Dislike'), carol)
+    like = dict(_like(carol, post), id=f'{carol.ap_profile_id}/likes/up')
+
+    _post(app, like, carol)
+
+    assert redis_double.get(activity_accepted_key(like['id'], carol.ap_profile_id)) == f'Like|{carol.ap_profile_id}'
