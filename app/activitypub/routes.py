@@ -28,7 +28,7 @@ from app.activitypub.util import MEDIA_OBJECT_TYPES, follow_answer_inbox, MEDIA_
     create_post, create_post_reply, update_post_reply_from_activity, \
     update_post_from_activity, undo_vote, has_vote_on, vote_state, release_undone_activity, mark_accepted, deferred_key, DEFERRED_SECONDS, \
     activity_accepted_key, deferred_count_key, DEFERRED_PER_HOST, FOLLOW_TYPES, VOTE_TYPES, DEFERRABLE_TYPES, \
-    DEFERRED_MAX_BYTES, DEFERRED_HEADERS, current_signed_at, post_to_page, find_reported_object, \
+    DEFERRED_MAX_BYTES, DEFERRED_HEADERS, current_signed_at, PARKED_RERUN_ENVIRON, post_to_page, find_reported_object, \
     process_report, ensure_domains_match, refresh_community_profile, \
     comment_model_to_json, restore_post_or_comment, ban_user, unban_user, \
     log_incoming_ap, find_community, site_ban_remove_data, community_ban_remove_data, verify_object_from_source, \
@@ -934,7 +934,8 @@ def shared_inbox():
             actor.instance.dormant = False
             actor.instance.gone_forever = False
             actor.instance.failures = 0
-            actor.instance.ip_address = ip_address() if not bounced else ''
+            if not request.environ.get(PARKED_RERUN_ENVIRON):   # a re-run has no sender address of its own (M6)
+                actor.instance.ip_address = ip_address() if not bounced else ''
         db.session.commit()
 
         # When a user is deleted, the only way to be fairly sure they get deleted everywhere is to tell the whole fediverse.
@@ -1041,10 +1042,18 @@ def _release_undone(undo, announced, types) -> None:
 
 @celery.task
 def rerun_parked_request(parked):
-    """Run a parked inbox request again, as it was sent: shared_inbox checks its signature and claims its id anew."""
+    """Run a parked inbox request again, as it was sent: shared_inbox checks its signature and claims its id anew.
+    An answer other than success is logged (M6): one shared_inbox gives without a row of its own, a 429 while
+    federation is paused say, would otherwise leave no trace of the activity."""
+    body = base64.b64decode(parked['body'])
     with current_app.test_request_context(parked['path'], method='POST', base_url=current_app.config['SERVER_URL'],
-                                          headers=parked['headers'], data=base64.b64decode(parked['body'])):
-        shared_inbox()
+                                          headers=parked['headers'], data=body,
+                                          environ_overrides={PARKED_RERUN_ENVIRON: True}):
+        response = shared_inbox()
+    status = response[1] if isinstance(response, tuple) else 200
+    if status != 200:
+        log_incoming_ap(json.loads(body).get('id', ''), APLOG_NOTYPE, APLOG_FAILURE, None,
+                        f'Parked request re-run answered {status}')
 
 
 def _ld_signature_verifies(request_json, actor) -> bool:

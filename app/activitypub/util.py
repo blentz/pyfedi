@@ -934,6 +934,8 @@ DEFERRED_PER_HOST = 50
 # was HTTP-signed with its actor's own key (not bounced, not LD-only, not relayed); None otherwise. An Undo's is what
 # a request parked for the activity it undoes must be at least as late as (parked_request, review ruling 2026-10-16).
 current_signed_at: ContextVar = ContextVar('current_signed_at', default=None)
+# Set in the environ of a parked request's re-run (rerun_parked_request): it has no sender address of its own (M6)
+PARKED_RERUN_ENVIRON = 'piefed.parked_rerun'
 
 
 def deferred_count_key(actor_url) -> str:

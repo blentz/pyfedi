@@ -894,3 +894,42 @@ def test_every_stored_blob_is_within_the_cap(app, inline, scene, redis_double):
     _post(app, follow, carol)
 
     assert len(redis_double.get(deferred_key(follow['id'], carol.ap_profile_id))) <= DEFERRED_MAX_BYTES
+
+
+# --- round 3, M6: what a re-run answers is logged; it does not touch the sender's address ---
+
+
+def _parked_for_rerun(app, carol, follow, redis_double):
+    now = int(time.time())
+    _post(app, follow, carol, at=now - 900)
+    _post(app, follow, carol, at=now - 100)
+    return json.loads(redis_double.get(deferred_key(follow['id'], carol.ap_profile_id)))
+
+
+def test_a_rerun_answered_with_other_than_success_is_logged(app, inline, scene, redis_double):
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    parked = _parked_for_rerun(app, carol, follow, redis_double)
+    redis_double.set('pause_federation', '1')
+
+    activitypub_routes.rerun_parked_request(parked)
+
+    row = _last_log()
+    assert (row.activity_id, row.result) == (follow['id'], 'failure')
+    assert row.exception_message == 'Parked request re-run answered 429'
+
+
+def test_a_rerun_does_not_touch_the_instances_ip_address(app, inline, scene, redis_double):
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    parked = _parked_for_rerun(app, carol, follow, redis_double)
+    instance = db.session.get(type(carol.instance), carol.instance_id)
+    instance.ip_address = '203.0.113.9'
+    db.session.commit()
+    redis_double.delete(activity_dedupe_key(follow['id'], carol.ap_profile_id))   # as when an Undo released it
+
+    activitypub_routes.rerun_parked_request(parked)
+
+    db.session.expire_all()
+    assert db.session.get(type(carol.instance), carol.instance_id).ip_address == '203.0.113.9'
+    assert not (_last_log().exception_message or '').startswith('Parked request')
