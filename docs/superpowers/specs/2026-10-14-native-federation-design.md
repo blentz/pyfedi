@@ -617,6 +617,8 @@ Each step gets its own implementation plan and its own commits, and each ends wi
      - The file `Link`'s `mediaType` is the media mime, except that `video/quicktime` (MOV) is sent as `video/mp4`. PeerTube keeps a remote file `Link` only for `video/mp4`, `video/webm` and `video/ogg`, and a MOV holds the same streams.
      - The file name in `href` is the upload's random 15-character name (A13.4). It is unique, which is what §4.3 asks of `<uuid>-<height>.<ext>`.
      - The thumbnail `File` gets `width` and `height` when `probe_media` writes it, from the saved image. Before this, it had only `source_url`.
+     - `probe_media` also records the size in the media record as `thumbnail_width` and `thumbnail_height`. The `Video` icon and `uses_peertube_video` read those, not the `File`, because `make_image_sizes` later rewrites `File.width` and `File.height` to the medium size while `source_url` stays the full-size image.
+   - `uses_peertube_video` also requires the record keys the builder indexes (`uuid`, `duration_s`, `height`, `bytes`, `thumbnail_width`, `thumbnail_height`) to be present and non-empty, so a malformed record is served as a `Page`.
      - `likes` and `dislikes` are the collection URLs as strings, as in the spike.
      - `sensitive` is `nsfw or nsfl or content_warning` (A7). `language` is sent when the post has one.
   5. **Delivery (§6.1).** `send_post` hands a post `uses_peertube_video` accepts to `send_peertube_video`. Each of the community's follower instances gets one activity:

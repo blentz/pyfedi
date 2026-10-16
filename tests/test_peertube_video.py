@@ -28,7 +28,7 @@ def video_post(db_session):
     post.body = 'About the video'
     post.url = f'{server}/static/media/posts/ab/cd/abcdefghijklmno.mp4'
     with_media(post, status='ready', uuid=str(uuid.uuid4()), mime='video/mp4', bytes=12741, duration_s=10,
-               width=640, height=360, fps=30)
+               width=640, height=360, fps=30, thumbnail_width=640, thumbnail_height=360)
     post.image = File(source_url=f'{server}/static/media/posts/ef/gh/thumbthumbthumb.jpg', width=640, height=360)
     db.session.commit()
     return post
@@ -165,7 +165,7 @@ def _no_image(post):
 
 
 def _no_dims(post):
-    post.image.width = None
+    with_media(post, thumbnail_width=None)
 
 
 def _no_media(post):
@@ -186,4 +186,18 @@ def test_the_ready_video_is_a_peertube_video(video_post):
 
 def test_a_text_post_in_a_video_channel_is_a_page(video_post):
     video_post.type = POST_TYPE_ARTICLE
+    assert post_to_page(video_post)['type'] == 'Page'
+
+
+def test_the_icon_size_survives_make_image_sizes_rewriting_the_file(video_post):
+    # make_image_sizes_async later writes the 1200 px medium size into File.width/height; the url is not resized
+    video_post.image.width, video_post.image.height = 1200, 675
+    icon = peertube_video(video_post)['icon'][0]
+    assert (icon['width'], icon['height']) == (640, 360)
+
+
+@pytest.mark.parametrize('key', ['uuid', 'duration_s', 'height', 'bytes', 'thumbnail_width', 'thumbnail_height'])
+def test_a_record_missing_a_key_the_builder_needs_is_a_page(video_post, key):
+    with_media(video_post, **{key: None})
+    assert uses_peertube_video(video_post) is False
     assert post_to_page(video_post)['type'] == 'Page'

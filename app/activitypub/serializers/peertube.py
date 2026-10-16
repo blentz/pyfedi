@@ -14,11 +14,14 @@ CONTENT_MIN = 3
 TAG_MIN, TAG_MAX = 2, 30
 COMMENTS_ENABLED, COMMENTS_DISABLED = 1, 2
 # PeerTube keeps a remote file Link only for mp4, webm and ogg; a MOV holds the same streams an mp4 does
+# what peertube_video indexes: a record without one is a Page, not a KeyError on a fetch. The thumbnail size is
+# here and not on the File because make_image_sizes rewrites File.width/height to a size the source_url is not
+REQUIRED_KEYS = ('uuid', 'duration_s', 'height', 'bytes', 'thumbnail_width', 'thumbnail_height')
 LINK_MIME = {'video/quicktime': 'video/mp4'}
 
 
 def uses_peertube_video(post) -> bool:
-    """A public, ready video upload in a local video_channel community whose thumbnail has a size. Anything else in
+    """A public, ready video upload in a local video_channel community whose record holds every field the Video needs. Anything else in
     that community is a Page (spec §4.1)."""
     community = post.community
     media = media_of(post)
@@ -27,7 +30,7 @@ def uses_peertube_video(post) -> bool:
                 and post.type == POST_TYPE_VIDEO and is_open(post)
                 and media is not None and media.get('status') == 'ready'
                 and str(media.get('mime', '')).startswith('video/')
-                and image is not None and image.width and image.height)
+                and image is not None and all(media.get(key) for key in REQUIRED_KEYS))
 
 
 def video_name(title) -> str:
@@ -68,7 +71,7 @@ def peertube_video(post) -> dict:
         'dislikes': f'{base}/dislikes',
         'url': [_file_link(post, media), {'type': 'Link', 'mediaType': 'text/html', 'href': post.public_url()}],
         'icon': [{'type': 'Image', 'url': post.image.source_url, 'mediaType': guess_mime_type(post.image.source_url),
-                  'width': post.image.width, 'height': post.image.height}],
+                  'width': media['thumbnail_width'], 'height': media['thumbnail_height']}],
         'attributedTo': [{'type': 'Person', 'id': post.author.public_url()},
                          {'type': 'Group', 'id': community.public_url()}],
         'to': [PUBLIC],
