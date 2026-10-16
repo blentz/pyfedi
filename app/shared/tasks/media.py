@@ -141,12 +141,15 @@ def probe_media(send_async, post_id):
 
 def _probe(post_id, token: str) -> None:
     """The claimed upload of an undeleted local post: ready and published, or failed with a reason, by the run that
-    still holds the claim; a run that lost it removes its own files and writes nothing."""
+    still holds the claim; a run that lost it removes its own files and writes nothing.
+
+    Nothing of the post is written before the claim is checked: an UPDATE would lock its row through the S3 upload,
+    and every other write to the post (an edit, a removal, a ban's bulk update) would wait on that upload."""
     post = db.session.get(Post, post_id)
     media = media_of(post)
     written = []        # every image file this run has started to write, so a failure can remove it
     thumbnail = None    # the thumbnail's File row, once it exists
-    moved = False       # the media is in the bucket and post.url names it; the local copy goes once that is committed
+    media_url = None    # the media's bucket URL; the local copy goes once post.url naming it is committed
     try:
         path = media_local_path(post)
         if path is None or not os.path.isfile(path):
@@ -160,8 +163,7 @@ def _probe(post_id, token: str) -> None:
             current_app.logger.warning(f'probe_media: post {post.id}: no thumbnail: {error!r}')
             raise MediaToolError('the thumbnail could not be made') from error
         if store_files_in_s3():   # only once the file is known good and its thumbnail made
-            _move_to_s3(post, path, thumbnail, written)
-            moved = True
+            media_url = _move_to_s3(post, path, thumbnail, written)
     except MediaToolError as error:
         if not _holds_claim(post, token):
             _abandon(post, thumbnail, written)
@@ -171,22 +173,26 @@ def _probe(post_id, token: str) -> None:
     if not _holds_claim(post, token):
         _abandon(post, thumbnail, written)
         return
+    if media_url is not None:
+        post.url = media_url
     refusal = publish_refusal(post)
     if refusal is not None:
         _fail(post, thumbnail, written, refusal)
     else:
         if thumbnail is not None:
-            meta['thumbnail_file_id'] = post.image_id
+            post.image = thumbnail
+            meta['thumbnail_file_id'] = thumbnail.id
         with_media(post, status='ready', **meta)
         publish_ready_post(post)
-    if moved:
+    if media_url is not None:
         _drop_local_copy(post, path)
     if refusal is None and thumbnail is not None:
         make_image_sizes(thumbnail.id, 512, 1200, 'posts', post.community.low_quality)
 
 
 def _thumbnail(post, path, kind, probe, written) -> File | None:
-    """The post's thumbnail as a File that is also post.image (A13.4), or None for audio with no cover art."""
+    """The post's thumbnail as a File (A13.4), or None for audio with no cover art. Only the File row is written: the
+    caller makes it post.image once it holds the claim, so the post's row is not locked meanwhile."""
     if kind == MEDIA_KIND_VIDEO:
         def grab(out):
             extract_frame(path, _duration(probe) * THUMBNAIL_AT, out)
@@ -204,7 +210,6 @@ def _thumbnail(post, path, kind, probe, written) -> File | None:
         _remove(frame)
     file = File(source_url=f"{current_app.config['SERVER_URL']}{served_path(image_place)}")
     db.session.add(file)
-    post.image = file
     db.session.flush()
     return file
 
@@ -237,15 +242,16 @@ def _s3_key(local_path: str) -> str:
     return 'posts/' + local_path.removeprefix(MEDIA_DIRECTORY + '/')   # posts/xx/yy/<name><ext>
 
 
-def _move_to_s3(post, path, thumbnail, written) -> None:
-    """The thumbnail, then the media, into the bucket. The media goes last: if it fails, the thumbnail's File row
-    names the bucket and its removal takes the object with it, and the post keeps its local file."""
+def _move_to_s3(post, path, thumbnail, written) -> str:
+    """The thumbnail, then the media, into the bucket; returns the media's URL, for the caller to write to post.url
+    once it holds the claim. The media goes last: if it fails, the thumbnail's File row names the bucket and its
+    removal takes the object with it, and the post keeps its local file."""
     try:
         if thumbnail is not None:
             image_place = written[-1]
             thumbnail.source_url = upload_file_to_s3(image_place, _s3_key(image_place), guess_mime_type(image_place))
             _drop_local_copy(post, image_place)
-        post.url = upload_file_to_s3(path, _s3_key(path), media_of(post)['mime'])
+        return upload_file_to_s3(path, _s3_key(path), media_of(post)['mime'])
     except _STORE_ERRORS as error:
         current_app.logger.warning(f'probe_media: post {post.id}: S3 refused it: {error!r}')
         raise MediaToolError('the file could not be stored') from error
@@ -284,8 +290,7 @@ def _drop_local_copy(post, path) -> None:
 
 def _fail(post, thumbnail, written, reason: str) -> None:
     """A13.9: the post stays unpublished, its media record says why, and its author is told."""
-    if thumbnail is not None:
-        post.image = None
+    if thumbnail is not None:   # never post.image: only a ready post gets its thumbnail
         thumbnail.delete_from_disk()
         db.session.delete(thumbnail)
     for image_place in written:   # one written before its File row existed, or left half-written

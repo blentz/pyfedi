@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import boto3
 import pytest
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from werkzeug.datastructures import FileStorage
 
@@ -329,6 +330,33 @@ def test_a_media_upload_refused_by_s3_keeps_the_local_file_and_the_thumbnail_lea
     assert os.path.isfile(local) and media_local_path(post) == local
     assert s3.list_objects_v2(Bucket='pyfedi-test').get('KeyCount') == 0
     assert File.query.count() == 0
+
+
+def test_the_post_row_is_not_locked_while_its_files_go_to_the_bucket(env, s3, monkeypatch):
+    """An S3 upload of up to 500 MB can take minutes. Until the run holds its claim, nothing of the post is written,
+    so the author editing it, a mod removing it or a ban's bulk update does not wait on the upload."""
+    post = stored_post(env)
+    post_id = post.id
+    real_upload = media_tasks.upload_file_to_s3
+    edited = []
+
+    def upload(path, key, content_type):
+        with Session(bind=db.engine) as other:
+            other.execute(text("SET LOCAL lock_timeout = '1s'"))
+            other.execute(text('UPDATE post SET title = :title WHERE id = :id'),
+                          {'title': f'edited {len(edited)}', 'id': post_id})
+            other.commit()
+        edited.append(path)
+        return real_upload(path, key, content_type)
+    monkeypatch.setattr(media_tasks, 'upload_file_to_s3', upload)
+    post = run(post)
+
+    assert len(edited) == 2   # the thumbnail, then the media
+    assert post.title == 'edited 1'
+    assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_PUBLISHED
+    assert post.url.startswith('https://cdn.probeland.test/posts/')
+    assert media_of(post)['thumbnail_file_id'] == post.image_id
+    assert post.image.source_url.startswith('https://cdn.probeland.test/posts/')
 
 
 def test_upload_file_to_s3_passes_the_storage_class_and_acl(env, s3, monkeypatch):
