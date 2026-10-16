@@ -90,12 +90,12 @@ def env(app, db_session, monkeypatch):
     return SimpleNamespace(author=author, community=community)
 
 
-def _inbound(env, media_type):
+def _inbound(env, media_type, kind='Document', url=AUDIO_URL):
     activity = {'id': f'https://{PEER}/activities/1', 'type': 'Create', 'actor': env.author.ap_profile_id,
                 'object': {'id': f'https://{PEER}/p/1', 'type': 'Page', 'name': 'Ep',
                            'attributedTo': env.author.ap_profile_id, 'audience': env.community.ap_profile_id,
-                           'attachment': [{'type': 'Document', 'mediaType': media_type, 'url': AUDIO_URL,
-                                           'name': 'Ep'}]}}
+                           'attachment': [{'type': kind, **({'mediaType': media_type} if media_type else {}),
+                                           'url': url, 'name': 'Ep'}]}}
     post = Post.new(env.author, env.community, activity)
     db.session.commit()
     return post
@@ -110,4 +110,16 @@ def test_inbound_audio_document_is_marked_audio(env):
 
 def test_inbound_image_document_is_not_marked_audio(env):
     post = _inbound(env, 'image/jpeg')
+    assert (post.extensions or {}).get('media_type') != 'audio'
+
+
+def test_inbound_audio_attachment_is_marked_audio(env):
+    post = _inbound(env, 'audio/mpeg', kind='Audio', url=AUDIO_URL + '2')
+    assert post.url == AUDIO_URL + '2'
+    assert post.extensions['media_type'] == 'audio'
+
+
+def test_inbound_audio_attachment_without_media_type_is_not_marked(env):
+    post = _inbound(env, None, kind='Audio', url=AUDIO_URL + '2')
+    assert post.url == AUDIO_URL + '2'
     assert (post.extensions or {}).get('media_type') != 'audio'
