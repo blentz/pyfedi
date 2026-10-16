@@ -968,3 +968,33 @@ def test_an_emoji_react_reusing_the_id_that_lands_before_its_undo_takes_effect_a
 
     assert _reaction(post, carol) == '🎉'
     assert redis_double.exists(deferred_key(react['id'], carol.ap_profile_id)) == 0
+
+
+class _RecordedTask:
+    """rerun_parked_request as _release_undone sees it: called in line, or queued with .delay."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, parked):
+        self.calls.append(('direct', parked))
+
+    def delay(self, parked):
+        self.calls.append(('delay', parked))
+
+
+@pytest.mark.parametrize('debug, how', [(True, 'direct'), (False, 'delay')])
+def test_the_parked_request_is_run_in_line_in_debug_and_queued_otherwise(app, redis_double, monkeypatch, debug, how):
+    """The pattern of the inbox's other tasks: a debug server has no worker, so it runs the re-run itself."""
+    _accepted(redis_double)
+    parked = _parked_follow(redis_double)
+    task = _RecordedTask()
+    monkeypatch.setattr(activitypub_routes, 'rerun_parked_request', task)
+    monkeypatch.setattr(app, 'debug', debug)
+    token = current_signed_at.set(5)
+    try:
+        activitypub_routes._release_undone(UNDO_OF_FOLLOW, False, FOLLOW)
+    finally:
+        current_signed_at.reset(token)
+
+    assert task.calls == [(how, parked)]

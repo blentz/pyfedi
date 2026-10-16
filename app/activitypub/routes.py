@@ -1037,7 +1037,11 @@ def _park_duplicate(activity_id, actor, typed_json, request, http_signed) -> Non
 def _release_undone(undo, announced, types) -> None:
     """release_undone_activity, then the activity parked under the released id, if any, through the inbox again."""
     parked = release_undone_activity(undo, announced, types)
-    if parked is not None:
+    if parked is None:
+        return
+    if current_app.debug:
+        rerun_parked_request(parked)
+    else:
         rerun_parked_request.delay(parked)
 
 
