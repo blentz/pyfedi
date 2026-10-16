@@ -96,6 +96,8 @@ _MOVE_MEDIA_STATUS = text(
     " WHERE id = :post_id AND deleted = false AND extensions -> 'media' ->> 'status' = :from_status"
     " AND (CAST(:token AS text) IS NULL OR extensions -> 'media' ->> 'probing_since' = CAST(:token AS text))")
 STUCK_AFTER = timedelta(minutes=30)   # a probe is bounded by its tools' 60 s limits and one S3 upload
+# An upload not yet claimed may only be waiting behind a long background queue: a lost task is assumed later
+UNCLAIMED_AFTER = timedelta(hours=2)
 MAX_ATTEMPTS = 3
 
 
@@ -393,34 +395,35 @@ def requeue_stuck_media() -> None:
     """A13.9: the per-minute sweep for uploads a lost run left behind. Celery acks early, so a worker killed mid-probe
     (OOM, SIGKILL, a deploy restart) loses its task and the post would wait forever.
 
-    A probe claimed more than STUCK_AFTER ago, and an upload not probed within STUCK_AFTER of its upload or of its last
-    requeue, is put back to processing and queued again. Claims count `attempts` and requeues count `requeues`, so a
+    A probe claimed more than STUCK_AFTER ago, and an upload not claimed within UNCLAIMED_AFTER of its upload or of its
+    last requeue, is put back to processing and queued again. An unclaimed upload gets longer: it may only be waiting
+    its turn behind a backlog on the background queue. Claims count `attempts` and requeues count `requeues`, so a
     task lost before it ever claims is capped too: at MAX_ATTEMPTS of either, the upload fails and its author is told.
     Each move is the compare-and-set probe_media claims with, so a probe that is in fact alive keeps its upload. One
     post the sweep cannot handle is logged and skipped: the sweep runs inside send-queue's minute, whose other work
     must still run."""
-    cutoff = utcnow() - STUCK_AFTER
+    now = utcnow()
     waiting = Post.extensions['media']['status'].as_string().in_(('processing', 'probing'))   # never a failed post
     for post in Post.query.filter(Post.status == POST_STATUS_PROCESSING, Post.deleted == False,
                                   waiting).order_by(Post.id).all():
         post_id = post.id   # read now: the rollback expires the post, and reloading it can fail too
         try:
-            _sweep(post, cutoff)
+            _sweep(post, now)
         except Exception as error:
             db.session.rollback()
             current_app.logger.error(f'requeue_stuck_media: post {post_id}: {error!r}')
 
 
-def _sweep(post, cutoff) -> None:
+def _sweep(post, now) -> None:
     media = media_of(post) or {}
     status = media.get('status')
     if status == 'probing':
-        since = _stamp(media.get('probing_since'))
+        since, budget = _stamp(media.get('probing_since')), STUCK_AFTER
     elif status == 'processing':
-        since = _stamp(media.get('requeued_at')) or post.created_at
+        since, budget = _stamp(media.get('requeued_at')) or post.created_at, UNCLAIMED_AFTER
     else:
         return   # ready, or failed: nothing is waiting
-    if since is not None and since > cutoff:
+    if since is not None and since > now - budget:
         return
     if max(media.get('attempts') or 0, media.get('requeues') or 0) >= MAX_ATTEMPTS:
         if _move_media_status(post.id, status, 'failed'):
