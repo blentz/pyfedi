@@ -18,7 +18,8 @@ from flask import current_app
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.activitypub.signature import RsaKeys
-from app.activitypub.util import DEFERRED_SECONDS, activity_accepted_key, activity_dedupe_key, deferred_key, \
+from app.activitypub.util import DEFERRED_PER_HOST, DEFERRED_SECONDS, activity_accepted_key, activity_dedupe_key, \
+    deferred_count_key, deferred_key, \
     mark_accepted, release_undone_activity, undo_of_key
 from app.models import ActivityPubLog, CommunityMember, FeedMember, PostVote, UserFollower, utcnow
 from tests.conftest import unsigned_but_precheck_clean_headers
@@ -486,19 +487,63 @@ def test_a_like_reusing_the_id_that_lands_before_its_undo_takes_effect_after_it(
     assert PostVote.query.filter_by(user_id=carol.id, post_id=post.id).count() == 1
 
 
-def test_a_parked_follow_from_another_actor_is_discarded(app, inline, scene, redis_double):
-    """mallory, on carol's host, sends a verified Follow under carol's follow id: it is parked under that id, and
-    discarded when carol's Undo releases it, since its actor is not the Undo's."""
+def test_a_duplicate_from_another_actor_than_the_accepted_one_is_not_parked(app, inline, scene, redis_double):
+    """mallory, on carol's host, sends a verified Follow under carol's follow id: the id was accepted from carol, so
+    mallory's duplicate is dropped, not parked, and carol's Undo runs nothing of mallory's."""
     community, _, _, carol, mallory = scene
     follow = _follow(carol, community.ap_profile_id)
     _post(app, follow, carol)
     _post(app, dict(follow, actor=mallory.ap_profile_id), mallory)
-    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 1
+    assert _last_log().exception_message.startswith(DUPLICATE)
+    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 0
 
     _post(app, _undo(carol, follow), carol)
 
     assert _member(community, mallory) is None and _member(community, carol) is None
+
+
+def test_a_duplicate_of_an_id_never_accepted_is_not_parked(app, inline, scene, redis_double):
+    """A claim with no acceptance marker (a Follow that was refused, say) parks nothing."""
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    redis_double.set(activity_dedupe_key(follow['id'], carol.ap_profile_id), 1)
+
+    _post(app, follow, carol)
+
+    assert _last_log().exception_message.startswith(DUPLICATE)
     assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 0
+
+
+def test_a_host_parks_at_most_fifty_bodies_in_the_window(app, inline, scene, redis_double):
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    _post(app, follow, carol)
+    redis_double.set(deferred_count_key(carol.ap_profile_id), DEFERRED_PER_HOST - 1)
+
+    _post(app, follow, carol)   # the 50th
+    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 1
+    redis_double.delete(deferred_key(follow['id'], carol.ap_profile_id))
+
+    _post(app, follow, carol)   # the 51st
+    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 0
+    assert 590 < redis_double.ttl(deferred_count_key(carol.ap_profile_id)) <= 600
+
+
+def test_the_parking_limits(app):
+    assert activitypub_routes.DEFERRED_MAX_BYTES == 8 * 1024
+    assert DEFERRED_PER_HOST == 50
+
+
+def test_a_parked_body_holds_only_what_the_rerun_needs(app, inline, scene, redis_double):
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    _post(app, follow, carol)
+    _post(app, follow, carol)
+
+    parked = json.loads(redis_double.get(deferred_key(follow['id'], carol.ap_profile_id)))
+    assert set(parked) == {'path', 'headers', 'body'}
+    assert set(parked['headers']) <= set(activitypub_routes.DEFERRED_HEADERS)
+    assert json.loads(base64.b64decode(parked['body'])) == follow
 
 
 def test_a_parked_follow_failing_its_signature_on_the_rerun_is_discarded(app, inline, scene, redis_double):
@@ -565,11 +610,10 @@ def test_a_duplicate_of_another_type_is_still_dropped_before_any_signature_check
     assert _last_log().exception_message == 'Already aware of this activity (before any signature check)'
 
 
-def test_an_oversized_duplicate_is_not_parked(app, inline, scene, redis_double, monkeypatch):
+def test_a_duplicate_over_8_kib_is_not_parked(app, inline, scene, redis_double):
     community, _, _, carol, _ = scene
-    follow = _follow(carol, community.ap_profile_id)
+    follow = dict(_follow(carol, community.ap_profile_id), summary='x' * (8 * 1024))
     _post(app, follow, carol)
-    monkeypatch.setattr(activitypub_routes, 'DEFERRED_MAX_BYTES', 10)
 
     _post(app, follow, carol)
 
@@ -579,6 +623,7 @@ def test_an_oversized_duplicate_is_not_parked(app, inline, scene, redis_double, 
 @pytest.mark.parametrize('body', [
     {'id': FOLLOW_ID, 'type': 'Like', 'actor': ACTOR},     # another type
     {'id': f'{ACTOR}/follows/8', 'type': 'Follow', 'actor': ACTOR},   # another id
+    {'id': FOLLOW_ID, 'type': 'Follow', 'actor': 'https://peer.example/u/mallory'},   # another actor
 ])
 def test_a_parked_body_not_matching_the_undone_activity_is_discarded(app, redis_double, body):
     _accepted(redis_double)
