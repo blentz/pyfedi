@@ -1,6 +1,5 @@
 """Uploaded video and audio (spec §3.4, §5.1, A13): who may upload, how big, what type, and the media record."""
 import os
-import re
 import shutil
 import uuid
 
@@ -8,7 +7,7 @@ from flask import current_app
 
 from app.constants import (COMMUNITY_KIND_PODCAST, COMMUNITY_KIND_VIDEO_CHANNEL, MEDIA_KIND_AUDIO,
                            MEDIA_KIND_VIDEO, POST_STATUS_PROCESSING)
-from app.models import served_path
+from app.models import MEDIA_DIRECTORY, media_local_path, media_of, served_path  # noqa: F401  (re-exported)
 from app.shared.tasks import task_selector
 from app.utils import can_upload_audio, can_upload_video, ensure_directory_exists, get_setting, gibberish
 
@@ -19,10 +18,7 @@ _SWITCH = {MEDIA_KIND_VIDEO: can_upload_video, MEDIA_KIND_AUDIO: can_upload_audi
 _AUDIO_BRANDS = (b'M4A ', b'M4B ')
 MEDIA_EXT = {'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm',
              'audio/mpeg': '.mp3', 'audio/mp4': '.m4a', 'audio/ogg': '.ogg'}
-MEDIA_DIRECTORY = 'app/static/media/posts'
 COPY_CHUNK = 1024 * 1024
-# The only names store_uploaded_media writes: two shard directories that are the name's first four characters
-_STORED_NAME = re.compile(r'([A-Za-z0-9]{2})/([A-Za-z0-9]{2})/([A-Za-z0-9]{15})\.(?:mp4|mov|webm|mp3|m4a|ogg)')
 
 
 class MediaRefused(Exception):
@@ -63,12 +59,6 @@ def sniff_media_mime(head: bytes, kind: str) -> str | None:
     if mime is None or not mime.startswith(kind + '/'):
         return None
     return mime
-
-
-def media_of(post) -> dict | None:
-    extensions = post.extensions if isinstance(post.extensions, dict) else {}
-    media = extensions.get('media')
-    return media if isinstance(media, dict) else None
 
 
 def with_media(post, **fields) -> None:
@@ -112,26 +102,6 @@ def store_uploaded_media(post, uploaded_file, kind) -> str | None:
     if kind == MEDIA_KIND_AUDIO:
         post.extensions = {**post.extensions, 'media_type': 'audio'}   # A13.5: the shape inbound Audio gets
     return None
-
-
-def media_local_path(post) -> str | None:
-    """The local file behind `post.url`, when it is media this server stored for this post, else None.
-
-    `post.url` is not trusted: a link post can name any URL, including another post's media or a traversal. A path
-    is returned only for a local post with a media record (which only store_uploaded_media writes) whose URL is
-    exactly a name store_uploaded_media would write, resolving inside the media tree."""
-    if media_of(post) is None or not post.is_local() or not isinstance(post.url, str):
-        return None
-    prefix = current_app.config['SERVER_URL'] + served_path(MEDIA_DIRECTORY) + '/'
-    name = post.url[len(prefix):] if post.url.startswith(prefix) else ''
-    match = _STORED_NAME.fullmatch(name)
-    if match is None or match[1] + match[2] != match[3][:4]:
-        return None
-    path = f'{MEDIA_DIRECTORY}/{name}'
-    root = os.path.realpath(MEDIA_DIRECTORY)
-    if os.path.commonpath([root, os.path.realpath(path)]) != root:
-        return None
-    return path
 
 
 def queue_probe(post_id) -> None:

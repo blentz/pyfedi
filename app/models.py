@@ -500,6 +500,38 @@ def served_path(value):
     return f'/{value[4:]}' if value.startswith('app/') else value
 
 
+MEDIA_DIRECTORY = 'app/static/media/posts'
+# The only names store_uploaded_media writes: two shard directories that are the name's first four characters
+_STORED_NAME = re.compile(r'([A-Za-z0-9]{2})/([A-Za-z0-9]{2})/([A-Za-z0-9]{15})\.(?:mp4|mov|webm|mp3|m4a|ogg)')
+
+
+def media_of(post) -> dict | None:
+    extensions = post.extensions if isinstance(post.extensions, dict) else {}
+    media = extensions.get('media')
+    return media if isinstance(media, dict) else None
+
+
+def media_local_path(post) -> str | None:
+    """The local file behind `post.url`, when it is media this server stored for this post, else None.
+
+    `post.url` is not trusted: a link post can name any URL, including another post's media or a traversal. A path
+    is returned only for a local post with a media record (which only store_uploaded_media writes) whose URL is
+    exactly a name store_uploaded_media would write, resolving inside the media tree. It lives here, not in
+    app.shared.media, so that Post.delete_dependencies can use the same rule."""
+    if media_of(post) is None or not post.is_local() or not isinstance(post.url, str):
+        return None
+    prefix = current_app.config['SERVER_URL'] + served_path(MEDIA_DIRECTORY) + '/'
+    name = post.url[len(prefix):] if post.url.startswith(prefix) else ''
+    match = _STORED_NAME.fullmatch(name)
+    if match is None or match[1] + match[2] != match[3][:4]:
+        return None
+    path = f'{MEDIA_DIRECTORY}/{name}'
+    root = os.path.realpath(MEDIA_DIRECTORY)
+    if os.path.commonpath([root, os.path.realpath(path)]) != root:
+        return None
+    return path
+
+
 def markdown_source(document, require_media_type=True):
     """The markdown a peer offered in an object's `source`, or None if it offered
     none usable.
@@ -3489,7 +3521,11 @@ class Post(db.Model):
             for file in File.query.filter(File.id.in_(gallery_ids)).all():
                 file.delete_from_disk(cache_urls=cache_urls)
                 db.session.delete(file)
-        if self.type == POST_TYPE_VIDEO and _store_files_in_s3() and self.url:
+        is_media = media_of(self) is not None
+        local_media = media_local_path(self)
+        if local_media and os.path.isfile(local_media):   # A13.8: only the strict stored name is ever unlinked
+            os.unlink(local_media)
+        if (is_media or self.type == POST_TYPE_VIDEO) and _store_files_in_s3() and self.url:
             # D1343. This passed `self.url` -- the whole `https://...` -- as an S3
             # KEY, so `delete_objects` was asked for an object that cannot exist
             # and every mirrored video stayed in the bucket for good. The key it
