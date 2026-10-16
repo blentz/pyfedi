@@ -176,6 +176,7 @@ def _probe(post_id, token: str) -> None:
     if media_url is not None:
         post.url = media_url
     refusal = publish_refusal(post)
+    published = False
     if refusal is not None:
         _fail(post, thumbnail, written, refusal)
     else:
@@ -183,9 +184,11 @@ def _probe(post_id, token: str) -> None:
             post.image = thumbnail
             meta['thumbnail_file_id'] = thumbnail.id
         with_media(post, status='ready', **meta)
-        publish_ready_post(post)
-    if media_url is not None:
+        published = _commit_ready_post(post)
+    if media_url is not None:   # committed: the post names the bucket, so nothing after this may keep the local copy
         _drop_local_copy(post, path)
+    if published:
+        _announce_post(post)
     if refusal is None and thumbnail is not None:
         make_image_sizes(thumbnail.id, 512, 1200, 'posts', post.community.low_quality)
 
@@ -333,13 +336,24 @@ def publish_refusal(post) -> str | None:
 
 def publish_ready_post(post) -> None:
     """The scheduled-post publisher's sequence (app/cli.py publish_scheduled_posts): a scheduled upload waits for it."""
+    if _commit_ready_post(post):
+        _announce_post(post)
+
+
+def _commit_ready_post(post) -> bool:
+    """Commit the ready post as published, or as scheduled if it has a schedule; whether it was published now."""
     if post.scheduled_for:
         post.status = POST_STATUS_SCHEDULED
         db.session.commit()
-        return
+        return False
     post.status = POST_STATUS_PUBLISHED
     post.posted_at = utcnow()
     db.session.commit()
+    return True
+
+
+def _announce_post(post) -> None:
+    """Federate a just-published post and tell its subscribers: the side effects after the publishing commit."""
     task_selector('make_post', post_id=post.id)
     notify_about_post(post)
 
