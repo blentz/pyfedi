@@ -6,6 +6,7 @@ import os
 import uuid
 import re
 import unicodedata
+from contextlib import suppress
 from datetime import datetime, timedelta, date, timezone
 from hashlib import sha256
 from time import time
@@ -3522,9 +3523,11 @@ class Post(db.Model):
                 file.delete_from_disk(cache_urls=cache_urls)
                 db.session.delete(file)
         is_media = media_of(self) is not None
-        local_media = media_local_path(self)
-        if local_media and os.path.isfile(local_media):   # A13.8: only the strict stored name is ever unlinked
-            os.unlink(local_media)
+        local_media = media_local_path(self)   # A13.8: only the strict stored name is ever unlinked
+        # never one a cross-post still plays: cross-posts are found by url equality, as in the S3 branch below
+        if local_media and not s3_object_is_referenced_elsewhere(self.url, post_id=self.id):
+            with suppress(FileNotFoundError):
+                os.unlink(local_media)
         if (is_media or self.type == POST_TYPE_VIDEO) and _store_files_in_s3() and self.url:
             # D1343. This passed `self.url` -- the whole `https://...` -- as an S3
             # KEY, so `delete_objects` was asked for an object that cannot exist
