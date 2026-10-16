@@ -1036,3 +1036,22 @@ def test_a_requeued_upload_waiting_for_its_claim_has_two_hours_again(sweep):
 def test_a_claimed_probe_gone_stale_keeps_thirty_minutes(sweep):
     post = swept(stuck(sweep, 'probing', minutes_ago=31))
     assert media_of(post)['status'] == 'processing' and sweep.queued == [post.id]
+
+
+# ---------------------------------------------------------------- final review M7: the thumbnail sizes before the announce
+
+
+def test_an_announce_error_still_queues_the_thumbnail_sizes(env, monkeypatch):
+    """The post is committed published before it is announced: an error federating it must not leave its thumbnail
+    without the sizes listings show."""
+    def broker_down(key, **kw):
+        raise ConnectionError('the broker went away')
+    monkeypatch.setattr(media_tasks, 'task_selector', broker_down)
+    post = stored_post(env)
+    with pytest.raises(ConnectionError):
+        probe_media(False, post.id)
+    db.session.expire_all()
+    post = db.session.get(Post, post.id)
+
+    assert post.status == POST_STATUS_PUBLISHED
+    assert env.sized == [(post.image_id, 512, 1200, 'posts', post.community.low_quality)]

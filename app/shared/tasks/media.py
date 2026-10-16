@@ -192,10 +192,10 @@ def _probe(post_id, token: str) -> None:
         published = _commit_ready_post(post)
     if media_url is not None:   # committed: the post names the bucket, so nothing after this may keep the local copy
         _drop_local_copy(post, path)
+    if refusal is None and thumbnail is not None:   # before the announce, so an error federating it cannot skip them
+        make_image_sizes(thumbnail.id, 512, 1200, 'posts', post.community.low_quality)
     if published:
         _announce_post(post)
-    if refusal is None and thumbnail is not None:
-        make_image_sizes(thumbnail.id, 512, 1200, 'posts', post.community.low_quality)
 
 
 def _thumbnail(post, path, kind, probe, written) -> File | None:
