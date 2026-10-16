@@ -11,7 +11,7 @@
         {% endif %}
         {# A13.1/A13.9: only the author, the community's moderators and admins can open an unpublished post #}
         {% set media = media_of(post) -%}
-        {% if media and media.status == 'processing' -%}
+        {% if media and media.status in ('processing', 'probing') -%}
             <div class="alert alert-info" role="status">{{ _('This media is still being processed. The post will be published when it is ready.') }}</div>
         {% elif media and media.status == 'failed' -%}
             <div class="alert alert-danger" role="alert">{{ _('This media could not be processed: %(reason)s', reason=media.error) }}</div>

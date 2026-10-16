@@ -534,6 +534,15 @@ def test_a_processing_post_is_seen_only_by_its_author_moderators_and_admins(env)
     assert page_for(env, other_mod, path).status_code == 200
 
 
+def test_a_post_being_probed_shows_the_processing_notice(env):
+    post = stored_post(env, env.chan)
+    with_media(post, status='probing')   # probe_media has claimed it and is working on it
+    db.session.commit()
+
+    author, _ = env.client_for(env.mod)
+    assert b'is still being processed' in author.get(f'/post/{post.id}').data
+
+
 def test_a_failed_post_shows_its_reason(env):
     post = stored_post(env, env.chan)
     with_media(post, status='failed', error='The video codec is not supported.')

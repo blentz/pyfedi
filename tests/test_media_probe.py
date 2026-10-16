@@ -345,7 +345,7 @@ def test_upload_file_to_s3_passes_the_storage_class_and_acl(env, s3, monkeypatch
     assert os.path.exists('app/static/tmp/x.ogg')   # the caller removes the local copy
 
 
-@pytest.mark.parametrize('post_id', [None, 'no media record', 'already ready', 'deleted'])
+@pytest.mark.parametrize('post_id', [None, 'no media record', 'already ready', 'deleted', 'being probed'])
 def test_a_post_with_nothing_to_probe_is_left_alone(env, post_id):
     if post_id is None:
         probe_media(False, 999999)
@@ -358,6 +358,8 @@ def test_a_post_with_nothing_to_probe_is_left_alone(env, post_id):
         post = stored_post(env)
         if post_id == 'already ready':
             with_media(post, status='ready')
+        elif post_id == 'being probed':
+            with_media(post, status='probing')
         else:
             post.deleted = True
         db.session.commit()
@@ -392,7 +394,7 @@ def test_an_error_the_task_does_not_expect_is_rolled_back_and_raised(env, monkey
     with pytest.raises(RuntimeError):
         probe_media(False, post.id)
     db.session.expire_all()
-    assert media_of(db.session.get(Post, post.id))['status'] == 'processing'
+    assert media_of(db.session.get(Post, post.id))['status'] == 'processing'   # released, not left 'probing'
 
 
 def test_publish_ready_post_follows_the_scheduled_publisher(env):
@@ -511,3 +513,30 @@ def test_rights_unchanged_while_probing_publish_as_before(env, monkeypatch):
     post = run(stored_post(env))
     assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_PUBLISHED
     assert env.tasks == [('make_post', {'post_id': post.id})] and env.notified == [post.id]
+
+
+# ---------------------------------------------------------------- one run per upload
+
+
+def test_a_second_run_while_the_first_is_probing_does_nothing(env, monkeypatch):
+    """Two deliveries of the same task: the second starts while the first is inside ffprobe. It finds the upload
+    already claimed and leaves it alone, so the post is probed, published and announced once."""
+    post = stored_post(env)
+    real, probes, inner = media_tasks.run_ffprobe, [], []
+
+    def probing(path):
+        probes.append(path)
+        if not inner:
+            inner.append(probe_media(False, post.id))   # the second run, in its own session
+        return real(path)
+    monkeypatch.setattr(media_tasks, 'run_ffprobe', probing)
+    post = run(post)
+
+    assert len(probes) == 1 and inner == [None]
+    assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_PUBLISHED
+    assert env.tasks == [('make_post', {'post_id': post.id})] and env.notified == [post.id]
+
+
+def test_a_failure_does_not_leave_the_upload_claimed(env):
+    post = run(stored_post(env, 'video_mpeg4.mp4'))
+    assert media_of(post)['status'] == 'failed'

@@ -6,6 +6,7 @@ import pillow_avif  # NOQA  # registers Pillow's AVIF plugin, for an instance wh
 from boto3.exceptions import Boto3Error
 from botocore.exceptions import BotoCoreError, ClientError
 from flask import current_app
+from sqlalchemy import text
 from flask_babel import force_locale, gettext
 from PIL import Image, ImageOps
 
@@ -78,12 +79,33 @@ def validate_probe(probe: dict, kind: str) -> dict:
     return {'duration_s': math.ceil(duration), 'codec': audio['codec_name']}
 
 
+# One UPDATE moves the media status, and only from `from_status`: of two runs racing for one upload, one claims it
+_MOVE_MEDIA_STATUS = text(
+    "UPDATE post SET extensions = jsonb_set(extensions::jsonb, '{media,status}', to_jsonb(CAST(:to_status AS text)))::json"
+    " WHERE id = :post_id AND deleted = false AND extensions -> 'media' ->> 'status' = :from_status")
+
+
+def _move_media_status(post_id, from_status: str, to_status: str) -> bool:
+    moved = db.session.execute(_MOVE_MEDIA_STATUS,
+                               {'post_id': post_id, 'from_status': from_status, 'to_status': to_status})
+    db.session.commit()
+    return moved.rowcount == 1
+
+
 @celery.task
 def probe_media(send_async, post_id):
     session = get_task_session()
     try:
         with patch_db_session(session):
-            _probe(post_id)
+            # 'probing' while this run works: a second delivery of the task finds it claimed and leaves it alone
+            if not _move_media_status(post_id, 'processing', 'probing'):
+                return
+            try:
+                _probe(post_id)
+            except Exception:
+                db.session.rollback()
+                _move_media_status(post_id, 'probing', 'processing')   # not left claimed by a run that died
+                raise
     except Exception:
         session.rollback()
         raise
@@ -92,10 +114,9 @@ def probe_media(send_async, post_id):
 
 
 def _probe(post_id) -> None:
+    """The claimed upload of an undeleted local post: ready and published, or failed with a reason."""
     post = db.session.get(Post, post_id)
-    media = media_of(post) if post is not None else None
-    if media is None or post.deleted or media.get('status') != 'processing':
-        return
+    media = media_of(post)
     written = []        # every image file this run has started to write, so a failure can remove it
     thumbnail = None    # the thumbnail's File row, once it exists
     try:
