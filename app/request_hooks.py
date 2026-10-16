@@ -115,11 +115,12 @@ def register_request_hooks(app):
         the global cap: add_post answers it with a 404."""
         if request.method != 'POST' or request.endpoint != 'community.add_post':
             return
-        kind = request.view_args.get('type')
-        if kind not in (MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO):
-            return
         community = actor_to_community(request.view_args['actor'])
         if community is None:
+            return
+        # The untyped /submit, which the main "Create post" buttons link to, is the community's default type there
+        kind = request.view_args.get('type') or community.default_post_type
+        if kind not in (MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO):
             return
         limit = upload_byte_limit(kind) + MEDIA_UPLOAD_SLACK
         if not (current_user.is_authenticated and kind == media_kind_for(community)

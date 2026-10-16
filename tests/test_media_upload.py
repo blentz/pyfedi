@@ -813,3 +813,37 @@ def test_an_edit_cannot_give_a_media_post_a_repeat(env):
     db.session.expire_all()
     assert response.status_code == 302
     assert db.session.get(Post, post.id).repeat in (None, '', 'none')
+
+
+# ---------------------------------------------------------------- final review #2: the untyped submit URL
+
+
+def test_the_untyped_submit_url_raises_the_cap_by_the_communitys_default_type(env, monkeypatch):
+    """The main "Create post" buttons link to /community/<x>/submit, which add_post serves as the community's default
+    post type. The cap follows the same rule: a permitted moderator's upload above the global cap is taken."""
+    monkeypatch.setitem(env.app.config, 'MAX_CONTENT_LENGTH', SMALL_GLOBAL)
+    env.chan.default_post_type = 'video'
+    db.session.commit()
+    with env.app.test_request_context():
+        url = url_for('community.add_post', actor=env.chan.name)
+    assert url.endswith('/submit')
+
+    client, token = env.client_for(env.mod)
+    response = client.post(url, data=form_data(env, token, env.chan, 'clip.mp4', padded_video()),
+                           content_type='multipart/form-data')
+
+    assert response.status_code == 302
+    assert media_of(Post.query.one())['bytes'] == SMALL_GLOBAL + 32 * 1024 + 64
+
+
+def test_the_untyped_submit_url_keeps_the_global_cap_for_a_member(env, monkeypatch):
+    monkeypatch.setitem(env.app.config, 'MAX_CONTENT_LENGTH', SMALL_GLOBAL)
+    env.chan.default_post_type = 'video'
+    db.session.commit()
+    with env.app.test_request_context():
+        url = url_for('community.add_post', actor=env.chan.name)
+
+    client, token = env.client_for(env.stranger)
+    response = client.post(url, data=form_data(env, token, env.chan, 'clip.mp4', padded_video()),
+                           content_type='multipart/form-data')
+    assert response.status_code == 413
