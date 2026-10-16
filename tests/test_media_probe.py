@@ -564,3 +564,17 @@ def test_a_local_copy_that_cannot_be_removed_after_its_upload_does_not_fail_the_
     assert s3.head_object(Bucket='pyfedi-test', Key=key)['ContentLength'] == media_of(post)['bytes']
     assert post.image.source_url.startswith('https://cdn.probeland.test/posts/')
     assert os.path.exists(local)   # left behind, and logged
+
+
+def test_an_owner_without_the_moderator_flag_still_publishes(env, monkeypatch):
+    """The project's moderator is is_owner OR is_moderator (Community.moderators). An AP Remove can leave an owner
+    with is_moderator False; that owner may upload, so the publish-time check must let the post through."""
+    post = stored_post(env)
+
+    def owner_only(other):
+        member = other.query(CommunityMember).filter_by(user_id=env.mod.id, community_id=post.community_id).one()
+        member.is_moderator, member.is_owner = False, True
+    while_probing(monkeypatch, owner_only)
+    post = run(post)
+    assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_PUBLISHED
+    assert env.tasks == [('make_post', {'post_id': post.id})]
