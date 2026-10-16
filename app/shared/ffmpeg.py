@@ -22,8 +22,9 @@ def _limit_address_space():
 
 def _run(cmd: list, private_paths: tuple = ()) -> bytes:
     try:
-        done = subprocess.run(cmd, capture_output=True, timeout=PROBE_TIMEOUT_S,
-                              preexec_fn=_limit_address_space, stdin=subprocess.DEVNULL, check=False)
+        # PATH only: the tools parse untrusted bytes, and the app's environment holds its secrets
+        done = subprocess.run(cmd, capture_output=True, timeout=PROBE_TIMEOUT_S, preexec_fn=_limit_address_space,
+                              stdin=subprocess.DEVNULL, check=False, env={'PATH': os.environ.get('PATH', '/usr/bin:/bin')})
     except subprocess.TimeoutExpired:
         raise MediaToolError(f'{cmd[0]} timed out after {PROBE_TIMEOUT_S} s')
     except FileNotFoundError:
