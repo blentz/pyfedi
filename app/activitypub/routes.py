@@ -27,7 +27,8 @@ from app.activitypub.util import MEDIA_OBJECT_TYPES, follow_answer_inbox, MEDIA_
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
     update_post_from_activity, undo_vote, has_vote_on, release_undone_activity, mark_accepted, deferred_key, DEFERRED_SECONDS, \
-    activity_accepted_key, deferred_count_key, DEFERRED_PER_HOST, post_to_page, find_reported_object, \
+    activity_accepted_key, deferred_count_key, DEFERRED_PER_HOST, FOLLOW_TYPES, VOTE_TYPES, DEFERRABLE_TYPES, \
+    DEFERRED_MAX_BYTES, DEFERRED_HEADERS, post_to_page, find_reported_object, \
     process_report, ensure_domains_match, refresh_community_profile, \
     comment_model_to_json, restore_post_or_comment, ban_user, unban_user, \
     log_incoming_ap, find_community, site_ban_remove_data, community_ban_remove_data, verify_object_from_source, \
@@ -984,14 +985,11 @@ def community_inbox(actor):
 # The messages shared_inbox logs when an activity fails signature checking. replay_inbox_request skips those
 # checks, so the admin replay refuses to re-run a row logged with one of these.
 # Logged before any signature check, so the stored JSON is whatever anyone sent with a known id: never replayed.
-# R-UNDORELEASE: the types an Undo arm undoes, so only an activity of that type has its claim released
-FOLLOW_TYPES = ('Follow',)
-VOTE_TYPES = ('Like', 'Dislike', 'EmojiReact')
-# A verified duplicate of one of these is parked (_park_duplicate) for the Undo it may have overtaken
-DEFERRABLE_TYPES = FOLLOW_TYPES + VOTE_TYPES
-DEFERRED_MAX_BYTES = 8 * 1024   # a Follow or vote is a few hundred bytes: anything larger is not parked
-# What the inbox's signature checks read, kept with a parked body so the re-run verifies it as it was sent
-DEFERRED_HEADERS = ('Host', 'Date', 'Digest', 'Content-Digest', 'Signature', 'Signature-Input', 'Content-Type')
+UNVERIFIED_DUPLICATE_MESSAGE = 'Already aware of this activity (before any signature check)'
+UNVERIFIED_LOG_MESSAGES = (UNVERIFIED_DUPLICATE_MESSAGE,)
+
+SIGNATURE_FAILURE_MESSAGES = ('Precheck failed', 'Could not verify LD signature', 'Could not verify HTTP signature',
+                              'Signature keyId host does not match actor')
 
 
 def _park_duplicate(activity_id, actor, typed_json, request) -> None:
@@ -1032,12 +1030,6 @@ def rerun_parked_request(parked):
     with current_app.test_request_context(parked['path'], method='POST', base_url=current_app.config['SERVER_URL'],
                                           headers=parked['headers'], data=base64.b64decode(parked['body'])):
         shared_inbox()
-
-UNVERIFIED_DUPLICATE_MESSAGE = 'Already aware of this activity (before any signature check)'
-UNVERIFIED_LOG_MESSAGES = (UNVERIFIED_DUPLICATE_MESSAGE,)
-
-SIGNATURE_FAILURE_MESSAGES = ('Precheck failed', 'Could not verify LD signature', 'Could not verify HTTP signature',
-                              'Signature keyId host does not match actor')
 
 
 def _ld_signature_verifies(request_json, actor) -> bool:

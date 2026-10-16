@@ -18,9 +18,9 @@ from flask import current_app
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.activitypub.signature import RsaKeys
-from app.activitypub.util import DEFERRED_PER_HOST, DEFERRED_SECONDS, activity_accepted_key, activity_dedupe_key, \
-    deferred_count_key, deferred_key, \
-    mark_accepted, release_undone_activity, undo_of_key
+from app.activitypub.util import DEFERRED_HEADERS, DEFERRED_MAX_BYTES, DEFERRED_PER_HOST, DEFERRED_SECONDS, \
+    activity_accepted_key, activity_dedupe_key, deferred_count_key, deferred_key, mark_accepted, \
+    release_undone_activity, undo_of_key
 from app.models import ActivityPubLog, CommunityMember, FeedMember, PostVote, UserFollower, utcnow
 from tests.conftest import unsigned_but_precheck_clean_headers
 from tests.factories import make_community, make_feed, make_instance, make_post, make_site, make_user, signed_inbox_post
@@ -530,7 +530,7 @@ def test_a_host_parks_at_most_fifty_bodies_in_the_window(app, inline, scene, red
 
 
 def test_the_parking_limits(app):
-    assert activitypub_routes.DEFERRED_MAX_BYTES == 8 * 1024
+    assert DEFERRED_MAX_BYTES == 8 * 1024
     assert DEFERRED_PER_HOST == 50
 
 
@@ -542,7 +542,7 @@ def test_a_parked_body_holds_only_what_the_rerun_needs(app, inline, scene, redis
 
     parked = json.loads(redis_double.get(deferred_key(follow['id'], carol.ap_profile_id)))
     assert set(parked) == {'path', 'headers', 'body'}
-    assert set(parked['headers']) <= set(activitypub_routes.DEFERRED_HEADERS)
+    assert set(parked['headers']) <= set(DEFERRED_HEADERS)
     assert json.loads(base64.b64decode(parked['body'])) == follow
 
 

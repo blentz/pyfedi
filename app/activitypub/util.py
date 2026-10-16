@@ -916,10 +916,16 @@ def activity_accepted_key(activity_id, actor_url) -> str:
     return 'ap-accepted:' + activity_dedupe_key(activity_id, actor_url).removeprefix('ap-dedupe:')
 
 
+# R-UNDORELEASE: the types an Undo arm undoes, so only an activity of that type has its claim released
+FOLLOW_TYPES = ('Follow',)
+VOTE_TYPES = ('Like', 'Dislike', 'EmojiReact')
+# A verified duplicate of one of these is parked (_park_duplicate) for the Undo it may have overtaken
+DEFERRABLE_TYPES = FOLLOW_TYPES + VOTE_TYPES
+DEFERRED_MAX_BYTES = 8 * 1024   # a Follow or vote is a few hundred bytes: anything larger is not parked
+# What the inbox's signature checks read, kept with a parked body so the re-run verifies it as it was sent
+DEFERRED_HEADERS = ('Host', 'Date', 'Digest', 'Content-Digest', 'Signature', 'Signature-Input', 'Content-Type')
 # How long a verified duplicate Follow or vote is parked for the Undo it may have overtaken (R-UNDORELEASE)
 DEFERRED_SECONDS = 600
-
-
 # At most this many parked requests per sending host within DEFERRED_SECONDS (security review, 2026-10-16)
 DEFERRED_PER_HOST = 50
 
