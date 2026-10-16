@@ -301,10 +301,16 @@ def _verify_signature(key, alg, signature: bytes, data: bytes) -> None:
     raise KeyMismatchError('Signature mismatch')
 
 
+class CoveredComponents(frozenset):
+    """The components a verified signature covers, as a frozenset, with `created`: that signature's created time."""
+    created: int | None = None
+
+
 def verify(method: str, url: str, headers: Mapping[str, str], body: bytes, public_key_pem: str,
            required: frozenset[str] = frozenset(), *, now: int | None = None,
            key_id: str | None = None) -> frozenset[str]:
-    """Verify the request's RFC 9421 signature against `public_key_pem`; return the components it covers.
+    """Verify the request's RFC 9421 signature against `public_key_pem`; return the components it covers, with the
+    verifying label's created time as the result's `created` (CoveredComponents).
 
     With several labels the first that verifies wins; if none does, the last label's error is raised. Every
     component in `required` must be covered (after normalise_covered). Content-Digest, when present, must match
@@ -332,7 +338,9 @@ def verify(method: str, url: str, headers: Mapping[str, str], body: bytes, publi
             missing = required - normalise_covered(covered)
             if missing:
                 raise VerificationError('unsigned required component: ' + ' '.join(sorted(missing)))
-            return frozenset(covered)
+            result = CoveredComponents(covered)
+            result.created = params['created']   # an int: _check_created passed
+            return result
         except VerificationError as e:
             error = e
     raise error

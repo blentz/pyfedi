@@ -15,17 +15,19 @@ import time
 from email.utils import formatdate
 
 import pytest
-from flask import current_app, request as flask_request
+from flask import current_app
 
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.activitypub.signature import RsaKeys
 from app.activitypub.util import DEFERRED_HEADERS, DEFERRED_MAX_BYTES, DEFERRED_PER_HOST, DEFERRED_SECONDS, \
     activity_accepted_key, activity_dedupe_key, deferred_count_key, deferred_key, mark_accepted, \
-    release_undone_activity, undo_of_key
+    current_signed_at, release_undone_activity, undo_of_key
 from app.models import ActivityPubLog, CommunityMember, FeedMember, PostVote, UserFollower, utcnow
+from app.activitypub import signature_rfc9421
+from app.activitypub.signature import http_date_seconds
 from tests.conftest import ld_signed_body, unsigned_but_precheck_clean_headers
-from tests.factories import make_community, make_feed, make_instance, make_post, make_site, make_user, signed_inbox_post
+from tests.factories import cavage_signed_headers, make_community, make_feed, make_instance, make_post, make_site, make_user, signed_inbox_post
 
 DUPLICATE = 'Already aware of this activity'   # the start of both messages: before and after the signature check
 
@@ -98,6 +100,14 @@ def _like(sender, post, kind='Like'):
 
 def _undo(sender, undone, suffix='/undo'):
     return {'id': undone['id'] + suffix, 'type': 'Undo', 'actor': sender.ap_profile_id, 'object': undone}
+
+
+def _race(app, sender, activity, undo):
+    """PeerTube's race: `activity` accepted, then the resent copy signed AFTER `undo` but landing before it."""
+    now = int(time.time())
+    _post(app, activity, sender, at=now - 900)
+    _post(app, activity, sender, at=now - 100)
+    _post(app, undo, sender, at=now - 200)
 
 
 def _last_log():
@@ -390,7 +400,7 @@ def test_mark_accepted(app, redis_double, activity, marked):
     mark_accepted(activity, announced=False)
     mark_accepted(dict(activity, id=f'{ACTOR}/announced'), announced=True)
 
-    assert redis_double.get(activity_accepted_key(FOLLOW_ID, ACTOR)) == ('Follow|' + ACTOR + '|' if marked else None)
+    assert redis_double.get(activity_accepted_key(FOLLOW_ID, ACTOR)) == ('Follow|' + ACTOR if marked else None)
     assert redis_double.exists(activity_accepted_key(f'{ACTOR}/announced', ACTOR)) == 0
 
 
@@ -480,12 +490,13 @@ def test_a_follow_that_was_never_undone_releases_no_undo(app, redis_double):
 def test_a_follow_reusing_the_id_that_lands_before_its_undo_takes_effect_after_it(app, inline, scene, redis_double):
     community, _, _, carol, _ = scene
     follow = _follow(carol, community.ap_profile_id)
-    _post(app, follow, carol)
-    _post(app, follow, carol)   # the resubscription, ahead of the Undo: a duplicate, parked
+    now = int(time.time())
+    _post(app, follow, carol, at=now - 900)
+    _post(app, follow, carol, at=now - 100)   # the resubscription, ahead of the Undo: a duplicate, parked
     assert _last_log().exception_message.startswith(DUPLICATE)
     assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 1
 
-    _post(app, _undo(carol, follow), carol)
+    _post(app, _undo(carol, follow), carol, at=now - 200)   # signed before the resubscription, landing after it
 
     assert _member(community, carol) is not None
     assert [body['type'] for body in inline].count('Accept') == 2
@@ -495,10 +506,8 @@ def test_a_follow_reusing_the_id_that_lands_before_its_undo_takes_effect_after_i
 def test_a_like_reusing_the_id_that_lands_before_its_undo_takes_effect_after_it(app, inline, scene):
     _, _, post, carol, _ = scene
     like = _like(carol, post)
-    _post(app, like, carol)
-    _post(app, like, carol)
 
-    _post(app, _undo(carol, like), carol)
+    _race(app, carol, like, _undo(carol, like))
 
     assert PostVote.query.filter_by(user_id=carol.id, post_id=post.id).count() == 1
 
@@ -557,7 +566,7 @@ def test_a_parked_body_holds_only_what_the_rerun_needs(app, inline, scene, redis
     _post(app, follow, carol)
 
     parked = json.loads(redis_double.get(deferred_key(follow['id'], carol.ap_profile_id)))
-    assert set(parked) == {'path', 'headers', 'body'}
+    assert set(parked) == {'path', 'headers', 'body', 'signed_at'}
     assert set(parked['headers']) <= set(DEFERRED_HEADERS)
     assert json.loads(base64.b64decode(parked['body'])) == follow
 
@@ -565,14 +574,15 @@ def test_a_parked_body_holds_only_what_the_rerun_needs(app, inline, scene, redis
 def test_a_parked_follow_failing_its_signature_on_the_rerun_is_discarded(app, inline, scene, redis_double):
     community, _, _, carol, _ = scene
     follow = _follow(carol, community.ap_profile_id)
-    _post(app, follow, carol)
-    _post(app, follow, carol)
+    now = int(time.time())
+    _post(app, follow, carol, at=now - 900)
+    _post(app, follow, carol, at=now - 100)
     key = deferred_key(follow['id'], carol.ap_profile_id)
     parked = json.loads(redis_double.get(key))
     parked['headers']['Signature'] = parked['headers']['Signature'].replace('signature="', 'signature="AAAA')
     redis_double.set(key, json.dumps(parked), keepttl=True)
 
-    _post(app, _undo(carol, follow), carol)
+    _post(app, _undo(carol, follow), carol, at=now - 200)
 
     assert _member(community, carol) is None
     assert ActivityPubLog.query.filter(ActivityPubLog.exception_message.startswith('Could not verify')).count() == 1
@@ -669,51 +679,75 @@ def test_an_ld_only_duplicate_is_not_parked(app, inline, scene, redis_double, no
     assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 0
 
 
-@pytest.mark.parametrize('later', [0, -5])
-def test_a_retry_with_the_same_or_an_older_date_is_not_parked(app, inline, scene, redis_double, later):
-    """A sender's retry of the original carries its Date or an older one: it is the old X, not a new one."""
+def test_a_retry_of_the_old_activity_signed_before_the_undo_is_discarded(app, inline, scene, redis_double):
+    """A sender's retry of the old Follow is re-signed, but before the user's Undo: it is parked, then discarded, so
+    it cannot reverse the Undo."""
     community, _, _, carol, _ = scene
     follow = _follow(carol, community.ap_profile_id)
-    at = int(time.time()) - 600
-    _post(app, follow, carol, at=at)
+    now = int(time.time())
+    _post(app, follow, carol, at=now - 900)
+    _post(app, follow, carol, at=now - 300)   # the retry
+    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 1
 
-    _post(app, follow, carol, at=at + later)
+    _post(app, _undo(carol, follow), carol, at=now - 200)
 
+    assert _member(community, carol) is None
+    assert [body['type'] for body in inline].count('Accept') == 1
+    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 0
+
+
+def test_a_duplicate_whose_date_the_signature_does_not_cover_is_not_parked(app, inline, scene, redis_double):
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    _post(app, follow, carol)
+    body = json.dumps(follow).encode()
+    headers = cavage_signed_headers(carol.private_key, f'{carol.ap_profile_id}#main-key', body=body,
+                                    signed=('(request-target)', 'host', 'digest'))
+    with app.test_client() as client:
+        response = client.post('/inbox', data=body, headers=headers, content_type='application/activity+json')
+
+    assert response.status_code == 200
     assert _last_log().exception_message.startswith(DUPLICATE)
     assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 0
+    assert redis_double.exists(deferred_count_key(carol.ap_profile_id)) == 0   # nor counted
 
 
-def test_the_accepted_marker_records_the_originals_date(app, inline, scene, redis_double):
-    community, _, _, carol, _ = scene
-    follow = _follow(carol, community.ap_profile_id)
-    at = int(time.time()) - 600
-
-    _post(app, follow, carol, at=at)
-
-    assert redis_double.get(activity_accepted_key(follow['id'], carol.ap_profile_id)) == \
-        f'Follow|{carol.ap_profile_id}|{at}'
-
-
-def test_a_duplicate_of_an_original_with_no_date_is_not_parked(app, inline, scene, redis_double):
-    """An original accepted without a Date (an RFC 9421 request, an LD-only delivery) leaves nothing to compare."""
+def test_an_rfc9421_duplicate_is_parked_with_its_created_time(app, inline, scene, redis_double):
     community, _, _, carol, _ = scene
     follow = _follow(carol, community.ap_profile_id)
     _post(app, follow, carol)
-    redis_double.set(activity_accepted_key(follow['id'], carol.ap_profile_id), f'Follow|{carol.ap_profile_id}|')
+    created = int(time.time()) - 50
+    body = json.dumps(follow).encode()
+    host = current_app.config['SERVER_NAME']
+    headers = signature_rfc9421.sign('post', f'https://{host}/inbox', body, carol.private_key,
+                                     f'{carol.ap_profile_id}#main-key', created=created)
+    headers['Host'] = host
+    with app.test_client() as client:
+        client.post('/inbox', data=body, headers=headers, content_type='application/activity+json')
 
-    _post(app, follow, carol)
-
-    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 0
+    assert json.loads(redis_double.get(deferred_key(follow['id'], carol.ap_profile_id)))['signed_at'] == created
 
 
-@pytest.mark.parametrize('headers, expected', [
-    ({'Date': 'Thu, 15 Oct 2026 12:00:00 GMT'}, 1792065600),
-    ({'Date': 'not a date'}, None),
-    ({}, None),
-])
-def test_signed_date(app, headers, expected):
-    with app.test_request_context('/inbox', method='POST', headers=headers):
-        assert activitypub_routes._signed_date(flask_request) == expected
+@pytest.mark.parametrize('parked_at, undo_at, rerun', [(10, 5, True), (5, 5, True), (4, 5, False),
+                                                       (None, 5, False), (10, None, False)])
+def test_a_parked_request_runs_only_if_signed_no_earlier_than_the_undo(app, redis_double, parked_at, undo_at, rerun):
+    _accepted(redis_double)
+    parked = {'path': '/inbox', 'headers': {}, 'signed_at': parked_at,
+              'body': base64.b64encode(json.dumps({'id': FOLLOW_ID, 'type': 'Follow', 'actor': ACTOR}).encode()).decode()}
+    redis_double.set(deferred_key(FOLLOW_ID, ACTOR), json.dumps(parked))
+    token = current_signed_at.set(undo_at)
+    try:
+        result = release_undone_activity(UNDO_OF_FOLLOW, announced=False, types=FOLLOW)
+    finally:
+        current_signed_at.reset(token)
+
+    assert (result == parked) if rerun else (result is None)
+
+
+@pytest.mark.parametrize('value, expected', [('Thu, 15 Oct 2026 12:00:00 GMT', 1792065600), ('not a date', None),
+                                             (None, None)])
+def test_http_date_seconds(value, expected):
+    assert http_date_seconds(value) == expected
 
 
 # --- round 3, I2: the per-host cap is a fixed window ---
@@ -748,14 +782,3 @@ def test_the_hosts_window_starts_again_after_it_ends(app, inline, scene, redis_d
     assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 1
     assert redis_double.get(counter) == '1'
     assert 50 < redis_double.ttl(counter) <= 60
-
-
-def test_a_duplicate_failing_the_newer_check_is_not_counted(app, inline, scene, redis_double):
-    community, _, _, carol, _ = scene
-    follow = _follow(carol, community.ap_profile_id)
-    at = int(time.time()) - 600
-    _post(app, follow, carol, at=at)
-
-    _post(app, follow, carol, at=at)
-
-    assert redis_double.exists(deferred_count_key(carol.ap_profile_id)) == 0
