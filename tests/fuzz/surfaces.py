@@ -283,4 +283,10 @@ SURFACES: dict[str, list[str]] = {
         'app.utils.refuse_over_remote_thumbnail_cap',
         'app.activitypub.util.make_image_sizes_async',
     ],
+    # Video channels (T8): the ffprobe JSON an uploaded file's media record is made from, and the PeerTube Video a
+    # local video_channel post is sent and fetched as.
+    'video_channels': [
+        'app.shared.tasks.media.validate_probe',
+        'app.activitypub.serializers.peertube.peertube_video',
+    ],
 }
