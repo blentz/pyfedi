@@ -38,7 +38,8 @@ from app.constants import SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, POST_TYPE_LIN
     SUBSCRIPTION_PENDING, SUBSCRIPTION_MODERATOR, REPORT_STATE_NEW, REPORT_STATE_ESCALATED, REPORT_STATE_RESOLVED, \
     REPORT_STATE_DISCARDED, POST_TYPE_VIDEO, NOTIF_COMMUNITY, POST_TYPE_POLL, SRC_WEB, \
     NOTIF_REPORT, NOTIF_BAN, NOTIF_UNBAN, NOTIF_REPORT_ESCALATION, NOTIF_MENTION, POST_STATUS_REVIEWING, \
-    POST_TYPE_EVENT, REPORT_TYPE_COMMUNITY, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO, POST_STATUS_PUBLISHED
+    POST_TYPE_EVENT, REPORT_TYPE_COMMUNITY, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO, POST_STATUS_PUBLISHED, \
+    COMMUNITY_KIND_MICROBLOGS
 from app.email import send_email
 from app.inoculation import inoculation
 from app.models import User, Community, CommunityMember, CommunityJoinRequest, CommunityBan, Post, Site, \
@@ -157,7 +158,8 @@ def add_local():
                               subscriptions_count=1, instance_id=1, ai_generated=form.ai_generated.data,
                               low_quality=('memes' in form.url.data or 'shitpost' in form.url.data) and
                                            get_setting('meme_comms_low_quality', False),
-                              question_answer=form.question_answer.data, first_federated_at=utcnow())
+                              question_answer=form.question_answer.data, first_federated_at=utcnow(),
+                              kind=form.kind.data, user_id=current_user.id)
         icon_file = request.files.get('icon_file')
         if icon_file and icon_file.filename != '':
             file = save_icon_file(icon_file)
@@ -1529,7 +1531,22 @@ def community_edit(community_id: int):
             form.nsfw.render_kw = {'disabled': True}
         if g.site.enable_nsfl is False:
             form.nsfl.render_kw = {'disabled': True}
+        # The kind changes only while the community has no posts, and the microblogs community never
+        # changes it (A15.2). A disabled select is not submitted, so the POST below keeps the stored kind.
+        locked = db.session.query(Post.id).filter(Post.community_id == community.id).first() is not None
+        if community.kind == COMMUNITY_KIND_MICROBLOGS:
+            form.kind.choices = [(COMMUNITY_KIND_MICROBLOGS, _('Microblogs'))]
+            locked = True
+        if locked:
+            form.kind.render_kw = {'class': 'form-select', 'disabled': True}
         if form.validate_on_submit():
+            kind = form.kind.data if form.kind.raw_data else community.kind   # a disabled select is not submitted
+            refusal = shared_community.apply_kind(community, kind, current_user)
+            if refusal is not None:
+                db.session.rollback()
+                form.kind.errors = list(form.kind.errors) + [refusal]
+                return render_template('community/community_edit.html', title=_('Edit community'), form=form,
+                                       current_app=current_app, current="edit_settings", community=community)
             # D641: one implementation, shared with the API.
             shared_community.edit_community(form, community, SRC_WEB, uploaded_icon_file=request.files.get('icon_file'),
                            uploaded_banner_file=request.files.get('banner_file'))
@@ -1544,6 +1561,7 @@ def community_edit(community_id: int):
             # replaced by the stored values. D907's shape for the fourth time.
             form.title.data = community.title
             form.description.data = community.description
+            form.kind.data = community.kind
             form.theme.data = community.theme
             form.posting_warning.data = community.posting_warning
             form.nsfw.data = community.nsfw

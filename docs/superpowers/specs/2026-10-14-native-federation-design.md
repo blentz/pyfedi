@@ -582,7 +582,7 @@ Each step gets its own implementation plan and its own commits, and each ends wi
 - **A15 (§3.1, §3.2, §4.3, §6.1, §6.2, §8.3), step 4 video channels; code survey 2026-10-16:** the survey found these gaps between the spec and the code. Rulings:
   1. **Owner.** No local community records an owner in `Community.user_id` today: `add_local` and `make_community` leave it NULL, and ownership lives only in `CommunityMember.is_owner`. A video channel without it has no `attributedTo` Person, and PeerTube cannot subscribe (§6.2).
      - Every new local community, web or API, stores its creator in `Community.user_id`.
-     - When an existing community becomes `video_channel` and its `user_id` is NULL, `user_id` is set to its owner member with the lowest `CommunityMember.id`, or to the editing user when it has no owner member.
+     - When an existing community becomes `video_channel` and its `user_id` is NULL, `user_id` is set to its owner member with the earliest `CommunityMember.created_at` (ties by `user_id`; the table has no `id` column), or to the editing user when it has no owner member.
      - Moving ownership later does not change `user_id`. PeerTube cannot change a channel's account either.
   2. **Kind rules (§3.2).**
      - Create (web form and API `kind`) offers `discussion`, `video_channel` and `podcast`; the default is `discussion`.

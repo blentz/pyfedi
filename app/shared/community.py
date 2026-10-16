@@ -22,7 +22,7 @@ from app.constants import *
 from app.email import send_email
 from app.models import CommunityBlock, CommunityMember, Notification, NotificationSubscription, User, Conversation, \
     Community, Language, File, CommunityFlair, utcnow, CommunityInvitation, CommunityFavorite, \
-    CommunityFlairBlock, Topic, _as_url
+    CommunityFlairBlock, Topic, Post, _as_url
 from app.shared.tasks import task_selector
 from app.shared.upload import process_upload
 from app.user.utils import search_for_user
@@ -219,8 +219,32 @@ def invite_with_email(community_id: int, to: str, src, auth=None):
     return 1
 
 
+def apply_kind(community, kind, user) -> str | None:
+    """Set `community.kind` under spec §3.2 and §10 A15.2; the error message, or None once applied. The kind changes
+    only while the community has no posts, deleted ones included, and microblogs is never chosen. A community that
+    becomes a video channel needs an owner Person for PeerTube (§6.2): a NULL user_id becomes its first owner member,
+    or else `user`."""
+    if kind == community.kind:
+        return None
+    if kind not in COMMUNITY_KINDS_OFFERED:
+        return 'kind must be one of ' + ', '.join(COMMUNITY_KINDS_OFFERED)
+    if community.kind == COMMUNITY_KIND_MICROBLOGS:
+        return 'the microblogs community keeps its kind'
+    if db.session.query(Post.id).filter(Post.community_id == community.id).first() is not None:
+        return 'kind can change only while the community has no posts'
+    community.kind = kind
+    if kind == COMMUNITY_KIND_VIDEO_CHANNEL and community.user_id is None:
+        # CommunityMember has no id column: the earliest membership stands for the lowest id.
+        first_owner = db.session.query(CommunityMember.user_id).filter_by(community_id=community.id, is_owner=True) \
+            .order_by(CommunityMember.created_at, CommunityMember.user_id).first()
+        community.user_id = first_owner.user_id if first_owner else user.id
+    return None
+
+
 def make_community(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_file=None):
+    kind = COMMUNITY_KIND_DISCUSSION   # the create form's kind is set by add_local, which does not come through here
     if src == SRC_API:
+        kind = input.get('kind', COMMUNITY_KIND_DISCUSSION)
         input['name'] = slugify(input['name'], separator='_').lower()
 
         name = input['name']
@@ -274,7 +298,8 @@ def make_community(input, src, auth=None, uploaded_icon_file=None, uploaded_bann
                           ap_followers_url='https://' + current_app.config['SERVER_NAME'] + '/c/' + name + '/followers',
                           ap_domain=current_app.config['SERVER_NAME'],
                           subscriptions_count=1, instance_id=1, low_quality='memes' in name,
-                          question_answer=question_answer, first_federated_at=utcnow())
+                          question_answer=question_answer, first_federated_at=utcnow(),
+                          kind=kind, user_id=user.id)
     try:
         db.session.add(community)
         db.session.commit()
@@ -401,6 +426,11 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
     if not from_scratch:
         if not can_moderate(community, user):
             raise Exception('incorrect_login')
+
+        if src == SRC_API and 'kind' in input:
+            refusal = apply_kind(community, input['kind'], user)
+            if refusal is not None:
+                raise Exception(refusal)
 
         # The API names its images by url; the web edit form replaces one only
         # when a file is uploaded, below.

@@ -3,6 +3,7 @@ import re
 from datetime import datetime
 from marshmallow import Schema, fields, validate, ValidationError, EXCLUDE, validates_schema, INCLUDE
 
+from app.constants import COMMUNITY_KINDS_OFFERED
 from app.utils import is_hex_color
 
 
@@ -802,6 +803,7 @@ class CreateCommunityRequest(DefaultSchema):
     question_answer = fields.Boolean()
     restricted_to_mods = fields.Boolean()
     rules = fields.String()
+    kind = fields.String(validate=validate.OneOf(COMMUNITY_KINDS_OFFERED))
 
 
 class CommunityResponse(DefaultSchema):
@@ -835,6 +837,7 @@ class EditCommunityRequest(DefaultSchema):
     default_post_type = fields.String()
     downvote_accept_mode = fields.Integer()
     post_url_type = fields.String()
+    kind = fields.String(validate=validate.OneOf(COMMUNITY_KINDS_OFFERED))
 
 
 class DeleteCommunityRequest(DefaultSchema):

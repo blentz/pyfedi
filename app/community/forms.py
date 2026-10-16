@@ -16,12 +16,16 @@ from wtforms import StringField, SubmitField, TextAreaField, BooleanField, Hidde
 from wtforms.validators import ValidationError, DataRequired, Length, Regexp, Optional, URL
 
 from app import db
-from app.constants import DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
+from app.constants import COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_PODCAST, COMMUNITY_KIND_VIDEO_CHANNEL, \
+    DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
     DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE
 from app.models import Community, Site, utcnow, User, Feed
 from app.utils import domain_from_url, MultiCheckboxField, get_timezones, url_is_parseable, is_hex_color
 
 MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+
+KIND_CHOICES = [(COMMUNITY_KIND_DISCUSSION, _l('Discussion')), (COMMUNITY_KIND_VIDEO_CHANNEL, _l('Video channel')),
+                (COMMUNITY_KIND_PODCAST, _l('Podcast'))]
 
 
 def image_upload_too_large(field, uploaded_file) -> bool:
@@ -59,6 +63,8 @@ class AddCommunityForm(FlaskForm):
         (4, _l('Invitation by owner required')),
     ]
     invitations = SelectField(_l('Joining process'), coerce=int, choices=joining_options)
+    kind = SelectField(_l('Kind'), choices=KIND_CHOICES, default=COMMUNITY_KIND_DISCUSSION,
+                       render_kw={'class': 'form-select'})
     publicize = BooleanField(_l('Announce this community to newcommunities@lemmy.world'))
     question_answer = BooleanField(_l('Question & answer community'))
     languages = MultiCheckboxField(_l('Languages'), coerce=int, validators=[Optional()],
@@ -149,6 +155,8 @@ class EditCommunityForm(FlaskForm):
         (4, _l('Invitation by owner required')),
     ]
     invitations = SelectField(_l('Joining process'), coerce=int, choices=joining_options)
+    kind = SelectField(_l('Kind'), choices=KIND_CHOICES, default=COMMUNITY_KIND_DISCUSSION, validators=[Optional()],
+                       render_kw={'class': 'form-select'})
     question_answer = BooleanField(_l('Question & answer community'))
     restricted_to_mods = BooleanField(_l('Only moderators can post'))
     new_mods_wanted = BooleanField(_l('New moderators wanted'))
