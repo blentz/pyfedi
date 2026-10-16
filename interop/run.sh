@@ -29,6 +29,7 @@ up() {
     wait_http piefed-web https://piefed.test/health
     wait_http piefed-web https://mastodon.test/health   # piefed-web has curl; the Mastodon image may not
     wait_http piefed-web https://peertube.test/api/v1/ping
+    wait_http piefed-web https://castopod.test/cp-auth/login
     # init-db drops every table first, so run it only on an empty instance table (a re-run of `up` keeps the data)
     if [ "$($COMPOSE exec -T piefed-db psql -U piefed -tAc 'select count(*) from instance' | tr -d '[:space:]')" = 0 ]; then
         $COMPOSE exec -T piefed-web sh -c 'FLASK_APP=pyfedi.py flask init-db --interactive no'
@@ -38,7 +39,14 @@ up() {
         | $COMPOSE exec -T piefed-web python -
     token=$($COMPOSE exec -T mastodon-web bin/rails runner - < interop/seed_mastodon.rb | tail -n 1)
     peertube=$($COMPOSE exec -T piefed-web python - < interop/seed_peertube.py | tail -n 1)
-    printf '%s' "$peertube" | python3 -c 'import json, sys; t = json.load(sys.stdin); t["mastodon_bob"] = sys.argv[1]; print(json.dumps(t))' \
+    # Castopod's image migrates at boot, but races MariaDB; init-database is idempotent. The superadmin prompt reads
+    # its password twice from stdin, and the command exits 1 with "already created" once an owner exists.
+    $COMPOSE exec -T castopod-web php spark install:init-database > /dev/null
+    out=$(printf 'interop-admin-pw-1\ninterop-admin-pw-1\n' \
+        | $COMPOSE exec -T castopod-web php spark install:create-superadmin -n admin -e admin@castopod.test) \
+        || grep -q 'already created' <<< "$out" || { echo "$out" >&2; return 1; }
+    castopod=$($COMPOSE exec -T piefed-web python - < interop/seed_castopod.py | tail -n 1)
+    printf '%s\n%s' "$peertube" "$castopod" | python3 -c 'import json, sys; t = {}; [t.update(json.loads(l)) for l in sys.stdin]; t["mastodon_bob"] = sys.argv[1]; print(json.dumps(t))' \
         "$token" > interop/.tokens.json
 }
 

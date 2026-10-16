@@ -34,3 +34,7 @@ fi
 if ! grep -q '^PEERTUBE_SECRET=' .env.interop; then
     printf '# PeerTube\nPEERTUBE_SECRET=%s\n' "$(hex 32)" >> .env.interop
 fi
+# Castopod joined the harness later: its analytics salt is mandatory
+if ! grep -q '^CP_ANALYTICS_SALT=' .env.interop; then
+    printf '# Castopod\nCP_ANALYTICS_SALT=%s\n' "$(hex 32)" >> .env.interop
+fi

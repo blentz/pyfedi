@@ -1,4 +1,4 @@
-# Interop harness (spec 2026-10-14 §8.1): PieFed built from this tree, Mastodon and PeerTube, behind Caddy with an
+# Interop harness (spec 2026-10-14 §8.1): PieFed built from this tree, Mastodon, PeerTube and Castopod, behind Caddy with an
 # internal CA on *.test names. Run via interop/run.sh, never by hand. Nothing here is published to the host network.
 # Its own project and pod: unnamed, it would be `pyfedi` like compose.test.yaml's stack, and each stack's `down`
 # would remove the other's containers.
@@ -31,7 +31,7 @@ services:
       - caddy-data:/data
     networks:
       interop:
-        aliases: [piefed.test, mastodon.test, peertube.test]
+        aliases: [piefed.test, mastodon.test, peertube.test, castopod.test]
 
   piefed-db:
     image: docker.io/library/postgres:17.11@sha256:3cec7eb015ba8adb28139fa5c83b8489cdf0e666e53dfdf20f598ae0cc8739e3
@@ -146,6 +146,38 @@ services:
     entrypoint: ["/trust_ca.sh", "/usr/local/bin/entrypoint.sh"]
     command: ["node", "dist/server"]
     depends_on: [caddy, peertube-db, peertube-redis]
+
+  castopod-db:
+    image: docker.io/library/mariadb:11.8@sha256:6422478cb8e159f080fb1d8ccf65101e26fe51385787fde7d16c3b165a331f15
+    environment: {MARIADB_ROOT_PASSWORD: castopod, MARIADB_DATABASE: castopod, MARIADB_USER: castopod, MARIADB_PASSWORD: castopod}
+    tmpfs: [/var/lib/mysql]
+    networks: [interop]
+
+  castopod-web:
+    <<: *trust
+    # 1.15.5, the newest stable release on 2026-10-16 (2.0.0-next.4 has the same inbox)
+    image: docker.io/castopod/castopod:1.15.5@sha256:4e4f0440520f45257bfeac7be4347defd20048b4efef8f53d73ec9ed3a4f7966
+    environment:
+      CP_BASEURL: https://castopod.test
+      CP_DISABLE_HTTPS: "1"   # Caddy terminates TLS; Castopod's own https redirect would loop behind it
+      CP_DATABASE_HOSTNAME: castopod-db
+      CP_DATABASE_NAME: castopod
+      CP_DATABASE_USERNAME: castopod
+      CP_DATABASE_PASSWORD: castopod
+      # the REST API seeds episodes (seed_castopod.py); CodeIgniter reads <config>_<property> from the environment
+      restapi_enabled: "true"
+      restapi_basicAuth: "true"
+      restapi_basicAuthUsername: interop
+      restapi_basicAuthPassword: interop-api-pw
+    volumes:
+      - caddy-data:/caddy-data:ro
+      - ./interop/trust_ca.sh:/trust_ca.sh:ro
+      # PHP's curl and openssl ignore SSL_CERT_FILE: point them at the bundle trust_ca.sh writes
+      - ./interop/castopod-ca.ini:/usr/local/etc/php/conf.d/zz-harness-ca.ini:ro
+    # trust_ca.sh first, then the image's own s6 /init (exec keeps it PID 1)
+    entrypoint: ["/trust_ca.sh", "docker-php-serversideup-entrypoint"]
+    command: ["/init"]
+    depends_on: [caddy, castopod-db]
 
   interop-runner:
     <<: *trust
