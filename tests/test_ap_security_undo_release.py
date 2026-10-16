@@ -16,7 +16,7 @@ from flask import current_app
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.activitypub.signature import RsaKeys
-from app.activitypub.util import activity_dedupe_key, release_undone_activity
+from app.activitypub.util import activity_accepted_key, activity_dedupe_key, mark_accepted, release_undone_activity
 from app.models import ActivityPubLog, CommunityMember, FeedMember, PostVote, UserFollower, utcnow
 from tests.factories import make_community, make_feed, make_instance, make_post, make_site, make_user, signed_inbox_post
 
@@ -286,33 +286,107 @@ def test_the_undos_own_claim_is_kept(app, inline, scene, redis_double):
 
 
 ACTOR = 'https://peer.example/u/carol'
+FOLLOW_ID = f'{ACTOR}/follows/7'
+FOLLOW = ('Follow',)
+
+
+def _accepted(redis_double, activity_id=FOLLOW_ID, kind='Follow', actor=ACTOR):
+    """As if PieFed had accepted `activity_id` as a `kind` from `actor`: its claim and its acceptance marker."""
+    redis_double.set(activity_dedupe_key(activity_id, actor), 1)
+    mark_accepted({'id': activity_id, 'type': kind, 'actor': actor}, announced=False)
 
 
 @pytest.mark.parametrize('undo, released', [
-    ({'id': f'{ACTOR}/undo', 'actor': ACTOR, 'object': {'id': f'{ACTOR}/follows/7', 'actor': ACTOR}}, True),
-    ({'id': f'{ACTOR}/undo', 'actor': ACTOR, 'object': f'{ACTOR}/follows/7'}, False),   # no inner actor to compare
-    ({'id': f'{ACTOR}/undo', 'actor': {'id': ACTOR}, 'object': {'id': f'{ACTOR}/follows/7', 'actor': ACTOR}}, False),
-    ({'id': f'{ACTOR}/undo', 'actor': ACTOR, 'object': {'id': 7, 'actor': ACTOR}}, False),
-    ({'id': f'{ACTOR}/undo', 'actor': ACTOR, 'object': {'id': f'{ACTOR}/follows/7'}}, False),
-    ({'id': f'{ACTOR}/undo', 'actor': ACTOR, 'object': {'id': f'{ACTOR}/undo', 'actor': ACTOR}}, False),   # its own id
+    ({'id': f'{ACTOR}/undo', 'actor': ACTOR, 'object': {'id': FOLLOW_ID, 'type': 'Follow', 'actor': ACTOR}}, True),
+    ({'id': f'{ACTOR}/undo', 'actor': ACTOR, 'object': FOLLOW_ID}, False),   # no inner actor to compare
+    ({'id': f'{ACTOR}/undo', 'actor': {'id': ACTOR}, 'object': {'id': FOLLOW_ID, 'type': 'Follow', 'actor': ACTOR}},
+     False),
+    ({'id': f'{ACTOR}/undo', 'actor': ACTOR, 'object': {'id': 7, 'type': 'Follow', 'actor': ACTOR}}, False),
+    ({'id': f'{ACTOR}/undo', 'actor': ACTOR, 'object': {'id': FOLLOW_ID, 'type': 'Follow'}}, False),
+    ({'id': f'{ACTOR}/undo', 'actor': ACTOR, 'object': {'id': f'{ACTOR}/undo', 'type': 'Follow', 'actor': ACTOR}},
+     False),   # its own id
+    ({'id': f'{ACTOR}/undo', 'actor': ACTOR, 'object': {'id': FOLLOW_ID, 'type': 'Like', 'actor': ACTOR}},
+     False),   # not the type the arm undid
 ])
 def test_release_undone_activity_conditions(app, redis_double, undo, released):
-    key = activity_dedupe_key(f'{ACTOR}/follows/7', ACTOR)
-    redis_double.set(key, 1)
+    _accepted(redis_double)
     redis_double.set(activity_dedupe_key(f'{ACTOR}/undo', ACTOR), 1)
 
-    release_undone_activity(undo, announced=False)
+    release_undone_activity(undo, announced=False, types=FOLLOW)
 
-    assert redis_double.exists(key) == (0 if released else 1)
+    assert redis_double.exists(activity_dedupe_key(FOLLOW_ID, ACTOR)) == (0 if released else 1)
     assert redis_double.exists(activity_dedupe_key(f'{ACTOR}/undo', ACTOR)) == 1
 
 
 def test_an_announced_undo_releases_nothing(app, redis_double):
     """An Undo inside an Announce was verified as the announcer's, not as its own actor's."""
-    key = activity_dedupe_key(f'{ACTOR}/follows/7', ACTOR)
-    redis_double.set(key, 1)
+    _accepted(redis_double)
 
     release_undone_activity({'id': f'{ACTOR}/undo', 'actor': ACTOR,
-                             'object': {'id': f'{ACTOR}/follows/7', 'actor': ACTOR}}, announced=True)
+                             'object': {'id': FOLLOW_ID, 'type': 'Follow', 'actor': ACTOR}}, announced=True,
+                            types=FOLLOW)
 
-    assert redis_double.exists(key) == 1
+    assert redis_double.exists(activity_dedupe_key(FOLLOW_ID, ACTOR)) == 1
+
+
+UNDO_OF_FOLLOW = {'id': f'{ACTOR}/undo', 'actor': ACTOR, 'object': {'id': FOLLOW_ID, 'type': 'Follow', 'actor': ACTOR}}
+
+
+def test_an_id_never_accepted_is_not_released(app, redis_double):
+    redis_double.set(activity_dedupe_key(FOLLOW_ID, ACTOR), 1)   # claimed, but nothing was accepted under it
+
+    release_undone_activity(UNDO_OF_FOLLOW, announced=False, types=FOLLOW)
+
+    assert redis_double.exists(activity_dedupe_key(FOLLOW_ID, ACTOR)) == 1
+
+
+@pytest.mark.parametrize('kind, actor', [('Create', ACTOR), ('Like', ACTOR), ('Follow', 'https://peer.example/u/mallory')])
+def test_an_id_accepted_as_another_type_or_from_another_actor_is_not_released(app, redis_double, kind, actor):
+    redis_double.set(activity_dedupe_key(FOLLOW_ID, ACTOR), 1)
+    mark_accepted({'id': FOLLOW_ID, 'type': kind, 'actor': actor}, announced=False)
+
+    release_undone_activity(UNDO_OF_FOLLOW, announced=False, types=FOLLOW)
+
+    assert redis_double.exists(activity_dedupe_key(FOLLOW_ID, ACTOR)) == 1
+
+
+def test_one_acceptance_allows_one_release(app, redis_double):
+    """The marker is consumed: a second Undo naming the same, not re-accepted, id releases nothing."""
+    _accepted(redis_double)
+    release_undone_activity(UNDO_OF_FOLLOW, announced=False, types=FOLLOW)
+    redis_double.set(activity_dedupe_key(FOLLOW_ID, ACTOR), 1)
+
+    release_undone_activity(dict(UNDO_OF_FOLLOW, id=f'{ACTOR}/undo/2'), announced=False, types=FOLLOW)
+
+    assert redis_double.exists(activity_dedupe_key(FOLLOW_ID, ACTOR)) == 1
+
+
+@pytest.mark.parametrize('activity, marked', [
+    ({'id': FOLLOW_ID, 'type': 'Follow', 'actor': ACTOR}, True),
+    ({'id': FOLLOW_ID, 'type': 'Follow', 'actor': {'id': ACTOR}}, False),
+])
+def test_mark_accepted(app, redis_double, activity, marked):
+    mark_accepted(activity, announced=False)
+    mark_accepted(dict(activity, id=f'{ACTOR}/announced'), announced=True)
+
+    assert redis_double.get(activity_accepted_key(FOLLOW_ID, ACTOR)) == ('Follow|' + ACTOR if marked else None)
+    assert redis_double.exists(activity_accepted_key(f'{ACTOR}/announced', ACTOR)) == 0
+
+
+def test_an_undo_naming_a_prior_create_releases_nothing(app, inline, scene, redis_double):
+    """The security review's case: carol's Undo really removes her membership, but its embedded "Follow" carries
+    the id of an earlier Create of hers. That Create's claim stays, so its replay is still dropped."""
+    community, _, _, carol, _ = scene
+    _post(app, _follow(carol, community.ap_profile_id), carol)
+    create_id = f'{carol.ap_profile_id}/activities/create/1'
+    redis_double.set(activity_dedupe_key(create_id, carol.ap_profile_id), 1)
+    mark_accepted({'id': create_id, 'type': 'Create', 'actor': carol.ap_profile_id}, announced=False)
+    disguised = {'id': create_id, 'type': 'Follow', 'actor': carol.ap_profile_id, 'object': community.ap_profile_id}
+
+    _post(app, _undo(carol, disguised), carol)
+
+    assert _member(community, carol) is None
+    assert redis_double.exists(activity_dedupe_key(create_id, carol.ap_profile_id)) == 1
+    _post(app, {'id': create_id, 'type': 'Create', 'actor': carol.ap_profile_id,
+                'object': {'id': f'{carol.ap_profile_id}/notes/1', 'type': 'Note'}}, carol)
+    assert _last_log().exception_message.startswith(DUPLICATE)

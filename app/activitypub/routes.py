@@ -25,7 +25,7 @@ from app.activitypub.util import MEDIA_OBJECT_TYPES, follow_answer_inbox, MEDIA_
     post_to_activity, post_count_collections, comment_count_collections, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
-    update_post_from_activity, undo_vote, has_vote_on, release_undone_activity, post_to_page, find_reported_object, \
+    update_post_from_activity, undo_vote, has_vote_on, release_undone_activity, mark_accepted, post_to_page, find_reported_object, \
     process_report, ensure_domains_match, refresh_community_profile, \
     comment_model_to_json, restore_post_or_comment, ban_user, unban_user, \
     log_incoming_ap, find_community, site_ban_remove_data, community_ban_remove_data, verify_object_from_source, \
@@ -978,6 +978,10 @@ def community_inbox(actor):
 # The messages shared_inbox logs when an activity fails signature checking. replay_inbox_request skips those
 # checks, so the admin replay refuses to re-run a row logged with one of these.
 # Logged before any signature check, so the stored JSON is whatever anyone sent with a known id: never replayed.
+# R-UNDORELEASE: the types an Undo arm undoes, so only an activity of that type has its claim released
+FOLLOW_TYPES = ('Follow',)
+VOTE_TYPES = ('Like', 'Dislike', 'EmojiReact')
+
 UNVERIFIED_DUPLICATE_MESSAGE = 'Already aware of this activity (before any signature check)'
 UNVERIFIED_LOG_MESSAGES = (UNVERIFIED_DUPLICATE_MESSAGE,)
 
@@ -1284,6 +1288,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                 user.last_seen = utcnow()
                                 session.commit()
                                 cache.delete_memoized(community_membership, user, community)
+                                mark_accepted(core_activity, announced)   # R-UNDORELEASE: an Undo may release it
                             # send accept message to acknowledge the follow - again, if they are already a member, as
                             # a peer that lost our Accept retries the Follow (D66, owner ruling)
                             accept = {"@context": default_context(), "actor": community.public_url(),
@@ -1322,6 +1327,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                 feed.subscriptions_count += 1
                                 session.commit()
                                 cache.delete_memoized(feed_membership, user, feed)
+                                mark_accepted(core_activity, announced)   # R-UNDORELEASE
                             # send accept message to acknowledge the follow - again for an existing member (D66)
                             accept = {"@context": default_context(), "actor": feed.public_url(),
                                       "to": [user.public_url()],
@@ -1354,6 +1360,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                 local_user.ap_followers_url = local_user.public_url() + '/followers'
                             session.add(new_follower)
                             session.commit()
+                            mark_accepted(core_activity, announced)   # R-UNDORELEASE
                             if auto_accept:
                                 accept = {"@context": default_context(), "actor": local_user.public_url(),
                                           "to": [remote_user.public_url()],
@@ -2030,7 +2037,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                             session.commit()
                             cache.delete_memoized(community_membership, user, community)
                             if member or join_request:   # R-UNDORELEASE: a re-sent Follow may reuse the id
-                                release_undone_activity(core_activity, announced)
+                                release_undone_activity(core_activity, announced, FOLLOW_TYPES)
                             log_incoming_ap(id, APLOG_UNDO_FOLLOW, APLOG_SUCCESS, saved_json)
                             return
                         if isinstance(target, Feed):
@@ -2045,7 +2052,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                             session.commit()
                             cache.delete_memoized(feed_membership, user, feed)
                             if member or join_request:   # R-UNDORELEASE
-                                release_undone_activity(core_activity, announced)
+                                release_undone_activity(core_activity, announced, FOLLOW_TYPES)
                             log_incoming_ap(id, APLOG_UNDO_FOLLOW, APLOG_SUCCESS, saved_json)
                             return
                         if isinstance(target, User):
@@ -2058,7 +2065,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                             if follower:
                                 session.delete(follower)
                                 session.commit()
-                                release_undone_activity(core_activity, announced)   # R-UNDORELEASE
+                                release_undone_activity(core_activity, announced, FOLLOW_TYPES)   # R-UNDORELEASE
                                 log_incoming_ap(id, APLOG_UNDO_FOLLOW, APLOG_SUCCESS, saved_json)
                             return
                         if not target:
@@ -2110,7 +2117,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                             post_or_comment = undo_vote(comment, post, target_ap_id, user)
                         if post_or_comment:
                             if undone:   # R-UNDORELEASE: a re-sent Like may reuse the id
-                                release_undone_activity(core_activity, announced)
+                                release_undone_activity(core_activity, announced, VOTE_TYPES)
                             log_incoming_ap(id, APLOG_UNDO_VOTE, APLOG_SUCCESS, saved_json)
                             if not announced and post_or_comment.visibility in OPEN_VISIBILITIES:
                                 announce_activity_to_followers(post_or_comment.community, user, request_json, can_batch=True)
@@ -3135,6 +3142,7 @@ def process_upvote(user, store_ap_json, request_json, announced):
         if isinstance(liked, (Post, PostReply)) and user.id not in blocked_users(liked.author.id) and \
                 votes_cast_today(user.id) < current_app.config['VOTE_QUOTA']:
             liked.vote(user, 'upvote', emoji)
+            mark_accepted(request_json, announced)   # R-UNDORELEASE: an Undo may release it
             log_incoming_ap(id, APLOG_LIKE, APLOG_SUCCESS, saved_json)
             if not announced and liked.visibility in OPEN_VISIBILITIES:  # as process_new_content (interop D7)
                 announce_activity_to_followers(liked.community, user, request_json, can_batch=True)
@@ -3158,6 +3166,7 @@ def process_downvote(user, store_ap_json, request_json, announced):
         if isinstance(liked, (Post, PostReply)) and user.id not in blocked_users(liked.author.id) and \
                 votes_cast_today(user.id) < current_app.config['VOTE_QUOTA']:
             liked.vote(user, 'downvote', None)
+            mark_accepted(request_json, announced)   # R-UNDORELEASE
             log_incoming_ap(id, APLOG_DISLIKE, APLOG_SUCCESS, saved_json)
             if not announced and liked.visibility in OPEN_VISIBILITIES:  # as process_new_content (interop D7)
                 announce_activity_to_followers(liked.community, user, request_json, can_batch=True)

@@ -910,23 +910,47 @@ def release_activity(activity_id, actor_url) -> None:
     app_pkg.redis_client.delete(activity_dedupe_key(activity_id, actor_url))
 
 
-def release_undone_activity(undo: dict, announced: bool) -> None:
+def activity_accepted_key(activity_id, actor_url) -> str:
+    """The Redis key recording that PieFed took an inbound Follow or vote: scoped like the dedupe key."""
+    return 'ap-accepted:' + activity_dedupe_key(activity_id, actor_url).removeprefix('ap-dedupe:')
+
+
+def mark_accepted(activity: dict, announced: bool) -> None:
+    """Remember, for ACTIVITY_DEDUPE_SECONDS, that the top-level `activity` (a Follow or a vote) made a membership,
+    follower or vote here: `<type>|<actor>`. Only such an id can later have its claim released by an Undo
+    (R-UNDORELEASE); the AP log cannot be the record, LOG_ACTIVITYPUB_TO_DB may be off. One inside an Announce is not
+    marked, as an announced Undo releases nothing."""
+    actor = activity.get('actor')
+    if announced or not isinstance(actor, str):
+        return
+    app_pkg.redis_client.set(activity_accepted_key(activity['id'], actor), f"{activity['type']}|{actor}",
+                             ex=ACTIVITY_DEDUPE_SECONDS)
+
+
+def release_undone_activity(undo: dict, announced: bool, types: tuple) -> None:
     """Forget the claim of the activity an accepted Undo took back (R-UNDORELEASE, spec §6.4, amendment A14), so a
     later activity reusing its id is processed: PeerTube re-sends a Follow with the same id after an unsubscribe, and
     a Like after an Undo(Like) with the same id.
 
     Called only once the Undo's handler really undid something. Released only when the Undo is the verified
     top-level activity (not `announced`: one inside an Announce was verified as the announcer's), the undone
-    activity is embedded with a string id other than the Undo's own, its actor is the Undo's actor, and the id
-    lives on that actor's host -- the claim being scoped to the host, no other host's id is ever touched."""
+    activity is embedded with a string id other than the Undo's own, its actor is the Undo's actor, its id lives on
+    that actor's host -- the claim being scoped to the host, no other host's id is ever touched -- and its type is
+    one of `types`, those the handler undid. The id must also be one PieFed accepted as that type from that actor
+    (mark_accepted): otherwise an Undo could name the id of any earlier activity of its actor, a Create say, and
+    reopen it to replay. The marker is consumed, so one acceptance allows one release."""
     actor = undo['actor']
     undone = undo['object']
     if announced or not isinstance(actor, str) or not isinstance(undone, dict):
         return
     undone_id = undone.get('id')
     if not isinstance(undone_id, str) or undone_id == undo.get('id') or undone.get('actor') != actor or \
-            host_of(undone_id) != host_of(actor):
+            host_of(undone_id) != host_of(actor) or undone.get('type') not in types:
         return
+    marker = activity_accepted_key(undone_id, actor)
+    if app_pkg.redis_client.get(marker) != f"{undone['type']}|{actor}":
+        return
+    app_pkg.redis_client.delete(marker)
     release_activity(undone_id, actor)
 
 
