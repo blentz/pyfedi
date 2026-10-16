@@ -613,7 +613,7 @@ Each step gets its own implementation plan and its own commits, and each ends wi
        - the record's numeric fields (`duration_s`, `height`, `bytes`, `thumbnail_width`, `thumbnail_height`) are positive integers.
      - Any other post in that community uses the `Page` path (§4.1).
      - `name` is the stripped title cut to 120 characters. A title shorter than 3 characters is padded with `.` to 3. The web forms already require 3; the API's edit may not.
-     - `content` is `post.body` as `text/markdown`, sent only when the stripped body has at least 3 characters.
+     - `content` is the first 10000 characters of `post.body`, stripped, as `text/markdown`, sent only when that has at least 3 characters. PeerTube v8.3.1 rejects the whole `Video` when `content` is longer than 10000 (`VIDEOS.DESCRIPTION`), and PieFed bodies go to 50000.
      - `tag` holds only the post's `Hashtag` entries whose name, without `#`, has 2 to 30 characters. Flair entries (`lemmy:CommunityTag`) are left out.
      - `url` holds the file `Link` and a `text/html` `Link` to the post page.
      - The file `Link`'s `mediaType` is the media mime, except that `video/quicktime` (MOV) is sent as `video/mp4`. PeerTube keeps a remote file `Link` only for `video/mp4`, `video/webm` and `video/ogg`, and a MOV holds the same streams.
