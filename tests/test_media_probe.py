@@ -95,6 +95,11 @@ def test_an_integer_duration_too_large_for_a_float_is_refused():
         validate_probe(probe(V, A, duration=10 ** 400), 'video')
 
 
+@pytest.mark.parametrize('rate', ['1' + '0' * 400 + '/1', '1/' + '0' * 400])
+def test_an_absurd_frame_rate_is_left_out(rate):
+    assert 'fps' not in validate_probe(probe({**V, 'avg_frame_rate': rate}, A), 'video')
+
+
 def test_an_unhashable_audio_codec_is_refused():
     with pytest.raises(MediaToolError, match='codec'):
         validate_probe(probe({'codec_type': 'audio', 'codec_name': ['aac']}), 'audio')

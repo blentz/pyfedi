@@ -39,7 +39,7 @@ def _fps(rate) -> int | None:
     try:
         num, den = (int(x) for x in rate.split('/'))
         return round(num / den) if den else None
-    except (AttributeError, ValueError):
+    except (AttributeError, ValueError, OverflowError):   # a 400-digit rate divides to more than a float holds
         return None
 
 
