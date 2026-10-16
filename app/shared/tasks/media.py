@@ -101,6 +101,16 @@ def _move_media_status(post_id, from_status: str, to_status: str, bump: int = 0,
     return moved.rowcount == 1
 
 
+def _release(post_id) -> None:
+    """Put a claimed upload back to processing after an unexpected error, so no run leaves it claimed. If that fails
+    too, it is logged and not raised: the caller re-raises the error that broke the run, and the sweep recovers it."""
+    try:
+        _move_media_status(post_id, 'probing', 'processing')
+    except Exception as error:
+        db.session.rollback()
+        current_app.logger.error(f'probe_media: post {post_id}: could not release the claim: {error!r}')
+
+
 @celery.task
 def probe_media(send_async, post_id):
     session = get_task_session()
@@ -114,7 +124,7 @@ def probe_media(send_async, post_id):
                 _probe(post_id)
             except Exception:
                 db.session.rollback()
-                _move_media_status(post_id, 'probing', 'processing')   # not left claimed by a run that died
+                _release(post_id)
                 raise
     except Exception:
         session.rollback()

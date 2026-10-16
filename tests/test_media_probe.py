@@ -468,33 +468,43 @@ def setting_off(name):
     return change
 
 
+GONE, NO_RIGHT = 'the community is gone', 'you may no longer post this media in this community'
+# Each revocation, committed while probing, and the reason the author is then given
 REVOCATIONS = {
-    'the post was deleted': lambda env, post: lambda o: setattr(o.get(Post, post.id), 'deleted', True),
-    'the author was deleted': lambda env, post: lambda o: setattr(o.get(User, env.mod.id), 'deleted', True),
-    'the author was banned from the site': lambda env, post: lambda o: setattr(o.get(User, env.mod.id), 'banned', True),
-    'the author may no longer post': lambda env, post: lambda o: setattr(o.get(User, env.mod.id), 'ban_posts', True),
-    'the author was banned from the community': lambda env, post: lambda o: o.add(
-        CommunityBan(user_id=env.mod.id, community_id=post.community_id, banned_by=1)),
-    'the author is no longer a moderator': lambda env, post: lambda o: setattr(
-        o.query(CommunityMember).filter_by(user_id=env.mod.id, community_id=post.community_id).one(),
-        'is_moderator', False),
-    'the upload switch was turned off': lambda env, post: setting_off('allow_video_file_uploads'),
-    'the community is no longer a video channel': lambda env, post: lambda o: setattr(
-        o.get(type(env.chan), post.community_id), 'kind', COMMUNITY_KIND_DISCUSSION),
-    'the community was deleted': lambda env, post: lambda o: setattr(
-        o.get(type(env.chan), post.community_id), 'banned', True),
+    'the post was deleted': (
+        lambda env, post: lambda o: setattr(o.get(Post, post.id), 'deleted', True), 'the post was deleted'),
+    'the author was deleted': (
+        lambda env, post: lambda o: setattr(o.get(User, env.mod.id), 'deleted', True), NO_RIGHT),
+    'the author was banned from the site': (
+        lambda env, post: lambda o: setattr(o.get(User, env.mod.id), 'banned', True), NO_RIGHT),
+    'the author may no longer post': (
+        lambda env, post: lambda o: setattr(o.get(User, env.mod.id), 'ban_posts', True), NO_RIGHT),
+    'the author was banned from the community': (
+        lambda env, post: lambda o: o.add(CommunityBan(user_id=env.mod.id, community_id=post.community_id,
+                                                       banned_by=1)), NO_RIGHT),
+    'the author is no longer a moderator': (
+        lambda env, post: lambda o: setattr(
+            o.query(CommunityMember).filter_by(user_id=env.mod.id, community_id=post.community_id).one(),
+            'is_moderator', False), NO_RIGHT),
+    'the upload switch was turned off': (
+        lambda env, post: setting_off('allow_video_file_uploads'), NO_RIGHT),
+    'the community is no longer a video channel': (
+        lambda env, post: lambda o: setattr(o.get(type(env.chan), post.community_id), 'kind',
+                                            COMMUNITY_KIND_DISCUSSION), NO_RIGHT),
+    'the community was deleted': (
+        lambda env, post: lambda o: setattr(o.get(type(env.chan), post.community_id), 'banned', True), GONE),
 }
 
 
 @pytest.mark.parametrize('case', list(REVOCATIONS))
 def test_a_right_lost_while_probing_fails_the_post_instead_of_publishing_it(env, monkeypatch, case):
     post = stored_post(env)
-    while_probing(monkeypatch, REVOCATIONS[case](env, post))
+    revoke, reason = REVOCATIONS[case]
+    while_probing(monkeypatch, revoke(env, post))
     post = run(post)
     media = media_of(post)
     assert media['status'] == 'failed'
-    assert media['error'] in ('the post was deleted', 'the community is gone',
-                              'you may no longer post this media in this community')
+    assert media['error'] == reason
     assert_nothing_published(env, post)
     notification = Notification.query.one()
     assert (notification.user_id, notification.subtype) == (env.mod.id, 'media_failed')
@@ -503,7 +513,7 @@ def test_a_right_lost_while_probing_fails_the_post_instead_of_publishing_it(env,
 
 def test_a_right_lost_before_a_scheduled_upload_is_ready_fails_it_too(env, monkeypatch):
     post = stored_post(env, scheduled_for=utcnow() + timedelta(days=1), timezone='UTC')
-    while_probing(monkeypatch, REVOCATIONS['the author is no longer a moderator'](env, post))
+    while_probing(monkeypatch, REVOCATIONS['the author is no longer a moderator'][0](env, post))
     post = run(post)
     assert media_of(post)['status'] == 'failed' and post.status == POST_STATUS_PROCESSING
 
@@ -710,3 +720,24 @@ def test_the_sweep_leaves_an_upload_a_live_probe_moved_first(sweep, monkeypatch,
     swept(post)
     assert sweep.queued == [] and Notification.query.count() == 0
     assert media_of(db.session.get(Post, post.id))['status'] == 'probing'
+
+
+
+def test_a_failed_release_does_not_hide_the_error_that_caused_it(env, monkeypatch, caplog):
+    """The run fails unexpectedly, and then its release of the claim fails too (the database went away, say). The
+    release's error is logged; the error raised is still the one that broke the run."""
+    post = stored_post(env)
+    real_move = media_tasks._move_media_status
+
+    def broken(path):
+        raise RuntimeError('a bug')
+
+    def release_fails(post_id, from_status, to_status, **kwargs):
+        if from_status == 'probing':
+            raise ConnectionError('the database went away')
+        return real_move(post_id, from_status, to_status, **kwargs)
+    monkeypatch.setattr(media_tasks, 'run_ffprobe', broken)
+    monkeypatch.setattr(media_tasks, '_move_media_status', release_fails)
+    with pytest.raises(RuntimeError, match='a bug'):
+        probe_media(False, post.id)
+    assert 'the database went away' in caplog.text
