@@ -237,13 +237,19 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
         }
         video = is_post and uses_peertube_video(object)   # spec §10 A15.6: PeerTube takes a video's Delete only from its channel's account
         owner = session.get(User, community.user_id) if video and community.user_id else None
+        if owner is not None and (not owner.is_local() or owner.deleted):   # only a live local owner can sign
+            owner = None
         for instance in community.following_instances():
             if instance.inbox and instance.online() and not user.has_blocked_instance(instance.id) and not instance_banned(instance.domain):
                 if video and instance.software == 'peertube':
                     if is_restore:      # PeerTube has no Undo(Delete): the video is sent again
                         send_post_request(instance.inbox, _video_create(object), object.author.private_key,
                                           object.author.public_url() + '#main-key')
-                    elif owner is not None:
+                    elif owner is None:     # PeerTube refuses a community's or anyone else's Delete: leave the instance unsent
+                        current_app.logger.warning(f'Delete of video {object.id} in community {community.id} not sent to '
+                                                   f'{instance.domain}: the community has no live local owner to sign it')
+                        continue
+                    else:
                         send_post_request(instance.inbox, dict(delete, actor=owner.public_url(),
                                                                **{'@context': default_context()}),
                                           owner.private_key, owner.public_url() + '#main-key')
