@@ -591,6 +591,7 @@ Each step gets its own implementation plan and its own commits, and each ends wi
        - the API refuses it with the error `kind can change only while the community has no posts`.
      - Once the community has posts, the web form shows the kind as a disabled select. A disabled select is not submitted, so a POST without `kind` keeps the stored kind.
      - A community of kind `microblogs` never changes kind, and `microblogs` is never accepted as a choice.
+     - Only a local community has a kind to set: a remote community keeps `discussion` (§3.1), so the web edit and the API refuse a different kind for it (`only a local community has a kind`), and the web form shows the select disabled.
      - `podcast` is offered now because step 3 audio uploads need it. Until step 6, a podcast community's posts federate as `Page`.
   3. **Microblogs marking (§3.1, A12).**
      - Migration `d4a7c1e9b3f6` sets `kind='microblogs'` on the row `find_microblogging_community` matches (`instance_id=1, user_id=1, name='microblogs'`). Its downgrade sets that row back to `discussion`.
