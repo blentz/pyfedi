@@ -3522,13 +3522,14 @@ class Post(db.Model):
             for file in File.query.filter(File.id.in_(gallery_ids)).all():
                 file.delete_from_disk(cache_urls=cache_urls)
                 db.session.delete(file)
-        is_media = media_of(self) is not None
-        local_media = media_local_path(self)   # A13.8: only the strict stored name is ever unlinked
-        # never one a cross-post still plays: cross-posts are found by url equality, as in the S3 branch below
-        if local_media and not s3_object_is_referenced_elsewhere(self.url, post_id=self.id):
+        # A13.8: the post that owns the media record always takes its media with it. A post that only links to the
+        # URL is not a reference: anyone, a remote peer included, can make one, and it must not stop a takedown
+        owns_media = media_of(self) is not None and self.is_local()
+        local_media = media_local_path(self)   # only the strict stored name is ever unlinked
+        if local_media:
             with suppress(FileNotFoundError):
                 os.unlink(local_media)
-        if (is_media or self.type == POST_TYPE_VIDEO) and _store_files_in_s3() and self.url:
+        if (owns_media or self.type == POST_TYPE_VIDEO) and _store_files_in_s3() and self.url:
             # D1343. This passed `self.url` -- the whole `https://...` -- as an S3
             # KEY, so `delete_objects` was asked for an object that cannot exist
             # and every mirrored video stayed in the bucket for good. The key it
@@ -3538,8 +3539,7 @@ class Post(db.Model):
             # url equality, so up to ten Post rows name one video and deleting one
             # of them must not take the file the others play.
             s3_key = s3_key_from_url(self.url)
-            if s3_key and not s3_object_is_referenced_elsewhere(self.url,
-                                                                post_id=self.id):
+            if s3_key and (owns_media or not s3_object_is_referenced_elsewhere(self.url, post_id=self.id)):
                 from app.shared.tasks.maintenance import delete_from_s3  # cycle: app.shared.tasks.maintenance imports from this module
                 if current_app.debug:
                     delete_from_s3([s3_key])

@@ -942,7 +942,8 @@ def test_a_failure_after_the_move_to_s3_removes_the_object(env, s3, monkeypatch,
     assert not os.path.exists(local) and files_on_disk() == []
 
 
-def test_a_failed_post_keeps_a_bucket_object_another_post_names(env, s3, monkeypatch):
+def test_a_failed_post_removes_its_bucket_object_even_when_a_link_names_it(env, s3, monkeypatch):
+    """Security ruling: a post that only links to the URL is not a reference, as for purge (A13.8)."""
     post = stored_post(env)
     other_id = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/other', title='Other').id
     db.session.commit()
@@ -956,7 +957,7 @@ def test_a_failed_post_keeps_a_bucket_object_another_post_names(env, s3, monkeyp
     post = run(post)
 
     assert media_of(post)['status'] == 'failed' and db.session.get(Post, other_id).url == post.url
-    s3.head_object(Bucket='pyfedi-test', Key=post.url.removeprefix('https://cdn.probeland.test/'))
+    assert s3.list_objects_v2(Bucket='pyfedi-test').get('KeyCount') == 0
 
 
 def test_a_timed_out_upload_loses_its_file(sweep):
