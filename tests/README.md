@@ -376,7 +376,7 @@ Two corpus directories, and which is which matters:
 ### Targets
 
 74 targets over 13 surfaces. Generated from `REGISTRY` and `SURFACES` on
-2026-10-14; "Entry points" is the number of functions the surface lists, a
+2026-10-16; "Entry points" is the number of functions the surface lists, a
 budget is `budget_ms`, and "app" is `needs_app`. Regenerate it in the test
 container rather than editing it by hand:
 
