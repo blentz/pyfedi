@@ -930,10 +930,10 @@ DEFERRED_HEADERS = ('Host', 'Date', 'Digest', 'Content-Digest', 'Signature', 'Si
 DEFERRED_SECONDS = 60
 # At most this many parked requests per sending host within DEFERRED_SECONDS (security review, 2026-10-16)
 DEFERRED_PER_HOST = 50
-# The Date, in epoch seconds, of the delivery process_inbox_request is handling, when it was HTTP-signed with its
-# actor's own key (not bounced, not LD-only, not relayed); None otherwise. mark_accepted records it, so a duplicate is
-# parked only when it is a newer copy than the one accepted (security review I1).
-current_http_date: ContextVar = ContextVar('current_http_date', default=None)
+# The signed time (signature.signed_at), in epoch seconds, of the delivery process_inbox_request is handling, when it
+# was HTTP-signed with its actor's own key (not bounced, not LD-only, not relayed); None otherwise. An Undo's is what
+# a request parked for the activity it undoes must be at least as late as (parked_request, review ruling 2026-10-16).
+current_signed_at: ContextVar = ContextVar('current_signed_at', default=None)
 
 
 def deferred_count_key(actor_url) -> str:
@@ -952,23 +952,16 @@ def undo_of_key(activity_id, actor_url) -> str:
     return 'ap-undo-of:' + activity_dedupe_key(activity_id, actor_url).removeprefix('ap-dedupe:')
 
 
-def accepted_as(activity_id, actor) -> tuple[str, str]:
-    """What mark_accepted recorded for `activity_id`: ('<type>|<actor>', '<Date epoch seconds, or empty>'), or
-    ('', '') when nothing was."""
-    head, _, date = (app_pkg.redis_client.get(activity_accepted_key(activity_id, actor)) or '').rpartition('|')
-    return head, date
-
-
 def mark_accepted(activity: dict, announced: bool) -> None:
     """Remember, for ACTIVITY_DEDUPE_SECONDS, that the top-level `activity` (a Follow or a vote) made a membership,
-    follower or vote here: `<type>|<actor>|<Date>` (current_http_date, empty when the delivery had none). Only such an id can later have its claim released by an Undo
+    follower or vote here: `<type>|<actor>`. Only such an id can later have its claim released by an Undo
     (R-UNDORELEASE); the AP log cannot be the record, LOG_ACTIVITYPUB_TO_DB may be off. One inside an Announce is not
     marked, as an announced Undo releases nothing."""
     actor = activity.get('actor')
     if announced or not isinstance(actor, str):
         return
-    app_pkg.redis_client.set(activity_accepted_key(activity['id'], actor),
-                             f"{activity['type']}|{actor}|{current_http_date.get() or ''}", ex=ACTIVITY_DEDUPE_SECONDS)
+    app_pkg.redis_client.set(activity_accepted_key(activity['id'], actor), f"{activity['type']}|{actor}",
+                             ex=ACTIVITY_DEDUPE_SECONDS)
     # R-UNDORELEASE, repeated cycles: PeerTube reuses the Undo's id as well (`<id>/undo`). This activity was undone
     # before and now really took effect again, so the Undo that undid it is released too: the next one is processed.
     recorded = app_pkg.redis_client.get(undo_of_key(activity['id'], actor))
@@ -1004,18 +997,23 @@ def release_undone_activity(undo: dict, announced: bool, types: tuple) -> dict |
             host_of(undone_id) != host_of(actor) or undone.get('type') not in types:
         return
     marker = activity_accepted_key(undone_id, actor)
-    if accepted_as(undone_id, actor)[0] != f"{undone['type']}|{actor}":
+    if app_pkg.redis_client.get(marker) != f"{undone['type']}|{actor}":
         return
     app_pkg.redis_client.delete(marker)
     release_activity(undone_id, actor)
     app_pkg.redis_client.set(undo_of_key(undone_id, actor), f"{undo['id']}|{actor}", ex=ACTIVITY_DEDUPE_SECONDS)
-    return parked_request(undone_id, actor, types)
+    return parked_request(undone_id, actor, types, current_signed_at.get())
 
 
-def parked_request(activity_id, actor, types: tuple) -> dict | None:
-    """Take the request parked under `activity_id` (deferred_key), if any: {'path', 'headers', 'body'}, the body
-    base64. It is returned only when it is that activity, of one of `types`, from `actor`; otherwise it is
-    discarded. The caller runs it through the inbox again, signature check included."""
+def parked_request(activity_id, actor, types: tuple, undo_signed_at: int | None) -> dict | None:
+    """Take the request parked under `activity_id` (deferred_key), if any: {'path', 'headers', 'body', 'signed_at'},
+    the body base64. It is returned only when it is that activity, of one of `types`, from `actor`, and was signed no
+    earlier than the Undo (`undo_signed_at`); otherwise it is discarded. The caller runs it through the inbox again,
+    signature check included.
+
+    The signed times tell the two apart (review ruling 2026-10-16): in PeerTube's race the new activity is signed
+    after its Undo and only lands first, while a sender's retry of the old one was signed before the Undo it would
+    otherwise reverse. Either time missing: discarded."""
     key = deferred_key(activity_id, actor)
     raw = app_pkg.redis_client.get(key)
     if raw is None:
@@ -1023,7 +1021,8 @@ def parked_request(activity_id, actor, types: tuple) -> dict | None:
     app_pkg.redis_client.delete(key)
     parked = json.loads(raw)
     body = json.loads(base64.b64decode(parked['body']))
-    if body.get('id') != activity_id or body.get('actor') != actor or body.get('type') not in types:
+    if body.get('id') != activity_id or body.get('actor') != actor or body.get('type') not in types or \
+            parked.get('signed_at') is None or undo_signed_at is None or parked['signed_at'] < undo_signed_at:
         return None
     return parked
 

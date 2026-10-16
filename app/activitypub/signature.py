@@ -366,6 +366,25 @@ def _check_signed_host(request) -> None:
         raise VerificationError(f'Signed host {host} is not this instance')
 
 
+# Where HttpSignature.verify_request leaves the time a verified signature covers (signed_at)
+SIGNED_AT_ENVIRON = 'piefed.signed_at'
+
+
+def http_date_seconds(value) -> int | None:
+    """An HTTP date in epoch seconds, or None when there is none or it does not parse."""
+    try:
+        return int(parse_http_date(value).timestamp())
+    except (TypeError, ValueError):
+        return None
+
+
+def signed_at(request) -> int | None:
+    """The time, in epoch seconds, that the request's verified HTTP signature covers: the Date header when a cavage
+    signature signs `date`, the verifying label's `created` for RFC 9421. None when no verification passed, or the
+    signature covers no time."""
+    return request.environ.get(SIGNED_AT_ENVIRON)
+
+
 def is_rfc9421(request) -> bool:
     """True when the request carries an RFC 9421 signature (Signature-Input), which then decides verification,
     freshness and the keyId; otherwise it is a cavage request."""
@@ -705,6 +724,7 @@ class HttpSignature:
             covered = rfc9421.verify(request.method, _target_uri(request), request.headers, request.get_data(),
                                      public_key, key_id=key_id)
             _check_required(set(rfc9421.normalise_covered(covered)), _rfc9421_required(required), key_id, enforce)
+            request.environ[SIGNED_AT_ENVIRON] = covered.created
             return True
 
         # Get the signature details
@@ -736,6 +756,8 @@ class HttpSignature:
         if "host" in signed:
             _check_signed_host(request)
         _check_required(signed, required, signature_details["keyid"], enforce)
+        if "date" in signed:   # an uncovered Date is the sender's say-so: no signed time
+            request.environ[SIGNED_AT_ENVIRON] = http_date_seconds(request.headers.get("date"))
         return True
 
     @classmethod

@@ -20,15 +20,15 @@ from app import db, cache, celery, limiter
 from app.activitypub import bp
 from app.activitypub.actor import find_actor_by_url
 from app.activitypub.entitlement import PRIVATE_HEADERS, actor_document, addressees_of, audience_entitles, signed_requester_actor
-from app.activitypub.signature import POST_REQUIRED, HttpSignature, parse_http_date, VerificationError, VerificationFormatError, default_context, LDSignature, \
+from app.activitypub.signature import POST_REQUIRED, HttpSignature, signed_at, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request, verify_with_key_refresh, request_key_id
 from app.activitypub.util import MEDIA_OBJECT_TYPES, follow_answer_inbox, MEDIA_URL_KIND, media_url_from, activity_dedupe_key, community_actor_data, refresh_community_profile_task, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
     post_to_activity, post_count_collections, comment_count_collections, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
     update_post_from_activity, undo_vote, has_vote_on, release_undone_activity, mark_accepted, deferred_key, DEFERRED_SECONDS, \
-    deferred_count_key, DEFERRED_PER_HOST, FOLLOW_TYPES, VOTE_TYPES, DEFERRABLE_TYPES, \
-    DEFERRED_MAX_BYTES, DEFERRED_HEADERS, accepted_as, current_http_date, post_to_page, find_reported_object, \
+    activity_accepted_key, deferred_count_key, DEFERRED_PER_HOST, FOLLOW_TYPES, VOTE_TYPES, DEFERRABLE_TYPES, \
+    DEFERRED_MAX_BYTES, DEFERRED_HEADERS, current_signed_at, post_to_page, find_reported_object, \
     process_report, ensure_domains_match, refresh_community_profile, \
     comment_model_to_json, restore_post_or_comment, ban_user, unban_user, \
     log_incoming_ap, find_community, site_ban_remove_data, community_ban_remove_data, verify_object_from_source, \
@@ -951,9 +951,9 @@ def shared_inbox():
 
         relay_kwargs = {'relay_id': relay.id} if relay else {}
         relay_kwargs.update(ld_kwargs)
-        signed_date = _signed_date(request) if http_signed else None
-        if signed_date is not None:   # mark_accepted records it (I1); only when set, as above
-            relay_kwargs['http_date'] = signed_date
+        delivery_signed_at = signed_at(request) if http_signed else None
+        if delivery_signed_at is not None:   # an Undo's is compared with a parked request's; only when set, as above
+            relay_kwargs['signed_time'] = delivery_signed_at
         if current_app.debug:
             process_inbox_request(request_json, store_ap_json, **relay_kwargs)
         else:
@@ -997,15 +997,6 @@ SIGNATURE_FAILURE_MESSAGES = ('Precheck failed', 'Could not verify LD signature'
                               'Signature keyId host does not match actor')
 
 
-def _signed_date(request) -> int | None:
-    """The request's Date header in epoch seconds, or None when it has none or it does not parse (an RFC 9421 request
-    needs no Date, so precheck does not hold it to the HTTP date format)."""
-    try:
-        return int(parse_http_date(request.headers['Date']).timestamp())
-    except (KeyError, TypeError, ValueError):
-        return None
-
-
 def _park_duplicate(activity_id, actor, typed_json, request, http_signed) -> None:
     """Park a verified Follow or vote dropped as a duplicate, for DEFERRED_SECONDS (R-UNDORELEASE). PeerTube sends
     Undo(X) and the new X reusing X's id at once; if the new one lands first, the Undo's release runs it again
@@ -1016,15 +1007,14 @@ def _park_duplicate(activity_id, actor, typed_json, request, http_signed) -> Non
     release -- and at most DEFERRED_PER_HOST per sending host in a fixed window of DEFERRED_SECONDS. Only the path, the headers the
     signature checks read and the body are kept.
 
-    Only a newer copy (security review I1): a sender's retry of the original, or an LD-signed copy anyone holding it
-    could deliver, would otherwise be run after the actor's next Undo and reverse it. So the duplicate must be
-    HTTP-signed with the actor's own key (`http_signed`) and its Date strictly later than the accepted original's."""
+    Only an HTTP-signed copy with a signed time (security review I1 and its follow-up): an LD-signed copy anyone
+    holding it could deliver, or one whose Date the signature does not cover, is never parked. The signed time is
+    kept, and the Undo's release runs the copy only if it was signed no earlier than the Undo (parked_request), so a
+    sender's retry of the old activity cannot reverse a later Undo."""
     body = request.get_data()
-    duplicate_date = _signed_date(request) if http_signed else None
-    head, accepted_date = accepted_as(activity_id, actor)
-    if typed_json['type'] not in DEFERRABLE_TYPES or len(body) > DEFERRED_MAX_BYTES or duplicate_date is None or \
-            head != f"{typed_json['type']}|{actor}" or not accepted_date.isdigit() or \
-            duplicate_date <= int(accepted_date):
+    duplicate_signed_at = signed_at(request) if http_signed else None
+    if typed_json['type'] not in DEFERRABLE_TYPES or len(body) > DEFERRED_MAX_BYTES or duplicate_signed_at is None \
+            or app_pkg.redis_client.get(activity_accepted_key(activity_id, actor)) != f"{typed_json['type']}|{actor}":
         return
     # A fixed window (review I2): the TTL is set only when the counter is created, in the same transaction as the
     # INCR, so a host that keeps parking cannot keep its window open
@@ -1036,7 +1026,7 @@ def _park_duplicate(activity_id, actor, typed_json, request, http_signed) -> Non
         return
     parked = {'path': request.full_path if request.query_string else request.path,
               'headers': {name: request.headers[name] for name in DEFERRED_HEADERS if name in request.headers},
-              'body': base64.b64encode(body).decode('ascii')}
+              'body': base64.b64encode(body).decode('ascii'), 'signed_at': duplicate_signed_at}
     app_pkg.redis_client.set(deferred_key(activity_id, actor), json.dumps(parked), ex=DEFERRED_SECONDS)
 
 
@@ -1129,11 +1119,11 @@ def replay_inbox_request(request_json):
 
 @celery.task
 def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_verified=False, ld_signed=False,
-                          http_date=None):
+                          signed_time=None):
     with current_app.app_context():
         session = get_task_session()
         token = current_relay_id.set(relay_id)   # Post.new records it as post.relay_id; reset in the finally
-        date_token = current_http_date.set(http_date)   # mark_accepted records it (R-UNDORELEASE, I1)
+        signed_at_token = current_signed_at.set(signed_time)   # an Undo's, for parked_request (R-UNDORELEASE)
         ld_token = current_ld_signed.set(ld_signed)   # log_incoming_ap marks this delivery's rows unreplayable
         as_sent_token = current_as_sent.set(None)   # set below once the dispatched copy is final
         try:
@@ -2349,7 +2339,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
             current_relay_id.reset(token)   # before close(): a raising close must not leak relay_id into the next task
             current_ld_signed.reset(ld_token)
             current_as_sent.reset(as_sent_token)
-            current_http_date.reset(date_token)
+            current_signed_at.reset(signed_at_token)
             session.close()
 
 
