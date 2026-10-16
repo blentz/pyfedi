@@ -869,3 +869,28 @@ def test_a_like_that_turns_a_downvote_up_is_marked(app, inline, scene, redis_dou
     _post(app, like, carol)
 
     assert redis_double.get(activity_accepted_key(like['id'], carol.ap_profile_id)) == f'Like|{carol.ap_profile_id}'
+
+
+# --- round 3, M4: the cap covers everything stored ---
+
+
+def test_a_duplicate_whose_stored_blob_exceeds_8_kib_is_not_parked(app, inline, scene, redis_double):
+    """A 6 KB body is under the cap alone, but base64 and the headers make what would be stored larger than 8 KiB."""
+    community, _, _, carol, _ = scene
+    follow = dict(_follow(carol, community.ap_profile_id), summary='x' * 6000)
+    assert len(json.dumps(follow)) < DEFERRED_MAX_BYTES
+    _post(app, follow, carol)
+
+    _post(app, follow, carol)
+
+    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 0
+    assert redis_double.exists(deferred_count_key(carol.ap_profile_id)) == 0
+
+
+def test_every_stored_blob_is_within_the_cap(app, inline, scene, redis_double):
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    _post(app, follow, carol)
+    _post(app, follow, carol)
+
+    assert len(redis_double.get(deferred_key(follow['id'], carol.ap_profile_id))) <= DEFERRED_MAX_BYTES
