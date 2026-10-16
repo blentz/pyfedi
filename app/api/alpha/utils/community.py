@@ -329,11 +329,13 @@ def post_community(auth, data):
     discussion_languages = data['discussion_languages'] if 'discussion_languages' in data else [2]  # FIXME: use site language
     question_answer = data['question_answer'] if 'question_answer' in data else False
     kind = data['kind'] if 'kind' in data else COMMUNITY_KIND_DISCUSSION
+    podcast_category = data.get('podcast_category', '')
 
     input = {'name': name, 'title': title, 'description': description, 'rules': rules,
              'icon_url': icon_url, 'banner_url': banner_url,
              'nsfw': nsfw, 'restricted_to_mods': restricted_to_mods, 'local_only': local_only,
-             'discussion_languages': discussion_languages, 'question_answer': question_answer, 'kind': kind}
+             'discussion_languages': discussion_languages, 'question_answer': question_answer, 'kind': kind,
+             'podcast_category': podcast_category}
 
     user_id, community_id = shared_community.make_community(input, SRC_API, auth)
     community_json = community_view(community=community_id, variant=4, user_id=user_id)
@@ -379,6 +381,8 @@ def put_community(auth, data):
     input.update({key: data[key] for key in shared_community.COMMUNITY_SETTINGS if key in data})
     if 'kind' in data:
         input['kind'] = data['kind']
+    if 'podcast_category' in data:
+        input['podcast_category'] = data['podcast_category']
 
     user_id = shared_community.edit_community(input, community, SRC_API, auth)
     community_json = community_view(community=community, variant=4, user_id=user_id)
