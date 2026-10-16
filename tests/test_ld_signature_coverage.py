@@ -425,7 +425,8 @@ def test_an_http_signature_from_the_actors_own_host_is_not_marked_ld_signed(app,
     with app.test_client() as client:
         response = client.post('/inbox', data=body, headers=headers, content_type='application/activity+json')
 
-    assert response.status_code == 200 and dispatched[0][1] == {}
+    # http_date travels with an HTTP-signed delivery (R-UNDORELEASE I1); nothing marks it LD-signed
+    assert response.status_code == 200 and set(dispatched[0][1]) == {'http_date'}
 
 
 # --- R-LDDOWNGRADE: what an LD signature still cannot vouch for ---------------------------------------------

@@ -11,9 +11,11 @@ because the claim is taken by the route and released by the dispatcher: neither 
 import base64
 import contextlib
 import json
+import time
+from email.utils import formatdate
 
 import pytest
-from flask import current_app
+from flask import current_app, request as flask_request
 
 from app import db
 from app.activitypub import routes as activitypub_routes
@@ -22,7 +24,7 @@ from app.activitypub.util import DEFERRED_HEADERS, DEFERRED_MAX_BYTES, DEFERRED_
     activity_accepted_key, activity_dedupe_key, deferred_count_key, deferred_key, mark_accepted, \
     release_undone_activity, undo_of_key
 from app.models import ActivityPubLog, CommunityMember, FeedMember, PostVote, UserFollower, utcnow
-from tests.conftest import unsigned_but_precheck_clean_headers
+from tests.conftest import ld_signed_body, unsigned_but_precheck_clean_headers
 from tests.factories import make_community, make_feed, make_instance, make_post, make_site, make_user, signed_inbox_post
 
 DUPLICATE = 'Already aware of this activity'   # the start of both messages: before and after the signature check
@@ -34,6 +36,10 @@ def inline(app, monkeypatch, redis_double):
     monkeypatch.setitem(app.config, 'DEBUG', True)   # signing to test.piefed.local needs DEBUG; dispatch is inline
     # fakeredis has no Lua, so a lock cannot be released (tests/conftest.py redis_double's CAVEAT)
     monkeypatch.setattr(redis_double, 'lock', lambda *a, **kw: contextlib.nullcontext())
+    # Each signed request is one second later than the one before, so a resent activity carries a newer Date, as
+    # it does from PeerTube; a test that needs a given Date passes `at` to _post
+    CLOCK['next'] = int(time.time()) - 1800
+    monkeypatch.setattr('app.activitypub.signature.http_date', _clock_date)
     sends = []
     monkeypatch.setattr(activitypub_routes, 'send_post_request',
                         lambda uri, body, private_key, key_id, **kw: sends.append(body))
@@ -63,7 +69,17 @@ def scene(db_session):
     return community, local_user, post, carol, mallory
 
 
-def _post(app, activity, sender):
+CLOCK = {'next': 0}
+
+
+def _clock_date():
+    CLOCK['next'] += 1
+    return formatdate(CLOCK['next'], usegmt=True)
+
+
+def _post(app, activity, sender, at=None):
+    if at is not None:
+        CLOCK['next'] = at - 1
     with app.test_client() as client:
         response = signed_inbox_post(client, activity, sender)
     assert response.status_code == 200
@@ -374,7 +390,7 @@ def test_mark_accepted(app, redis_double, activity, marked):
     mark_accepted(activity, announced=False)
     mark_accepted(dict(activity, id=f'{ACTOR}/announced'), announced=True)
 
-    assert redis_double.get(activity_accepted_key(FOLLOW_ID, ACTOR)) == ('Follow|' + ACTOR if marked else None)
+    assert redis_double.get(activity_accepted_key(FOLLOW_ID, ACTOR)) == ('Follow|' + ACTOR + '|' if marked else None)
     assert redis_double.exists(activity_accepted_key(f'{ACTOR}/announced', ACTOR)) == 0
 
 
@@ -526,7 +542,7 @@ def test_a_host_parks_at_most_fifty_bodies_in_the_window(app, inline, scene, red
 
     _post(app, follow, carol)   # the 51st
     assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 0
-    assert 590 < redis_double.ttl(deferred_count_key(carol.ap_profile_id)) <= 600
+    assert 50 < redis_double.ttl(deferred_count_key(carol.ap_profile_id)) <= 60
 
 
 def test_the_parking_limits(app):
@@ -563,14 +579,14 @@ def test_a_parked_follow_failing_its_signature_on_the_rerun_is_discarded(app, in
     assert redis_double.exists(key) == 0
 
 
-def test_a_parked_body_lives_ten_minutes(app, inline, scene, redis_double):
+def test_a_parked_body_lives_a_minute(app, inline, scene, redis_double):
     community, _, _, carol, _ = scene
     follow = _follow(carol, community.ap_profile_id)
     _post(app, follow, carol)
     _post(app, follow, carol)
 
-    assert DEFERRED_SECONDS == 600
-    assert 590 < redis_double.ttl(deferred_key(follow['id'], carol.ap_profile_id)) <= 600
+    assert DEFERRED_SECONDS == 60
+    assert 50 < redis_double.ttl(deferred_key(follow['id'], carol.ap_profile_id)) <= 60
 
 
 def test_an_expired_parked_body_is_gone_and_the_undo_still_applies(app, inline, scene, redis_double):
@@ -632,3 +648,69 @@ def test_a_parked_body_not_matching_the_undone_activity_is_discarded(app, redis_
 
     assert release_undone_activity(UNDO_OF_FOLLOW, announced=False, types=FOLLOW) is None
     assert redis_double.exists(deferred_key(FOLLOW_ID, ACTOR)) == 0
+
+
+# --- round 3, I1: only a newer, HTTP-signed copy is parked ---
+
+
+def test_an_ld_only_duplicate_is_not_parked(app, inline, scene, redis_double, no_network_ld_signing):
+    """Anyone holding an LD-signed copy of carol's Follow could deliver it; it must never be parked to reverse her
+    next Undo."""
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    _post(app, follow, carol)
+    body = ld_signed_body(carol, id=follow['id'], activity_type='Follow', object_uri=community.ap_profile_id)
+    with app.test_client() as client:
+        response = client.post('/inbox', data=body, headers=unsigned_but_precheck_clean_headers(body),
+                               content_type='application/activity+json')
+
+    assert response.status_code == 200
+    assert _last_log().exception_message.endswith(DUPLICATE)
+    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 0
+
+
+@pytest.mark.parametrize('later', [0, -5])
+def test_a_retry_with_the_same_or_an_older_date_is_not_parked(app, inline, scene, redis_double, later):
+    """A sender's retry of the original carries its Date or an older one: it is the old X, not a new one."""
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    at = int(time.time()) - 600
+    _post(app, follow, carol, at=at)
+
+    _post(app, follow, carol, at=at + later)
+
+    assert _last_log().exception_message.startswith(DUPLICATE)
+    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 0
+
+
+def test_the_accepted_marker_records_the_originals_date(app, inline, scene, redis_double):
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    at = int(time.time()) - 600
+
+    _post(app, follow, carol, at=at)
+
+    assert redis_double.get(activity_accepted_key(follow['id'], carol.ap_profile_id)) == \
+        f'Follow|{carol.ap_profile_id}|{at}'
+
+
+def test_a_duplicate_of_an_original_with_no_date_is_not_parked(app, inline, scene, redis_double):
+    """An original accepted without a Date (an RFC 9421 request, an LD-only delivery) leaves nothing to compare."""
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    _post(app, follow, carol)
+    redis_double.set(activity_accepted_key(follow['id'], carol.ap_profile_id), f'Follow|{carol.ap_profile_id}|')
+
+    _post(app, follow, carol)
+
+    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 0
+
+
+@pytest.mark.parametrize('headers, expected', [
+    ({'Date': 'Thu, 15 Oct 2026 12:00:00 GMT'}, 1792065600),
+    ({'Date': 'not a date'}, None),
+    ({}, None),
+])
+def test_signed_date(app, headers, expected):
+    with app.test_request_context('/inbox', method='POST', headers=headers):
+        assert activitypub_routes._signed_date(flask_request) == expected
