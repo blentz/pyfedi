@@ -2913,6 +2913,8 @@ class Post(db.Model):
                 elif attachment['type'] == 'Document':
                     if 'url' not in attachment:     # as the Link branch above
                         continue                    # already tests for
+                    if str(attachment.get('mediaType', '')).startswith('audio/'):   # A17.3: a PieFed episode
+                        post.extensions = {**(post.extensions or {}), 'media_type': 'audio'}
                     if 'name' in attachment:
                         alt_text = attachment['name']
                     attached_images.append(attachment)
@@ -2920,6 +2922,8 @@ class Post(db.Model):
                     if 'url' not in attachment:
                         continue
                     post.url = attachment['url']
+                    if str(attachment.get('mediaType', '')).startswith('audio/'):   # A17.3: a PieFed episode
+                        post.extensions = {**(post.extensions or {}), 'media_type': 'audio'}
                     if 'name' in attachment:
                         post.title = attachment['name']
                     if post.url:
