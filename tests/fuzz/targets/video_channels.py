@@ -25,7 +25,7 @@ from app.constants import COMMUNITY_KIND_VIDEO_CHANNEL, MEDIA_KIND_AUDIO, MEDIA_
 from app import db
 from app.models import Community, File, Post, Tag, User, utcnow
 from app.shared.ffmpeg import MediaToolError
-from app.shared.tasks.media import validate_probe
+from app.shared.tasks.media import _is_cover_art, validate_probe
 from tests.fuzz.targets._target import Target
 from tests.fuzz.targets.signatures import _fields, _json_or_text, _text
 
@@ -36,11 +36,13 @@ _NO_EMOJI = {'return_value.filter.return_value.order_by.return_value.all.return_
 
 
 def check_validate_probe(data: bytes) -> None:
-    """validate_probe either refuses with MediaToolError or returns a record: a positive int duration_s, a codec
-    string, and for video positive int width and height. Anything else raised is a finding."""
+    """validate_probe, over any JSON value, either refuses with MediaToolError or returns a record: a positive int
+    duration_s, a codec string, and for video positive int width and height. Anything else raised is a finding.
+    _is_cover_art over each raw stream answers a bool whatever the stream is."""
     probe = _json_or_text(data)
-    if not isinstance(probe, dict):
-        return
+    streams = probe.get('streams') if isinstance(probe, dict) else None
+    for stream in streams if isinstance(streams, list) else ():
+        assert isinstance(_is_cover_art(stream), bool), f'cover art test of {stream!r}'
     for kind in (MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO):
         try:
             meta = validate_probe(probe, kind)
