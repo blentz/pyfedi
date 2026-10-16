@@ -67,6 +67,34 @@ def with_media(post, **fields) -> None:
     post.extensions = extensions   # new dicts: db.JSON does not track in-place changes
 
 
+def episode_of(post) -> dict:
+    """The episode fields of `post` (spec §3.4, §10 A17.4), or {}."""
+    podcast = (post.extensions or {}).get('podcast') if isinstance(post.extensions, dict) else None
+    return dict(podcast) if isinstance(podcast, dict) else {}
+
+
+def with_episode(post, episode_number, season, explicit) -> None:
+    """Store the episode fields, keeping every other key, such as the Castopod `credits` (A17.4)."""
+    podcast = {key: value for key, value in episode_of(post).items() if key not in ('episode_number', 'season')}
+    if episode_number is not None:
+        podcast['episode_number'] = episode_number
+    if season is not None:
+        podcast['season'] = season
+    podcast['explicit'] = bool(explicit)
+    extensions = dict(post.extensions) if isinstance(post.extensions, dict) else {}
+    extensions['podcast'] = podcast
+    post.extensions = extensions   # a new dict: db.JSON does not track in-place changes
+
+
+def episode_form_wanted(community, post=None) -> bool:
+    """The episode fields belong on a podcast community's audio upload, and on the edit of one (A17.4)."""
+    if community.kind != COMMUNITY_KIND_PODCAST or not community.is_local():
+        return False
+    if post is None:
+        return True
+    return str((media_of(post) or {}).get('mime', '')).startswith('audio/')
+
+
 def uploaded_size(uploaded_file) -> int:
     """The exact size of a parsed upload, read from its stream without loading it."""
     stream = uploaded_file.stream

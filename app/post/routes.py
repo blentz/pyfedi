@@ -54,7 +54,7 @@ from app.shared.site import block_remote_instance
 # The module, not the names: app.shared.community reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
-from app.shared.media import media_of
+from app.shared.media import episode_form_wanted, episode_of, media_of
 from app.shared.tasks import task_selector
 import app.variants as variants
 from app.utils import clean_ap_url, can_moderate, render_template, markdown_to_html, validation_required, \
@@ -1322,6 +1322,8 @@ def post_edit(post_id: int):
 
     del form.communities
     del form.visibility     # Amendment B: visibility is fixed at creation
+    if 'episode_number' in form and not episode_form_wanted(post.community, post):
+        del form.episode_number, form.season, form.explicit
 
     media_url_field = None
     if media_of(post) is not None:   # A13.7: the media's URL is shown, not edited
@@ -1391,6 +1393,11 @@ def post_edit(post_id: int):
             form.repeat.data = post.repeat
             form.scheduled_for.data = post.scheduled_for
             form.timezone.data = post.timezone if post.timezone else current_user.timezone
+            if 'episode_number' in form:
+                episode = episode_of(post)
+                form.episode_number.data = episode.get('episode_number')
+                form.season.data = episode.get('season')
+                form.explicit.data = episode.get('explicit', False)
             if form.flair:
                 form.flair.data = [flair.id for flair in post.flair]
             if post_type == POST_TYPE_LINK:

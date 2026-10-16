@@ -74,7 +74,8 @@ from app.utils import user_banned_from_community, back, get_setting, render_temp
 # The module, not the names: app.shared.post reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.post)
 import app.shared.post as shared_post
-from app.shared.media import MediaRefused, can_upload_media, media_kind_for, upload_byte_limit, uploaded_size
+from app.shared.media import MediaRefused, can_upload_media, episode_form_wanted, media_kind_for, upload_byte_limit, \
+    uploaded_size
 from app.shared.tasks import task_selector
 # The module, not the names: app.shared.feed reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.feed)
@@ -1300,6 +1301,9 @@ def add_post(actor, type=None):
     media_upload = type == media_kind_for(community) and can_upload_media(current_user, community)
     if type in (MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO) and not media_upload:
         del form.image_file
+    if 'episode_number' in form and not (type == MEDIA_KIND_AUDIO and media_upload
+                                                and episode_form_wanted(community)):
+        del form.episode_number, form.season, form.explicit   # A17.4: only a podcast's audio upload has them
 
     if form.validate_on_submit() and not refused_media_repeat(form, media_upload):
         if type == 'image' or type == 'event' or media_upload:

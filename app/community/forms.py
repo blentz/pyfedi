@@ -13,7 +13,7 @@ from sqlalchemy import func
 from wtforms import StringField, SubmitField, TextAreaField, BooleanField, HiddenField, SelectField, FileField, \
     DateField, IntegerField, DateTimeLocalField, RadioField
 
-from wtforms.validators import ValidationError, DataRequired, Length, Regexp, Optional, URL
+from wtforms.validators import ValidationError, DataRequired, Length, Regexp, Optional, URL, NumberRange
 
 from app import db
 from app.constants import COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_PODCAST, COMMUNITY_KIND_VIDEO_CHANNEL, \
@@ -370,7 +370,14 @@ class SubmittedUrlMixin:
         return True
 
 
-class CreateLinkForm(SubmittedUrlMixin, CreatePostForm):
+class EpisodeFieldsMixin:
+    """Spec §3.4, §10 A17.4: a podcast episode's number, season and explicit flag."""
+    episode_number = IntegerField(_l('Episode number'), validators=[Optional(), NumberRange(min=1)])
+    season = IntegerField(_l('Season'), validators=[Optional(), NumberRange(min=1)])
+    explicit = BooleanField(_l('Explicit episode'))
+
+
+class CreateLinkForm(EpisodeFieldsMixin, SubmittedUrlMixin, CreatePostForm):
     link_url = StringField(_l('URL'), validators=[DataRequired(), Regexp(r'^https?://', message='Submitted links need to start with "http://"" or "https://"')],
                            render_kw={'placeholder': 'https://...',
                                       'hx-get': '/community/check_url_already_posted',
@@ -417,7 +424,7 @@ class CreateVideoForm(MediaUrlOrFileMixin, CreatePostForm):
             self.video_url, lambda name: _l("Videos from %(domain)s are not allowed.", domain=name))
 
 
-class CreateAudioForm(MediaUrlOrFileMixin, CreatePostForm):
+class CreateAudioForm(EpisodeFieldsMixin, MediaUrlOrFileMixin, CreatePostForm):
     """An audio post (A13.5): a link, or an uploaded file that becomes a POST_TYPE_LINK post with
     `extensions.media_type = 'audio'`."""
     audio_url = StringField(_l('URL'), validators=[Optional(), Regexp(r'^https?://', message='Submitted links need to start with "http://"" or "https://"')],
