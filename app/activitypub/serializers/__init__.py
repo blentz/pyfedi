@@ -2,5 +2,7 @@
 peer is sent and the object it fetches are the same object (spec 2026-10-14 §4, amended §10 A1)."""
 from app.activitypub.serializers.microblog import (microblog_note, note_addressing, note_attachments, note_content,
                                                    uses_microblog_note)
+from app.activitypub.serializers.peertube import peertube_video, uses_peertube_video
 
-__all__ = ['microblog_note', 'note_addressing', 'note_attachments', 'note_content', 'uses_microblog_note']
+__all__ = ['microblog_note', 'note_addressing', 'note_attachments', 'note_content', 'uses_microblog_note',
+           'peertube_video', 'uses_peertube_video']
