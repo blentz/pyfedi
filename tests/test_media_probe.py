@@ -540,3 +540,27 @@ def test_a_second_run_while_the_first_is_probing_does_nothing(env, monkeypatch):
 def test_a_failure_does_not_leave_the_upload_claimed(env):
     post = run(stored_post(env, 'video_mpeg4.mp4'))
     assert media_of(post)['status'] == 'failed'
+
+
+def test_a_local_copy_that_cannot_be_removed_after_its_upload_does_not_fail_the_post(env, s3, monkeypatch):
+    """The media and its thumbnail are safe in the bucket once uploaded, so a failed unlink of the local copies is
+    logged and the post is published; post.url already names the bucket, so the object is not orphaned."""
+    post = stored_post(env)
+    local = media_local_path(post)
+    name = os.path.basename(local)
+    real_unlink = os.unlink
+
+    def stuck(path, *args, **kwargs):
+        if str(path).startswith('app/static/media/posts/'):
+            raise PermissionError(13, 'Permission denied', path)
+        return real_unlink(path, *args, **kwargs)
+    with monkeypatch.context() as patched:
+        patched.setattr(os, 'unlink', stuck)
+        post = run(post)
+
+    key = f'posts/{name[0:2]}/{name[2:4]}/{name}'
+    assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_PUBLISHED
+    assert post.url == f'https://cdn.probeland.test/{key}'
+    assert s3.head_object(Bucket='pyfedi-test', Key=key)['ContentLength'] == media_of(post)['bytes']
+    assert post.image.source_url.startswith('https://cdn.probeland.test/posts/')
+    assert os.path.exists(local)   # left behind, and logged

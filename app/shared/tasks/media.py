@@ -207,13 +207,20 @@ def _move_to_s3(post, path, thumbnail, written) -> None:
         if thumbnail is not None:
             image_place = written[-1]
             thumbnail.source_url = upload_file_to_s3(image_place, _s3_key(image_place), guess_mime_type(image_place))
-            os.unlink(image_place)
-        media_url = upload_file_to_s3(path, _s3_key(path), media_of(post)['mime'])
-        os.unlink(path)
+            _drop_local_copy(post, image_place)
+        post.url = upload_file_to_s3(path, _s3_key(path), media_of(post)['mime'])   # named before the unlink
     except _STORE_ERRORS as error:
         current_app.logger.warning(f'probe_media: post {post.id}: S3 refused it: {error!r}')
         raise MediaToolError('the file could not be stored') from error
-    post.url = media_url
+    _drop_local_copy(post, path)
+
+
+def _drop_local_copy(post, path) -> None:
+    """Remove a local file now safe in the bucket. Failing to is logged, not a failure: the post names the object."""
+    try:
+        os.unlink(path)
+    except OSError as error:
+        current_app.logger.warning(f'probe_media: post {post.id}: uploaded, but the local copy stayed: {error!r}')
 
 
 def _fail(post, thumbnail, written, reason: str) -> None:
