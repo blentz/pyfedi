@@ -373,9 +373,12 @@ SIGNED_AT_ENVIRON = 'piefed.signed_at'
 def http_date_seconds(value) -> int | None:
     """An HTTP date in epoch seconds, or None when there is none or it does not parse."""
     try:
-        return int(parse_http_date(value).timestamp())
+        dt = parse_http_date(value)
     except (TypeError, ValueError):
         return None
+    if dt.tzinfo is None:   # a `-0000` Date parses naive: it is UTC, not the host's timezone
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
 
 
 def signed_at(request) -> int | None:

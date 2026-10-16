@@ -744,10 +744,18 @@ def test_a_parked_request_runs_only_if_signed_no_earlier_than_the_undo(app, redi
     assert (result == parked) if rerun else (result is None)
 
 
-@pytest.mark.parametrize('value, expected', [('Thu, 15 Oct 2026 12:00:00 GMT', 1792065600), ('not a date', None),
-                                             (None, None)])
-def test_http_date_seconds(value, expected):
-    assert http_date_seconds(value) == expected
+@pytest.mark.parametrize('value, expected', [('Thu, 15 Oct 2026 12:00:00 GMT', 1792065600),
+                                             ('Thu, 15 Oct 2026 12:00:00 -0000', 1792065600),
+                                             ('not a date', None), (None, None)])
+def test_http_date_seconds(value, expected, monkeypatch):
+    """A `-0000` Date parses to a naive datetime; it is UTC, never the host's own timezone."""
+    monkeypatch.setenv('TZ', 'America/New_York')
+    time.tzset()
+    try:
+        assert http_date_seconds(value) == expected
+    finally:
+        monkeypatch.undo()
+        time.tzset()
 
 
 # --- round 3, I2: the per-host cap is a fixed window ---
