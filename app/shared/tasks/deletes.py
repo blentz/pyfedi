@@ -1,4 +1,5 @@
 from app import celery, db
+from app.activitypub.serializers import peertube_video, uses_peertube_video
 from app.activitypub.signature import default_context, send_post_request
 from app.constants import NOTIF_REPORT, NOTIF_REPORT_ESCALATION
 from app.models import Community, Instance, Post, PostReply, User, UserFollower, File, Notification, ChatMessage
@@ -117,6 +118,13 @@ def restore_community(send_async, user_id, community_id):
             session.close()
 
 
+def _video_create(post) -> dict:
+    video = peertube_video(post)
+    return {'id': f"{current_app.config['SERVER_URL']}/activities/create/{gibberish(15)}", 'type': 'Create',
+            'actor': post.author.public_url(), 'object': video, 'to': video['to'], 'cc': video['cc'],
+            '@context': default_context()}
+
+
 def delete_object(user_id, object, is_post=False, is_restore=False, reason=None, session=None):
     user = session.get(User, user_id)
     if isinstance(object, Community):
@@ -227,8 +235,20 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
           'to': to,
           'cc': cc
         }
+        video = is_post and uses_peertube_video(object)   # spec §10 A15.6: PeerTube takes a video's Delete only from its channel's account
+        owner = session.get(User, community.user_id) if video and community.user_id else None
         for instance in community.following_instances():
             if instance.inbox and instance.online() and not user.has_blocked_instance(instance.id) and not instance_banned(instance.domain):
+                if video and instance.software == 'peertube':
+                    if is_restore:      # PeerTube has no Undo(Delete): the video is sent again
+                        send_post_request(instance.inbox, _video_create(object), object.author.private_key,
+                                          object.author.public_url() + '#main-key')
+                    elif owner is not None:
+                        send_post_request(instance.inbox, dict(delete, actor=owner.public_url(),
+                                                               **{'@context': default_context()}),
+                                          owner.private_key, owner.public_url() + '#main-key')
+                    domains_sent_to.append(instance.domain)
+                    continue
                 send_post_request(instance.inbox, announce, community.private_key, community.public_url() + '#main-key')
                 domains_sent_to.append(instance.domain)
     else:
