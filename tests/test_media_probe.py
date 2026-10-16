@@ -8,7 +8,7 @@ are recorded, not run: what is asserted is that they are asked for, once, and on
 import io
 import math
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import boto3
@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy.orm import Session
 from werkzeug.datastructures import FileStorage
 
-from app import db
+from app import cli, db
 from app.constants import (COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_PODCAST, COMMUNITY_KIND_VIDEO_CHANNEL, NOTIF_DEFAULT,
                            POST_STATUS_PROCESSING, POST_STATUS_PUBLISHED, POST_STATUS_SCHEDULED, POST_TYPE_LINK,
                            POST_TYPE_VIDEO)
@@ -25,7 +25,7 @@ from app.shared.ffmpeg import MediaToolError, run_ffprobe
 from app.shared.media import media_local_path, media_of, store_uploaded_media, with_media
 from app.shared.tasks import task_selector
 from app.shared.tasks import media as media_tasks
-from app.shared.tasks.media import probe_media, publish_ready_post, validate_probe
+from app.shared.tasks.media import probe_media, publish_ready_post, requeue_stuck_media, validate_probe
 from app.utils import set_setting, upload_file_to_s3
 from tests.factories import make_community, make_community_member, make_instance, make_post, make_user
 
@@ -578,3 +578,135 @@ def test_an_owner_without_the_moderator_flag_still_publishes(env, monkeypatch):
     post = run(post)
     assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_PUBLISHED
     assert env.tasks == [('make_post', {'post_id': post.id})]
+
+
+# ---------------------------------------------------------------- the stuck-probe sweep (A13.9)
+
+
+def test_a_claim_stamps_the_time_and_counts_the_attempt(env, monkeypatch):
+    post = stored_post(env)
+
+    def broken(path):
+        raise RuntimeError('a bug')
+    monkeypatch.setattr(media_tasks, 'run_ffprobe', broken)
+    for attempt in (1, 2):
+        before = utcnow()
+        with pytest.raises(RuntimeError):
+            probe_media(False, post.id)
+        db.session.expire_all()
+        media = media_of(db.session.get(Post, post.id))
+        assert media['status'] == 'processing' and media['attempts'] == attempt
+        assert before <= datetime.fromisoformat(media['probing_since']) <= utcnow()
+
+
+@pytest.fixture
+def sweep(env, monkeypatch):
+    queued = []
+    monkeypatch.setattr(media_tasks, 'queue_probe', queued.append)
+    env.queued = queued
+    return env
+
+
+def stuck(env, status, minutes_ago=31, attempts=1, **media):
+    post = stored_post(env)
+    stamp = (utcnow() - timedelta(minutes=minutes_ago)).isoformat()
+    if status == 'probing':
+        media.setdefault('probing_since', stamp)
+    else:
+        post.created_at = utcnow() - timedelta(minutes=minutes_ago)
+    with_media(post, status=status, attempts=attempts, **media)
+    db.session.commit()
+    return post
+
+
+def swept(post):
+    requeue_stuck_media()
+    db.session.expire_all()
+    return db.session.get(Post, post.id)
+
+
+def test_a_stale_probe_is_put_back_and_queued_again(sweep):
+    post = swept(stuck(sweep, 'probing'))
+    media = media_of(post)
+    assert media['status'] == 'processing' and media['attempts'] == 1
+    assert utcnow() - datetime.fromisoformat(media['requeued_at']) < timedelta(minutes=1)
+    assert sweep.queued == [post.id] and post.status == POST_STATUS_PROCESSING
+
+
+def test_a_probe_still_within_its_time_is_left_alone(sweep):
+    post = stuck(sweep, 'probing', minutes_ago=5)
+    before = dict(media_of(post))
+    post = swept(post)
+    assert media_of(post) == before and sweep.queued == []
+
+
+def test_a_probe_with_an_unreadable_start_time_counts_as_stale(sweep):
+    post = swept(stuck(sweep, 'probing', probing_since='not a time'))
+    assert media_of(post)['status'] == 'processing' and sweep.queued == [post.id]
+
+
+def test_an_upload_never_probed_is_queued_again(sweep):
+    post = swept(stuck(sweep, 'processing'))
+    assert media_of(post)['status'] == 'processing' and sweep.queued == [post.id]
+    assert 'requeued_at' in media_of(post)
+
+
+@pytest.mark.parametrize('case', ['uploaded just now', 'queued again just now'])
+def test_an_upload_waiting_its_turn_is_not_queued_twice(sweep, case):
+    if case == 'uploaded just now':
+        post = stuck(sweep, 'processing', minutes_ago=2)
+    else:   # the sweep queued it a minute ago; the queue may simply be long
+        post = stuck(sweep, 'processing', requeued_at=(utcnow() - timedelta(minutes=1)).isoformat())
+    swept(post)
+    assert sweep.queued == []
+
+
+@pytest.mark.parametrize('status', ['probing', 'processing'])
+def test_a_third_lost_attempt_fails_the_upload_and_tells_the_author(sweep, status):
+    post = swept(stuck(sweep, status, attempts=3))
+    media = media_of(post)
+    assert media['status'] == 'failed' and media['error'] == 'processing timed out'
+    assert sweep.queued == [] and sweep.tasks == [] and post.status == POST_STATUS_PROCESSING
+    notification = Notification.query.one()
+    assert (notification.user_id, notification.subtype) == (sweep.mod.id, 'media_failed')
+
+
+@pytest.mark.parametrize('case', ['deleted', 'failed', 'ready', 'published', 'no media record'])
+def test_the_sweep_skips_what_is_not_stuck(sweep, case):
+    if case == 'no media record':
+        post = make_post(sweep.chan, sweep.mod, ap_id='https://test.piefed.local/post/plain', title='plain')
+        post.status, post.created_at = POST_STATUS_PROCESSING, utcnow() - timedelta(hours=1)
+    else:
+        post = stuck(sweep, 'probing')
+        if case == 'deleted':
+            post.deleted = True
+        elif case == 'published':
+            post.status = POST_STATUS_PUBLISHED
+        else:
+            with_media(post, status=case)
+    db.session.commit()
+    before = (post.status, dict(post.extensions or {}))
+    post = swept(post)
+    assert (post.status, dict(post.extensions or {})) == before
+    assert sweep.queued == [] and Notification.query.count() == 0
+
+
+def test_the_per_minute_cron_runs_the_sweep(sweep, monkeypatch):
+    calls = []
+    monkeypatch.setattr('app.cli.requeue_stuck_media', lambda: calls.append(True))
+    monkeypatch.setattr('app.cli.sleep', lambda seconds: None)   # send-queue's random start delay
+    cli.register(sweep.app)   # pyfedi.py registers the commands; the test app has none
+    result = sweep.app.test_cli_runner().invoke(args=['send-queue'])
+    assert result.exception is None, result.exception
+    assert calls == [True]
+
+
+@pytest.mark.parametrize('attempts', [1, 3])
+def test_the_sweep_leaves_an_upload_a_live_probe_moved_first(sweep, monkeypatch, attempts):
+    """The sweep read the upload as stuck, but a probe claimed or finished it before the sweep's own move: the move
+    changes no row, and the sweep neither queues it nor fails it."""
+    post = stuck(sweep, 'probing', attempts=attempts)
+    monkeypatch.setattr(media_tasks, '_move_media_status', lambda *args, **kwargs: False)
+    swept(post)
+    assert sweep.queued == [] and Notification.query.count() == 0
+    assert media_of(db.session.get(Post, post.id))['status'] == 'probing'

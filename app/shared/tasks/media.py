@@ -1,6 +1,8 @@
 """probe_media (spec §5.2, A13): validate an uploaded file in a sandbox, thumbnail it, then publish its post."""
+import json
 import math
 import os
+from datetime import datetime, timedelta
 
 import pillow_avif  # NOQA  # registers Pillow's AVIF plugin, for an instance whose MEDIA_IMAGE_FORMAT is AVIF
 from boto3.exceptions import Boto3Error
@@ -12,11 +14,11 @@ from PIL import Image, ImageOps
 
 from app import celery, db
 from app.activitypub.util import make_image_sizes, notify_about_post
-from app.constants import (MEDIA_KIND_AUDIO, MEDIA_KIND_VIDEO, NOTIF_DEFAULT, POST_STATUS_PUBLISHED,
-                           POST_STATUS_SCHEDULED)
+from app.constants import (MEDIA_KIND_AUDIO, MEDIA_KIND_VIDEO, NOTIF_DEFAULT, POST_STATUS_PROCESSING,
+                           POST_STATUS_PUBLISHED, POST_STATUS_SCHEDULED)
 from app.models import CommunityMember, File, Notification, Post, served_path, utcnow
 from app.shared.ffmpeg import MediaToolError, extract_cover, extract_frame, run_ffprobe
-from app.shared.media import MEDIA_DIRECTORY, can_upload_media, media_local_path, media_of, with_media
+from app.shared.media import MEDIA_DIRECTORY, can_upload_media, media_local_path, media_of, queue_probe, with_media
 from app.shared.tasks import task_selector
 from app.utils import (can_create_post, ensure_directory_exists, get_recipient_language, get_task_session, gibberish,
                        guess_mime_type, patch_db_session, save_image_without_metadata, shorten_string,
@@ -79,15 +81,22 @@ def validate_probe(probe: dict, kind: str) -> dict:
     return {'duration_s': math.ceil(duration), 'codec': audio['codec_name']}
 
 
-# One UPDATE moves the media status, and only from `from_status`: of two runs racing for one upload, one claims it
+# One UPDATE moves the media status, only from `from_status` and only for an undeleted post, and merges `fields` and the
+# attempt count into the media record. Postgres re-reads the WHERE of a row another UPDATE changed meanwhile, so of
+# two runs racing for one upload exactly one moves it: the compare-and-set is the statement, no read-check-write.
 _MOVE_MEDIA_STATUS = text(
-    "UPDATE post SET extensions = jsonb_set(extensions::jsonb, '{media,status}', to_jsonb(CAST(:to_status AS text)))::json"
+    "UPDATE post SET extensions = jsonb_set(extensions::jsonb, '{media}', (extensions::jsonb -> 'media')"
+    " || CAST(:fields AS jsonb)"
+    " || jsonb_build_object('attempts', COALESCE((extensions -> 'media' ->> 'attempts')::int, 0) + :bump))::json"
     " WHERE id = :post_id AND deleted = false AND extensions -> 'media' ->> 'status' = :from_status")
+STUCK_AFTER = timedelta(minutes=30)   # a probe is bounded by its tools' 60 s limits and one S3 upload
+MAX_ATTEMPTS = 3
 
 
-def _move_media_status(post_id, from_status: str, to_status: str) -> bool:
-    moved = db.session.execute(_MOVE_MEDIA_STATUS,
-                               {'post_id': post_id, 'from_status': from_status, 'to_status': to_status})
+def _move_media_status(post_id, from_status: str, to_status: str, bump: int = 0, **stamps) -> bool:
+    moved = db.session.execute(_MOVE_MEDIA_STATUS, {
+        'post_id': post_id, 'from_status': from_status, 'bump': bump,
+        'fields': json.dumps({'status': to_status, **stamps})})
     db.session.commit()
     return moved.rowcount == 1
 
@@ -98,7 +107,8 @@ def probe_media(send_async, post_id):
     try:
         with patch_db_session(session):
             # 'probing' while this run works: a second delivery of the task finds it claimed and leaves it alone
-            if not _move_media_status(post_id, 'processing', 'probing'):
+            if not _move_media_status(post_id, 'processing', 'probing', bump=1,
+                                      probing_since=utcnow().isoformat()):
                 return
             try:
                 _probe(post_id)
@@ -278,3 +288,36 @@ def publish_ready_post(post) -> None:
     db.session.commit()
     task_selector('make_post', post_id=post.id)
     notify_about_post(post)
+
+
+def _stamp(value) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def requeue_stuck_media() -> None:
+    """A13.9: the per-minute sweep for uploads a lost run left behind. Celery acks early, so a worker killed mid-probe
+    (OOM, SIGKILL, a deploy restart) loses its task and the post would wait forever.
+
+    A probe claimed more than STUCK_AFTER ago, and an upload not probed within STUCK_AFTER of its upload or of its last
+    requeue, is put back to processing and queued again; one that has used MAX_ATTEMPTS fails and its author is told.
+    Each move is the compare-and-set probe_media claims with, so a probe that is in fact alive keeps its upload."""
+    cutoff = utcnow() - STUCK_AFTER
+    for post in Post.query.filter(Post.status == POST_STATUS_PROCESSING, Post.deleted == False).all():
+        media = media_of(post) or {}
+        status = media.get('status')
+        if status == 'probing':
+            since = _stamp(media.get('probing_since'))
+        elif status == 'processing':
+            since = _stamp(media.get('requeued_at')) or post.created_at
+        else:
+            continue   # ready, or failed: nothing is waiting
+        if since is not None and since > cutoff:
+            continue
+        if (media.get('attempts') or 0) >= MAX_ATTEMPTS:
+            if _move_media_status(post.id, status, 'failed'):
+                _fail(post, None, [], 'processing timed out')
+        elif _move_media_status(post.id, status, 'processing', requeued_at=utcnow().isoformat()):
+            queue_probe(post.id)
