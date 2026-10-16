@@ -52,7 +52,7 @@ def check_validate_probe(data: bytes) -> None:
         assert isinstance(meta['codec'], str)
         if kind == MEDIA_KIND_VIDEO:
             assert meta['width'] > 0 and meta['height'] > 0, f'video dimensions {meta["width"]!r}x{meta["height"]!r}'
-            assert 'fps' not in meta or meta['fps'], f'fps {meta["fps"]!r}'
+            assert 'fps' not in meta or meta['fps'] > 0, f'fps {meta["fps"]!r}'
 
 
 def _writable(media) -> bool:

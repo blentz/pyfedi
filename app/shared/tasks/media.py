@@ -38,7 +38,8 @@ _STORE_ERRORS = (BotoCoreError, ClientError, Boto3Error, OSError)
 def _fps(rate) -> int | None:
     try:
         num, den = (int(x) for x in rate.split('/'))
-        return round(num / den) if den else None
+        fps = round(num / den) if den else 0
+        return fps if fps > 0 else None
     except (AttributeError, ValueError, OverflowError):   # a 400-digit rate divides to more than a float holds
         return None
 
