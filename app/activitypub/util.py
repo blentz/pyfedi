@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import html
@@ -915,6 +916,16 @@ def activity_accepted_key(activity_id, actor_url) -> str:
     return 'ap-accepted:' + activity_dedupe_key(activity_id, actor_url).removeprefix('ap-dedupe:')
 
 
+# How long a verified duplicate Follow or vote is parked for the Undo it may have overtaken (R-UNDORELEASE)
+DEFERRED_SECONDS = 600
+
+
+def deferred_key(activity_id, actor_url) -> str:
+    """The Redis key holding a parked request: a verified Follow or vote dropped as a duplicate. PeerTube sends an
+    Undo and the activity re-using the undone id at once, so the new one can land while the old claim stands."""
+    return 'ap-deferred:' + activity_dedupe_key(activity_id, actor_url).removeprefix('ap-dedupe:')
+
+
 def undo_of_key(activity_id, actor_url) -> str:
     """The Redis key naming the Undo whose acceptance released this activity's claim: `<undo id>|<actor>`."""
     return 'ap-undo-of:' + activity_dedupe_key(activity_id, actor_url).removeprefix('ap-dedupe:')
@@ -941,7 +952,7 @@ def mark_accepted(activity: dict, announced: bool) -> None:
         release_activity(undo_id, actor)
 
 
-def release_undone_activity(undo: dict, announced: bool, types: tuple) -> None:
+def release_undone_activity(undo: dict, announced: bool, types: tuple) -> dict | None:
     """Forget the claim of the activity an accepted Undo took back (R-UNDORELEASE, spec §6.4, amendment A14), so a
     later activity reusing its id is processed: PeerTube re-sends a Follow with the same id after an unsubscribe, and
     a Like after an Undo(Like) with the same id.
@@ -953,7 +964,9 @@ def release_undone_activity(undo: dict, announced: bool, types: tuple) -> None:
     one of `types`, those the handler undid. The id must also be one PieFed accepted as that type from that actor
     (mark_accepted): otherwise an Undo could name the id of any earlier activity of its actor, a Create say, and
     reopen it to replay. The marker is consumed, so one acceptance allows one release. The Undo is recorded against
-    the activity (undo_of_key), so the activity's next acceptance releases the Undo's claim in turn."""
+    the activity (undo_of_key), so the activity's next acceptance releases the Undo's claim in turn.
+
+    Returns the request parked for the released activity (parked_request), for the caller to run again."""
     actor = undo['actor']
     undone = undo['object']
     if announced or not isinstance(actor, str) or not isinstance(undone, dict):
@@ -968,6 +981,23 @@ def release_undone_activity(undo: dict, announced: bool, types: tuple) -> None:
     app_pkg.redis_client.delete(marker)
     release_activity(undone_id, actor)
     app_pkg.redis_client.set(undo_of_key(undone_id, actor), f"{undo['id']}|{actor}", ex=ACTIVITY_DEDUPE_SECONDS)
+    return parked_request(undone_id, actor, types)
+
+
+def parked_request(activity_id, actor, types: tuple) -> dict | None:
+    """Take the request parked under `activity_id` (deferred_key), if any: {'path', 'headers', 'body'}, the body
+    base64. It is returned only when it is that activity, of one of `types`, from `actor`; otherwise it is
+    discarded. The caller runs it through the inbox again, signature check included."""
+    key = deferred_key(activity_id, actor)
+    raw = app_pkg.redis_client.get(key)
+    if raw is None:
+        return None
+    app_pkg.redis_client.delete(key)
+    parked = json.loads(raw)
+    body = json.loads(base64.b64decode(parked['body']))
+    if body.get('id') != activity_id or body.get('actor') != actor or body.get('type') not in types:
+        return None
+    return parked
 
 
 def served_by_us(url: str, file) -> bool:

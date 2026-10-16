@@ -8,7 +8,9 @@ forever and the re-like was lost.
 Each test here goes through the real /inbox route with a real HTTP signature (DEBUG makes the dispatch inline),
 because the claim is taken by the route and released by the dispatcher: neither half alone shows the defect.
 """
+import base64
 import contextlib
+import json
 
 import pytest
 from flask import current_app
@@ -16,9 +18,10 @@ from flask import current_app
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.activitypub.signature import RsaKeys
-from app.activitypub.util import activity_accepted_key, activity_dedupe_key, mark_accepted, release_undone_activity, \
-    undo_of_key
+from app.activitypub.util import DEFERRED_SECONDS, activity_accepted_key, activity_dedupe_key, deferred_key, \
+    mark_accepted, release_undone_activity, undo_of_key
 from app.models import ActivityPubLog, CommunityMember, FeedMember, PostVote, UserFollower, utcnow
+from tests.conftest import unsigned_but_precheck_clean_headers
 from tests.factories import make_community, make_feed, make_instance, make_post, make_site, make_user, signed_inbox_post
 
 DUPLICATE = 'Already aware of this activity'   # the start of both messages: before and after the signature check
@@ -452,3 +455,135 @@ def test_a_follow_that_was_never_undone_releases_no_undo(app, redis_double):
     mark_accepted({'id': f'{ACTOR}/follows/8', 'type': 'Follow', 'actor': ACTOR}, announced=False)
 
     assert redis_double.exists(activity_dedupe_key(f'{ACTOR}/undo', ACTOR)) == 1
+
+
+# --- gap 4: PeerTube sends Undo(X) and the new X at once; a reused-id X landing first is parked, not lost ---
+
+
+def test_a_follow_reusing_the_id_that_lands_before_its_undo_takes_effect_after_it(app, inline, scene, redis_double):
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    _post(app, follow, carol)
+    _post(app, follow, carol)   # the resubscription, ahead of the Undo: a duplicate, parked
+    assert _last_log().exception_message.startswith(DUPLICATE)
+    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 1
+
+    _post(app, _undo(carol, follow), carol)
+
+    assert _member(community, carol) is not None
+    assert [body['type'] for body in inline].count('Accept') == 2
+    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 0
+
+
+def test_a_like_reusing_the_id_that_lands_before_its_undo_takes_effect_after_it(app, inline, scene):
+    _, _, post, carol, _ = scene
+    like = _like(carol, post)
+    _post(app, like, carol)
+    _post(app, like, carol)
+
+    _post(app, _undo(carol, like), carol)
+
+    assert PostVote.query.filter_by(user_id=carol.id, post_id=post.id).count() == 1
+
+
+def test_a_parked_follow_from_another_actor_is_discarded(app, inline, scene, redis_double):
+    """mallory, on carol's host, sends a verified Follow under carol's follow id: it is parked under that id, and
+    discarded when carol's Undo releases it, since its actor is not the Undo's."""
+    community, _, _, carol, mallory = scene
+    follow = _follow(carol, community.ap_profile_id)
+    _post(app, follow, carol)
+    _post(app, dict(follow, actor=mallory.ap_profile_id), mallory)
+    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 1
+
+    _post(app, _undo(carol, follow), carol)
+
+    assert _member(community, mallory) is None and _member(community, carol) is None
+    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 0
+
+
+def test_a_parked_follow_failing_its_signature_on_the_rerun_is_discarded(app, inline, scene, redis_double):
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    _post(app, follow, carol)
+    _post(app, follow, carol)
+    key = deferred_key(follow['id'], carol.ap_profile_id)
+    parked = json.loads(redis_double.get(key))
+    parked['headers']['Signature'] = parked['headers']['Signature'].replace('signature="', 'signature="AAAA')
+    redis_double.set(key, json.dumps(parked), keepttl=True)
+
+    _post(app, _undo(carol, follow), carol)
+
+    assert _member(community, carol) is None
+    assert ActivityPubLog.query.filter(ActivityPubLog.exception_message.startswith('Could not verify')).count() == 1
+    assert redis_double.exists(key) == 0
+
+
+def test_a_parked_body_lives_ten_minutes(app, inline, scene, redis_double):
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    _post(app, follow, carol)
+    _post(app, follow, carol)
+
+    assert DEFERRED_SECONDS == 600
+    assert 590 < redis_double.ttl(deferred_key(follow['id'], carol.ap_profile_id)) <= 600
+
+
+def test_an_expired_parked_body_is_gone_and_the_undo_still_applies(app, inline, scene, redis_double):
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    _post(app, follow, carol)
+    _post(app, follow, carol)
+    redis_double.delete(deferred_key(follow['id'], carol.ap_profile_id))   # as at the end of its TTL
+
+    _post(app, _undo(carol, follow), carol)
+
+    assert _member(community, carol) is None
+    assert [body['type'] for body in inline].count('Accept') == 1
+
+
+def test_an_unverified_duplicate_is_never_parked(app, inline, scene, redis_double):
+    """Only a body whose signature verified is parked: a forgery cannot take the genuine resubscription's place."""
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    _post(app, follow, carol)
+    body = json.dumps(follow).encode()
+    with app.test_client() as client:
+        forged = client.post('/inbox', data=body, content_type='application/activity+json',
+                             headers={'Host': app.config['SERVER_NAME'], **unsigned_but_precheck_clean_headers(body)})
+    assert forged.status_code == 400
+    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 0
+
+
+def test_a_duplicate_of_another_type_is_still_dropped_before_any_signature_check(app, inline, scene, redis_double):
+    _, _, _, carol, _ = scene
+    create = {'id': f'{carol.ap_profile_id}/activities/create/9', 'type': 'Create', 'actor': carol.ap_profile_id,
+              'object': {'id': f'{carol.ap_profile_id}/notes/9', 'type': 'Note'}}
+    redis_double.set(activity_dedupe_key(create['id'], carol.ap_profile_id), 1)
+
+    _post(app, create, carol)
+
+    assert _last_log().exception_message == 'Already aware of this activity (before any signature check)'
+
+
+def test_an_oversized_duplicate_is_not_parked(app, inline, scene, redis_double, monkeypatch):
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    _post(app, follow, carol)
+    monkeypatch.setattr(activitypub_routes, 'DEFERRED_MAX_BYTES', 10)
+
+    _post(app, follow, carol)
+
+    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 0
+
+
+@pytest.mark.parametrize('body', [
+    {'id': FOLLOW_ID, 'type': 'Like', 'actor': ACTOR},     # another type
+    {'id': f'{ACTOR}/follows/8', 'type': 'Follow', 'actor': ACTOR},   # another id
+])
+def test_a_parked_body_not_matching_the_undone_activity_is_discarded(app, redis_double, body):
+    _accepted(redis_double)
+    redis_double.set(deferred_key(FOLLOW_ID, ACTOR),
+                     json.dumps({'path': '/inbox', 'headers': {}, 'body': base64.b64encode(json.dumps(body).encode()).decode()}))
+
+    assert release_undone_activity(UNDO_OF_FOLLOW, announced=False, types=FOLLOW) is None
+    assert redis_double.exists(deferred_key(FOLLOW_ID, ACTOR)) == 0

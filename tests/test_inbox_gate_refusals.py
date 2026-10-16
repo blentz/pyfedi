@@ -683,7 +683,8 @@ def test_a_repeated_activity_is_suppressed(app, signing_peer, monkeypatch, redis
     dispatched = []
     monkeypatch.setattr('app.activitypub.routes.process_inbox_request',
                         lambda *args, **kwargs: dispatched.append(args))
-    activity = inbox_activity(signing_peer)
+    # A Create: a duplicate Follow or vote goes on to its signature check instead, to be parked (R-UNDORELEASE)
+    activity = inbox_activity(signing_peer, activity_type='Create')
 
     with app.test_client() as client:
         first = signed_inbox_post(client, activity, signing_peer)

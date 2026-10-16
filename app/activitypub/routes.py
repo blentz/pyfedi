@@ -1,3 +1,4 @@
+import base64
 import copy
 
 import werkzeug.exceptions
@@ -25,7 +26,7 @@ from app.activitypub.util import MEDIA_OBJECT_TYPES, follow_answer_inbox, MEDIA_
     post_to_activity, post_count_collections, comment_count_collections, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
-    update_post_from_activity, undo_vote, has_vote_on, release_undone_activity, mark_accepted, post_to_page, find_reported_object, \
+    update_post_from_activity, undo_vote, has_vote_on, release_undone_activity, mark_accepted, deferred_key, DEFERRED_SECONDS, post_to_page, find_reported_object, \
     process_report, ensure_domains_match, refresh_community_profile, \
     comment_model_to_json, restore_post_or_comment, ban_user, unban_user, \
     log_incoming_ap, find_community, site_ban_remove_data, community_ban_remove_data, verify_object_from_source, \
@@ -67,7 +68,7 @@ import app.shared.tasks.pages as shared_pages
 # app.activitypub.signature before show_profile is defined (import cycle: user.routes)
 import app.user.routes as user_routes
 from app.user.utils import search_for_user
-from app.utils import user_banned_from_community, gibberish, get_setting, community_membership, ap_datetime, ip_address, can_downvote, \
+from app.utils import FETCH_MAX_BYTES, user_banned_from_community, gibberish, get_setting, community_membership, ap_datetime, ip_address, can_downvote, \
     can_upvote, can_create_post, awaken_dormant_instance, shorten_string, can_create_post_reply, sha256_digest, \
     community_moderators, html_to_text, add_to_modlog, instance_banned, get_redis_connection, \
     feed_membership, get_task_session, patch_db_session, \
@@ -825,7 +826,10 @@ def shared_inbox():
         if not instance_allowed(actor_host):
             return '', 403
 
-    if app_pkg.redis_client.exists(activity_dedupe_key(id, request_json['actor'])):  # Something is sending same activity multiple times
+    # Something is sending same activity multiple times. A Follow or vote goes on to its signature check, so that a
+    # duplicate one is parked only once verified (R-UNDORELEASE, _park_duplicate)
+    if typed_json['type'] not in DEFERRABLE_TYPES and \
+            app_pkg.redis_client.exists(activity_dedupe_key(id, request_json['actor'])):
         log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json, UNVERIFIED_DUPLICATE_MESSAGE)
         return '', 200
 
@@ -915,6 +919,7 @@ def shared_inbox():
     # Remembered only once the signature has verified, so a forged request reusing a genuine activity's id cannot
     # make this instance drop the genuine one. set(nx=True) is also the gate for two deliveries verified at once.
     if not claim_activity(id, request_json['actor']):
+        _park_duplicate(id, request_json['actor'], typed_json, request)
         log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json,
                         f'{LD_SIGNED_LOG_PREFIX}: Already aware of this activity' if ld_signed else 'Already aware of this activity')
         return '', 200
@@ -981,6 +986,39 @@ def community_inbox(actor):
 # R-UNDORELEASE: the types an Undo arm undoes, so only an activity of that type has its claim released
 FOLLOW_TYPES = ('Follow',)
 VOTE_TYPES = ('Like', 'Dislike', 'EmojiReact')
+# A verified duplicate of one of these is parked (_park_duplicate) for the Undo it may have overtaken
+DEFERRABLE_TYPES = FOLLOW_TYPES + VOTE_TYPES
+DEFERRED_MAX_BYTES = FETCH_MAX_BYTES   # a Follow or vote is a few hundred bytes; the inbox has only the global cap
+# What the inbox's signature checks read, kept with a parked body so the re-run verifies it as it was sent
+DEFERRED_HEADERS = ('Host', 'Date', 'Digest', 'Content-Digest', 'Signature', 'Signature-Input', 'Content-Type')
+
+
+def _park_duplicate(activity_id, actor, typed_json, request) -> None:
+    """Park a verified Follow or vote dropped as a duplicate, for DEFERRED_SECONDS (R-UNDORELEASE). PeerTube sends
+    Undo(X) and the new X reusing X's id at once; if the new one lands first, the Undo's release runs it again
+    (_release_undone). One per id: a later duplicate replaces it."""
+    body = request.get_data()
+    if typed_json['type'] not in DEFERRABLE_TYPES or len(body) > DEFERRED_MAX_BYTES:
+        return
+    parked = {'path': request.full_path if request.query_string else request.path,
+              'headers': {name: request.headers[name] for name in DEFERRED_HEADERS if name in request.headers},
+              'body': base64.b64encode(body).decode('ascii')}
+    app_pkg.redis_client.set(deferred_key(activity_id, actor), json.dumps(parked), ex=DEFERRED_SECONDS)
+
+
+def _release_undone(undo, announced, types) -> None:
+    """release_undone_activity, then the activity parked under the released id, if any, through the inbox again."""
+    parked = release_undone_activity(undo, announced, types)
+    if parked is not None:
+        rerun_parked_request.delay(parked)
+
+
+@celery.task
+def rerun_parked_request(parked):
+    """Run a parked inbox request again, as it was sent: shared_inbox checks its signature and claims its id anew."""
+    with current_app.test_request_context(parked['path'], method='POST', base_url=current_app.config['SERVER_URL'],
+                                          headers=parked['headers'], data=base64.b64decode(parked['body'])):
+        shared_inbox()
 
 UNVERIFIED_DUPLICATE_MESSAGE = 'Already aware of this activity (before any signature check)'
 UNVERIFIED_LOG_MESSAGES = (UNVERIFIED_DUPLICATE_MESSAGE,)
@@ -2037,7 +2075,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                             session.commit()
                             cache.delete_memoized(community_membership, user, community)
                             if member or join_request:   # R-UNDORELEASE: a re-sent Follow may reuse the id
-                                release_undone_activity(core_activity, announced, FOLLOW_TYPES)
+                                _release_undone(core_activity, announced, FOLLOW_TYPES)
                             log_incoming_ap(id, APLOG_UNDO_FOLLOW, APLOG_SUCCESS, saved_json)
                             return
                         if isinstance(target, Feed):
@@ -2052,7 +2090,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                             session.commit()
                             cache.delete_memoized(feed_membership, user, feed)
                             if member or join_request:   # R-UNDORELEASE
-                                release_undone_activity(core_activity, announced, FOLLOW_TYPES)
+                                _release_undone(core_activity, announced, FOLLOW_TYPES)
                             log_incoming_ap(id, APLOG_UNDO_FOLLOW, APLOG_SUCCESS, saved_json)
                             return
                         if isinstance(target, User):
@@ -2065,7 +2103,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                             if follower:
                                 session.delete(follower)
                                 session.commit()
-                                release_undone_activity(core_activity, announced, FOLLOW_TYPES)   # R-UNDORELEASE
+                                _release_undone(core_activity, announced, FOLLOW_TYPES)   # R-UNDORELEASE
                                 log_incoming_ap(id, APLOG_UNDO_FOLLOW, APLOG_SUCCESS, saved_json)
                             return
                         if not target:
@@ -2117,7 +2155,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                             post_or_comment = undo_vote(comment, post, target_ap_id, user)
                         if post_or_comment:
                             if undone:   # R-UNDORELEASE: a re-sent Like may reuse the id
-                                release_undone_activity(core_activity, announced, VOTE_TYPES)
+                                _release_undone(core_activity, announced, VOTE_TYPES)
                             log_incoming_ap(id, APLOG_UNDO_VOTE, APLOG_SUCCESS, saved_json)
                             if not announced and post_or_comment.visibility in OPEN_VISIBILITIES:
                                 announce_activity_to_followers(post_or_comment.community, user, request_json, can_batch=True)
