@@ -41,7 +41,8 @@ def podcast_community_for(user) -> Community | None:
 
 def podcast_twin_user(community) -> User | None:
     """The podcast User sharing this Community's ap_profile_id, when the Community is a podcast twin; else None.
-    Remote Group communities carry no user_id, so they pay no query."""
+    A remote Group community carries no user_id, so it pays no query. A local community stores its creator in
+    user_id (A15.1), so it pays one; the ap_profile_id match then tells a twin from a creator."""
     if community is None or not community.user_id or not community.ap_profile_id:
         return None
     owner = db.session.get(User, community.user_id)

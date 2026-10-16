@@ -69,7 +69,7 @@ that already has posts.
   (`instance_id=1, user_id=1, name='microblogs'`). Downgrade drops the column.
 - `find_microblogging_community` creates new rows with `kind='microblogs'`.
 - `is_local_microblogs(community)` becomes `community.kind == 'microblogs' and community.is_local()`.
-  `Post.is_microblog()` becomes `self.microblog and self.community.kind == 'microblogs'`. Every other
+  `Post.is_microblog()` stays a name test (A15.3). Every other
   name test for `'microblogs'` stays a name test, because each one deliberately also matches the `microblogs`
   communities of remote PieFed servers, which keep `kind='discussion'`. A15.3 lists the sites kept.
 - Remote communities keep `kind='discussion'`. This includes the podcast twin communities from
@@ -609,7 +609,7 @@ Each step gets its own implementation plan and its own commits, and each ends wi
        - the post is a `POST_TYPE_VIDEO` in a local `video_channel` community;
        - `is_open(post)` is true;
        - its media is `ready` with a `video/*` mime;
-       - `post.image` has `width` and `height`;
+       - `post.image` exists, and its size comes from the media record (`thumbnail_width`, `thumbnail_height`), not from the `File`;
        - the record's numeric fields (`duration_s`, `height`, `bytes`, `thumbnail_width`, `thumbnail_height`) are positive integers.
      - Any other post in that community uses the `Page` path (§4.1).
      - `name` is the stripped title cut to 120 characters. A title shorter than 3 characters is padded with `.` to 3. The web forms already require 3; the API's edit may not.
@@ -620,7 +620,7 @@ Each step gets its own implementation plan and its own commits, and each ends wi
      - The file name in `href` is the upload's random 15-character name (A13.4). It is unique, which is what §4.3 asks of `<uuid>-<height>.<ext>`.
      - The thumbnail `File` gets `width` and `height` when `probe_media` writes it, from the saved image. Before this, it had only `source_url`.
      - `probe_media` also records the size in the media record as `thumbnail_width` and `thumbnail_height`. The `Video` icon and `uses_peertube_video` read those, not the `File`, because `make_image_sizes` later rewrites `File.width` and `File.height` to the medium size while `source_url` stays the full-size image.
-   - `uses_peertube_video` also requires the record keys the builder indexes (`uuid`, `duration_s`, `height`, `bytes`, `thumbnail_width`, `thumbnail_height`) to be present and non-empty, so a malformed record is served as a `Page`.
+     - `uses_peertube_video` also requires the record keys the builder indexes (`uuid`, `duration_s`, `height`, `bytes`, `thumbnail_width`, `thumbnail_height`) to be present and non-empty, so a malformed record is served as a `Page`.
      - `likes` and `dislikes` are the collection URLs as strings, as in the spike.
      - `sensitive` is `nsfw or nsfl or content_warning` (A7). `language` is sent when the post has one.
   5. **Delivery (§6.1).** `send_post` hands a post `uses_peertube_video` accepts to `send_peertube_video`. Each of the community's follower instances gets one activity:
