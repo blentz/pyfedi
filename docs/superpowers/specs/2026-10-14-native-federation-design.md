@@ -12,7 +12,7 @@ sees its content in their own app as if a native account had posted it:
 |---|---|---|
 | A post in the local `microblogs` community | Mastodon and compatible microblogs | A status in the follower's home timeline: body text only (no duplicated title), attachments shown, hashtags and mentions live |
 | An uploaded video in a `video_channel` community | PeerTube | A playable video listed under the subscribed channel, with the right duration and thumbnail |
-| An uploaded audio episode in a `podcast` community | Castopod | An episode or episode announcement shown as Castopod shows its own (exact shape set by the Castopod spike, §9 step 5) |
+| An uploaded audio episode in a `podcast` community | Castopod | An episode or episode announcement shown as Castopod shows its own (exact shape set by the Castopod spike, §9 step 5). (Amended: see §10 A16; Castopod shows no remote podcast's episodes.) |
 
 Replies, likes and boosts from those apps come back into the post's PieFed thread.
 
@@ -218,6 +218,8 @@ already send it (`app/request_hooks.py`); a reverse proxy or S3 bucket that serv
 
 ### 4.4 `podcast_episode`
 
+(Amended: see §10 A16.)
+
 This mirrors what Castopod sends us. The Castopod spike (§9 step 5) confirms the shape or replaces it.
 
 - The fetchable episode object: `type: PodcastEpisode`, `id: <episode URL>`, `name: post.title`,
@@ -316,7 +318,7 @@ Recipients are filtered as they are today: `can_deliver_to`, instance bans, user
 |---|---|---|---|
 | `microblogs` | `Create(Note)` / `Update(Note)` | author | shared inboxes of the author's followers' instances and mentioned actors' instances. Threadiverse instances following `/c/microblogs` keep today's community `Announce`. |
 | `video_channel` | `Create(Video)` / `Update(Video)`; `Delete` of a video post | author for `Create` and `Update`; the community owner for `Delete` | the shared inboxes of the community's follower instances. `MICROBLOG_APPS` get `Announce(<id>)` as today. |
-| `podcast` | `Create(Note)` announcement | community | the community's follower instances |
+| `podcast` | `Create(Note)` announcement | community | the community's follower instances (Amended: see §10 A16.) |
 
 (Amended: see §10 A11.) For `video_channel`, PeerTube v8.3.1 lists the video under the subscribed channel for
 each of these deliveries: `Create(Video)` signed by the author, `Create(Video)` signed by the community, or
@@ -349,6 +351,8 @@ community.
 - No new actor types, inboxes or URL namespaces, apart from the episode route in §4.4.
 
 ### 6.3 Following
+
+(Amended: see §10 A16.)
 
 - A PeerTube subscription or a Castopod follow sends `Follow` to the Group, which the existing community
   follow handling accepts.
@@ -461,6 +465,7 @@ Each step gets its own implementation plan and its own commits, and each ends wi
 5. Castopod spike: add Castopod to the harness and find out whether it shows a non-Castopod podcast actor's
    episodes. If it does, the findings replace §4.4 and §6.1 for podcasts. If it does not, podcast scope
    becomes RSS (§4.5) plus `Audio` objects for Mastodon and PieFed, and the owner decides before step 6.
+   (Done 2026-10-16: it does not. See §10 A16.)
 6. Podcasts: `podcast_episode`, the episode route, RSS, and Castopod delivery as decided after step 5.
 
 ## 10. Amendments (2026-10-14, plan for steps 0–1)
@@ -636,6 +641,48 @@ Each step gets its own implementation plan and its own commits, and each ends wi
   - **Gates (2026-10-16, Task 7).** `interop/test_video_channel.py` passes in the harness, with two tests. The first uploads a video to `vc_media` with carol subscribed from PeerTube. The video is listed under the channel in under 60 s, with `duration` equal to the media record's `duration_s`, `files[0].fileUrl` equal to the post's URL, and a stored thumbnail that PeerTube serves as `image/jpeg`. A PeerTube `like` raises `upvotes` above the baseline read just before it (the author's own upvote already counts 1 at creation), so the like itself is proven. An API edit renames the video. An API delete removes it from PeerTube. The second test deletes a video and then restores the post: PeerTube lists it again, so it accepts the re-`Create(Video)` after `Delete`, and A15.6's restore ruling stands. The full interop suite passes on a fresh stack (19 tests: the 17 earlier ones plus these two) and on two reused-stack runs (19 passed each).
     - Two PeerTube behaviours the test accounts for. `thumbnailPath` in the API holds only a 16:9 thumbnail (`getSmallestThumbnailStaticPath('16:9')`), and the fixture's is square, so the test reads `thumbnails[0].fileUrl` instead. While PeerTube removes a deleted video, a `GET /videos/{uuid}` can answer 500 (`Cannot read properties of undefined (reading 'VideoFiles')`) before it answers 404; the test keeps waiting on 500.
 
+- **A16 (§1, §4.4, §6.1, §6.3, §9 step 5), Castopod spike (step 5), 2026-10-16; owner decision pending:** Castopod
+  1.15.5 does not show a non-Castopod podcast actor's episodes, and no shape PieFed could send would change that.
+  The step 5 rule applies: podcast scope becomes RSS (§4.5) plus `Audio` objects for Mastodon and PieFed, and the
+  owner decides before step 6.
+  - **Castopod cannot follow anyone.** A podcast is Castopod's only actor, and nothing in Castopod sends a `Follow`.
+    The only path to `FollowModel::addFollower` is the inbox, which records a remote follower and sends no activity.
+    The `/@<podcast>/follow` page is the reverse direction: a visitor types their own handle and is redirected home
+    to follow the Castopod podcast. Castopod has no timeline, following list or subscription page.
+  - **Castopod's inbox stores only replies to its own posts.** A `Create(Note)` is kept only when `inReplyTo` names a
+    post Castopod holds. A top-level `Create(Note)` (the §4.4 announcement) is refused: 501 with
+    `inReplyTo: null`, 500 without the key (a PHP undefined-property error). `Create(PodcastEpisode)` and any other
+    object type get 501. An `Announce` is accepted (200) but stored only for a post Castopod holds. Nothing PieFed
+    sent at top level appears on Castopod.
+  - **What does work.**
+    - A PieFed reply to a Castopod episode's announcement post is stored and shown on the episode page.
+    - A PieFed actor can follow a Castopod podcast (202, `Accept` delivered). Castopod then pushes its announcement
+      Notes, which PieFed already turns into audio posts (C1, `castopod_episode_url`). The 1.15.5 golden passes
+      `castopod_episode_url`.
+  - **Castopod's Follow button cannot take a PieFed handle.** It needs an `http://ostatus.org/schema/1.0/subscribe`
+    template in the follower's webfinger, and PieFed's webfinger has none. A PieFed user follows a Castopod podcast
+    by searching for it in PieFed instead.
+  - **2.0.0-next.4 is the same.** Its inbox differs from 1.15.5 only in reading the `Delete` object's `id`.
+  - **Effect on the earlier sections.**
+    - §1: the Castopod row has no target. A Castopod account is a podcaster, not a listener, so no Castopod user can
+      follow a PieFed podcast.
+    - §6.1: the `podcast` row has no Castopod recipients.
+    - §6.3: the "Castopod follow" case does not exist.
+    - §4.4: the announcement shape mirrors Castopod's own, so other PieFed instances would recognise it only if its
+      link matched `_CASTOPOD_EPISODE_PATH` (`/@<name>/episodes/<slug>`). The planned route
+      `/c/<community>/episodes/<post_id>` does not match.
+  - **Options for step 6 (owner to choose).**
+    1. The step 5 fallback, as written: Podcasting 2.0 RSS (§4.5), and each episode federated as an `Audio`-bearing
+       object for Mastodon and PieFed. Mastodon plays an audio attachment inline. Castopod is out of scope, apart
+       from the interactions above, which already work.
+    2. Option 1 plus the fetchable `PodcastEpisode` route (§4.4), served under a path that matches PieFed's
+       `_CASTOPOD_EPISODE_PATH`. Other PieFed instances would then handle a PieFed podcast as they handle Castopod.
+       This costs a new URL namespace (§6.2 forbids one apart from the episode route).
+    3. Option 1 plus a Castopod mirror: Castopod's own "import podcast" reads an RSS feed, so a Castopod admin could
+       mirror a PieFed podcast from §4.5. That copy is Castopod-hosted and Castopod-owned, and no federation is
+       involved. Nothing to build beyond §4.5.
+  - Evidence: §12.
+
 ## 11. Evidence: PeerTube spike (2026-10-15)
 
 PeerTube `docker.io/chocobozzz/peertube:v8.3.1-trixie@sha256:1f161d08b113d77410b8051f764d16a05267692f3b0a3a7b2f0cf887f80ed082`
@@ -764,3 +811,45 @@ A real PieFed post served a `Video` at its own id. The PeerTube user then acted 
 playlist and a web-video mp4, five icons, `attributedTo` naming the account and the channel, and `commentsPolicy`.
 `tests/fixtures/peertube_channel_v8.json` is its channel. Its `attributedTo` is a list of URL strings naming the
 account.
+
+## 12. Evidence: Castopod spike (2026-10-16)
+
+Castopod `docker.io/castopod/castopod:1.15.5@sha256:4e4f0440520f45257bfeac7be4347defd20048b4efef8f53d73ec9ed3a4f7966`
+(the newest stable release, and the image `latest` points to), run in the interop harness (`compose.interop.yaml`,
+seeded by `interop/seed_castopod.py`) with MariaDB 11.8. The seed creates podcast `@dave` with one published
+episode. Activities were signed with PieFed's own `HttpSignature.signed_request` as the `pod_media` community (a
+`podcast` community) or as user alice, and posted to `https://castopod.test/@dave/inbox`. Source citations are
+paths in the image's `/var/www/html`. The 2.0.0-next.4 image
+(`sha256:3e2951c14d51cf1d242a21affe75e99c2b468e2027d932e8eb6c1a43a5d39433`, `/var/www/castopod`) was read for
+comparison.
+
+### 12.1 Inbox
+
+| Probe | Status | Effect |
+|---|---|---|
+| `Create(Note)` by the `pod_media` Group, top level, no `inReplyTo` key, content opening with a link to an episode URL (the §4.4 announcement) | 500 | none; `ErrorException: Undefined property: stdClass::$inReplyTo` |
+| The same by user alice | 500 | none; same error |
+| The same with `inReplyTo: null` | 501 | none |
+| `Create(PodcastEpisode)` (Castopod's own fetchable shape) | 501 | none |
+| `Announce` of a PieFed object | 200 | none: Castopod reblogs only a post it holds |
+| `Create(Note)` by alice, `inReplyTo` dave's episode announcement post | 200 | shown on the episode page as a comment |
+| `Follow` of `@dave` by the `pod_media` Group | 202 | `pod_media` listed in dave's followers; `Accept` POSTed to `https://piefed.test/c/pod_media/inbox` (200) |
+
+Source: `modules/Fediverse/Controllers/ActorController.php:93-135` (the `Create` case: a `Note` without
+`inReplyTo` returns 501 at `:95-97`, a `Note` replying to an unknown post is dropped, any other type returns 501 at
+`:134`); `:177-190` (`Announce` acts only on a post `getPostByUri` finds); `:323-372` (`attemptFollow`: the visitor
+remote-follow form, which needs an ostatus subscribe link, `:357`, else `remoteFollowNotAllowed`, `:368`).
+`modules/Fediverse/Models/FollowModel.php:50-66`: `addFollower` emits a `Follow` only when `$registerActivity`; its one
+caller is the inbox (`ActorController.php:150`), which passes `false`. No admin or public view lists followed accounts
+or a timeline.
+
+### 12.2 Golden captures
+
+- `tests/fixtures/castopod_actor_v1_15.json` is podcast `@dave` served as ActivityPub: `type: Person`, with
+  `nodeInfo2Url`. Castopod serves `/.well-known/x-nodeinfo2` and answers 404 for `/.well-known/nodeinfo`.
+- `tests/fixtures/castopod_create_episode_note_v1_15.json` is the episode announcement from dave's outbox: a
+  `Create(Note)` whose `content` is `<a href="<episode URL>">title</a><br/><message>`, with no attachment.
+- `tests/fixtures/castopod_podcast_episode_v1_15.json` is the episode URL fetched as ActivityPub: `type:
+  PodcastEpisode`, served with `Content-Type: application/json`. It has `description` as a markdown `Note` with
+  `contentMap`, `image`, `comments`, and `audio: {id, type: Audio, name, size, duration (float seconds), url: {href,
+  type: Link, mediaType}}`.
