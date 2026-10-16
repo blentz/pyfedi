@@ -89,12 +89,16 @@ that already has posts.
 
 ### 3.3 Podcast show fields
 
+(Amended: see §10 A17.)
+
 - New column `Community.podcast_category = String(64)`, nullable. It holds an Apple Podcasts category
   string; the form offers the fixed list.
 - The show's cover is the community icon, and its language is the community's existing language.
   The show's author is the community's owner.
 
 ### 3.4 Per-post media metadata
+
+(Amended: see §10 A17.)
 
 Uploaded media metadata lives in `Post.extensions['media']`, following the fork's `extensions` convention:
 
@@ -233,6 +237,8 @@ This mirrors what Castopod sends us. The Castopod spike (§9 step 5) confirms th
   `PodcastEpisode`, browsers are redirected to the post page.
 
 ### 4.5 Podcast RSS
+
+(Amended: see §10 A17.)
 
 Communities of kind `podcast` serve a Podcasting 2.0 feed at their existing community RSS URL. Each episode
 gets `<enclosure url length type>`, `<itunes:duration>`, `<itunes:episode>`, `<itunes:season>`,
@@ -466,7 +472,7 @@ Each step gets its own implementation plan and its own commits, and each ends wi
    episodes. If it does, the findings replace §4.4 and §6.1 for podcasts. If it does not, podcast scope
    becomes RSS (§4.5) plus `Audio` objects for Mastodon and PieFed, and the owner decides before step 6.
    (Done 2026-10-16: it does not. See §10 A16.)
-6. Podcasts: `podcast_episode`, the episode route, RSS, and Castopod delivery as decided after step 5.
+6. Podcasts: `podcast_episode`, the episode route, RSS, and Castopod delivery as decided after step 5. (Amended: see §10 A16, A17: RSS and Audio-bearing Pages; no PodcastEpisode, no episode route, no Castopod delivery.)
 
 ## 10. Amendments (2026-10-14, plan for steps 0–1)
 
@@ -686,6 +692,46 @@ Each step gets its own implementation plan and its own commits, and each ends wi
        mirror a PieFed podcast from §4.5. That copy is Castopod-hosted and Castopod-owned, and no federation is
        involved. Nothing to build beyond §4.5.
   - Evidence: §12.
+- **A17 (§3.3, §3.4, §4.5, §6.1, §8.3), step 6 podcasts; code survey 2026-10-16:** the survey found these gaps between the spec and the code. Rulings:
+  1. **What an episode is.** `uses_podcast_episode(post)` holds only when all of these are true:
+     - the post's community is a local `podcast` community;
+     - the post is `POST_TYPE_LINK` (an audio upload is a link post, A13.5);
+     - its media record is `ready`, with a `mime` starting `audio/`;
+     - the record's `bytes` and `duration_s` are positive ints, and its `uuid` is a non-empty string.
+
+     A link to remote audio (`audio_url`) has no media record, so it is not an episode. It federates as today, and the feed leaves it out.
+  2. **The `Audio`-bearing object (A16 option 1).** The `Page` stays a `Page`. For an episode, its `attachment` is one `Document` built by `episode_attachment(post)`, in place of today's `{'href': post.url, 'type': 'Link'}`:
+     - `type: Document`, `mediaType`: the media mime, `url`: `post.url`, `name`: the title cut to 1500 characters (Mastodon's description limit).
+     - `icon: {type: Image, url: post.image.source_url}` when the episode has cover art. Mastodon shows this as the audio player's artwork.
+
+     It is a `Document` and not an `Audio` because Lemmy 0.19's `Attachment` deserializes only `Link`, `Image` and `Document`. An `Audio` entry there would reject the whole `Page`. `send_post`'s `Page` and `post_to_page` both call `episode_attachment`, and the amended `Note` for mentions and author followers copies the `Page`'s `attachment`. Delivery shapes per software stay as they are today (§6.1 `podcast` row, A16).
+  3. **Inbound (PieFed peers).** `Post.new` already takes a `Document`'s `url` as `post.url`. It now also sets `extensions['media_type'] = 'audio'` when the `Document` or `Audio` attachment it took has a `mediaType` starting `audio/`. The player in `_post_full.html` then shows for any URL, with or without an audio file extension.
+  4. **Episode fields (§3.4).** `Post.extensions['podcast']` gains `episode_number` and `season` (ints of at least 1, optional) and `explicit` (bool, default false). They are written by `with_episode(post, episode_number, season, explicit)` (`app/shared/media.py`), which keeps every other key, including `credits` (`app/discovery/credits.py`).
+     - The web form shows these fields in two cases: the audio upload form of a podcast community, when a file can be uploaded (`media_upload`), and the edit form of an audio upload in a podcast community.
+     - The edit form is prefilled from the stored values.
+     - The alpha API neither shows nor takes them. An API edit leaves them as they are.
+  5. **Show fields (§3.3).**
+     - `Community.podcast_category = String(64)`, nullable, added by migration `e5b8d2f0a4c7` (after `d4a7c1e9b3f6`).
+     - The fixed list is Apple Podcasts' 19 top-level categories, in `APPLE_PODCAST_CATEGORIES` (`app/constants.py`). Subcategories are not offered.
+     - `apply_podcast_category(community, value)` (`app/shared/community.py`) sets the field. An empty value clears it. Any other value outside the list is refused with `podcast_category must be one of the Apple Podcasts categories`.
+     - The create and edit forms (`add_local`, `community_edit`) and the API community create and edit (`podcast_category`) use it. It may be set on any kind, but only a `podcast` community's feed reads it.
+  6. **Feed (§4.5).** For a local `podcast` community, `show_community_rss` keeps its route, cache, ETag, private check and query parameters, with these changes:
+     - It lists only episodes that are `is_open`. The query filters in SQL (link posts whose media record is `ready` with an `audio/` mime), so the `limit` counts episodes.
+     - Each item keeps today's fields and adds:
+       - `<enclosure url length type>` from `post.url`, `bytes` and `mime`;
+       - `<itunes:duration>` (`duration_s`);
+       - `<itunes:episode>` and `<itunes:season>` when set;
+       - `<itunes:explicit>`: `yes` when the episode is explicit or the post is `nsfw`/`nsfl`, else `no`;
+       - `<itunes:image>` when the episode has cover art;
+       - `<podcast:guid>` (the media `uuid`).
+     - The channel adds:
+       - `<itunes:category>` when `podcast_category` is set;
+       - `<itunes:image>`: the community icon, else its banner, else the site's `apple-touch-icon.png`;
+       - `<itunes:author>`: the owner's display name, else the community title;
+       - `<itunes:explicit>`: `yes` when the community is `nsfw` or `nsfl`, else `no`;
+       - `<podcast:locked>no</podcast:locked>`.
+     - The channel's `language` is the community's first language other than `und`, else `en`. The feed of every other kind keeps `en`.
+  7. **Fuzz (§8.3).** Atheris targets for `episode_attachment` (over a fuzzed media record and title) and for the podcast feed's item builder (over a fuzzed media record and episode fields) join the fuzz registry under the surface `podcasts`.
 
 ## 11. Evidence: PeerTube spike (2026-10-15)
 
