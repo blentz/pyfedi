@@ -434,6 +434,15 @@ def test_publish_ready_post_follows_the_scheduled_publisher(env):
     assert env.tasks == [('make_post', {'post_id': post.id})] and env.notified == [post.id]
 
 
+def test_publish_ready_post_leaves_a_scheduled_post_to_its_schedule(env):
+    post = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/s', title='s')
+    post.status, post.scheduled_for = POST_STATUS_PROCESSING, utcnow() + timedelta(days=1)
+    db.session.commit()
+    publish_ready_post(post)
+    assert post.status == POST_STATUS_SCHEDULED
+    assert env.tasks == [] and env.notified == []
+
+
 def test_probe_media_is_registered_with_task_selector(env, monkeypatch):
     seen = []
     monkeypatch.setattr(media_tasks.probe_media, 'delay', lambda **kw: seen.append(kw))
@@ -602,6 +611,25 @@ def test_a_local_copy_that_cannot_be_removed_after_its_upload_does_not_fail_the_
     assert s3.head_object(Bucket='pyfedi-test', Key=key)['ContentLength'] == media_of(post)['bytes']
     assert post.image.source_url.startswith('https://cdn.probeland.test/posts/')
     assert os.path.exists(local)   # left behind, and logged
+
+
+def test_the_local_copy_goes_even_when_federating_the_published_post_fails(env, s3, monkeypatch):
+    """Once the commit names the bucket the local copy is only a leftover: an error federating or announcing the
+    post after that commit must not keep it on disk forever."""
+    post = stored_post(env)
+    local = media_local_path(post)
+
+    def broker_down(key, **kwargs):
+        raise ConnectionError('the broker went away')
+    monkeypatch.setattr(media_tasks, 'task_selector', broker_down)
+    with pytest.raises(ConnectionError):
+        probe_media(False, post.id)
+    db.session.expire_all()
+    post = db.session.get(Post, post.id)
+
+    assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_PUBLISHED
+    assert post.url.startswith('https://cdn.probeland.test/posts/')
+    assert not os.path.exists(local)
 
 
 def test_an_owner_without_the_moderator_flag_still_publishes(env, monkeypatch):
