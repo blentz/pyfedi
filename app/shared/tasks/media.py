@@ -17,8 +17,7 @@ from app import celery, db
 from app.activitypub.util import make_image_sizes, notify_about_post
 from app.constants import (MEDIA_KIND_AUDIO, MEDIA_KIND_VIDEO, NOTIF_DEFAULT, POST_STATUS_PROCESSING,
                            POST_STATUS_PUBLISHED, POST_STATUS_SCHEDULED)
-from app.models import (CommunityMember, File, Notification, Post, s3_key_from_url, s3_object_is_referenced_elsewhere,
-                        served_path, utcnow)
+from app.models import CommunityMember, File, Notification, Post, s3_key_from_url, served_path, utcnow
 from app.shared.ffmpeg import MediaToolError, extract_cover, extract_frame, run_ffprobe
 from app.shared.post import feature_published_post
 from app.shared.media import MEDIA_DIRECTORY, can_upload_media, media_local_path, media_of, queue_probe, with_media
@@ -318,10 +317,8 @@ def _fail(post, thumbnail, written, reason: str) -> None:
 
 
 def _remove_media_file(post) -> None:
-    """Remove a failed post's media, locally or in the bucket, as purge does (Post.delete_dependencies): never one
-    another post's url names."""
-    if not post.url or s3_object_is_referenced_elsewhere(post.url, post_id=post.id):
-        return
+    """Remove a failed post's media, locally or in the bucket, as the owning post's purge does (A13.8): a post that
+    only links to its URL is not a reference, and does not keep it."""
     local = media_local_path(post)
     if local is not None:
         with suppress(FileNotFoundError):

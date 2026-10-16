@@ -6,12 +6,12 @@ from types import SimpleNamespace
 import pytest
 
 from app import db
-from app.constants import POST_TYPE_LINK
+from app.constants import POST_TYPE_LINK, POST_TYPE_VIDEO
 from app.models import Post
 from app.shared.media import media_local_path
 from app.shared import post as post_module
 from app.shared.post import delete_post
-from tests.factories import make_post
+from tests.factories import make_instance, make_post, make_user
 from tests.test_media_probe import env, files_on_disk, run, s3, stored_post  # noqa: F401  (fixtures and helpers)
 
 CDN = 'https://cdn.probeland.test/'
@@ -55,16 +55,6 @@ def test_purging_an_s3_media_post_removes_the_object(env, s3, fixture, kind):
     assert key not in keys
 
 
-def test_an_s3_object_another_post_names_stays(env, s3):
-    post = run(stored_post(env))
-    key = post.url.removeprefix(CDN)
-    other = stored_post(env, title='Other')
-    other.url = post.url
-    db.session.commit()
-    purge(post)
-    s3.head_object(Bucket='pyfedi-test', Key=key)
-
-
 def test_a_soft_delete_keeps_the_files(env, monkeypatch):
     monkeypatch.setattr(post_module, 'current_user', SimpleNamespace(id=env.mod.id))
     post = run(stored_post(env))
@@ -99,16 +89,52 @@ def test_a_link_post_naming_another_posts_media_leaves_it(env, app):
     assert os.path.isfile(real_file)
 
 
-def test_purging_a_media_post_keeps_the_local_file_a_crosspost_names(env, app):
-    """Final review M6: cross-posts are found by url equality, so a link post can name this post's local media. Purging
-    the media post leaves the file the cross-post still plays, as the S3 branch already does."""
+
+@pytest.mark.parametrize('origin', ['local', 'remote'])
+def test_the_owning_posts_purge_removes_its_local_media_a_link_names(env, origin):
+    """Security ruling (content removal): a post that only links to the media is not a reference. Anyone can make one,
+    a remote post included, so letting it keep the file would let anyone stop a takedown. The owner's purge removes
+    the file, and the link post becomes a dead link."""
     post = run(stored_post(env))
     media_file = media_local_path(post)
-    crosspost = make_post(env.cast, env.mod, ap_id='https://test.piefed.local/post/cross', title='Cross')
-    crosspost.type, crosspost.url = POST_TYPE_LINK, post.url
+    if origin == 'remote':
+        peer = make_instance('peer.example')
+        author = make_user(peer, 'linker')
+        linker = make_post(env.cast, author, ap_id='https://peer.example/post/1', title='Link')
+        linker.instance_id = peer.id
+    else:
+        linker = make_post(env.cast, env.mod, ap_id='https://test.piefed.local/post/cross', title='Link')
+    linker.type, linker.url = POST_TYPE_LINK, post.url
     db.session.commit()
 
     purge(post)
 
-    assert os.path.isfile(media_file)
-    os.unlink(media_file)
+    assert not os.path.exists(media_file)
+
+
+def test_the_owning_posts_purge_removes_its_s3_media_a_link_names(env, s3):
+    post = run(stored_post(env))
+    key = post.url.removeprefix(CDN)
+    linker = make_post(env.cast, env.mod, ap_id='https://test.piefed.local/post/cross', title='Link')
+    linker.type, linker.url = POST_TYPE_LINK, post.url
+    db.session.commit()
+
+    purge(post)
+
+    assert key not in [o['Key'] for o in s3.list_objects_v2(Bucket='pyfedi-test').get('Contents', [])]
+
+
+def test_a_legacy_video_post_keeps_an_s3_object_another_post_names(env, s3):
+    """A video post with no media record (a federated video mirrored into the bucket) owns nothing: up to ten
+    cross-posts name one object, and purging one of them leaves it (D1343)."""
+    key = 'posts/le/ga/legacyvideo0001.mp4'
+    s3.put_object(Bucket='pyfedi-test', Key=key, Body=b'video')
+    first = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/v1', title='v1')
+    second = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/v2', title='v2')
+    for video in (first, second):
+        video.type, video.url = POST_TYPE_VIDEO, CDN + key
+    db.session.commit()
+
+    purge(first)
+
+    s3.head_object(Bucket='pyfedi-test', Key=key)
