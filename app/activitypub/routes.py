@@ -1013,7 +1013,7 @@ def _park_duplicate(activity_id, actor, typed_json, request, http_signed) -> Non
 
     Bounded (security review, 2026-10-16): only a body of at most DEFERRED_MAX_BYTES, only a duplicate of an id
     accepted from this same actor as this same type (mark_accepted) -- so the parked body can be one an Undo may
-    release -- and at most DEFERRED_PER_HOST per sending host in the window. Only the path, the headers the
+    release -- and at most DEFERRED_PER_HOST per sending host in a fixed window of DEFERRED_SECONDS. Only the path, the headers the
     signature checks read and the body are kept.
 
     Only a newer copy (security review I1): a sender's retry of the original, or an LD-signed copy anyone holding it
@@ -1026,10 +1026,12 @@ def _park_duplicate(activity_id, actor, typed_json, request, http_signed) -> Non
             head != f"{typed_json['type']}|{actor}" or not accepted_date.isdigit() or \
             duplicate_date <= int(accepted_date):
         return
+    # A fixed window (review I2): the TTL is set only when the counter is created, in the same transaction as the
+    # INCR, so a host that keeps parking cannot keep its window open
     counter = app_pkg.redis_client.pipeline()
+    counter.set(deferred_count_key(actor), 0, ex=DEFERRED_SECONDS, nx=True)
     counter.incr(deferred_count_key(actor))
-    counter.expire(deferred_count_key(actor), DEFERRED_SECONDS)
-    parked_now, _ = counter.execute()
+    _, parked_now = counter.execute()
     if parked_now > DEFERRED_PER_HOST:
         return
     parked = {'path': request.full_path if request.query_string else request.path,

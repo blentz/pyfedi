@@ -534,7 +534,7 @@ def test_a_host_parks_at_most_fifty_bodies_in_the_window(app, inline, scene, red
     community, _, _, carol, _ = scene
     follow = _follow(carol, community.ap_profile_id)
     _post(app, follow, carol)
-    redis_double.set(deferred_count_key(carol.ap_profile_id), DEFERRED_PER_HOST - 1)
+    redis_double.set(deferred_count_key(carol.ap_profile_id), DEFERRED_PER_HOST - 1, ex=DEFERRED_SECONDS)
 
     _post(app, follow, carol)   # the 50th
     assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 1
@@ -714,3 +714,48 @@ def test_a_duplicate_of_an_original_with_no_date_is_not_parked(app, inline, scen
 def test_signed_date(app, headers, expected):
     with app.test_request_context('/inbox', method='POST', headers=headers):
         assert activitypub_routes._signed_date(flask_request) == expected
+
+
+# --- round 3, I2: the per-host cap is a fixed window ---
+
+
+def test_a_park_does_not_extend_the_hosts_window(app, inline, scene, redis_double):
+    """A host that keeps parking must not keep its counter alive: the window ends on time while traffic goes on."""
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    _post(app, follow, carol)
+    counter = deferred_count_key(carol.ap_profile_id)
+    redis_double.set(counter, 1, ex=5)
+
+    _post(app, follow, carol)
+
+    assert redis_double.get(counter) == '2'
+    assert redis_double.ttl(counter) <= 5
+
+
+def test_the_hosts_window_starts_again_after_it_ends(app, inline, scene, redis_double):
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    _post(app, follow, carol)
+    counter = deferred_count_key(carol.ap_profile_id)
+    redis_double.set(counter, DEFERRED_PER_HOST, ex=5)
+    _post(app, follow, carol)
+    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 0   # the window is full
+    redis_double.delete(counter)   # as when the window's TTL runs out
+
+    _post(app, follow, carol)
+
+    assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 1
+    assert redis_double.get(counter) == '1'
+    assert 50 < redis_double.ttl(counter) <= 60
+
+
+def test_a_duplicate_failing_the_newer_check_is_not_counted(app, inline, scene, redis_double):
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    at = int(time.time()) - 600
+    _post(app, follow, carol, at=at)
+
+    _post(app, follow, carol, at=at)
+
+    assert redis_double.exists(deferred_count_key(carol.ap_profile_id)) == 0
