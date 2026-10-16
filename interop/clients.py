@@ -1,8 +1,10 @@
 """Thin API clients for the harness apps. Every wait is bounded: a slow interop test is a bug (spec §8.1)."""
 import json
 import os
+import re
 import ssl
 import time
+from html.parser import HTMLParser
 
 import httpx
 
@@ -91,6 +93,79 @@ class PieFed:
 
     def replies(self, post_id):
         return self.http.get('/comment/list', params={'post_id': post_id}).raise_for_status().json()['comments']
+
+
+_FIELD_ERROR = re.compile(r'class="invalid-feedback[^"]*"[^>]*>\s*([^<]+?)\s*<')
+
+
+def form_errors(page):
+    """The field errors a re-rendered PieFed form shows (bootstrap-flask's invalid-feedback), for assertion messages."""
+    return _FIELD_ERROR.findall(page)
+
+
+class _FormDefaults(HTMLParser):
+    """What a browser would submit for a page's form untouched: input values, checked boxes, textareas (always sent,
+    if empty), and each select's selected (else first) option. Files are left to the caller."""
+
+    def __init__(self):
+        super().__init__()
+        self.values, self._select, self._first, self._textarea = {}, None, None, None
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        name = a.get('name')
+        if tag == 'input' and name and a.get('type') not in ('file', 'submit'):
+            if a.get('type') in ('checkbox', 'radio'):
+                if 'checked' in a:
+                    self.values[name] = a.get('value', 'y')
+            else:
+                self.values[name] = a.get('value') or ''
+        elif tag == 'textarea' and name:
+            self._textarea = name
+            self.values[name] = ''
+        elif tag == 'select' and name:
+            self._select, self._first = name, None
+        elif tag == 'option' and self._select:
+            if self._first is None:
+                self._first = a.get('value', '')
+            if 'selected' in a:
+                self.values[self._select] = a.get('value', '')
+
+    def handle_data(self, data):
+        if self._textarea:
+            self.values[self._textarea] += data
+
+    def handle_endtag(self, tag):
+        if tag == 'textarea':
+            self._textarea = None
+        elif tag == 'select' and self._select:
+            self.values.setdefault(self._select, self._first or '')
+            self._select = None
+
+
+class PieFedWeb:
+    """A logged-in browser session on PieFed's web forms, for what the alpha API does not offer, such as media
+    uploads (app/community/routes.py add_post). Each POST sends what the form page itself holds, CSRF token included."""
+
+    def __init__(self, user, password):
+        self.http = httpx.Client(base_url='https://piefed.test', verify=ssl.create_default_context(cafile=CA), timeout=30)
+        r = self.http.post('/auth/login', data={**self._defaults('/auth/login'), 'user_name': user, 'password': password})
+        if r.status_code != 302:
+            raise AssertionError(f'PieFedWeb: login as {user} answered {r.status_code}, not a redirect')
+
+    def _defaults(self, path):
+        parser = _FormDefaults()
+        parser.feed(self.http.get(path).raise_for_status().text)
+        if not parser.values.get('csrf_token'):
+            raise AssertionError(f'PieFedWeb: no csrf_token on {path}')
+        return parser.values
+
+    def submit_media(self, community, kind, title, path, mime):
+        """POST `path` as a `kind` ('video' or 'audio') upload to `community`; the raw response, redirects unfollowed."""
+        form = f'/community/{community}/submit/{kind}'
+        data = {**self._defaults(form), 'title': title}
+        with open(path, 'rb') as f:
+            return self.http.post(form, data=data, files={'image_file': (os.path.basename(path), f, mime)})
 
 
 class PeerTube:

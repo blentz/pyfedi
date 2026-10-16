@@ -11,6 +11,15 @@ x-trust: &trust
   env_file: ./interop/.env.interop
   networks: [interop]
 
+# PieFed's web and worker containers share the media and tmp trees, as production's bind mounts do (compose.yaml):
+# an upload lands on piefed-web and is probed and thumbnailed by piefed-celery-background. `:U` hands each volume to
+# the image's user python; the image has no app/static/media to copy that ownership from (.dockerignore).
+x-piefed-volumes: &piefed-volumes
+  - caddy-data:/caddy-data:ro
+  - ./interop/trust_ca.sh:/trust_ca.sh:ro
+  - piefed-media:/app/app/static/media:U
+  - piefed-tmp:/app/app/static/tmp:U
+
 services:
   caddy:
     image: docker.io/library/caddy:2.10@sha256:d8c17a862962def15cde69863a3a463f25a2664942eafd7bdbf050e9c3116b83
@@ -43,6 +52,7 @@ services:
     build: {context: ., target: runtime}
     image: localhost/piefed-interop:latest
     entrypoint: ["/trust_ca.sh", "/usr/bin/tini", "--", "/app/entrypoint.sh"]
+    volumes: *piefed-volumes
     depends_on: [caddy, piefed-db, piefed-redis]
 
   piefed-celery:
@@ -52,6 +62,20 @@ services:
       DATABASE_URL: postgresql+psycopg2://piefed:piefed@piefed-db/piefed   # not in .env.interop: Mastodon reads DATABASE_URL too
     image: localhost/piefed-interop:latest
     entrypoint: ["/trust_ca.sh", "/app/entrypoint_celery.sh"]
+    volumes: *piefed-volumes
+    depends_on: [piefed-web]
+
+  # the background queue (probe_media, A13.9; backfills, maintenance), as production's pyfedi-celery-background
+  piefed-celery-background:
+    <<: *trust
+    environment:
+      LOG_ACTIVITYPUB_TO_DB: "1"
+      DATABASE_URL: postgresql+psycopg2://piefed:piefed@piefed-db/piefed   # not in .env.interop: Mastodon reads DATABASE_URL too
+      CELERY_QUEUES: background
+      CELERY_CONCURRENCY: "2"
+    image: localhost/piefed-interop:latest
+    entrypoint: ["/trust_ca.sh", "/app/entrypoint_celery.sh"]
+    volumes: *piefed-volumes
     depends_on: [piefed-web]
 
   mastodon-db:
@@ -135,10 +159,13 @@ services:
       - caddy-data:/caddy-data:ro
       - ./interop/trust_ca.sh:/trust_ca.sh:ro
       - ./interop:/app/interop:ro
+      - ./tests/fixtures/media:/app/tests/fixtures/media:ro   # test_media_pipeline uploads these
     profiles: [runner]
 
 volumes:
   caddy-data:
+  piefed-media:
+  piefed-tmp:
 
 networks:
   interop:

@@ -547,6 +547,8 @@ Each step gets its own implementation plan and its own commits, and each ends wi
        - Such a post goes back to `processing`, by the same compare-and-set, increments `requeues`, and is queued again. Once `attempts` or `requeues` reaches 3, it fails with "processing timed out" and the author is notified. A run whose claim was taken back (its `probing_since` token no longer matches) writes nothing.
   10. **Container image.** `ffmpeg` goes into the Dockerfile `builder` stage, which `test` inherits, and the `runtime` stage. It is also added to `INSTALL.md`.
       - `deploy/DEPLOY_GUIDE.md` and `INSTALL.md` document the matching reverse-proxy body limit: Caddy `request_body { max_size 510MB }`; nginx `client_max_body_size 510M`.
+        - Correction: Caddy reads `MB` as 10^6 bytes, so `510MB` (510000000) is less than the 500 MiB default video limit. The `Caddyfile` and the guide use `510MiB` (534773760). nginx's `M` is already MiB.
+  - **Gates (2026-10-15, Task 7).** `interop/test_media_pipeline.py` passes in the harness. A video upload to `vc_media` and an audio upload to `pod_media` each reach `extensions.media.status = 'ready'` and are published. Each answers `Range: bytes=0-99` through Caddy with `206`, `Content-Range: bytes 0-99/<size>` and `Access-Control-Allow-Origin: *`. A `not_media.mp4` upload makes no post. The full interop suite passes on a fresh stack: 17 tests.
 
 ## 11. Evidence: PeerTube spike (2026-10-15)
 

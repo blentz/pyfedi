@@ -10,7 +10,9 @@ See `compose.interop.yaml`; spec 2026-10-14 section 8.1.
     interop/run.sh test [args]   up, then pytest interop/ in the interop-runner container (args pass through)
     interop/run.sh down          remove the stack and its volumes
 
-Seeded: PieFed `alice` / `interop-alice-pw` and the local `microblogs` community; Mastodon `bob`; PeerTube admin
+Seeded: PieFed `alice` / `interop-alice-pw`, the local `microblogs` community, the `video_channel` community `vc1`, and
+the media upload communities `vc_media` (`video_channel`) and `pod_media` (`podcast`), which alice moderates, with video
+and audio uploads open to users; Mastodon `bob`; PeerTube admin
 `root` / `interop-root-pw` and user `carol` / `interop-carol-pw`. `interop/.tokens.json` holds the API tokens
 `mastodon_bob`, `peertube_root` and `peertube_carol` (PeerTube OAuth access tokens last a day; `up` renews them).
 `interop/.env.interop` (secrets) and `interop/.tokens.json` are generated and gitignored. `up` is safe to repeat.
@@ -31,4 +33,7 @@ Seeded: PieFed `alice` / `interop-alice-pw` and the local `microblogs` community
 - Caddy's CA root is published to every app container as `/caddy-data/harness-root.crt`; `trust_ca.sh` adds it to
   `/tmp/harness-ca.crt` and sets `SSL_CERT_FILE`. Node ignores that variable, so PeerTube gets
   `NODE_EXTRA_CA_CERTS=/caddy-data/harness-root.crt` instead.
-- Logs: `podman-compose -f compose.interop.yaml logs piefed-celery` (also `piefed-web`, `mastodon-web`, `mastodon-sidekiq`, `peertube-web`, `caddy`).
+- `piefed-celery-background` serves the celery `background` queue (`probe_media`), as production's
+  `pyfedi-celery-background` does. piefed-web and both workers share the `piefed-media` and `piefed-tmp` volumes.
+  The runner mounts `tests/fixtures/media` for the media uploads.
+- Logs: `podman-compose -f compose.interop.yaml logs piefed-celery` (also `piefed-celery-background`, `piefed-web`, `mastodon-web`, `mastodon-sidekiq`, `peertube-web`, `caddy`).
