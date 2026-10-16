@@ -13,13 +13,13 @@ from app import celery, db
 from app.activitypub.util import make_image_sizes, notify_about_post
 from app.constants import (MEDIA_KIND_AUDIO, MEDIA_KIND_VIDEO, NOTIF_DEFAULT, POST_STATUS_PUBLISHED,
                            POST_STATUS_SCHEDULED)
-from app.models import File, Notification, Post, served_path, utcnow
+from app.models import CommunityMember, File, Notification, Post, served_path, utcnow
 from app.shared.ffmpeg import MediaToolError, extract_cover, extract_frame, run_ffprobe
-from app.shared.media import MEDIA_DIRECTORY, media_local_path, media_of, with_media
+from app.shared.media import MEDIA_DIRECTORY, can_upload_media, media_local_path, media_of, with_media
 from app.shared.tasks import task_selector
-from app.utils import (ensure_directory_exists, get_recipient_language, get_task_session, gibberish,
+from app.utils import (can_create_post, ensure_directory_exists, get_recipient_language, get_task_session, gibberish,
                        guess_mime_type, patch_db_session, save_image_without_metadata, shorten_string,
-                       store_files_in_s3, to_srgb, upload_file_to_s3)
+                       store_files_in_s3, to_srgb, upload_file_to_s3, user_banned_from_community)
 
 VIDEO_CODECS = {'h264', 'vp9', 'av1'}
 AUDIO_CODECS = {'aac', 'mp3', 'opus', 'vorbis'}
@@ -115,6 +115,10 @@ def _probe(post_id) -> None:
     except MediaToolError as error:
         _fail(post, thumbnail, written, str(error))
         return
+    refusal = publish_refusal(post)
+    if refusal is not None:
+        _fail(post, thumbnail, written, refusal)
+        return
     if thumbnail is not None:
         meta['thumbnail_file_id'] = post.image_id
     with_media(post, status='ready', **meta)
@@ -208,6 +212,28 @@ def _fail(post, thumbnail, written, reason: str) -> None:
                                 targets={'post_id': post.id}))
     author.unread_notifications += 1
     db.session.commit()
+
+
+def publish_refusal(post) -> str | None:
+    """Why `post` may not be published now, or None. The upload was allowed when it was made, but probing takes
+    time: the author, the community or the post can change before it is ready. The scheduled publisher re-checks
+    can_create_post at publish time for the same reason (app/cli.py, F7). The rows are read again, so a change another
+    transaction committed while probing is seen, and moderator status is read from its row, not from the cached
+    Community.moderators list."""
+    db.session.flush()
+    for row in (post, post.author, post.community):
+        db.session.refresh(row)
+    author, community = post.author, post.community
+    if post.deleted:
+        return 'the post was deleted'
+    if community.banned or community.is_gone():
+        return 'the community is gone'
+    still_moderates = db.session.query(CommunityMember).filter_by(
+        user_id=author.id, community_id=community.id, is_moderator=True, is_banned=False).first() is not None
+    if author.deleted or author.banned or user_banned_from_community(author.id, community.id) or \
+            not still_moderates or not can_create_post(author, community) or not can_upload_media(author, community):
+        return 'you may no longer post this media in this community'
+    return None
 
 
 def publish_ready_post(post) -> None:
