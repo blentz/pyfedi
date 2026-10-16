@@ -37,7 +37,8 @@ def test_a_microblogs_post_fills_only_its_non_body_tags(app, poster):
 
 def test_another_communitys_post_fills_all_its_tags(app, poster):
     _, _, community, author, _ = poster
-    assert form_tags_string(_tagged_post(community, author)) == 'Cats, News'
+    # Post.tags has no order: the tags are compared as a set (the gate saw 'News, Cats' once in 24 000 tests)
+    assert sorted(form_tags_string(_tagged_post(community, author)).split(', ')) == ['Cats', 'News']
 
 
 def test_the_edit_form_leaves_out_body_tags(app, poster):
