@@ -52,7 +52,9 @@ def _duration(probe: dict) -> float:
     return duration if math.isfinite(duration) else 0.0   # 'inf' parses, and math.ceil of it raises
 
 
-def _is_cover_art(stream: dict) -> bool:
+def _is_cover_art(stream) -> bool:
+    if not isinstance(stream, dict):   # ffprobe's streams are untrusted JSON: a number or a list is no cover art
+        return False
     disposition = stream.get('disposition')
     return isinstance(disposition, dict) and bool(disposition.get('attached_pic'))
 
@@ -63,6 +65,8 @@ def _in(codec, allowed: set) -> bool:
 
 def validate_probe(probe: dict, kind: str) -> dict:
     """The media record's metadata fields for ffprobe's `probe` of a `kind` file, or MediaToolError(reason)."""
+    if not isinstance(probe, dict):
+        raise MediaToolError('ffprobe output was unreadable')
     streams = probe.get('streams')
     if not isinstance(streams, list):
         raise MediaToolError('ffprobe output was unreadable')

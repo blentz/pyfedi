@@ -28,7 +28,7 @@ from app.shared.media import media_local_path, media_of, store_uploaded_media, w
 from app.shared import post as post_module
 from app.shared.tasks import task_selector
 from app.shared.tasks import media as media_tasks
-from app.shared.tasks.media import probe_media, publish_ready_post, requeue_stuck_media, validate_probe
+from app.shared.tasks.media import _is_cover_art, _thumbnail, probe_media, publish_ready_post, requeue_stuck_media, validate_probe
 from app.utils import set_setting, upload_file_to_s3
 from tests.factories import make_community, make_community_member, make_instance, make_post, make_user
 
@@ -114,6 +114,21 @@ def test_streams_that_are_not_objects_are_skipped():
     assert validate_probe(probe(7, None, 'x', V, A), 'video')['codec'] == 'h264'
     with pytest.raises(MediaToolError, match='no audio stream'):
         validate_probe(probe(7, None), 'audio')
+
+
+@pytest.mark.parametrize('bad', [[], [A], 5, 'x', None, True])
+@pytest.mark.parametrize('kind', ['video', 'audio'])
+def test_ffprobe_output_that_is_not_an_object_is_refused(bad, kind):
+    with pytest.raises(MediaToolError, match='unreadable'):
+        validate_probe(bad, kind)
+
+
+def test_a_stream_that_is_not_an_object_is_not_cover_art():
+    assert _is_cover_art(5) is False and _is_cover_art(None) is False and _is_cover_art([COVER]) is False
+
+
+def test_an_audio_thumbnail_skips_streams_that_are_not_objects():
+    assert _thumbnail(None, 'a.mp3', 'audio', probe(5, A, 'x'), None) is None
 
 
 def test_a_disposition_that_is_not_an_object_is_not_cover_art():
