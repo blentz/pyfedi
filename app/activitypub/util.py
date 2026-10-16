@@ -915,6 +915,11 @@ def activity_accepted_key(activity_id, actor_url) -> str:
     return 'ap-accepted:' + activity_dedupe_key(activity_id, actor_url).removeprefix('ap-dedupe:')
 
 
+def undo_of_key(activity_id, actor_url) -> str:
+    """The Redis key naming the Undo whose acceptance released this activity's claim: `<undo id>|<actor>`."""
+    return 'ap-undo-of:' + activity_dedupe_key(activity_id, actor_url).removeprefix('ap-dedupe:')
+
+
 def mark_accepted(activity: dict, announced: bool) -> None:
     """Remember, for ACTIVITY_DEDUPE_SECONDS, that the top-level `activity` (a Follow or a vote) made a membership,
     follower or vote here: `<type>|<actor>`. Only such an id can later have its claim released by an Undo
@@ -925,6 +930,15 @@ def mark_accepted(activity: dict, announced: bool) -> None:
         return
     app_pkg.redis_client.set(activity_accepted_key(activity['id'], actor), f"{activity['type']}|{actor}",
                              ex=ACTIVITY_DEDUPE_SECONDS)
+    # R-UNDORELEASE, repeated cycles: PeerTube reuses the Undo's id as well (`<id>/undo`). This activity was undone
+    # before and now really took effect again, so the Undo that undid it is released too: the next one is processed.
+    recorded = app_pkg.redis_client.get(undo_of_key(activity['id'], actor))
+    if recorded is None:
+        return
+    app_pkg.redis_client.delete(undo_of_key(activity['id'], actor))
+    undo_id, _, undo_actor = recorded.rpartition('|')
+    if undo_actor == actor:
+        release_activity(undo_id, actor)
 
 
 def release_undone_activity(undo: dict, announced: bool, types: tuple) -> None:
@@ -938,7 +952,8 @@ def release_undone_activity(undo: dict, announced: bool, types: tuple) -> None:
     that actor's host -- the claim being scoped to the host, no other host's id is ever touched -- and its type is
     one of `types`, those the handler undid. The id must also be one PieFed accepted as that type from that actor
     (mark_accepted): otherwise an Undo could name the id of any earlier activity of its actor, a Create say, and
-    reopen it to replay. The marker is consumed, so one acceptance allows one release."""
+    reopen it to replay. The marker is consumed, so one acceptance allows one release. The Undo is recorded against
+    the activity (undo_of_key), so the activity's next acceptance releases the Undo's claim in turn."""
     actor = undo['actor']
     undone = undo['object']
     if announced or not isinstance(actor, str) or not isinstance(undone, dict):
@@ -952,6 +967,7 @@ def release_undone_activity(undo: dict, announced: bool, types: tuple) -> None:
         return
     app_pkg.redis_client.delete(marker)
     release_activity(undone_id, actor)
+    app_pkg.redis_client.set(undo_of_key(undone_id, actor), f"{undo['id']}|{actor}", ex=ACTIVITY_DEDUPE_SECONDS)
 
 
 def served_by_us(url: str, file) -> bool:
