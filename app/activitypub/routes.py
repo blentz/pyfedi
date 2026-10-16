@@ -1,5 +1,6 @@
 import base64
 import copy
+import io
 
 import werkzeug.exceptions
 from flask import request, current_app, abort, jsonify, json, g, url_for, redirect, make_response, flash
@@ -1047,8 +1048,8 @@ def rerun_parked_request(parked):
     federation is paused say, would otherwise leave no trace of the activity."""
     body = base64.b64decode(parked['body'])
     with current_app.test_request_context(parked['path'], method='POST', base_url=current_app.config['SERVER_URL'],
-                                          headers=parked['headers'], data=body,
-                                          environ_overrides={PARKED_RERUN_ENVIRON: True}):
+                                          headers=parked['headers'], input_stream=io.BytesIO(body),
+                                          content_length=len(body), environ_overrides={PARKED_RERUN_ENVIRON: True}):
         response = shared_inbox()
     status = response[1] if isinstance(response, tuple) else 200
     if status != 200:
