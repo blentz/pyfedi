@@ -920,6 +920,15 @@ def activity_accepted_key(activity_id, actor_url) -> str:
 DEFERRED_SECONDS = 600
 
 
+# At most this many parked requests per sending host within DEFERRED_SECONDS (security review, 2026-10-16)
+DEFERRED_PER_HOST = 50
+
+
+def deferred_count_key(actor_url) -> str:
+    """The Redis counter of requests the actor's host has parked in the current window."""
+    return f'ap-deferred-count:{host_of(actor_url) if isinstance(actor_url, str) else ""}'
+
+
 def deferred_key(activity_id, actor_url) -> str:
     """The Redis key holding a parked request: a verified Follow or vote dropped as a duplicate. PeerTube sends an
     Undo and the activity re-using the undone id at once, so the new one can land while the old claim stands."""

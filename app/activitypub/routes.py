@@ -26,7 +26,8 @@ from app.activitypub.util import MEDIA_OBJECT_TYPES, follow_answer_inbox, MEDIA_
     post_to_activity, post_count_collections, comment_count_collections, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
-    update_post_from_activity, undo_vote, has_vote_on, release_undone_activity, mark_accepted, deferred_key, DEFERRED_SECONDS, post_to_page, find_reported_object, \
+    update_post_from_activity, undo_vote, has_vote_on, release_undone_activity, mark_accepted, deferred_key, DEFERRED_SECONDS, \
+    activity_accepted_key, deferred_count_key, DEFERRED_PER_HOST, post_to_page, find_reported_object, \
     process_report, ensure_domains_match, refresh_community_profile, \
     comment_model_to_json, restore_post_or_comment, ban_user, unban_user, \
     log_incoming_ap, find_community, site_ban_remove_data, community_ban_remove_data, verify_object_from_source, \
@@ -988,7 +989,7 @@ FOLLOW_TYPES = ('Follow',)
 VOTE_TYPES = ('Like', 'Dislike', 'EmojiReact')
 # A verified duplicate of one of these is parked (_park_duplicate) for the Undo it may have overtaken
 DEFERRABLE_TYPES = FOLLOW_TYPES + VOTE_TYPES
-DEFERRED_MAX_BYTES = FETCH_MAX_BYTES   # a Follow or vote is a few hundred bytes; the inbox has only the global cap
+DEFERRED_MAX_BYTES = 8 * 1024   # a Follow or vote is a few hundred bytes: anything larger is not parked
 # What the inbox's signature checks read, kept with a parked body so the re-run verifies it as it was sent
 DEFERRED_HEADERS = ('Host', 'Date', 'Digest', 'Content-Digest', 'Signature', 'Signature-Input', 'Content-Type')
 
@@ -996,9 +997,21 @@ DEFERRED_HEADERS = ('Host', 'Date', 'Digest', 'Content-Digest', 'Signature', 'Si
 def _park_duplicate(activity_id, actor, typed_json, request) -> None:
     """Park a verified Follow or vote dropped as a duplicate, for DEFERRED_SECONDS (R-UNDORELEASE). PeerTube sends
     Undo(X) and the new X reusing X's id at once; if the new one lands first, the Undo's release runs it again
-    (_release_undone). One per id: a later duplicate replaces it."""
+    (_release_undone). One per id: a later duplicate replaces it.
+
+    Bounded (security review, 2026-10-16): only a body of at most DEFERRED_MAX_BYTES, only a duplicate of an id
+    accepted from this same actor as this same type (mark_accepted) -- so the parked body can be one an Undo may
+    release -- and at most DEFERRED_PER_HOST per sending host in the window. Only the path, the headers the
+    signature checks read and the body are kept."""
     body = request.get_data()
-    if typed_json['type'] not in DEFERRABLE_TYPES or len(body) > DEFERRED_MAX_BYTES:
+    if typed_json['type'] not in DEFERRABLE_TYPES or len(body) > DEFERRED_MAX_BYTES or \
+            app_pkg.redis_client.get(activity_accepted_key(activity_id, actor)) != f"{typed_json['type']}|{actor}":
+        return
+    counter = app_pkg.redis_client.pipeline()
+    counter.incr(deferred_count_key(actor))
+    counter.expire(deferred_count_key(actor), DEFERRED_SECONDS)
+    parked_now, _ = counter.execute()
+    if parked_now > DEFERRED_PER_HOST:
         return
     parked = {'path': request.full_path if request.query_string else request.path,
               'headers': {name: request.headers[name] for name in DEFERRED_HEADERS if name in request.headers},
