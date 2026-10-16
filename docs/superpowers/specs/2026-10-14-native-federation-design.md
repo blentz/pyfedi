@@ -641,7 +641,7 @@ Each step gets its own implementation plan and its own commits, and each ends wi
   - **Gates (2026-10-16, Task 7).** `interop/test_video_channel.py` passes in the harness, with two tests. The first uploads a video to `vc_media` with carol subscribed from PeerTube. The video is listed under the channel in under 60 s, with `duration` equal to the media record's `duration_s`, `files[0].fileUrl` equal to the post's URL, and a stored thumbnail that PeerTube serves as `image/jpeg`. A PeerTube `like` raises `upvotes` above the baseline read just before it (the author's own upvote already counts 1 at creation), so the like itself is proven. An API edit renames the video. An API delete removes it from PeerTube. The second test deletes a video and then restores the post: PeerTube lists it again, so it accepts the re-`Create(Video)` after `Delete`, and A15.6's restore ruling stands. The full interop suite passes on a fresh stack (19 tests: the 17 earlier ones plus these two) and on two reused-stack runs (19 passed each).
     - Two PeerTube behaviours the test accounts for. `thumbnailPath` in the API holds only a 16:9 thumbnail (`getSmallestThumbnailStaticPath('16:9')`), and the fixture's is square, so the test reads `thumbnails[0].fileUrl` instead. While PeerTube removes a deleted video, a `GET /videos/{uuid}` can answer 500 (`Cannot read properties of undefined (reading 'VideoFiles')`) before it answers 404; the test keeps waiting on 500.
 
-- **A16 (§1, §4.4, §6.1, §6.3, §9 step 5), Castopod spike (step 5), 2026-10-16; owner decision pending:** Castopod
+- **A16 (§1, §4.4, §6.1, §6.3, §9 step 5), Castopod spike (step 5), 2026-10-16; owner ruled 2026-10-16 for option 1:** Castopod
   1.15.5 does not show a non-Castopod podcast actor's episodes, and no shape PieFed could send would change that.
   The step 5 rule applies: podcast scope becomes RSS (§4.5) plus `Audio` objects for Mastodon and PieFed, and the
   owner decides before step 6.
@@ -671,7 +671,11 @@ Each step gets its own implementation plan and its own commits, and each ends wi
     - §4.4: the announcement shape mirrors Castopod's own, so other PieFed instances would recognise it only if its
       link matched `_CASTOPOD_EPISODE_PATH` (`/@<name>/episodes/<slug>`). The planned route
       `/c/<community>/episodes/<post_id>` does not match.
-  - **Options for step 6 (owner to choose).**
+  - **Ruling (owner, 2026-10-16): option 1.** Step 6 builds the Podcasting 2.0 RSS feed (§4.5) and federates each
+    episode as an `Audio`-bearing object for Mastodon and PieFed; its plan sets that object's shape. The
+    `PodcastEpisode` object and the `/c/<community>/episodes/<post_id>` route of §4.4 are dropped, and Castopod gets
+    no deliveries. Options 2 and 3 are not built.
+  - **Options for step 6 (as put to the owner).**
     1. The step 5 fallback, as written: Podcasting 2.0 RSS (§4.5), and each episode federated as an `Audio`-bearing
        object for Mastodon and PieFed. Mastodon plays an audio attachment inline. Castopod is out of scope, apart
        from the interactions above, which already work.
