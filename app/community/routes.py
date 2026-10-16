@@ -1537,6 +1537,8 @@ def community_edit(community_id: int):
         if community.kind == COMMUNITY_KIND_MICROBLOGS:
             form.kind.choices = [(COMMUNITY_KIND_MICROBLOGS, _('Microblogs'))]
             locked = True
+        if not community.is_local():   # a remote community keeps 'discussion' (§3.1)
+            locked = True
         if locked:
             form.kind.render_kw = {'class': 'form-select', 'disabled': True}
         if form.validate_on_submit():

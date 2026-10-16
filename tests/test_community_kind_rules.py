@@ -6,11 +6,13 @@ from unittest.mock import patch
 
 import pytest
 from flask import current_app, g, url_for
+from flask import session as flask_session
+from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.constants import (COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_MICROBLOGS, COMMUNITY_KIND_PODCAST,
                            COMMUNITY_KIND_VIDEO_CHANNEL)
-from app.models import Community, CommunityMember, Instance, Language, Site, utcnow
+from app.models import Community, CommunityMember, Language, Site, utcnow
 from app.shared.community import apply_kind
 from tests.factories import (a_keypair, make_community, make_community_member, make_instance, make_post,
                              make_user)
@@ -51,6 +53,21 @@ def test_a_community_with_a_post_keeps_its_kind(owner):
     post.deleted = True                       # deleted posts count too
     db.session.commit()
     assert apply_kind(community, COMMUNITY_KIND_VIDEO_CHANNEL, owner) == OWN_REFUSAL
+    assert community.kind == COMMUNITY_KIND_DISCUSSION
+    assert apply_kind(community, COMMUNITY_KIND_DISCUSSION, owner) is None   # unchanged is always fine
+
+
+def _remote(name='far'):
+    community = make_community(name, host='remote.example')
+    community.ap_id = f'{name}@remote.example'
+    db.session.commit()
+    assert not community.is_local()
+    return community
+
+
+def test_a_remote_community_keeps_its_kind(owner):
+    community = _remote()
+    assert apply_kind(community, COMMUNITY_KIND_VIDEO_CHANNEL, owner) == 'only a local community has a kind'
     assert community.kind == COMMUNITY_KIND_DISCUSSION
     assert apply_kind(community, COMMUNITY_KIND_DISCUSSION, owner) is None   # unchanged is always fine
 
@@ -104,9 +121,6 @@ def login(client, user):
 
 
 def csrf(app, client):
-    from flask import session as flask_session
-    from flask_wtf.csrf import generate_csrf
-
     with app.test_request_context():
         token = generate_csrf()
         raw = flask_session['csrf_token']
@@ -239,6 +253,36 @@ def test_the_edit_form_without_a_kind_keeps_it_once_there_are_posts(web):
     assert (stored.title, stored.kind) == ('Renamed', COMMUNITY_KIND_DISCUSSION)
 
 
+def test_the_edit_form_refuses_a_kind_on_a_remote_community(web):
+    remote = _remote()
+    make_community_member(web.founder, remote, is_moderator=True)
+
+    _response, render = _post(web, 'community.community_edit',
+                              {'title': 'Far', 'description': '', 'theme': 'disabled', 'posting_warning': '',
+                               'invitations': '0', 'languages': str(web.english.id), 'default_layout': '',
+                               'default_post_type': 'link', 'downvote_accept_mode': '0',
+                               'post_url_type': 'friendly', 'submit': 'Save', 'kind': 'video_channel'},
+                              community_id=remote.id)
+
+    assert 'only a local community has a kind' in render.call_args.kwargs['form'].kind.errors
+    assert _stored(remote.id).kind == COMMUNITY_KIND_DISCUSSION
+
+
+def test_the_edit_form_without_a_kind_keeps_it_on_a_remote_community(web):
+    remote = _remote()
+    make_community_member(web.founder, remote, is_moderator=True)
+
+    form = _get_form(web, 'community.community_edit', community_id=remote.id)
+    opening, _html = _kind_select(web, form)
+    assert 'disabled' in opening
+
+    _post(web, 'community.community_edit',
+          {'title': 'Far2', 'description': '', 'theme': 'disabled', 'posting_warning': '', 'invitations': '0',
+           'languages': str(web.english.id), 'default_layout': '', 'default_post_type': 'link',
+           'downvote_accept_mode': '0', 'post_url_type': 'friendly', 'submit': 'Save'}, community_id=remote.id)
+    assert _stored(remote.id).kind == COMMUNITY_KIND_DISCUSSION
+
+
 def test_the_edit_page_disables_the_kind_once_there_are_posts(web):
     make_post(web.community, web.founder, ap_id='https://test.piefed.local/post/1')
 
@@ -361,6 +405,17 @@ def test_the_api_edit_refuses_a_kind_change_once_there_are_posts(api):
     assert OWN_REFUSAL in response.get_json()['message']
     stored = _stored(api.community.id)
     assert (stored.title, stored.kind) == ('probeland', COMMUNITY_KIND_DISCUSSION)
+
+
+def test_the_api_edit_refuses_a_kind_on_a_remote_community(api):
+    remote = _remote()
+    make_community_member(api.moderator, remote, is_moderator=True)
+
+    response = _api_edit(api, community_id=remote.id, kind='video_channel')
+
+    assert response.status_code == 400
+    assert 'only a local community has a kind' in response.get_json()['message']
+    assert _stored(remote.id).kind == COMMUNITY_KIND_DISCUSSION
 
 
 def test_the_api_edit_without_a_kind_keeps_it(api):

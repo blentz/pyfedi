@@ -226,6 +226,8 @@ def apply_kind(community, kind, user) -> str | None:
     or else `user`."""
     if kind == community.kind:
         return None
+    if not community.is_local():
+        return 'only a local community has a kind'   # remote communities keep 'discussion' (§3.1)
     if kind not in COMMUNITY_KINDS_OFFERED:
         return 'kind must be one of ' + ', '.join(COMMUNITY_KINDS_OFFERED)
     if community.kind == COMMUNITY_KIND_MICROBLOGS:
