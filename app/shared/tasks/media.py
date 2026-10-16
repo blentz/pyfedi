@@ -416,10 +416,8 @@ def _sweep(post, now) -> None:
     status = media.get('status')
     if status == 'probing':
         since, budget = _stamp(media.get('probing_since')), STUCK_AFTER
-    elif status == 'processing':
+    else:   # 'processing': the query loads no other status, and every move below is a compare-and-set on it
         since, budget = _stamp(media.get('requeued_at')) or post.created_at, UNCLAIMED_AFTER
-    else:
-        return   # ready, or failed: nothing is waiting
     if since is not None and since > now - budget:
         return
     if max(media.get('attempts') or 0, media.get('requeues') or 0) >= MAX_ATTEMPTS:
