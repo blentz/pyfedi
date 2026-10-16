@@ -20,15 +20,15 @@ from app import db, cache, celery, limiter
 from app.activitypub import bp
 from app.activitypub.actor import find_actor_by_url
 from app.activitypub.entitlement import PRIVATE_HEADERS, actor_document, addressees_of, audience_entitles, signed_requester_actor
-from app.activitypub.signature import POST_REQUIRED, HttpSignature, VerificationError, VerificationFormatError, default_context, LDSignature, \
+from app.activitypub.signature import POST_REQUIRED, HttpSignature, parse_http_date, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request, verify_with_key_refresh, request_key_id
 from app.activitypub.util import MEDIA_OBJECT_TYPES, follow_answer_inbox, MEDIA_URL_KIND, media_url_from, activity_dedupe_key, community_actor_data, refresh_community_profile_task, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
     post_to_activity, post_count_collections, comment_count_collections, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
     update_post_from_activity, undo_vote, has_vote_on, release_undone_activity, mark_accepted, deferred_key, DEFERRED_SECONDS, \
-    activity_accepted_key, deferred_count_key, DEFERRED_PER_HOST, FOLLOW_TYPES, VOTE_TYPES, DEFERRABLE_TYPES, \
-    DEFERRED_MAX_BYTES, DEFERRED_HEADERS, post_to_page, find_reported_object, \
+    deferred_count_key, DEFERRED_PER_HOST, FOLLOW_TYPES, VOTE_TYPES, DEFERRABLE_TYPES, \
+    DEFERRED_MAX_BYTES, DEFERRED_HEADERS, accepted_as, current_http_date, post_to_page, find_reported_object, \
     process_report, ensure_domains_match, refresh_community_profile, \
     comment_model_to_json, restore_post_or_comment, ban_user, unban_user, \
     log_incoming_ap, find_community, site_ban_remove_data, community_ban_remove_data, verify_object_from_source, \
@@ -920,8 +920,10 @@ def shared_inbox():
 
     # Remembered only once the signature has verified, so a forged request reusing a genuine activity's id cannot
     # make this instance drop the genuine one. set(nx=True) is also the gate for two deliveries verified at once.
+    # I1: signed by the actor's own key over HTTP -- not bounced, not accepted on an LD signature, not via a relay
+    http_signed = not bounced and not ld_signed and relay is None
     if not claim_activity(id, request_json['actor']):
-        _park_duplicate(id, request_json['actor'], typed_json, request)
+        _park_duplicate(id, request_json['actor'], typed_json, request, http_signed)
         log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json,
                         f'{LD_SIGNED_LOG_PREFIX}: Already aware of this activity' if ld_signed else 'Already aware of this activity')
         return '', 200
@@ -949,6 +951,9 @@ def shared_inbox():
 
         relay_kwargs = {'relay_id': relay.id} if relay else {}
         relay_kwargs.update(ld_kwargs)
+        signed_date = _signed_date(request) if http_signed else None
+        if signed_date is not None:   # mark_accepted records it (I1); only when set, as above
+            relay_kwargs['http_date'] = signed_date
         if current_app.debug:
             process_inbox_request(request_json, store_ap_json, **relay_kwargs)
         else:
@@ -992,7 +997,16 @@ SIGNATURE_FAILURE_MESSAGES = ('Precheck failed', 'Could not verify LD signature'
                               'Signature keyId host does not match actor')
 
 
-def _park_duplicate(activity_id, actor, typed_json, request) -> None:
+def _signed_date(request) -> int | None:
+    """The request's Date header in epoch seconds, or None when it has none or it does not parse (an RFC 9421 request
+    needs no Date, so precheck does not hold it to the HTTP date format)."""
+    try:
+        return int(parse_http_date(request.headers['Date']).timestamp())
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _park_duplicate(activity_id, actor, typed_json, request, http_signed) -> None:
     """Park a verified Follow or vote dropped as a duplicate, for DEFERRED_SECONDS (R-UNDORELEASE). PeerTube sends
     Undo(X) and the new X reusing X's id at once; if the new one lands first, the Undo's release runs it again
     (_release_undone). One per id: a later duplicate replaces it.
@@ -1000,10 +1014,17 @@ def _park_duplicate(activity_id, actor, typed_json, request) -> None:
     Bounded (security review, 2026-10-16): only a body of at most DEFERRED_MAX_BYTES, only a duplicate of an id
     accepted from this same actor as this same type (mark_accepted) -- so the parked body can be one an Undo may
     release -- and at most DEFERRED_PER_HOST per sending host in the window. Only the path, the headers the
-    signature checks read and the body are kept."""
+    signature checks read and the body are kept.
+
+    Only a newer copy (security review I1): a sender's retry of the original, or an LD-signed copy anyone holding it
+    could deliver, would otherwise be run after the actor's next Undo and reverse it. So the duplicate must be
+    HTTP-signed with the actor's own key (`http_signed`) and its Date strictly later than the accepted original's."""
     body = request.get_data()
-    if typed_json['type'] not in DEFERRABLE_TYPES or len(body) > DEFERRED_MAX_BYTES or \
-            app_pkg.redis_client.get(activity_accepted_key(activity_id, actor)) != f"{typed_json['type']}|{actor}":
+    duplicate_date = _signed_date(request) if http_signed else None
+    head, accepted_date = accepted_as(activity_id, actor)
+    if typed_json['type'] not in DEFERRABLE_TYPES or len(body) > DEFERRED_MAX_BYTES or duplicate_date is None or \
+            head != f"{typed_json['type']}|{actor}" or not accepted_date.isdigit() or \
+            duplicate_date <= int(accepted_date):
         return
     counter = app_pkg.redis_client.pipeline()
     counter.incr(deferred_count_key(actor))
@@ -1105,10 +1126,12 @@ def replay_inbox_request(request_json):
 
 
 @celery.task
-def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_verified=False, ld_signed=False):
+def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_verified=False, ld_signed=False,
+                          http_date=None):
     with current_app.app_context():
         session = get_task_session()
         token = current_relay_id.set(relay_id)   # Post.new records it as post.relay_id; reset in the finally
+        date_token = current_http_date.set(http_date)   # mark_accepted records it (R-UNDORELEASE, I1)
         ld_token = current_ld_signed.set(ld_signed)   # log_incoming_ap marks this delivery's rows unreplayable
         as_sent_token = current_as_sent.set(None)   # set below once the dispatched copy is final
         try:
@@ -2324,6 +2347,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
             current_relay_id.reset(token)   # before close(): a raising close must not leak relay_id into the next task
             current_ld_signed.reset(ld_token)
             current_as_sent.reset(as_sent_token)
+            current_http_date.reset(date_token)
             session.close()
 
 

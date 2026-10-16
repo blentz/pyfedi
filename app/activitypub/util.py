@@ -924,10 +924,16 @@ DEFERRABLE_TYPES = FOLLOW_TYPES + VOTE_TYPES
 DEFERRED_MAX_BYTES = 8 * 1024   # a Follow or vote is a few hundred bytes: anything larger is not parked
 # What the inbox's signature checks read, kept with a parked body so the re-run verifies it as it was sent
 DEFERRED_HEADERS = ('Host', 'Date', 'Digest', 'Content-Digest', 'Signature', 'Signature-Input', 'Content-Type')
-# How long a verified duplicate Follow or vote is parked for the Undo it may have overtaken (R-UNDORELEASE)
-DEFERRED_SECONDS = 600
+# How long a verified duplicate Follow or vote is parked for the Undo it may have overtaken (R-UNDORELEASE). PeerTube
+# sends the two at once: in the interop harness the parked Follow and its Undo landed 2 to 6 ms apart (log rows
+# 37/38, 58/59). A minute leaves room for a busy sender's queue, and keeps a parked copy from waiting for a later Undo.
+DEFERRED_SECONDS = 60
 # At most this many parked requests per sending host within DEFERRED_SECONDS (security review, 2026-10-16)
 DEFERRED_PER_HOST = 50
+# The Date, in epoch seconds, of the delivery process_inbox_request is handling, when it was HTTP-signed with its
+# actor's own key (not bounced, not LD-only, not relayed); None otherwise. mark_accepted records it, so a duplicate is
+# parked only when it is a newer copy than the one accepted (security review I1).
+current_http_date: ContextVar = ContextVar('current_http_date', default=None)
 
 
 def deferred_count_key(actor_url) -> str:
@@ -946,16 +952,23 @@ def undo_of_key(activity_id, actor_url) -> str:
     return 'ap-undo-of:' + activity_dedupe_key(activity_id, actor_url).removeprefix('ap-dedupe:')
 
 
+def accepted_as(activity_id, actor) -> tuple[str, str]:
+    """What mark_accepted recorded for `activity_id`: ('<type>|<actor>', '<Date epoch seconds, or empty>'), or
+    ('', '') when nothing was."""
+    head, _, date = (app_pkg.redis_client.get(activity_accepted_key(activity_id, actor)) or '').rpartition('|')
+    return head, date
+
+
 def mark_accepted(activity: dict, announced: bool) -> None:
     """Remember, for ACTIVITY_DEDUPE_SECONDS, that the top-level `activity` (a Follow or a vote) made a membership,
-    follower or vote here: `<type>|<actor>`. Only such an id can later have its claim released by an Undo
+    follower or vote here: `<type>|<actor>|<Date>` (current_http_date, empty when the delivery had none). Only such an id can later have its claim released by an Undo
     (R-UNDORELEASE); the AP log cannot be the record, LOG_ACTIVITYPUB_TO_DB may be off. One inside an Announce is not
     marked, as an announced Undo releases nothing."""
     actor = activity.get('actor')
     if announced or not isinstance(actor, str):
         return
-    app_pkg.redis_client.set(activity_accepted_key(activity['id'], actor), f"{activity['type']}|{actor}",
-                             ex=ACTIVITY_DEDUPE_SECONDS)
+    app_pkg.redis_client.set(activity_accepted_key(activity['id'], actor),
+                             f"{activity['type']}|{actor}|{current_http_date.get() or ''}", ex=ACTIVITY_DEDUPE_SECONDS)
     # R-UNDORELEASE, repeated cycles: PeerTube reuses the Undo's id as well (`<id>/undo`). This activity was undone
     # before and now really took effect again, so the Undo that undid it is released too: the next one is processed.
     recorded = app_pkg.redis_client.get(undo_of_key(activity['id'], actor))
@@ -991,7 +1004,7 @@ def release_undone_activity(undo: dict, announced: bool, types: tuple) -> dict |
             host_of(undone_id) != host_of(actor) or undone.get('type') not in types:
         return
     marker = activity_accepted_key(undone_id, actor)
-    if app_pkg.redis_client.get(marker) != f"{undone['type']}|{actor}":
+    if accepted_as(undone_id, actor)[0] != f"{undone['type']}|{actor}":
         return
     app_pkg.redis_client.delete(marker)
     release_activity(undone_id, actor)
