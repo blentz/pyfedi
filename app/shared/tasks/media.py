@@ -45,9 +45,10 @@ def _fps(rate) -> int | None:
 
 def _duration(probe: dict) -> float:
     try:
-        return float(probe['format']['duration'])
+        duration = float(probe['format']['duration'])
     except (KeyError, TypeError, ValueError):
         return 0.0
+    return duration if math.isfinite(duration) else 0.0   # 'inf' parses, and math.ceil of it raises
 
 
 def _is_cover_art(stream: dict) -> bool:
