@@ -1,13 +1,11 @@
 """send_post for a ready video in a local video_channel community pushes the Video peertube_video builds (spec
 2026-10-14 §6.1, amended §10 A15.5)."""
-import pytest
-
 from app import db
 from app.activitypub.serializers import peertube_video
-from app.constants import COMMUNITY_KIND_VIDEO_CHANNEL, POST_TYPE_ARTICLE, POST_TYPE_VIDEO
+from app.constants import POST_TYPE_ARTICLE
 from app.shared.media import with_media
 from app.shared.tasks.pages import send_post
-from tests.factories import make_instance, make_instance_block
+from tests.factories import make_follow, make_instance, make_instance_block, make_user
 from tests.peertube_video_fixtures import _example_hosts_resolve_without_a_resolver, sent, video_post    # noqa: F401
 
 
@@ -70,3 +68,19 @@ def test_a_text_post_in_a_video_channel_keeps_the_page_path(sent, video_post):
     video_post.type = POST_TYPE_ARTICLE
     send_post(video_post.id, session=db.session)
     assert sent['https://lemmy.example/inbox'][0]['object']['object']['type'] == 'Page'
+
+
+def test_an_instance_already_sent_the_announce_gets_nothing_more_as_an_author_follower(sent, video_post):
+    lemmy = next(i for i in video_post.community.following_instances() if i.software == 'lemmy')
+    make_follow(video_post.author, make_user(lemmy, 'lefan'), is_inward=True)
+    send_post(video_post.id, session=db.session)
+    assert len(sent.calls) == 5 and sent['https://lemmy.example/inbox'][0]['type'] == 'Announce'
+
+
+def test_an_undeliverable_author_follower_instance_is_skipped(sent, video_post):
+    blocked = make_instance('blocked.example')
+    blocked.inbox = 'https://blocked.example/inbox'
+    make_follow(video_post.author, make_user(blocked, 'bl'), is_inward=True)
+    make_instance_block(video_post.author, blocked)
+    send_post(video_post.id, session=db.session)
+    assert 'https://blocked.example/inbox' not in sent and len(sent.calls) == 5
