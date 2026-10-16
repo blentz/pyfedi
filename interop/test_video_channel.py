@@ -74,9 +74,12 @@ def test_a_video_channel_upload_plays_on_peertube_and_round_trips(peertube, alic
     assert detail['thumbnails'], 'PeerTube stored no thumbnail'
     r = peertube.http.get(detail['thumbnails'][0]['fileUrl'])
     assert r.status_code == 200 and r.headers['content-type'] == 'image/jpeg'
+    assert int(r.headers['content-length']) > 0
 
+    # the author's own upvote is already counted at creation, so a like is proven by the count rising past it
+    before = alice_api.get_post(post_id)['counts']['upvotes']
     peertube.rate(video['uuid'], 'like')
-    wait_for(lambda: alice_api.get_post(post_id)['counts']['upvotes'] >= 1, timeout=30)
+    wait_for(lambda: alice_api.get_post(post_id)['counts']['upvotes'] >= before + 1, timeout=30)
 
     alice_api.edit(post_id, title=title + ' renamed')
     wait_for(lambda: peertube.video(video['uuid'])['name'] == title + ' renamed', timeout=30)
