@@ -354,7 +354,7 @@ community.
 
 ### 6.4 Inbound interactions
 
-(Amended: see §10 A10, A12.)
+(Amended: see §10 A10, A12, A14.)
 
 These go through the existing handlers, keyed by our object id:
 
@@ -367,6 +367,13 @@ These go through the existing handlers, keyed by our object id:
   `<account>/likes/<PeerTube video id>`, and the `Undo` of it is that id plus `/undo`. After a like, an unlike and
   a second like, PieFed drops the second `Like` as a duplicate activity id, so the upvote is lost. `Dislike` ids
   behave the same way.
+  (Amended: see §10 A14.) **Closed, 2026-10-16:** an accepted `Undo` now releases the dedupe claim of the
+  activity it undoes. A re-like reusing the id is then recorded again, and a resubscription reusing the `Follow` id
+  (`<account>/follows/<channel actor id>`) is accepted again. The claim is released only when the Undo's handler
+  really removed a vote, membership, join request or inward follower. The Undo must be the top-level,
+  signature-verified activity, its embedded activity must have the same actor, and that activity's id must be on the
+  actor's host. The Undo's own claim is kept. Still open: PeerTube reuses the `Undo` id too (`<id>/undo`), so a
+  second unlike or unsubscribe within `ACTIVITY_DEDUPE_SECONDS` is dropped, and the cycle after it fails again.
 
 Any gap found by the harness is fixed in the inbound handler, test-first.
 
@@ -549,6 +556,10 @@ Each step gets its own implementation plan and its own commits, and each ends wi
       - `deploy/DEPLOY_GUIDE.md` and `INSTALL.md` document the matching reverse-proxy body limit: Caddy `request_body { max_size 510MB }`; nginx `client_max_body_size 510M`.
         - Correction: Caddy reads `MB` as 10^6 bytes, so `510MB` (510000000) is less than the 500 MiB default video limit. The `Caddyfile` and the guide use `510MiB` (534773760). nginx's `M` is already MiB.
   - **Gates (2026-10-15, Task 7).** `interop/test_media_pipeline.py` passes in the harness. A video upload to `vc_media` and an audio upload to `pod_media` each reach `extensions.media.status = 'ready'` and are published. Each answers `Range: bytes=0-99` through Caddy with `206`, `Content-Range: bytes 0-99/<size>` and `Access-Control-Allow-Origin: *`. A `not_media.mp4` upload makes no post. The full interop suite passes on a fresh stack: 17 tests.
+- **A14 (§6.4), owner ruling 2026-10-15:** an accepted Undo releases the dedupe claim of the activity it undoes (same actor, signature-verified).
+  - `release_undone_activity` (`app/activitypub/util.py`) runs from the `Undo` arms of `Follow` (community, feed, user) and of `Like`, `Dislike` and `EmojiReact`, only when the handler took something back.
+  - It is refused for an `Undo` inside an `Announce`, for an inner actor other than the Undo's, for an undone id on another host or equal to the Undo's own, and for an `object` that is only an id string. The Undo's own claim and the dedupe window are unchanged.
+  - Evidence: `tests/test_ap_security_undo_release.py`. `interop/test_peertube_subscribe.py` passes on a reused stack, where the resubscription reuses the `Follow` id.
 
 ## 11. Evidence: PeerTube spike (2026-10-15)
 
