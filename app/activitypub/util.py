@@ -7220,7 +7220,7 @@ def find_microblogging_community():
                               ap_moderators_url='https://' + current_app.config['SERVER_NAME'] + '/c/microblogs/moderators',
                               ap_domain=current_app.config['SERVER_NAME'],
                               subscriptions_count=0, instance_id=1, user_id=1, ai_generated=False,
-                              first_federated_at=utcnow())
+                              first_federated_at=utcnow(), kind=COMMUNITY_KIND_MICROBLOGS)
         db.session.add(community)
         db.session.commit()
     return community

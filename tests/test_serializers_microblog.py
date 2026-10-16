@@ -9,8 +9,8 @@ from app import db
 from app.activitypub.serializers import (microblog_note, note_addressing, note_attachments, note_content,
                                          uses_microblog_note)
 from app.activitypub.serializers.microblog import link_hashtags
-from app.constants import (POST_TYPE_ARTICLE, POST_TYPE_EVENT, POST_TYPE_IMAGE, POST_TYPE_LINK, POST_TYPE_POLL,
-                           POST_TYPE_VIDEO, VISIBILITY_FOLLOWERS)
+from app.constants import (COMMUNITY_KIND_MICROBLOGS, POST_TYPE_ARTICLE, POST_TYPE_EVENT, POST_TYPE_IMAGE,
+                           POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO, VISIBILITY_FOLLOWERS)
 from app.models import File
 from tests.factories import make_community, make_instance, make_post, make_user
 
@@ -21,7 +21,7 @@ FIXTURE = Path(__file__).parent / 'fixtures' / 'mastodon_note_v4_5.json'
 def _local(community_name='microblogs', title='Hello there', body=None, body_html=None, post_type=POST_TYPE_ARTICLE):
     local = make_instance('test.piefed.local', software='piefed')
     alice = make_user(local, 'alice', local=True)
-    community = make_community(community_name)
+    community = make_community(community_name, kind=COMMUNITY_KIND_MICROBLOGS if community_name == 'microblogs' else None)
     post = make_post(community, alice, ap_id='https://test.piefed.local/post/1', title=title)
     post.type = post_type
     post.body = body

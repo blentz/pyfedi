@@ -13,7 +13,7 @@ from flask import current_app, g
 
 from app import db
 from app.activitypub.signature import HttpSignature
-from app.constants import POST_TYPE_ARTICLE, SRC_API
+from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_TYPE_ARTICLE, SRC_API
 from app.models import Language, PostReply
 from app.shared.post import make_post as shared_make_post
 from app.shared.tasks.notes import send_reply
@@ -63,7 +63,7 @@ def world(app, db_session, monkeypatch):
     db.session.add(Language(code='en', name='English'))
     db.session.commit()
     author = make_user(local, 'alice', local=True, with_keys=True)    # user 1: make_community's owner
-    community = make_community('microblogs')
+    community = make_community('microblogs', kind=COMMUNITY_KIND_MICROBLOGS)
     with monkeypatch.context() as m:
         m.setattr('app.shared.post.task_selector', lambda *a, **k: None)
         m.setattr('app.shared.post.authorise_api_user', lambda *a, **k: author)

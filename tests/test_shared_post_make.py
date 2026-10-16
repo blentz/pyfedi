@@ -87,6 +87,7 @@ from flask import g
 
 from app import db
 from app.constants import (
+    COMMUNITY_KIND_MICROBLOGS,
     COMMUNITY_KIND_VIDEO_CHANNEL,
     POST_TYPE_ARTICLE,
     POST_TYPE_LINK,
@@ -129,7 +130,7 @@ def seed_make_context(community_name='making'):
     instance = make_instance('local.example', software='piefed')
     site = make_site()
     author = make_user(instance, 'maker', local=True, with_keys=True)
-    community = make_community(community_name)
+    community = make_community(community_name, kind=COMMUNITY_KIND_MICROBLOGS if community_name == 'microblogs' else None)
     db.session.commit()
     g.site = site
     return SimpleNamespace(instance=instance, site=site, author=author,
