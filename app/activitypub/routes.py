@@ -1002,19 +1002,24 @@ def _park_duplicate(activity_id, actor, typed_json, request, http_signed) -> Non
     Undo(X) and the new X reusing X's id at once; if the new one lands first, the Undo's release runs it again
     (_release_undone). One per id: a later duplicate replaces it.
 
-    Bounded (security review, 2026-10-16): only a body of at most DEFERRED_MAX_BYTES, only a duplicate of an id
-    accepted from this same actor as this same type (mark_accepted) -- so the parked body can be one an Undo may
-    release -- and at most DEFERRED_PER_HOST per sending host in a fixed window of DEFERRED_SECONDS. Only the path, the headers the
-    signature checks read and the body are kept.
-
     Only an HTTP-signed copy with a signed time (security review I1 and its follow-up): an LD-signed copy anyone
     holding it could deliver, or one whose Date the signature does not cover, is never parked. The signed time is
     kept, and the Undo's release runs the copy only if it was signed no earlier than the Undo (parked_request), so a
-    sender's retry of the old activity cannot reverse a later Undo."""
+    sender's retry of the old activity cannot reverse a later Undo.
+
+    Bounded (security review, 2026-10-16): only a duplicate of an id accepted from this same actor as this same type
+    (mark_accepted), so the parked copy is one an Undo may release; at most DEFERRED_MAX_BYTES stored, the path, the
+    headers the signature checks read, the base64 body and the signed time together (M4); and at most
+    DEFERRED_PER_HOST per sending host in a fixed window of DEFERRED_SECONDS (I2)."""
     body = request.get_data()
     duplicate_signed_at = signed_at(request) if http_signed else None
     if typed_json['type'] not in DEFERRABLE_TYPES or len(body) > DEFERRED_MAX_BYTES or duplicate_signed_at is None \
             or app_pkg.redis_client.get(activity_accepted_key(activity_id, actor)) != f"{typed_json['type']}|{actor}":
+        return
+    blob = json.dumps({'path': request.full_path if request.query_string else request.path,
+                       'headers': {name: request.headers[name] for name in DEFERRED_HEADERS if name in request.headers},
+                       'body': base64.b64encode(body).decode('ascii'), 'signed_at': duplicate_signed_at})
+    if len(blob) > DEFERRED_MAX_BYTES:
         return
     # A fixed window (review I2): the TTL is set only when the counter is created, in the same transaction as the
     # INCR, so a host that keeps parking cannot keep its window open
@@ -1024,10 +1029,7 @@ def _park_duplicate(activity_id, actor, typed_json, request, http_signed) -> Non
     _, parked_now = counter.execute()
     if parked_now > DEFERRED_PER_HOST:
         return
-    parked = {'path': request.full_path if request.query_string else request.path,
-              'headers': {name: request.headers[name] for name in DEFERRED_HEADERS if name in request.headers},
-              'body': base64.b64encode(body).decode('ascii'), 'signed_at': duplicate_signed_at}
-    app_pkg.redis_client.set(deferred_key(activity_id, actor), json.dumps(parked), ex=DEFERRED_SECONDS)
+    app_pkg.redis_client.set(deferred_key(activity_id, actor), blob, ex=DEFERRED_SECONDS)
 
 
 def _release_undone(undo, announced, types) -> None:
