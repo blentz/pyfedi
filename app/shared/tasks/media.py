@@ -46,7 +46,7 @@ def _fps(rate) -> int | None:
 def _duration(probe: dict) -> float:
     try:
         duration = float(probe['format']['duration'])
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, OverflowError):   # a 309-digit JSON integer is an int float() refuses
         return 0.0
     return duration if math.isfinite(duration) else 0.0   # 'inf' parses, and math.ceil of it raises
 

@@ -90,6 +90,11 @@ def test_bad_video_is_refused_with_a_reason(bad, reason):
         validate_probe(bad, 'video')
 
 
+def test_an_integer_duration_too_large_for_a_float_is_refused():
+    with pytest.raises(MediaToolError, match='duration'):
+        validate_probe(probe(V, A, duration=10 ** 400), 'video')
+
+
 def test_an_unhashable_audio_codec_is_refused():
     with pytest.raises(MediaToolError, match='codec'):
         validate_probe(probe({'codec_type': 'audio', 'codec_name': ['aac']}), 'audio')
