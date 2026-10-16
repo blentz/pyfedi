@@ -16,7 +16,8 @@ from flask import current_app
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.activitypub.signature import RsaKeys
-from app.activitypub.util import activity_accepted_key, activity_dedupe_key, mark_accepted, release_undone_activity
+from app.activitypub.util import activity_accepted_key, activity_dedupe_key, mark_accepted, release_undone_activity, \
+    undo_of_key
 from app.models import ActivityPubLog, CommunityMember, FeedMember, PostVote, UserFollower, utcnow
 from tests.factories import make_community, make_feed, make_instance, make_post, make_site, make_user, signed_inbox_post
 
@@ -390,3 +391,64 @@ def test_an_undo_naming_a_prior_create_releases_nothing(app, inline, scene, redi
     _post(app, {'id': create_id, 'type': 'Create', 'actor': carol.ap_profile_id,
                 'object': {'id': f'{carol.ap_profile_id}/notes/1', 'type': 'Note'}}, carol)
     assert _last_log().exception_message.startswith(DUPLICATE)
+
+
+# --- gap 1: PeerTube reuses the Undo id too (`<id>/undo`), so every cycle repeats both ids ---
+
+
+def test_three_community_follow_cycles_reusing_both_ids_all_take_effect(app, inline, scene):
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    undo = _undo(carol, follow)
+    for _cycle in range(3):
+        _post(app, follow, carol)
+        assert _member(community, carol) is not None
+        _post(app, undo, carol)
+        assert _member(community, carol) is None
+    assert [body['type'] for body in inline].count('Accept') == 3
+
+
+def test_three_user_follow_cycles_reusing_both_ids_all_take_effect(app, inline, scene):
+    _, local_user, _, carol, _ = scene
+    follow = _follow(carol, local_user.ap_profile_id)
+    undo = _undo(carol, follow)
+    for _cycle in range(3):
+        _post(app, follow, carol)
+        assert UserFollower.query.filter_by(local_user_id=local_user.id, remote_user_id=carol.id).count() == 1
+        _post(app, undo, carol)
+        assert UserFollower.query.filter_by(local_user_id=local_user.id, remote_user_id=carol.id).count() == 0
+
+
+def test_three_like_cycles_reusing_both_ids_all_take_effect(app, inline, scene):
+    _, _, post, carol, _ = scene
+    like = _like(carol, post)
+    undo = _undo(carol, like)
+    for _cycle in range(3):
+        _post(app, like, carol)
+        assert PostVote.query.filter_by(user_id=carol.id, post_id=post.id).count() == 1
+        _post(app, undo, carol)
+        assert PostVote.query.filter_by(user_id=carol.id, post_id=post.id).count() == 0
+
+
+def test_a_replayed_undo_with_no_follow_between_is_still_dropped(app, inline, scene, redis_double):
+    community, _, _, carol, _ = scene
+    follow = _follow(carol, community.ap_profile_id)
+    undo = _undo(carol, follow)
+    _post(app, follow, carol)
+    _post(app, undo, carol)
+
+    _post(app, undo, carol)
+
+    assert _last_log().exception_message.startswith(DUPLICATE)
+    assert redis_double.exists(activity_dedupe_key(undo['id'], carol.ap_profile_id)) == 1
+
+
+def test_a_follow_that_was_never_undone_releases_no_undo(app, redis_double):
+    """mark_accepted releases an Undo's claim only when one was recorded against the activity, for the same actor."""
+    redis_double.set(activity_dedupe_key(f'{ACTOR}/undo', ACTOR), 1)
+    redis_double.set(undo_of_key(FOLLOW_ID, ACTOR), f'{ACTOR}/undo|https://peer.example/u/mallory')
+
+    mark_accepted({'id': FOLLOW_ID, 'type': 'Follow', 'actor': ACTOR}, announced=False)
+    mark_accepted({'id': f'{ACTOR}/follows/8', 'type': 'Follow', 'actor': ACTOR}, announced=False)
+
+    assert redis_double.exists(activity_dedupe_key(f'{ACTOR}/undo', ACTOR)) == 1
