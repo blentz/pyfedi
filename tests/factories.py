@@ -156,7 +156,7 @@ def feed_ids(app, viewer, community_ids, sort='new', **kwargs):
         return get_deduped_post_ids(uuid.uuid4().hex, community_ids, sort, **kwargs)
 
 
-def make_community(name: str = 'microblogs', host: str = 'test.piefed.local') -> Community:
+def make_community(name: str = 'microblogs', host: str = 'test.piefed.local', kind: str = None) -> Community:
     """A Community whose ActivityPub identity is published on `host`.
 
     `host` defaults to the value every caller before the resolver sub-project
@@ -183,6 +183,8 @@ def make_community(name: str = 'microblogs', host: str = 'test.piefed.local') ->
         local_only=False,
         nsfw=False,
     )
+    if kind is not None:
+        community.kind = kind
     db.session.add(community)
     db.session.commit()
     return community

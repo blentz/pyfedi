@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import db
-from app.constants import POST_STATUS_REVIEWING
+from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_STATUS_REVIEWING
 from app.models import Instance, Language, Post, Site
 from app.utils import utcnow
 from tests.factories import (make_community, make_community_member, make_instance, make_instance_block,
@@ -43,7 +43,7 @@ def live(app, db_session):
     viewer = make_user(local, 'viewer', local=True)
     remote = make_instance('mastodon.example')
     author = make_user(remote, 'tooter')
-    microblogs = make_community('microblogs')
+    microblogs = make_community('microblogs', kind=COMMUNITY_KIND_MICROBLOGS)
     microblogs.show_popular = False
     microblogs.show_all = False
     db.session.add(Language(code='und', name='Undetermined'))

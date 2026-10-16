@@ -7,7 +7,7 @@ import pytest
 
 from app import db
 from app.activitypub.util import post_to_page
-from app.constants import POST_TYPE_ARTICLE, VISIBILITY_FOLLOWERS
+from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_TYPE_ARTICLE, VISIBILITY_FOLLOWERS
 from app.models import CommunityMember
 from app.shared.tasks.pages import send_post
 from tests.factories import (a_keypair, make_community, make_follow, make_instance, make_instance_block, make_post,
@@ -48,7 +48,7 @@ def deliveries(monkeypatch):
 def _seed():
     local = make_instance('test.piefed.local', software='piefed')
     alice = make_user(local, 'alice', local=True, with_keys=True)
-    community = make_community('microblogs')
+    community = make_community('microblogs', kind=COMMUNITY_KIND_MICROBLOGS)
     community.private_key, community.public_key = a_keypair()
     post = make_post(community, alice, ap_id='https://test.piefed.local/post/1', title='Hello')
     post.type = POST_TYPE_ARTICLE

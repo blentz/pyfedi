@@ -13,7 +13,7 @@ import pytest
 from flask import current_app, g
 
 from app import db
-from app.constants import POST_TYPE_ARTICLE, SRC_API
+from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_TYPE_ARTICLE, SRC_API
 from app.models import Language
 from app.shared.post import make_post
 from tests.factories import bearer, feed_ids, make_community, make_follow, make_instance, make_site, make_user
@@ -42,7 +42,7 @@ def world(app, db_session, monkeypatch):
     follower = make_user(local, 'fran', local=True)
     stranger = make_user(local, 'sam', local=True)
     make_follow(follower, author)
-    community = make_community('microblogs')
+    community = make_community('microblogs', kind=COMMUNITY_KIND_MICROBLOGS)
     with monkeypatch.context() as m:
         m.setattr('app.shared.post.task_selector', lambda *a, **k: None)
         m.setattr('app.shared.post.authorise_api_user', lambda *a, **k: author)

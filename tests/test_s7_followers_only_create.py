@@ -10,7 +10,7 @@ import pytest
 from flask import current_app
 
 from app import db
-from app.constants import POST_TYPE_ARTICLE, SRC_API, SRC_WEB, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC
+from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_TYPE_ARTICLE, SRC_API, SRC_WEB, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC
 from app.models import Language, Post
 from app.shared.post import make_post, requested_visibility
 from app.utils import is_local_microblogs
@@ -27,7 +27,7 @@ from tests.test_shared_post_make import seed_make_context
 
 def test_the_local_microblogs_community_counts(db_session):
     make_user(make_instance('local.example', software='piefed'), 'founder', local=True)   # community.user_id = 1
-    assert is_local_microblogs(make_community('microblogs')) is True
+    assert is_local_microblogs(make_community('microblogs', kind=COMMUNITY_KIND_MICROBLOGS)) is True
 
 
 def test_another_local_community_does_not(db_session):
@@ -51,7 +51,7 @@ def test_a_remote_community_called_microblogs_does_not(db_session):
 @pytest.fixture
 def two_communities(db_session):
     make_user(make_instance('local.example', software='piefed'), 'founder', local=True)
-    return SimpleNamespace(microblogs=make_community('microblogs'), general=make_community('general'))
+    return SimpleNamespace(microblogs=make_community('microblogs', kind=COMMUNITY_KIND_MICROBLOGS), general=make_community('general'))
 
 
 @pytest.mark.parametrize('src, input_, expected', [
@@ -198,7 +198,7 @@ def web(app, db_session, site, monkeypatch):
     founder = make_user(local, 'founder', local=True)
     assert founder.id == 1  # fact 347
     author = able_to_post(make_user(local, 'author', local=True))
-    microblogs = make_community('microblogs')
+    microblogs = make_community('microblogs', kind=COMMUNITY_KIND_MICROBLOGS)
     general = make_community('general')
     db.session.add(Language(code='und', name='Undetermined'))
     english = Language(code='en', name='English')

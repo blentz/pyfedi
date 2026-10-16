@@ -468,9 +468,9 @@ def get_request_instance(uri, instance: Instance, params=None, headers=None, ret
 
 
 def is_local_microblogs(community) -> bool:
-    """The local `microblogs` community (find_microblogging_community): the only place a local user may publish a
-    followers-only post (Amendment B, S7.1). A remote community with the same name does not count."""
-    return community.name == 'microblogs' and community.is_local()
+    """The local `microblogs` community (find_microblogging_community), marked by kind (spec §10 A15.3): the only
+    place a local user may publish a followers-only post (Amendment B, S7.1). A remote community does not count."""
+    return community.kind == COMMUNITY_KIND_MICROBLOGS and community.is_local()
 
 
 # Saves an arbitrary object into a persistent key-value store. cached.

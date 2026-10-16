@@ -4,7 +4,7 @@ A12). Those are stored in post.tags on save, so filling them in would turn each 
 from unittest.mock import patch
 
 from app import db
-from app.constants import POST_TYPE_LINK
+from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_TYPE_LINK
 from app.models import Post, Tag
 from app.post.util import form_tags_string, tags_to_string
 from tests.factories import make_community, make_community_member
@@ -31,7 +31,7 @@ def test_tags_to_string_leaves_out_excluded_names(app, poster):
 
 def test_a_microblogs_post_fills_only_its_non_body_tags(app, poster):
     _, _, _, author, _ = poster
-    post = _tagged_post(make_community('microblogs'), author)
+    post = _tagged_post(make_community('microblogs', kind=COMMUNITY_KIND_MICROBLOGS), author)
     assert form_tags_string(post) == 'News'
 
 
@@ -43,7 +43,7 @@ def test_another_communitys_post_fills_all_its_tags(app, poster):
 
 def test_the_edit_form_leaves_out_body_tags(app, poster):
     client, _, _, author, _ = poster
-    microblogs = make_community('microblogs')
+    microblogs = make_community('microblogs', kind=COMMUNITY_KIND_MICROBLOGS)
     make_community_member(author, microblogs)
     post = _tagged_post(microblogs, author)
 
@@ -56,7 +56,7 @@ def test_the_edit_form_leaves_out_body_tags(app, poster):
 
 def test_a_crosspost_from_a_microblogs_post_leaves_out_its_body_tags(app, poster):
     client, _, community, author, _ = poster
-    source = _tagged_post(make_community('microblogs'), author)
+    source = _tagged_post(make_community('microblogs', kind=COMMUNITY_KIND_MICROBLOGS), author)
 
     with patch('app.community.routes.render_template', return_value='rendered') as render:
         client.get(url(app, 'community.add_post', actor=community.name, type='link') + f'?source={source.id}')

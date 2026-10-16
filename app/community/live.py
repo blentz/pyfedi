@@ -9,7 +9,7 @@ from flask import current_app
 from sqlalchemy import desc, func
 
 from app import cache, db
-from app.constants import POST_STATUS_REVIEWING, VISIBILITY_PUBLIC
+from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_STATUS_REVIEWING, VISIBILITY_PUBLIC
 from app.models import Community, Instance, Post, ServerViewMember, post_stored_hooks
 from app import utils
 from app.utils import instance_banned, utcnow
@@ -39,9 +39,9 @@ def is_live_community(community) -> bool:
 
 
 def is_local_microblogs(community) -> bool:
-    """The row find_microblogging_community() returns: the community server views filter."""
-    return (community.name == LIVE_COMMUNITY and community.instance_id == 1 and community.user_id == 1
-            and community.ap_id is None)
+    """The row find_microblogging_community() returns, marked by kind (spec §10 A15.3): the community server views
+    filter."""
+    return community.kind == COMMUNITY_KIND_MICROBLOGS and community.ap_id is None
 
 
 def server_view_instance(host: str):
