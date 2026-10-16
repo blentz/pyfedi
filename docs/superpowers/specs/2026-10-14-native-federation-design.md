@@ -372,8 +372,10 @@ These go through the existing handlers, keyed by our object id:
   (`<account>/follows/<channel actor id>`) is accepted again. The claim is released only when the Undo's handler
   really removed a vote, membership, join request or inward follower. The Undo must be the top-level,
   signature-verified activity, its embedded activity must have the same actor, and that activity's id must be on the
-  actor's host. The Undo's own claim is kept. Still open: PeerTube reuses the `Undo` id too (`<id>/undo`), so a
-  second unlike or unsubscribe within `ACTIVITY_DEDUPE_SECONDS` is dropped, and the cycle after it fails again.
+  actor's host, and PieFed must have accepted that id as that type from that actor. The Undo's own claim is kept
+  until the undone activity is accepted again. PeerTube reuses the `Undo` id too (`<id>/undo`), so that
+  re-acceptance releases the Undo's claim, and every later cycle works. PeerTube sends the `Undo` and the new
+  activity at once, so a verified duplicate Follow or vote is parked and run again once its Undo releases the id.
 
 Any gap found by the harness is fixed in the inbound handler, test-first.
 
@@ -559,7 +561,10 @@ Each step gets its own implementation plan and its own commits, and each ends wi
 - **A14 (§6.4), owner ruling 2026-10-15:** an accepted Undo releases the dedupe claim of the activity it undoes (same actor, signature-verified).
   - `release_undone_activity` (`app/activitypub/util.py`) runs from the `Undo` arms of `Follow` (community, feed, user) and of `Like`, `Dislike` and `EmojiReact`, only when the handler took something back.
   - It is refused for an `Undo` inside an `Announce`, for an inner actor other than the Undo's, for an undone id on another host or equal to the Undo's own, and for an `object` that is only an id string. The Undo's own claim and the dedupe window are unchanged.
-  - Evidence: `tests/test_ap_security_undo_release.py`. `interop/test_peertube_subscribe.py` passes on a reused stack, where the resubscription reuses the `Follow` id.
+  - Only an id PieFed accepted counts (security review, 2026-10-16). A Follow or vote that creates a membership, follower or vote sets the Redis marker `ap-accepted:<host>:<id> = <type>|<actor>`, with the dedupe TTL; the AP log cannot be the record, because `LOG_ACTIVITYPUB_TO_DB` may be off. An Undo releases only when the embedded type is one its arm undid (`FOLLOW_TYPES`, `VOTE_TYPES`) and the marker names that type and actor. The marker is consumed, so one acceptance allows one release. Without this, an Undo of a real follow could carry the id of an earlier Create and reopen it to replay.
+  - **Repeated cycles (ruling 2026-10-16).** A release records the Undo against the activity: `ap-undo-of:<host>:<id> = <undo id>|<actor>`, with the dedupe TTL. When that activity is accepted again and really re-creates a membership, follower or vote, the recorded Undo's claim is released too, for the same actor only. A replayed Undo with no re-accepted activity between stays dropped.
+  - **Ordering (ruling 2026-10-16).** A duplicate Follow, Like, Dislike or EmojiReact goes on to its signature check; the early unverified drop stays for every other type. Once verified, it is parked under `ap-deferred:<host>:<id>` for `DEFERRED_SECONDS` (600): its path, the headers the signature checks read and its body. A later duplicate replaces it. Parking is bounded (security review, 2026-10-16): a body over 8 KiB is not parked; a duplicate is parked only when its id was accepted from the same actor as the same type (the `ap-accepted` marker); and a host parks at most 50 bodies per window (`ap-deferred-count:<host>`, INCR and EXPIRE in one pipeline). When an Undo releases the id, the parked request is taken. If its id, actor and type match the undone activity, it runs through `shared_inbox` again in the `rerun_parked_request` celery task, with the signature check and the claim. Otherwise it is discarded.
+  - Evidence: `tests/test_ap_security_undo_release.py`. `interop/test_peertube_subscribe.py` passes on a fresh stack and on three consecutive reused-stack runs, with no wait between the unsubscribe and the subscribe.
 
 ## 11. Evidence: PeerTube spike (2026-10-15)
 
