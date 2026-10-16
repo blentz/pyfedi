@@ -10,7 +10,7 @@ from app.visibility import is_open
 
 PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 NAME_MIN, NAME_MAX = 3, 120
-CONTENT_MIN = 3
+CONTENT_MIN, CONTENT_MAX = 3, 10000   # PeerTube v8.3.1 VIDEOS.DESCRIPTION: a longer content rejects the whole Video
 TAG_MIN, TAG_MAX = 2, 30
 COMMENTS_ENABLED, COMMENTS_DISABLED = 1, 2
 # PeerTube keeps a remote file Link only for mp4, webm and ogg; a MOV holds the same streams an mp4 does
@@ -90,8 +90,9 @@ def peertube_video(post) -> dict:
         'downloadEnabled': True,
         'tag': _hashtags(post),
     }
-    if len((post.body or '').strip()) >= CONTENT_MIN:
-        video['content'] = post.body
+    content = (post.body or '')[:CONTENT_MAX].strip()
+    if len(content) >= CONTENT_MIN:
+        video['content'] = content
         video['mediaType'] = 'text/markdown'
     if post.language_id:
         video['language'] = {'identifier': post.language_code(), 'name': post.language_name()}

@@ -88,7 +88,7 @@ def check_peertube_video(data: bytes) -> None:
     assert 3 <= len(name) <= 120, f'name {name!r}'
     assert DURATION.fullmatch(video['duration']), f'duration {video["duration"]!r}'
     if 'content' in video:
-        assert len(video['content']) >= 3 and video['mediaType'] == 'text/markdown', f'content {video["content"]!r}'
+        assert 3 <= len(video['content']) <= 10000 and video['mediaType'] == 'text/markdown', f'content {video["content"]!r}'
     for tag in video['tag']:
         assert 2 <= len(tag['name'].lstrip('#')) <= 30, f'tag {tag!r}'
     link = video['url'][0]

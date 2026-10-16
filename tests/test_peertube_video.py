@@ -96,6 +96,22 @@ def test_the_description_is_sent_from_three_characters(video_post, body, sent):
         assert (video['content'], video['mediaType']) == ('abc', 'text/markdown')
 
 
+@pytest.mark.parametrize('length, sent', [(10000, 10000), (10001, 10000), (50000, 10000)])
+def test_the_description_is_cut_to_peertubes_limit(video_post, length, sent):
+    video_post.body = 'x' * length
+    assert peertube_video(video_post)['content'] == 'x' * sent
+
+
+def test_the_description_is_cut_first_then_stripped(video_post):
+    video_post.body = 'a' * 9998 + '  ' + 'b' * 40       # the cut ends in the spaces
+    assert peertube_video(video_post)['content'] == 'a' * 9998
+
+
+def test_a_description_that_is_blank_after_the_cut_is_not_sent(video_post):
+    video_post.body = ' ' * 10000 + 'text'
+    assert 'content' not in peertube_video(video_post)
+
+
 def test_no_body_sends_no_description(video_post):
     video_post.body = None
     assert 'content' not in peertube_video(video_post)
