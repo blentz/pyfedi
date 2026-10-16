@@ -6,8 +6,8 @@ community whom the upload switch admits (A13.6). It is sniffed, stored under
 post waits in `POST_STATUS_PROCESSING` (A13.1) until `probe_media` (Task 5) finishes.
 Every unpublished-post gate then hides it.
 
-`probe_media` does not exist yet, so `queue_probe` is patched in every test that
-stores media. Every test that stores media removes the files (the static leak gate).
+`queue_probe` is patched in every test that stores media but one, the end-to-end test that
+runs the real probe_media eagerly. Every test that stores media removes the files (the static leak gate).
 """
 import io
 import os
@@ -732,3 +732,30 @@ def test_an_audio_link_that_is_not_http_is_the_forms_ordinary_error(env):
     assert response.status_code == 200
     assert b'Submitted links need to start with' in response.data
     assert Post.query.count() == 0
+
+
+# ---------------------------------------------------------------- Task 5: the whole chain, eager
+
+
+def test_an_upload_is_probed_and_published_in_one_eager_request(env, monkeypatch):
+    """The real queue_probe and probe_media, run eagerly inside the upload request. The create queues the probe
+    only after deciding not to federate or notify, so the published post is sent and announced once, by
+    probe_media, and not a second time by the request that saw it come back published."""
+    monkeypatch.setattr('app.shared.post.queue_probe', queue_probe)
+    sent, notified = [], []
+    for module in ('app.shared.post', 'app.shared.tasks.media'):
+        monkeypatch.setattr(f'{module}.task_selector', lambda key, **kw: sent.append((key, kw)))
+        monkeypatch.setattr(f'{module}.notify_about_post', lambda post: notified.append(post.id))
+    monkeypatch.setattr('app.shared.tasks.media.make_image_sizes', lambda *args: None)
+
+    response = submit(env, env.mod, env.chan, 'video', 'clip.mp4', fixture_bytes('video_h264.mp4'))
+
+    assert response.status_code == 302
+    db.session.expire_all()
+    post = Post.query.one()
+    assert post.status == POST_STATUS_PUBLISHED
+    assert media_of(post)['status'] == 'ready' and media_of(post)['codec'] == 'h264'
+    assert sent == [('make_post', {'post_id': post.id})]
+    assert notified == [post.id]
+    image = post.image
+    os.unlink(image.local_path_for_url(image.source_url))

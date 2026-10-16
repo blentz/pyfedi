@@ -509,14 +509,15 @@ def h264_upload():
 
 def test_a_video_upload_is_judged_against_the_api_caller(db_session, chdir_upload, monkeypatch):
     """F12, kept through A13.6: the permission is the passed user's (`can_upload_media(user, community)`), not the
-    ambient `current_user`, which is absent here. The file is stored as media and the probe queued."""
+    ambient `current_user`, which is absent here. The file is stored as media. edit_post does not queue the probe:
+    make_post does, once the create has decided to federate and notify nothing (Task 5)."""
     s = media_channel_seed(monkeypatch)
     edit_post(_api_input(), s.post, POST_TYPE_VIDEO, SRC_API, user=s.user, uploaded_file=h264_upload(),
               from_scratch=True)
 
     written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
     assert [p.suffix for p in written] == ['.mp4']
-    assert s.post.status == POST_STATUS_PROCESSING and s.probes == [s.post.id]
+    assert s.post.status == POST_STATUS_PROCESSING and s.probes == []
 
 
 def test_an_upload_lands_in_the_per_post_media_directory(db_session, chdir_upload, http_mock):

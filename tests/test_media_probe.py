@@ -1,0 +1,439 @@
+"""Step 3, Task 5: probe_media validates an upload in the sandbox, thumbnails it, moves it to S3 when S3 is on, and
+then publishes its post, or fails it and tells the author (spec §5.2, A13.4, A13.5, A13.7, A13.8, A13.9).
+
+The tests run the real ffprobe and ffmpeg on the tiny fixtures in tests/fixtures/media. Each runs from a private
+static tree, so the files it provokes are its own; it still removes them. Federation and the subscriber notifications
+are recorded, not run: what is asserted is that they are asked for, once, and only for a ready post.
+"""
+import io
+import math
+import os
+from datetime import timedelta
+from types import SimpleNamespace
+
+import boto3
+import pytest
+from werkzeug.datastructures import FileStorage
+
+from app import db
+from app.constants import (COMMUNITY_KIND_PODCAST, COMMUNITY_KIND_VIDEO_CHANNEL, NOTIF_DEFAULT,
+                           POST_STATUS_PROCESSING, POST_STATUS_PUBLISHED, POST_STATUS_SCHEDULED, POST_TYPE_LINK,
+                           POST_TYPE_VIDEO)
+from app.models import File, Notification, Post, User, utcnow
+from app.shared.ffmpeg import MediaToolError, run_ffprobe
+from app.shared.media import media_local_path, media_of, store_uploaded_media, with_media
+from app.shared.tasks import task_selector
+from app.shared.tasks import media as media_tasks
+from app.shared.tasks.media import probe_media, publish_ready_post, validate_probe
+from app.utils import upload_file_to_s3
+from tests.factories import make_community, make_community_member, make_instance, make_post, make_user
+
+FIX = os.path.join(os.path.dirname(__file__), 'fixtures', 'media')
+
+
+def probe(*streams, duration='12.5'):
+    return {'streams': list(streams), 'format': {'duration': duration}}
+
+
+V = {'codec_type': 'video', 'codec_name': 'h264', 'width': 1280, 'height': 720, 'avg_frame_rate': '30000/1001'}
+A = {'codec_type': 'audio', 'codec_name': 'aac'}
+COVER = {'codec_type': 'video', 'codec_name': 'mjpeg', 'disposition': {'attached_pic': 1}}
+
+
+# ---------------------------------------------------------------- validate_probe: no database, no ffmpeg
+
+
+def test_video_metadata():
+    assert validate_probe(probe(V, A), 'video') == {
+        'duration_s': 13, 'width': 1280, 'height': 720, 'fps': 30, 'codec': 'h264'}
+
+
+def test_audio_metadata_has_no_picture_fields():
+    assert validate_probe(probe({'codec_type': 'audio', 'codec_name': 'opus'}), 'audio') == {
+        'duration_s': 13, 'codec': 'opus'}
+
+
+def test_audio_with_cover_art_reads_the_audio_stream():
+    assert validate_probe(probe(COVER, {'codec_type': 'audio', 'codec_name': 'mp3'}), 'audio')['codec'] == 'mp3'
+
+
+def test_cover_art_is_not_the_video_stream_of_a_video():
+    with pytest.raises(MediaToolError, match='no video stream'):
+        validate_probe(probe(COVER, A), 'video')
+
+
+@pytest.mark.parametrize('rate', ['0/0', 'N/A', None, '25'])
+def test_an_unreadable_frame_rate_is_left_out(rate):
+    meta = validate_probe(probe({**V, 'avg_frame_rate': rate}, A), 'video')
+    assert 'fps' not in meta and meta['width'] == 1280
+
+
+@pytest.mark.parametrize('bad, reason', [
+    (probe({**V, 'codec_name': 'mpeg4'}, A), 'codec'),
+    (probe(V, A, duration='0'), 'duration'), (probe(V, A, duration='N/A'), 'duration'),
+    (probe({**V, 'width': 0}, A), 'dimensions'), (probe({**V, 'height': None}, A), 'dimensions'),
+    (probe(A), 'no video stream'),
+    ({'streams': 'x'}, 'unreadable'), ({'streams': []}, 'duration'),
+    ({'streams': [V], 'format': 'x'}, 'duration'),
+])
+def test_bad_video_is_refused_with_a_reason(bad, reason):
+    with pytest.raises(MediaToolError, match=reason):
+        validate_probe(bad, 'video')
+
+
+def test_bad_audio_codec_is_refused():
+    with pytest.raises(MediaToolError, match='codec'):
+        validate_probe(probe({'codec_type': 'audio', 'codec_name': 'flac'}), 'audio')
+
+
+def test_cover_art_alone_is_not_audio():
+    with pytest.raises(MediaToolError, match='no audio stream'):
+        validate_probe(probe(COVER), 'audio')
+
+
+# ---------------------------------------------------------------- probe_media against the database
+
+
+@pytest.fixture
+def env(app, db_session, site, private_static_tree, monkeypatch):
+    local = make_instance('test.piefed.local', software='piefed')
+    make_user(local, 'founder', local=True)   # user 1 is the admin
+    mod = make_user(local, 'mod', local=True)
+    chan, cast = make_community('chan'), make_community('cast')
+    chan.kind, cast.kind = COMMUNITY_KIND_VIDEO_CHANNEL, COMMUNITY_KIND_PODCAST
+    db.session.commit()
+    for community in (chan, cast):
+        make_community_member(mod, community, is_moderator=True)
+
+    tasks, notified, sized = [], [], []
+    monkeypatch.setattr(media_tasks, 'task_selector', lambda key, **kw: tasks.append((key, kw)))
+    monkeypatch.setattr(media_tasks, 'notify_about_post', lambda post: notified.append(post.id))
+    monkeypatch.setattr(media_tasks, 'make_image_sizes', lambda *args: sized.append(args))
+    yield SimpleNamespace(app=app, mod=mod, chan=chan, cast=cast, tasks=tasks, notified=notified, sized=sized)
+    db.session.rollback()
+    for directory, _, files in os.walk('app/static'):
+        for name in files:
+            os.unlink(os.path.join(directory, name))
+
+
+def stored_post(env, fixture='video_h264.mp4', kind='video', title='Processing', **columns):
+    community = env.chan if kind == 'video' else env.cast
+    post = make_post(community, env.mod, ap_id=f'https://test.piefed.local/post/{title}', title=title)
+    post.type = POST_TYPE_VIDEO if kind == 'video' else POST_TYPE_LINK
+    for name, value in columns.items():
+        setattr(post, name, value)
+    with open(os.path.join(FIX, fixture), 'rb') as f:
+        upload = FileStorage(stream=io.BytesIO(f.read()), filename='upload.bin')
+    assert store_uploaded_media(post, upload, kind) is None
+    db.session.commit()
+    return post
+
+
+def run(post):
+    """probe_media as the worker runs it, then the post as the database now holds it."""
+    post_id = post.id
+    probe_media(False, post_id)
+    db.session.expire_all()
+    return db.session.get(Post, post_id)
+
+
+def files_on_disk():
+    return sorted(os.path.join(d, f) for d, _, files in os.walk('app/static') for f in files)
+
+
+def ffprobe_duration(fixture):
+    return math.ceil(float(run_ffprobe(os.path.join(FIX, fixture))['format']['duration']))
+
+
+def assert_nothing_published(env, post):
+    assert post.status == POST_STATUS_PROCESSING
+    assert env.tasks == [] and env.notified == []
+
+
+def test_a_good_video_is_ready_thumbnailed_and_published(env):
+    post = stored_post(env)
+    before = dict(media_of(post))
+    post = run(post)
+
+    media = media_of(post)
+    assert media['status'] == 'ready'
+    assert media['duration_s'] == ffprobe_duration('video_h264.mp4')
+    assert (media['width'], media['height'], media['codec'], media['fps']) == (64, 64, 'h264', 10)
+    assert media['uuid'] == before['uuid'] and media['bytes'] == before['bytes'] and media['mime'] == 'video/mp4'
+    assert 'error' not in media
+    assert post.status == POST_STATUS_PUBLISHED and post.posted_at is not None
+
+    assert isinstance(post.image, File) and media['thumbnail_file_id'] == post.image_id
+    thumbnail = post.image.local_path_for_url(post.image.source_url)
+    assert thumbnail.endswith('.jpg') and os.path.getsize(thumbnail) > 0
+    assert env.sized == [(post.image_id, 512, 1200, 'posts', post.community.low_quality)]
+    assert env.tasks == [('make_post', {'post_id': post.id})]
+    assert env.notified == [post.id]
+    assert os.path.isfile(media_local_path(post))   # S3 is off: the media stays where it was stored
+    assert os.listdir('app/static/tmp') == []
+
+
+def test_an_audio_file_with_cover_art_gets_that_art_as_its_thumbnail(env):
+    post = run(stored_post(env, 'audio_cover.mp3', 'audio'))
+    media = media_of(post)
+    assert media['status'] == 'ready' and media['codec'] == 'mp3'
+    assert media['duration_s'] == ffprobe_duration('audio_cover.mp3')
+    assert 'width' not in media and 'height' not in media and 'fps' not in media
+    assert post.image_id is not None and media['thumbnail_file_id'] == post.image_id
+    assert os.path.isfile(post.image.local_path_for_url(post.image.source_url))
+    assert post.status == POST_STATUS_PUBLISHED
+
+
+def test_an_audio_file_without_art_has_no_thumbnail(env):
+    post = run(stored_post(env, 'audio.mp3', 'audio'))
+    media = media_of(post)
+    assert media['status'] == 'ready' and 'thumbnail_file_id' not in media
+    assert post.image_id is None and env.sized == []
+    assert post.status == POST_STATUS_PUBLISHED
+    assert File.query.count() == 0
+
+
+def test_a_refused_codec_fails_the_post_and_tells_the_author(env):
+    post = stored_post(env, 'video_mpeg4.mp4')
+    unread = env.mod.unread_notifications
+    post = run(post)
+
+    media = media_of(post)
+    assert media['status'] == 'failed' and 'mpeg4' in media['error'] and 'codec' in media['error']
+    assert_nothing_published(env, post)
+    assert os.path.isfile(media_local_path(post))   # a failed upload keeps its file until the post is purged
+    notification = Notification.query.one()
+    assert notification.user_id == env.mod.id and notification.author_id == env.mod.id
+    assert (notification.notif_type, notification.subtype) == (NOTIF_DEFAULT, 'media_failed')
+    assert notification.targets == {'post_id': post.id}
+    assert notification.url == f'/post/{post.id}'
+    assert notification.title.startswith('Your upload could not be processed: ') and 'mpeg4' in notification.title
+    assert db.session.get(User, env.mod.id).unread_notifications == unread + 1
+    assert File.query.count() == 0
+
+
+def test_the_failure_notification_lists_with_its_title(env, app):
+    run(stored_post(env, 'video_mpeg4.mp4'))
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session['_user_id'] = str(env.mod.id)
+        session['_fresh'] = True
+    response = client.get('/notifications')
+    assert response.status_code == 200
+    assert 'Your upload could not be processed' in response.get_data(as_text=True)
+
+
+def test_a_sandbox_error_fails_the_post_with_its_reason(env, monkeypatch):
+    def timed_out(path):
+        raise MediaToolError('ffprobe timed out after 60 s')
+    monkeypatch.setattr(media_tasks, 'run_ffprobe', timed_out)
+    post = run(stored_post(env))
+    assert media_of(post)['status'] == 'failed'
+    assert media_of(post)['error'] == 'ffprobe timed out after 60 s'
+    assert_nothing_published(env, post)
+
+
+def test_a_thumbnail_that_cannot_be_written_fails_the_post_and_leaves_nothing(env, monkeypatch):
+    post = stored_post(env)
+    media_file = media_local_path(post)
+
+    def half_written(img, fp, **kwargs):
+        with open(fp, 'wb') as f:
+            f.write(b'partial')
+        raise OSError(28, 'No space left on device', fp)
+    monkeypatch.setattr(media_tasks, 'save_image_without_metadata', half_written)
+    post = run(post)
+
+    assert media_of(post)['status'] == 'failed'
+    assert media_of(post)['error'] == 'the thumbnail could not be made'   # no local path reaches the author
+    assert_nothing_published(env, post)
+    assert post.image_id is None and File.query.count() == 0
+    assert files_on_disk() == [media_file]
+
+
+def test_a_failure_after_the_thumbnail_removes_its_file_row_and_image(env, monkeypatch):
+    post = stored_post(env)
+    media_file = media_local_path(post)
+
+    def refuse(*args):
+        raise OSError('the disk went away')
+    monkeypatch.setattr(media_tasks, 'store_files_in_s3', lambda: True)
+    monkeypatch.setattr(media_tasks, 'upload_file_to_s3', refuse)
+    post = run(post)
+
+    assert media_of(post)['status'] == 'failed'
+    assert media_of(post)['error'] == 'the file could not be stored'
+    assert_nothing_published(env, post)
+    assert post.image_id is None and File.query.count() == 0
+    assert 'thumbnail_file_id' not in media_of(post)
+    assert files_on_disk() == [media_file]
+
+
+def test_a_scheduled_upload_waits_for_its_schedule(env):
+    post = run(stored_post(env, scheduled_for=utcnow() + timedelta(days=1), timezone='UTC'))
+    assert media_of(post)['status'] == 'ready'
+    assert post.status == POST_STATUS_SCHEDULED
+    assert env.tasks == [] and env.notified == []
+
+
+@pytest.fixture
+def s3(env, s3_bucket, monkeypatch):
+    for key, value in (('S3_ACCESS_KEY', 'key'), ('S3_ACCESS_SECRET', 'secret'),
+                       ('S3_ENDPOINT', 'https://s3.us-east-1.amazonaws.com'), ('S3_REGION', 'us-east-1'),
+                       ('S3_BUCKET', s3_bucket), ('S3_PUBLIC_URL', 'cdn.probeland.test'),
+                       ('S3_STORAGE_CLASS', ''), ('S3_PUBLIC_ACL', '')):
+        monkeypatch.setitem(env.app.config, key, value)
+    return boto3.client('s3', region_name='us-east-1')
+
+
+def test_with_s3_on_the_media_and_its_thumbnail_move_to_the_bucket(env, s3):
+    post = stored_post(env)
+    local = media_local_path(post)
+    name = os.path.basename(local)
+    post = run(post)
+
+    key = f'posts/{name[0:2]}/{name[2:4]}/{name}'
+    head = s3.head_object(Bucket='pyfedi-test', Key=key)
+    assert head['ContentType'] == 'video/mp4'
+    assert head['ContentLength'] == media_of(post)['bytes']
+    assert post.url == f'https://cdn.probeland.test/{key}'
+    assert media_local_path(post) is None
+    assert not os.path.exists(local)
+
+    assert post.image.source_url.startswith('https://cdn.probeland.test/posts/')
+    thumbnail_key = post.image.source_url.removeprefix('https://cdn.probeland.test/')
+    assert s3.head_object(Bucket='pyfedi-test', Key=thumbnail_key)['ContentType'] == 'image/jpeg'
+    assert files_on_disk() == []
+    assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_PUBLISHED
+
+
+def test_a_media_upload_refused_by_s3_keeps_the_local_file_and_the_thumbnail_leaves_the_bucket(env, s3, monkeypatch):
+    post = stored_post(env)
+    local = media_local_path(post)
+    real_upload = media_tasks.upload_file_to_s3
+
+    def thumbnail_only(path, key, content_type):
+        if path == local:
+            raise boto3.exceptions.S3UploadFailedError('refused')
+        return real_upload(path, key, content_type)
+    monkeypatch.setattr(media_tasks, 'upload_file_to_s3', thumbnail_only)
+    post = run(post)
+
+    assert media_of(post)['status'] == 'failed' and media_of(post)['error'] == 'the file could not be stored'
+    assert_nothing_published(env, post)
+    assert os.path.isfile(local) and media_local_path(post) == local
+    assert s3.list_objects_v2(Bucket='pyfedi-test').get('KeyCount') == 0
+    assert File.query.count() == 0
+
+
+def test_upload_file_to_s3_passes_the_storage_class_and_acl(env, s3, monkeypatch):
+    monkeypatch.setitem(env.app.config, 'S3_STORAGE_CLASS', 'STANDARD_IA')
+    monkeypatch.setitem(env.app.config, 'S3_PUBLIC_ACL', True)
+    with open('app/static/tmp/x.ogg', 'wb') as f:
+        f.write(b'OggS')
+    assert upload_file_to_s3('app/static/tmp/x.ogg', 'posts/ab/cd/x.ogg', 'audio/ogg') == \
+        'https://cdn.probeland.test/posts/ab/cd/x.ogg'
+    head = s3.head_object(Bucket='pyfedi-test', Key='posts/ab/cd/x.ogg')
+    assert head['ContentType'] == 'audio/ogg' and head['StorageClass'] == 'STANDARD_IA'
+    grants = s3.get_object_acl(Bucket='pyfedi-test', Key='posts/ab/cd/x.ogg')['Grants']
+    assert any(g['Grantee'].get('URI', '').endswith('/AllUsers') and g['Permission'] == 'READ' for g in grants)
+    assert os.path.exists('app/static/tmp/x.ogg')   # the caller removes the local copy
+
+
+@pytest.mark.parametrize('post_id', [None, 'no media record', 'already ready', 'deleted'])
+def test_a_post_with_nothing_to_probe_is_left_alone(env, post_id):
+    if post_id is None:
+        probe_media(False, 999999)
+        assert env.tasks == []
+        return
+    if post_id == 'no media record':
+        post = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/plain', title='plain')
+        before = (post.status, post.extensions)
+    else:
+        post = stored_post(env)
+        if post_id == 'already ready':
+            with_media(post, status='ready')
+        else:
+            post.deleted = True
+        db.session.commit()
+        before = (post.status, dict(post.extensions))
+    post = run(post)
+    assert (post.status, post.extensions) == before
+    assert env.tasks == [] and env.notified == [] and Notification.query.count() == 0
+
+
+def test_a_file_gone_from_disk_fails_the_post(env):
+    post = stored_post(env)
+    os.unlink(media_local_path(post))
+    post = run(post)
+    assert media_of(post)['status'] == 'failed' and media_of(post)['error'] == 'media file is missing'
+    assert_nothing_published(env, post)
+
+
+def test_a_media_url_that_is_not_a_stored_name_is_missing_media(env):
+    post = stored_post(env)
+    post.url = 'https://elsewhere.example/clip.mp4'
+    db.session.commit()
+    post = run(post)
+    assert media_of(post)['error'] == 'media file is missing'
+
+
+def test_an_error_the_task_does_not_expect_is_rolled_back_and_raised(env, monkeypatch):
+    post = stored_post(env)
+
+    def broken(path):
+        raise RuntimeError('a bug')
+    monkeypatch.setattr(media_tasks, 'run_ffprobe', broken)
+    with pytest.raises(RuntimeError):
+        probe_media(False, post.id)
+    db.session.expire_all()
+    assert media_of(db.session.get(Post, post.id))['status'] == 'processing'
+
+
+def test_publish_ready_post_follows_the_scheduled_publisher(env):
+    post = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/p', title='p')
+    post.status = POST_STATUS_PROCESSING
+    db.session.commit()
+    publish_ready_post(post)
+    assert post.status == POST_STATUS_PUBLISHED and post.posted_at is not None
+    assert env.tasks == [('make_post', {'post_id': post.id})] and env.notified == [post.id]
+
+
+def test_probe_media_is_registered_with_task_selector(env, monkeypatch):
+    seen = []
+    monkeypatch.setattr(media_tasks.probe_media, 'delay', lambda **kw: seen.append(kw))
+    task_selector('probe_media', post_id=5)
+    assert seen == [{'send_async': True, 'post_id': 5}]
+
+
+def test_a_frame_ffmpeg_could_not_grab_fails_the_post_with_its_reason(env, monkeypatch):
+    def nothing_written(path, at_s, out_path):
+        raise MediaToolError('ffmpeg wrote no image')
+    monkeypatch.setattr(media_tasks, 'extract_frame', nothing_written)
+    post = stored_post(env)
+    media_file = media_local_path(post)
+    post = run(post)
+    assert media_of(post)['error'] == 'ffmpeg wrote no image'
+    assert_nothing_published(env, post)
+    assert files_on_disk() == [media_file]
+
+
+def test_the_thumbnail_is_written_in_the_configured_image_format(env, monkeypatch):
+    monkeypatch.setitem(env.app.config, 'MEDIA_IMAGE_FORMAT', 'webp')
+    post = run(stored_post(env))
+    thumbnail = post.image.local_path_for_url(post.image.source_url)
+    assert thumbnail.endswith('.webp')
+    with open(thumbnail, 'rb') as f:
+        head = f.read(12)
+    assert head[:4] == b'RIFF' and head[8:12] == b'WEBP'
+
+
+def test_with_s3_on_audio_without_art_moves_only_the_media(env, s3):
+    post = stored_post(env, 'audio.mp3', 'audio')
+    name = os.path.basename(media_local_path(post))
+    post = run(post)
+    key = f'posts/{name[0:2]}/{name[2:4]}/{name}'
+    assert s3.head_object(Bucket='pyfedi-test', Key=key)['ContentType'] == 'audio/mpeg'
+    assert s3.list_objects_v2(Bucket='pyfedi-test')['KeyCount'] == 1
+    assert post.url == f'https://cdn.probeland.test/{key}' and post.image_id is None
+    assert files_on_disk() == [] and post.status == POST_STATUS_PUBLISHED

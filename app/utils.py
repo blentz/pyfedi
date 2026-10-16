@@ -6005,6 +6005,29 @@ def store_files_in_s3():
         current_app.config['S3_ENDPOINT'] != ''
 
 
+def upload_file_to_s3(local_path: str, key: str, content_type: str) -> str:
+    """Put `local_path` in the bucket at `key` and return its public URL; the local copy is the caller's to remove.
+
+    The client and ExtraArgs are edit_post's uploaded-image block (app/shared/post.py)."""
+    extra_args = {'ContentType': content_type}
+    if current_app.config.get('S3_STORAGE_CLASS'):
+        extra_args['StorageClass'] = current_app.config['S3_STORAGE_CLASS']
+    if current_app.config.get('S3_PUBLIC_ACL'):
+        extra_args['ACL'] = 'public-read'
+    s3 = boto3.session.Session().client(
+        service_name='s3',
+        region_name=current_app.config['S3_REGION'],
+        endpoint_url=current_app.config['S3_ENDPOINT'],
+        aws_access_key_id=current_app.config['S3_ACCESS_KEY'],
+        aws_secret_access_key=current_app.config['S3_ACCESS_SECRET'],
+    )
+    try:
+        s3.upload_file(local_path, current_app.config['S3_BUCKET'], key, ExtraArgs=extra_args)
+    finally:
+        s3.close()
+    return f"https://{current_app.config['S3_PUBLIC_URL']}/{key}"
+
+
 def move_file_to_s3(file_id, s3):
     if store_files_in_s3():
         file: File = db.session.get(File, file_id)
