@@ -933,3 +933,38 @@ def test_a_rerun_does_not_touch_the_instances_ip_address(app, inline, scene, red
     db.session.expire_all()
     assert db.session.get(type(carol.instance), carol.instance_id).ip_address == '203.0.113.9'
     assert not (_last_log().exception_message or '').startswith('Parked request')
+
+
+# --- round 3, M2: EmojiReact, the third vote type an Undo arm undoes ---
+
+
+def _react(sender, post, emoji='🎉'):
+    return {'id': f'{sender.ap_profile_id}/reactions/{post.id}', 'type': 'EmojiReact', 'actor': sender.ap_profile_id,
+            'object': post.ap_id, 'content': emoji}
+
+
+def _reaction(post, user):
+    vote = PostVote.query.filter_by(user_id=user.id, post_id=post.id).first()
+    return vote.emoji if vote else None
+
+
+def test_three_emoji_react_cycles_reusing_both_ids_all_take_effect(app, inline, scene):
+    _, _, post, carol, _ = scene
+    react = _react(carol, post)
+    undo = _undo(carol, react)
+    for _cycle in range(3):
+        _post(app, react, carol)
+        assert _reaction(post, carol) == '🎉'
+        _post(app, undo, carol)
+        assert _reaction(post, carol) is None
+
+
+def test_an_emoji_react_reusing_the_id_that_lands_before_its_undo_takes_effect_after_it(app, inline, scene,
+                                                                                        redis_double):
+    _, _, post, carol, _ = scene
+    react = _react(carol, post)
+
+    _race(app, carol, react, _undo(carol, react))
+
+    assert _reaction(post, carol) == '🎉'
+    assert redis_double.exists(deferred_key(react['id'], carol.ap_profile_id)) == 0
