@@ -25,7 +25,7 @@ from app.models import File, Notification, NotificationSubscription, Poll, PollC
     Report, Site, User, utcnow, Instance, Event, Community, CommunityFlair, votes_cast_today, post_file, \
     ap_parse_datetime, PollChoiceVote, adjust_domain_post_count, served_path, _as_url
 from app.shared.media import MediaRefused, can_upload_media, media_kind_for, media_of, queue_probe, \
-    store_uploaded_media
+    store_uploaded_media, episode_form_wanted, with_episode
 from app.shared.tasks import task_selector
 from app.shared.upload import open_uploaded_image
 from app.visibility import is_open, post_title_for
@@ -505,6 +505,9 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         repeat = input.repeat.data
         timezone = input.timezone.data
         image_alt_text = input.image_alt_text.data if hasattr(input, 'image_alt_text') and input.image_alt_text else ''
+        if getattr(input, 'episode_number', None) is not None and episode_form_wanted(post.community):
+            # A17.4: the web form of a podcast episode; the API never has them. make_post comes through here too
+            with_episode(post, input.episode_number.data, input.season.data, input.explicit.data)
 
         # Extract poll data from form
         if type == POST_TYPE_POLL:
