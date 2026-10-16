@@ -11,6 +11,13 @@
 hell.cloud {
 	encode zstd gzip
 
+	# Media uploads (deploy/DEPLOY_GUIDE.md, "Media uploads"): the largest upload limit, max_video_upload_bytes
+	# (default 524288000, 500 MiB), plus 10 MiB for the rest of the form. MiB, not MB: Caddy reads "MB" as 10^6
+	# bytes, and 510MB is less than 500 MiB. The app still refuses anything over its own per-request limit.
+	request_body {
+		max_size 510MiB
+	}
+
 	# The browser opens this as an EventSource, so it has to be same-origin over TLS.
 	# FastAPI already serves the route at /notifications/stream (fastapi_server.py:46),
 	# so no path rewriting is needed. flush_interval -1 disables response buffering,

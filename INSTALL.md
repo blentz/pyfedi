@@ -511,8 +511,10 @@ server {
         expires max;
         access_log off;
     }
-    
-    client_max_body_size 100M;
+
+    # Media uploads: the largest upload limit (max_video_upload_bytes, default 500 MiB) plus 10 MiB for the rest
+    # of the form. nginx's M is MiB. PieFed refuses anything over its own per-request limit either way.
+    client_max_body_size 510M;
 
 }
 ```
