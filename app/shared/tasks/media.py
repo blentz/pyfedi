@@ -2,6 +2,7 @@
 import json
 import math
 import os
+from contextlib import suppress
 from datetime import datetime, timedelta
 
 import pillow_avif  # NOQA  # registers Pillow's AVIF plugin, for an instance whose MEDIA_IMAGE_FORMAT is AVIF
@@ -16,10 +17,12 @@ from app import celery, db
 from app.activitypub.util import make_image_sizes, notify_about_post
 from app.constants import (MEDIA_KIND_AUDIO, MEDIA_KIND_VIDEO, NOTIF_DEFAULT, POST_STATUS_PROCESSING,
                            POST_STATUS_PUBLISHED, POST_STATUS_SCHEDULED)
-from app.models import CommunityMember, File, Notification, Post, served_path, utcnow
+from app.models import (CommunityMember, File, Notification, Post, s3_key_from_url, s3_object_is_referenced_elsewhere,
+                        served_path, utcnow)
 from app.shared.ffmpeg import MediaToolError, extract_cover, extract_frame, run_ffprobe
 from app.shared.media import MEDIA_DIRECTORY, can_upload_media, media_local_path, media_of, queue_probe, with_media
 from app.shared.tasks import task_selector
+from app.shared.tasks.maintenance import delete_from_s3
 from app.utils import (can_create_post, ensure_directory_exists, get_recipient_language, get_task_session, gibberish,
                        guess_mime_type, patch_db_session, save_image_without_metadata, shorten_string,
                        store_files_in_s3, to_srgb, upload_file_to_s3, user_banned_from_community)
@@ -292,7 +295,8 @@ def _drop_local_copy(post, path) -> None:
 
 
 def _fail(post, thumbnail, written, reason: str) -> None:
-    """A13.9: the post stays unpublished, its media record says why, and its author is told."""
+    """A13.9: the post stays unpublished, its media record says why, its author is told, and its file goes: no retry
+    reads it, and keeping it would host bytes nobody can see."""
     if thumbnail is not None:   # never post.image: only a ready post gets its thumbnail
         thumbnail.delete_from_disk()
         db.session.delete(thumbnail)
@@ -307,6 +311,24 @@ def _fail(post, thumbnail, written, reason: str) -> None:
                                 targets={'post_id': post.id}))
     author.unread_notifications += 1
     db.session.commit()
+    _remove_media_file(post)
+
+
+def _remove_media_file(post) -> None:
+    """Remove a failed post's media, locally or in the bucket, as purge does (Post.delete_dependencies): never one
+    another post's url names."""
+    if not post.url or s3_object_is_referenced_elsewhere(post.url, post_id=post.id):
+        return
+    local = media_local_path(post)
+    if local is not None:
+        with suppress(FileNotFoundError):
+            os.unlink(local)
+    s3_key = s3_key_from_url(post.url) if store_files_in_s3() else None
+    if s3_key:
+        if current_app.debug:
+            delete_from_s3([s3_key])
+        else:
+            delete_from_s3.delay([s3_key])
 
 
 def publish_refusal(post) -> str | None:
@@ -376,7 +398,9 @@ def requeue_stuck_media() -> None:
     post the sweep cannot handle is logged and skipped: the sweep runs inside send-queue's minute, whose other work
     must still run."""
     cutoff = utcnow() - STUCK_AFTER
-    for post in Post.query.filter(Post.status == POST_STATUS_PROCESSING, Post.deleted == False).order_by(Post.id).all():
+    waiting = Post.extensions['media']['status'].as_string().in_(('processing', 'probing'))   # never a failed post
+    for post in Post.query.filter(Post.status == POST_STATUS_PROCESSING, Post.deleted == False,
+                                  waiting).order_by(Post.id).all():
         post_id = post.id   # read now: the rollback expires the post, and reloading it can fail too
         try:
             _sweep(post, cutoff)

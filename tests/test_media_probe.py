@@ -201,13 +201,14 @@ def test_an_audio_file_without_art_has_no_thumbnail(env):
 
 def test_a_refused_codec_fails_the_post_and_tells_the_author(env):
     post = stored_post(env, 'video_mpeg4.mp4')
+    local = media_local_path(post)
     unread = env.mod.unread_notifications
     post = run(post)
 
     media = media_of(post)
     assert media['status'] == 'failed' and 'mpeg4' in media['error'] and 'codec' in media['error']
     assert_nothing_published(env, post)
-    assert os.path.isfile(media_local_path(post))   # a failed upload keeps its file until the post is purged
+    assert not os.path.exists(local) and files_on_disk() == []   # ruling: a failed upload's file is removed
     notification = Notification.query.one()
     assert notification.user_id == env.mod.id and notification.author_id == env.mod.id
     assert (notification.notif_type, notification.subtype) == (NOTIF_DEFAULT, 'media_failed')
@@ -254,7 +255,7 @@ def test_a_thumbnail_that_cannot_be_written_fails_the_post_and_leaves_nothing(en
     assert media_of(post)['error'] == 'the thumbnail could not be made'   # no local path reaches the author
     assert_nothing_published(env, post)
     assert post.image_id is None and File.query.count() == 0
-    assert files_on_disk() == [media_file]
+    assert not os.path.exists(media_file) and files_on_disk() == []
 
 
 def test_a_failure_after_the_thumbnail_removes_its_file_row_and_image(env, monkeypatch):
@@ -272,7 +273,7 @@ def test_a_failure_after_the_thumbnail_removes_its_file_row_and_image(env, monke
     assert_nothing_published(env, post)
     assert post.image_id is None and File.query.count() == 0
     assert 'thumbnail_file_id' not in media_of(post)
-    assert files_on_disk() == [media_file]
+    assert not os.path.exists(media_file) and files_on_disk() == []
 
 
 def test_a_scheduled_upload_waits_for_its_schedule(env):
@@ -313,7 +314,7 @@ def test_with_s3_on_the_media_and_its_thumbnail_move_to_the_bucket(env, s3):
     assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_PUBLISHED
 
 
-def test_a_media_upload_refused_by_s3_keeps_the_local_file_and_the_thumbnail_leaves_the_bucket(env, s3, monkeypatch):
+def test_a_media_upload_refused_by_s3_removes_the_local_file_and_the_thumbnail_leaves_the_bucket(env, s3, monkeypatch):
     post = stored_post(env)
     local = media_local_path(post)
     real_upload = media_tasks.upload_file_to_s3
@@ -327,7 +328,7 @@ def test_a_media_upload_refused_by_s3_keeps_the_local_file_and_the_thumbnail_lea
 
     assert media_of(post)['status'] == 'failed' and media_of(post)['error'] == 'the file could not be stored'
     assert_nothing_published(env, post)
-    assert os.path.isfile(local) and media_local_path(post) == local
+    assert not os.path.exists(local) and files_on_disk() == []   # ruling: a failed upload's file is removed
     assert s3.list_objects_v2(Bucket='pyfedi-test').get('KeyCount') == 0
     assert File.query.count() == 0
 
@@ -459,7 +460,7 @@ def test_a_frame_ffmpeg_could_not_grab_fails_the_post_with_its_reason(env, monke
     post = run(post)
     assert media_of(post)['error'] == 'ffmpeg wrote no image'
     assert_nothing_published(env, post)
-    assert files_on_disk() == [media_file]
+    assert not os.path.exists(media_file) and files_on_disk() == []
 
 
 def test_the_thumbnail_is_written_in_the_configured_image_format(env, monkeypatch):
@@ -916,3 +917,70 @@ def test_a_stale_release_leaves_the_live_claim_alone(env, monkeypatch):
         probe_media(False, post.id)
     db.session.expire_all()
     assert_left_to_the_second_run(env, db.session.get(Post, post.id), media_file)
+
+
+# ---------------------------------------------------------------- ruling (final review #3): a failure removes the file
+
+
+@pytest.mark.parametrize('debug', [True, False])   # debug deletes in line; otherwise the delete is queued
+def test_a_failure_after_the_move_to_s3_removes_the_object(env, s3, monkeypatch, debug):
+    """The right is lost while probing, after the media is in the bucket: post.url names the object, and the failure
+    removes it with the local copy."""
+    monkeypatch.setattr(env.app, 'debug', debug)
+    post = stored_post(env)
+    local = media_local_path(post)
+    while_probing(monkeypatch, REVOCATIONS['the author is no longer a moderator'][0](env, post))
+    post = run(post)
+
+    assert media_of(post)['status'] == 'failed' and post.url.startswith('https://cdn.probeland.test/posts/')
+    assert s3.list_objects_v2(Bucket='pyfedi-test').get('KeyCount') == 0
+    assert not os.path.exists(local) and files_on_disk() == []
+
+
+def test_a_failed_post_keeps_a_bucket_object_another_post_names(env, s3, monkeypatch):
+    post = stored_post(env)
+    other_id = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/other', title='Other').id
+    db.session.commit()
+
+    def refused_after_a_crosspost(post):
+        # the bucket URL, named by a second post before this one fails; db.session is the task's session here
+        db.session.get(Post, other_id).url = post.url
+        db.session.commit()
+        return 'the post was deleted'
+    monkeypatch.setattr(media_tasks, 'publish_refusal', refused_after_a_crosspost)
+    post = run(post)
+
+    assert media_of(post)['status'] == 'failed' and db.session.get(Post, other_id).url == post.url
+    s3.head_object(Bucket='pyfedi-test', Key=post.url.removeprefix('https://cdn.probeland.test/'))
+
+
+def test_a_timed_out_upload_loses_its_file(sweep):
+    post = stuck(sweep, 'processing', attempts=3)
+    local = media_local_path(post)
+    post = swept(post)
+    assert media_of(post)['status'] == 'failed' and not os.path.exists(local)
+
+
+def test_a_failure_whose_file_is_already_gone_is_quiet(env, monkeypatch):
+    post = stored_post(env, 'video_mpeg4.mp4')
+    real = media_tasks.run_ffprobe
+
+    def gone_meanwhile(path):
+        result = real(path)
+        os.unlink(path)
+        return result
+    monkeypatch.setattr(media_tasks, 'run_ffprobe', gone_meanwhile)
+    post = run(post)
+    assert media_of(post)['status'] == 'failed' and files_on_disk() == []
+
+
+def test_the_sweep_does_not_load_a_failed_post(sweep, monkeypatch):
+    """A failed post stays POST_STATUS_PROCESSING for good; the sweep's query leaves it out in SQL, not after loading."""
+    failed = stuck(sweep, 'probing', title='failed')
+    with_media(failed, status='failed')
+    waiting = stuck(sweep, 'processing', title='waiting')
+    db.session.commit()
+    loaded = []
+    monkeypatch.setattr(media_tasks, '_sweep', lambda post, cutoff: loaded.append(post.id))
+    requeue_stuck_media()
+    assert loaded == [waiting.id]
