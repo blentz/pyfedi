@@ -11,6 +11,7 @@ from app.models import Post
 from app.shared.media import media_local_path
 from app.shared import post as post_module
 from app.shared.post import delete_post
+from tests.factories import make_post
 from tests.test_media_probe import env, files_on_disk, run, s3, stored_post  # noqa: F401  (fixtures and helpers)
 
 CDN = 'https://cdn.probeland.test/'
@@ -96,3 +97,18 @@ def test_a_link_post_naming_another_posts_media_leaves_it(env, app):
     db.session.commit()
     purge(link)
     assert os.path.isfile(real_file)
+
+
+def test_purging_a_media_post_keeps_the_local_file_a_crosspost_names(env, app):
+    """Final review M6: cross-posts are found by url equality, so a link post can name this post's local media. Purging
+    the media post leaves the file the cross-post still plays, as the S3 branch already does."""
+    post = run(stored_post(env))
+    media_file = media_local_path(post)
+    crosspost = make_post(env.cast, env.mod, ap_id='https://test.piefed.local/post/cross', title='Cross')
+    crosspost.type, crosspost.url = POST_TYPE_LINK, post.url
+    db.session.commit()
+
+    purge(post)
+
+    assert os.path.isfile(media_file)
+    os.unlink(media_file)
