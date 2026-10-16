@@ -22,7 +22,7 @@ from app.activitypub import routes as activitypub_routes
 from app.activitypub.signature import RsaKeys
 from app.activitypub.util import DEFERRED_HEADERS, DEFERRED_MAX_BYTES, DEFERRED_PER_HOST, DEFERRED_SECONDS, \
     activity_accepted_key, activity_dedupe_key, deferred_count_key, deferred_key, mark_accepted, \
-    current_signed_at, release_undone_activity, undo_of_key
+    current_signed_at, parked_request, release_undone_activity, undo_of_key
 from app.models import ActivityPubLog, CommunityMember, FeedMember, PostVote, UserFollower, utcnow
 from app.activitypub import signature_rfc9421
 from app.activitypub.signature import http_date_seconds
@@ -782,3 +782,53 @@ def test_the_hosts_window_starts_again_after_it_ends(app, inline, scene, redis_d
     assert redis_double.exists(deferred_key(follow['id'], carol.ap_profile_id)) == 1
     assert redis_double.get(counter) == '1'
     assert 50 < redis_double.ttl(counter) <= 60
+
+
+# --- round 3, M1: check-then-delete is decided by the delete ---
+
+
+def _parked_follow(redis_double, signed_at=10):
+    parked = {'path': '/inbox', 'headers': {}, 'signed_at': signed_at,
+              'body': base64.b64encode(json.dumps({'id': FOLLOW_ID, 'type': 'Follow', 'actor': ACTOR}).encode()).decode()}
+    redis_double.set(deferred_key(FOLLOW_ID, ACTOR), json.dumps(parked))
+    return parked
+
+
+def test_two_concurrent_releases_run_the_parked_request_once(app, redis_double, monkeypatch):
+    """The second release read the marker and the parked body before the first deleted them: only the release whose
+    delete removed them acts."""
+    _accepted(redis_double)
+    _parked_follow(redis_double)
+    stale = {key: redis_double.get(key) for key in redis_double.keys()}
+    reruns = []
+    monkeypatch.setattr(activitypub_routes.rerun_parked_request, 'delay', reruns.append)
+    token = current_signed_at.set(5)
+    try:
+        activitypub_routes._release_undone(UNDO_OF_FOLLOW, False, FOLLOW)
+        monkeypatch.setattr(redis_double, 'get', stale.get)
+        activitypub_routes._release_undone(UNDO_OF_FOLLOW, False, FOLLOW)
+    finally:
+        current_signed_at.reset(token)
+
+    assert len(reruns) == 1
+
+
+def test_a_parked_request_already_taken_is_not_returned_again(app, redis_double, monkeypatch):
+    parked = _parked_follow(redis_double)
+    stale = redis_double.get(deferred_key(FOLLOW_ID, ACTOR))
+    assert parked_request(FOLLOW_ID, ACTOR, FOLLOW, 5) == parked
+    monkeypatch.setattr(redis_double, 'get', lambda key: stale)
+
+    assert parked_request(FOLLOW_ID, ACTOR, FOLLOW, 5) is None
+
+
+def test_a_recorded_undo_already_taken_is_not_released_again(app, redis_double, monkeypatch):
+    redis_double.set(undo_of_key(FOLLOW_ID, ACTOR), f'{ACTOR}/undo|{ACTOR}')
+    stale = redis_double.get(undo_of_key(FOLLOW_ID, ACTOR))
+    mark_accepted({'id': FOLLOW_ID, 'type': 'Follow', 'actor': ACTOR}, announced=False)
+    redis_double.set(activity_dedupe_key(f'{ACTOR}/undo', ACTOR), 1)   # claimed again since
+    monkeypatch.setattr(redis_double, 'get', lambda key: stale if key == undo_of_key(FOLLOW_ID, ACTOR) else None)
+
+    mark_accepted({'id': FOLLOW_ID, 'type': 'Follow', 'actor': ACTOR}, announced=False)
+
+    assert redis_double.exists(activity_dedupe_key(f'{ACTOR}/undo', ACTOR)) == 1

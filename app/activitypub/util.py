@@ -965,9 +965,9 @@ def mark_accepted(activity: dict, announced: bool) -> None:
     # R-UNDORELEASE, repeated cycles: PeerTube reuses the Undo's id as well (`<id>/undo`). This activity was undone
     # before and now really took effect again, so the Undo that undid it is released too: the next one is processed.
     recorded = app_pkg.redis_client.get(undo_of_key(activity['id'], actor))
-    if recorded is None:
+    # the delete decides (review M1): of two acceptances that both read the record, only one acts on it
+    if recorded is None or app_pkg.redis_client.delete(undo_of_key(activity['id'], actor)) != 1:
         return
-    app_pkg.redis_client.delete(undo_of_key(activity['id'], actor))
     undo_id, _, undo_actor = recorded.rpartition('|')
     if undo_actor == actor:
         release_activity(undo_id, actor)
@@ -997,9 +997,9 @@ def release_undone_activity(undo: dict, announced: bool, types: tuple) -> dict |
             host_of(undone_id) != host_of(actor) or undone.get('type') not in types:
         return
     marker = activity_accepted_key(undone_id, actor)
-    if app_pkg.redis_client.get(marker) != f"{undone['type']}|{actor}":
+    # the delete decides (review M1): of two Undos that both read the marker, only one releases
+    if app_pkg.redis_client.get(marker) != f"{undone['type']}|{actor}" or app_pkg.redis_client.delete(marker) != 1:
         return
-    app_pkg.redis_client.delete(marker)
     release_activity(undone_id, actor)
     app_pkg.redis_client.set(undo_of_key(undone_id, actor), f"{undo['id']}|{actor}", ex=ACTIVITY_DEDUPE_SECONDS)
     return parked_request(undone_id, actor, types, current_signed_at.get())
@@ -1016,9 +1016,8 @@ def parked_request(activity_id, actor, types: tuple, undo_signed_at: int | None)
     otherwise reverse. Either time missing: discarded."""
     key = deferred_key(activity_id, actor)
     raw = app_pkg.redis_client.get(key)
-    if raw is None:
+    if raw is None or app_pkg.redis_client.delete(key) != 1:   # the delete decides who runs it (review M1)
         return None
-    app_pkg.redis_client.delete(key)
     parked = json.loads(raw)
     body = json.loads(base64.b64decode(parked['body']))
     if body.get('id') != activity_id or body.get('actor') != actor or body.get('type') not in types or \
