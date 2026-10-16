@@ -13,7 +13,7 @@ import pytest
 
 from app import cli, db
 from app.constants import POST_STATUS_PUBLISHED, POST_STATUS_SCHEDULED
-from app.models import Post, utcnow
+from app.models import CommunityMember, ModLog, Post, utcnow
 from tests.factories import (make_community, make_community_ban, make_community_member,
                              make_instance, make_user)
 
@@ -106,3 +106,18 @@ def test_a_repeating_media_post_is_published_once_and_never_copied(app, schedule
     published = db.session.get(Post, post.id)
     assert published.status == POST_STATUS_PUBLISHED and published.scheduled_for is None
     assert f'Scheduled post {post.id} has uploaded media: published once, not repeated' in caplog.text
+
+
+def test_a_scheduled_sticky_post_is_featured_when_it_is_published(app, scheduled, monkeypatch):
+    """add_post leaves an unpublished post's sticky to the publish: the scheduled publisher features it then."""
+    sent = []
+    monkeypatch.setattr('app.shared.post.task_selector', lambda key, **kw: sent.append((key, kw)))
+    CommunityMember.query.filter_by(user_id=scheduled.author.id).one().is_moderator = True
+    scheduled.post.sticky = True
+    db.session.commit()
+
+    _publish(app)
+
+    assert db.session.get(Post, scheduled.post.id).status == POST_STATUS_PUBLISHED
+    assert sent == [('sticky_post', {'user_id': scheduled.author.id, 'post_id': scheduled.post.id})]
+    assert ModLog.query.filter_by(action='featured_post').count() == 1

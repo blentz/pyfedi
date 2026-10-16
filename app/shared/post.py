@@ -1226,29 +1226,41 @@ def sticky_post(post_id: int, featured: bool, src: int, auth=None):
         user = current_user
 
     post = db.session.get(Post, post_id) or abort(404)
-    community = post.community
 
     if can_mod_post(post, user):
-        post.sticky = featured
-        if featured:
-            modlog_type = 'featured_post'
-        else:
-            modlog_type = 'unfeatured_post'
-        if not community.ap_featured_url:
-            community.ap_featured_url = community.ap_profile_id + '/featured'
-        db.session.commit()
-        add_to_modlog(modlog_type, actor=user, target_user=post.author, reason='',
-                      community=post.community, post=post,
-                      link_text=shorten_string(post.title), link=f'post/{post.id}')
-
-        if featured:
-            task_selector('sticky_post', user_id=user.id, post_id=post_id)
-        else:
-            task_selector('unsticky_post', user_id=user.id, post_id=post_id)
+        _set_featured(post, user, featured)
     elif src == SRC_API:
         raise Exception('Does not have permission')
 
     return user.id, post
+
+
+def _set_featured(post, user, featured: bool) -> None:
+    community = post.community
+    post.sticky = featured
+    if featured:
+        modlog_type = 'featured_post'
+    else:
+        modlog_type = 'unfeatured_post'
+    if not community.ap_featured_url:
+        community.ap_featured_url = community.ap_profile_id + '/featured'
+    db.session.commit()
+    add_to_modlog(modlog_type, actor=user, target_user=post.author, reason='',
+                  community=post.community, post=post,
+                  link_text=shorten_string(post.title), link=f'post/{post.id}')
+
+    if featured:
+        task_selector('sticky_post', user_id=user.id, post_id=post.id)
+    else:
+        task_selector('unsticky_post', user_id=user.id, post_id=post.id)
+
+
+def feature_published_post(post) -> None:
+    """Feature a post its author marked sticky when making it, once it is published. add_post leaves an unpublished
+    post's sticky to here: an Add to the featured collection, and a modlog row, for a post no one can see yet would
+    name an object peers cannot fetch."""
+    if post.sticky and can_mod_post(post, post.author):
+        _set_featured(post, post.author, True)
 
 
 def hide_post(post_id: int, hidden: bool, src: int, auth=None):

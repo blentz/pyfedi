@@ -38,7 +38,7 @@ from app.constants import SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, POST_TYPE_LIN
     SUBSCRIPTION_PENDING, SUBSCRIPTION_MODERATOR, REPORT_STATE_NEW, REPORT_STATE_ESCALATED, REPORT_STATE_RESOLVED, \
     REPORT_STATE_DISCARDED, POST_TYPE_VIDEO, NOTIF_COMMUNITY, POST_TYPE_POLL, SRC_WEB, \
     NOTIF_REPORT, NOTIF_BAN, NOTIF_UNBAN, NOTIF_REPORT_ESCALATION, NOTIF_MENTION, POST_STATUS_REVIEWING, \
-    POST_TYPE_EVENT, REPORT_TYPE_COMMUNITY, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO
+    POST_TYPE_EVENT, REPORT_TYPE_COMMUNITY, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO, POST_STATUS_PUBLISHED
 from app.email import send_email
 from app.inoculation import inoculation
 from app.models import User, Community, CommunityMember, CommunityJoinRequest, CommunityBan, Post, Site, \
@@ -1350,8 +1350,10 @@ def add_post(actor, type=None):
                                    {'user_id': current_user.id, 'timezone': form.timezone.data})
                 db.session.commit()
 
-            if post.sticky:
-                shared_post.sticky_post(post.id, True, SRC_WEB)  # federating post's stickiness is separate from creating it
+            # federating post's stickiness is separate from creating it. An unpublished post is featured when it is
+            # published (probe_media, publish_scheduled_posts): an Add would name an object peers cannot fetch yet
+            if post.sticky and post.status >= POST_STATUS_PUBLISHED:
+                shared_post.sticky_post(post.id, True, SRC_WEB)
 
             flash(Markup(_('Your post has been created. <a href="/post/%(post_id)d/edit">Edit it</a> if you notice any typos!', post_id=post.id)))
 

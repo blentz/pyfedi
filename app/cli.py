@@ -40,7 +40,7 @@ from app.models import CronJobLog, Settings, BannedInstances, Role, User, RolePe
 from app.shared.tasks import task_selector
 from app.visibility import listable_clause, post_title_for
 from app.shared.tasks.maintenance import add_remote_communities, remove_old_bot_content, pwn_bots
-from app.shared.post import make_post
+from app.shared.post import feature_published_post, make_post
 from app.shared.tasks.media import requeue_stuck_media
 from app.relays.expiry import expire_relayed_posts
 from app.utils import retrieve_block_list, blocked_domains, retrieve_peertube_block_list, canonical_host, \
@@ -1104,6 +1104,7 @@ def register(app):
 
                         # Federate post
                         task_selector('make_post', post_id=post.id)
+                        feature_published_post(post)   # add_post left a scheduled post's sticky to its publish
 
                         # create Notification()s for all the people subscribed to this post.community, post.author, post.topic_id and feed
                         notify_about_post(post)
