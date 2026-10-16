@@ -13,19 +13,20 @@ from types import SimpleNamespace
 
 import boto3
 import pytest
+from sqlalchemy.orm import Session
 from werkzeug.datastructures import FileStorage
 
 from app import db
-from app.constants import (COMMUNITY_KIND_PODCAST, COMMUNITY_KIND_VIDEO_CHANNEL, NOTIF_DEFAULT,
+from app.constants import (COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_PODCAST, COMMUNITY_KIND_VIDEO_CHANNEL, NOTIF_DEFAULT,
                            POST_STATUS_PROCESSING, POST_STATUS_PUBLISHED, POST_STATUS_SCHEDULED, POST_TYPE_LINK,
                            POST_TYPE_VIDEO)
-from app.models import File, Notification, Post, User, utcnow
+from app.models import CommunityBan, CommunityMember, File, Notification, Post, Settings, User, utcnow
 from app.shared.ffmpeg import MediaToolError, run_ffprobe
 from app.shared.media import media_local_path, media_of, store_uploaded_media, with_media
 from app.shared.tasks import task_selector
 from app.shared.tasks import media as media_tasks
 from app.shared.tasks.media import probe_media, publish_ready_post, validate_probe
-from app.utils import upload_file_to_s3
+from app.utils import set_setting, upload_file_to_s3
 from tests.factories import make_community, make_community_member, make_instance, make_post, make_user
 
 FIX = os.path.join(os.path.dirname(__file__), 'fixtures', 'media')
@@ -99,11 +100,15 @@ def env(app, db_session, site, private_static_tree, monkeypatch):
     local = make_instance('test.piefed.local', software='piefed')
     make_user(local, 'founder', local=True)   # user 1 is the admin
     mod = make_user(local, 'mod', local=True)
+    mod.verified = True
+    mod.private_key = 'a private key'   # can_create_post wants both of a local user
     chan, cast = make_community('chan'), make_community('cast')
     chan.kind, cast.kind = COMMUNITY_KIND_VIDEO_CHANNEL, COMMUNITY_KIND_PODCAST
     db.session.commit()
     for community in (chan, cast):
         make_community_member(mod, community, is_moderator=True)
+    set_setting('allow_video_file_uploads', 'users')   # the author may upload to both, until a test revokes it
+    set_setting('allow_audio_file_uploads', 'users')
 
     tasks, notified, sized = [], [], []
     monkeypatch.setattr(media_tasks, 'task_selector', lambda key, **kw: tasks.append((key, kw)))
@@ -437,3 +442,72 @@ def test_with_s3_on_audio_without_art_moves_only_the_media(env, s3):
     assert s3.list_objects_v2(Bucket='pyfedi-test')['KeyCount'] == 1
     assert post.url == f'https://cdn.probeland.test/{key}' and post.image_id is None
     assert files_on_disk() == [] and post.status == POST_STATUS_PUBLISHED
+
+
+# ---------------------------------------------------------------- the author's rights, re-checked at publish time
+
+
+def while_probing(monkeypatch, change):
+    """Run `change(session, post)` in another transaction, committed while probe_media is busy probing: the author or
+    the community changes between the upload and the publish."""
+    real = media_tasks.run_ffprobe
+
+    def probing(path):
+        with Session(bind=db.engine) as other:
+            change(other)
+            other.commit()
+        return real(path)
+    monkeypatch.setattr(media_tasks, 'run_ffprobe', probing)
+
+
+def setting_off(name):
+    def change(other):
+        other.query(Settings).filter_by(name=name).one().value = '"no"'
+    return change
+
+
+REVOCATIONS = {
+    'the post was deleted': lambda env, post: lambda o: setattr(o.get(Post, post.id), 'deleted', True),
+    'the author was deleted': lambda env, post: lambda o: setattr(o.get(User, env.mod.id), 'deleted', True),
+    'the author was banned from the site': lambda env, post: lambda o: setattr(o.get(User, env.mod.id), 'banned', True),
+    'the author may no longer post': lambda env, post: lambda o: setattr(o.get(User, env.mod.id), 'ban_posts', True),
+    'the author was banned from the community': lambda env, post: lambda o: o.add(
+        CommunityBan(user_id=env.mod.id, community_id=post.community_id, banned_by=1)),
+    'the author is no longer a moderator': lambda env, post: lambda o: setattr(
+        o.query(CommunityMember).filter_by(user_id=env.mod.id, community_id=post.community_id).one(),
+        'is_moderator', False),
+    'the upload switch was turned off': lambda env, post: setting_off('allow_video_file_uploads'),
+    'the community is no longer a video channel': lambda env, post: lambda o: setattr(
+        o.get(type(env.chan), post.community_id), 'kind', COMMUNITY_KIND_DISCUSSION),
+    'the community was deleted': lambda env, post: lambda o: setattr(
+        o.get(type(env.chan), post.community_id), 'banned', True),
+}
+
+
+@pytest.mark.parametrize('case', list(REVOCATIONS))
+def test_a_right_lost_while_probing_fails_the_post_instead_of_publishing_it(env, monkeypatch, case):
+    post = stored_post(env)
+    while_probing(monkeypatch, REVOCATIONS[case](env, post))
+    post = run(post)
+    media = media_of(post)
+    assert media['status'] == 'failed'
+    assert media['error'] in ('the post was deleted', 'the community is gone',
+                              'you may no longer post this media in this community')
+    assert_nothing_published(env, post)
+    notification = Notification.query.one()
+    assert (notification.user_id, notification.subtype) == (env.mod.id, 'media_failed')
+    assert post.image_id is None and File.query.count() == 0   # the thumbnail made for it is removed
+
+
+def test_a_right_lost_before_a_scheduled_upload_is_ready_fails_it_too(env, monkeypatch):
+    post = stored_post(env, scheduled_for=utcnow() + timedelta(days=1), timezone='UTC')
+    while_probing(monkeypatch, REVOCATIONS['the author is no longer a moderator'](env, post))
+    post = run(post)
+    assert media_of(post)['status'] == 'failed' and post.status == POST_STATUS_PROCESSING
+
+
+def test_rights_unchanged_while_probing_publish_as_before(env, monkeypatch):
+    while_probing(monkeypatch, lambda other: None)   # positive control: the same hook, with nothing revoked
+    post = run(stored_post(env))
+    assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_PUBLISHED
+    assert env.tasks == [('make_post', {'post_id': post.id})] and env.notified == [post.id]
