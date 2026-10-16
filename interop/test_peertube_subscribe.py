@@ -21,25 +21,12 @@ def _subscription_state(handle_name):
             return row[0] if row else None
 
 
-def _piefed_member(community_name):
-    """Whether PieFed has carol as a member of the community."""
-    with psycopg2.connect(host='piefed-db', dbname='piefed', user='piefed', password='piefed') as conn:
-        with conn.cursor() as cur:
-            cur.execute('SELECT 1 FROM community_member m JOIN community c ON c.id = m.community_id '
-                        'JOIN "user" u ON u.id = m.user_id WHERE c.name = %s AND c.ap_id IS NULL '
-                        "AND u.ap_profile_id = 'https://peertube.test/accounts/carol'", (community_name,))
-            return cur.fetchone() is not None
-
-
 def test_a_peertube_subscription_to_a_piefed_video_channel_is_accepted(peertube):
-    """On a reused stack this is a resubscription: PeerTube sends the Follow with the first one's id
-    (`<account>/follows/<channel actor id>`), which PieFed takes only because the Undo released its claim (§10 A14)."""
-    was_accepted = _subscription_state('vc1') == 'accepted'
+    """On a reused stack this is a resubscription: PeerTube sends the Undo and the new Follow at once, both with the
+    ids of the cycle before (`<account>/follows/<channel actor id>`, plus `/undo`). PieFed takes them only through
+    spec §10 A14: the Undo releases the Follow's claim, a Follow landing first is parked and run after it, and the
+    re-accepted Follow releases the Undo's claim for the next cycle."""
     peertube.unsubscribe('vc1@piefed.test')    # `up` keeps the data: a repeated run subscribes afresh
-    if was_accepted:
-        # PeerTube delivers the Undo and the next Follow concurrently; a Follow that reuses the id and lands first is
-        # still a duplicate, as any user resubscribing within a second would find. Wait for the Undo to land.
-        wait_for(lambda: not _piefed_member('vc1'), timeout=60)
     peertube.subscribe('vc1@piefed.test')
 
     def accepted():
