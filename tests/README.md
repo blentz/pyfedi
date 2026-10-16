@@ -305,7 +305,7 @@ which is where they always ran.
 
 - **`tests/fuzz/targets/`** -- one module per input surface: `sanitizers`,
   `signatures`, `ap_json`, `ap_models`, `markdown`, `urls`, `discovery`, `nntp`,
-  `api`, `imports`, `images`. Each holds plain property checks and a `TARGETS`
+  `api`, `imports`, `images`, `video_channels`. Each holds plain property checks and a `TARGETS`
   list. No module in the package imports atheris, so the replay can call the
   same checks inside the ordinary suite.
 - **`Target`** (`tests/fuzz/targets/_target.py`) -- one frozen record per target:
@@ -375,7 +375,7 @@ Two corpus directories, and which is which matters:
 
 ### Targets
 
-72 targets over 12 surfaces. Generated from `REGISTRY` and `SURFACES` on
+74 targets over 13 surfaces. Generated from `REGISTRY` and `SURFACES` on
 2026-10-14; "Entry points" is the number of functions the surface lists, a
 budget is `budget_ms`, and "app" is `needs_app`. Regenerate it in the test
 container rather than editing it by hand:
@@ -400,6 +400,7 @@ container rather than editing it by hand:
 | `api` | 7 | `api_schemas`, `api_request_args` (app), `api_validators`, `safe_order_by` |
 | `imports` | 5 | `settings_import`, `mastodon_csv`, `ban_list` |
 | `images` | 13 | `upload_decode` (500 ms), `icon_banner_decode` (200 ms), `remote_thumbnail_decode` (1200 ms), `to_srgb` (200 ms), `scale_gif` (200 ms), `c2pa_inspect` (50 ms) |
+| `video_channels` | 2 | `validate_probe`, `peertube_video` (app) |
 
 ### The three gates
 

@@ -16,10 +16,11 @@ replay runs in the ordinary suite, under coverage, without the fuzzer.
 """
 
 from tests.fuzz.targets import (ap_json, ap_models, api, discovery, images, imports, markdown, nntp, sanitizers,
-                                signatures, urls)
+                                signatures, urls, video_channels)
 from tests.fuzz.targets._target import Target
 
-SURFACE_MODULES = [sanitizers, signatures, ap_json, ap_models, markdown, urls, discovery, nntp, api, imports, images]
+SURFACE_MODULES = [sanitizers, signatures, ap_json, ap_models, markdown, urls, discovery, nntp, api, imports, images,
+                  video_channels]
 
 
 def collect(modules) -> dict[str, Target]:
