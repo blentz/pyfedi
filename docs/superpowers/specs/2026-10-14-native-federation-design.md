@@ -542,6 +542,9 @@ Each step gets its own implementation plan and its own commits, and each ends wi
      - Purge (`Post.delete_dependencies`) removes the media file locally or in S3, plus the thumbnail through `post.image`.
      - The old purge path removed only a video stored on S3. Local and audio media are new.
   9. **Failure.** `probe_media` runs on the `background` celery queue. A failure sets `extensions.media.status = 'failed'` with an `error`, leaves the post unpublished, and notifies the author with a `Notification` of `notif_type=NOTIF_DEFAULT`, `subtype='media_failed'`.
+     - **Stuck probes.** Celery acks early, so a worker killed mid-probe (OOM, SIGKILL, a deploy restart) loses its task. Each run first claims the upload: one compare-and-set UPDATE moves `media.status` from `processing` to `probing`, stamps `probing_since` (ISO UTC) and increments `attempts`.
+       - The per-minute `send-queue` cron runs `requeue_stuck_media()` next to `publish_scheduled_posts()`. It looks at every undeleted `POST_STATUS_PROCESSING` post whose media is either `probing` with `probing_since` over 30 minutes old, or `processing` with no upload or requeue (`requeued_at`) in the last 30 minutes.
+       - Such a post goes back to `processing`, by the same compare-and-set, and is queued again. Once `attempts` reaches 3, it fails with "processing timed out" and the author is notified.
   10. **Container image.** `ffmpeg` goes into the Dockerfile `builder` stage, which `test` inherits, and the `runtime` stage. It is also added to `INSTALL.md`.
       - `deploy/DEPLOY_GUIDE.md` and `INSTALL.md` document the matching reverse-proxy body limit: Caddy `request_body { max_size 510MB }`; nginx `client_max_body_size 510M`.
 

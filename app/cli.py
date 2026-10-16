@@ -41,6 +41,7 @@ from app.shared.tasks import task_selector
 from app.visibility import listable_clause, post_title_for
 from app.shared.tasks.maintenance import add_remote_communities, remove_old_bot_content, pwn_bots
 from app.shared.post import make_post
+from app.shared.tasks.media import requeue_stuck_media
 from app.relays.expiry import expire_relayed_posts
 from app.utils import retrieve_block_list, blocked_domains, retrieve_peertube_block_list, canonical_host, \
     shorten_string, get_request, blocked_communities, gibberish, \
@@ -1025,6 +1026,8 @@ def register(app):
                             db.session.commit()
 
                         publish_scheduled_posts()
+
+                        requeue_stuck_media()   # A13.9: uploads a killed probe_media left behind
 
                         send_batched_activities()
 
