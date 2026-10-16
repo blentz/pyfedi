@@ -59,6 +59,7 @@ import app.activitypub.actor as activitypub_actor
 import app.discovery.credits as discovery_credits   # the module: app.discovery.credits imports this one
 import app.activitypub.serializers.microblog as microblog_serializer   # the module: it imports this one
 import app.activitypub.serializers.peertube as peertube_serializer   # likewise
+import app.activitypub.serializers.podcast as podcast_serializer   # likewise
 import urllib.parse
 from app.utils import random_chars, site_language_id, is_hex_color, save_image_without_metadata, \
     refuse_over_remote_thumbnail_cap
@@ -420,7 +421,9 @@ def post_to_page(post: Post):
         activity_data['sensitive'] = True  # a peer takes `summary` as a warning only alongside this
     if post.edited_at is not None:
         activity_data["updated"] = ap_datetime(post.edited_at)
-    if (post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO or post.type == POST_TYPE_EVENT) and post.url is not None:
+    if podcast_serializer.uses_podcast_episode(post):   # spec §10 A17.2: the Document send_post pushes too
+        activity_data["attachment"] = [podcast_serializer.episode_attachment(post)]
+    elif (post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO or post.type == POST_TYPE_EVENT) and post.url is not None:
         activity_data["attachment"] = [{"href": post.url, "type": "Link"}]
     if post.image_id is not None:
         activity_data["image"] = {"url": post.image.view_url(), "type": "Image"}

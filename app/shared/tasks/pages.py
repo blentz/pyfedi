@@ -1,7 +1,8 @@
 import json
 from zoneinfo import ZoneInfo
 from app import celery, db
-from app.activitypub.serializers import microblog_note, peertube_video, uses_microblog_note, uses_peertube_video
+from app.activitypub.serializers import (episode_attachment, microblog_note, peertube_video, uses_microblog_note,
+                                         uses_peertube_video, uses_podcast_episode)
 from app.activitypub.signature import default_context, send_post_request
 from app.constants import POST_TYPE_LINK, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_VIDEO, \
     POST_TYPE_POLL, MICROBLOG_APPS, NOTIF_MENTION, POST_TYPE_EVENT
@@ -280,7 +281,9 @@ def send_post(post_id, edit=False, session=None):
     source = {'content': post.body, 'mediaType': 'text/markdown'}
     attachment = []
     # EVENT too, as post_to_page attaches it, so the pushed document matches the fetched one (D300)
-    if (post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO or post.type == POST_TYPE_EVENT) and post.url is not None:
+    if uses_podcast_episode(post):   # spec §10 A17.2: the Document post_to_page serves too
+        attachment.append(episode_attachment(post))
+    elif (post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO or post.type == POST_TYPE_EVENT) and post.url is not None:
         attachment.append({'href': post.url, 'type': 'Link'})
     elif post.type == POST_TYPE_IMAGE and post.image_id:
         attachment.append({'type': 'Image', 'url': post.image.source_url, 'name': post.image.alt_text})
