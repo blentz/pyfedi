@@ -17,7 +17,12 @@ COMMENTS_ENABLED, COMMENTS_DISABLED = 1, 2
 # what peertube_video indexes: a record without one is a Page, not a KeyError on a fetch. The thumbnail size is
 # here and not on the File because make_image_sizes rewrites File.width/height to a size the source_url is not
 REQUIRED_KEYS = ('uuid', 'duration_s', 'height', 'bytes', 'thumbnail_width', 'thumbnail_height')
+POSITIVE_INT_KEYS = ('duration_s', 'height', 'bytes', 'thumbnail_width', 'thumbnail_height')
 LINK_MIME = {'video/quicktime': 'video/mp4'}
+
+
+def _positive_int(value) -> bool:
+    return type(value) is int and value > 0   # not a bool or a float: PT<n>S and the sizes are whole numbers
 
 
 def uses_peertube_video(post) -> bool:
@@ -30,7 +35,8 @@ def uses_peertube_video(post) -> bool:
                 and post.type == POST_TYPE_VIDEO and is_open(post)
                 and media is not None and media.get('status') == 'ready'
                 and str(media.get('mime', '')).startswith('video/')
-                and image is not None and all(media.get(key) for key in REQUIRED_KEYS))
+                and image is not None and all(media.get(key) for key in REQUIRED_KEYS)
+                and all(_positive_int(media[key]) for key in POSITIVE_INT_KEYS))
 
 
 def video_name(title) -> str:
@@ -41,9 +47,9 @@ def video_name(title) -> str:
 def _file_link(post, media) -> dict:
     link = {'type': 'Link', 'mediaType': LINK_MIME.get(media['mime'], media['mime']), 'href': post.url,
             'height': media['height'], 'size': media['bytes']}
-    if media.get('width'):
+    if _positive_int(media.get('width')):
         link['width'] = media['width']
-    if media.get('fps'):
+    if _positive_int(media.get('fps')):
         link['fps'] = media['fps']
     return link
 

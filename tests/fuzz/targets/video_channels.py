@@ -8,10 +8,8 @@ limits PeerTube enforces (Global Constraints, "PeerTube limits"): name 3-120 cha
 absent or 3+ characters, hashtags 2-30, the file Link's height and size, the icon's width and height, and the
 public audience in full.
 
-The record is fuzzed freely -- missing keys, odd types -- except that the builder is called only when duration_s is
-a positive int (see _writable). probe_media stores math.ceil(duration), so a float or a string duration_s is not a
-record it can write; the builder formats it as PT1.5S or PTxS, which breaks the PT<n>S limit. That is reported, not
-fixed here, and is the one place this check is narrower than the builder's input.
+The record is fuzzed freely -- missing keys, odd types -- and the builder is called whenever uses_peertube_video
+accepts the post; a record it rejects is a Page, which is fine.
 
 No database and no network. The post is built unsaved and never added to a session; the builder target needs an app
 for SERVER_URL.
@@ -55,12 +53,6 @@ def check_validate_probe(data: bytes) -> None:
             assert 'fps' not in meta or meta['fps'] > 0, f'fps {meta["fps"]!r}'
 
 
-def _writable(media) -> bool:
-    """A media record probe_media could have written: duration_s a positive int (not a bool)."""
-    duration = media.get('duration_s')
-    return type(duration) is int and duration > 0
-
-
 def _video_post(record, title: str, body: str, tags: list[str], flags: int) -> Post:
     server = current_app.config['SERVER_URL']
     community = Community(name='chan', kind=COMMUNITY_KIND_VIDEO_CHANNEL, ap_followers_url=f'{server}/c/chan/followers')
@@ -88,7 +80,7 @@ def check_peertube_video(data: bytes) -> None:
     if isinstance(fuzzed, dict):
         record.update(fuzzed)
     post = _video_post(record, title, body, tags, len(record_bytes))
-    if not uses_peertube_video(post) or not _writable(record):
+    if not uses_peertube_video(post):
         return
     with patch.object(db.session, 'query', MagicMock(**_NO_EMOJI)):
         video = peertube_video(post)
@@ -100,8 +92,11 @@ def check_peertube_video(data: bytes) -> None:
     for tag in video['tag']:
         assert 2 <= len(tag['name'].lstrip('#')) <= 30, f'tag {tag!r}'
     link = video['url'][0]
-    assert link['height'] and link['size'], f'file Link {link!r}'
-    assert video['icon'][0]['width'] and video['icon'][0]['height'], f'icon {video["icon"]!r}'
+    icon = video['icon'][0]
+    for what, value in (('Link height', link['height']), ('Link size', link['size']), ('icon width', icon['width']),
+                        ('icon height', icon['height']),
+                        *((f'Link {key}', link[key]) for key in ('width', 'fps') if key in link)):
+        assert type(value) is int and value > 0, f'{what} {value!r}'
     assert video['to'] == [PUBLIC]
     assert video['commentsPolicy'] in (1, 2)
 
