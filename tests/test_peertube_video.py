@@ -201,3 +201,18 @@ def test_a_record_missing_a_key_the_builder_needs_is_a_page(video_post, key):
     with_media(video_post, **{key: None})
     assert uses_peertube_video(video_post) is False
     assert post_to_page(video_post)['type'] == 'Page'
+
+
+@pytest.mark.parametrize('key', ['duration_s', 'height', 'bytes', 'thumbnail_width', 'thumbnail_height'])
+@pytest.mark.parametrize('value', [1.5, 10.0, '10', True, 0, -3])
+def test_a_numeric_field_that_is_not_a_positive_int_makes_a_page(video_post, key, value):
+    with_media(video_post, **{key: value})
+    assert uses_peertube_video(video_post) is False
+    assert post_to_page(video_post)['type'] == 'Page'
+
+
+@pytest.mark.parametrize('field, value', [('width', 1.5), ('width', '640'), ('width', True), ('width', -1),
+                                          ('fps', 29.97), ('fps', '30'), ('fps', True), ('fps', -30)])
+def test_an_odd_width_or_fps_is_left_out_of_the_file_link(video_post, field, value):
+    with_media(video_post, **{field: value})
+    assert field not in peertube_video(video_post)['url'][0]

@@ -608,7 +608,8 @@ Each step gets its own implementation plan and its own commits, and each ends wi
        - the post is a `POST_TYPE_VIDEO` in a local `video_channel` community;
        - `is_open(post)` is true;
        - its media is `ready` with a `video/*` mime;
-       - `post.image` has `width` and `height`.
+       - `post.image` has `width` and `height`;
+       - the record's numeric fields (`duration_s`, `height`, `bytes`, `thumbnail_width`, `thumbnail_height`) are positive integers.
      - Any other post in that community uses the `Page` path (§4.1).
      - `name` is the stripped title cut to 120 characters. A title shorter than 3 characters is padded with `.` to 3. The web forms already require 3; the API's edit may not.
      - `content` is `post.body` as `text/markdown`, sent only when the stripped body has at least 3 characters.
