@@ -18,11 +18,13 @@ for SERVER_URL.
 """
 
 import re
+from unittest.mock import MagicMock, patch
 
 from flask import current_app
 
 from app.activitypub.serializers.peertube import PUBLIC, peertube_video, uses_peertube_video
 from app.constants import COMMUNITY_KIND_VIDEO_CHANNEL, MEDIA_KIND_AUDIO, MEDIA_KIND_VIDEO, POST_TYPE_VIDEO
+from app import db
 from app.models import Community, File, Post, Tag, User, utcnow
 from app.shared.ffmpeg import MediaToolError
 from app.shared.tasks.media import validate_probe
@@ -31,6 +33,8 @@ from tests.fuzz.targets.signatures import _fields, _json_or_text, _text
 
 DURATION = re.compile(r'PT\d+S')
 MAX_TAGS = 8
+# tags_for_activitypub looks a body's :tokens: up in the emoji table; no database here, so that query finds none.
+_NO_EMOJI = {'return_value.filter.return_value.order_by.return_value.all.return_value': []}
 
 
 def check_validate_probe(data: bytes) -> None:
@@ -86,7 +90,8 @@ def check_peertube_video(data: bytes) -> None:
     post = _video_post(record, title, body, tags, len(record_bytes))
     if not uses_peertube_video(post) or not _writable(record):
         return
-    video = peertube_video(post)
+    with patch.object(db.session, 'query', MagicMock(**_NO_EMOJI)):
+        video = peertube_video(post)
     name = video['name']
     assert 3 <= len(name) <= 120, f'name {name!r}'
     assert DURATION.fullmatch(video['duration']), f'duration {video["duration"]!r}'
