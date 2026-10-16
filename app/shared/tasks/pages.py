@@ -1,7 +1,7 @@
 import json
 from zoneinfo import ZoneInfo
 from app import celery, db
-from app.activitypub.serializers import microblog_note, uses_microblog_note
+from app.activitypub.serializers import microblog_note, peertube_video, uses_microblog_note, uses_peertube_video
 from app.activitypub.signature import default_context, send_post_request
 from app.constants import POST_TYPE_LINK, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_VIDEO, \
     POST_TYPE_POLL, MICROBLOG_APPS, NOTIF_MENTION, POST_TYPE_EVENT
@@ -157,6 +157,47 @@ def send_microblog_note(post, user, community, recipients: list, edit: bool) -> 
         sent_to.add(instance.domain)
 
 
+def send_peertube_video(post, user, community, recipients: list, edit: bool) -> None:
+    """Push a ready video of a local video_channel community as the Video peertube_video builds (spec 2026-10-14
+    §6.1, §10 A11, A15.5). One activity per instance. PeerTube gets the author's Create (or Update): it ignores the
+    Announce of a Create that threadiverse followers get. Microblog apps get the community's Announce of the id, or the
+    author's Update on edit, as for any post. Other followers get the community's Announce of the author's activity,
+    naming the community as its audience (§10 A9). Then the author's followers and the users the body mentions get the
+    author's activity."""
+    video = peertube_video(post)
+    verb = 'update' if edit else 'create'
+    activity = {'id': f"{current_app.config['SERVER_URL']}/activities/{verb}/{gibberish(15)}",
+                'type': 'Update' if edit else 'Create', 'actor': user.public_url(), 'object': video,
+                'to': video['to'], 'cc': video['cc'], '@context': default_context()}
+    audience = community.public_url()
+    inner = {key: value for key, value in activity.items() if key != '@context'}
+    microblog_announce = {'id': f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}",
+                          'type': 'Announce', 'actor': community.public_url(), 'object': post.ap_id,
+                          'to': video['to'], 'cc': [community.ap_followers_url], '@context': default_context()}
+    group_announce = dict(microblog_announce,
+                          object=dict(inner, audience=audience, object=dict(video, audience=audience)))
+    author_key, community_key = user.public_url() + '#main-key', community.public_url() + '#main-key'
+
+    sent_to = set()
+    for instance in community.following_instances():
+        if not can_deliver_to(user, instance):
+            continue
+        if instance.software == 'peertube' or (edit and instance.software in MICROBLOG_APPS):
+            send_post_request(instance.inbox, activity, user.private_key, author_key)
+        elif instance.software in MICROBLOG_APPS:
+            send_post_request(instance.inbox, microblog_announce, community.private_key, community_key)
+        else:
+            send_post_request(instance.inbox, group_announce, community.private_key, community_key)
+        sent_to.add(instance.domain)
+
+    targets = [recipient.instance for recipient in recipients if recipient.instance_id != 1]
+    for instance in targets + user.following_instances():
+        if instance.domain in sent_to or not can_deliver_to(user, instance):
+            continue
+        send_post_request(instance.inbox, activity, user.private_key, author_key)
+        sent_to.add(instance.domain)
+
+
 def send_post(post_id, edit=False, session=None):
     post = session.get(Post, post_id)
     media = media_of(post)
@@ -210,6 +251,10 @@ def send_post(post_id, edit=False, session=None):
 
     if uses_microblog_note(post):   # spec 2026-10-14 §10 A1: the Note push and fetch share one builder
         send_microblog_note(post, user, community, recipients, edit)
+        return
+
+    if uses_peertube_video(post):   # spec 2026-10-14 §10 A15.5: the Video push and fetch share one builder
+        send_peertube_video(post, user, community, recipients, edit)
         return
 
     if post.type == POST_TYPE_POLL:
