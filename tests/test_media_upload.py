@@ -496,6 +496,22 @@ def test_a_failure_after_the_store_leaves_no_file(env, monkeypatch):
     assert stored_files() == []
 
 
+def test_a_failure_after_the_file_has_gone_still_undoes_the_create(env, monkeypatch, caplog):
+    """An eager probe_media can move the stored file to S3 before something after it raises. The cleanup then
+    finds no file: that must not replace the original error with FileNotFoundError, nor skip the database undo."""
+    def moved_then_fail(post_id):
+        os.unlink(media_local_path(db.session.get(Post, post_id)))
+        raise RuntimeError('notify broke after the probe')
+    monkeypatch.setattr('app.shared.post.queue_probe', moved_then_fail)
+
+    response = submit(env, env.mod, env.chan, 'video', 'clip.mp4', fixture_bytes('video_h264.mp4'))
+
+    assert response.status_code == 302 and '/submit' not in response.headers['Location']
+    assert Post.query.count() == 0 and stored_files() == []
+    assert 'RuntimeError: notify broke after the probe' in caplog.text
+    assert 'FileNotFoundError' not in caplog.text
+
+
 def test_an_audio_media_post_edit_cannot_replace_its_file_either(env):
     post = stored_post(env, env.cast, 'audio.mp3', 'audio', POST_TYPE_LINK)
     url = post.url
