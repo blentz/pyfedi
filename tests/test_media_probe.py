@@ -75,6 +75,8 @@ def test_an_unreadable_frame_rate_is_left_out(rate):
 @pytest.mark.parametrize('bad, reason', [
     (probe({**V, 'codec_name': 'mpeg4'}, A), 'codec'),
     (probe(V, A, duration='0'), 'duration'), (probe(V, A, duration='N/A'), 'duration'),
+    (probe(V, A, duration='inf'), 'duration'), (probe(V, A, duration='1e999'), 'duration'),
+    (probe(V, A, duration=float('inf')), 'duration'),
     (probe({**V, 'width': 0}, A), 'dimensions'), (probe({**V, 'height': None}, A), 'dimensions'),
     (probe(A), 'no video stream'),
     ({'streams': 'x'}, 'unreadable'), ({'streams': []}, 'duration'),
