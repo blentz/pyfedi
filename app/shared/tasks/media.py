@@ -52,7 +52,12 @@ def _duration(probe: dict) -> float:
 
 
 def _is_cover_art(stream: dict) -> bool:
-    return bool(stream.get('disposition', {}).get('attached_pic'))
+    disposition = stream.get('disposition')
+    return isinstance(disposition, dict) and bool(disposition.get('attached_pic'))
+
+
+def _in(codec, allowed: set) -> bool:
+    return isinstance(codec, str) and codec in allowed   # a list or dict codec_name is unhashable
 
 
 def validate_probe(probe: dict, kind: str) -> dict:
@@ -60,6 +65,7 @@ def validate_probe(probe: dict, kind: str) -> dict:
     streams = probe.get('streams')
     if not isinstance(streams, list):
         raise MediaToolError('ffprobe output was unreadable')
+    streams = [s for s in streams if isinstance(s, dict)]
     duration = _duration(probe)
     if not duration > 0:
         raise MediaToolError('the file has no duration')
@@ -67,7 +73,7 @@ def validate_probe(probe: dict, kind: str) -> dict:
         video = next((s for s in streams if s.get('codec_type') == 'video' and not _is_cover_art(s)), None)
         if video is None:
             raise MediaToolError('the file has no video stream')
-        if video.get('codec_name') not in VIDEO_CODECS:
+        if not _in(video.get('codec_name'), VIDEO_CODECS):
             raise MediaToolError(f"video codec {video.get('codec_name')} is not h264, vp9 or av1")
         width, height = video.get('width') or 0, video.get('height') or 0
         if not all(type(side) is int and side > 0 for side in (width, height)):   # ffprobe writes integers
@@ -80,7 +86,7 @@ def validate_probe(probe: dict, kind: str) -> dict:
     audio = next((s for s in streams if s.get('codec_type') == 'audio'), None)
     if audio is None:
         raise MediaToolError('the file has no audio stream')
-    if audio.get('codec_name') not in AUDIO_CODECS:
+    if not _in(audio.get('codec_name'), AUDIO_CODECS):
         raise MediaToolError(f"audio codec {audio.get('codec_name')} is not aac, mp3, opus or vorbis")
     return {'duration_s': math.ceil(duration), 'codec': audio['codec_name']}
 

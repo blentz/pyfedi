@@ -81,12 +81,28 @@ def test_an_unreadable_frame_rate_is_left_out(rate):
     (probe({**V, 'width': '64'}, A), 'dimensions'), (probe({**V, 'height': {}}, A), 'dimensions'),
     (probe({**V, 'width': True}, A), 'dimensions'), (probe({**V, 'height': 7.5}, A), 'dimensions'),
     (probe(A), 'no video stream'),
+    (probe({**V, 'codec_name': {}}, A), 'codec'), (probe({**V, 'codec_name': ['h264']}, A), 'codec'),
     ({'streams': 'x'}, 'unreadable'), ({'streams': []}, 'duration'),
     ({'streams': [V], 'format': 'x'}, 'duration'),
 ])
 def test_bad_video_is_refused_with_a_reason(bad, reason):
     with pytest.raises(MediaToolError, match=reason):
         validate_probe(bad, 'video')
+
+
+def test_an_unhashable_audio_codec_is_refused():
+    with pytest.raises(MediaToolError, match='codec'):
+        validate_probe(probe({'codec_type': 'audio', 'codec_name': ['aac']}), 'audio')
+
+
+def test_streams_that_are_not_objects_are_skipped():
+    assert validate_probe(probe(7, None, 'x', V, A), 'video')['codec'] == 'h264'
+    with pytest.raises(MediaToolError, match='no audio stream'):
+        validate_probe(probe(7, None), 'audio')
+
+
+def test_a_disposition_that_is_not_an_object_is_not_cover_art():
+    assert validate_probe(probe({**V, 'disposition': 1}, A), 'video')['codec'] == 'h264'
 
 
 def test_bad_audio_codec_is_refused():
