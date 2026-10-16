@@ -675,7 +675,11 @@ def sweep(env, monkeypatch):
     return env
 
 
-def stuck(env, status, minutes_ago=31, attempts=1, title='Processing', **media):
+def stuck(env, status, minutes_ago=None, attempts=1, title='Processing', **media):
+    """An upload past its budget unless `minutes_ago` says otherwise: 30 minutes for a claimed probe, 2 hours for one
+    still waiting for its claim."""
+    if minutes_ago is None:
+        minutes_ago = 31 if status == 'probing' else 121
     post = stored_post(env, title=title)
     stamp = (utcnow() - timedelta(minutes=minutes_ago)).isoformat()
     if status == 'probing':
@@ -720,13 +724,13 @@ def test_an_upload_never_probed_is_queued_again(sweep):
 
 
 def test_an_upload_whose_task_is_lost_before_it_claims_times_out_too(sweep):
-    """Only a claim counts an attempt, so a task lost before it claims would be queued again every 30 minutes
+    """Only a claim counts an attempt, so a task lost before it claims would be queued again every 2 hours
     forever. The sweep's requeues are counted as well, and the same cap of 3 applies."""
     post = stuck(sweep, 'processing', attempts=0)
     for requeue in (1, 2, 3):
         post = swept(post)
         assert media_of(post)['requeues'] == requeue and media_of(post)['status'] == 'processing'
-        with_media(post, requeued_at=(utcnow() - timedelta(minutes=31)).isoformat())   # its task lost again
+        with_media(post, requeued_at=(utcnow() - timedelta(minutes=121)).isoformat())   # its task lost again
         db.session.commit()
     post = swept(post)
     assert media_of(post)['status'] == 'failed' and media_of(post)['error'] == 'processing timed out'
@@ -755,13 +759,13 @@ def test_a_post_the_sweep_cannot_reload_after_its_error_is_still_logged(sweep, m
     first_id = first.id
     real_sweep = media_tasks._sweep
 
-    def row_gone(post, cutoff):
+    def row_gone(post, now):
         if post.id == first_id:
             with Session(bind=db.engine) as other:
                 other.execute(text('DELETE FROM post WHERE id = :id'), {'id': first_id})
                 other.commit()
             raise ConnectionError('the database went away')
-        real_sweep(post, cutoff)
+        real_sweep(post, now)
     monkeypatch.setattr(media_tasks, '_sweep', row_gone)
     requeue_stuck_media()
     assert sweep.queued == [second.id]
@@ -1009,3 +1013,25 @@ def test_a_post_not_marked_sticky_is_not_featured(env, monkeypatch):
     monkeypatch.setattr(post_module, 'task_selector', lambda key, **kw: env.tasks.append((key, kw)))
     post = run(stored_post(env))
     assert env.tasks == [('make_post', {'post_id': post.id})] and ModLog.query.count() == 0
+
+
+# ---------------------------------------------------------------- ruling (final review M3): a backlog is not stuck
+
+
+@pytest.mark.parametrize('minutes_ago', [31, 119])
+def test_an_upload_waiting_for_its_claim_has_two_hours(sweep, minutes_ago):
+    """A long background queue is not a lost task: an upload never claimed since its upload, or since its last
+    requeue, is queued again only after 2 hours."""
+    post = swept(stuck(sweep, 'processing', minutes_ago=minutes_ago, attempts=0))
+    assert sweep.queued == [] and 'requeues' not in media_of(post)
+
+
+def test_a_requeued_upload_waiting_for_its_claim_has_two_hours_again(sweep):
+    post = stuck(sweep, 'processing', requeued_at=(utcnow() - timedelta(minutes=31)).isoformat())
+    swept(post)
+    assert sweep.queued == []
+
+
+def test_a_claimed_probe_gone_stale_keeps_thirty_minutes(sweep):
+    post = swept(stuck(sweep, 'probing', minutes_ago=31))
+    assert media_of(post)['status'] == 'processing' and sweep.queued == [post.id]
