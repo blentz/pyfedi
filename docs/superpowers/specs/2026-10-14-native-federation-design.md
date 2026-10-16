@@ -70,8 +70,8 @@ that already has posts.
 - `find_microblogging_community` creates new rows with `kind='microblogs'`.
 - `is_local_microblogs(community)` becomes `community.kind == 'microblogs' and community.is_local()`.
   `Post.is_microblog()` becomes `self.microblog and self.community.kind == 'microblogs'`. Every other
-  name test for `'microblogs'` (`app/utils.py` SQL, `app/main/routes.py`, `app/relays/expiry.py`,
-  `app/community/routes.py`, `app/community/live.py`) is changed to test `kind`. The plan lists each site.
+  name test for `'microblogs'` stays a name test, because each one deliberately also matches the `microblogs`
+  communities of remote PieFed servers, which keep `kind='discussion'`. A15.3 lists the sites kept.
 - Remote communities keep `kind='discussion'`. This includes the podcast twin communities from
   `app/discovery/podcast.py`, so inbound behaviour does not change. `kind` changes only outbound
   behaviour, and only for local communities.
@@ -632,6 +632,8 @@ Each step gets its own implementation plan and its own commits, and each ends wi
      - Restore: each `peertube` follower instance gets the author's `Create(Video)` again, because PeerTube has no `Undo(Delete)`.
      - Every other instance keeps today's shapes.
   7. **Fuzz (§8.3).** Atheris targets for `peertube_video` (over a fuzzed media record and title) and for `validate_probe` (over fuzzed ffprobe JSON) join the fuzz registry.
+  - **Gates (2026-10-16, Task 7).** `interop/test_video_channel.py` passes in the harness, with two tests. The first uploads a video to `vc_media` with carol subscribed from PeerTube. The video is listed under the channel in under 60 s, with `duration` equal to the media record's `duration_s`, `files[0].fileUrl` equal to the post's URL, and a stored thumbnail that PeerTube serves as `image/jpeg`. A PeerTube `like` comes back as `upvotes >= 1`. An API edit renames the video. An API delete removes it from PeerTube. The second test deletes a video and then restores the post: PeerTube lists it again, so it accepts the re-`Create(Video)` after `Delete`, and A15.6's restore ruling stands. The full interop suite passes on a fresh stack (19 tests: the 17 earlier ones plus these two) and on two reused-stack runs (19 passed each).
+    - Two PeerTube behaviours the test accounts for. `thumbnailPath` in the API holds only a 16:9 thumbnail (`getSmallestThumbnailStaticPath('16:9')`), and the fixture's is square, so the test reads `thumbnails[0].fileUrl` instead. While PeerTube removes a deleted video, a `GET /videos/{uuid}` can answer 500 (`Cannot read properties of undefined (reading 'VideoFiles')`) before it answers 404; the test keeps waiting on 500.
 
 ## 11. Evidence: PeerTube spike (2026-10-15)
 
