@@ -308,7 +308,8 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None):
             if domain.banned or domain.name.endswith('.pages.dev'):
                 raise Exception(domain.name + ' is blocked by admin')
 
-    if uploaded_file and uploaded_file.filename != '' and media_upload_kind(user, community, type, uploaded_file) is None:
+    media_upload = media_upload_kind(user, community, type, uploaded_file) is not None
+    if uploaded_file and uploaded_file.filename != '' and not media_upload:
         # check if this is an allowed type of file. A media upload is checked by its bytes instead (A13.6).
         allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.mpo', '.avif', '.svg']
         file_ext = os.path.splitext(uploaded_file.filename)[1]
@@ -317,6 +318,8 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None):
 
     post = Post(user_id=user.id, community_id=community.id, instance_id=user.instance_id, from_bot=user.bot or user.bot_override,
                 posted_at=utcnow(), ap_id=gibberish(), title=title, language_id=language_id, visibility=visibility)
+    if media_upload:   # A13.1: committed below, before the file is copied: never listed, not even for that while
+        post.status = POST_STATUS_PROCESSING
     db.session.add(post)
     db.session.commit()
 

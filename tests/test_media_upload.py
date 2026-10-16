@@ -16,6 +16,8 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 from flask import g, request, session as flask_session, url_for
 from flask.testing import EnvironBuilder
 from flask_wtf.csrf import generate_csrf
@@ -27,6 +29,7 @@ from app.constants import (COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_PODCAST, CO
                            POST_TYPE_VIDEO)
 from app.models import Language, Post, Site
 from app.shared import media as media_module
+from app.shared import post as post_module
 from app.shared.media import media_local_path, media_of, queue_probe, store_uploaded_media, with_media
 from app.shared.post import media_upload_kind
 from app.shared.tasks.pages import send_post
@@ -847,3 +850,24 @@ def test_the_untyped_submit_url_keeps_the_global_cap_for_a_member(env, monkeypat
     response = client.post(url, data=form_data(env, token, env.chan, 'clip.mp4', padded_video()),
                            content_type='multipart/form-data')
     assert response.status_code == 413
+
+
+# ---------------------------------------------------------------- final review M1: no published stub during the copy
+
+
+def test_the_post_is_never_listable_while_its_file_is_copied(env, monkeypatch):
+    """make_post commits the Post before store_uploaded_media copies the file, which can take a while for a large
+    upload. The row it commits is processing from the start, so no listing shows a stub meanwhile."""
+    seen = []
+    real_store = post_module.store_uploaded_media
+
+    def store_watched(post, uploaded_file, kind):
+        with Session(bind=db.engine) as other:   # what every other request sees while the file is copied
+            seen.append(other.execute(text('SELECT status FROM post WHERE id = :id'), {'id': post.id}).scalar())
+        return real_store(post, uploaded_file, kind)
+    monkeypatch.setattr(post_module, 'store_uploaded_media', store_watched)
+
+    response = submit(env, env.mod, env.chan, 'video', 'clip.mp4', fixture_bytes('video_h264.mp4'))
+
+    assert response.status_code == 302
+    assert seen == [POST_STATUS_PROCESSING]
