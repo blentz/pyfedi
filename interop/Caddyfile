@@ -14,3 +14,7 @@ mastodon.test {
 peertube.test {
 	reverse_proxy peertube-web:9000
 }
+
+castopod.test {
+	reverse_proxy castopod-web:8080
+}
