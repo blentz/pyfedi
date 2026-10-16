@@ -78,6 +78,8 @@ def test_an_unreadable_frame_rate_is_left_out(rate):
     (probe(V, A, duration='inf'), 'duration'), (probe(V, A, duration='1e999'), 'duration'),
     (probe(V, A, duration=float('inf')), 'duration'),
     (probe({**V, 'width': 0}, A), 'dimensions'), (probe({**V, 'height': None}, A), 'dimensions'),
+    (probe({**V, 'width': '64'}, A), 'dimensions'), (probe({**V, 'height': {}}, A), 'dimensions'),
+    (probe({**V, 'width': True}, A), 'dimensions'), (probe({**V, 'height': 7.5}, A), 'dimensions'),
     (probe(A), 'no video stream'),
     ({'streams': 'x'}, 'unreadable'), ({'streams': []}, 'duration'),
     ({'streams': [V], 'format': 'x'}, 'duration'),
