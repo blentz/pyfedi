@@ -6,7 +6,7 @@ from app import db
 from app.activitypub.serializers import peertube_video
 from app.constants import POST_TYPE_ARTICLE
 from app.shared.tasks.deletes import delete_object
-from tests.factories import make_user
+from tests.factories import make_follow, make_instance, make_user
 from tests.peertube_video_fixtures import _example_hosts_resolve_without_a_resolver, sent, video_post    # noqa: F401
 
 
@@ -28,6 +28,8 @@ def test_peertube_gets_the_owners_delete(sent, video_post, owner):
     body, key = sent['https://peertube.example/inbox']
     assert (body['type'], body['actor'], body['object']) == ('Delete', owner.public_url(), video_post.public_url())
     assert key == owner.public_url() + '#main-key'
+    plain = sent['https://follower.example/inbox'][0]       # the owner's copy must not have changed the author's
+    assert (plain['type'], plain['actor']) == ('Delete', video_post.author.public_url())
 
 
 def test_a_moderators_removal_is_still_signed_by_the_owner(sent, video_post, owner, moderator):
@@ -41,12 +43,41 @@ def test_other_followers_keep_the_communitys_announce(sent, video_post, owner):
     assert sent['https://mastodon.example/inbox'][0]['type'] == 'Announce'
 
 
-def test_without_an_owner_peertube_gets_nothing(sent, video_post):
+def _author_follows_peertube(video_post):
+    peertube = next(i for i in video_post.community.following_instances() if i.software == 'peertube')
+    follower = make_user(peertube, 'ptfan')
+    follower.ap_profile_id = follower.ap_public_url = 'https://peertube.example/users/ptfan'
+    db.session.commit()
+    make_follow(video_post.author, follower, is_inward=True)
+
+
+def _assert_no_owner_sends_peertube_only_the_authors_delete(sent, video_post, caplog):
+    _author_follows_peertube(video_post)
+    with caplog.at_level('WARNING'):
+        delete_object(video_post.author.id, video_post, is_post=True, session=db.session)
+    body, key = sent['https://peertube.example/inbox']
+    assert (body['type'], body['actor']) == ('Delete', video_post.author.public_url())   # via the author's followers
+    assert key == video_post.author.public_url() + '#main-key'
+    assert sent['https://lemmy.example/inbox'][0]['type'] == 'Announce'
+    assert f'community {video_post.community.id}' in caplog.text and f'video {video_post.id}' in caplog.text
+
+
+def test_without_an_owner_peertube_is_not_marked_sent(sent, video_post, caplog):
     video_post.community.user_id = None
     db.session.commit()
-    delete_object(video_post.author.id, video_post, is_post=True, session=db.session)
-    assert 'https://peertube.example/inbox' not in sent
-    assert 'https://lemmy.example/inbox' in sent
+    _assert_no_owner_sends_peertube_only_the_authors_delete(sent, video_post, caplog)
+
+
+def test_a_remote_owner_cannot_sign(sent, video_post, caplog):
+    video_post.community.user_id = make_user(make_instance('far.example'), 'far').id
+    db.session.commit()
+    _assert_no_owner_sends_peertube_only_the_authors_delete(sent, video_post, caplog)
+
+
+def test_a_deleted_owner_cannot_sign(sent, video_post, owner, caplog):
+    owner.deleted = True
+    db.session.commit()
+    _assert_no_owner_sends_peertube_only_the_authors_delete(sent, video_post, caplog)
 
 
 def test_a_restore_sends_peertube_the_create_again(sent, video_post):
