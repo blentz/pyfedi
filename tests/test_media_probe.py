@@ -746,6 +746,26 @@ def test_one_post_the_sweep_cannot_handle_does_not_stop_the_others(sweep, monkey
     assert 'the broker went away' in caplog.text
 
 
+def test_a_post_the_sweep_cannot_reload_after_its_error_is_still_logged(sweep, monkeypatch, caplog):
+    """The rollback after an error expires the post, so reading post.id in the handler would go back to the database:
+    with the row gone (or the connection dropped) that raises out of the handler and stops the sweep."""
+    first, second = stuck(sweep, 'processing', title='first'), stuck(sweep, 'processing', title='second')
+    first_id = first.id
+    real_sweep = media_tasks._sweep
+
+    def row_gone(post, cutoff):
+        if post.id == first_id:
+            with Session(bind=db.engine) as other:
+                other.execute(text('DELETE FROM post WHERE id = :id'), {'id': first_id})
+                other.commit()
+            raise ConnectionError('the database went away')
+        real_sweep(post, cutoff)
+    monkeypatch.setattr(media_tasks, '_sweep', row_gone)
+    requeue_stuck_media()
+    assert sweep.queued == [second.id]
+    assert f'requeue_stuck_media: post {first_id}: ' in caplog.text and 'the database went away' in caplog.text
+
+
 @pytest.mark.parametrize('case', ['uploaded just now', 'queued again just now'])
 def test_an_upload_waiting_its_turn_is_not_queued_twice(sweep, case):
     if case == 'uploaded just now':

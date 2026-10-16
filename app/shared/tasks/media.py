@@ -377,11 +377,12 @@ def requeue_stuck_media() -> None:
     must still run."""
     cutoff = utcnow() - STUCK_AFTER
     for post in Post.query.filter(Post.status == POST_STATUS_PROCESSING, Post.deleted == False).order_by(Post.id).all():
+        post_id = post.id   # read now: the rollback expires the post, and reloading it can fail too
         try:
             _sweep(post, cutoff)
         except Exception as error:
             db.session.rollback()
-            current_app.logger.error(f'requeue_stuck_media: post {post.id}: {error!r}')
+            current_app.logger.error(f'requeue_stuck_media: post {post_id}: {error!r}')
 
 
 def _sweep(post, cutoff) -> None:
