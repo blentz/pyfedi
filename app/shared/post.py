@@ -344,6 +344,11 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None, upload
     try:    # federation is done in edit_post
         post = edit_post(input, post, type, src, user, auth, uploaded_file, from_scratch=True,
                          uploaded_files=uploaded_files, image_alt_texts=image_alt_texts)
+        published = post.status == POST_STATUS_PUBLISHED
+        if post.status == POST_STATUS_PROCESSING:
+            # Stored and committed: probe_media publishes it when the media is ready. Queued only once this create
+            # has federated nothing and decided to notify nobody: an eager probe_media has published it by its return
+            queue_probe(post.id)
     except Exception as e:
         # Only the file store_uploaded_media wrote during this call, never a path derived from post.url
         stored_media = getattr(post, 'stored_media_path', None)
@@ -356,7 +361,7 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None, upload
         db.session.commit()
         raise e
 
-    if post.status == POST_STATUS_PUBLISHED:
+    if published:
         notify_about_post(post)
 
     plugins.fire_hook('after_post_create', post)
@@ -1095,9 +1100,6 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         db.session.add(new_notification)
 
     db.session.commit()
-
-    if media_kind is not None:
-        queue_probe(post.id)   # stored and committed: probe_media publishes it when the media is ready
 
     # Scheduled and processing posts alike (A13.1): nothing federates before the post is published
     if post.status < POST_STATUS_PUBLISHED or post.community.local_only or post.community.private:
