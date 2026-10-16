@@ -27,7 +27,7 @@ from app import db
 from app.constants import (COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_PODCAST, COMMUNITY_KIND_VIDEO_CHANNEL,
                            POST_STATUS_PROCESSING, POST_STATUS_PUBLISHED, POST_TYPE_IMAGE, POST_TYPE_LINK,
                            POST_TYPE_VIDEO)
-from app.models import Language, Post, Site
+from app.models import Language, ModLog, Post, Site
 from app.shared import media as media_module
 from app.shared import post as post_module
 from app.shared.media import media_local_path, media_of, queue_probe, store_uploaded_media, with_media
@@ -871,3 +871,34 @@ def test_the_post_is_never_listable_while_its_file_is_copied(env, monkeypatch):
 
     assert response.status_code == 302
     assert seen == [POST_STATUS_PROCESSING]
+
+
+# ---------------------------------------------------------------- final review M2: sticky waits for the publish
+
+
+def test_a_sticky_upload_is_not_featured_while_it_is_processing(env, monkeypatch):
+    """An Add to the featured collection, and a modlog row, would name a post nobody can fetch yet: add_post leaves an
+    unpublished post's sticky to the publish."""
+    sent = []
+    monkeypatch.setattr('app.shared.post.task_selector', lambda key, **kw: sent.append((key, kw)))
+
+    response = submit(env, env.mod, env.chan, 'video', 'clip.mp4', fixture_bytes('video_h264.mp4'), sticky='y')
+
+    post = Post.query.one()
+    assert response.status_code == 302 and post.status == POST_STATUS_PROCESSING
+    assert post.sticky is True   # marked: probe_media features it when it is published
+    assert [key for key, _ in sent if key == 'sticky_post'] == []
+    assert ModLog.query.count() == 0
+
+
+def test_a_sticky_link_post_is_still_featured_at_once(env, monkeypatch, http_mock):
+    sent = []
+    monkeypatch.setattr('app.shared.post.task_selector', lambda key, **kw: sent.append((key, kw)))
+    client, token = env.client_for(env.mod)
+    response = client.post(submit_url(env.app, env.talk, 'discussion'), content_type='multipart/form-data',
+                           data={**form_data(env, token, env.talk), 'sticky': 'y'})
+
+    post = Post.query.one()
+    assert response.status_code == 302 and post.status == POST_STATUS_PUBLISHED
+    assert ('sticky_post', {'user_id': env.mod.id, 'post_id': post.id}) in sent
+    assert ModLog.query.filter_by(action='featured_post').count() == 1

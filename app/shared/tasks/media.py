@@ -20,6 +20,7 @@ from app.constants import (MEDIA_KIND_AUDIO, MEDIA_KIND_VIDEO, NOTIF_DEFAULT, PO
 from app.models import (CommunityMember, File, Notification, Post, s3_key_from_url, s3_object_is_referenced_elsewhere,
                         served_path, utcnow)
 from app.shared.ffmpeg import MediaToolError, extract_cover, extract_frame, run_ffprobe
+from app.shared.post import feature_published_post
 from app.shared.media import MEDIA_DIRECTORY, can_upload_media, media_local_path, media_of, queue_probe, with_media
 from app.shared.tasks import task_selector
 from app.shared.tasks.maintenance import delete_from_s3
@@ -377,6 +378,7 @@ def _commit_ready_post(post) -> bool:
 def _announce_post(post) -> None:
     """Federate a just-published post and tell its subscribers: the side effects after the publishing commit."""
     task_selector('make_post', post_id=post.id)
+    feature_published_post(post)   # after the Create, so peers have the post the Add names
     notify_about_post(post)
 
 

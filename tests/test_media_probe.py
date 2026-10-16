@@ -21,9 +21,10 @@ from app import cli, db
 from app.constants import (COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_PODCAST, COMMUNITY_KIND_VIDEO_CHANNEL, NOTIF_DEFAULT,
                            POST_STATUS_PROCESSING, POST_STATUS_PUBLISHED, POST_STATUS_SCHEDULED, POST_TYPE_LINK,
                            POST_TYPE_VIDEO)
-from app.models import CommunityBan, CommunityMember, File, Notification, Post, Settings, User, utcnow
+from app.models import CommunityBan, CommunityMember, File, ModLog, Notification, Post, Settings, User, utcnow
 from app.shared.ffmpeg import MediaToolError, run_ffprobe
 from app.shared.media import media_local_path, media_of, store_uploaded_media, with_media
+from app.shared import post as post_module
 from app.shared.tasks import task_selector
 from app.shared.tasks import media as media_tasks
 from app.shared.tasks.media import probe_media, publish_ready_post, requeue_stuck_media, validate_probe
@@ -984,3 +985,27 @@ def test_the_sweep_does_not_load_a_failed_post(sweep, monkeypatch):
     monkeypatch.setattr(media_tasks, '_sweep', lambda post, cutoff: loaded.append(post.id))
     requeue_stuck_media()
     assert loaded == [waiting.id]
+
+
+# ---------------------------------------------------------------- final review M2: a sticky upload is featured when ready
+
+
+def test_a_sticky_upload_is_featured_once_it_is_published(env, monkeypatch):
+    monkeypatch.setattr(post_module, 'task_selector', lambda key, **kw: env.tasks.append((key, kw)))
+    post = run(stored_post(env, sticky=True))
+
+    assert post.status == POST_STATUS_PUBLISHED
+    assert env.tasks == [('make_post', {'post_id': post.id}), ('sticky_post', {'user_id': env.mod.id, 'post_id': post.id})]
+    assert ModLog.query.filter_by(action='featured_post', post_id=post.id).count() == 1
+
+
+def test_a_sticky_upload_that_fails_is_never_featured(env, monkeypatch):
+    monkeypatch.setattr(post_module, 'task_selector', lambda key, **kw: env.tasks.append((key, kw)))
+    post = run(stored_post(env, 'video_mpeg4.mp4', sticky=True))
+    assert media_of(post)['status'] == 'failed' and env.tasks == [] and ModLog.query.count() == 0
+
+
+def test_a_post_not_marked_sticky_is_not_featured(env, monkeypatch):
+    monkeypatch.setattr(post_module, 'task_selector', lambda key, **kw: env.tasks.append((key, kw)))
+    post = run(stored_post(env))
+    assert env.tasks == [('make_post', {'post_id': post.id})] and ModLog.query.count() == 0
