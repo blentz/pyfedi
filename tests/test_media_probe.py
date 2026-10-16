@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import boto3
 import pytest
+from PIL import Image
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from werkzeug.datastructures import FileStorage
@@ -1095,3 +1096,10 @@ def test_the_sweep_skips_an_unexpected_media_status(sweep, status):
     db.session.expire_all()
     assert media_of(db.session.get(Post, post.id)) == before
     assert sweep.queued == [] and Notification.query.count() == 0
+
+
+def test_the_thumbnail_records_its_size(env):
+    post = run(stored_post(env))
+    with Image.open(post.image.local_path_for_url(post.image.source_url)) as saved:
+        assert (post.image.width, post.image.height) == saved.size
+    assert post.image.width and post.image.height

@@ -215,17 +215,17 @@ def _thumbnail(post, path, kind, probe, written) -> File | None:
     frame = f'{TMP_DIRECTORY}/{gibberish(15)}.jpg'
     try:
         grab(frame)
-        image_place = _save_thumbnail_image(frame, written)
+        image_place, (width, height) = _save_thumbnail_image(frame, written)
     finally:
         _remove(frame)
-    file = File(source_url=f"{current_app.config['SERVER_URL']}{served_path(image_place)}")
+    file = File(source_url=f"{current_app.config['SERVER_URL']}{served_path(image_place)}", width=width, height=height)
     db.session.add(file)
     db.session.flush()
     return file
 
 
-def _save_thumbnail_image(frame, written) -> str:
-    """Re-encode `frame` as edit_post does an uploaded image, into the media tree; returns where it went."""
+def _save_thumbnail_image(frame, written) -> tuple:
+    """Re-encode `frame` as edit_post does an uploaded image, into the media tree; returns where it went and its size."""
     image_format = (current_app.config['MEDIA_IMAGE_FORMAT'] or 'JPEG').upper()
     max_dimension = current_app.config['MEDIA_IMAGE_MAX_DIMENSION']
     name = gibberish(15)
@@ -240,7 +240,8 @@ def _save_thumbnail_image(frame, written) -> str:
         written.append(image_place)
         save_image_without_metadata(img, image_place, format=image_format, optimize=True,
                                     quality=int(current_app.config['MEDIA_IMAGE_QUALITY']))
-    return image_place
+        size = img.size
+    return image_place, size
 
 
 def _remove(path: str) -> None:
