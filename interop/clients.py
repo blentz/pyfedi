@@ -88,6 +88,9 @@ class PieFed:
     def delete(self, post_id):
         self.http.post('/post/delete', json={'post_id': post_id, 'deleted': True}).raise_for_status()
 
+    def restore(self, post_id):
+        self.http.post('/post/delete', json={'post_id': post_id, 'deleted': False}).raise_for_status()
+
     def get_post(self, post_id):
         return self.http.get('/post', params={'id': post_id}).raise_for_status().json()['post_view']
 
@@ -197,3 +200,8 @@ class PeerTube:
     def video(self, video_id):
         r = self.http.get(f'/videos/{video_id}')
         return None if r.status_code == 404 else r.raise_for_status().json()
+
+    video_or_none = video   # the same lookup, named for the tests that expect it to be gone
+
+    def rate(self, video_id, rating):
+        self.http.put(f'/videos/{video_id}/rate', json={'rating': rating}).raise_for_status()

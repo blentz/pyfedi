@@ -17,6 +17,16 @@ and audio uploads open to users; Mastodon `bob`; PeerTube admin
 `mastodon_bob`, `peertube_root` and `peertube_carol` (PeerTube OAuth access tokens last a day; `up` renews them).
 `interop/.env.interop` (secrets) and `interop/.tokens.json` are generated and gitignored. `up` is safe to repeat.
 
+## Tests
+
+- `test_smoke.py`: TLS, DNS, webfinger and a federated follow both ways.
+- `test_microblog_mastodon.py`: a local microblogs post shows on Mastodon, and replies, favourites and boosts land in PieFed.
+- `test_peertube_subscribe.py`: a PeerTube user subscribes to a `video_channel` and PeerTube sees it accepted.
+- `test_media_pipeline.py`: video and audio uploads are probed, published and served in ranges.
+- `test_video_channel.py`: a video uploaded to `vc_media` plays on PeerTube under the subscribed channel (duration,
+  file URL, thumbnail), a PeerTube like comes back as an upvote, an edit renames it, a delete removes it, and a
+  restore creates it again.
+
 ## Needs
 
 - podman and podman-compose; about 6 GB RAM; the first `up` pulls images and builds PieFed (a few minutes).

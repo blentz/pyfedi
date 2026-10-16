@@ -34,7 +34,12 @@ def _query(sql, *args):
 
 
 def _upload_and_wait_ready(alice_web, community, kind, fixture, mime):
-    title = f'{kind} upload {uuid.uuid4().hex[:8]}'
+    return _upload(alice_web, community, kind, fixture, mime)[0]
+
+
+def _upload(alice_web, community, kind, fixture, mime, title=None):
+    """Upload, wait until the probe is done: (url, post id, media record)."""
+    title = title or f'{kind} upload {uuid.uuid4().hex[:8]}'
     r = alice_web.submit_media(community, kind, title, os.path.join(FIXTURES, fixture), mime)
     assert r.status_code == 302, f'upload answered {r.status_code}, not a redirect: {form_errors(r.text)}'
     # the new post's page (its slug, app/models.py Post), not the community page a failed create redirects to
@@ -49,7 +54,7 @@ def _upload_and_wait_ready(alice_web, community, kind, fixture, mime):
     assert media['status'] == 'ready', f'probe failed: {media.get("error")}'
     assert status == POST_STATUS_PUBLISHED
     assert media['mime'] == mime
-    return url
+    return url, post_id, media
 
 
 def _ranged_get(url):
