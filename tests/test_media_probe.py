@@ -1103,3 +1103,9 @@ def test_the_thumbnail_records_its_size(env):
     with Image.open(post.image.local_path_for_url(post.image.source_url)) as saved:
         assert (post.image.width, post.image.height) == saved.size
     assert post.image.width and post.image.height
+
+
+def test_the_media_record_keeps_the_thumbnail_size(env):
+    post = run(stored_post(env))
+    with Image.open(post.image.local_path_for_url(post.image.source_url)) as saved:
+        assert (media_of(post)['thumbnail_width'], media_of(post)['thumbnail_height']) == saved.size

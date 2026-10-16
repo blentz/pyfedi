@@ -190,6 +190,7 @@ def _probe(post_id, token: str) -> None:
         if thumbnail is not None:
             post.image = thumbnail
             meta['thumbnail_file_id'] = thumbnail.id
+            meta['thumbnail_width'], meta['thumbnail_height'] = thumbnail.width, thumbnail.height
         with_media(post, status='ready', **meta)
         published = _commit_ready_post(post)
     if media_url is not None:   # committed: the post names the bucket, so nothing after this may keep the local copy
