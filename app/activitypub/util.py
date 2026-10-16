@@ -5394,6 +5394,13 @@ def _take_back_vote(voted_on, existing_vote):
         db.session.commit()
 
 
+def vote_state(voted_on, user) -> tuple | None:
+    """`user`'s vote on the Post or PostReply `voted_on` as (effect, emoji), or None: compared before and after
+    Post.vote, which can create, turn, take back or leave a vote (R-UNDORELEASE, review M3)."""
+    vote = _users_vote(voted_on, user)
+    return None if vote is None else (vote.effect, vote.emoji)
+
+
 def has_vote_on(target_ap_id, user) -> bool:
     """Whether `user` has a vote on the post or comment at `target_ap_id`: an Undo of it takes something back."""
     voted_on = find_liked_object(target_ap_id)

@@ -26,7 +26,7 @@ from app.activitypub.util import MEDIA_OBJECT_TYPES, follow_answer_inbox, MEDIA_
     post_to_activity, post_count_collections, comment_count_collections, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
-    update_post_from_activity, undo_vote, has_vote_on, release_undone_activity, mark_accepted, deferred_key, DEFERRED_SECONDS, \
+    update_post_from_activity, undo_vote, has_vote_on, vote_state, release_undone_activity, mark_accepted, deferred_key, DEFERRED_SECONDS, \
     activity_accepted_key, deferred_count_key, DEFERRED_PER_HOST, FOLLOW_TYPES, VOTE_TYPES, DEFERRABLE_TYPES, \
     DEFERRED_MAX_BYTES, DEFERRED_HEADERS, current_signed_at, post_to_page, find_reported_object, \
     process_report, ensure_domains_match, refresh_community_profile, \
@@ -3200,8 +3200,11 @@ def process_upvote(user, store_ap_json, request_json, announced):
     if can_upvote(user, liked.community) and not instance_banned(user.instance.domain):
         if isinstance(liked, (Post, PostReply)) and user.id not in blocked_users(liked.author.id) and \
                 votes_cast_today(user.id) < current_app.config['VOTE_QUOTA']:
+            before = vote_state(liked, user)
             liked.vote(user, 'upvote', emoji)
-            mark_accepted(request_json, announced)   # R-UNDORELEASE: an Undo may release it
+            after = vote_state(liked, user)
+            if after is not None and after != before:   # R-UNDORELEASE: only a vote it made or changed (M3)
+                mark_accepted(request_json, announced)
             log_incoming_ap(id, APLOG_LIKE, APLOG_SUCCESS, saved_json)
             if not announced and liked.visibility in OPEN_VISIBILITIES:  # as process_new_content (interop D7)
                 announce_activity_to_followers(liked.community, user, request_json, can_batch=True)
@@ -3224,8 +3227,11 @@ def process_downvote(user, store_ap_json, request_json, announced):
     if can_downvote(user, liked.community) and not instance_banned(user.instance.domain):
         if isinstance(liked, (Post, PostReply)) and user.id not in blocked_users(liked.author.id) and \
                 votes_cast_today(user.id) < current_app.config['VOTE_QUOTA']:
+            before = vote_state(liked, user)
             liked.vote(user, 'downvote', None)
-            mark_accepted(request_json, announced)   # R-UNDORELEASE
+            after = vote_state(liked, user)
+            if after is not None and after != before:   # R-UNDORELEASE: only a vote it made or changed (M3)
+                mark_accepted(request_json, announced)
             log_incoming_ap(id, APLOG_DISLIKE, APLOG_SUCCESS, saved_json)
             if not announced and liked.visibility in OPEN_VISIBILITIES:  # as process_new_content (interop D7)
                 announce_activity_to_followers(liked.community, user, request_json, can_batch=True)
