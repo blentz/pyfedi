@@ -13,11 +13,11 @@ NAME_MIN, NAME_MAX = 3, 120
 CONTENT_MIN, CONTENT_MAX = 3, 10000   # PeerTube v8.3.1 VIDEOS.DESCRIPTION: a longer content rejects the whole Video
 TAG_MIN, TAG_MAX = 2, 30
 COMMENTS_ENABLED, COMMENTS_DISABLED = 1, 2
-# PeerTube keeps a remote file Link only for mp4, webm and ogg; a MOV holds the same streams an mp4 does
-# what peertube_video indexes: a record without one is a Page, not a KeyError on a fetch. The thumbnail size is
-# here and not on the File because make_image_sizes rewrites File.width/height to a size the source_url is not
+# The keys peertube_video indexes: a record without one is a Page, not a KeyError on a fetch. The thumbnail size is
+# here and not on the File because make_image_sizes rewrites File.width/height to a size the source_url is not.
 REQUIRED_KEYS = ('uuid', 'duration_s', 'height', 'bytes', 'thumbnail_width', 'thumbnail_height')
 POSITIVE_INT_KEYS = ('duration_s', 'height', 'bytes', 'thumbnail_width', 'thumbnail_height')
+# PeerTube keeps a remote file Link only for mp4, webm and ogg; a MOV holds the same streams an mp4 does
 LINK_MIME = {'video/quicktime': 'video/mp4'}
 
 

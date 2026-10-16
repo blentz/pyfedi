@@ -26,7 +26,8 @@ def find_local_community(actor_url: str) -> Community:
 
 def podcast_twin_refused(community: Community) -> bool:
     """D24: a podcast's Community shares its id with a User; a ban or deletion of that User hides the Community.
-    Remote Group communities carry no user_id, so they pay no extra query."""
+    A remote Group community carries no user_id, so it pays no extra query. A local community stores its creator in
+    user_id (A15.1), so it pays one; the ap_profile_id match then tells a twin from a creator."""
     if community is None or not community.user_id:
         return False
     owner = db.session.get(User, community.user_id)
