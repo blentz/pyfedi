@@ -6,7 +6,7 @@ import pillow_avif  # NOQA  # registers Pillow's AVIF plugin, for an instance wh
 from boto3.exceptions import Boto3Error
 from botocore.exceptions import BotoCoreError, ClientError
 from flask import current_app
-from sqlalchemy import text
+from sqlalchemy import or_, text
 from flask_babel import force_locale, gettext
 from PIL import Image, ImageOps
 
@@ -256,8 +256,11 @@ def publish_refusal(post) -> str | None:
         return 'the post was deleted'
     if community.banned or community.is_gone():
         return 'the community is gone'
-    still_moderates = db.session.query(CommunityMember).filter_by(
-        user_id=author.id, community_id=community.id, is_moderator=True, is_banned=False).first() is not None
+    # A moderator is an owner or a moderator, as in Community.moderators: an AP Remove can leave an owner unflagged
+    still_moderates = db.session.query(CommunityMember).filter(
+        CommunityMember.user_id == author.id, CommunityMember.community_id == community.id,
+        or_(CommunityMember.is_moderator == True, CommunityMember.is_owner == True),
+        CommunityMember.is_banned == False).first() is not None
     if author.deleted or author.banned or user_banned_from_community(author.id, community.id) or \
             not still_moderates or not can_create_post(author, community) or not can_upload_media(author, community):
         return 'you may no longer post this media in this community'
