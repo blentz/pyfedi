@@ -1,0 +1,39 @@
+{
+  "@context": "https://www.w3.org/ns/activitystreams",
+  "id": "https://castopod.test/@dave/episodes/first-episode",
+  "type": "PodcastEpisode",
+  "published": "2026-10-16T21:24:23+00:00",
+  "to": [
+    "https://www.w3.org/ns/activitystreams#Public"
+  ],
+  "cc": [
+    "https://castopod.test/@dave/followers"
+  ],
+  "attributedTo": "https://castopod.test/@dave",
+  "comments": "https://castopod.test/@dave/episodes/first-episode/comments",
+  "description": {
+    "type": "Note",
+    "mediaType": "text/markdown",
+    "content": "The first episode.",
+    "contentMap": {
+      "en": "<p>The first episode.</p>\n"
+    }
+  },
+  "image": {
+    "type": "Image",
+    "mediaType": "image/png",
+    "url": "https://castopod.test/media/podcasts/dave/cover_feed.png"
+  },
+  "audio": {
+    "id": "https://castopod.test/audio/@dave/first-episode.mp3",
+    "type": "Audio",
+    "name": "First episode",
+    "size": 4406,
+    "duration": 1.0187874874846774,
+    "url": {
+      "href": "https://castopod.test/audio/@dave/first-episode.mp3",
+      "type": "Link",
+      "mediaType": "audio/mpeg"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "@context": "https://www.w3.org/ns/activitystreams",
+  "id": "https://castopod.test/@dave/activities/ff80a373-ca33-48e2-bc85-f12cf9513039",
+  "type": "Create",
+  "to": [
+    "https://www.w3.org/ns/activitystreams#Public"
+  ],
+  "actor": "https://castopod.test/@dave",
+  "object": {
+    "@context": "https://www.w3.org/ns/activitystreams",
+    "id": "https://castopod.test/@dave/posts/e74019f4-48e1-4a00-a609-39bf4f68f4e9",
+    "type": "Note",
+    "content": "<a href=\"https://castopod.test/@dave/episodes/first-episode\">First episode</a><br/>Episode one is out.",
+    "published": "2026-10-16T21:24:23+00:00",
+    "to": [
+      "https://www.w3.org/ns/activitystreams#Public"
+    ],
+    "cc": [
+      "https://castopod.test/@dave/followers"
+    ],
+    "attributedTo": "https://castopod.test/@dave",
+    "replies": "https://castopod.test/@dave/posts/e74019f4-48e1-4a00-a609-39bf4f68f4e9/replies"
+  }
+}
