@@ -1055,3 +1055,43 @@ def test_an_announce_error_still_queues_the_thumbnail_sizes(env, monkeypatch):
 
     assert post.status == POST_STATUS_PUBLISHED
     assert env.sized == [(post.image_id, 512, 1200, 'posts', post.community.low_quality)]
+
+
+# ---------------------------------------------------------------- security review: the sweep re-checks what it moves
+
+
+@pytest.mark.parametrize('change', ['media ready and published', 'published, media record not yet updated'])
+def test_a_post_that_changes_between_the_query_and_the_handling_is_left_alone(sweep, monkeypatch, change):
+    """The sweep's query read the upload as stuck, then a probe finished it before the sweep handled it. The move
+    requires both the media status read and the post still POST_STATUS_PROCESSING, so the sweep changes nothing."""
+    post = stuck(sweep, 'processing', attempts=1)
+    post_id = post.id
+    real_sweep = media_tasks._sweep
+
+    def finished_meanwhile(loaded, now):
+        with Session(bind=db.engine) as other:
+            row = other.get(Post, post_id)
+            row.status = POST_STATUS_PUBLISHED
+            if change == 'media ready and published':
+                row.extensions = {**row.extensions, 'media': {**row.extensions['media'], 'status': 'ready'}}
+            other.commit()
+        real_sweep(loaded, now)
+    monkeypatch.setattr(media_tasks, '_sweep', finished_meanwhile)
+    requeue_stuck_media()
+
+    db.session.expire_all()
+    post = db.session.get(Post, post_id)
+    assert sweep.queued == [] and Notification.query.count() == 0
+    assert post.status == POST_STATUS_PUBLISHED and 'requeues' not in media_of(post)
+
+
+@pytest.mark.parametrize('status', ['ready', 'failed', 'something else', None])
+def test_the_sweep_skips_an_unexpected_media_status(sweep, status):
+    post = stuck(sweep, 'processing', attempts=3)
+    with_media(post, status=status)
+    db.session.commit()
+    before = dict(media_of(post))
+    media_tasks._sweep(post, utcnow())
+    db.session.expire_all()
+    assert media_of(db.session.get(Post, post.id)) == before
+    assert sweep.queued == [] and Notification.query.count() == 0
