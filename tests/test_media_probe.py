@@ -617,8 +617,8 @@ def sweep(env, monkeypatch):
     return env
 
 
-def stuck(env, status, minutes_ago=31, attempts=1, **media):
-    post = stored_post(env)
+def stuck(env, status, minutes_ago=31, attempts=1, title='Processing', **media):
+    post = stored_post(env, title=title)
     stamp = (utcnow() - timedelta(minutes=minutes_ago)).isoformat()
     if status == 'probing':
         media.setdefault('probing_since', stamp)
@@ -638,7 +638,7 @@ def swept(post):
 def test_a_stale_probe_is_put_back_and_queued_again(sweep):
     post = swept(stuck(sweep, 'probing'))
     media = media_of(post)
-    assert media['status'] == 'processing' and media['attempts'] == 1
+    assert media['status'] == 'processing' and media['attempts'] == 1 and media['requeues'] == 1
     assert utcnow() - datetime.fromisoformat(media['requeued_at']) < timedelta(minutes=1)
     assert sweep.queued == [post.id] and post.status == POST_STATUS_PROCESSING
 
@@ -658,7 +658,36 @@ def test_a_probe_with_an_unreadable_start_time_counts_as_stale(sweep):
 def test_an_upload_never_probed_is_queued_again(sweep):
     post = swept(stuck(sweep, 'processing'))
     assert media_of(post)['status'] == 'processing' and sweep.queued == [post.id]
-    assert 'requeued_at' in media_of(post)
+    assert 'requeued_at' in media_of(post) and media_of(post)['requeues'] == 1
+
+
+def test_an_upload_whose_task_is_lost_before_it_claims_times_out_too(sweep):
+    """Only a claim counts an attempt, so a task lost before it claims would be queued again every 30 minutes
+    forever. The sweep's requeues are counted as well, and the same cap of 3 applies."""
+    post = stuck(sweep, 'processing', attempts=0)
+    for requeue in (1, 2, 3):
+        post = swept(post)
+        assert media_of(post)['requeues'] == requeue and media_of(post)['status'] == 'processing'
+        with_media(post, requeued_at=(utcnow() - timedelta(minutes=31)).isoformat())   # its task lost again
+        db.session.commit()
+    post = swept(post)
+    assert media_of(post)['status'] == 'failed' and media_of(post)['error'] == 'processing timed out'
+    assert sweep.queued == [post.id] * 3 and Notification.query.count() == 1
+
+
+def test_one_post_the_sweep_cannot_handle_does_not_stop_the_others(sweep, monkeypatch, caplog):
+    """The sweep runs inside send-queue's minute: an error on one post is logged and the sweep goes on, so the
+    other posts, and the rest of the minute's cron work, still run."""
+    first, second = stuck(sweep, 'processing', title='first'), stuck(sweep, 'processing', title='second')
+
+    def queue(post_id):
+        if post_id == first.id:
+            raise ConnectionError('the broker went away')
+        sweep.queued.append(post_id)
+    monkeypatch.setattr(media_tasks, 'queue_probe', queue)
+    requeue_stuck_media()
+    assert sweep.queued == [second.id]
+    assert 'the broker went away' in caplog.text
 
 
 @pytest.mark.parametrize('case', ['uploaded just now', 'queued again just now'])
@@ -720,7 +749,6 @@ def test_the_sweep_leaves_an_upload_a_live_probe_moved_first(sweep, monkeypatch,
     swept(post)
     assert sweep.queued == [] and Notification.query.count() == 0
     assert media_of(db.session.get(Post, post.id))['status'] == 'probing'
-
 
 
 def test_a_failed_release_does_not_hide_the_error_that_caused_it(env, monkeypatch, caplog):

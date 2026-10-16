@@ -82,12 +82,13 @@ def validate_probe(probe: dict, kind: str) -> dict:
 
 
 # One UPDATE moves the media status, only from `from_status` (and, given a token, only for the run that claimed with it)
-# and only for an undeleted post, and merges `fields` and the attempt count into the media record. Postgres re-reads the WHERE of a row another UPDATE changed meanwhile, so of
+# and only for an undeleted post, and merges `fields` and the `counter` (attempts, or requeues) into the media record. Postgres re-reads the WHERE of a row another UPDATE changed meanwhile, so of
 # two runs racing for one upload exactly one moves it: the compare-and-set is the statement, no read-check-write.
 _MOVE_MEDIA_STATUS = text(
     "UPDATE post SET extensions = jsonb_set(extensions::jsonb, '{media}', (extensions::jsonb -> 'media')"
     " || CAST(:fields AS jsonb)"
-    " || jsonb_build_object('attempts', COALESCE((extensions -> 'media' ->> 'attempts')::int, 0) + :bump))::json"
+    " || jsonb_build_object(CAST(:counter AS text),"
+    " COALESCE((extensions -> 'media' ->> CAST(:counter AS text))::int, 0) + :bump))::json"
     " WHERE id = :post_id AND deleted = false AND extensions -> 'media' ->> 'status' = :from_status"
     " AND (CAST(:token AS text) IS NULL OR extensions -> 'media' ->> 'probing_since' = CAST(:token AS text))")
 STUCK_AFTER = timedelta(minutes=30)   # a probe is bounded by its tools' 60 s limits and one S3 upload
@@ -95,9 +96,9 @@ MAX_ATTEMPTS = 3
 
 
 def _move_media_status(post_id, from_status: str, to_status: str, bump: int = 0, token: str | None = None,
-                       **stamps) -> bool:
+                       counter: str = 'attempts', **stamps) -> bool:
     moved = db.session.execute(_MOVE_MEDIA_STATUS, {
-        'post_id': post_id, 'from_status': from_status, 'bump': bump, 'token': token,
+        'post_id': post_id, 'from_status': from_status, 'bump': bump, 'token': token, 'counter': counter,
         'fields': json.dumps({'status': to_status, **stamps})})
     db.session.commit()
     return moved.rowcount == 1
@@ -350,22 +351,34 @@ def requeue_stuck_media() -> None:
     (OOM, SIGKILL, a deploy restart) loses its task and the post would wait forever.
 
     A probe claimed more than STUCK_AFTER ago, and an upload not probed within STUCK_AFTER of its upload or of its last
-    requeue, is put back to processing and queued again; one that has used MAX_ATTEMPTS fails and its author is told.
-    Each move is the compare-and-set probe_media claims with, so a probe that is in fact alive keeps its upload."""
+    requeue, is put back to processing and queued again. Claims count `attempts` and requeues count `requeues`, so a
+    task lost before it ever claims is capped too: at MAX_ATTEMPTS of either, the upload fails and its author is told.
+    Each move is the compare-and-set probe_media claims with, so a probe that is in fact alive keeps its upload. One
+    post the sweep cannot handle is logged and skipped: the sweep runs inside send-queue's minute, whose other work
+    must still run."""
     cutoff = utcnow() - STUCK_AFTER
-    for post in Post.query.filter(Post.status == POST_STATUS_PROCESSING, Post.deleted == False).all():
-        media = media_of(post) or {}
-        status = media.get('status')
-        if status == 'probing':
-            since = _stamp(media.get('probing_since'))
-        elif status == 'processing':
-            since = _stamp(media.get('requeued_at')) or post.created_at
-        else:
-            continue   # ready, or failed: nothing is waiting
-        if since is not None and since > cutoff:
-            continue
-        if (media.get('attempts') or 0) >= MAX_ATTEMPTS:
-            if _move_media_status(post.id, status, 'failed'):
-                _fail(post, None, [], 'processing timed out')
-        elif _move_media_status(post.id, status, 'processing', requeued_at=utcnow().isoformat()):
-            queue_probe(post.id)
+    for post in Post.query.filter(Post.status == POST_STATUS_PROCESSING, Post.deleted == False).order_by(Post.id).all():
+        try:
+            _sweep(post, cutoff)
+        except Exception as error:
+            db.session.rollback()
+            current_app.logger.error(f'requeue_stuck_media: post {post.id}: {error!r}')
+
+
+def _sweep(post, cutoff) -> None:
+    media = media_of(post) or {}
+    status = media.get('status')
+    if status == 'probing':
+        since = _stamp(media.get('probing_since'))
+    elif status == 'processing':
+        since = _stamp(media.get('requeued_at')) or post.created_at
+    else:
+        return   # ready, or failed: nothing is waiting
+    if since is not None and since > cutoff:
+        return
+    if max(media.get('attempts') or 0, media.get('requeues') or 0) >= MAX_ATTEMPTS:
+        if _move_media_status(post.id, status, 'failed'):
+            _fail(post, None, [], 'processing timed out')
+    elif _move_media_status(post.id, status, 'processing', bump=1, counter='requeues',
+                            requeued_at=utcnow().isoformat()):
+        queue_probe(post.id)
