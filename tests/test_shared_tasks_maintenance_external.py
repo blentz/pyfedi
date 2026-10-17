@@ -928,6 +928,27 @@ class TestRefreshInstanceChooser:
         assert db.session.query(InstanceChooser).filter_by(
             domain='kept.example').first() is not None
 
+    def test_an_unreachable_observer_returns_early_and_keeps_the_rows(self, db_session, http_mock):
+        """The observer request itself failing in transport.
+
+        On hell.cloud, from 2026-10-13, api.fediverse.observer answered every
+        TLS handshake with an EOF. `_capped_request` raised `httpx.ConnectError`
+        and the outer handler re-raised it, so `flask daily-maintenance` died at
+        its first step every night and never logged its run. An outage on the
+        observer's side is no reason to stop the rest of the maintenance, or
+        to prune the chooser rows the last good run left.
+        """
+        db.session.add(InstanceChooser(domain='kept.example'))
+        db.session.commit()
+        http_mock.post(self.OBSERVER).mock(side_effect=httpx.ConnectError(
+            '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol'))
+
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceChooser).filter_by(
+            domain='kept.example').first() is not None
+
     def test_a_malformed_observer_response_returns_early(self, db_session, http_mock):
         """`:991`'s shape check -- 200 with no `data.nodes`."""
         db.session.add(InstanceChooser(domain='kept.example'))

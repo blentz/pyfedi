@@ -1047,8 +1047,13 @@ def refresh_instance_chooser():
         }
         
         headers = {'Content-Type': 'application/json'}
-        response = _capped_request('POST', 'https://api.fediverse.observer/', json=query, headers=headers, timeout=30,
-                                   keep_status=True)
+        try:
+            response = _capped_request('POST', 'https://api.fediverse.observer/', json=query, headers=headers,
+                                       timeout=30, keep_status=True)
+        except httpx.HTTPError as e:
+            # Keep the existing rows: an observer outage says nothing about the instances
+            current_app.logger.warning(f"fediverse.observer API unreachable: {e}")
+            return
         
         if response.status_code != 200:
             current_app.logger.error(f"fediverse.observer API returned {response.status_code}")
