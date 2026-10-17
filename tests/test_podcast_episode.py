@@ -154,3 +154,42 @@ def test_an_inbound_edit_with_a_non_audio_attachment_does_not_mark_audio(env, ki
                    'attachment': [{'type': kind, 'mediaType': 'image/jpeg', 'url': AUDIO_URL, 'name': 'Ep'}]}})
 
     assert (post.extensions or {}).get('media_type') != 'audio'
+
+
+def _edit_with(env, post, attachment):
+    update_post_from_activity(post, {
+        'id': f'{post.ap_id}/update', 'type': 'Update',
+        'object': {'id': post.ap_id, 'type': 'Page', 'name': 'Ep', 'attributedTo': env.author.ap_profile_id,
+                   **({'attachment': attachment} if attachment is not None else {})}})
+
+
+@pytest.mark.parametrize('attachment', [
+    [{'type': 'Link', 'href': 'https://other.example/page'}],
+    [{'type': 'Document', 'mediaType': 'image/jpeg', 'url': 'https://other.example/cover.jpg'}],
+    [{'type': 'Document', 'url': 'https://other.example/page'}],
+    [{'type': 'Audio', 'mediaType': 'text/html', 'url': 'https://other.example/page'}],
+    [{'type': 'Image', 'url': 'https://other.example/cover.jpg'}],
+    {'type': 'Image', 'url': 'https://other.example/cover.jpg'}],
+    ids=['link', 'image-document', 'document-no-mime', 'audio-not-audio', 'image', 'dict'])
+def test_an_edit_whose_attachment_is_no_longer_audio_clears_the_audio_marker(env, monkeypatch, attachment):
+    monkeypatch.setattr('app.activitypub.util.opengraph_parse', lambda url: None)   # no network
+    post = _inbound(env, 'audio/mpeg')
+    assert post.extensions['media_type'] == 'audio'
+
+    _edit_with(env, post, attachment)
+
+    assert (post.extensions or {}).get('media_type') != 'audio'
+
+
+@pytest.mark.parametrize('attachment', [
+    [{'type': 'Document', 'mediaType': 'audio/ogg', 'url': 'https://other.example/two'}],
+    [{'type': 'Document', 'url': 'https://other.example/two.mp3'}],
+    None,
+], ids=['new-audio', 'mp3-no-mime', 'no-attachment'])
+def test_an_edit_that_is_still_audio_or_has_no_attachment_keeps_the_audio_marker(env, monkeypatch, attachment):
+    monkeypatch.setattr('app.activitypub.util.opengraph_parse', lambda url: None)
+    post = _inbound(env, 'audio/mpeg')
+
+    _edit_with(env, post, attachment)
+
+    assert post.extensions['media_type'] == 'audio'

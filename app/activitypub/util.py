@@ -41,7 +41,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     _as_text, _as_int, _as_float, _as_dict, _as_url, property_value_fields, public_key_pem, \
     more_info_link, is_more_info_link, more_info_url_from, \
     language_from_ap, mark_audio_attachment, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError, post_file, GALLERY_BLOCKED_WEIGHT
-from app.utils import strip_quote_fallback, FETCH_MAX_BYTES, get_request, get_request_capped, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
+from app.utils import mimetype_from_url, strip_quote_fallback, FETCH_MAX_BYTES, get_request, get_request_capped, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, PAGE_MAX_BYTES, \
     sanitise_posting_warning, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
@@ -4783,6 +4783,19 @@ def _is_vote_count(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
+def drop_stale_audio_marker(post: Post, attachment: dict, url: str):
+    """An Update whose attachment sets the post's url and is no longer audio ends the post's life as an episode: the
+    A17.3 marker a Create or an earlier Update set goes. An attachment with no mediaType is audio only by its url's
+    extension. (A Create never clears anything: it has no marker yet.)"""
+    if (post.extensions or {}).get('media_type') != 'audio':
+        return
+    media_type = attachment.get('mediaType')
+    if not isinstance(media_type, str) or not media_type:
+        media_type = mimetype_from_url(url) or ''
+    if not media_type.startswith('audio/'):
+        post.extensions = {key: value for key, value in post.extensions.items() if key != 'media_type'}
+
+
 def update_post_from_activity(post: Post, request_json: dict):
     with app_pkg.redis_client.lock(f"lock:post:{post.id}", timeout=60, blocking_timeout=60):
         object_type = request_json['object'].get('type')
@@ -5179,6 +5192,7 @@ def update_post_from_activity(post: Post, request_json: dict):
         # TypeError for a string. `_as_dict(...).get('type')` answers None for both,
         # which matches none of the arms. Every element is scanned, not only the
         # first, so a junk first entry cannot hide the attachments behind it (R202).
+        chosen_attachment = None   # the attachment whose url the Update sets, if one does
         if ('attachment' in request_json['object'] and
                 isinstance(request_json['object']['attachment'], list) and
                 len(request_json['object']['attachment']) > 0 and
@@ -5192,11 +5206,13 @@ def update_post_from_activity(post: Post, request_json: dict):
                     elif 'url' in attachment:
                         new_url = attachment['url']  # NodeBB
                     if new_url:
+                        chosen_attachment = attachment
                         break
                 elif attachment.get('type') == 'Document':
                     new_url = attachment['url']  # Mastodon
                     mark_audio_attachment(post, attachment)
                     if new_url:
+                        chosen_attachment = attachment
                         break
                 elif attachment.get('type') == 'Audio':  # WordPress podcast
                     new_url = attachment['url']
@@ -5204,6 +5220,7 @@ def update_post_from_activity(post: Post, request_json: dict):
                     if 'name' in attachment:
                         post.title = attachment['name']
                     if new_url:
+                        chosen_attachment = attachment
                         break
             # Lastly, check for image posts. Mbin sends link posts with both image and link and we want to ignore the image in that case.
             if not new_url:
@@ -5211,12 +5228,16 @@ def update_post_from_activity(post: Post, request_json: dict):
                     attachment = _as_dict(attachment)
                     if attachment.get('type') == 'Image':
                         new_url = attachment['url']  # PixelFed, PieFed, Lemmy >= 0.19.4
+                        chosen_attachment = attachment
 
         if 'attachment' in request_json['object'] and isinstance(request_json['object']['attachment'],
                                                                  dict):  # Mastodon / a.gup.pe
             # D1397. A dict `attachment` without `url` was a KeyError here, and
             # the Update went with it; None falls through to the parse guard below.
             new_url = request_json['object']['attachment'].get('url')
+            chosen_attachment = request_json['object']['attachment'] if new_url else None
+        if chosen_attachment is not None and object_type not in MEDIA_URL_KIND:
+            drop_stale_audio_marker(post, chosen_attachment, new_url)
         if object_type in MEDIA_URL_KIND:  # C4: the media URL replaces the stored one only when it is usable
             new_url = media_url_from(request_json['object'], MEDIA_URL_KIND[object_type]) or old_url
             if object_type == 'Audio':
