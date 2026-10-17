@@ -698,6 +698,7 @@ Each step gets its own implementation plan and its own commits, and each ends wi
      - the post is `POST_TYPE_LINK` (an audio upload is a link post, A13.5);
      - its media record is `ready`, with a `mime` starting `audio/`;
      - the record's `bytes` and `duration_s` are positive ints, and its `uuid` is a non-empty string.
+     - the record's mime and uuid are valid XML text (a corrupt record that would break the feed is not an episode).
 
      A link to remote audio (`audio_url`) has no media record, so it is not an episode. It federates as today, and the feed leaves it out.
   2. **The `Audio`-bearing object (A16 option 1).** The `Page` stays a `Page`. For an episode, its `attachment` is one `Document` built by `episode_attachment(post)`, in place of today's `{'href': post.url, 'type': 'Link'}`:
