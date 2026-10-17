@@ -17,6 +17,8 @@ from sqlalchemy import inspect
 from app import db
 from app.constants import APPLE_PODCAST_CATEGORIES
 from app.models import Community, Language, Site, utcnow
+from app.constants import SRC_API
+from app.shared import community as shared_community
 from app.shared.community import apply_podcast_category
 from tests.factories import (a_keypair, make_community, make_community_member, make_instance, make_user)
 
@@ -224,12 +226,34 @@ def test_migration_adds_and_drops_the_column(app, db_session):
         connection.rollback()
 
 
-def test_api_edit_refuses_what_the_shared_rule_refuses(api, monkeypatch):
-    """The schema vets the value first; this is the rule's own refusal, should the two lists ever drift."""
-    monkeypatch.setattr('app.shared.community.APPLE_PODCAST_CATEGORIES', ())
+def _input(**fields):
+    return {'name': 'directland', 'title': 'direct land', 'description': '', 'rules': '', 'icon_url': None,
+            'banner_url': None, 'nsfw': False, 'restricted_to_mods': False,
+            'local_only': False, 'discussion_languages': [2], 'question_answer': False, **fields}
 
-    response = _api_edit(api, podcast_category='News')
 
-    assert response.status_code == 400
-    assert REFUSAL in response.get_json()['message']
+def test_make_community_refuses_a_category_apple_does_not_list(api):
+    with pytest.raises(Exception, match=REFUSAL):
+        shared_community.make_community(_input(podcast_category='Nonsense'), SRC_API,
+                                        'Bearer ' + api.maker.encode_jwt_token())
+
+    assert Community.query.filter_by(name='directland').count() == 0
+
+
+def test_make_community_stores_none_for_an_empty_category(api):
+    with patch('app.shared.community.task_selector'):
+        shared_community.make_community(_input(podcast_category=''), SRC_API,
+                                        'Bearer ' + api.maker.encode_jwt_token())
+
+    assert Community.query.filter_by(name='directland').one().podcast_category is None
+
+
+def test_edit_community_refuses_a_category_apple_does_not_list(api):
+    edit = {'community_id': api.community.id, 'title': 'Renamed', 'description': '', 'rules': '', 'icon_url': None,
+            'banner_url': None, 'nsfw': False, 'restricted_to_mods': False, 'local_only': False,
+            'discussion_languages': [2], 'question_answer': False, 'podcast_category': 'Nonsense'}
+
+    with pytest.raises(Exception, match=REFUSAL):
+        shared_community.edit_community(edit, api.community, SRC_API, 'Bearer ' + api.moderator.encode_jwt_token())
+
     assert _stored(api.community.id).podcast_category is None

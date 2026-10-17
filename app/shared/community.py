@@ -315,7 +315,11 @@ def make_community(input, src, auth=None, uploaded_icon_file=None, uploaded_bann
                           ap_domain=current_app.config['SERVER_NAME'],
                           subscriptions_count=1, instance_id=1, low_quality='memes' in name,
                           question_answer=question_answer, first_federated_at=utcnow(),
-                          kind=kind, podcast_category=podcast_category or None, user_id=user.id)
+                          kind=kind, user_id=user.id)
+    if src == SRC_API:
+        refusal = apply_podcast_category(community, podcast_category)
+        if refusal is not None:
+            raise Exception(refusal)
     try:
         db.session.add(community)
         db.session.commit()
