@@ -3,6 +3,7 @@ stays a Page for every peer; only its attachment changes, from a bare Link to a 
 parses (Lemmy 0.19's Attachment has no Audio variant, and one unknown entry rejects the whole Page)."""
 from app.constants import COMMUNITY_KIND_PODCAST, POST_TYPE_LINK
 from app.models import media_of
+from app.utils import is_valid_xml_utf8
 
 NAME_MAX = 1500   # Mastodon's MediaAttachment::MAX_DESCRIPTION_LENGTH
 
@@ -13,15 +14,16 @@ def _positive_int(value) -> bool:
 
 def uses_podcast_episode(post) -> bool:
     """A ready audio upload in a local podcast community (A17.1). A remote-audio link has no media record, so it is
-    not one."""
+    not one. A mime or uuid that is not XML text is no episode either: the feed writes both into XML, and lxml raises
+    on a control character, which would fail the whole feed."""
     community = post.community
     media = media_of(post)
     return bool(community.kind == COMMUNITY_KIND_PODCAST and community.is_local()
                 and post.type == POST_TYPE_LINK
                 and media is not None and media.get('status') == 'ready'
-                and str(media.get('mime', '')).startswith('audio/')
+                and str(media.get('mime', '')).startswith('audio/') and is_valid_xml_utf8(str(media['mime']))
                 and _positive_int(media.get('bytes')) and _positive_int(media.get('duration_s'))
-                and isinstance(media.get('uuid'), str) and media['uuid'] != '')
+                and isinstance(media.get('uuid'), str) and media['uuid'] != '' and is_valid_xml_utf8(media['uuid']))
 
 
 def episode_attachment(post) -> dict:
