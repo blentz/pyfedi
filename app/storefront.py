@@ -50,30 +50,15 @@ def normalise_host(host: str) -> str:
     return _bare_host(host)
 
 
-def _port_of(authority: str) -> int | None:
-    """The port an authority names, or None when it has none or an invalid one."""
-    try:
-        return urlsplit(f'//{authority.strip()}').port
-    except ValueError:
-        return None
-
-
-_DEFAULT_PORTS = {'http': 80, 'https': 443}
-
-
 def _authority(storefront) -> str:
-    """`host[:port]` for building URLs on `storefront`. The port is the one the request came in on, or SERVER_NAME's
-    when there is no request and `storefront` is that host (a dev install on 127.0.0.1:5000). A scheme's default
-    port is left out."""
+    """`host[:port]` for building URLs on `storefront`. It comes from configuration only, never from the request:
+    the Host header's port would let a client put its own port into absolute URLs. SERVER_NAME's host uses
+    SERVER_NAME verbatim (a dev install on 127.0.0.1:5000 keeps its port); any other registered domain is its bare
+    host."""
     server_name = current_app.config.get('SERVER_NAME') or ''
-    if has_request_context():
-        port = _port_of(request.host)
-    elif storefront.domain == _bare_host(server_name):
-        port = _port_of(server_name)
-    else:
-        port = None
-    host = f'[{storefront.domain}]' if ':' in storefront.domain else storefront.domain
-    return host if port in (None, _DEFAULT_PORTS.get(storefront.scheme)) else f'{host}:{port}'
+    if storefront.domain == _bare_host(server_name):
+        return server_name
+    return f'[{storefront.domain}]' if ':' in storefront.domain else storefront.domain
 
 
 def _synthesised_default() -> DomainInfo:
