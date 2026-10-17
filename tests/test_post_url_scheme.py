@@ -39,14 +39,13 @@ change this file deliberately rather than by accident.
 import contextlib
 
 import pytest
-from flask import g
 
 from app import db
 from app.activitypub.util import post_to_page, update_post_from_activity
 from app.constants import POST_TYPE_ARTICLE, POST_TYPE_LINK
-from app.models import Post, Site
+from app.models import Post
 from app.utils import url_is_storable
-from tests.factories import make_community, make_instance, make_user
+from tests.podcast_fixtures import env  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
 PEER = 'peer.test'
@@ -92,23 +91,6 @@ def no_head(monkeypatch):
     unfixed code's HEAD request to `javascript:alert(...)` (which respx reported as
     `HEAD /alert(document.domain)`) does not decide anything either."""
     monkeypatch.setattr('app.utils.mime_type_using_head', lambda url: '')
-
-
-@pytest.fixture
-def env(app, db_session):
-    from types import SimpleNamespace
-    site = db.session.get(Site, 1)
-    site.private_instance = False
-    g.site = site
-    g.admin_ids = []
-    local = make_instance(HOST, software='piefed')
-    make_user(local, 'founder', local=True)
-    peer = make_instance(PEER)
-    author = make_user(peer, 'author')
-    author.ap_profile_id = f'https://{PEER}/u/author'
-    community = make_community('general')
-    db.session.commit()
-    return SimpleNamespace(author=author, community=community)
 
 
 @pytest.fixture
