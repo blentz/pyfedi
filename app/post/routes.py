@@ -57,6 +57,7 @@ import app.shared.community as shared_community
 from app.shared.media import episode_form_wanted, episode_of, media_of
 from app.shared.tasks import task_selector
 import app.variants as variants
+from app.storefront import storefront_url
 from app.utils import etag_stamp
 from app.utils import clean_ap_url, can_moderate, render_template, markdown_to_html, validation_required, \
     shorten_string, markdown_to_text, gibberish, ap_datetime, return_304, \
@@ -704,9 +705,9 @@ def post_oembed(post_id):
             "version": "1.0",
             "type": "rich",
             "provider_name": g.site.name,
-            "provider_url": f"{current_app.config['SERVER_URL']}",
+            "provider_url": storefront_url(),
             "title": title,
-            "html": f"<p><iframe src='{iframe_url}' class='piefed-embed' style='max-width: 100%; border: 0' width='400' allowfullscreen='allowfullscreen'></iframe><script src='https://{current_app.config['SERVER_NAME']}/static/js/embed.js' async='async'></script></p>",
+            "html": f"<p><iframe src='{iframe_url}' class='piefed-embed' style='max-width: 100%; border: 0' width='400' allowfullscreen='allowfullscreen'></iframe><script src='{storefront_url()}/static/js/embed.js' async='async'></script></p>",
             "width": 400,
             "height": 300,
             "author_name": post.author.display_name(),

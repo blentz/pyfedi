@@ -110,8 +110,7 @@ def send_newsletter(form):
                                     content=form.body_text.data)
         body_html = render_template('email/newsletter.html',
                                     recipient=recipient if not form.test.data else current_user,
-                                    content=form.body_html.data,
-                                    domain=current_app.config['SERVER_NAME'])
+                                    content=form.body_html.data)
         if form.test.data:
             to = current_user.email
         else:

@@ -170,7 +170,7 @@ def reset_password(token):
         db.session.commit()
         flash(_('Your password has been reset. Please use it to log in with user name of %(name)s.', name=user.user_name))
         return redirect(url_for('auth.login'))
-    return render_template('auth/reset_password.html', form=form, domain=current_app.config['SERVER_NAME'])
+    return render_template('auth/reset_password.html', form=form)
 
 
 @bp.route('/verify_email/<token>')

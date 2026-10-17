@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 from feedgen.feed import FeedGenerator
 from app.models import media_of
 from app.shared.media import episode_of
+from app.storefront import storefront_link
 from app.utils import has_unsafe_url_scheme, feed_entry_body, mimetype_from_url, is_video_hosting_site, is_valid_xml_utf8 as _is_valid_xml_utf8
 # could be used later for instance checks: from app.models import User, Community, Post, PostReply
 
@@ -196,7 +197,12 @@ class RSSFeed:
                 fe.category(term=cat, scheme='flair/tag')
 
         if podcast:
-            cls._add_episode(fe, episode_item_fields(post))
+            fields = episode_item_fields(post)
+            url, length, mime = fields['enclosure']
+            fields['enclosure'] = (storefront_link(url), length, mime)   # a stored URL, shown on this storefront
+            if 'image' in fields:
+                fields['image'] = storefront_link(fields['image'])
+            cls._add_episode(fe, fields)
 
     @staticmethod
     def _add_episode(entry, fields):
@@ -236,7 +242,7 @@ class RSSFeed:
         """
         if not url:
             return None
-        medium = {'url': url}
+        medium = {'url': storefront_link(url)}   # a stored URL, shown on this storefront
 
         type = mimetype_from_url(url)
         if not type and is_video_hosting_site(url):

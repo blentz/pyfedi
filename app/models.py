@@ -41,6 +41,8 @@ from app.constants import SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPT
     POST_STATUS_PUBLISHED, POST_TYPE_VIDEO, INVITE_MEMBERS_ONLY, INVITE_MODS_ONLY, INVITE_OWNER_ONLY, ROLE_ADMIN_NAME, \
     ROLE_STAFF_NAME, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC, VISIBILITY_UNLISTED
 import app as app_pkg
+# The module, not the name: app.storefront reads SiteDomain from this module (import cycle: storefront)
+import app.storefront as storefront
 from app.relays import current_relay_id
 
 
@@ -1029,7 +1031,13 @@ class File(db.Model):
 
     user = db.relationship('User', lazy='dynamic', secondary=user_file)
 
-    def view_url(self, resize=False):
+    @staticmethod
+    def _origin(canonical: bool) -> str:
+        """Where a local file is served from: the visitor's storefront, or with `canonical` the federation origin,
+        for what a peer receives (spec §3.4)."""
+        return storefront.canonical_url() if canonical else storefront.storefront_url()
+
+    def view_url(self, resize=False, canonical=False):
         if self.source_url:
             if resize and '/pictrs/' in self.source_url and '?' not in self.source_url:
                 return f'{self.source_url}?thumbnail=1024'
@@ -1038,18 +1046,18 @@ class File(db.Model):
         elif self.file_path:
             if self.file_path.startswith('http'):
                 return self.file_path
-            return f"{current_app.config['SERVER_URL']}{served_path(self.file_path)}"
+            return f"{self._origin(canonical)}{served_path(self.file_path)}"
         else:
             return ''
 
-    def medium_url(self):
+    def medium_url(self, canonical=False):
         if self.file_path is None:
-            return self.thumbnail_url()
+            return self.thumbnail_url(canonical)
         if self.file_path.startswith('http'):
             return self.file_path
-        return f"{current_app.config['SERVER_URL']}{served_path(self.file_path)}"
+        return f"{self._origin(canonical)}{served_path(self.file_path)}"
 
-    def thumbnail_url(self):
+    def thumbnail_url(self, canonical=False):
         if self.thumbnail_path is None:
             if self.source_url:
                 return self.source_url
@@ -1059,7 +1067,7 @@ class File(db.Model):
             return self.thumbnail_path
         # image paths must include fqdn (not just starting with /) because apps need
         # to make a request from outside
-        return f"{current_app.config['SERVER_URL']}{served_path(self.thumbnail_path)}"
+        return f"{self._origin(canonical)}{served_path(self.thumbnail_path)}"
 
     def is_image(self):
         # D1409, as `is_image_url` (app/utils.py) one round earlier: the value read here is

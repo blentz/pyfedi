@@ -168,8 +168,18 @@ def test_an_unknown_topic_aborts_before_the_line_that_looked_uncovered(app, publ
 
     assert response.status_code == 404
     source = _lines('app/topic/routes.py')
-    assert source[67].strip() == 'abort(404)', 'the early abort moved; 212 may now be live'
-    assert source[212].strip() == 'abort(404)'
+
+    def find(needle, after):
+        return next(n for n in range(after, len(source)) if needle in source[n])
+
+    # found by content, not line number: an import added above them must not break this row
+    start = find('def show_topic(', 0)
+    loop = find('for url_part in topic_url_parts:', start)
+    early = find('abort(404)', loop)
+    branch = find('if current_topic:', early)
+    assert source[early - 1].strip() == 'else:' and early < branch, 'the early abort moved; the else may now be live'
+    assert source[branch - 1].strip() == '' and source[branch - 2].strip() == 'current_topic = topic'
+    assert source[find('abort(404)', branch) - 1].strip() == 'else:'
 
 
 def test_show_feed_dereferences_its_argument_long_before_the_uncovered_else(app, public):

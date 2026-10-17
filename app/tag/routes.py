@@ -15,6 +15,7 @@ from app.constants import POST_STATUS_REVIEWING
 import app.feed.routes as feed_routes
 from app.inoculation import inoculation
 from app.models import Post, Community, Tag, post_tag, Topic, FeedItem, Feed
+from app.storefront import storefront_link, storefront_url
 from app.tag import bp
 # The module, not the name: app.topic.routes reaches this file through
 # app.activitypub before get_all_child_topic_ids is defined (import cycle: topic.routes)
@@ -123,7 +124,7 @@ def show_tag(tag):
                                next_url=next_url, prev_url=prev_url,
                                content_filters=content_filters, category=category, category_id=category_id,
                                moderated_community_ids=moderating_communities_ids(current_user.get_id()),
-                               rss_feed=f"{current_app.config['SERVER_URL']}/tag/{tag.name}/feed",
+                               rss_feed=f"{storefront_url()}/tag/{tag.name}/feed",
                                rss_feed_name=f"#{tag.display_as} on {g.site.name}",
                                inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None,
                                )
@@ -147,25 +148,25 @@ def show_tag_rss(tag):
         posts = posts.order_by(desc(Post.posted_at)).limit(20).all()
 
         fg = FeedGenerator()
-        fg.id(f"{current_app.config['SERVER_URL']}/tag/{tag.name}")
+        fg.id(f"{storefront_url()}/tag/{tag.name}")
         fg.title(f'#{tag.display_as} on {g.site.name}')
-        fg.link(href=f"{current_app.config['SERVER_URL']}/tag/{tag.name}", rel='alternate')
-        fg.logo(f"{current_app.config['SERVER_URL']}{g.site.logo_152 if g.site.logo_152 else '/static/images/apple-touch-icon.png'}")
+        fg.link(href=f"{storefront_url()}/tag/{tag.name}", rel='alternate')
+        fg.logo(f"{storefront_url()}{g.site.logo_152 if g.site.logo_152 else '/static/images/apple-touch-icon.png'}")
         fg.subtitle(' ')
-        fg.link(href=f"{current_app.config['SERVER_URL']}/tag/{tag.name}/feed", rel='self')
+        fg.link(href=f"{storefront_url()}/tag/{tag.name}/feed", rel='self')
         fg.language('en')
 
         for post in posts:
             fe = fg.add_entry()
             fe.title(post.title)
             if post.slug:
-                fe.link(href=f"{current_app.config['SERVER_URL']}{post.slug}")
+                fe.link(href=f"{storefront_url()}{post.slug}")
             else:
-                fe.link(href=f"{current_app.config['SERVER_URL']}/post/{post.id}")
+                fe.link(href=f"{storefront_url()}/post/{post.id}")
             if post.url and not post.content_warning:
                 type = mimetype_from_url(post.url)
                 if type and not type.startswith('text/'):
-                    fe.enclosure(post.url, type=type)
+                    fe.enclosure(storefront_link(post.url), type=type)
             fe.description(feed_entry_body(post))
             fe.guid(post.profile_id(), permalink=True)
             fe.author(name=post.author.user_name)

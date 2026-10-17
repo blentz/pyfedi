@@ -74,7 +74,7 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     PostReply, PostReplyBookmark, AllowedInstances, InstanceBan, Tag, Emoji, UserExtraField, ArchivedPostReply, \
     RevokedToken, CommunityFavorite, UserFollower, CommunityFlairBlock, s3_key_from_url, Role, RolePermission, \
     ServerViewMember
-from app.storefront import is_local_host, is_local_link
+from app.storefront import is_local_host, is_local_link, storefront_host, storefront_url
 from collections import Counter
 from flask import has_request_context
 import app as app_pkg
@@ -93,7 +93,7 @@ def render_template(template_name: str, skip_protocol_replacement: bool = False,
         content = flask.render_template(template_name, **context)
 
     if not skip_protocol_replacement and current_app.config['HTTP_PROTOCOL'] == 'mixed':  # mixed mode is for instances like retro.piefed.com which has a web ui that uses http while federation happens over https
-        server_name = current_app.config['SERVER_NAME']
+        server_name = storefront_host()
         content = content.replace(f"https://{server_name}", f"http://{server_name}")
 
     # Browser caching using ETags and Cache-Control
@@ -2335,10 +2335,7 @@ def first_paragraph(html):
 
 
 def community_link_to_href(link: str, server_name_override: str | None = None) -> str:
-    if server_name_override:
-        server_name = server_name_override
-    else:
-        server_name = current_app.config['SERVER_NAME']
+    origin = f'https://{server_name_override}' if server_name_override else storefront_url()
 
     # A NUL first: a placeholder of letters and digits right after a handle was read as more of its host.
     code_placeholder = '\x00' + gibberish(10)
@@ -2355,7 +2352,7 @@ def community_link_to_href(link: str, server_name_override: str | None = None) -
     tag_snippets, link = stash_code_html(link, tag_placeholder, _ANY_TAG_HTML_RE)
 
     pattern = COMMUNITY_PATTERN
-    server = r'<a href="https://' + server_name + r'/community/lookup/'
+    server = r'<a href="' + origin + r'/community/lookup/'
     link = re.sub(pattern, server + r'\g<1>/\g<2>">' + r'!\g<1>@\g<2></a>', link)
 
     # Bring back the tags, then the links
@@ -2369,10 +2366,7 @@ def community_link_to_href(link: str, server_name_override: str | None = None) -
 
 
 def feed_link_to_href(link: str, server_name_override: str | None = None) -> str:
-    if server_name_override:
-        server_name = server_name_override
-    else:
-        server_name = current_app.config['SERVER_NAME']
+    origin = f'https://{server_name_override}' if server_name_override else storefront_url()
 
     # A NUL first: a placeholder of letters and digits right after a handle was read as more of its host.
     code_placeholder = '\x00' + gibberish(10)
@@ -2389,7 +2383,7 @@ def feed_link_to_href(link: str, server_name_override: str | None = None) -> str
     tag_snippets, link = stash_code_html(link, tag_placeholder, _ANY_TAG_HTML_RE)
 
     pattern = FEED_PATTERN
-    server = r'<a href="https://' + server_name + r'/feed/lookup/'
+    server = r'<a href="' + origin + r'/feed/lookup/'
     link = re.sub(pattern, server + r'\g<1>/\g<2>">' + r'~\g<1>@\g<2></a>', link)
 
     # Bring back the tags, then the links
@@ -2403,10 +2397,7 @@ def feed_link_to_href(link: str, server_name_override: str | None = None) -> str
 
 
 def person_link_to_href(link: str, server_name_override: str | None = None) -> str:
-    if server_name_override:
-        server_name = server_name_override
-    else:
-        server_name = current_app.config['SERVER_NAME']
+    origin = f'https://{server_name_override}' if server_name_override else storefront_url()
 
     # A NUL first: a placeholder of letters and digits right after a handle was read as more of its host.
     code_placeholder = '\x00' + gibberish(10)
@@ -2424,7 +2415,7 @@ def person_link_to_href(link: str, server_name_override: str | None = None) -> s
 
     # Substitute @user@instance.tld with <a> tags, but ignore if it has a preceding / or [ character
     pattern = PERSON_PATTERN
-    server = f'https://{server_name}/user/lookup/'
+    server = f'{origin}/user/lookup/'
     replacement = (r'<a href="' + server + r'\g<1>/\g<2>" rel="nofollow noindex">@\g<1>@\g<2></a>')
     link = re.sub(pattern, replacement, link)
 

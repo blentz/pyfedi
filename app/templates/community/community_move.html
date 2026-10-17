@@ -27,7 +27,7 @@
             <li><p>{{ _('Create a post in the old community announcing the impending move to %(instance_domain)s. Paste the url of that post into the field below.', instance_domain=instance_domain) }}</p></li>
             <li><p>{{ _('Submit the form to send the request to %(instance_domain)s admins.', instance_domain=instance_domain) }}</p></li>
             <li><p>{{ _('%(instance_domain)s admins will review your request, turn this community into a local one and contact you.', instance_domain=instance_domain) }}</p></li>
-            <li><p>{{ _('Update your announcement post in the old community to encourage people to join the new community at<br>!%(community_name)s@%(instance_domain)s.', community_name=community.name, instance_domain=instance_domain) }}</p></li>
+            <li><p>{{ _('Update your announcement post in the old community to encourage people to join the new community at<br>!%(community_name)s@%(instance_domain)s.', community_name=community.name, instance_domain=handle_domain) }}</p></li>
         </ol>
         <hr>
         {{ render_form(form) }}

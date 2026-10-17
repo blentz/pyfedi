@@ -17,7 +17,7 @@ from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, PO
     SUBSCRIPTION_MODERATOR, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_PENDING, ROLE_ADMIN_NAME, VERSION, \
     POST_TYPE_EVENT, AP_MEDIA_TYPES, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO
 from app.models import Site, utcnow
-from app.storefront import check_default_domain, is_local_link, resolve_storefront
+from app.storefront import check_default_domain, is_local_link, resolve_storefront, storefront_host, storefront_url
 from app.shared.media import can_upload_media, media_kind_for, media_of, upload_byte_limit
 from app.utils import getmtime, gibberish, shorten_string, shorten_url, digits, user_access, community_membership, joined_server_views, \
     can_upvote, can_downvote, shorten_number, ap_datetime, current_theme, community_link_to_href, \
@@ -37,13 +37,32 @@ def viewer_can_view(obj) -> bool:
     return can_view(obj, current_user.get_id())
 
 
+class OnUse:
+    """A template value computed only when a template uses it. Most pages never name the storefront, and outside a
+    request (an email from a background job) finding the default storefront reads site_domain. Unlike werkzeug's
+    LocalProxy it forwards no attribute lookups, so Jinja's probes of its context values do not compute it."""
+
+    def __init__(self, compute):
+        self._compute = compute
+
+    def __str__(self):
+        return self._compute()
+
+    def __bool__(self):
+        return bool(self._compute())
+
+    def __add__(self, other):
+        return self._compute() + other
+
+
 def register_request_hooks(app):
     with app.app_context():
         check_default_domain()
 
     @app.context_processor
     def app_context_processor():
-        return dict(getmtime=getmtime, instance_domain=current_app.config['SERVER_NAME'], debug_mode=current_app.debug,
+        return dict(getmtime=getmtime, instance_domain=OnUse(storefront_host), site_url=OnUse(storefront_url),
+                    debug_mode=current_app.debug,
                     pendulum=pendulum, locale=g.locale if hasattr(g, 'locale') else None, notif_server=current_app.config['NOTIF_SERVER'],
                     site=g.site if hasattr(g, 'site') else None, nonce=g.nonce if hasattr(g, 'nonce') else None,
                     admin_ids=g.admin_ids if hasattr(g, 'admin_ids') else [], low_bandwidth=g.low_bandwidth if hasattr(g, 'low_bandwidth') else None,
@@ -221,7 +240,7 @@ def register_request_hooks(app):
                         del response.headers['Vary']
         else:
             if not current_app.config['ALLOW_AI_CRAWLERS']:
-                response.headers.add('Link', f'<https://{current_app.config["SERVER_NAME"]}/rsl.xml>; rel="license"; type="application/rsl+xml"')
+                response.headers.add('Link', f'<{storefront_url()}/rsl.xml>; rel="license"; type="application/rsl+xml"')
             if 'auth/register' not in request.path:
                 if hasattr(g, 'nonce') and "api/alpha/swagger" not in request.path:
                     # Don't set CSP header for htmx fragment requests - they use parent page's CSP

@@ -426,7 +426,7 @@ def post_to_page(post: Post):
     elif (post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO or post.type == POST_TYPE_EVENT) and post.url is not None:
         activity_data["attachment"] = [{"href": post.url, "type": "Link"}]
     if post.image_id is not None:
-        activity_data["image"] = {"url": post.image.view_url(), "type": "Image"}
+        activity_data["image"] = {"url": post.image.view_url(canonical=True), "type": "Image"}
         if post.type == POST_TYPE_IMAGE:
             activity_data['attachment'] = [{'type': 'Image',
                                             'url': post.image.source_url,
@@ -1044,7 +1044,8 @@ def served_by_us(url: str, file) -> bool:
     For a local community such a URL is no change."""
     if host_of(url) == host_of(current_app.config['SERVER_URL']):
         return True
-    return file is not None and url in (file.source_url, file.view_url(), file.medium_url(), file.thumbnail_url())
+    return file is not None and url in (file.source_url, file.view_url(canonical=True), file.medium_url(canonical=True),
+                                        file.thumbnail_url(canonical=True))
 
 
 def community_actor_data(community: Community) -> dict:

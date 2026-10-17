@@ -84,7 +84,7 @@ from app.shared.tasks import task_selector
 import app.shared.feed as shared_feed
 from app.utils import is_valid_xml_utf8, get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url, joined_server_views
 from app.activitypub.serializers.podcast import uses_podcast_episode
-from app.storefront import is_local_host
+from app.storefront import is_local_host, storefront_host, storefront_link, storefront_url
 from app.rss_extras import RSSFeed, PodcastChannel, itunes_image_ok
 from datetime import timezone, timedelta
 from flask import render_template as flask_render_template
@@ -800,7 +800,7 @@ def show_community(community: Community, from_instance=None):
                                          canonical=community.profile_id(), ap_alternate=ap_alternate,
                                          can_upvote_here=can_upvote(user, community),
                                          can_downvote_here=can_downvote(user, community),
-                                         rss_feed=None if view_actor else f"{current_app.config['SERVER_URL']}/community/{community.link()}/feed",
+                                         rss_feed=None if view_actor else f"{storefront_url()}/community/{community.link()}/feed",
                                          rss_feed_name=f"{community.title} on {g.site.name}",
                                          content_filters=content_filters, sort=sort, flair=flair, show_post_community=False,
                                          tags=[] if view_actor else hashtags_used_in_community(community.id, content_filters),
@@ -884,9 +884,9 @@ def show_community_rss(actor):
         limit = max(min(limit, 100), 0)
         posts = posts.order_by(desc(Post.created_at)).limit(limit).all()
 
-        server_url = current_app.config['SERVER_URL']
+        server_url = storefront_url()
         description = shorten_string(community.description, 150) if community.description else ' '
-        image = community.image.source_url if community.image_id \
+        image = storefront_link(community.image.source_url) if community.image_id \
                           else f"{server_url}/static/images/apple-touch-icon.png"
         podcast = None
         language = 'en'
@@ -895,7 +895,7 @@ def show_community_rss(actor):
             # whose shape SQL cannot test. listable_clause (visibility == public) already implies is_open.
             posts = [post for post in posts if uses_podcast_episode(post)]
             # feedgen offers only a .jpg/.png URL to itunes:image: the first of icon, banner and the site's icon that is one
-            candidates = [urljoin(server_url, served_path(file.file_path or file.source_url))
+            candidates = [storefront_link(urljoin(server_url, served_path(file.file_path or file.source_url)))
                           for file in (community.icon, community.image) if file is not None
                           and (file.file_path or file.source_url)]
             owner = db.session.get(User, community.user_id) if community.user_id else None
@@ -2119,11 +2119,11 @@ def community_move(actor):
             text_body = flask_render_template('email/move_community.txt', current_user=current_user,
                                               community=community,
                                               post_url=form.post_link.data,
-                                              home_domain=current_app.config['SERVER_NAME'])
+                                              home_domain=storefront_host())
             html_body = flask_render_template('email/move_community.html', current_user=current_user,
                                               community=community,
                                               post_url=form.post_link.data,
-                                              home_domain=current_app.config['SERVER_NAME'])
+                                              home_domain=storefront_host())
             send_email(f'Request to move {community.link()}', f'{current_app.config["MAIL_FROM"]}',
                        g.site.contact_email, text_body, html_body, current_user.email)
 
@@ -2141,7 +2141,9 @@ def community_move(actor):
             db.session.commit()
 
             flash(_('Your request has been sent to the site admins.'))
-        return render_template('community/community_move.html', community=community, form=form)
+        # a community handle names the federation domain, whichever storefront shows it
+        return render_template('community/community_move.html', community=community, form=form,
+                               handle_domain=current_app.config['SERVER_NAME'])
     else:
         abort(404)
 

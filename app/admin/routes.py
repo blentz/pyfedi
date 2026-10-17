@@ -44,7 +44,7 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, RolePermission, Domain, \
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, SiteDomain
-from app.storefront import clear_domain_cache, default_domain
+from app.storefront import clear_domain_cache, default_domain, storefront_url
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
 from app.translation import LibreTranslateAPI
@@ -2692,7 +2692,7 @@ def admin_community_move(community_id, new_owner):
         else:
             move_community_images_to_here.delay(community.id)
 
-        new_url = f'{current_app.config["SERVER_URL"]}/c/{community.link()}'
+        new_url = f'{storefront_url()}/c/{community.link()}'
         flash(_('%(community_name)s is now %(new_url)s. Contact the initiator of this request to let them know.',
                 community_name=old_name, new_url=new_url))
 

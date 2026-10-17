@@ -41,6 +41,7 @@ from app.main.util import sidebar_active_communities, sidebar_new_instances, sid
     sidebar_new_communities, _base_list_communities_context, reload_url
 from app.translation import LibreTranslateAPI
 from app.visibility import listable_clause, modlog_open_clause, visible_to_clause
+from app.storefront import storefront_link, storefront_url
 from app.utils import etag_stamp
 from app.utils import render_template, ensure_rss_token, get_setting, request_etag_matches, return_304, blocked_domains, rss_token_user, \
     ap_datetime, shorten_string, user_filters_home, \
@@ -973,8 +974,7 @@ And if you want to add your score to the database to help your fellow Bookworms 
                                                        notifications=notifications),
                        html_body=flask.render_template('email/unread_notifications.html', user=user,
                                                        notifications=notifications,
-                                                       posts=posts,
-                                                       domain=current_app.config['SERVER_NAME']))
+                                                       posts=posts))
             user.email_unread_sent = True
             db.session.commit()
 
@@ -1364,7 +1364,7 @@ def static_manifest():
         manifest = json.load(f)
 
     # Modify manifest
-    manifest['id'] = f'{current_app.config["SERVER_URL"]}'
+    manifest['id'] = f'{storefront_url()}'
     manifest['name'] = g.site.name if g.site.name else 'PieFed'
     manifest['description'] = g.site.description if g.site.description else ''
     
@@ -1519,31 +1519,31 @@ def index_rss(feed_type=None):
     description = shorten_string(g.site.description, 150) if g.site.description else None
     og_image = g.site.logo if g.site.logo else None
     fg = FeedGenerator()
-    fg.id(f"{current_app.config['SERVER_URL']}/{feed_type}{rss_token}")
+    fg.id(f"{storefront_url()}/{feed_type}{rss_token}")
     fg.title(f'{g.site.name} - {feed_type.capitalize()}')
-    fg.link(href=f"{current_app.config['SERVER_URL']}", rel='alternate')
+    fg.link(href=f"{storefront_url()}", rel='alternate')
     if og_image:
         fg.logo(og_image)
     else:
-        fg.logo(f"{current_app.config['SERVER_URL']}/static/images/apple-touch-icon.png")
+        fg.logo(f"{storefront_url()}/static/images/apple-touch-icon.png")
     if description:
         fg.subtitle(description)
     else:
         fg.subtitle(' ')
-    fg.link(href=f"{current_app.config['SERVER_URL']}/feed", rel='self')
+    fg.link(href=f"{storefront_url()}/feed", rel='self')
     fg.language('en')
 
     for post in posts:
         fe = fg.add_entry()
         fe.title(post.title)
         if post.slug:
-            fe.link(href=f"{current_app.config['SERVER_URL']}{post.slug}")
+            fe.link(href=f"{storefront_url()}{post.slug}")
         else:
-            fe.link(href=f"{current_app.config['SERVER_URL']}/post/{post.id}")
+            fe.link(href=f"{storefront_url()}/post/{post.id}")
         if post.url and not post.content_warning:
             type = mimetype_from_url(post.url)
             if type and not type.startswith('text/'):
-                fe.enclosure(post.url, type=type)
+                fe.enclosure(storefront_link(post.url), type=type)
         fe.description(feed_entry_body(post))
         fe.guid(post.profile_id(), permalink=True)
         fe.author(name=post.author.user_name)

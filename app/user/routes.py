@@ -53,7 +53,7 @@ from app.utils import user_banned_from_community, back, render_template, markdow
 from app.rss_extras import RSSFeed
 import app.api.alpha.views as alpha_views
 from app.utils import user_filters_languages
-from app.storefront import is_local_host
+from app.storefront import is_local_host, storefront_url
 from app.utils import ap_alternate_url
 from app.utils import canonical_host
 import app as app_pkg
@@ -249,7 +249,7 @@ def show_profile(user):
                            show_deleted=current_user.is_authenticated and current_user.is_admin_or_staff(),
                            reported_posts=reported_posts(current_user.get_id(), current_user.get_id() in g.admin_ids),
                            moderated_community_ids=moderating_communities_ids(current_user.get_id()),
-                           rss_feed=f"{current_app.config['SERVER_URL']}/u/{user.link()}/feed" if user.post_count > 0 else None,
+                           rss_feed=f"{storefront_url()}/u/{user.link()}/feed" if user.post_count > 0 else None,
                            rss_feed_name=f"{user.display_name()} on {g.site.name}" if user.post_count > 0 else None,
                            user_has_public_feeds=user_has_public_feeds, user_public_feeds=user_public_feeds,
                            overview_items=overview_items, overview_next_url=overview_next_url,
@@ -290,7 +290,7 @@ def user_upvotes(actor):
                                title=_('Posts upvoted by %(user_name)s', user_name=user.user_name),
                                upvoted=upvoted, disable_voting=True,
                                user_notes=user_notes(current_user.get_id()),
-                               rss_feed=f"{current_app.config['SERVER_URL']}/u/{user.link()}/feed" if user.post_count > 0 else None,
+                               rss_feed=f"{storefront_url()}/u/{user.link()}/feed" if user.post_count > 0 else None,
                                rss_feed_name=f"{user.display_name()} on {g.site.name}" if user.post_count > 0 else None)
 
 
@@ -2513,7 +2513,7 @@ def show_profile_rss(actor):
             filter(Post.from_bot == False, Post.deleted == False, Post.visibility.in_(OPEN_VISIBILITIES),
                    Post.status > POST_STATUS_REVIEWING).order_by(desc(Post.created_at)).limit(limit).all()
 
-        server_url = current_app.config['SERVER_URL']
+        server_url = storefront_url()
         description = shorten_string(user.about, 150) if user.about else ' '
         image = user.avatar_image() if user.avatar_id \
                                         else f"{server_url}/static/images/apple-touch-icon.png"

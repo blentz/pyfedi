@@ -6,14 +6,16 @@ implicit default, so installs that never ran the migration's seed still work.
 from __future__ import annotations
 
 from typing import NamedTuple
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from flask import Response, current_app, g, has_request_context, request
 from flask.globals import request_ctx
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import cache, db
-from app.models import SiteDomain
+# The module, not the name: app.models imports this module for File's media URLs, so whichever of the two is
+# imported first finds the other mid-import (import cycle: models)
+import app.models as models
 
 
 class DomainInfo(NamedTuple):
@@ -70,7 +72,7 @@ def _synthesised_default() -> DomainInfo:
 
 @cache.memoize(timeout=300)
 def domain_rows() -> tuple[DomainInfo, ...]:
-    rows = db.session.query(SiteDomain).order_by(SiteDomain.id).all()
+    rows = db.session.query(models.SiteDomain).order_by(models.SiteDomain.id).all()
     if not rows:
         return (_synthesised_default(),)
     return tuple(DomainInfo(r.domain, r.scheme, r.federates, r.registration, r.is_default, r.is_onion)
@@ -141,6 +143,21 @@ def storefront_url() -> str:
     """Origin of the current storefront. Use for links a visitor follows, never for federation identity."""
     storefront = current_storefront()
     return f'{storefront.scheme}://{_authority(storefront)}'
+
+
+def storefront_host() -> str:
+    """`host[:port]` of the current storefront, for naming this site in text a visitor reads."""
+    return _authority(current_storefront())
+
+
+def storefront_link(url):
+    """`url` moved onto the current storefront when it points at this site (any registered host); any other URL,
+    or a value that is not a string, unchanged. For stored links shown where no HTML rewrite reaches (RSS)."""
+    if not is_local_link(url):
+        return url
+    parts = urlsplit(url)
+    origin = urlsplit(storefront_url())
+    return urlunsplit((origin.scheme, origin.netloc, parts.path, parts.query, parts.fragment))
 
 
 def canonical_url() -> str:

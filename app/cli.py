@@ -1637,9 +1637,7 @@ def register(app):
                                                                        notifications=notifications, site=site),
                                        html_body=flask.render_template('email/unread_notifications.html', user=user,
                                                                        notifications=notifications,
-                                                                       posts=posts, site=site,
-                                                                       domain=current_app.config['SERVER_NAME'],
-                                                                       protocol=current_app.config['HTTP_PROTOCOL']))
+                                                                       posts=posts, site=site))
                             user.email_unread_sent = True
 
 
