@@ -1182,7 +1182,7 @@ def add_remote_community_from_post(post_data):
         community_lookup = ['!' + community + '@' + server]
     else:
         pattern = r'![A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
-        community_lookup = re.findall(pattern, post_data['body'])
+        community_lookup = re.findall(pattern, post_data.get('body') or '')   # Lemmy omits an empty body
 
     if len(community_lookup):
         for cl in set(community_lookup):
