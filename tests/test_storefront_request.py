@@ -4,7 +4,7 @@ from flask import g, url_for
 
 from app import db
 from app.models import SiteDomain
-from app.storefront import (_authority, _port_of, canonical_url, clear_domain_cache, current_storefront,
+from app.storefront import (DomainInfo, _authority, canonical_url, clear_domain_cache, current_storefront,
                             default_domain, domain_for_host, normalise_host, storefront_url)
 
 
@@ -132,17 +132,28 @@ def test_default_row_is_the_bare_host(app, server_name):
         assert storefront_url().endswith('://[::1]:5000')
 
 
-def test_urls_keep_the_port_the_request_came_in_on(app, server_name):
+def test_urls_use_the_configured_port(app, server_name):
     server_name('127.0.0.1:5000')
     with app.test_request_context(base_url='http://127.0.0.1:5000'):
         app.preprocess_request()
         assert url_for('main.index', _external=True) == 'https://127.0.0.1:5000/home'
         assert storefront_url() == 'https://127.0.0.1:5000'
-    
 
 
-def test_default_port_is_left_out(app, onion):
-    with app.test_request_context(base_url='http://abc.onion:80'):
+def test_request_port_never_reaches_urls(app, server_name):
+    server_name('test.piefed.local')
+    with app.test_request_context(base_url='https://test.piefed.local:6666'):
+        app.preprocess_request()
+        assert ':6666' not in url_for('main.index', _external=True)
+        assert storefront_url() == 'https://test.piefed.local'
+    server_name('127.0.0.1:5000')
+    with app.test_request_context(base_url='https://127.0.0.1:6666'):
+        app.preprocess_request()
+        assert storefront_url() == 'https://127.0.0.1:5000'
+
+
+def test_alias_urls_carry_no_port(app, onion):
+    with app.test_request_context(base_url='http://abc.onion:6666'):
         app.preprocess_request()
         assert storefront_url() == 'http://abc.onion'
 
@@ -153,10 +164,8 @@ def test_normalise_host(host, bare):
     assert normalise_host(host) == bare
 
 
-def test_port_of():
-    assert (_port_of('x:5000'), _port_of('[::1]:7'), _port_of('x'), _port_of('x:nope')) == (5000, 7, None, None)
-
-
-def test_authority_outside_request_for_another_domain(app, onion):
+def test_authority_is_configured_never_requested(app, onion):
     with app.app_context():
         assert _authority(domain_for_host('abc.onion')) == 'abc.onion'
+        assert _authority(DomainInfo('::1', 'http', True, 'anyone', False, False)) == '[::1]'
+        assert _authority(default_domain()) == app.config['SERVER_NAME']
