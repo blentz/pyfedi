@@ -126,9 +126,10 @@ class RSSFeed:
         fg.load_extension('media', rss=True)
         fg.register_extension('slash', SlashExtension, SlashEntryExtension)
 
-        fg.title(self.title)
+        # A string the community's owner chose can hold a character XML forbids; lxml would fail the whole feed
+        fg.title(self.title if _is_valid_xml_utf8(self.title) else self.link)
         fg.link(href=self.link, rel='alternate')
-        fg.subtitle(self.description)
+        fg.subtitle(self.description if _is_valid_xml_utf8(self.description) else ' ')
         if self.logo:
             fg.logo(self.logo)
         if self.self_link:
@@ -138,7 +139,7 @@ class RSSFeed:
         if self.podcast:
             fg.load_extension('podcast', rss=True)
             fg.register_extension('podcastindex', PodcastIndexExtension, PodcastIndexEntryExtension)
-            if self.podcast.category:
+            if self.podcast.category and _is_valid_xml_utf8(self.podcast.category):
                 fg.podcast.itunes_category({'cat': self.podcast.category})
             fg.podcast.itunes_image(self.podcast.image)
             fg.podcast.itunes_author(self.podcast.author)
@@ -188,10 +189,10 @@ class RSSFeed:
             comment_count = post.reply_count
         fe.slash.comments(max(0, comment_count or 0))
 
-        if post.community:
+        if post.community and _is_valid_xml_utf8(post.community.name):
             fe.category(term=post.community.name)
         for cat in set([flair.flair for flair in post.flair] + [tag.display_as for tag in post.tags]):
-            if cat:
+            if cat and _is_valid_xml_utf8(cat):
                 fe.category(term=cat, scheme='flair/tag')
 
         if podcast:
