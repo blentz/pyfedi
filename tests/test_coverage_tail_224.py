@@ -173,10 +173,10 @@ def test_an_unknown_topic_aborts_before_the_line_that_looked_uncovered(app, publ
 
 
 def test_show_feed_dereferences_its_argument_long_before_the_uncovered_else(app, public):
-    """`app/feed/routes.py:645`, the same shape. `show_feed` has no route of its own -- the
+    """`show_feed`'s `else: abort(404)` in `app/feed/routes.py`, the same shape. `show_feed` has no route of its own -- the
     activitypub blueprint resolves the feed and calls it (`app/activitypub/routes.py:2765`)
-    -- and it reads `feed_readable_by(feed, ...)` at 510 and `feed.title` at 559 before
-    reaching `if current_feed:` at 565. A falsy feed raises long before the `else`.
+    -- and it reads `feed_readable_by(feed, ...)` and `feed.title` before
+    reaching `if current_feed:`. A falsy feed raises long before the `else`.
 
     Read out of the source rather than driven, because driving it would mean calling
     `show_feed(None)` and asserting the AttributeError -- which pins the crash, not the
@@ -184,10 +184,20 @@ def test_show_feed_dereferences_its_argument_long_before_the_uncovered_else(app,
     """
     source = _lines('app/feed/routes.py')
 
-    assert 'feed_readable_by(feed' in source[509]
-    assert 'feed.title' in source[558]
-    assert source[564].strip() == 'if current_feed:'
-    assert source[644].strip() == 'abort(404)'
+    def find(needle, after):
+        return next(n for n in range(after, len(source)) if needle in source[n])
+
+    start = find('def show_feed(', 0)
+    readable = find('feed_readable_by(feed', start)
+    title = find('feed.title', readable)
+    branch = find('if current_feed:', title)
+    refusal = find('abort(404)', branch)
+
+    indent = len(source[branch]) - len(source[branch].lstrip())
+    assert source[refusal - 1].strip() == 'else:', 'the abort is no longer the `else` of `if current_feed:`'
+    assert len(source[refusal - 1]) - len(source[refusal - 1].lstrip()) == indent
+    assert not any(line.strip() and len(line) - len(line.lstrip()) <= indent and not line.lstrip().startswith(('#', 'else:'))
+                   for line in source[branch + 1:refusal]), 'something other than the `if` body sits before the `else`'
 
 
 # --------------------------------------------------------------------------
