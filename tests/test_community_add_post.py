@@ -1071,3 +1071,28 @@ def test_a_post_with_no_timezone_left_on_the_form_skips_the_timezone_update(app,
     assert response.status_code == 302
     db.session.expire_all()
     assert db.session.get(type(author), author.id).timezone == 'Europe/Paris'
+
+
+@pytest.mark.parametrize('kind', ['link', 'discussion', 'image', 'video', 'audio', 'poll', 'event'])
+def test_the_compose_form_tells_its_community_switcher_which_type_it_is_on(app, poster, kind, monkeypatch):
+    """The type buttons belong to the community the form opened on, so scripts.js's setupCommunitySwitcher sends a
+    change of the community select back through main.add_post with this type, and the form is rebuilt for the new
+    community. An audio form is a podcast's, so the community is one here; the other forms do not depend on kind."""
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the real template renders form.csrf_token
+    client, token, community, author, english = poster
+    community.kind = 'podcast'
+    db.session.commit()
+
+    html = client.get(url(app, 'community.add_post', actor=community.name, type=kind)).get_data(as_text=True)
+
+    assert f'id="type_of_post" class="btn-group flex-wrap" role="navigation" data-switch-url="/add_post" ' \
+           f'data-post-type="{kind}"' in html
+
+
+def test_a_compose_form_opened_without_a_type_names_the_type_it_chose(app, poster, monkeypatch):
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
+    client, token, community, author, english = poster
+
+    html = client.get(url(app, 'community.add_post', actor=community.name)).get_data(as_text=True)
+
+    assert f'data-post-type="{community.default_post_type or "link"}"' in html
