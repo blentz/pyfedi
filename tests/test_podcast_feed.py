@@ -7,12 +7,12 @@ from feedgen.util import xml_elem
 
 from app import cache, db
 from app.constants import COMMUNITY_KIND_PODCAST, POST_STATUS_PROCESSING, POST_TYPE_LINK, POST_TYPE_ARTICLE, VISIBILITY_FOLLOWERS
-from app.models import Community, Language, User
+from app.models import Community, Language, Tag, User
 from app.rss_extras import PodcastIndexEntryExtension
 from app.shared.media import with_episode, with_media
 from app.shared.tasks import media as media_tasks
 from app.shared.tasks.media import publish_ready_post
-from tests.factories import make_community, make_file, make_post, make_site
+from tests.factories import make_community, make_community_flair, make_file, make_post, make_site
 from tests.podcast_fixtures import episode_post  # noqa: F401  (a fixture)
 
 NS = {'itunes': 'http://www.itunes.com/dtds/podcast-1.0.dtd', 'podcast': 'https://podcastindex.org/namespace/1.0'}
@@ -289,3 +289,34 @@ def test_an_owner_name_that_is_not_xml_text_falls_back_to_the_community_title(ap
     channel = channel_of(app.test_client())
 
     assert channel.findtext('itunes:author', namespaces=NS) == pod.title
+
+
+def test_a_flair_or_tag_that_is_not_xml_text_is_left_out_of_the_items(app, pod, episode_post):
+    episode_post.flair.append(make_community_flair(pod, 'bad\x13flair'))
+    episode_post.flair.append(make_community_flair(pod, 'good flair'))
+    episode_post.tags.append(Tag(name='bad', display_as='bad\x13tag'))
+    db.session.commit()
+
+    item = items_of(channel_of(app.test_client()))['Episode one']
+
+    assert sorted(c.text for c in item.findall('category')) == ['good flair', 'pod']
+
+
+def test_a_community_title_or_description_that_is_not_xml_text_does_not_fail_the_feed(app, pod, episode_post):
+    pod.title = 'po\x13d'
+    pod.description = 'about\x13 it'
+    db.session.commit()
+
+    channel = channel_of(app.test_client())
+
+    assert 'Episode one' in items_of(channel)
+    assert '\x13' not in channel.findtext('title') and channel.findtext('title').strip()
+
+
+def test_a_podcast_category_that_is_not_xml_text_is_left_out(app, pod, episode_post):
+    pod.podcast_category = 'Tech\x13nology'
+    db.session.commit()
+
+    channel = channel_of(app.test_client())
+
+    assert channel.find('itunes:category', NS) is None

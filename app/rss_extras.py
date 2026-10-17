@@ -124,8 +124,9 @@ class RSSFeed:
         fg.register_extension('slash', SlashExtension, SlashEntryExtension)
         fg.load_extension('dc')
 
-        fg.title(title)
-        fg.subtitle(description)
+        # A string the community's owner chose can hold a character XML forbids; lxml would fail the whole feed
+        fg.title(title if _is_valid_xml_utf8(title) else link)
+        fg.subtitle(description if _is_valid_xml_utf8(description) else ' ')
         if logo:
             fg.logo(logo)
         if self_link:
@@ -138,7 +139,7 @@ class RSSFeed:
         if podcast:
             fg.load_extension('podcast', rss=True)
             fg.register_extension('podcastindex', PodcastIndexExtension, PodcastIndexEntryExtension)
-            if podcast.category:
+            if podcast.category and _is_valid_xml_utf8(podcast.category):
                 fg.podcast.itunes_category({'cat': podcast.category})
             fg.podcast.itunes_image(podcast.image)
             fg.podcast.itunes_author(podcast.author)
@@ -196,13 +197,15 @@ class RSSFeed:
             comment_count = post.reply_count
         fe.slash.comments(max(0, comment_count or 0))
 
-        if post.community:
+        if post.community and _is_valid_xml_utf8(post.community.name):
             fe.category(term=post.community.name)
             fe.category(term=post.community.lemmy_link(), scheme='lemmy-link')
         for flair in set([flair.flair for flair in post.flair]):
-            fe.category(term=flair, scheme='flair')
+            if flair and _is_valid_xml_utf8(flair):
+                fe.category(term=flair, scheme='flair')
         for tag in set([tag.display_as for tag in post.tags]):
-            fe.category(term=tag, scheme='tag')
+            if tag and _is_valid_xml_utf8(tag):
+                fe.category(term=tag, scheme='tag')
 
         if podcast:
             cls._add_episode(fe, episode_item_fields(post))
