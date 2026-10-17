@@ -7,7 +7,7 @@ from flask import current_app, g
 
 from app import db
 from app.activitypub.serializers.podcast import NAME_MAX, episode_attachment, uses_podcast_episode
-from app.activitypub.util import post_to_page
+from app.activitypub.util import post_to_page, update_post_from_activity
 from app.constants import COMMUNITY_KIND_DISCUSSION, POST_TYPE_LINK
 from app.models import File, Post, Site
 from app.shared.media import with_media
@@ -140,4 +140,29 @@ def test_inbound_audio_attachment_is_marked_audio(env):
 def test_inbound_audio_attachment_without_media_type_is_not_marked(env):
     post = _inbound(env, None, kind='Audio', url=AUDIO_URL + '2')
     assert post.url == AUDIO_URL + '2'
+    assert (post.extensions or {}).get('media_type') != 'audio'
+
+
+@pytest.mark.parametrize('kind', ['Document', 'Audio'])
+def test_an_inbound_edit_with_an_audio_attachment_marks_the_post_audio(env, kind):
+    post = _inbound(env, None, kind=kind)
+    assert (post.extensions or {}).get('media_type') != 'audio'
+
+    update_post_from_activity(post, {
+        'id': f'{post.ap_id}/update', 'type': 'Update',
+        'object': {'id': post.ap_id, 'type': 'Page', 'name': 'Ep', 'attributedTo': env.author.ap_profile_id,
+                   'attachment': [{'type': kind, 'mediaType': 'audio/mpeg', 'url': AUDIO_URL, 'name': 'Ep'}]}})
+
+    assert post.extensions['media_type'] == 'audio'
+
+
+@pytest.mark.parametrize('kind', ['Document', 'Audio'])
+def test_an_inbound_edit_with_a_non_audio_attachment_does_not_mark_audio(env, kind):
+    post = _inbound(env, None, kind=kind)
+
+    update_post_from_activity(post, {
+        'id': f'{post.ap_id}/update', 'type': 'Update',
+        'object': {'id': post.ap_id, 'type': 'Page', 'name': 'Ep', 'attributedTo': env.author.ap_profile_id,
+                   'attachment': [{'type': kind, 'mediaType': 'image/jpeg', 'url': AUDIO_URL, 'name': 'Ep'}]}})
+
     assert (post.extensions or {}).get('media_type') != 'audio'

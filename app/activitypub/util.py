@@ -5195,10 +5195,14 @@ def update_post_from_activity(post: Post, request_json: dict):
                         break
                 elif attachment.get('type') == 'Document':
                     new_url = attachment['url']  # Mastodon
+                    if str(attachment.get('mediaType', '')).startswith('audio/'):   # A17.3, as Post.new
+                        post.extensions = {**(post.extensions or {}), 'media_type': 'audio'}
                     if new_url:
                         break
                 elif attachment.get('type') == 'Audio':  # WordPress podcast
                     new_url = attachment['url']
+                    if str(attachment.get('mediaType', '')).startswith('audio/'):   # A17.3, as Post.new
+                        post.extensions = {**(post.extensions or {}), 'media_type': 'audio'}
                     if 'name' in attachment:
                         post.title = attachment['name']
                     if new_url:
