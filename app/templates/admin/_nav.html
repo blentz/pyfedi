@@ -4,6 +4,7 @@
     {% if user_access('change instance settings', current_user.id) %}
         <a href="{{ url_for('admin.admin_site') }}">{{ _('Site profile') }}</a> |
         <a href="{{ url_for('admin.admin_misc') }}">{{ _('Misc settings') }}</a> |
+        <a href="{{ url_for('admin.admin_domains') }}">{{ _('Domains') }}</a> |
     {% endif %}
     {% if user_access('administer all communities', current_user.id) %}
         <a href="{{ url_for('admin.admin_communities') }}">{{ _('Communities') }}</a> |

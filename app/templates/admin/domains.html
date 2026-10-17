@@ -1,0 +1,64 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% from 'bootstrap5/form.html' import render_form %}
+{% set active_child = 'admin_domains' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+
+<div class="row">
+    <div class="col-12 col-md-10">
+        <h2>{{ _('Domains') }}</h2>
+        <p>{{ _('These are the domains this site answers on. Adding a domain here does not set up DNS, TLS or a Tor onion service: see deploy/DEPLOY_GUIDE.md for DNS, TLS and Tor setup.') }}</p>
+
+        <div class="table-responsive">
+            <table class="table table-striped">
+                <thead>
+                    <tr>
+                        <th>{{ _('Default') }}</th>
+                        <th>{{ _('Domain') }}</th>
+                        <th>{{ _('Scheme') }}</th>
+                        <th>{{ _('Federates') }}</th>
+                        <th>{{ _('Who may register') }}</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if implicit_default %}
+                    <tr>
+                        <td><input type="radio" name="default" checked disabled aria-label="{{ _('Default domain') }}"></td>
+                        <td>{{ implicit_default.domain }}</td>
+                        <td>{{ implicit_default.scheme }}</td>
+                        <td>{{ _('Yes') }}</td>
+                        <td>{{ implicit_default.registration }}</td>
+                        <td></td>
+                    </tr>
+                    {% endif %}
+                    {% for row in rows %}
+                    <tr>
+                        <td><input type="radio" name="default" value="{{ row.id }}" {% if row.is_default %}checked{% endif %} disabled aria-label="{{ _('Default domain') }}"></td>
+                        <td>{{ row.domain }}{% if row.is_onion %} <span class="badge bg-secondary">onion</span>{% endif %}</td>
+                        <td>{{ row.scheme }}</td>
+                        <td>{{ _('Yes') if row.federates else _('No') }}</td>
+                        <td>{{ row.registration }}</td>
+                        <td>
+                            {% if not row.is_default %}
+                            <a href="#" data-url="{{ url_for('admin.admin_domains_delete', domain_id=row.id) }}" class="confirm_first send_post">{{ _('Delete') }}</a>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p class="text-muted">{{ _('The default domain is the one this site federates as, and changing the default domain is not supported yet.') }}</p>
+
+        <h3>{{ _('Add a domain') }}</h3>
+        {{ render_form(form) }}
+    </div>
+</div>
+{% endblock %}
