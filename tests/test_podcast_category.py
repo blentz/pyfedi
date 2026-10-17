@@ -15,9 +15,8 @@ from flask_wtf.csrf import generate_csrf
 from sqlalchemy import inspect
 
 from app import db
-from app.constants import APPLE_PODCAST_CATEGORIES
 from app.models import Community, Language, Site, utcnow
-from app.constants import SRC_API
+from app.constants import APPLE_PODCAST_CATEGORIES, SRC_API
 from app.shared import community as shared_community
 from app.shared.community import apply_podcast_category
 from tests.factories import (a_keypair, make_community, make_community_member, make_instance, make_user)
@@ -183,6 +182,14 @@ def test_edit_form_get_shows_the_stored_category(web):
         web.client.get(url(web.app, 'community.community_edit', community_id=web.community.id))
 
     assert render.call_args.kwargs['form'].podcast_category.data == 'News'
+
+
+def test_both_forms_wrap_the_category_field_like_the_kind_field(web, monkeypatch):
+    monkeypatch.setitem(web.app.config, 'WTF_CSRF_ENABLED', True)   # the templates render form.csrf_token()
+    for page in (url(web.app, 'community.add_local'),
+                 url(web.app, 'community.community_edit', community_id=web.community.id)):
+        html = web.client.get(page).get_data(as_text=True)
+        assert 'id="kind_field"' in html and 'id="podcast_category_field"' in html
 
 
 def test_api_create_and_edit(api):
