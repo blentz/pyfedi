@@ -386,6 +386,7 @@ def _commit_ready_post(post) -> bool:
         return False
     post.status = POST_STATUS_PUBLISHED
     post.posted_at = utcnow()
+    post.community.last_active = utcnow()   # a podcast feed's ETag is its last_active; make_post bumped it while the upload processed
     db.session.commit()
     return True
 
