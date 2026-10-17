@@ -4,6 +4,7 @@ Revision ID: f1c3a9d7b2e4
 Revises: e5b8d2f0a4c7
 """
 import os
+from urllib.parse import urlsplit
 
 from alembic import op
 import sqlalchemy as sa
@@ -23,7 +24,8 @@ SITE_DOMAIN = sa.table('site_domain', sa.column('domain'), sa.column('scheme'), 
 
 def seed_default(bind, environ):
     """Insert the one default row, from SERVER_NAME, HTTP_PROTOCOL and the site's registration mode."""
-    domain = (environ.get('SERVER_NAME') or 'localhost').lower()
+    # The bare host, as app.storefront.normalise_host holds it: no port, no IPv6 brackets, no trailing dot.
+    domain = (urlsplit('//' + (environ.get('SERVER_NAME') or 'localhost')).hostname or 'localhost').rstrip('.')
     protocol = environ.get('HTTP_PROTOCOL') or 'https'
     mode = bind.execute(sa.text('SELECT registration_mode FROM site ORDER BY id LIMIT 1')).scalar()
     bind.execute(SITE_DOMAIN.insert().values(

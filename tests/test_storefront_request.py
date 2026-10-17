@@ -4,8 +4,8 @@ from flask import g, url_for
 
 from app import db
 from app.models import SiteDomain
-from app.storefront import (canonical_url, clear_domain_cache, current_storefront, default_domain,
-                            storefront_url)
+from app.storefront import (_authority, _port_of, canonical_url, clear_domain_cache, current_storefront,
+                            default_domain, domain_for_host, normalise_host, storefront_url)
 
 
 @pytest.fixture
@@ -91,3 +91,72 @@ def test_health_is_exempt_from_421(app, db_session, site, path):
 
 def test_other_paths_on_localhost_still_421(app, db_session, site):
     assert app.test_client().get('/robots.txt', headers={'Host': 'localhost:5000'}).status_code == 421
+
+
+@pytest.fixture
+def server_name(app, db_session, site, monkeypatch):
+    db.session.query(SiteDomain).delete()   # the empty table: SERVER_NAME is the one implicit default
+    db.session.commit()
+
+    def set_name(value):
+        monkeypatch.setitem(app.config, 'SERVER_NAME', value)
+        clear_domain_cache()
+    yield set_name
+    clear_domain_cache()
+
+
+@pytest.mark.parametrize('name,host', [('127.0.0.1:5000', '127.0.0.1:5000'), ('127.0.0.1:5000', '127.0.0.1'),
+                                       ('[::1]:5000', '[::1]:5000'), ('[::1]:5000', '[::1]')])
+def test_server_name_with_port_serves_with_empty_table(app, server_name, name, host):
+    server_name(name)
+    response = app.test_client().get('/robots.txt', headers={'Host': host})
+    assert response.status_code == 200
+
+
+def test_server_name_with_port_serves_with_seeded_row(app, server_name):
+    server_name('127.0.0.1:5000')
+    db.session.add(SiteDomain(domain='127.0.0.1:5000', scheme='http', is_default=True))   # as an old migration seeded it
+    db.session.commit()
+    clear_domain_cache()
+    assert app.test_client().get('/robots.txt', headers={'Host': '127.0.0.1:5000'}).status_code == 200
+
+
+def test_default_row_is_the_bare_host(app, server_name):
+    server_name('127.0.0.1:5000')
+    with app.app_context():
+        assert default_domain().domain == '127.0.0.1'
+        assert storefront_url().endswith('://127.0.0.1:5000')
+    server_name('[::1]:5000')
+    with app.app_context():
+        assert default_domain().domain == '::1'
+        assert storefront_url().endswith('://[::1]:5000')
+
+
+def test_urls_keep_the_port_the_request_came_in_on(app, server_name):
+    server_name('127.0.0.1:5000')
+    with app.test_request_context(base_url='http://127.0.0.1:5000'):
+        app.preprocess_request()
+        assert url_for('main.index', _external=True) == 'https://127.0.0.1:5000/home'
+        assert storefront_url() == 'https://127.0.0.1:5000'
+    
+
+
+def test_default_port_is_left_out(app, onion):
+    with app.test_request_context(base_url='http://abc.onion:80'):
+        app.preprocess_request()
+        assert storefront_url() == 'http://abc.onion'
+
+
+@pytest.mark.parametrize('host,bare', [('HELL.onion.:80', 'hell.onion'), ('[::1]:5000', '::1'), ('[::1]', '::1'),
+                                       ('[::1', ''), ('::1', '::1'), ('', '')])
+def test_normalise_host(host, bare):
+    assert normalise_host(host) == bare
+
+
+def test_port_of():
+    assert (_port_of('x:5000'), _port_of('[::1]:7'), _port_of('x'), _port_of('x:nope')) == (5000, 7, None, None)
+
+
+def test_authority_outside_request_for_another_domain(app, onion):
+    with app.app_context():
+        assert _authority(domain_for_host('abc.onion')) == 'abc.onion'
