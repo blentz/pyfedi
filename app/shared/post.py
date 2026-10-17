@@ -481,7 +481,9 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         timezone = input.timezone.data
         image_alt_text = input.image_alt_text.data if hasattr(input, 'image_alt_text') and input.image_alt_text else ''
         if getattr(input, 'episode_number', None) is not None and episode_form_wanted(post.community):
-            # A17.4: the web form of a podcast episode; the API never has them. make_post comes through here too
+            # A17.4: the web form of a podcast episode; the API never has them. make_post comes through here too.
+            # Not a guard on its own: any post in a local podcast community passes it, so a form that still has the
+            # fields writes them. The routes prune the fields from forms of posts that are not episodes.
             with_episode(post, input.episode_number.data, input.season.data, input.explicit.data)
 
         # Extract poll data from form
