@@ -6,10 +6,12 @@ import pytest
 from feedgen.util import xml_elem
 
 from app import cache, db
-from app.constants import COMMUNITY_KIND_PODCAST, POST_TYPE_LINK, POST_TYPE_ARTICLE, VISIBILITY_FOLLOWERS
+from app.constants import COMMUNITY_KIND_PODCAST, POST_STATUS_PROCESSING, POST_TYPE_LINK, POST_TYPE_ARTICLE, VISIBILITY_FOLLOWERS
 from app.models import Community, Language, User
 from app.rss_extras import PodcastIndexEntryExtension
 from app.shared.media import with_episode, with_media
+from app.shared.tasks import media as media_tasks
+from app.shared.tasks.media import publish_ready_post
 from tests.factories import make_community, make_file, make_post, make_site
 from tests.podcast_fixtures import episode_post  # noqa: F401  (a fixture)
 
@@ -255,3 +257,26 @@ def test_a_control_character_in_the_media_record_does_not_fail_the_feed(app, pod
     channel = channel_of(app.test_client())
 
     assert 'Episode one' not in items_of(channel)
+
+
+def test_publishing_an_upload_changes_the_feed_etag(app, pod, episode_post, monkeypatch):
+    monkeypatch.setattr(media_tasks, 'task_selector', lambda key, **kw: None)
+    monkeypatch.setattr(media_tasks, 'notify_about_post', lambda post: None)
+    alice = db.session.get(User, episode_post.user_id)
+    upload = another_episode(pod, alice, 'Uploaded', status='processing')
+    upload.status = POST_STATUS_PROCESSING
+    db.session.commit()
+    client = app.test_client()
+    cache.clear()
+    first = client.get('/community/pod/feed')
+    etag = first.headers['ETag']
+    assert 'Uploaded' not in items_of(ET.fromstring(first.data).find('channel'))
+
+    upload.extensions = {**upload.extensions, 'media': {**upload.extensions['media'], 'status': 'ready'}}
+    db.session.commit()
+    publish_ready_post(upload)
+    cache.clear()
+    after = client.get('/community/pod/feed', headers={'If-None-Match': etag})
+
+    assert after.status_code == 200
+    assert 'Uploaded' in items_of(ET.fromstring(after.data).find('channel'))
