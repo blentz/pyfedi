@@ -243,6 +243,7 @@ def test_the_canonical_host_is_local_with_no_rows(app, db_session):
 @pytest.mark.parametrize('url, expected', [
     ('http://abc.onion/post/1', True), ('//abc.onion/x', True), ('https://test.piefed.local', True),
     ('https://abc.onion@evil.example/', False), ('/post/1', False), ('http://[::1/', False), (None, False),
+    ('https://evil.example\\@abc.onion/', False), ('https://abc.onion\\x', False),
 ])
 def test_is_local_link(app, onion, url, expected):
     assert storefront.is_local_link(url) is expected

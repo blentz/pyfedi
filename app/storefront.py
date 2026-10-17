@@ -121,8 +121,9 @@ def is_local_host(host: str | None) -> bool:
 
 def is_local_link(url) -> bool:
     """Whether absolute (or scheme-relative) `url` points at this site: `is_local_host` of its host. The host is
-    urlsplit's, after any userinfo, which is the host a browser would visit."""
-    if not isinstance(url, str):
+    urlsplit's, after any userinfo. A browser reads `\\` as `/`, so a URL with a backslash has no host we can name
+    and is not local."""
+    if not isinstance(url, str) or '\\' in url:
         return False
     try:
         host = urlsplit(url).hostname
