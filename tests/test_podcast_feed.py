@@ -7,7 +7,7 @@ from feedgen.util import xml_elem
 
 from app import cache, db
 from app.constants import COMMUNITY_KIND_PODCAST, POST_STATUS_PROCESSING, POST_TYPE_LINK, POST_TYPE_ARTICLE, VISIBILITY_FOLLOWERS
-from app.models import Community, Language, Tag, User
+from app.models import Community, Language, Site, Tag, User
 from app.rss_extras import PodcastIndexEntryExtension
 from app.shared.media import with_episode, with_media
 from app.shared.tasks import media as media_tasks
@@ -320,3 +320,22 @@ def test_a_podcast_category_that_is_not_xml_text_is_left_out(app, pod, episode_p
     channel = channel_of(app.test_client())
 
     assert channel.find('itunes:category', NS) is None
+
+
+def test_a_private_instances_enclosure_is_served_to_a_podcast_app_without_cookies(app, pod, episode_post, tmp_path,
+                                                                                 monkeypatch):
+    """Item 18: nothing gates /static (the site is not even loaded for it), so the feed's own token is not needed on
+    an enclosure URL; adding one would only leak the token into media logs."""
+    media_dir = tmp_path / 'media' / 'posts' / 'ab' / 'cd'
+    media_dir.mkdir(parents=True)
+    (media_dir / 'abcdefghijklmno.mp3').write_bytes(b'ID3audio')
+    monkeypatch.setattr(app, 'static_folder', str(tmp_path))
+    db.session.get(Site, 1).private_instance = True
+    db.session.commit()
+    cache.clear()
+    client = app.test_client()
+    assert client.get('/community/pod/feed').status_code == 404   # anonymous: the feed itself is refused
+
+    response = client.get(episode_post.url.removeprefix(SERVER))
+
+    assert response.status_code == 200 and response.data == b'ID3audio'
