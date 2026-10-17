@@ -907,7 +907,7 @@ def show_community_rss(actor):
                        link = f"{server_url}/c/{actor}",
                        description = description,
                        logo = image,
-                       self_link = f"{server_url}/c/{actor}/feed",
+                       self_link = f"{server_url}/community/{actor}/feed",
                        language = language,
                        podcast = podcast
                      )

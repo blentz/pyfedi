@@ -222,3 +222,16 @@ def test_other_kinds_unchanged(app, pod, episode_post):
     assert not [element for element in channel.iter() if element.tag.startswith(('{%s}' % NS['itunes'], '{%s}' % NS['podcast']))]
     assert channel.find('item/enclosure') is None
     assert channel.findtext('language') == 'en'
+
+
+@pytest.mark.parametrize('kind', ['discussion', COMMUNITY_KIND_PODCAST])
+def test_self_link_is_a_url_that_resolves(app, pod, episode_post, kind):
+    pod.kind = kind
+    db.session.commit()
+    client = app.test_client()
+
+    href = channel_of(client).find('{http://www.w3.org/2005/Atom}link[@rel="self"]').get('href')
+
+    assert href == f'{SERVER}/community/pod/feed'
+    cache.clear()
+    assert client.get(href.removeprefix(SERVER)).status_code == 200
