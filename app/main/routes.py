@@ -41,6 +41,7 @@ from app.main.util import sidebar_active_communities, sidebar_new_instances, sid
 from app.shared.tasks.maintenance import refresh_instance_chooser
 from app.translation import LibreTranslateAPI
 from app.visibility import listable_clause, modlog_open_clause, visible_to_clause
+from app.storefront import storefront_link, storefront_url
 from app.utils import etag_stamp
 from app.utils import render_template, ensure_rss_token, get_setting, request_etag_matches, return_304, blocked_domains, rss_token_user, \
     ap_datetime, shorten_string, user_filters_home, \
@@ -977,8 +978,7 @@ And if you want to add your score to the database to help your fellow Bookworms 
                                                        notifications=notifications),
                        html_body=flask.render_template('email/unread_notifications.html', user=user,
                                                        notifications=notifications,
-                                                       posts=posts,
-                                                       domain=current_app.config['SERVER_NAME']))
+                                                       posts=posts))
             user.email_unread_sent = True
             db.session.commit()
 
@@ -1370,7 +1370,7 @@ def static_manifest():
         manifest = json.load(f)
 
     # Modify manifest
-    manifest['id'] = f'{current_app.config["SERVER_URL"]}'
+    manifest['id'] = f'{storefront_url()}'
     manifest['name'] = g.site.name if g.site.name else 'PieFed'
     manifest['description'] = g.site.description if g.site.description else ''
 
@@ -1526,7 +1526,7 @@ def index_rss(feed_type=None):
     post_ids = paginate_post_ids(post_ids, 0, page_length=50)
     posts = post_ids_to_models(post_ids, 'new').all()
 
-    server_url = current_app.config['SERVER_URL']
+    server_url = storefront_url()   # the visitor's storefront
     description = shorten_string(g.site.description, 150) if g.site.description else ' '
     image = f"{server_url}{g.site.logo}" if g.site.logo\
                       else f"{server_url}/static/images/apple-touch-icon.png"

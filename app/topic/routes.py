@@ -15,6 +15,7 @@ from app.constants import SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, POST_TYPE_
 from app.email import send_topic_suggestion
 from app.inoculation import inoculation
 from app.models import Topic, Community, NotificationSubscription, PostReply, utcnow
+from app.storefront import storefront_link, storefront_url
 from app.topic import bp
 from app.topic.forms import SuggestTopicsForm
 from app.utils import etag_stamp, render_template, user_filters_posts, validation_required, login_required, \
@@ -195,7 +196,7 @@ def show_topic(topic_path):
                                sub_topics=sub_topics, topic_path=topic_path, breadcrumbs=breadcrumbs,
                                tags=hashtags_used_in_communities(community_ids, content_filters),
                                joined_communities=joined_or_modding_communities(current_user.get_id()),
-                               rss_feed=f"{current_app.config['SERVER_URL']}/topic/{topic_path}.rss",
+                               rss_feed=f"{storefront_url()}/topic/{topic_path}.rss",
                                rss_feed_name=f"{current_topic.name} on {g.site.name}", content_type=content_type,
                                reported_posts=reported_posts(current_user.get_id(), current_user.get_id() in g.admin_ids),
                                user_notes=user_notes(current_user.get_id()),
@@ -234,7 +235,7 @@ def show_topic_rss(topic_path):
         post_ids = paginate_post_ids(post_ids, 0, page_length=50)
         posts = post_ids_to_models(post_ids, 'new').all()
 
-        server_url = current_app.config['SERVER_URL']
+        server_url = storefront_url()   # the visitor's storefront
         feed = RSSFeed(title = f'{topic.name} on {g.site.name}',
                        link = f"{server_url}/topic/{last_topic_machine_name}",
                        description = ' ',

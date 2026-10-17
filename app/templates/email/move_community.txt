@@ -7,4 +7,4 @@ Checklist:
 
 If all is well then make the community local by using this link:
 
-https://{{ home_domain }}/admin/community/{{ community.id }}/move/{{ current_user.id }}
+{{ site_url }}/admin/community/{{ community.id }}/move/{{ current_user.id }}

@@ -487,7 +487,9 @@ def test_the_reset_form_renders_for_a_good_token(app, env):
         response = anon.get(f'/auth/reset_password/{token}')
 
     assert response.status_code == 200
-    assert render.call_args.kwargs['domain'] == app.config['SERVER_NAME']
+    # the page's template names no domain; the base template's links follow the storefront (onion spec §3.4)
+    assert render.call_args.args == ('auth/reset_password.html',)
+    assert 'domain' not in render.call_args.kwargs
 
 
 def test_somebody_logged_in_does_not_need_a_reset_link(app, env):

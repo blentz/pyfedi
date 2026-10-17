@@ -30,7 +30,7 @@ import app.shared.community as shared_community
 # The module, not the names: app.shared.feed reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.feed)
 import app.shared.feed as shared_feed
-from app.storefront import is_local_host
+from app.storefront import is_local_host, storefront_link, storefront_url
 from app.shared.upload import is_refused_upload
 from app.utils import etag_stamp, back, show_ban_message, piefed_markdown_to_lemmy_markdown, markdown_to_html, render_template, \
     user_filters_posts, joined_communities, menu_instance_feeds, validation_required, feed_membership, \
@@ -618,7 +618,7 @@ def show_feed(feed):
                                              feed_communities=feed_communities, content_filters=user_filters_posts(current_user.id) if current_user.is_authenticated else {},
                                              tags=hashtags_used_in_communities(feed_community_ids, content_filters),
                                              sub_feeds=sub_feeds, feed_path=feed.path(), breadcrumbs=breadcrumbs,
-                                             rss_feed=f"{current_app.config['SERVER_URL']}/f/{feed.path()}.rss",
+                                             rss_feed=f"{storefront_url()}/f/{feed.path()}.rss",
                                              rss_feed_name=f"{current_feed.name} on {g.site.name}",
                                              communities_banned_from_list=communities_banned_from_list,
                                              show_post_community=True,
@@ -871,7 +871,7 @@ def show_feed_rss(feed_path):
         post_ids = paginate_post_ids(post_ids, 0, page_length=50)
         posts = post_ids_to_models(post_ids, 'new').all()
 
-        server_url = current_app.config['SERVER_URL']
+        server_url = storefront_url()   # the visitor's storefront
         rss_feed = RSSFeed(title=f'{feed.title} on {g.site.name}',
                            link=f"{server_url}/f/{last_feed_machine_name}",
                            description=' ',

@@ -31,7 +31,7 @@
             }
             
             registerBtn.addEventListener('click', function () {
-                navigator.registerProtocolHandler("web+ap", "https://{{ instance_domain }}/protocol_handler?to=%s");
+                navigator.registerProtocolHandler("web+ap", "{{ site_url }}/protocol_handler?to=%s");
                 localStorage.setItem(storageKey, 'true');
                 alert('Your browser will pop up some confirmation dialogs. If you complete the process then links starting with web+ap:// will be displayed by {{ instance_domain }}.');
                 registerBtn.classList.add('d-none');
@@ -39,7 +39,7 @@
             });
             unRegisterBtn.addEventListener('click', function () {
                 if (typeof navigator.unregisterProtocolHandler === 'function') {
-                    navigator.unregisterProtocolHandler("web+ap", "https://{{ instance_domain }}/protocol_handler?to=%s");
+                    navigator.unregisterProtocolHandler("web+ap", "{{ site_url }}/protocol_handler?to=%s");
                     alert('Links starting with web+ap:// will not be displayed by {{ instance_domain }}.');
                 } else {
                     alert('Unregistering protocol handlers is not supported in this browser. You may need to clear your browser settings manually.');

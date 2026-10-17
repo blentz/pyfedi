@@ -11,6 +11,7 @@ from flask import current_app, render_template, g, url_for, flash
 from flask_babel import _  # todo: set the locale based on account_id so that _() works
 
 from app import celery
+from app.storefront import storefront_url
 from app.utils import get_setting, markdown_to_html, html_to_text
 
 CHARSET = "UTF-8"
@@ -25,27 +26,26 @@ def send_password_reset_email(user):
                sender=f'{g.site.name} <{current_app.config["MAIL_FROM"]}>',
                recipients=[user.email],
                text_body=render_template('email/reset_password.txt',
-                                         user=user, token=token, domain=current_app.config['SERVER_NAME']),
+                                         user=user, token=token),
                html_body=render_template('email/reset_password.html',
-                                         user=user, token=token, domain=current_app.config['SERVER_NAME']))
+                                         user=user, token=token))
 
 
 def send_verification_email(user):
     send_email(_('[PieFed] Please verify your email address'),
                sender=f'{g.site.name} <{current_app.config["MAIL_FROM"]}>',
                recipients=[user.email],
-               text_body=render_template('email/verification.txt', user=user, domain=current_app.config['SERVER_NAME']),
-               html_body=render_template('email/verification.html', user=user, domain=current_app.config['SERVER_NAME']))
+               text_body=render_template('email/verification.txt', user=user),
+               html_body=render_template('email/verification.html', user=user))
 
 
 def send_registration_approved_email(user):
     subject = _('Your application has been approved - welcome to PieFed')
     body = get_setting('registration_approved_email', '')
     if body:
-        body = render_template('email/welcome.html', user=user, email_body=markdown_to_html(body), domain=current_app.config['SERVER_NAME'])
+        body = render_template('email/welcome.html', user=user, email_body=markdown_to_html(body))
     else:
-        body = render_template('email/welcome.html', user=user, email_body=markdown_to_html(f'\n\nYour account at https://{current_app.config["SERVER_NAME"]} has been approved. Welcome!\n\n'),
-                               domain=current_app.config['SERVER_NAME'])
+        body = render_template('email/welcome.html', user=user, email_body=markdown_to_html(f'\n\nYour account at {storefront_url()} has been approved. Welcome!\n\n'))
     mail_from = current_app.config["MAIL_FROM"] if current_app.config["MAIL_FROM"] else g.site.contact_email
     send_email(subject,
                sender=f'{g.site.name} <{mail_from}>',
@@ -63,8 +63,7 @@ def send_topic_suggestion(communities_for_topic, user, recipients, subject, topi
                                          communities_for_topic=communities_for_topic),
                html_body=render_template('email/suggested_topic.html', site_name=g.site.name,
                                          current_user_name=user.user_name, topic_name=topic_name,
-                                         communities_for_topic=communities_for_topic,
-                                         domain=current_app.config['SERVER_NAME']))
+                                         communities_for_topic=communities_for_topic))
 
 
 @celery.task

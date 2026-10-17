@@ -141,6 +141,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/community/routes.py': {
         'add_local': 5,
         'community_invite': 1,
+        'community_move': 1,   # the community handle shown on the move page names the federation domain
         'do_subscribe': 1,
         'join_then_add': 1,
         'unsubscribe': 3,
@@ -322,6 +323,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'bot_challenge_user': 1,
     },
     'app/storefront.py': {
+        '_authority': 1,   # SERVER_NAME verbatim is the canonical host's authority; no other host may borrow its port
         '_synthesised_default': 1,
         'canonical_url': 1,
         'check_default_domain': 2,

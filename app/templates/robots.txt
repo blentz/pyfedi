@@ -116,5 +116,5 @@ User-agent: anthropic-ai
 Disallow: /
 
 {% if use_rsl %}
-License: https://{{ instance_domain }}/rsl.xml
+License: {{ site_url }}/rsl.xml
 {% endif %}

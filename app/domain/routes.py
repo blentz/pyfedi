@@ -13,7 +13,7 @@ from app.domain.forms import PostWarningForm
 from app.inoculation import inoculation
 from app.models import Post, Domain, Community, DomainBlock, read_posts
 from app.shared.domain import block_domain, unblock_domain
-from app.storefront import is_local_host
+from app.storefront import is_local_host, storefront_link, storefront_url
 from app.visibility import listable_clause
 from app.utils import render_template, permission_required, user_filters_posts, blocked_domains, \
     blocked_or_banned_instances, \
@@ -107,7 +107,7 @@ def show_domain(domain_id):
                                    reported_posts=reported_posts(current_user.get_id(), current_user.get_id() in g.admin_ids),
                                    joined_communities=joined_or_modding_communities(current_user.get_id()),
                                    moderated_community_ids=moderating_communities_ids(current_user.get_id()),
-                                   rss_feed=f"{current_app.config['SERVER_URL']}/d/{domain.id}/feed" if domain.post_count > 0 else None,
+                                   rss_feed=f"{storefront_url()}/d/{domain.id}/feed" if domain.post_count > 0 else None,
                                    rss_feed_name=f"{domain.name} on {g.site.name}" if domain.post_count > 0 else None,
                                    inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None,
                                    )
@@ -138,7 +138,7 @@ def show_domain_rss(domain_id):
                        Post.deleted == False, Post.status > POST_STATUS_REVIEWING, Community.private == False,
                        Post.private == False, listable_clause(Post)).order_by(desc(Post.posted_at)).limit(20).all()
 
-            server_url = current_app.config['SERVER_URL']
+            server_url = storefront_url()   # the visitor's storefront
             feed = RSSFeed(title = f'{domain.name} on {g.site.name}',
                            link = f"{server_url}/d/{domain_id}",
                            description = ' ',

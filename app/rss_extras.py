@@ -7,6 +7,7 @@ from feedgen.feed import FeedGenerator
 from app.models import media_of
 from app.shared.media import episode_of
 from app.utils import has_unsafe_url_scheme, feed_entry_body, mimetype_from_url, is_valid_xml_utf8 as _is_valid_xml_utf8
+from app.storefront import storefront_link
 # could be used later for instance checks: from app.models import User, Community, Post, PostReply
 
 ####################################################################################################
@@ -208,7 +209,12 @@ class RSSFeed:
                 fe.category(term=tag, scheme='tag')
 
         if podcast:
-            cls._add_episode(fe, episode_item_fields(post))
+            fields = episode_item_fields(post)
+            url, length, mime = fields['enclosure']
+            fields['enclosure'] = (storefront_link(url), length, mime)   # a stored URL, shown on this storefront
+            if 'image' in fields:
+                fields['image'] = storefront_link(fields['image'])
+            cls._add_episode(fe, fields)
 
     @staticmethod
     def _add_episode(entry, fields):
@@ -250,7 +256,7 @@ class RSSFeed:
         gallery = post.gallery if post.gallery else []
         for file in gallery:
             url = file.source_url
-            medium = {'url': url}
+            medium = {'url': storefront_link(url)}   # a stored URL, shown on this storefront
             type = mimetype_from_url(url)
             if type:
                 medium['type'] = type
@@ -263,7 +269,7 @@ class RSSFeed:
         url = post.url
         if not url:  # image is only used when post.url is not None, so the thumbnail for galleries will not be used unless it's given as URL.
             return
-        medium = {'url': url}
+        medium = {'url': storefront_link(url)}   # a stored URL, shown on this storefront
         type = mimetype_from_url(url)
         if type:
             medium['type'] = type
