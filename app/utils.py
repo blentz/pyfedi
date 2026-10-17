@@ -3148,11 +3148,11 @@ def refuse_if_private_instance(func):
     comment argues for against its own 304 -- whose `@cache.cached` line is commented out,
     which is why its inline check was enough.
 
-    Unconditional, as `index_rss` writes it: an RSS reader presents no session and follows
-    no redirect to a login form, so a private instance has no feeds rather than
-    members-only feeds. `login_required_if_private_instance` is the right decorator for a
-    route a person opens in a browser (D1411 uses it on the embeds); this one is for the
-    machine-readable views.
+    An RSS reader presents no session and follows no redirect to a login form, so an
+    anonymous request gets 404 as `index_rss` writes it. A member's reader gets in with the
+    `?token=` of their RSS token (R219, `rss_token_user`); that is the only way in.
+    `login_required_if_private_instance` is the right decorator for a route a person opens
+    in a browser (D1411 uses it on the embeds); this one is for the machine-readable views.
     """
 
     @wraps(func)
