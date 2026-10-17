@@ -3,7 +3,9 @@ from datetime import timezone
 from urllib.parse import urlsplit
 
 from feedgen.feed import FeedGenerator
-from app.utils import feed_entry_body, mimetype_from_url, is_video_hosting_site, is_valid_xml_utf8 as _is_valid_xml_utf8
+from app.models import media_of
+from app.shared.media import episode_of
+from app.utils import has_unsafe_url_scheme, feed_entry_body, mimetype_from_url, is_video_hosting_site, is_valid_xml_utf8 as _is_valid_xml_utf8
 # could be used later for instance checks: from app.models import User, Community, Post, PostReply
 
 ####################################################################################################
@@ -38,7 +40,69 @@ class SlashEntryExtension(BaseExtension):
         if type(value) is not int or value < 0:
             raise ValueError('Slash Extension: Invalid comment count')
         self._comments = str(value)
+
+PODCAST_NS = 'https://podcastindex.org/namespace/1.0'
+
+
+class PodcastIndexExtension(BaseExtension):
+    """The Podcasting 2.0 tags feedgen has no extension for (spec §4.5): channel <podcast:locked>, item <podcast:guid>."""
+    def __init__(self):
+        self._locked = None
+
+    def extend_ns(self):
+        return {'podcast': PODCAST_NS}
+
+    def extend_rss(self, rss_feed):
+        if self._locked is not None:
+            xml_elem('{%s}locked' % PODCAST_NS, rss_feed[0]).text = self._locked
+        return rss_feed
+
+    def locked(self, value: bool):
+        self._locked = 'yes' if value else 'no'
+
+
+class PodcastIndexEntryExtension(BaseExtension):
+    def __init__(self):
+        self._guid = None
+
+    def extend_rss(self, entry):
+        if self._guid:
+            xml_elem('{%s}guid' % PODCAST_NS, entry).text = self._guid
+        return entry
+
+    def guid(self, value: str):
+        self._guid = value
 ####################################################################################################
+
+
+def itunes_image_ok(url) -> bool:
+    """feedgen's itunes:image takes only a URL ending exactly in .jpg or .png (a channel's silently drops any other,
+    an item's raises), so those are the only images this feed offers it."""
+    return isinstance(url, str) and not has_unsafe_url_scheme(url) and url.endswith(('.jpg', '.png'))
+
+
+@dataclass
+class PodcastChannel:
+    """A podcast community's show fields for its feed (spec §3.3, §10 A17.6)."""
+    category: str | None
+    image: str
+    author: str
+    explicit: bool
+
+
+def episode_item_fields(post) -> dict:
+    """What an episode's feed item adds (A17.6), from its media record and episode fields."""
+    media = media_of(post)
+    episode = episode_of(post)
+    fields = {'enclosure': (post.url, str(media['bytes']), media['mime']), 'duration': media['duration_s'],
+              'explicit': 'yes' if episode.get('explicit') or post.nsfw or post.nsfl else 'no',
+              'guid': media['uuid']}
+    for key in ('episode_number', 'season'):
+        if type(episode.get(key)) is int and episode[key] >= 1:   # a stored value is trusted only in this shape
+            fields[key] = episode[key]
+    if post.image is not None and itunes_image_ok(post.image.source_url):
+        fields['image'] = post.image.source_url
+    return fields
 
 
 @dataclass
@@ -53,6 +117,7 @@ class RSSFeed:
     logo: str|None = None
     self_link: str|None = None
     language: str|None = None
+    podcast: PodcastChannel|None = None
 
     def create_feed(self, posts, server_url):
         fg = FeedGenerator()
@@ -68,18 +133,27 @@ class RSSFeed:
             fg.link(href=self.self_link, rel='self')
         if self.language:
             fg.language(self.language)
+        if self.podcast:
+            fg.load_extension('podcast', rss=True)
+            fg.register_extension('podcastindex', PodcastIndexExtension, PodcastIndexEntryExtension)
+            if self.podcast.category:
+                fg.podcast.itunes_category({'cat': self.podcast.category})
+            fg.podcast.itunes_image(self.podcast.image)
+            fg.podcast.itunes_author(self.podcast.author)
+            fg.podcast.itunes_explicit('yes' if self.podcast.explicit else 'no')
+            fg.podcastindex.locked(False)
 
         # the reversed below is so that newer entries will be first in the feed wrt document order,
         # which depending on the RSS client can be quite useful.
         # However, this also depends on ordering done by the caller,
         # and ultimately on FeedGenerator itself, so it's a heuristic only.
         for post in reversed(posts):
-           self._add_post(post, fg, server_url)
+           self._add_post(post, fg, server_url, podcast=self.podcast is not None)
 
         return fg.rss_str()
 
     @classmethod
-    def _add_post(cls, post, feed, server_url):
+    def _add_post(cls, post, feed, server_url, podcast=False):
          # Validate title and body - skip this post if invalid
         # TODO can also be fixed with RegExes, feedgen could take care of it?
         # @see https://www.w3.org/TR/REC-xml/#charsets
@@ -117,6 +191,19 @@ class RSSFeed:
         for cat in set([flair.flair for flair in post.flair] + [tag.display_as for tag in post.tags]):
             if cat:
                 fe.category(term=cat, scheme='flair/tag')
+
+        if podcast:
+            fields = episode_item_fields(post)
+            fe.enclosure(*fields['enclosure'])
+            fe.podcast.itunes_duration(fields['duration'])
+            fe.podcast.itunes_explicit(fields['explicit'])
+            if 'episode_number' in fields:
+                fe.podcast.itunes_episode(fields['episode_number'])
+            if 'season' in fields:
+                fe.podcast.itunes_season(fields['season'])
+            if 'image' in fields:
+                fe.podcast.itunes_image(fields['image'])
+            fe.podcastindex.guid(fields['guid'])
 
     @staticmethod
     def _email_from_public_url(url):

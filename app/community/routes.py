@@ -39,10 +39,10 @@ from app.constants import SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, POST_TYPE_LIN
     REPORT_STATE_DISCARDED, POST_TYPE_VIDEO, NOTIF_COMMUNITY, POST_TYPE_POLL, SRC_WEB, \
     NOTIF_REPORT, NOTIF_BAN, NOTIF_UNBAN, NOTIF_REPORT_ESCALATION, NOTIF_MENTION, POST_STATUS_REVIEWING, \
     POST_TYPE_EVENT, REPORT_TYPE_COMMUNITY, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO, POST_STATUS_PUBLISHED, \
-    COMMUNITY_KIND_MICROBLOGS
+    COMMUNITY_KIND_MICROBLOGS, COMMUNITY_KIND_PODCAST
 from app.email import send_email
 from app.inoculation import inoculation
-from app.models import User, Community, CommunityMember, CommunityJoinRequest, CommunityBan, Post, Site, \
+from app.models import served_path, User, Community, CommunityMember, CommunityJoinRequest, CommunityBan, Post, Site, \
     File, utcnow, Report, Notification, Topic, PostReply, \
     NotificationSubscription, Language, ModLog, CommunityWikiPage, \
     CommunityWikiPageRevision, read_posts, Feed, FeedItem, CommunityBlock, CommunityFlair, post_flair, UserFlair, \
@@ -81,7 +81,9 @@ from app.shared.tasks import task_selector
 # package before they are defined (import cycle: app.shared.feed)
 import app.shared.feed as shared_feed
 from app.utils import get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url, joined_server_views
-from app.rss_extras import RSSFeed
+from urllib.parse import urljoin
+from app.activitypub.serializers.podcast import uses_podcast_episode
+from app.rss_extras import RSSFeed, PodcastChannel, itunes_image_ok
 from datetime import timezone, timedelta
 from flask import render_template as flask_render_template
 
@@ -870,6 +872,12 @@ def show_community_rss(actor):
         if flair_id:
             posts = posts.join(post_flair).filter(post_flair.c.flair_id == flair_id)
 
+        is_podcast = community.kind == COMMUNITY_KIND_PODCAST and community.is_local()   # spec §4.5, §10 A17.6
+        if is_podcast:
+            posts = posts.filter(Post.type == POST_TYPE_LINK,
+                                 Post.extensions['media']['status'].as_string() == 'ready',
+                                 Post.extensions['media']['mime'].as_string().startswith('audio/'))
+
         limit = request.args.get('limit', 20, int)
         limit = max(min(limit, 100), 0)
         posts = posts.order_by(desc(Post.created_at)).limit(limit).all()
@@ -878,12 +886,30 @@ def show_community_rss(actor):
         description = shorten_string(community.description, 150) if community.description else ' '
         image = community.image.source_url if community.image_id \
                           else f"{server_url}/static/images/apple-touch-icon.png"
+        podcast = None
+        language = 'en'
+        if is_podcast:
+            posts = [post for post in posts if uses_podcast_episode(post) and is_open(post)]   # the shapes SQL cannot test
+            # feedgen offers only a .jpg/.png URL to itunes:image: the first of icon, banner and the site's icon that is one
+            candidates = [urljoin(server_url, served_path(file.file_path or file.source_url))
+                          for file in (community.icon, community.image) if file is not None
+                          and (file.file_path or file.source_url)]
+            owner = db.session.get(User, community.user_id) if community.user_id else None
+            podcast = PodcastChannel(
+                category=community.podcast_category,
+                image=next((url for url in candidates + [f"{server_url}/static/images/apple-touch-icon.png"]
+                            if itunes_image_ok(url))),
+                author=owner.display_name() if owner else community.title,
+                explicit=bool(community.nsfw or community.nsfl))
+            language = community.languages.filter(Language.code != 'und').order_by(Language.id).first()
+            language = language.code if language else 'en'
         feed = RSSFeed(title = f'{community.title} on {g.site.name}',
                        link = f"{server_url}/c/{actor}",
                        description = description,
                        logo = image,
                        self_link = f"{server_url}/c/{actor}/feed",
-                       language = 'en'
+                       language = language,
+                       podcast = podcast
                      )
 
         response = make_response(feed.create_feed(posts, server_url))
