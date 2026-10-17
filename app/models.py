@@ -2529,6 +2529,12 @@ class ActivityLog(db.Model):
 post_stored_hooks = []
 
 
+def mark_audio_attachment(post, attachment):
+    """A17.3: an attachment whose mediaType is audio/* makes the post an audio post (a PieFed episode)."""
+    if str(attachment.get('mediaType', '')).startswith('audio/'):
+        post.extensions = {**(post.extensions or {}), 'media_type': 'audio'}
+
+
 class Post(db.Model):
     query_class = FullTextSearchQuery
     id = db.Column(db.Integer, primary_key=True)
@@ -2874,8 +2880,7 @@ class Post(db.Model):
                     if 'url' not in attachment:     # as the Link branch above
                         continue                    # already tests for
                     post.url = attachment['url']  # Mastodon
-                    if str(attachment.get('mediaType', '')).startswith('audio/'):   # A17.3: a PieFed episode
-                        post.extensions = {**(post.extensions or {}), 'media_type': 'audio'}
+                    mark_audio_attachment(post, attachment)
                     if 'name' in attachment:
                         alt_text = attachment['name']
                     if post.url:
@@ -2884,8 +2889,7 @@ class Post(db.Model):
                     if 'url' not in attachment:
                         continue
                     post.url = attachment['url']
-                    if str(attachment.get('mediaType', '')).startswith('audio/'):   # A17.3: a PieFed episode
-                        post.extensions = {**(post.extensions or {}), 'media_type': 'audio'}
+                    mark_audio_attachment(post, attachment)
                     if 'name' in attachment:
                         post.title = attachment['name']
                     if post.url:

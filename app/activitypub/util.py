@@ -40,7 +40,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     UserFollower, PostBoost, QuoteAuthorization, Relay, parse_ap_timestamp, parse_ap_published, image_url_from, markdown_source, \
     _as_text, _as_int, _as_float, _as_dict, _as_url, property_value_fields, public_key_pem, \
     more_info_link, is_more_info_link, more_info_url_from, \
-    language_from_ap, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError, post_file, GALLERY_BLOCKED_WEIGHT
+    language_from_ap, mark_audio_attachment, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError, post_file, GALLERY_BLOCKED_WEIGHT
 from app.utils import strip_quote_fallback, FETCH_MAX_BYTES, get_request, get_request_capped, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, PAGE_MAX_BYTES, \
     sanitise_posting_warning, \
@@ -5195,14 +5195,12 @@ def update_post_from_activity(post: Post, request_json: dict):
                         break
                 elif attachment.get('type') == 'Document':
                     new_url = attachment['url']  # Mastodon
-                    if str(attachment.get('mediaType', '')).startswith('audio/'):   # A17.3, as Post.new
-                        post.extensions = {**(post.extensions or {}), 'media_type': 'audio'}
+                    mark_audio_attachment(post, attachment)
                     if new_url:
                         break
                 elif attachment.get('type') == 'Audio':  # WordPress podcast
                     new_url = attachment['url']
-                    if str(attachment.get('mediaType', '')).startswith('audio/'):   # A17.3, as Post.new
-                        post.extensions = {**(post.extensions or {}), 'media_type': 'audio'}
+                    mark_audio_attachment(post, attachment)
                     if 'name' in attachment:
                         post.title = attachment['name']
                     if new_url:
