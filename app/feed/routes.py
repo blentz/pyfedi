@@ -31,6 +31,7 @@ import app.shared.community as shared_community
 # The module, not the names: app.shared.feed reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.feed)
 import app.shared.feed as shared_feed
+from app.storefront import is_local_host
 from app.shared.upload import is_refused_upload
 from app.utils import etag_stamp, back, show_ban_message, piefed_markdown_to_lemmy_markdown, markdown_to_html, render_template, \
     user_filters_posts, joined_communities, menu_instance_feeds, validation_required, feed_membership, \
@@ -796,7 +797,7 @@ def feed_unsubscribe(actor):
 
 @bp.route('/feed/lookup/<feedname>/<domain>')
 def lookup(feedname, domain):
-    if domain == current_app.config['SERVER_NAME']:
+    if is_local_host(domain):
         return redirect('/f/' + feedname)
 
     feedname = feedname.lower()

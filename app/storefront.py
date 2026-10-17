@@ -6,6 +6,7 @@ implicit default, so installs that never ran the migration's seed still work.
 from __future__ import annotations
 
 from typing import NamedTuple
+from urllib.parse import urlsplit
 
 from flask import Response, current_app, g, has_request_context, request
 from flask.globals import request_ctx
@@ -68,6 +69,37 @@ def default_domain() -> DomainInfo:
 
 def is_registered_host(host: str) -> bool:
     return domain_for_host(host) is not None
+
+
+def _bare_host(authority: str) -> str:
+    """The host of an authority (`host`, `host:port`, `[v6]:port`), lower-cased, trailing dot stripped; '' when it
+    names none."""
+    try:
+        return (urlsplit(f'//{authority.strip()}').hostname or '').rstrip('.')
+    except ValueError:   # an unbalanced IPv6 bracket
+        return ''
+
+
+def is_local_host(host: str | None) -> bool:
+    """Whether `host` names this site: SERVER_NAME (the canonical host, ours even before a site_domain row names it)
+    or any registered domain. Case, a port and a trailing dot are ignored.
+
+    The one answer to "is this domain ours" (spec §3.4): a link pasted from the onion is as local as one from the
+    clearnet. The canonical host is compared first, so the common case reads no rows."""
+    bare = _bare_host(host or '')
+    return bool(bare) and (bare == _bare_host(current_app.config.get('SERVER_NAME') or '') or is_registered_host(bare))
+
+
+def is_local_link(url) -> bool:
+    """Whether absolute (or scheme-relative) `url` points at this site: `is_local_host` of its host. The host is
+    urlsplit's, after any userinfo, which is the host a browser would visit."""
+    if not isinstance(url, str):
+        return False
+    try:
+        host = urlsplit(url).hostname
+    except ValueError:
+        return False
+    return is_local_host(host)
 
 
 def check_default_domain() -> None:

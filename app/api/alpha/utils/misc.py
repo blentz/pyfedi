@@ -16,6 +16,7 @@ from app.api.alpha.views import search_view, post_view, reply_view, user_view, c
 from app.community.util import search_for_community
 from app.discovery.podcast import PODCAST_DROP, podcast_route_for, podcast_twin_named_by_other
 from app.models import Post, PostReply, User, Community, BannedInstances, Feed, ModLog
+from app.storefront import is_local_host
 from app.user.utils import search_for_user
 from app.visibility import can_view, modlog_open_clause
 from app.feed.util import search_for_feed
@@ -157,7 +158,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
     if not server:  # can't find server
         raise Exception('No object found.')
     
-    if server == current_app.config['SERVER_NAME']:
+    if is_local_host(server):   # a link on any of this site's domains
         local_request = True
     else:
         if query.startswith('!'):

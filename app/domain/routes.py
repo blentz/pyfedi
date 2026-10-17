@@ -14,6 +14,7 @@ from app.domain.forms import PostWarningForm
 from app.inoculation import inoculation
 from app.models import Post, Domain, Community, DomainBlock, read_posts
 from app.shared.domain import block_domain, unblock_domain
+from app.storefront import is_local_host
 from app.visibility import listable_clause
 from app.utils import render_template, permission_required, user_filters_posts, blocked_domains, \
     blocked_or_banned_instances, \
@@ -238,7 +239,7 @@ def domain_block(domain_id):
 
     block_domain(domain.name, SRC_WEB)
 
-    if domain.name.lower() != current_app.config['SERVER_NAME'].lower():  # D581: our own domain was refused, with its own flash
+    if not is_local_host(domain.name):  # D581: our own domain was refused, with its own flash
         flash(_('%(name)s blocked.', name=domain.name))
 
     if request.headers.get("HX-Request"):

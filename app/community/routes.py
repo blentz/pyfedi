@@ -84,6 +84,7 @@ from app.shared.tasks import task_selector
 import app.shared.feed as shared_feed
 from app.utils import is_valid_xml_utf8, get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url, joined_server_views
 from app.activitypub.serializers.podcast import uses_podcast_episode
+from app.storefront import is_local_host
 from app.rss_extras import RSSFeed, PodcastChannel, itunes_image_ok
 from datetime import timezone, timedelta
 from flask import render_template as flask_render_template
@@ -3196,7 +3197,7 @@ def community_invite_accept(actor, token):
 
 @bp.route('/lookup/<community>/<domain>')
 def lookup(community, domain):
-    if domain == current_app.config['SERVER_NAME']:
+    if is_local_host(domain):
         return redirect('/c/' + community)
 
     community = community.lower()

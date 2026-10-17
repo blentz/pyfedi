@@ -74,6 +74,7 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     PostReply, PostReplyBookmark, AllowedInstances, InstanceBan, Tag, Emoji, UserExtraField, ArchivedPostReply, \
     RevokedToken, CommunityFavorite, UserFollower, CommunityFlairBlock, s3_key_from_url, Role, RolePermission, \
     ServerViewMember
+from app.storefront import is_local_host, is_local_link
 from collections import Counter
 from flask import has_request_context
 import app as app_pkg
@@ -599,7 +600,7 @@ def is_local_image_url(url):
     if not is_image_url(url):
         return False
     f = furl(url)
-    return f.host in ["127.0.0.1", current_app.config["SERVER_NAME"], current_app.config['S3_PUBLIC_URL']]
+    return f.host in ["127.0.0.1", current_app.config['S3_PUBLIC_URL']] or is_local_host(f.host)
 
 
 def is_video_url(url: str) -> bool:
@@ -3385,7 +3386,8 @@ def is_safe_redirect_target(url) -> bool:
 
     Accepted:
       - relative URLs (`/foo`, `foo`, `?x=1`, `#frag`): same-origin by definition.
-      - absolute `http://` or `https://` URLs whose HOST equals `SERVER_NAME`.
+      - absolute `http://` or `https://` URLs whose HOST is this site's: `SERVER_NAME`
+        or any registered storefront domain (`app.storefront.is_local_host`).
       - absolute `http://` or `https://` URLs whose HOST the admin's
         `redirect_policy` setting additionally allows (see below).
 
@@ -3420,10 +3422,10 @@ def is_safe_redirect_target(url) -> bool:
                          choice, and the admin form says so.
 
     Consequence worth knowing: this function is no longer pure. Under the default
-    it touches the database only for an off-origin absolute URL -- a relative URL
-    and this server's own host are both decided before the setting is read -- but
-    it can query, so it needs an app context with a working database, not just a
-    request context.
+    it touches the database only for an absolute URL off SERVER_NAME -- a relative
+    URL and SERVER_NAME are both decided before anything is read; the registered
+    domains are read (cached) next, the setting after that -- but it can query, so
+    it needs an app context with a working database, not just a request context.
 
     Two decisions worth stating, because they are the ones that make this
     different from what it replaces:
@@ -3491,16 +3493,14 @@ def is_safe_redirect_target(url) -> bool:
     # any mode below is allowed to match on.
 
     # `.lower()` is belt-and-braces: urlparse's .hostname normalises the case of
-    # an ASCII host, and config.py lower-cases SERVER_NAME at import, so neither
-    # call is discriminated by a test. They are here so the comparison stays
-    # correct if either of those normalisations goes away.
+    # an ASCII host, so it is not discriminated by a test. It is here so the
+    # comparison stays correct if that normalisation goes away.
     host = host.lower()
 
-    server_name = (current_app.config.get('SERVER_NAME') or '').strip().lower()
-    expected_host = urlparse(f'//{server_name}').hostname if server_name else None
-    if expected_host and host == expected_host.lower():
-        # Our own host is acceptable under every policy, and deciding it here
-        # means the common case never reads the setting or touches the database.
+    if is_local_host(host):
+        # Our own hosts -- SERVER_NAME and every registered storefront domain
+        # (spec 2026-10-17 §3.4) -- are acceptable under every policy, and
+        # deciding them here means the common case never reads the setting.
         return True
 
     policy = get_setting(REDIRECT_POLICY_SETTING, REDIRECT_POLICY_SAME_ORIGIN)
@@ -7399,7 +7399,7 @@ def log_cron_task_to_db(task_name: str):
 def display_back_button():
     ua = request.user_agent.string or ""
     if "iPhone" in ua or "iPad" in ua or "iPod" in ua:
-        if request.referrer and request.referrer.startswith(current_app.config['SERVER_URL']):
+        if is_local_link(request.referrer):   # a referrer on any storefront of this site
             return 'display_back_button'
         else:
             return ''

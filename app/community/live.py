@@ -12,6 +12,7 @@ from app import cache, db
 from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_STATUS_REVIEWING, VISIBILITY_PUBLIC
 from app.models import Community, Instance, Post, ServerViewMember, post_stored_hooks
 from app import utils
+from app.storefront import is_local_host
 from app.utils import instance_banned, utcnow
 
 from app.discovery import MEDIA_SOFTWARE
@@ -47,7 +48,7 @@ def is_local_microblogs(community) -> bool:
 def server_view_instance(host: str):
     """The Instance whose server view is /c/microblogs@<host>, else None (spec: Resolving).
     `host` is lower-cased by the caller."""
-    if not host or host == current_app.config['SERVER_NAME'].lower():
+    if not host or is_local_host(host):
         return None
     # A real community always wins: /c/microblogs@piefed.social stays PieFed's own community.
     if db.session.query(Community.id).filter(Community.ap_id == f'{LIVE_COMMUNITY}@{host}').first():
