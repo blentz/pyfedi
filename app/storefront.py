@@ -101,6 +101,9 @@ def canonical_url() -> str:
     return current_app.config['SERVER_URL']
 
 
+HEALTH_ENDPOINTS = frozenset({'main.health', 'main.health2'})   # probes name localhost or an internal hostname
+
+
 def resolve_storefront() -> Response | None:
     """First `before_request`: set `g.storefront` from the Host header, or refuse an unregistered host with 421.
 
@@ -109,6 +112,8 @@ def resolve_storefront() -> Response | None:
     would name SERVER_NAME. The adapter is rebound to the storefront's own domain and scheme, so external URLs
     follow the host. SERVER_NAME itself is untouched."""
     storefront = domain_for_host(request.host)
+    if storefront is None and request.endpoint in HEALTH_ENDPOINTS:
+        storefront = default_domain()   # health checks are exempt from the 421
     if storefront is None:
         return Response('Misdirected Request: this host is not served here.\n', status=421, mimetype='text/plain')
     g.storefront = storefront
