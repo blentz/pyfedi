@@ -1,4 +1,5 @@
 """Interop D24: `flask refresh_discovery`, run daily from daily.sh and never on a request."""
+import subprocess
 from pathlib import Path
 
 from app import cli
@@ -70,3 +71,48 @@ def test_sync_discovery_says_none_when_no_host_failed(app, db_session, monkeypat
     result = app.test_cli_runner().invoke(args=['sync_discovery'])
 
     assert 'failed hosts: none' in result.output
+
+
+def _run_job_script(script, tmp_path, failing):
+    """Run a job script with a stand-in `flask` that records each command and
+    exits 1 for the one named `failing`. The script runs in an empty directory,
+    so its `source venv/bin/activate` fails, as it does inside the container."""
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    log = tmp_path / 'ran'
+    flask = bin_dir / 'flask'
+    flask.write_text(f'#!/bin/bash\necho "$1" >> {log}\n[ "$1" != "{failing}" ]\n')
+    flask.chmod(0o755)
+    env = {'PATH': f'{bin_dir}:/usr/bin:/bin'}
+    result = subprocess.run(['bash', str(ROOT / script)], cwd=tmp_path, env=env)
+    return result.returncode, log.read_text().split()
+
+
+def test_daily_sh_fails_when_a_step_fails_but_still_runs_the_rest(tmp_path):
+    """On hell.cloud `flask daily-maintenance` crashed every night from
+    2026-10-12, yet daily.sh exited 0 because its last command succeeded, so
+    the systemd unit reported success and its OnFailure email never fired."""
+    code, ran = _run_job_script('daily.sh', tmp_path, failing='daily-maintenance')
+
+    assert code != 0
+    assert ran == ['daily-maintenance', 'refresh_discovery', 'sync_discovery']
+
+
+def test_daily_sh_succeeds_when_every_step_does(tmp_path):
+    code, ran = _run_job_script('daily.sh', tmp_path, failing='none')
+
+    assert code == 0
+    assert ran == ['daily-maintenance', 'refresh_discovery', 'sync_discovery']
+
+
+def test_email_notifs_sh_fails_when_a_step_fails_but_still_runs_the_rest(tmp_path):
+    code, ran = _run_job_script('email_notifs.sh', tmp_path, failing='send_missed_notifs')
+
+    assert code != 0
+    assert ran == ['send_missed_notifs', 'process_email_bounces', 'clean_up_old_activities']
+
+
+def test_email_notifs_sh_succeeds_when_every_step_does(tmp_path):
+    code, ran = _run_job_script('email_notifs.sh', tmp_path, failing='none')
+
+    assert code == 0
