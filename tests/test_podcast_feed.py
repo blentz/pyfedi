@@ -156,7 +156,8 @@ def test_item_with_cover_has_its_image(app, pod, episode_post):
     assert item.find('itunes:image', NS).get('href') == episode_post.image.source_url
 
 
-@pytest.mark.parametrize('cover', ['https://cdn.example/cover.webp', 'https://cdn.example/cover.JPG', 'javascript:alert(1)//cover.png'])
+@pytest.mark.parametrize('cover', ['https://cdn.example/cover.webp', 'https://cdn.example/cover.JPG', 'javascript:alert(1)//cover.png',
+                                   'https://cdn.example/co\x13ver.jpg'])
 def test_item_cover_feedgen_would_refuse_is_left_out(app, pod, episode_post, cover):
     episode_post.image_id = make_file(source_url=cover).id
     db.session.commit()

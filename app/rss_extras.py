@@ -77,8 +77,10 @@ class PodcastIndexEntryExtension(BaseExtension):
 
 def itunes_image_ok(url) -> bool:
     """feedgen's itunes:image takes only a URL ending exactly in .jpg or .png (a channel's silently drops any other,
-    an item's raises), so those are the only images this feed offers it."""
-    return isinstance(url, str) and not has_unsafe_url_scheme(url) and url.endswith(('.jpg', '.png'))
+    an item's raises), so those are the only images this feed offers it. A control character is refused too: lxml
+    raises on one when the feed is rendered, which would fail the whole feed for one image."""
+    return (isinstance(url, str) and not has_unsafe_url_scheme(url) and url.endswith(('.jpg', '.png'))
+            and _is_valid_xml_utf8(url))
 
 
 @dataclass
