@@ -1,6 +1,7 @@
 from collections import namedtuple
 
 from random import randint
+from urllib.parse import urljoin
 
 import flask
 from bs4 import BeautifulSoup
@@ -81,7 +82,6 @@ from app.shared.tasks import task_selector
 # package before they are defined (import cycle: app.shared.feed)
 import app.shared.feed as shared_feed
 from app.utils import is_valid_xml_utf8, get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url, joined_server_views
-from urllib.parse import urljoin
 from app.activitypub.serializers.podcast import uses_podcast_episode
 from app.rss_extras import RSSFeed, PodcastChannel, itunes_image_ok
 from datetime import timezone, timedelta
