@@ -25,7 +25,7 @@ from app.activitypub.signature import default_context, LDSignature, HttpSignatur
 from app.admin.util import topics_for_form
 from app.api.alpha.utils.misc import get_resolve_object
 from app.constants import SUBSCRIPTION_PENDING, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, \
-    POST_STATUS_REVIEWING
+    POST_STATUS_REVIEWING, POST_FORM_TYPES
 from app.email import send_email, send_registration_approved_email
 from app.inoculation import inoculation
 from app.community import server_view_list
@@ -335,44 +335,25 @@ def list_topics():
 @bp.route('/add_post', methods=['GET'])
 @login_required
 def add_post():
-    """The "add post" button: pick a community for the user and send them to its
-    compose form.
+    """The "Create post" button outside a community: the user picks where to post, or creates a community.
 
-    D1385. `cross_post_community_id` is a cookie, written when the user last
-    cross-posted, and it was trusted three ways at once. Measured, every value
-    below reaching this route:
-
-        'abc', 'null', '1.5'   ValueError: invalid literal for int() with base 10
-        '0', '2', '999999'     AttributeError: 'NoneType' object has no attribute
-                               'link'   (no such community)
-        '-1'                   204, with the joined-community fallback skipped
-
-    So a cookie naming a community that has since been deleted -- or one edited by
-    hand, or left by an older version -- broke the button with a 500 until it
-    expired, and a `-1` made it silently do nothing. The cookie is a hint about
-    where the user probably wants to post, so an unusable one falls through to the
-    same choice the route would have made without it, and 204 is left for the case
-    it means: this user has nowhere to post.
+    A compose form's post types come from its community (Poll and Event are dead for a Lemmy one, Audio shows only
+    for a podcast), so the form must open on the community the user chose, not one picked for them. No community is
+    preselected (owner ruling 2026-10-17). `?community=<id>` goes on to that community's form, keeping `&type=` --
+    the compose form's community select comes back through here when it changes.
     """
     poss_communities = possible_communities()
-
-    default_community = None
-    cross_post_community_id = request.cookies.get('cross_post_community_id')
-    if cross_post_community_id and cross_post_community_id.strip().isdigit():
-        default_community = db.session.get(Community,
-                                           int(cross_post_community_id))
-
-    if default_community is None:
-        for section in ("Joined communities", "Moderating", "Others"):
-            if section in poss_communities and poss_communities[section]:
-                default_community = db.session.get(
-                    Community, poss_communities[section][0][0])
-                if default_community is not None:
-                    break
-
-    if default_community is None:
-        return ('', 204)
-    return redirect(url_for('community.add_post', actor=default_community.link()))
+    chosen = request.args.get('community', '')
+    if chosen.isascii() and chosen.isdigit():
+        allowed = {community_id for section in poss_communities.values() for community_id, _name in section}
+        community = db.session.get(Community, int(chosen)) if int(chosen) in allowed else None
+        if community is not None:
+            kind = request.args.get('type')
+            return redirect(url_for('community.add_post', actor=community.link(),
+                                    type=kind if kind in POST_FORM_TYPES else None))
+    can_create = current_user.is_admin() or not g.site.community_creation_admin_only
+    return render_template('choose_community.html', title=_('Create post'), communities=poss_communities,
+                           can_create=can_create)
 
 
 @bp.route('/communities', methods=['GET'])

@@ -24,6 +24,8 @@ POST_STATUS_PROCESSING = -3   # uploaded video/audio awaiting ffprobe/ffmpeg
 
 MEDIA_KIND_VIDEO = 'video'
 MEDIA_KIND_AUDIO = 'audio'
+# the <type> of /community/<actor>/submit/<type>: one compose form each
+POST_FORM_TYPES = ('link', 'discussion', 'image', 'video', 'audio', 'poll', 'event')
 
 # ActivityPub audience of a Post or PostReply, classified at ingest by
 # app.activitypub.util.activitypub_visibility and enforced by app/visibility.py.

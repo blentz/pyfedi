@@ -1,36 +1,24 @@
-"""`main.add_post`: the "add post" button that picks a community for you.
+"""`main.add_post`: the "Create post" button outside any community.
 
-14 statements with no test at all.
+It used to pick a community for the user -- the `cross_post_community_id` cookie's, else the first joined one -- and
+redirect to its compose form. That form's post-type buttons are built from the community it opened on (Poll and Event
+are dead `#` links for a Lemmy community, Audio shows only for a podcast), and changing its community select did not
+rebuild them, so the user posted with the wrong community's choices. The route now shows a chooser: the user picks a
+community (none is preselected, owner ruling 2026-10-17) or creates one, and `?community=<id>` sends them on to that
+community's form. The compose form's select comes back here with `&type=` when it changes, so the form is rebuilt for
+the community picked there too.
 
-D1385. `cross_post_community_id` is a cookie, written when the user last
-cross-posted, and the route trusted it three ways at once. Measured, each value
-reaching the route:
-
-    'abc', 'null', '1.5'   ValueError: invalid literal for int() with base 10
-    '0', '2', '999999'     AttributeError: 'NoneType' object has no attribute
-                           'link'   (no such community)
-    '-1'                   204, with the joined-community fallback skipped
-
-So a cookie naming a community that has since been deleted -- or edited by hand,
-or left behind by an older version -- broke the button with a 500 until it
-expired, and `-1` made it silently do nothing. The cookie is a hint about where
-the user probably wants to post, so an unusable one now falls through to the same
-choice the route would have made without it, and 204 is left for the case it
-actually means: nowhere to post.
-
-A HARNESS NOTE THAT COST A PROBE. `client.set_cookie(key, value)` defaults the
-domain to `localhost`, while this app's `SERVER_NAME` is `test.piefed.local`, so
-the cookie is never sent and the route takes its no-cookie path. The first probe
-reported `status=302` for every value including `'abc'`, which looked like the
-route being robust; it was the cookie being absent. Every test here passes
-`domain=...` and the first class below asserts the cookie is honoured at all, so
-a silent regression to "cookie never read" fails rather than passing everything.
+A HARNESS NOTE. `client.set_cookie(key, value)` defaults the domain to `localhost`, while this app's `SERVER_NAME` is
+`test.piefed.local`, so a cookie set without `domain=HOST` is never sent.
 """
+import re
+
 import pytest
 from flask import g
 
 from app import db
-from app.models import Community, Language, Site
+from app.constants import ROLE_ADMIN, ROLE_ADMIN_NAME
+from app.models import Community, CommunityMember, Language, Role, Site, User
 from tests.factories import (make_community, make_community_member,
                              make_instance, make_user)
 
@@ -43,6 +31,7 @@ def env(app, db_session):
     """Alice has joined `general`; `elsewhere` exists and she has not."""
     site = db.session.get(Site, 1)
     site.private_instance = False
+    site.community_creation_admin_only = False
     db.session.commit()
     local = make_instance(HOST)
     make_user(local, 'founder', local=True)          # id 1, the admin trap
@@ -61,186 +50,145 @@ def env(app, db_session):
     return client, joined, elsewhere
 
 
-def go(client, cookie=None):
-    if cookie is not None:
-        client.set_cookie('cross_post_community_id', cookie, domain=HOST)
-    return client.get('/add_post')
+def options(html):
+    """The chooser's <option value="id">s, in page order, and the ids marked selected."""
+    found = re.findall(r'<option value="(\d*)"( selected)?', html)
+    return [value for value, _ in found if value], [value for value, chosen in found if chosen]
 
 
-# --------------------------------------------------------------------------
-# The cookie is read at all
-# --------------------------------------------------------------------------
-
-
-class TestTheCookieIsHonoured:
-    def test_a_usable_cookie_wins_over_the_joined_community(self, app, env):
-        """Asserted first, because every other row below would also pass if the
-        cookie were simply never read -- which is what a missing `domain=` on
-        `set_cookie` silently produces."""
+class TestTheChooser:
+    def test_the_button_shows_a_chooser_instead_of_opening_a_community(self, app, env):
         client, joined, elsewhere = env
 
-        response = go(client, str(elsewhere.id))
+        response = client.get('/add_post')
 
-        assert response.status_code == 302
-        assert response.headers['Location'] == '/community/elsewhere/submit'
+        assert response.status_code == 200
+        values, _ = options(response.get_data(as_text=True))
+        assert str(joined.id) in values and str(elsewhere.id) in values
 
-    def test_a_padded_cookie_is_honoured(self, app, env):
-        """`.strip().isdigit()` rather than `.isdigit()`: `int('  2  ')` is 2, so
-        the guard is written to accept exactly what the parse accepts. Without the
-        strip a padded cookie falls back instead of being used -- a silent
-        difference in behaviour, which is why this row exists rather than being
-        left to the parse.
-        """
-        client, joined, elsewhere = env
-
-        response = go(client, f'  {elsewhere.id}  ')
-
-        assert response.status_code == 302
-        assert response.headers['Location'] == '/community/elsewhere/submit'
-
-    def test_without_a_cookie_the_joined_community_is_used(self, app, env):
-        client, joined, elsewhere = env
-
-        response = go(client)
-
-        assert response.status_code == 302
-        assert response.headers['Location'] == '/community/general/submit'
-
-
-# --------------------------------------------------------------------------
-# D1385: the values that used to raise
-# --------------------------------------------------------------------------
-
-
-class TestACookieThatIsNotANumber:
-    @pytest.mark.parametrize('cookie', ['abc', 'null', '1.5', '-1', '1e3',
-                                        'NaN', '0x2', '2;3', ' ', '٢'])
-    def test_it_does_not_raise(self, app, env, cookie):
-        """`int(cookie)` was `ValueError` for most of these. `'٢'` is an
-        Arabic-Indic digit: `str.isdigit()` accepts it and `int()` parses it, so
-        it is here to pin that the guard and the parse agree about what a digit
-        is -- a mismatch between them would be the same crash again."""
-        client, joined, elsewhere = env
-
-        assert go(client, cookie).status_code in (302, 204)
-
-    @pytest.mark.parametrize('cookie', ['abc', 'null', '1.5', '-1'])
-    def test_it_falls_back_to_the_joined_community(self, app, env, cookie):
-        """The cookie is a hint, so an unusable one must leave the user where the
-        route would have sent them anyway. `-1` is in this list because it used
-        to reach the `== -1` check and return 204 instead."""
-        client, joined, elsewhere = env
-
-        response = go(client, cookie)
-
-        assert response.status_code == 302
-        assert response.headers['Location'] == '/community/general/submit'
-
-
-class TestACookieNamingNoCommunity:
-    @pytest.mark.parametrize('cookie', ['999999', '0'])
-    def test_it_does_not_raise(self, app, env, cookie):
-        """`db.session.get` answered None and `.link()` was called on it -- the
-        unguarded-get shape. `'0'` is included because no row has id 0 while
-        `'0'.isdigit()` is true, so it reaches the lookup."""
-        client, joined, elsewhere = env
-
-        assert go(client, cookie).status_code in (302, 204)
-
-    def test_a_deleted_community_falls_back(self, app, env):
-        """The way this is reached in practice: the user cross-posted to a
-        community, the community was later removed, and the cookie outlived it."""
-        client, joined, elsewhere = env
-        gone_id = elsewhere.id
-        db.session.delete(elsewhere)
-        db.session.commit()
-
-        response = go(client, str(gone_id))
-
-        assert response.status_code == 302
-        assert response.headers['Location'] == '/community/general/submit'
-
-
-# --------------------------------------------------------------------------
-# The fallback order, and the one case 204 is for
-# --------------------------------------------------------------------------
-
-
-class TestTheFallbackOrder:
-    def test_moderating_is_preferred_over_joined(self, app, env):
-        """`possible_communities()` builds `Moderating` from
-        `moderating_communities` FIRST and skips those ids when building
-        `Joined communities`, so a community the user both moderates and has
-        joined appears only under `Moderating`.
-
-        The route's own order is `Joined communities`, then `Moderating`, then
-        `Others` -- so with a moderated community and a separately joined one,
-        the joined one still wins. Both facts are asserted here because the route
-        and the helper order these sections differently, and a reader comparing
-        the two should not have to guess which prevails.
-        """
-        from app.models import CommunityMember, User
-
+    def test_the_communities_are_grouped_like_the_compose_forms_select(self, app, env):
         client, joined, elsewhere = env
         alice = User.query.filter_by(user_name='alice').one()
-        # alice moderates `elsewhere` and has joined `general`.
-        make_community_member(alice, elsewhere, is_moderator=True)
+        make_community_member(alice, make_community('modded'), is_moderator=True)
         db.session.commit()
 
-        response = go(client)
+        html = client.get('/add_post').get_data(as_text=True)
 
-        assert response.status_code == 302
-        assert response.headers['Location'] == '/community/general/submit'
+        groups = re.findall(r'<optgroup label="([^"]+)"', html)
+        assert groups == ['Moderating', 'Joined communities', 'Others']
 
-    def test_moderating_is_used_when_nothing_is_joined(self, app, env):
-        """With no joined community, `Moderating` is the next section the route
-        looks at."""
-        from app.models import CommunityMember, User
-
+    def test_no_community_is_preselected(self, app, env):
+        """Owner ruling: the user picks every time, so a stale guess cannot send a post to the wrong place."""
         client, joined, elsewhere = env
-        alice = User.query.filter_by(user_name='alice').one()
-        CommunityMember.query.filter_by(user_id=alice.id).delete()
-        make_community_member(alice, elsewhere, is_moderator=True)
+
+        _, selected = options(client.get('/add_post').get_data(as_text=True))
+
+        assert selected == []
+
+    def test_the_last_cross_posted_community_is_not_preselected_either(self, app, env):
+        client, joined, elsewhere = env
+        client.set_cookie('cross_post_community_id', str(elsewhere.id), domain=HOST)
+
+        response = client.get('/add_post')
+
+        assert response.status_code == 200
+        assert options(response.get_data(as_text=True))[1] == []
+
+    def test_it_offers_to_create_a_community(self, app, env):
+        client, joined, elsewhere = env
+
+        html = client.get('/add_post').get_data(as_text=True)
+
+        assert 'href="/community/add_local"' in html
+
+    def test_it_does_not_offer_creation_when_only_admins_may_create(self, app, env):
+        client, joined, elsewhere = env
+        db.session.get(Site, 1).community_creation_admin_only = True
         db.session.commit()
 
-        response = go(client)
+        html = client.get('/add_post').get_data(as_text=True)
 
-        assert response.status_code == 302
-        assert response.headers['Location'] == '/community/elsewhere/submit'
+        assert 'href="/community/add_local"' not in html
 
-    def test_a_user_with_nowhere_to_post_gets_204(self, app, env):
-        """The meaning 204 is reserved for. Asserted by removing every community,
-        so `possible_communities()` has nothing in any section."""
+    def test_an_admin_is_offered_creation_when_only_admins_may_create(self, app, env):
         client, joined, elsewhere = env
-        from app.models import CommunityMember
+        db.session.get(Site, 1).community_creation_admin_only = True
+        db.session.commit()
+        User.query.filter_by(user_name='alice').one().roles.append(Role(id=ROLE_ADMIN + 100, name=ROLE_ADMIN_NAME))
+        db.session.commit()
 
+        html = client.get('/add_post').get_data(as_text=True)
+
+        assert 'href="/community/add_local"' in html
+
+    def test_a_user_with_nowhere_to_post_is_offered_creation_not_an_empty_reply(self, app, env):
+        """This was a bare 204, which a browser shows as the button doing nothing."""
+        client, joined, elsewhere = env
         CommunityMember.query.delete()
         Community.query.delete()
         db.session.commit()
 
-        response = go(client)
+        response = client.get('/add_post')
 
-        assert response.status_code == 204
-        assert response.data == b''
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert options(html)[0] == []
+        assert 'href="/community/add_local"' in html
 
-    def test_a_cookie_cannot_rescue_a_user_with_nowhere_to_post(self, app, env):
-        """A stale cookie must not resurrect a community that is gone: the lookup
-        fails, the fallback finds nothing, and the answer is the same 204."""
+
+class TestChoosingACommunity:
+    def test_a_chosen_community_opens_its_compose_form(self, app, env):
         client, joined, elsewhere = env
-        from app.models import CommunityMember
 
-        stale = elsewhere.id
-        CommunityMember.query.delete()
-        Community.query.delete()
+        response = client.get(f'/add_post?community={elsewhere.id}')
+
+        assert response.status_code == 302
+        assert response.headers['Location'] == '/community/elsewhere/submit'
+
+    @pytest.mark.parametrize('kind', ['link', 'discussion', 'image', 'video', 'audio', 'poll', 'event'])
+    def test_the_type_the_compose_form_was_on_is_kept(self, app, env, kind):
+        """The compose form's community select sends its current type, so switching community keeps it."""
+        client, joined, elsewhere = env
+
+        response = client.get(f'/add_post?community={elsewhere.id}&type={kind}')
+
+        assert response.status_code == 302
+        assert response.headers['Location'] == f'/community/elsewhere/submit/{kind}'
+
+    def test_a_type_the_compose_form_does_not_have_is_dropped(self, app, env):
+        client, joined, elsewhere = env
+
+        response = client.get(f'/add_post?community={elsewhere.id}&type=../../admin')
+
+        assert response.status_code == 302
+        assert response.headers['Location'] == '/community/elsewhere/submit'
+
+    @pytest.mark.parametrize('value', ['', 'abc', '1.5', '-1', '0', '999999', '٢', ' '])
+    def test_a_value_naming_no_community_shows_the_chooser_again(self, app, env, value):
+        """`'٢'` is an Arabic-Indic digit: str.isdigit() accepts it, so it pins that no int() parse can raise."""
+        client, joined, elsewhere = env
+
+        response = client.get('/add_post', query_string={'community': value})
+
+        assert response.status_code == 200
+        assert str(joined.id) in options(response.get_data(as_text=True))[0]
+
+    def test_a_private_community_the_user_is_not_in_is_not_a_destination(self, app, env):
+        """possible_communities() leaves it out of the chooser, so the redirect must not reach it by id either."""
+        client, joined, elsewhere = env
+        secret = make_community('secret')
+        secret.private = True
         db.session.commit()
 
-        assert go(client, str(stale)).status_code == 204
+        response = client.get(f'/add_post?community={secret.id}')
+
+        assert response.status_code == 200
+        assert str(secret.id) not in options(response.get_data(as_text=True))[0]
 
 
 class TestWhoMayUseIt:
     def test_an_anonymous_visitor_is_sent_to_the_login(self, app, env):
-        """`@login_required` -- the route reads `possible_communities()`, which
-        needs a user."""
+        """`@login_required` -- the route reads `possible_communities()`, which needs a user."""
         response = app.test_client().get('/add_post')
 
         assert response.status_code in (302, 401)

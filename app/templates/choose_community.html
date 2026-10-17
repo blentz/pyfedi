@@ -1,0 +1,36 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+
+{% block app_content %}
+<div class="row">
+    <main class="col-12 col-lg-8 position-relative main_pane">
+        <h1>{{ _('Create post') }}</h1>
+        {% if communities -%}
+            <form method="get" action="{{ url_for('main.add_post') }}">
+                <div class="form-group mb-3">
+                    <label class="form-control-label" for="communities">{{ _('Community to post in') }}</label>
+                    <select class="form-select" id="communities" name="community" required>
+                        <option value="">{{ _('Choose a community') }}</option>
+                        {% for section, choices in communities.items() -%}
+                            <optgroup label="{{ section }}">
+                                {% for community_id, name in choices -%}
+                                    <option value="{{ community_id }}">{{ name }}</option>
+                                {% endfor -%}
+                            </optgroup>
+                        {% endfor -%}
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-primary">{{ _('Continue') }}</button>
+            </form>
+        {% else -%}
+            <p>{{ _('There is no community you can post in yet.') }}</p>
+        {% endif -%}
+        {% if can_create -%}
+            <p class="mt-4">{{ _('Or') }} <a href="{{ url_for('community.add_local') }}">{{ _('create a new community') }}</a>.</p>
+        {% endif -%}
+    </main>
+</div>
+{% endblock %}
