@@ -13,7 +13,7 @@ import pytest
 
 from app import cli, db
 from app.constants import POST_STATUS_PUBLISHED, POST_STATUS_SCHEDULED
-from app.models import CommunityMember, ModLog, Post, utcnow
+from app.models import Community, CommunityMember, ModLog, Post, utcnow
 from tests.factories import (make_community, make_community_ban, make_community_member,
                              make_instance, make_user)
 
@@ -52,6 +52,21 @@ def test_a_one_shot_post_by_an_author_who_may_post_is_published(app, scheduled):
     _publish(app)
 
     assert db.session.get(Post, scheduled.post.id).status == POST_STATUS_PUBLISHED
+
+
+@pytest.mark.parametrize('repeat', [None, 'daily'])
+def test_publishing_a_scheduled_post_bumps_the_communitys_last_active(app, scheduled, repeat):
+    """A feed's ETag is the community's last_active: left alone, a feed reader is told nothing changed."""
+    scheduled.post.repeat = repeat
+    scheduled.community.last_active = utcnow() - timedelta(days=3)
+    db.session.commit()
+    before = scheduled.community.last_active
+
+    _publish(app)
+
+    db.session.expire_all()
+    assert Post.query.filter_by(status=POST_STATUS_PUBLISHED).count() == 1
+    assert db.session.get(Community, scheduled.community.id).last_active > before + timedelta(days=2)
 
 
 def test_a_one_shot_post_by_an_author_banned_since_is_not_published(app, scheduled):

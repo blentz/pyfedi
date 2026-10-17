@@ -1096,6 +1096,7 @@ def register(app):
                         post.posted_at = utcnow()
                         post.edited_at = None
                         post.title = render_from_tpl(post.title)
+                        post.community.last_active = utcnow()   # the community feed's ETag is its last_active
                         if post.type == POST_TYPE_POLL:
                             poll = db.session.get(Poll, post.id)
                             time_difference = poll.end_poll - post.created_at
@@ -1124,6 +1125,7 @@ def register(app):
                         scheduled_post.edited_at = None
                         scheduled_post.status = POST_STATUS_PUBLISHED
                         scheduled_post.title = render_from_tpl(scheduled_post.title)
+                        post.community.last_active = utcnow()   # the community feed's ETag is its last_active
                         scheduled_post.flair = post.flair
                         scheduled_post.tags = post.tags
                         db.session.add(scheduled_post)
