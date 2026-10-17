@@ -153,6 +153,7 @@ class Community(DefaultSchema):
     description = fields.String(metadata={"format": "markdown"})
     icon = fields.String(allow_none=True, metadata={"format": "url"})
     posting_warning = fields.String(allow_none=True)
+    podcast_category = fields.String(metadata={"description": "The Apple Podcasts category of a podcast community's RSS feed, or an empty string"})
     updated = fields.String(validate=validate_datetime_string, metadata={"example": "2025-06-07T02:29:07.980084Z", "format": "datetime"})
 
 

@@ -609,7 +609,8 @@ def community_view(community: Community | int | str, variant, stub=False, user_i
                    'hidden': community.private,
                    'instance_id': community.instance_id if community.instance_id else 1,
                    'ap_domain': community.ap_domain,
-                   'ai_generated': bool(v1['ai_generated'])})
+                   'ai_generated': bool(v1['ai_generated']),
+                   'podcast_category': community.podcast_category or ''})
         if community.description and not stub:
             v1['description'] = community.description
         if not stub:

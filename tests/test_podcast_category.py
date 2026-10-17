@@ -192,6 +192,17 @@ def test_both_forms_wrap_the_category_field_like_the_kind_field(web, monkeypatch
         assert 'id="kind_field"' in html and 'id="podcast_category_field"' in html
 
 
+def test_the_api_returns_the_category_it_sets(api):
+    response = _api_edit(api, podcast_category='Sports')
+    assert response.get_json()['community_view']['community']['podcast_category'] == 'Sports'
+
+    read = api.client.get(f'/api/alpha/community?id={api.community.id}', headers=auth(api.moderator))
+    assert read.get_json()['community_view']['community']['podcast_category'] == 'Sports'
+
+    response = _api_edit(api, podcast_category='')
+    assert response.get_json()['community_view']['community']['podcast_category'] == ''
+
+
 def test_api_create_and_edit(api):
     response = _api_create(api, podcast_category='News')
     assert response.status_code == 200, response.get_json()
