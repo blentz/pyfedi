@@ -29,7 +29,7 @@ from app.admin.forms import FederationForm, SiteMiscForm, SiteProfileForm, EditC
     EditTopicForm, SendNewsletterForm, AddUserForm, PreLoadCommunitiesForm, ImportExportBannedListsForm, \
     EditInstanceForm, RemoteInstanceScanForm, MoveCommunityForm, EditBlockedImageForm, AddBlockedImageForm, \
     CmsPageForm, CreateOfflineInstanceForm, InstanceChooserForm, CloseInstanceForm, EmojiForm, TopicImportForm, \
-    MastodonDirectoryScanForm
+    MastodonDirectoryScanForm, SiteDomainForm
 from flask_wtf import FlaskForm
 from app.admin.util import ban_list_entries, unsubscribe_from_everything_then_delete, unsubscribe_from_community, send_newsletter, \
     topics_for_form, move_community_images_to_here, switch_to_unsilenced, switch_to_silenced, serialize_topic_tree, \
@@ -43,7 +43,8 @@ from app.email import send_registration_approved_email
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, RolePermission, Domain, \
-    Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file
+    Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, SiteDomain
+from app.storefront import clear_domain_cache, default_domain
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
 from app.translation import LibreTranslateAPI
@@ -321,6 +322,45 @@ def admin_site():
         form.announcement.data = get_setting('announcement', '')
     return render_template('admin/site.html', title=_('Site profile'), form=form,
                            roles_with=roles_with('change instance settings'))
+
+
+@bp.route('/domains', methods=['GET', 'POST'])
+@login_required
+@permission_required('change instance settings')
+def admin_domains():
+    form = SiteDomainForm()
+    if form.validate_on_submit():
+        # The default row is locked to SERVER_NAME (spec §3.1). Nothing the form posts can set it. An install
+        # that never ran the seed has no rows, and adding the first would unregister SERVER_NAME, so seed it.
+        if db.session.query(SiteDomain.id).first() is None:
+            implicit = default_domain()
+            db.session.add(SiteDomain(domain=implicit.domain, scheme=implicit.scheme, federates=True,
+                                      registration='anyone', is_default=True))
+        db.session.add(SiteDomain(domain=form.domain.data, scheme=form.scheme.data,
+                                  federates=form.federates.data, registration=form.registration.data,
+                                  is_default=False))
+        db.session.commit()
+        clear_domain_cache()
+        flash(_('Domain added.'))
+        return redirect(url_for('admin.admin_domains'))
+    rows = db.session.query(SiteDomain).order_by(SiteDomain.id).all()
+    return render_template('admin/domains.html', title=_('Domains'), form=form, rows=rows,
+                           implicit_default=default_domain() if not rows else None)
+
+
+@bp.route('/domains/<int:domain_id>/delete', methods=['POST'])
+@login_required
+@permission_required('change instance settings')
+def admin_domains_delete(domain_id):
+    row = db.session.get(SiteDomain, domain_id) or abort(404)
+    if row.is_default:
+        flash(_('The default domain cannot be deleted.'), 'error')
+    else:
+        db.session.delete(row)
+        db.session.commit()
+        clear_domain_cache()
+        flash(_('Domain deleted.'))
+    return redirect(url_for('admin.admin_domains'))
 
 
 @bp.route('/misc', methods=['GET', 'POST'])

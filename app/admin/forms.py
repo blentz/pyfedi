@@ -1,3 +1,5 @@
+import re
+
 from flask_wtf import FlaskForm
 from flask_wtf.file import FileAllowed
 from slugify import slugify
@@ -9,9 +11,10 @@ from wtforms.validators import ValidationError, DataRequired, EqualTo, InputRequ
     NumberRange, Optional
 from flask_babel import _, lazy_gettext as _l
 
+from app import db
 from app.constants import DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
     DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE
-from app.models import Community, User, CmsPage, Instance
+from app.models import Community, User, CmsPage, Instance, SiteDomain
 from app.utils import REDIRECT_POLICY_ALL_REFERRERS, REDIRECT_POLICY_FEDERATED_SERVERS, \
     REDIRECT_POLICY_SAME_ORIGIN, REDIRECT_POLICY_TRUSTED_SERVERS, validate_user_name_charset
 
@@ -485,3 +488,32 @@ class EmojiForm(FlaskForm):
 class TopicImportForm(FlaskForm):
     import_file = FileField(_l('Json file that was exported from another instance'), validators=[DataRequired()])
     import_submit = SubmitField(_l('Import'))
+
+
+_DOMAIN_CHARS = re.compile(r'[a-z0-9.-]+')
+
+
+class SiteDomainForm(FlaskForm):
+    domain = StringField(_l('Domain'), validators=[DataRequired(), Length(max=255)],
+                         description=_l('A host name only: no scheme, no port.'))
+    scheme = SelectField(_l('Scheme'), choices=[('https', 'https'), ('http', 'http')], default='https')
+    federates = BooleanField(_l('Federates'), default=True,
+                             description=_l('Federation per domain takes effect in a later release.'))
+    registration = SelectField(_l('Who may register'),
+                               choices=[('anyone', _l('Anyone')), ('staff', _l('Staff only')),
+                                        ('admin', _l('Admins only'))], default='anyone',
+                               description=_l('Registration per domain takes effect in a later release.'))
+    submit = SubmitField(_l('Add domain'))
+
+    def validate_domain(self, field):
+        """Normalise to lower case without a trailing dot, then require a plain IDNA-encodable host name."""
+        domain = field.data.strip().lower().rstrip('.')
+        if not _DOMAIN_CHARS.fullmatch(domain):
+            raise ValidationError(_l('Enter a host name such as example.com, with no scheme, port or path.'))
+        try:
+            domain.encode('idna')
+        except UnicodeError:
+            raise ValidationError(_l('That is not a valid host name.'))
+        if db.session.query(SiteDomain.id).filter_by(domain=domain).first() is not None:
+            raise ValidationError(_l('That domain is already listed.'))
+        field.data = domain
