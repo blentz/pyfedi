@@ -80,6 +80,13 @@ def test_not_ready_or_linked_audio_is_not_an_episode(episode_post):
     assert not uses_podcast_episode(episode_post)
 
 
+@pytest.mark.parametrize('media', [{'mime': 'audio/\u0013'}, {'uuid': 'a\u0013b'}])
+def test_a_mime_or_uuid_that_is_not_xml_text_is_no_episode(episode_post, media):
+    with_media(episode_post, **media)
+    assert not uses_podcast_episode(episode_post)
+    assert post_to_page(episode_post)['attachment'] == [{'href': episode_post.url, 'type': 'Link'}]
+
+
 def test_a_discussion_community_has_no_episodes(episode_post):
     episode_post.community.kind = COMMUNITY_KIND_DISCUSSION
     assert not uses_podcast_episode(episode_post)
