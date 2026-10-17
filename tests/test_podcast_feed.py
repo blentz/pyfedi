@@ -236,3 +236,13 @@ def test_self_link_is_a_url_that_resolves(app, pod, episode_post, kind):
     assert href == f'{SERVER}/community/pod/feed'
     cache.clear()
     assert client.get(href.removeprefix(SERVER)).status_code == 200
+
+
+@pytest.mark.parametrize('media', [{'mime': 'audio/\u0013'}, {'uuid': 'a\u0013b'}])
+def test_a_control_character_in_the_media_record_does_not_fail_the_feed(app, pod, episode_post, media):
+    episode_post.extensions = {**episode_post.extensions, 'media': {**episode_post.extensions['media'], **media}}
+    db.session.commit()
+
+    channel = channel_of(app.test_client())
+
+    assert 'Episode one' not in items_of(channel)
