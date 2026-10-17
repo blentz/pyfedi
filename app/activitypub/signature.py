@@ -60,6 +60,7 @@ from app.activitypub.signature_errors import KeyMismatchError, KeyRefetchable, U
 from app.constants import AP_FETCH_ACCEPT, DATETIME_MS_FORMAT
 from app.discovery.instance_answers import record_delivery_refusal
 from app.relays.refusals import record_relay_refusal
+from app.storefront import domain_for_host, domain_rows
 from app.models import utcnow, ActivityPubLog, Community, Instance, CommunityMember, Site, User, SendQueue, public_key_pem
 from app.utils import RequestNotSendable, ResponseTooLarge, _capped_get, _capped_request, get_request_capped, \
     get_task_session, is_invalid_get_request_uri
@@ -342,9 +343,16 @@ def _rfc9421_required(required: frozenset[str]) -> frozenset[str]:
 
 def _target_uri(request) -> str:
     """The URI an RFC 9421 signer must have signed: SERVER_URL's scheme and authority (https in HTTP_PROTOCOL
-    'mixed'), then the path and query. Never the Host header (R-HOSTPIN): a signature made for another instance,
-    replayed here with that instance's Host, must not verify."""
+    'mixed'), then the path and query. Never the Host header as sent (R-HOSTPIN): a signature made for another
+    instance, replayed here with that instance's Host, must not verify.
+
+    A request addressed to a registered alias (a Tor-capable peer posting to the onion, spec Review Focus 5) was
+    signed for that alias, so its target is the alias's own scheme and domain. Only a registered domain can be named
+    this way; any other Host is answered by SERVER_URL as before."""
     path = request.full_path if request.query_string else request.path
+    storefront = domain_for_host(request.host)
+    if storefront is not None and not storefront.is_default:
+        return f"{storefront.scheme}://{storefront.domain}{path}"
     server = urlparse(current_app.config['SERVER_URL'])
     return f"{server.scheme}://{server.netloc}{path}"
 
@@ -360,10 +368,12 @@ def _authority(value: str) -> str:
 
 def _check_signed_host(request) -> None:
     """Refuse a cavage signature whose signed Host is not this instance (R-HOSTPIN): otherwise a request signed
-    for another instance verifies here when replayed with that instance's Host."""
-    host = request.headers.get('Host', '')
-    if _authority(host) != _authority(current_app.config['SERVER_NAME']):
-        raise VerificationError(f'Signed host {host} is not this instance')
+    for another instance verifies here when replayed with that instance's Host. Every registered domain is this
+    instance, so a peer that signed for the onion alias it posted to verifies."""
+    host = _authority(request.headers.get('Host', ''))
+    ours = {_authority(current_app.config['SERVER_NAME'])} | {row.domain for row in domain_rows()}
+    if host not in ours:
+        raise VerificationError(f'Signed host {request.headers.get("Host", "")} is not this instance')
 
 
 # Where HttpSignature.verify_request leaves the time a verified signature covers (signed_at)

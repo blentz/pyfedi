@@ -1,10 +1,11 @@
-from flask import abort, current_app, flash
+from flask import abort, flash
 from flask_babel import _
 from flask_login import current_user
 
 from app import db, cache
 from app.constants import *
 from app.models import DomainBlock, Domain
+from app.storefront import is_local_host
 from app.utils import authorise_api_user, blocked_domains, canonical_host
 
 
@@ -22,7 +23,7 @@ def block_domain(domain, src, auth=None):
         if src == SRC_API:
             raise Exception('domain_not_found')
         abort(404)
-    if domain_to_block.name.lower() == current_app.config['SERVER_NAME'].lower():
+    if is_local_host(domain_to_block.name):
         if src == SRC_API:
             raise Exception('cannot_block_own_domain')
         flash(_('You cannot block this instance\'s own domain.'), 'error')

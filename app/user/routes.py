@@ -53,6 +53,7 @@ from app.utils import render_template, markdown_to_html, user_access, markdown_t
 from app.rss_extras import RSSFeed
 import app.api.alpha.views as alpha_views
 from app.utils import user_filters_languages
+from app.storefront import is_local_host
 from app.utils import ap_alternate_url
 from app.utils import canonical_host
 import app as app_pkg
@@ -1973,7 +1974,7 @@ def user_settings_block_domain():
         domain_name = canonical_host(domain_name.rstrip('/'))
 
         # D581: nobody blocks this instance's own domain, as app.shared.domain.block_domain refuses it
-        if domain_name == current_app.config['SERVER_NAME'].lower():
+        if is_local_host(domain_name):
             flash(_('You cannot block this instance\'s own domain.'), 'error')
             return render_template('user/block_domain.html', form=form, user=current_user)
 
@@ -2495,7 +2496,7 @@ def user_bot_challenge(actor):
 
 @bp.route('/user/lookup/<person>/<domain>')
 def lookup(person, domain):
-    if domain == current_app.config['SERVER_NAME']:
+    if is_local_host(domain):
         return redirect('/u/' + person)
 
     exists = User.query.filter_by(user_name=person, ap_domain=domain).first()
