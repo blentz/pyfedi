@@ -898,9 +898,9 @@ def show_community_rss(actor):
                           for file in (community.icon, community.image) if file is not None
                           and (file.file_path or file.source_url)]
             owner = db.session.get(User, community.user_id) if community.user_id else None
-            owner_name = owner.display_name() if owner else community.title
-            if not is_valid_xml_utf8(owner_name):   # the owner chose it; a control character would fail the whole feed
-                owner_name = community.title
+            # people choose these; a control character would fail the whole feed. The route found the name, so it is text
+            owner_name = next(name for name in (owner.display_name() if owner else None, community.title, community.name)
+                              if name and is_valid_xml_utf8(name))
             podcast = PodcastChannel(
                 category=community.podcast_category,
                 image=next((url for url in candidates if itunes_image_ok(url)),
