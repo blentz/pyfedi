@@ -31,10 +31,15 @@ up() {
     wait_http piefed-web https://peertube.test/api/v1/ping
     # Castopod's boot migration loses the race with MariaDB and leaves no tables, so its login page answers 500 until
     # init-database (idempotent) has run; retry it until MariaDB accepts connections
+    initialised=
     for _ in $(seq 1 60); do
-        $COMPOSE exec -T castopod-web php spark install:init-database > /dev/null 2>&1 && break
+        if $COMPOSE exec -T castopod-web php spark install:init-database > /dev/null 2>&1; then
+            initialised=1
+            break
+        fi
         sleep 2
     done
+    [ -n "$initialised" ] || { echo "run.sh: castopod init-database never succeeded" >&2; return 1; }
     wait_http piefed-web https://castopod.test/cp-auth/login
     # init-db drops every table first, so run it only on an empty instance table (a re-run of `up` keeps the data)
     if [ "$($COMPOSE exec -T piefed-db psql -U piefed -tAc 'select count(*) from instance' | tr -d '[:space:]')" = 0 ]; then
