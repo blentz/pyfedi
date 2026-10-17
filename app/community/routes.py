@@ -889,7 +889,9 @@ def show_community_rss(actor):
         podcast = None
         language = 'en'
         if is_podcast:
-            posts = [post for post in posts if uses_podcast_episode(post) and is_open(post)]   # the shapes SQL cannot test
+            # The SQL filter above is what makes `limit` count episodes; this drops only a corrupt record (rare), one
+            # whose shape SQL cannot test. listable_clause (visibility == public) already implies is_open.
+            posts = [post for post in posts if uses_podcast_episode(post)]
             # feedgen offers only a .jpg/.png URL to itunes:image: the first of icon, banner and the site's icon that is one
             candidates = [urljoin(server_url, served_path(file.file_path or file.source_url))
                           for file in (community.icon, community.image) if file is not None
@@ -900,8 +902,8 @@ def show_community_rss(actor):
                 owner_name = community.title
             podcast = PodcastChannel(
                 category=community.podcast_category,
-                image=next((url for url in candidates + [f"{server_url}/static/images/apple-touch-icon.png"]
-                            if itunes_image_ok(url))),
+                image=next((url for url in candidates if itunes_image_ok(url)),
+                           f"{server_url}/static/images/apple-touch-icon.png"),
                 author=owner_name,
                 explicit=bool(community.nsfw or community.nsfl))
             language = community.languages.filter(Language.code != 'und').order_by(Language.id).first()
