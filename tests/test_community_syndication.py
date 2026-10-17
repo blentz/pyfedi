@@ -130,6 +130,22 @@ def test_the_rss_feed_lists_the_communitys_posts(app, env):
     assert b'post 1' in response.data
 
 
+def test_a_remote_communitys_page_links_to_a_feed_that_resolves(app, env):
+    """The page's rss_feed link was built from a URL; the feed route takes the `name@host` handle."""
+    client, mine, theirs, mod = env
+    remote = make_community('remote', host='other.example')
+    remote.ap_id = 'remote@other.example'
+    db.session.commit()
+    a_post(remote, mod, 5)
+
+    with patch('app.community.routes.render_template', return_value='rendered') as render:
+        client.get('/c/remote@other.example')
+    link = render.call_args.kwargs['rss_feed']
+    assert link.endswith('/community/remote@other.example/feed'), link
+
+    assert app.test_client().get(link.removeprefix(app.config['SERVER_URL'])).status_code == 200
+
+
 def test_a_remote_community_is_found_by_its_handle(app, env):
     """`if '@' in actor:` picks the `ap_id` lookup; without it a remote
     community's feed is a 404."""
