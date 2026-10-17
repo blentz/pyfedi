@@ -93,6 +93,11 @@ def test_upload_stores_episode_fields(env):
     assert episode_of(post) == {'episode_number': 4, 'season': 2, 'explicit': True}
 
 
+def test_upload_with_only_explicit_stores_no_numbers(env):
+    submit(env, env.mod, env.cast, 'audio', 'episode.mp3', fixture_bytes('audio.mp3'), explicit='y')
+    assert episode_of(Post.query.one()) == {'explicit': True}
+
+
 def test_upload_without_episode_fields_stores_explicit_false(env):
     submit(env, env.mod, env.cast, 'audio', 'episode.mp3', fixture_bytes('audio.mp3'))
     assert episode_of(Post.query.one()) == {'explicit': False}
