@@ -278,9 +278,10 @@ class TestHostPinning:
 
     @pytest.mark.parametrize('post', ['_cavage_post', '_rfc9421_post'])
     def test_an_inbox_post_replayed_with_another_host_is_refused(self, app, signing_peer, dispatched, post):
+        # An unregistered Host is refused with 421 by the storefront hook before the signature is looked at.
         response = getattr(self, post)(app, signing_peer, self.EVIL)
-        assert response.status_code == 400 and dispatched == []
-        assert ActivityPubLog.query.one().exception_message.startswith('Could not verify HTTP signature')
+        assert response.status_code == 421 and dispatched == []
+        assert ActivityPubLog.query.count() == 0
 
     @pytest.mark.parametrize('post', ['_cavage_post', '_rfc9421_post'])
     def test_the_same_post_with_this_host_is_dispatched(self, app, signing_peer, dispatched, post):

@@ -86,6 +86,8 @@ class Config(object):
     SQLALCHEMY_ECHO = False     # set to true to see SQL in console
     WTF_CSRF_TIME_LIMIT = None  # a value of None ensures csrf token is valid for the lifetime of the session
     HTTP_PROTOCOL = os.environ.get('HTTP_PROTOCOL') or 'https'  # useful during development
+    # Scheme of a URL built outside a request (Celery, CLI). In a request the storefront's own scheme is used.
+    PREFERRED_URL_SCHEME = 'https' if HTTP_PROTOCOL in ('https', 'mixed') else HTTP_PROTOCOL
 
     # Where the client IP used for rate limiting, IP bans, geolocation and the audit
     # trail comes from. Empty (the default) means request.remote_addr, which
