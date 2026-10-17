@@ -924,13 +924,13 @@ def show_community_rss(actor):
                 explicit=bool(community.nsfw or community.nsfl))
             language = community.languages.filter(Language.code != 'und').order_by(Language.id).first()
             language = language.code if language else 'en'
-        feed = RSSFeed(title=f'{community.title} on {g.site.name}',
-                       link=f"{server_url}/c/{actor}",
-                       description=description,
-                       logo=image,
-                       self_link=f"{server_url}/c/{actor}/feed",
-                       language=language,
-                       podcast=podcast
+        feed = RSSFeed(title = f'{community.title} on {g.site.name}',
+                       link = f"{server_url}/c/{actor}",
+                       description = description,
+                       logo = image,
+                       self_link = f"{server_url}/community/{actor}/feed",
+                       language = language,
+                       podcast = podcast
                      )
 
         if language := request.args.get('lang'):    # filter by language
