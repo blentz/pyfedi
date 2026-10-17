@@ -54,6 +54,7 @@ document.addEventListener("DOMContentLoaded", function () {
         setupShowElementLinks,
         setupPostTeaserHandler,
         setupPostTypeSwitcher,
+        setupCommunitySwitcher,
         setupSelectNavigation,
         setupUserPopup,
         preventDoubleFormSubmissions,
@@ -196,6 +197,28 @@ function setupPostTeaserHandler() {
                 window.location.href = firstAnchor.href;
             }
         };
+    });
+}
+
+// The post-type buttons belong to the community the compose form opened on (Poll and Event are dead for a Lemmy
+// community, Audio shows only for a podcast), so picking another community rebuilds the form for it through
+// main.add_post, keeping the type. The draft is carried in the same cookies the type buttons use.
+function setupCommunitySwitcher() {
+    var typeSwitcher = document.getElementById('type_of_post');
+    var communities = document.getElementById('communities');
+    if(!typeSwitcher || !communities || !typeSwitcher.dataset.switchUrl)
+        return;
+    var openedOn = communities.value;
+    communities.addEventListener('change', function() {
+        if(!communities.value || communities.value === openedOn)
+            return;
+        ['title', 'body', 'tags'].forEach(function(id) {
+            var field = document.getElementById(id);
+            if(field)
+                setCookie(id === 'body' ? 'post_description' : 'post_' + id, field.value, 0.1);
+        });
+        var params = new URLSearchParams({community: communities.value, type: typeSwitcher.dataset.postType});
+        window.location.href = typeSwitcher.dataset.switchUrl + '?' + params.toString();
     });
 }
 

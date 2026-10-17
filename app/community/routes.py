@@ -1484,7 +1484,7 @@ def add_post(actor, type=None):
             flash(_('This community prefers posts in %(language_names)s', language_names=language_names), 'warning')
 
     return render_template('community/add_post.html', title=_('Add post to community'), form=form,
-                           post_type=post_type, community=community, show_visibility=is_local_microblogs(community), post=post, hide_community_actions=True,
+                           post_type=post_type, post_form_type=type, community=community, show_visibility=is_local_microblogs(community), post=post, hide_community_actions=True,
                            markdown_editor=current_user.markdown_editor, low_bandwidth=False, actor=actor, event_online=True,
                            inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None,
                            )

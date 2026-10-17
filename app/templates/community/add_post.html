@@ -8,7 +8,7 @@
             {{ _('Type of post') }}
         </label>
 
-        <div id="type_of_post" class="btn-group flex-wrap" role="navigation">
+        <div id="type_of_post" class="btn-group flex-wrap" role="navigation" data-switch-url="{{ url_for('main.add_post') }}" data-post-type="{{ post_form_type }}">
 
             <a href="{{ url_for('community.add_post', actor=actor, type='link') }}" class="btn {{ 'btn-primary' if post_type == POST_TYPE_LINK and 'audio_url' not in form else 'btn-outline-secondary' }}" aria-label="{{ _('Share a link') }}">{{ _('Link') }}</a>
             <a href="{{ url_for('community.add_post', actor=actor, type='discussion') }}" class="btn {{ 'btn-primary' if post_type == POST_TYPE_ARTICLE else 'btn-outline-secondary' }}" aria-label="{{ _('Start a discussion') }}">{{ _('Discussion') }}</a>
