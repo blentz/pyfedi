@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from flask import current_app
+from flask import Response, current_app, g, has_request_context, request
+from flask.globals import request_ctx
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import cache, db
@@ -82,3 +83,35 @@ def check_default_domain() -> None:
     elif default.domain != current_app.config['SERVER_NAME']:
         current_app.logger.error('site_domain default %s does not match SERVER_NAME %s',
                                  default.domain, current_app.config['SERVER_NAME'])
+
+
+def current_storefront() -> DomainInfo:
+    """The storefront this request was addressed to; the default one outside a request."""
+    return g.storefront if has_request_context() and 'storefront' in g else default_domain()
+
+
+def storefront_url() -> str:
+    """Origin of the current storefront. Use for links a visitor follows, never for federation identity."""
+    storefront = current_storefront()
+    return f'{storefront.scheme}://{storefront.domain}'
+
+
+def canonical_url() -> str:
+    """The federation origin. It never varies with the request host."""
+    return current_app.config['SERVER_URL']
+
+
+def resolve_storefront() -> Response | None:
+    """First `before_request`: set `g.storefront` from the Host header, or refuse an unregistered host with 421.
+
+    Flask 3.1 builds the request's URL adapter with SERVER_NAME as the server name, so a request on another
+    registered host still routes (3.1 no longer restricts requests to SERVER_NAME) but `url_for(_external=True)`
+    would name SERVER_NAME. The adapter is rebound to the storefront's own domain and scheme, so external URLs
+    follow the host. SERVER_NAME itself is untouched."""
+    storefront = domain_for_host(request.host)
+    if storefront is None:
+        return Response('Misdirected Request: this host is not served here.\n', status=421, mimetype='text/plain')
+    g.storefront = storefront
+    request_ctx.url_adapter = current_app.url_map.bind(storefront.domain, script_name=request.script_root,
+                                                       url_scheme=storefront.scheme)
+    return None
