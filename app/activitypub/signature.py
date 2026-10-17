@@ -369,9 +369,10 @@ def _authority(value: str) -> str:
 def _check_signed_host(request) -> None:
     """Refuse a cavage signature whose signed Host is not this instance (R-HOSTPIN): otherwise a request signed
     for another instance verifies here when replayed with that instance's Host. Every registered domain is this
-    instance, so a peer that signed for the onion alias it posted to verifies."""
+    instance, so a peer that signed for the onion alias it posted to verifies. The default domain is SERVER_NAME, port
+    included: a stored domain is a bare host, so only SERVER_NAME can say which port a signed Host must carry."""
     host = _authority(request.headers.get('Host', ''))
-    ours = {_authority(current_app.config['SERVER_NAME'])} | {row.domain for row in domain_rows()}
+    ours = {_authority(current_app.config['SERVER_NAME'])} | {row.domain for row in domain_rows() if not row.is_default}
     if host not in ours:
         raise VerificationError(f'Signed host {request.headers.get("Host", "")} is not this instance')
 
