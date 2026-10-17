@@ -1283,6 +1283,11 @@ def add_post(actor, type=None):
 
     if type is None:
         type = community.default_post_type or 'link'
+    # Lemmy takes neither, so its form has no button for them; a URL kept from another community's form still names one
+    if (type == 'poll' and not community.instance.can_poll()) or (type == 'event' and not community.instance.can_event()):
+        if request.method == 'POST':
+            abort(400)
+        return redirect(url_for('community.add_post', actor=actor, type='link'))
 
     post_type = POST_TYPE_LINK
     if type == 'discussion':
