@@ -1074,10 +1074,10 @@ def test_a_post_with_no_timezone_left_on_the_form_skips_the_timezone_update(app,
 
 
 @pytest.mark.parametrize('kind', ['link', 'discussion', 'image', 'video', 'audio', 'poll', 'event'])
-def test_the_compose_form_tells_its_community_switcher_which_type_it_is_on(app, poster, kind, monkeypatch):
-    """The type buttons belong to the community the form opened on, so scripts.js's setupCommunitySwitcher sends a
-    change of the community select back through main.add_post with this type, and the form is rebuilt for the new
-    community. An audio form is a podcast's, so the community is one here; the other forms do not depend on kind."""
+def test_the_compose_forms_community_picker_keeps_the_type_it_is_on(app, poster, kind, monkeypatch):
+    """The type buttons belong to the community the form opened on, so the picker's links go back through
+    main.add_post with this type, and the form is rebuilt for the community picked. An audio form is a podcast's,
+    so the community is one here; the other forms do not depend on kind."""
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the real template renders form.csrf_token
     client, token, community, author, english = poster
     community.kind = 'podcast'
@@ -1085,17 +1085,30 @@ def test_the_compose_form_tells_its_community_switcher_which_type_it_is_on(app, 
 
     html = client.get(url(app, 'community.add_post', actor=community.name, type=kind)).get_data(as_text=True)
 
-    assert f'id="type_of_post" class="btn-group flex-wrap" role="navigation" data-switch-url="/add_post" ' \
-           f'data-post-type="{kind}"' in html
+    assert f'href="/add_post?community={community.id}&amp;type={kind}"' in html
 
 
-def test_a_compose_form_opened_without_a_type_names_the_type_it_chose(app, poster, monkeypatch):
+def test_a_compose_form_opened_without_a_type_keeps_the_type_it_chose(app, poster, monkeypatch):
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
     client, token, community, author, english = poster
 
     html = client.get(url(app, 'community.add_post', actor=community.name)).get_data(as_text=True)
 
-    assert f'data-post-type="{community.default_post_type or "link"}"' in html
+    assert f'&amp;type={community.default_post_type or "link"}"' in html
+
+
+def test_the_compose_form_names_its_community_and_posts_to_it(app, poster, monkeypatch):
+    """The community is shown, not a select of every community; the picker is how to change it, and the hidden
+    `communities` field is what the POST reads."""
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
+    client, token, community, author, english = poster
+
+    html = client.get(url(app, 'community.add_post', actor=community.name)).get_data(as_text=True)
+
+    assert f'<strong>{community.display_name()}</strong>' in html
+    assert f'<input type="hidden" name="communities" value="{community.id}">' in html
+    assert '<select' not in html.split('id="type_of_post"')[1].split('</details>')[0]
+    assert 'class="dropdown-item active"' in html
 
 
 @pytest.fixture

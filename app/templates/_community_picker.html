@@ -1,0 +1,20 @@
+{# The main menu's communities list (communities_menu.html) as a post destination: each community links to
+   main.add_post, which opens its compose form keeping `post_form_type`. scripts.js's setupCommunityPicker filters it
+   with the search box, as hookupCommunityFilter does the menu's. #}
+{% macro community_picker(sections, post_form_type=None, current_id=None) -%}
+    <div class="community_picker" id="community_picker">
+        <div class="community_filter">
+            <input type="search" class="form-control" id="community-picker-filter" placeholder="{{ _('Filter communities...') }}" aria-label="{{ _('Filter communities...') }}">
+            <span class="fe fe-search" aria-hidden="true" style="padding: 0; margin: 0;"></span>
+        </div>
+        <ul class="list-unstyled">
+            {% for key, label, communities in sections if communities -%}
+                <li class="community-section" data-community-section="{{ key }}"><h6 class="dropdown-header">{{ label }}</h6></li>
+                {% for picked in communities -%}
+                    <li class="community-item" data-community-name="{{ picked.title.lower() }}"><a class="dropdown-item{% if picked.id == current_id %} active{% endif %}"
+                           href="{{ url_for('main.add_post', community=picked.id, type=post_form_type) }}">{% if picked.is_duplicate %}{{ picked.title }}<span class="text-muted small">@{{ picked.ap_domain | shorten(13) }}</span>{% else %}{{ picked.title }}{% endif %}</a></li>
+                {% endfor -%}
+            {% endfor -%}
+        </ul>
+    </div>
+{%- endmacro %}

@@ -2,11 +2,10 @@
 
 It used to pick a community for the user -- the `cross_post_community_id` cookie's, else the first joined one -- and
 redirect to its compose form. That form's post-type buttons are built from the community it opened on (Poll and Event
-are dead `#` links for a Lemmy community, Audio shows only for a podcast), and changing its community select did not
-rebuild them, so the user posted with the wrong community's choices. The route now shows a chooser: the user picks a
-community (none is preselected, owner ruling 2026-10-17) or creates one, and `?community=<id>` sends them on to that
-community's form. The compose form's select comes back here with `&type=` when it changes, so the form is rebuilt for
-the community picked there too.
+are left out for a Lemmy community, Audio shows only for a podcast), so the user posted with the wrong community's
+choices. The route now shows the main menu's list of communities (favorites, moderating, joined) with its search box,
+none preselected (owner ruling 2026-10-17), plus links to find or create another; `?community=<id>` sends the user on
+to that community's form, keeping `&type=` when the compose form's own picker comes back through here.
 
 A HARNESS NOTE. `client.set_cookie(key, value)` defaults the domain to `localhost`, while this app's `SERVER_NAME` is
 `test.piefed.local`, so a cookie set without `domain=HOST` is never sent.
@@ -18,7 +17,7 @@ from flask import g
 
 from app import db
 from app.constants import ROLE_ADMIN, ROLE_ADMIN_NAME
-from app.models import Community, CommunityMember, Language, Role, Site, User
+from app.models import Community, CommunityFavorite, CommunityMember, Language, Role, Site, User
 from tests.factories import (make_community, make_community_member,
                              make_instance, make_user)
 
@@ -50,49 +49,60 @@ def env(app, db_session):
     return client, joined, elsewhere
 
 
-def options(html):
-    """The chooser's <option value="id">s, in page order, and the ids marked selected."""
-    found = re.findall(r'<option value="(\d*)"( selected)?', html)
-    return [value for value, _ in found if value], [value for value, chosen in found if chosen]
+def picks(html):
+    """The community ids the picker links to, in page order."""
+    return [int(found) for found in re.findall(r'href="/add_post\?community=(\d+)', html)]
+
+
+def sections(html):
+    return re.findall(r'data-community-section="(\w+)"', html)
 
 
 class TestTheChooser:
-    def test_the_button_shows_a_chooser_instead_of_opening_a_community(self, app, env):
+    def test_the_button_shows_the_joined_communities_instead_of_opening_one(self, app, env):
         client, joined, elsewhere = env
 
         response = client.get('/add_post')
 
         assert response.status_code == 200
-        values, _ = options(response.get_data(as_text=True))
-        assert str(joined.id) in values and str(elsewhere.id) in values
+        assert picks(response.get_data(as_text=True)) == [joined.id]
 
-    def test_the_communities_are_grouped_like_the_compose_forms_select(self, app, env):
+    def test_the_communities_are_grouped_like_the_main_menu(self, app, env):
         client, joined, elsewhere = env
         alice = User.query.filter_by(user_name='alice').one()
-        make_community_member(alice, make_community('modded'), is_moderator=True)
+        modded = make_community('modded')
+        make_community_member(alice, modded, is_moderator=True)
+        db.session.add(CommunityFavorite(user_id=alice.id, community_id=joined.id))
         db.session.commit()
 
         html = client.get('/add_post').get_data(as_text=True)
 
-        groups = re.findall(r'<optgroup label="([^"]+)"', html)
-        assert groups == ['Moderating', 'Joined communities', 'Others']
+        assert sections(html) == ['favorites', 'moderating', 'joined']
+        assert picks(html) == [joined.id, modded.id, joined.id]
+
+    def test_it_has_the_main_menus_search_box(self, app, env):
+        client, joined, elsewhere = env
+
+        html = client.get('/add_post').get_data(as_text=True)
+
+        assert 'id="community-picker-filter"' in html
+        assert f'data-community-name="{joined.title.lower()}"' in html
 
     def test_no_community_is_preselected(self, app, env):
         """Owner ruling: the user picks every time, so a stale guess cannot send a post to the wrong place."""
         client, joined, elsewhere = env
+        client.set_cookie('cross_post_community_id', str(joined.id), domain=HOST)
 
-        _, selected = options(client.get('/add_post').get_data(as_text=True))
+        html = client.get('/add_post').get_data(as_text=True)
 
-        assert selected == []
+        assert 'dropdown-item active' not in html
 
-    def test_the_last_cross_posted_community_is_not_preselected_either(self, app, env):
+    def test_it_links_to_finding_a_community_that_is_not_listed(self, app, env):
         client, joined, elsewhere = env
-        client.set_cookie('cross_post_community_id', str(elsewhere.id), domain=HOST)
 
-        response = client.get('/add_post')
+        html = client.get('/add_post').get_data(as_text=True)
 
-        assert response.status_code == 200
-        assert options(response.get_data(as_text=True))[1] == []
+        assert 'href="/communities"' in html
 
     def test_it_offers_to_create_a_community(self, app, env):
         client, joined, elsewhere = env
@@ -121,19 +131,18 @@ class TestTheChooser:
 
         assert 'href="/community/add_local"' in html
 
-    def test_a_user_with_nowhere_to_post_is_offered_creation_not_an_empty_reply(self, app, env):
+    def test_a_user_who_has_joined_nothing_is_offered_finding_or_creating_one(self, app, env):
         """This was a bare 204, which a browser shows as the button doing nothing."""
         client, joined, elsewhere = env
         CommunityMember.query.delete()
-        Community.query.delete()
         db.session.commit()
 
         response = client.get('/add_post')
 
         assert response.status_code == 200
         html = response.get_data(as_text=True)
-        assert options(html)[0] == []
-        assert 'href="/community/add_local"' in html
+        assert picks(html) == [] and 'id="community_picker"' not in html
+        assert 'href="/communities"' in html and 'href="/community/add_local"' in html
 
 
 class TestChoosingACommunity:
@@ -171,7 +180,7 @@ class TestChoosingACommunity:
         response = client.get('/add_post', query_string={'community': value})
 
         assert response.status_code == 200
-        assert str(joined.id) in options(response.get_data(as_text=True))[0]
+        assert picks(response.get_data(as_text=True)) == [joined.id]
 
     def test_a_private_community_the_user_is_not_in_is_not_a_destination(self, app, env):
         """possible_communities() leaves it out of the chooser, so the redirect must not reach it by id either."""
@@ -183,7 +192,7 @@ class TestChoosingACommunity:
         response = client.get(f'/add_post?community={secret.id}')
 
         assert response.status_code == 200
-        assert str(secret.id) not in options(response.get_data(as_text=True))[0]
+        assert secret.id not in picks(response.get_data(as_text=True))
 
 
 class TestWhoMayUseIt:
