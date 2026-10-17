@@ -17,8 +17,27 @@ depends_on = None
 REGISTRATION_FROM_MODE = {'Open': 'anyone', 'RequireApplication': 'anyone', 'Closed': 'admin'}
 
 
+SITE_DOMAIN = sa.table('site_domain', sa.column('domain'), sa.column('scheme'), sa.column('federates'),
+                       sa.column('registration'), sa.column('is_default'), sa.column('is_onion'))
+
+
+def seed_default(bind, environ):
+    """Insert the one default row, from SERVER_NAME, HTTP_PROTOCOL and the site's registration mode."""
+    domain = (environ.get('SERVER_NAME') or 'localhost').lower()
+    protocol = environ.get('HTTP_PROTOCOL') or 'https'
+    mode = bind.execute(sa.text('SELECT registration_mode FROM site ORDER BY id LIMIT 1')).scalar()
+    bind.execute(SITE_DOMAIN.insert().values(
+        domain=domain,
+        scheme='https' if protocol in ('https', 'mixed') else protocol,
+        federates=True,
+        registration=REGISTRATION_FROM_MODE.get(mode, 'admin'),
+        is_default=True,
+        is_onion=domain.endswith('.onion'),
+    ))
+
+
 def upgrade():
-    site_domain = op.create_table(
+    op.create_table(
         'site_domain',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('domain', sa.String(length=255), nullable=False),
@@ -34,17 +53,7 @@ def upgrade():
     op.create_index('ix_site_domain_one_default', 'site_domain', ['is_default'], unique=True,
                     postgresql_where=sa.text('is_default'))
 
-    domain = (os.environ.get('SERVER_NAME') or 'localhost').lower()
-    protocol = os.environ.get('HTTP_PROTOCOL') or 'https'
-    mode = op.get_bind().execute(sa.text('SELECT registration_mode FROM site ORDER BY id LIMIT 1')).scalar()
-    op.bulk_insert(site_domain, [{
-        'domain': domain,
-        'scheme': 'https' if protocol in ('https', 'mixed') else protocol,
-        'federates': True,
-        'registration': REGISTRATION_FROM_MODE.get(mode, 'admin'),
-        'is_default': True,
-        'is_onion': domain.endswith('.onion'),
-    }])
+    seed_default(op.get_bind(), os.environ)
 
 
 def downgrade():

@@ -6,8 +6,10 @@ from pathlib import Path
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from app import db
-from app.models import SiteDomain
+from cachelib import SimpleCache
+
+from app import cache, db
+from app.models import Site, SiteDomain
 from app.storefront import (check_default_domain, clear_domain_cache, default_domain, domain_for_host,
                             domain_rows, is_registered_host, normalise_host, registration_from_mode)
 
@@ -49,9 +51,12 @@ def test_domain_for_host_normalises(db_session):
     assert normalise_host('HELL.cloud.:8080') == 'hell.cloud'
 
 
-def test_no_default_row_falls_back_to_server_name(db_session):
+def test_no_default_row_falls_back_to_server_name(app, db_session, caplog):
     add_domain('abc.onion', scheme='http')
     assert default_domain().domain == 'test.piefed.local'
+    with caplog.at_level(logging.ERROR, logger=app.logger.name):
+        check_default_domain()
+    assert 'none is the default' in caplog.text
 
 
 def test_mixed_protocol_default_is_https(app, db_session, monkeypatch):
@@ -73,6 +78,18 @@ def test_cache_cleared_on_change(db_session):
     assert {r.domain for r in domain_rows()} == {'test.piefed.local', 'abc.onion'}
 
 
+def test_cache_is_stale_until_cleared(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
+    clear_domain_cache()
+    assert len(domain_rows()) == 1
+    row = SiteDomain(domain='abc.onion', scheme='http')
+    db.session.add(row)
+    db.session.commit()
+    assert len(domain_rows()) == 1
+    clear_domain_cache()
+    assert {r.domain for r in domain_rows()} == {'abc.onion'}
+
+
 def test_onion_flag_follows_domain(db_session):
     row = add_domain('x.example')
     assert row.is_onion is False
@@ -92,12 +109,30 @@ def test_registration_from_mode(mode, expected):
 
 
 def test_migration_mapping_matches_app_mapping():
+    module = load_migration()
+    for mode, expected in module.REGISTRATION_FROM_MODE.items():
+        assert registration_from_mode(mode) == expected
+
+
+def load_migration():
     path = next(Path(__file__).parent.parent.glob('migrations/versions/*_site_domain.py'))
     spec = importlib.util.spec_from_file_location('site_domain_migration', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    for mode, expected in module.REGISTRATION_FROM_MODE.items():
-        assert registration_from_mode(mode) == expected
+    return module
+
+
+@pytest.mark.parametrize('mode,registration', [('Open', 'anyone'), ('RequireApplication', 'anyone'), ('Closed', 'admin')])
+def test_migration_seeds_from_env(db_session, mode, registration):
+    db.session.add(Site(name='s', registration_mode=mode))
+    db.session.commit()
+    load_migration().seed_default(db.session.connection(), {'SERVER_NAME': 'Test.Piefed.LOCAL', 'HTTP_PROTOCOL': 'mixed'})
+    db.session.commit()
+    rows = db.session.query(SiteDomain).all()
+    assert len(rows) == 1
+    row = rows[0]
+    assert (row.domain, row.scheme, row.federates, row.registration, row.is_default, row.is_onion) == \
+        ('test.piefed.local', 'https', True, registration, True, False)
 
 
 def test_startup_check_logs_mismatch(app, db_session, caplog):
