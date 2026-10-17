@@ -224,6 +224,8 @@ already send it (`app/request_hooks.py`); a reverse proxy or S3 bucket that serv
 
 (Amended: see §10 A16.)
 
+(Amended: see §10 A17.)
+
 This mirrors what Castopod sends us. The Castopod spike (§9 step 5) confirms the shape or replaces it.
 
 - The fetchable episode object: `type: PodcastEpisode`, `id: <episode URL>`, `name: post.title`,
@@ -316,6 +318,8 @@ Tests assert no file remains, following the static-tree leak gate (`tests/static
 (Amended: see §10 A6, A15.)
 
 (Amended: see §10 A9.)
+
+(Amended: see §10 A17.)
 
 Recipients are filtered as they are today: `can_deliver_to`, instance bans, user blocks, and
 `local_only`/`private` communities never federate.
