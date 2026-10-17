@@ -17,6 +17,7 @@ from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, PO
     SUBSCRIPTION_MODERATOR, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_PENDING, ROLE_ADMIN_NAME, VERSION, \
     POST_TYPE_EVENT, AP_MEDIA_TYPES, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO
 from app.models import Site, utcnow
+from app.storefront import check_default_domain
 from app.shared.media import can_upload_media, media_kind_for, media_of, upload_byte_limit
 from app.utils import getmtime, gibberish, shorten_string, shorten_url, digits, user_access, community_membership, joined_server_views, \
     can_upvote, can_downvote, shorten_number, ap_datetime, current_theme, community_link_to_href, \
@@ -37,6 +38,9 @@ def viewer_can_view(obj) -> bool:
 
 
 def register_request_hooks(app):
+    with app.app_context():
+        check_default_domain()
+
     @app.context_processor
     def app_context_processor():
         return dict(getmtime=getmtime, instance_domain=current_app.config['SERVER_NAME'], debug_mode=current_app.debug,

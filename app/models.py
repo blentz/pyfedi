@@ -23,7 +23,8 @@ from flask_login import UserMixin, current_user
 from flask_sqlalchemy.query import Query
 from furl import furl
 from slugify import slugify
-from sqlalchemy import or_, text, desc, Index, func, and_
+from sqlalchemy import or_, text, desc, Index, func, and_, CheckConstraint
+from sqlalchemy.orm import validates
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.dialects.postgresql import BIT
 from sqlalchemy.exc import IntegrityError
@@ -5415,6 +5416,27 @@ class Site(db.Model):
 @login.user_loader
 def load_user(id):
     return db.session.get(User, int(id))
+
+
+class SiteDomain(db.Model):
+    """One row per domain the site answers on (a storefront). Exactly one row is the default."""
+    __tablename__ = 'site_domain'
+    __table_args__ = (
+        CheckConstraint("registration IN ('anyone','staff','admin')", name='ck_site_domain_registration'),
+        Index('ix_site_domain_one_default', 'is_default', unique=True, postgresql_where=text('is_default')),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    domain = db.Column(db.String(255), unique=True, nullable=False)  # lower-case host name, no scheme or port
+    scheme = db.Column(db.String(5), nullable=False, default='https')  # https or http
+    federates = db.Column(db.Boolean, nullable=False, default=True, server_default='true')
+    registration = db.Column(db.String(10), nullable=False, default='anyone', server_default='anyone')  # anyone, staff, admin
+    is_default = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    is_onion = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+
+    @validates('domain')
+    def _set_is_onion(self, key, domain):
+        self.is_onion = domain.endswith('.onion')
+        return domain
 
 
 # --- Feeds Models ---
