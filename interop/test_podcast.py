@@ -53,6 +53,7 @@ def test_the_feed_is_a_podcast_feed(alice_web):
         feed = ET.fromstring(http.get('https://piefed.test/community/pod_media/feed',
                                       params={'token': link[1], 'limit': 100, 't': post_id}).content)
     items = {item.find('enclosure').get('url'): item for item in feed.iter('item') if item.find('enclosure') is not None}
+    assert url in items, f'the feed has no item with the enclosure {url}; it has {sorted(items)}'
     item = items[url]
     assert item.find('enclosure').get('length') == str(media['bytes'])
     assert item.find('enclosure').get('type') == 'audio/mpeg'
