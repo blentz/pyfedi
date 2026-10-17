@@ -1096,3 +1096,69 @@ def test_a_compose_form_opened_without_a_type_names_the_type_it_chose(app, poste
     html = client.get(url(app, 'community.add_post', actor=community.name)).get_data(as_text=True)
 
     assert f'data-post-type="{community.default_post_type or "link"}"' in html
+
+
+@pytest.fixture
+def lemmy_community(poster):
+    """A remote community on a Lemmy instance, which takes neither polls nor events (Instance.can_poll/can_event)."""
+    client, token, community, author, english = poster
+    lemmy = instance('lemmy.example', software='lemmy')
+    remote = make_community('remote', host='lemmy.example')
+    remote.ap_id = 'remote@lemmy.example'
+    remote.instance_id = lemmy.id
+    db.session.commit()
+    make_community_member(author, remote)
+    db.session.commit()
+    return remote
+
+
+def type_buttons(html):
+    import re
+    return re.search(r'id="type_of_post".*?</div>', html, re.S).group(0)
+
+
+def test_a_community_that_takes_polls_and_events_shows_their_buttons(app, poster, monkeypatch):
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the real template renders form.csrf_token
+    client, token, community, author, english = poster
+
+    buttons = type_buttons(client.get(url(app, 'community.add_post', actor=community.name)).get_data(as_text=True))
+
+    assert f'/community/{community.name}/submit/poll"' in buttons
+    assert f'/community/{community.name}/submit/event"' in buttons
+
+
+def test_a_community_that_takes_no_polls_or_events_shows_no_buttons_for_them(app, poster, lemmy_community,
+                                                                              monkeypatch):
+    """They were rendered as href="#" links that did nothing when clicked."""
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
+    client = poster[0]
+
+    buttons = type_buttons(client.get(url(app, 'community.add_post', actor=lemmy_community.link(),
+                                          type='link')).get_data(as_text=True))
+
+    assert 'Poll' not in buttons and 'Event' not in buttons
+    assert 'href="#"' not in buttons and 'aria-disabled' not in buttons
+
+
+@pytest.mark.parametrize('kind', ['poll', 'event'])
+def test_opening_a_form_the_community_cannot_take_goes_to_its_link_form(app, poster, lemmy_community, kind):
+    """Reached when the compose form's community switcher keeps a poll or event type for a Lemmy community."""
+    client = poster[0]
+
+    response = client.get(url(app, 'community.add_post', actor=lemmy_community.link(), type=kind))
+
+    assert response.status_code == 302
+    assert response.headers['Location'] == f'/community/{lemmy_community.link()}/submit/link'
+
+
+@pytest.mark.parametrize('kind', ['poll', 'event'])
+def test_posting_a_type_the_community_cannot_take_is_refused(app, poster, lemmy_community, kind):
+    """The POST's community comes from the form's `communities` field, so a poll form can name a Lemmy community."""
+    client, token, community, author, english = poster
+
+    with patch('app.shared.post.make_post', return_value=FakePost()) as make:
+        response = client.post(url(app, 'community.add_post', actor=community.name, type=kind),
+                               data=_post_payload(token, english, lemmy_community), content_type='multipart/form-data')
+
+    assert response.status_code == 400
+    assert make.call_args is None
