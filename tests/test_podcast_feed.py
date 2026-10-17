@@ -3,10 +3,12 @@ import uuid
 import xml.etree.ElementTree as ET
 
 import pytest
+from feedgen.util import xml_elem
 
 from app import cache, db
 from app.constants import COMMUNITY_KIND_PODCAST, POST_TYPE_LINK, POST_TYPE_ARTICLE, VISIBILITY_FOLLOWERS
 from app.models import Community, Language, User
+from app.rss_extras import PodcastIndexEntryExtension
 from app.shared.media import with_episode, with_media
 from tests.factories import make_community, make_file, make_post, make_site
 from tests.podcast_fixtures import episode_post  # noqa: F401  (a fixture)
@@ -236,6 +238,14 @@ def test_self_link_is_a_url_that_resolves(app, pod, episode_post, kind):
     assert href == f'{SERVER}/community/pod/feed'
     cache.clear()
     assert client.get(href.removeprefix(SERVER)).status_code == 200
+
+
+def test_entry_extension_without_a_guid_writes_no_podcast_guid():
+    entry = xml_elem('item', xml_elem('channel'))
+
+    PodcastIndexEntryExtension().extend_rss(entry)
+
+    assert list(entry) == []
 
 
 @pytest.mark.parametrize('media', [{'mime': 'audio/\u0013'}, {'uuid': 'a\u0013b'}])
