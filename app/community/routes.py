@@ -64,7 +64,7 @@ from app.utils import user_banned_from_community, back, get_setting, render_temp
     blocked_users, languages_for_form, add_to_modlog, \
     blocked_communities, remove_tracking_from_link, piefed_markdown_to_lemmy_markdown, \
     instance_software, domain_from_email, referrer, flair_for_form, find_flair_id, login_required_if_private_instance, \
-    possible_communities, reported_posts, user_notes, login_required, get_task_session, patch_db_session, \
+    possible_communities, post_destination_sections, reported_posts, user_notes, login_required, get_task_session, patch_db_session, \
     approval_required, permission_required, aged_account_required, communities_banned_from_all_users, \
     moderating_communities_ids_all_users, block_honey_pot, user_pronouns, community_membership_private, \
     show_reason_why_no_federation, banned_instances, is_invalid_get_request_uri, user_ip_banned, \
@@ -1489,7 +1489,7 @@ def add_post(actor, type=None):
             flash(_('This community prefers posts in %(language_names)s', language_names=language_names), 'warning')
 
     return render_template('community/add_post.html', title=_('Add post to community'), form=form,
-                           post_type=post_type, post_form_type=type, community=community, show_visibility=is_local_microblogs(community), post=post, hide_community_actions=True,
+                           post_type=post_type, post_form_type=type, destination_sections=post_destination_sections(), community=community, show_visibility=is_local_microblogs(community), post=post, hide_community_actions=True,
                            markdown_editor=current_user.markdown_editor, low_bandwidth=False, actor=actor, event_online=True,
                            inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None,
                            )

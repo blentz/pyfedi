@@ -50,7 +50,7 @@ from app.utils import render_template, ensure_rss_token, get_setting, request_et
     permission_required, debug_mode_only, ip_address, menu_instance_feeds, menu_my_feeds, menu_subscribed_feeds, \
     feed_tree_public, gibberish, get_deduped_post_ids, paginate_post_ids, post_ids_to_models, html_to_text, \
     get_redis_connection, subscribed_feeds, joined_or_modding_communities, login_required_if_private_instance, \
-    retrieve_image_hash, possible_communities, remove_tracking_from_link, reported_posts, \
+    retrieve_image_hash, possible_communities, post_destination_sections, remove_tracking_from_link, reported_posts, \
     moderating_communities_ids, user_notes, login_required, safe_order_by, filtered_out_communities, \
     num_topics, referrer, block_honey_pot, user_pronouns, get_instance_stickies, \
     community_membership_private, favorite_communities, mimetype_from_url, feed_entry_body, check_anoobis, \
@@ -335,7 +335,8 @@ def list_topics():
 @bp.route('/add_post', methods=['GET'])
 @login_required
 def add_post():
-    """The "Create post" button outside a community: the user picks where to post, or creates a community.
+    """The "Create post" button outside a community: the user picks where to post from the main menu's list of
+    communities (favorites, moderating, joined), finds another, or creates one.
 
     A compose form's post types come from its community (Poll and Event are dead for a Lemmy one, Audio shows only
     for a podcast), so the form must open on the community the user chose, not one picked for them. No community is
@@ -352,7 +353,7 @@ def add_post():
             return redirect(url_for('community.add_post', actor=community.link(),
                                     type=kind if kind in POST_FORM_TYPES else None))
     can_create = current_user.is_admin() or not g.site.community_creation_admin_only
-    return render_template('choose_community.html', title=_('Create post'), communities=poss_communities,
+    return render_template('choose_community.html', title=_('Create post'), sections=post_destination_sections(),
                            can_create=can_create)
 
 

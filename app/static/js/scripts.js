@@ -54,7 +54,7 @@ document.addEventListener("DOMContentLoaded", function () {
         setupShowElementLinks,
         setupPostTeaserHandler,
         setupPostTypeSwitcher,
-        setupCommunitySwitcher,
+        setupCommunityPicker,
         setupSelectNavigation,
         setupUserPopup,
         preventDoubleFormSubmissions,
@@ -200,30 +200,9 @@ function setupPostTeaserHandler() {
     });
 }
 
-// The post-type buttons belong to the community the compose form opened on (Poll and Event are dead for a Lemmy
-// community, Audio shows only for a podcast), so picking another community rebuilds the form for it through
-// main.add_post, keeping the type. The draft is carried in the same cookies the type buttons use.
-function setupCommunitySwitcher() {
-    var typeSwitcher = document.getElementById('type_of_post');
-    var communities = document.getElementById('communities');
-    if(!typeSwitcher || !communities || !typeSwitcher.dataset.switchUrl)
-        return;
-    var openedOn = communities.value;
-    communities.addEventListener('change', function() {
-        if(!communities.value || communities.value === openedOn)
-            return;
-        ['title', 'body', 'tags'].forEach(function(id) {
-            var field = document.getElementById(id);
-            if(field)
-                setCookie(id === 'body' ? 'post_description' : 'post_' + id, field.value, 0.1);
-        });
-        var params = new URLSearchParams({community: communities.value, type: typeSwitcher.dataset.postType});
-        window.location.href = typeSwitcher.dataset.switchUrl + '?' + params.toString();
-    });
-}
-
 function setupPostTypeSwitcher() {
-    document.querySelectorAll('#type_of_post a').forEach(a => {
+    // the community picker's links (_community_picker.html) reopen the form for another community, so they carry it too
+    document.querySelectorAll('#type_of_post a, form #community_picker a').forEach(a => {
         a.onclick = function() {
             setCookie('post_title', document.getElementById('title').value, 0.1);
             setCookie('post_description', document.getElementById('body').value, 0.1);
@@ -1828,14 +1807,46 @@ function setupCommunityFilter() {
 function hookupCommunityFilter() {
     // Set up community filter functionality for the communities dropdown
     const filterInput = document.getElementById('community-filter');
-    const clearButton = document.getElementById('clear-community-filter');
 
     if (!filterInput) {
         return; // Only run if filter element exists in current theme
     }
+    bindCommunityFilter(filterInput, filterInput.closest('.communities_menu_body') || document,
+                        document.getElementById('clear-community-filter'));
+
+    // Focus the input when the dropdown becomes visible
+    const observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.type === 'childList' && mutation.target.classList.contains('communities_menu')) {
+                // Check if the filter input is now in the DOM and visible
+                const currentFilter = document.getElementById('community-filter');
+                if (currentFilter && currentFilter.offsetParent !== null) {
+                    setTimeout(() => currentFilter.focus(), 100);
+                }
+            }
+        });
+    });
     
-    const communityItems = document.querySelectorAll('.community-item');
-    const communitySections = document.querySelectorAll('.community-section');
+    // Observe the communities menu for changes (HTMX loading)
+    const communitiesMenu = document.querySelector('.communities_menu');
+    if (communitiesMenu) {
+        observer.observe(communitiesMenu, { childList: true, subtree: true });
+    }
+}
+
+// The community picker (_community_picker.html) is the menu's list on a page, so it gets the menu's filter.
+function setupCommunityPicker() {
+    const picker = document.getElementById('community_picker');
+    if (picker) {
+        bindCommunityFilter(picker.querySelector('input[type="search"]'), picker, null);
+    }
+}
+
+// Filter the .community-item rows under `root` by `filterInput`, hiding .community-section headers left empty.
+// Scoped to `root` because the menu and a page's picker can both be in the document.
+function bindCommunityFilter(filterInput, root, clearButton) {
+    const communityItems = root.querySelectorAll('.community-item');
+    const communitySections = root.querySelectorAll('.community-section');
 
     function prevSection(communityItem) {
         let current = communityItem.previousElementSibling;
@@ -1909,24 +1920,6 @@ function hookupCommunityFilter() {
         clearButton.addEventListener('click', clearFilter);
     }
 
-    // Focus the input when the dropdown becomes visible
-    const observer = new MutationObserver(function(mutations) {
-        mutations.forEach(function(mutation) {
-            if (mutation.type === 'childList' && mutation.target.classList.contains('communities_menu')) {
-                // Check if the filter input is now in the DOM and visible
-                const currentFilter = document.getElementById('community-filter');
-                if (currentFilter && currentFilter.offsetParent !== null) {
-                    setTimeout(() => currentFilter.focus(), 100);
-                }
-            }
-        });
-    });
-    
-    // Observe the communities menu for changes (HTMX loading)
-    const communitiesMenu = document.querySelector('.communities_menu');
-    if (communitiesMenu) {
-        observer.observe(communitiesMenu, { childList: true, subtree: true });
-    }
 }
 
 function checkLanguage(languageSelect, warningDiv, recipientLanguage) {

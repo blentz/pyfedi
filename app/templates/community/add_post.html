@@ -1,4 +1,5 @@
 {% extends "post/post_edit.html" %}
+{% from "_community_picker.html" import community_picker %}
 
 {% block title %}<h1>{{ _('Create post') }}</h1>{% endblock %}
 
@@ -8,7 +9,7 @@
             {{ _('Type of post') }}
         </label>
 
-        <div id="type_of_post" class="btn-group flex-wrap" role="navigation" data-switch-url="{{ url_for('main.add_post') }}" data-post-type="{{ post_form_type }}">
+        <div id="type_of_post" class="btn-group flex-wrap" role="navigation">
 
             <a href="{{ url_for('community.add_post', actor=actor, type='link') }}" class="btn {{ 'btn-primary' if post_type == POST_TYPE_LINK and 'audio_url' not in form else 'btn-outline-secondary' }}" aria-label="{{ _('Share a link') }}">{{ _('Link') }}</a>
             <a href="{{ url_for('community.add_post', actor=actor, type='discussion') }}" class="btn {{ 'btn-primary' if post_type == POST_TYPE_ARTICLE else 'btn-outline-secondary' }}" aria-label="{{ _('Start a discussion') }}">{{ _('Discussion') }}</a>
@@ -27,7 +28,15 @@
 
     </div>
 
-    {{ render_field(form.communities) }}
+    <div class="form-group mb-3">
+        <span class="form-control-label">{{ _('Community') }}</span>:
+        <strong>{{ community.display_name() }}</strong>
+        <input type="hidden" name="communities" value="{{ community.id }}">
+        <details class="mt-1">
+            <summary>{{ _('Post in a different community') }}</summary>
+            {{ community_picker(destination_sections, post_form_type, community.id) }}
+        </details>
+    </div>
 {% endblock %}
 
 {# wondering where the rest of the form is? See line 1 #}

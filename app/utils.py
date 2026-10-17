@@ -6378,6 +6378,16 @@ def reported_post_replies(user_id: int, is_admin: bool) -> List[int]:
         {'community_ids': tuple(community_ids)}).scalars())
 
 
+def post_destination_sections():
+    """The main menu's communities (communities_menu.html), as _community_picker.html's sections: favorites,
+    moderating and joined. Every one is also in possible_communities(), which main.add_post checks a pick against."""
+    user_id = current_user.get_id()
+    favorites = Community.query.filter(Community.id.in_(favorite_communities(user_id))).order_by(Community.title).all()
+    return [('favorites', _('Favorites'), favorites),
+            ('moderating', _('Moderating'), moderating_communities(user_id)),
+            ('joined', _('Joined communities'), joined_communities(user_id))]
+
+
 def possible_communities():
     which_community = {}
     joined = joined_communities(current_user.get_id())
