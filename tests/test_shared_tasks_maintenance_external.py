@@ -439,6 +439,28 @@ class TestAddRemoteCommunityFromPost:
 
         assert recorder.calls == []
 
+    def test_a_post_with_neither_url_nor_body_looks_up_nothing(self, db_session, monkeypatch):
+        """Lemmy omits `body` from a post that has none.
+
+        On hell.cloud on 2026-10-12 such a post in newcommunities@lemmy.world
+        raised `KeyError: 'body'` here, which killed `flask daily-maintenance`
+        before it logged its run.
+        """
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.search_for_community', recorder)
+
+        add_remote_community_from_post({'name': 'A title only'})
+
+        assert recorder.calls == []
+
+    def test_a_null_body_looks_up_nothing(self, db_session, monkeypatch):
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.search_for_community', recorder)
+
+        add_remote_community_from_post({'body': None})
+
+        assert recorder.calls == []
+
     def test_a_community_on_this_instance_is_skipped(self, db_session, monkeypatch, app):
         """`:1113`'s guard against looking up our own communities."""
         recorder = _Recorder()

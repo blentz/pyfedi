@@ -1291,7 +1291,7 @@ def add_remote_community_from_post(post_data):
         if 'body' not in post_data:  # posts without a body have no community link in them, e.g. https://lemmy.world/post/52957269
             return
         pattern = r'![A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
-        community_lookup = re.findall(pattern, post_data['body'])
+        community_lookup = re.findall(pattern, post_data.get('body') or '')   # Lemmy omits an empty body
 
     if len(community_lookup):
         for cl in set(community_lookup):
