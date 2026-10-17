@@ -401,6 +401,7 @@ container rather than editing it by hand:
 | `imports` | 5 | `settings_import`, `mastodon_csv`, `ban_list` |
 | `images` | 13 | `upload_decode` (500 ms), `icon_banner_decode` (200 ms), `remote_thumbnail_decode` (1200 ms), `to_srgb` (200 ms), `scale_gif` (200 ms), `c2pa_inspect` (50 ms) |
 | `video_channels` | 2 | `validate_probe`, `peertube_video` (app) |
+| `podcasts` | 2 | `podcast_episode_attachment` (app), `podcast_feed_item` (app) |
 
 ### The three gates
 

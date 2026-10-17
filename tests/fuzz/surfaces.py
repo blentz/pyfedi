@@ -289,4 +289,10 @@ SURFACES: dict[str, list[str]] = {
         'app.shared.tasks.media.validate_probe',
         'app.activitypub.serializers.peertube.peertube_video',
     ],
+
+    # Podcasts (T9): the audio Document a local podcast episode's Page carries, and the fields its feed item adds.
+    'podcasts': [
+        'app.activitypub.serializers.podcast.episode_attachment',
+        'app.rss_extras.episode_item_fields',
+    ],
 }
