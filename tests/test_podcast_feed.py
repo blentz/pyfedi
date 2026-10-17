@@ -280,3 +280,12 @@ def test_publishing_an_upload_changes_the_feed_etag(app, pod, episode_post, monk
 
     assert after.status_code == 200
     assert 'Uploaded' in items_of(ET.fromstring(after.data).find('channel'))
+
+
+def test_an_owner_name_that_is_not_xml_text_falls_back_to_the_community_title(app, pod):
+    db.session.get(User, pod.user_id).title = 'Al\x13ice'
+    db.session.commit()
+
+    channel = channel_of(app.test_client())
+
+    assert channel.findtext('itunes:author', namespaces=NS) == pod.title

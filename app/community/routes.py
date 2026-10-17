@@ -80,7 +80,7 @@ from app.shared.tasks import task_selector
 # The module, not the names: app.shared.feed reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.feed)
 import app.shared.feed as shared_feed
-from app.utils import get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url, joined_server_views
+from app.utils import is_valid_xml_utf8, get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url, joined_server_views
 from urllib.parse import urljoin
 from app.activitypub.serializers.podcast import uses_podcast_episode
 from app.rss_extras import RSSFeed, PodcastChannel, itunes_image_ok
@@ -895,11 +895,14 @@ def show_community_rss(actor):
                           for file in (community.icon, community.image) if file is not None
                           and (file.file_path or file.source_url)]
             owner = db.session.get(User, community.user_id) if community.user_id else None
+            owner_name = owner.display_name() if owner else community.title
+            if not is_valid_xml_utf8(owner_name):   # the owner chose it; a control character would fail the whole feed
+                owner_name = community.title
             podcast = PodcastChannel(
                 category=community.podcast_category,
                 image=next((url for url in candidates + [f"{server_url}/static/images/apple-touch-icon.png"]
                             if itunes_image_ok(url))),
-                author=owner.display_name() if owner else community.title,
+                author=owner_name,
                 explicit=bool(community.nsfw or community.nsfl))
             language = community.languages.filter(Language.code != 'und').order_by(Language.id).first()
             language = language.code if language else 'en'
