@@ -81,3 +81,13 @@ def test_static_and_inbox_on_alias(app, onion):
     client = app.test_client()
     assert client.get('/static/styles.css', headers={'Host': 'abc.onion'}).status_code != 421
     assert client.post('/inbox', headers={'Host': 'abc.onion'}, data=b'{}').status_code != 421
+
+
+@pytest.mark.parametrize('path', ['/health', '/health2'])
+def test_health_is_exempt_from_421(app, db_session, site, path):
+    response = app.test_client().get(path, headers={'Host': 'localhost:5000'})
+    assert response.status_code == 200
+
+
+def test_other_paths_on_localhost_still_421(app, db_session, site):
+    assert app.test_client().get('/robots.txt', headers={'Host': 'localhost:5000'}).status_code == 421
