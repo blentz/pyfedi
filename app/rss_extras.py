@@ -195,17 +195,21 @@ class RSSFeed:
                 fe.category(term=cat, scheme='flair/tag')
 
         if podcast:
-            fields = episode_item_fields(post)
-            fe.enclosure(*fields['enclosure'])
-            fe.podcast.itunes_duration(fields['duration'])
-            fe.podcast.itunes_explicit(fields['explicit'])
-            if 'episode_number' in fields:
-                fe.podcast.itunes_episode(fields['episode_number'])
-            if 'season' in fields:
-                fe.podcast.itunes_season(fields['season'])
-            if 'image' in fields:
-                fe.podcast.itunes_image(fields['image'])
-            fe.podcastindex.guid(fields['guid'])
+            cls._add_episode(fe, episode_item_fields(post))
+
+    @staticmethod
+    def _add_episode(entry, fields):
+        """What an episode's fields add to one feed entry (A17.6). The feed and its fuzz target both write them here."""
+        entry.enclosure(*fields['enclosure'])
+        entry.podcast.itunes_duration(fields['duration'])
+        entry.podcast.itunes_explicit(fields['explicit'])
+        if 'episode_number' in fields:
+            entry.podcast.itunes_episode(fields['episode_number'])
+        if 'season' in fields:
+            entry.podcast.itunes_season(fields['season'])
+        if 'image' in fields:
+            entry.podcast.itunes_image(fields['image'])
+        entry.podcastindex.guid(fields['guid'])
 
     @staticmethod
     def _email_from_public_url(url):

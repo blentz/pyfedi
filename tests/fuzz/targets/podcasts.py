@@ -5,7 +5,7 @@ Both read a post's media record and its `extensions['podcast']` episode fields, 
 can sit in either. uses_podcast_episode decides whether a post is an episode; one it rejects is an ordinary link
 Page, which is fine. For one it accepts, no input may raise, the attachment must keep what Mastodon needs (an
 audio Document at the post's URL, a name within its description limit), and the feed fields must be what feedgen
-takes -- the item target hands them to feedgen exactly as RSSFeed._add_post does, so a value feedgen refuses (an
+takes -- the item target hands them to feedgen through RSSFeed._add_episode, the writer the feed uses, so a value feedgen refuses (an
 itunes_duration ValueError, say) is found.
 
 No database and no network. The post is built unsaved and never added to a session; both targets need an app for
@@ -19,7 +19,7 @@ from flask import current_app
 from app.activitypub.serializers.podcast import NAME_MAX, episode_attachment, uses_podcast_episode
 from app.constants import COMMUNITY_KIND_PODCAST, POST_TYPE_LINK
 from app.models import Community, File, Post, User, utcnow
-from app.rss_extras import PodcastIndexEntryExtension, PodcastIndexExtension, episode_item_fields
+from app.rss_extras import PodcastIndexEntryExtension, PodcastIndexExtension, RSSFeed, episode_item_fields
 from tests.fuzz.targets._target import Target
 from tests.fuzz.targets.signatures import _fields, _json_or_text, _text
 
@@ -81,16 +81,7 @@ def check_podcast_feed_item(data: bytes) -> None:
     feed.description('show')
     entry = feed.add_entry()
     entry.title('episode')
-    entry.enclosure(*fields['enclosure'])
-    entry.podcast.itunes_duration(fields['duration'])
-    entry.podcast.itunes_explicit(fields['explicit'])
-    if 'episode_number' in fields:
-        entry.podcast.itunes_episode(fields['episode_number'])
-    if 'season' in fields:
-        entry.podcast.itunes_season(fields['season'])
-    if 'image' in fields:
-        entry.podcast.itunes_image(fields['image'])
-    entry.podcastindex.guid(fields['guid'])
+    RSSFeed._add_episode(entry, fields)
     feed.rss_str()
 
 
