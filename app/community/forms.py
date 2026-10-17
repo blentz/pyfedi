@@ -43,7 +43,14 @@ def image_upload_too_large(field, uploaded_file) -> bool:
     return too_large
 
 
-class AddCommunityForm(FlaskForm):
+class PodcastCategoryMixin:
+    """The category a podcast community's RSS feed declares; both community forms carry it."""
+    podcast_category = SelectField(_l('Podcast category'), choices=PODCAST_CATEGORY_CHOICES, default='',
+                                   validators=[Optional()], render_kw={'class': 'form-select'},
+                                   description=_l('Used by the RSS feed of a podcast community'))
+
+
+class AddCommunityForm(PodcastCategoryMixin, FlaskForm):
     community_name = StringField(_l('Name'), validators=[DataRequired()])
     url = StringField(_l('Url'), validators=[Length(max=50)])
     description = TextAreaField(_l('Description'), validators=[Length(max=10000)])
@@ -66,9 +73,6 @@ class AddCommunityForm(FlaskForm):
     invitations = SelectField(_l('Joining process'), coerce=int, choices=joining_options)
     kind = SelectField(_l('Kind'), choices=KIND_CHOICES, default=COMMUNITY_KIND_DISCUSSION,
                        render_kw={'class': 'form-select'})
-    podcast_category = SelectField(_l('Podcast category'), choices=PODCAST_CATEGORY_CHOICES, default='',
-                                   validators=[Optional()], render_kw={'class': 'form-select'},
-                                   description=_l('Used by the RSS feed of a podcast community'))
     publicize = BooleanField(_l('Announce this community to newcommunities@lemmy.world'))
     question_answer = BooleanField(_l('Question & answer community'))
     languages = MultiCheckboxField(_l('Languages'), coerce=int, validators=[Optional()],
@@ -139,7 +143,7 @@ class AddCommunityForm(FlaskForm):
         return True
 
 
-class EditCommunityForm(FlaskForm):
+class EditCommunityForm(PodcastCategoryMixin, FlaskForm):
     title = StringField(_l('Title'), validators=[DataRequired()])
     description = TextAreaField(_l('Description'), validators=[Length(max=10000)])
     posting_warning = StringField(_l('Posting warning'), validators=[Length(max=512)])
@@ -161,9 +165,6 @@ class EditCommunityForm(FlaskForm):
     invitations = SelectField(_l('Joining process'), coerce=int, choices=joining_options)
     kind = SelectField(_l('Kind'), choices=KIND_CHOICES, default=COMMUNITY_KIND_DISCUSSION, validators=[Optional()],
                        render_kw={'class': 'form-select'})
-    podcast_category = SelectField(_l('Podcast category'), choices=PODCAST_CATEGORY_CHOICES, default='',
-                                   validators=[Optional()], render_kw={'class': 'form-select'},
-                                   description=_l('Used by the RSS feed of a podcast community'))
     question_answer = BooleanField(_l('Question & answer community'))
     restricted_to_mods = BooleanField(_l('Only moderators can post'))
     new_mods_wanted = BooleanField(_l('New moderators wanted'))
