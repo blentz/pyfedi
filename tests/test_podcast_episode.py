@@ -1,21 +1,19 @@
 """Spec 2026-10-14 §10 A17.1-A17.3: what a podcast episode is, the Document both Page builders carry, and how an
 inbound audio Document is marked."""
-from types import SimpleNamespace
 
 import pytest
-from flask import current_app, g
+from flask import current_app
 
 from app import db
 from app.activitypub.serializers.podcast import NAME_MAX, episode_attachment, uses_podcast_episode
 from app.activitypub.util import post_to_page, update_post_from_activity
 from app.constants import COMMUNITY_KIND_DISCUSSION, POST_TYPE_LINK
-from app.models import File, Post, Site
+from app.models import File, Post
 from app.shared.media import with_media
 import app.shared.tasks.pages as pages
 from app.shared.tasks.pages import send_post
-from tests.factories import make_community, make_instance, make_user
 from tests.peertube_video_fixtures import _remote
-from tests.podcast_fixtures import episode_post, sent  # noqa: F401
+from tests.podcast_fixtures import env, episode_post, sent  # noqa: F401
 
 
 def test_episode_attachment_is_an_audio_document(episode_post):
@@ -89,23 +87,6 @@ def test_a_discussion_community_has_no_episodes(episode_post):
 
 PEER = 'piefed.example'
 AUDIO_URL = f'https://{PEER}/static/media/posts/xx/yy/noextension'
-
-
-@pytest.fixture
-def env(app, db_session, monkeypatch):
-    monkeypatch.setattr('app.utils.mime_type_using_head', lambda url: '')   # no network
-    site = Site(name='Test Site', blocked_phrases='')
-    db.session.add(site)
-    db.session.commit()
-    site.private_instance = False
-    g.site = site
-    g.admin_ids = []
-    make_user(make_instance('test.piefed.local', software='piefed'), 'founder', local=True)
-    author = make_user(make_instance(PEER), 'author')
-    author.ap_profile_id = f'https://{PEER}/u/author'
-    community = make_community('general')
-    db.session.commit()
-    return SimpleNamespace(author=author, community=community)
 
 
 def _inbound(env, media_type, kind='Document', url=AUDIO_URL):
