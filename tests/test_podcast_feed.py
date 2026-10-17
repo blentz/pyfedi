@@ -173,15 +173,14 @@ def test_feed_leaves_out_non_episodes(app, pod, episode_post):
     alice = db.session.get(User, episode_post.user_id)
     text = make_post(pod, alice, 'https://test.piefed.local/post/t', title='Text post')
     text.type = POST_TYPE_ARTICLE
-    processing = another_episode(pod, alice, 'Processing', status='processing')
+    another_episode(pod, alice, 'Processing', status='processing')
     remote = make_post(pod, alice, 'https://test.piefed.local/post/r', title='Remote audio')
     remote.type = POST_TYPE_LINK
     remote.url = 'https://elsewhere.example/a.mp3'
     followers = another_episode(pod, alice, 'Followers only')
     followers.visibility = VISIBILITY_FOLLOWERS
-    zero = another_episode(pod, alice, 'Zero bytes', bytes=0)
+    another_episode(pod, alice, 'Zero bytes', bytes=0)
     db.session.commit()
-    assert {processing.id, zero.id}
 
     assert list(items_of(channel_of(app.test_client()))) == ['Episode one']
 
