@@ -77,6 +77,8 @@ def check_default_domain() -> None:
     except SQLAlchemyError:
         db.session.rollback()
         return
-    if default.domain != current_app.config['SERVER_NAME']:
+    if not any(row.is_default for row in domain_rows()):
+        current_app.logger.error('site_domain has rows but none is the default; using SERVER_NAME')
+    elif default.domain != current_app.config['SERVER_NAME']:
         current_app.logger.error('site_domain default %s does not match SERVER_NAME %s',
                                  default.domain, current_app.config['SERVER_NAME'])
