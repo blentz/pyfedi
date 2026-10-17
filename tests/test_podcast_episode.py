@@ -11,8 +11,10 @@ from app.activitypub.util import post_to_page
 from app.constants import COMMUNITY_KIND_DISCUSSION, POST_TYPE_LINK
 from app.models import File, Post, Site
 from app.shared.media import with_media
+import app.shared.tasks.pages as pages
 from app.shared.tasks.pages import send_post
 from tests.factories import make_community, make_instance, make_user
+from tests.peertube_video_fixtures import _remote
 from tests.podcast_fixtures import episode_post, sent  # noqa: F401
 
 
@@ -51,6 +53,22 @@ def test_push_carries_the_same_document(episode_post, sent):
     assert lemmy['object']['object']['attachment'] == [episode_attachment(episode_post)]
     mastodon = sent['https://mastodon.example/inbox'][0]   # an Announce of the id: Mastodon fetches the Page
     assert mastodon['object'] == episode_post.ap_id
+
+
+def test_an_edit_carries_the_document(episode_post, sent):
+    send_post(episode_post.id, edit=True, session=db.session)
+    lemmy = sent['https://lemmy.example/inbox'][0]   # the community's Announce of the author's Update(Page)
+    assert lemmy['object']['type'] == 'Update'
+    assert lemmy['object']['object']['attachment'] == [episode_attachment(episode_post)]
+
+
+def test_the_mentions_note_carries_the_document(episode_post, sent, monkeypatch):
+    _, mentioned = _remote('mention.example', 'piefed', 'men')
+    monkeypatch.setattr(pages, 'mentioned_users', lambda post: [mentioned])
+    send_post(episode_post.id, session=db.session)
+    note = sent['https://mention.example/inbox'][0]['object']
+    assert note['type'] == 'Note'
+    assert note['attachment'] == [episode_attachment(episode_post)]
 
 
 def test_not_ready_or_linked_audio_is_not_an_episode(episode_post):
