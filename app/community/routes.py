@@ -54,6 +54,7 @@ from app.post.util import form_tags_string
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
 from app.visibility import is_open, listable_clause, visible_to_clause
+from app.utils import etag_stamp
 from app.utils import user_banned_from_community, back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
     shorten_string, gibberish, community_membership, _capped_get, PAGE_MAX_BYTES, \
     request_etag_matches, return_304, can_upvote, can_downvote, user_filters_posts, \
@@ -461,7 +462,7 @@ def show_community(community: Community, from_instance=None):
 
     # If nothing has changed since their last visit, return HTTP 304
     current_etag = (f"{community.id}{'@' + str(from_instance.id) if from_instance is not None else ''}"
-                    f"{sort}{post_layout}_{hash(community.last_active)}")
+                    f"{sort}{post_layout}_{etag_stamp(community.last_active)}")
     if current_user.is_anonymous and request_etag_matches(current_etag):
         return return_304(current_etag)
 
@@ -844,14 +845,14 @@ def show_community_rss(actor):
         # holding an ETag from before the community was made private got
         # `304 Not Modified` where a fresh request got 403 -- measured. That
         # is an access check a conditional request walks past, and because the
-        # ETag is `{id}_{hash(last_active)}` a 304 on a guessed value also
+        # ETag is `{id}_{etag_stamp(last_active)}` a 304 on a guessed value also
         # confirms the community's current last_active. Refuse first, then
         # answer conditionally.
         if community.private:
             abort(403)
 
         # If nothing has changed since their last visit, return HTTP 304
-        current_etag = f"{community.id}_{hash(community.last_active)}"
+        current_etag = f"{community.id}_{etag_stamp(community.last_active)}"
         if request_etag_matches(current_etag):
             return return_304(current_etag, 'application/rss+xml')
 
@@ -919,7 +920,7 @@ def show_community_rss(actor):
 
         response = make_response(feed.create_feed(posts, server_url))
         response.headers.set('Content-Type', 'application/rss+xml')
-        response.headers.add_header('ETag', f"{community.id}_{hash(community.last_active)}")
+        response.headers.add_header('ETag', f"{community.id}_{etag_stamp(community.last_active)}")
         response.headers.add_header('Cache-Control', 'no-cache, max-age=600, must-revalidate')
         return response
     else:

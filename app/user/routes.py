@@ -37,6 +37,7 @@ from app.user.forms import ProfileForm, SettingsForm, DeleteAccountForm, ReportU
 from app.user.utils import unsubscribe_from_community, search_for_user, _get_user_moderates, \
     _get_user_upvoted_posts, _get_user_subscribed_communities, _get_user_posts, _get_user_post_replies, \
     _get_user_archived_replies, _get_user_posts_and_replies, _get_user_same_ip, insert_or_update_user_note
+from app.utils import etag_stamp
 from app.utils import user_banned_from_community, back, render_template, markdown_to_html, user_access, markdown_to_text, shorten_string, \
     gibberish, community_membership, user_filters_home, \
     user_filters_posts, user_filters_replies, theme_list, \
@@ -2493,7 +2494,7 @@ def show_profile_rss(actor):
             abort(404)
 
         # If nothing has changed since their last visit, return HTTP 304
-        current_etag = f"{user.id}_{hash(user.last_seen)}"
+        current_etag = f"{user.id}_{etag_stamp(user.last_seen)}"
         if request_etag_matches(current_etag):
             return return_304(current_etag, 'application/rss+xml')
 
@@ -2525,7 +2526,7 @@ def show_profile_rss(actor):
 
         response = make_response(feed.create_feed(posts, server_url))
         response.headers.set('Content-Type', 'application/rss+xml')
-        response.headers.add_header('ETag', f"{user.id}_{hash(user.last_seen)}")
+        response.headers.add_header('ETag', f"{user.id}_{etag_stamp(user.last_seen)}")
         response.headers.add_header('Cache-Control', 'no-cache, max-age=600, must-revalidate')
         return response
     else:

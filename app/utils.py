@@ -509,6 +509,12 @@ def file_get_contents(filename):
 random_chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
 
+def etag_stamp(value) -> str:
+    """A stable stand-in for a datetime (or any value) in an ETag. `hash()` of a datetime is salted per process, so
+    each worker and each restart computed another ETag for the same state and a client's If-None-Match never matched."""
+    return hashlib.md5(str(value).encode(), usedforsecurity=False).hexdigest()[:16]
+
+
 def gibberish(length: int = 10) -> str:
     return "".join([random.choice(random_chars) for x in range(length)])
 

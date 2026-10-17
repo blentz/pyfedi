@@ -19,7 +19,7 @@ from app.models import Topic, Community, NotificationSubscription, PostReply, ut
 from app.topic import bp
 from app.topic.forms import SuggestTopicsForm
 from app.visibility import listable_clause
-from app.utils import render_template, user_filters_posts, validation_required, mimetype_from_url, feed_entry_body, login_required, \
+from app.utils import etag_stamp, render_template, user_filters_posts, validation_required, mimetype_from_url, feed_entry_body, login_required, \
     gibberish, get_deduped_post_ids, paginate_post_ids, post_ids_to_models, blocked_communities, \
     recently_upvoted_posts, recently_downvoted_posts, blocked_or_banned_instances, blocked_users, \
     joined_or_modding_communities, \
@@ -261,7 +261,7 @@ def show_topic_rss(topic_path):
 
         response = make_response(fg.rss_str())
         response.headers.set('Content-Type', 'application/rss+xml')
-        response.headers.add_header('ETag', f"{topic.id}_{hash(g.site.last_active)}")
+        response.headers.add_header('ETag', f"{topic.id}_{etag_stamp(g.site.last_active)}")
         response.headers.add_header('Cache-Control', 'no-cache, max-age=600, must-revalidate')
         return response
     else:

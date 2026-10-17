@@ -32,7 +32,7 @@ import app.shared.community as shared_community
 # package before they are defined (import cycle: app.shared.feed)
 import app.shared.feed as shared_feed
 from app.shared.upload import is_refused_upload
-from app.utils import back, show_ban_message, piefed_markdown_to_lemmy_markdown, markdown_to_html, render_template, \
+from app.utils import etag_stamp, back, show_ban_message, piefed_markdown_to_lemmy_markdown, markdown_to_html, render_template, \
     user_filters_posts, joined_communities, menu_instance_feeds, validation_required, feed_membership, \
     gibberish, get_task_session, instance_banned, menu_subscribed_feeds, referrer, community_membership, \
     paginate_post_ids, get_deduped_post_ids, get_request, post_ids_to_models, recently_upvoted_posts, \
@@ -898,7 +898,7 @@ def show_feed_rss(feed_path):
 
         response = make_response(fg.rss_str())
         response.headers.set('Content-Type', 'application/rss+xml')
-        response.headers.add_header('ETag', f"{feed.id}_{hash(g.site.last_active)}")
+        response.headers.add_header('ETag', f"{feed.id}_{etag_stamp(g.site.last_active)}")
         response.headers.add_header('Cache-Control', 'no-cache, max-age=600, must-revalidate')
         return response
     else:

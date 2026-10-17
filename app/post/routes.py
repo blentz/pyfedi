@@ -57,6 +57,7 @@ import app.shared.community as shared_community
 from app.shared.media import episode_form_wanted, episode_of, media_of
 from app.shared.tasks import task_selector
 import app.variants as variants
+from app.utils import etag_stamp
 from app.utils import clean_ap_url, can_moderate, render_template, markdown_to_html, validation_required, \
     shorten_string, markdown_to_text, gibberish, ap_datetime, return_304, \
     request_etag_matches, ip_address, instance_banned, \
@@ -203,7 +204,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
         refuse_unpublished_post(post)
 
         # If nothing has changed since their last visit, return HTTP 304
-        current_etag = f"{post.id}{sort}_{hash(post.last_active)}"
+        current_etag = f"{post.id}{sort}_{etag_stamp(post.last_active)}"
         if current_user.is_anonymous and request_etag_matches(current_etag):
             return return_304(current_etag)
 
@@ -451,7 +452,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
                                    recently_upvoted_replies=recently_upvoted_replies,
                                    recently_downvoted_replies=recently_downvoted_replies,
                                    reply_collapse_threshold=reply_collapse_threshold,
-                                   etag=f"{post.id}{sort}_{hash(post.last_active)}",
+                                   etag=f"{post.id}{sort}_{etag_stamp(post.last_active)}",
                                    markdown_editor=current_user.is_authenticated and current_user.markdown_editor,
                                    can_upvote_here=can_upvote(user, community) and post.archived is None,
                                    can_downvote_here=can_downvote(user, community) and post.archived is None,
@@ -478,7 +479,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
         oembed_url = url_for('post.post_oembed', post_id=post.id, _external=True)
         response.headers.add('Link', f'<{oembed_url}>; rel="alternate"; type="application/json+oembed"')
         if current_user.is_anonymous:
-            response.headers.set('ETag', f"{post.id}{sort}_{hash(post.last_active)}")
+            response.headers.set('ETag', f"{post.id}{sort}_{etag_stamp(post.last_active)}")
             response.headers.set('Vary', 'Accept, Accept-Language')
             response.headers.set('Cache-Control', 'public, max-age=30')
         else:
@@ -596,7 +597,7 @@ def post_embed(post_id):
         refuse_invisible(post)
 
         # If nothing has changed since their last visit, return HTTP 304
-        current_etag = f"{post.id}_{hash(post.last_active)}"
+        current_etag = f"{post.id}_{etag_stamp(post.last_active)}"
         if current_user.is_anonymous and request_etag_matches(current_etag):
             return return_304(current_etag)
 
@@ -604,7 +605,7 @@ def post_embed(post_id):
             flash(_('%(name)s has indicated they made a mistake in this post.', name=post.author.user_name), 'warning')
 
         response = render_template('post/post_embed.html', title=post.title, post=post, show_post_community=True,
-                                   etag=f"{post.id}_{hash(post.last_active)}", embed=True)
+                                   etag=f"{post.id}_{etag_stamp(post.last_active)}", embed=True)
         response.headers.set('Vary', 'Accept, Cookie, Accept-Language')
         return response
 

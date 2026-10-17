@@ -26,7 +26,7 @@ from app.constants import (POST_STATUS_PUBLISHED, POST_STATUS_SCHEDULED,
                            POST_TYPE_LINK, POST_TYPE_POLL)
 from app.models import (CommunityBan, Event, File, Instance, Language, Post,
                         Site, Topic, User, UserFlair)
-from app.utils import utcnow
+from app.utils import etag_stamp, utcnow
 from tests.factories import (make_community, make_community_ban,
                              make_community_member, make_instance, make_poll,
                              make_poll_choice, make_post, make_post_reply,
@@ -436,7 +436,7 @@ def test_an_unchanged_page_answers_304_to_an_anonymous_visitor(app, env):
     assert second.status_code == 304
     # The same string the logged-in row builds by hand, so a typo there cannot
     # make that row pass by never matching.
-    assert etag == f'{post.id}hot_{hash(post.last_active)}'
+    assert etag == f'{post.id}hot_{etag_stamp(post.last_active)}'
 
 
 def test_a_logged_in_reader_gets_no_304(app, env):
@@ -467,7 +467,7 @@ def test_a_logged_in_reader_is_never_answered_304(app, env):
     the same test leaves the other client's requests being served as anonymous
     (fact 514)."""
     anon, community, post, mod, author, outsider = env
-    etag = f'{post.id}hot_{hash(post.last_active)}'
+    etag = f'{post.id}hot_{etag_stamp(post.last_active)}'
     client = as_user(app, outsider)
 
     with patch('app.post.routes.render_template',

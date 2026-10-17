@@ -29,7 +29,7 @@ from app.constants import (POST_STATUS_PUBLISHED, POST_STATUS_SCHEDULED,
 from app.models import (CommunityFlair, Event, File, Instance, Language, Poll,
                         PollChoice, Post, PostReply, PostReplyValidationError,
                         Site, Topic, User)
-from app.utils import utcnow
+from app.utils import etag_stamp, utcnow
 from tests.factories import (make_community, make_community_ban,
                              make_community_flair, make_community_member,
                              make_instance, make_poll, make_poll_choice,
@@ -234,7 +234,7 @@ def test_the_embed_flags_a_mea_culpa(app, env):
 
 def test_an_unchanged_embed_answers_304(app, env):
     anon, community, post, mod, author, outsider = env
-    etag = f'{post.id}_{hash(post.last_active)}'
+    etag = f'{post.id}_{etag_stamp(post.last_active)}'
 
     response = anon.get(f'/post/{post.id}/embed',
                         headers={'If-None-Match': etag})
