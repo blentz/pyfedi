@@ -81,11 +81,11 @@ def test_cache_cleared_on_change(db_session):
 def test_cache_is_stale_until_cleared(app, db_session, monkeypatch):
     monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
     clear_domain_cache()
-    assert len(domain_rows()) == 1
+    assert {r.domain for r in domain_rows()} == {'test.piefed.local'}
     row = SiteDomain(domain='abc.onion', scheme='http')
     db.session.add(row)
     db.session.commit()
-    assert len(domain_rows()) == 1
+    assert {r.domain for r in domain_rows()} == {'test.piefed.local'}
     clear_domain_cache()
     assert {r.domain for r in domain_rows()} == {'abc.onion'}
 
