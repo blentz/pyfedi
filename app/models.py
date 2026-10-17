@@ -2567,6 +2567,12 @@ class ActivityLog(db.Model):
 post_stored_hooks = []
 
 
+def mark_audio_attachment(post, attachment):
+    """A17.3: an attachment whose mediaType is audio/* makes the post an audio post (a PieFed episode)."""
+    if str(attachment.get('mediaType', '')).startswith('audio/'):
+        post.extensions = {**(post.extensions or {}), 'media_type': 'audio'}
+
+
 class Post(db.Model):
     query_class = FullTextSearchQuery
     id = db.Column(db.Integer, primary_key=True)
@@ -2914,8 +2920,11 @@ class Post(db.Model):
                 elif attachment['type'] == 'Document':
                     if 'url' not in attachment:     # as the Link branch above
                         continue                    # already tests for
-                    if str(attachment.get('mediaType', '')).startswith('audio/'):   # A17.3: a PieFed episode
-                        post.extensions = {**(post.extensions or {}), 'media_type': 'audio'}
+                    if str(attachment.get('mediaType', '')).startswith('audio/'):
+                        # A17.3: a PieFed episode is a link post to its audio, not an image or a gallery entry
+                        post.url = attachment['url']
+                        mark_audio_attachment(post, attachment)
+                        break
                     if 'name' in attachment:
                         alt_text = attachment['name']
                     attached_images.append(attachment)
@@ -2923,8 +2932,7 @@ class Post(db.Model):
                     if 'url' not in attachment:
                         continue
                     post.url = attachment['url']
-                    if str(attachment.get('mediaType', '')).startswith('audio/'):   # A17.3: a PieFed episode
-                        post.extensions = {**(post.extensions or {}), 'media_type': 'audio'}
+                    mark_audio_attachment(post, attachment)
                     if 'name' in attachment:
                         post.title = attachment['name']
                     if post.url:
