@@ -20,6 +20,7 @@ from flask import g
 
 from app import db
 from app.models import Community, CommunityMember, Post, Site, User, utcnow
+from app.utils import etag_stamp
 
 
 @pytest.fixture
@@ -84,7 +85,7 @@ class TestTheFeedAnyoneCanRead:
     def test_the_etag_is_offered(self, env):
         response = env.client.get('/index/feed')
 
-        assert response.headers['ETag'] == f'home_{hash(env.site.last_active)}'
+        assert response.headers['ETag'] == f'home_{etag_stamp(env.site.last_active)}'
 
     def test_a_matching_etag_gets_a_304(self, env):
         etag = env.client.get('/index/feed').headers['ETag']
