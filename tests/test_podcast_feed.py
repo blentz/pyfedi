@@ -8,7 +8,7 @@ from feedgen.util import xml_elem
 from app import cache, db
 from app.constants import COMMUNITY_KIND_PODCAST, POST_STATUS_PROCESSING, POST_TYPE_LINK, POST_TYPE_ARTICLE, VISIBILITY_FOLLOWERS
 from app.models import Community, Language, Site, Tag, User
-from app.rss_extras import PodcastIndexEntryExtension
+from app.rss_extras import PodcastIndexEntryExtension, RSSFeed
 from app.shared.media import with_episode, with_media
 from app.shared.tasks import media as media_tasks
 from app.shared.tasks.media import publish_ready_post
@@ -311,6 +311,15 @@ def test_a_community_title_or_description_that_is_not_xml_text_does_not_fail_the
 
     assert 'Episode one' in items_of(channel)
     assert '\x13' not in channel.findtext('title') and channel.findtext('title').strip()
+
+
+def test_a_community_name_that_is_not_xml_text_adds_no_category_term(app, pod, episode_post):
+    pod.name = 'po\x13d'   # the feed route finds a community by name, so a bad one is reached only by a direct call
+    feed = RSSFeed(title='t', link=SERVER, description='d')
+
+    items = ET.fromstring(feed.create_feed([episode_post], SERVER)).find('channel').findall('item')
+
+    assert [item.findall('category') for item in items] == [[]]
 
 
 def test_a_podcast_category_that_is_not_xml_text_is_left_out(app, pod, episode_post):
