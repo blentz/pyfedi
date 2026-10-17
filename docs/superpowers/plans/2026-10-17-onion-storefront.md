@@ -17,6 +17,16 @@
 - Clearnet behaviour is unchanged unless a task says otherwise.
 - Inline imports only if technically unavoidable. Break cycles by moving code (memory `inline-imports-rule`).
 - TDD: failing test first. One commit per task. Run tests with `./run_tests.sh <path> -v`, never from `/tmp` scripts (memory `gates-live-in-repo`).
+- **Coverage: 100% line and branch coverage on every changed line** (owner ruling 2026-10-17), base `b20e75bfe`. Every app task ends with this chain passing (tests/README.md "coverage ratchet"):
+  ```
+  ./run_tests.sh tests/ -q --cov=app --cov-branch --cov-report=json && \
+  python3 tests/check_coverage_floors.py coverage.json coverage_floors.ini && \
+  python3 tests/check_changed_line_coverage.py coverage.json b20e75bfe --branches
+  ```
+  New modules `app/storefront.py`, `app/onion.py`, `app/onion_guard.py` get floor 100 in `coverage_floors.ini`. Task 10 adds `app/static/js/onion_pow.js` to `package.json` `test:js` `--test-coverage-include` at 100 lines/branches/functions; its tests are `tests/js/onion_pow.test.mjs`.
+- No new inline imports: `KEPT` in `tests/test_no_inline_imports.py` must not rise.
+- Tests must leave no file under `app/static/media`, `app/static/tmp` or `app/static/posts` (`tests/static_leak_gate.py`).
+- Every commit message ends with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, or names the model that actually wrote it.
 - A slow or timing-out test is a bug to fix, not to report (memory `slow-tests-are-bugs`).
 - `deploy/` is git-ignored and local-only. Deploy-task files are not committed. Back up unit files, env files and the Caddyfile to `~/backups/<UTC timestamp>-onion/` on the server before editing. Pushing to GitHub is the owner's job.
 - With an empty `site_domain` table, the `SERVER_NAME` host is implicitly the one registered default. This keeps the existing ~657 test files and fresh installs working.
@@ -295,7 +305,7 @@
 - Modify: `app/onion_guard.py`, `app/auth/forms.py`, `app/auth/routes.py` (`login` :47, `register` :68), the login and register templates
 - Create: `app/static/js/onion_pow.js`, `app/templates/auth/onion_wait.html`
 - Modify: `app/admin/forms.py` and the `/misc` view (:326) to add an `onion_pow_difficulty` setting, default 16
-- Test: `tests/test_onion_pow.py`, `tests/js/onion_pow.test.*` (follow the existing `tests/js/` convention)
+- Test: `tests/test_onion_pow.py`, `tests/js/onion_pow.test.mjs`
 
 **Interfaces:**
 - Produces:
