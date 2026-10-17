@@ -135,6 +135,14 @@ def test_migration_seeds_from_env(db_session, mode, registration):
         ('test.piefed.local', 'https', True, registration, True, False)
 
 
+@pytest.mark.parametrize('server_name,domain', [('127.0.0.1:5000', '127.0.0.1'), ('[::1]:5000', '::1'),
+                                                 ('Hell.Onion.', 'hell.onion'), (None, 'localhost')])
+def test_migration_seeds_the_bare_host(db_session, server_name, domain):
+    load_migration().seed_default(db.session.connection(), {'SERVER_NAME': server_name, 'HTTP_PROTOCOL': 'http'})
+    db.session.commit()
+    assert db.session.query(SiteDomain).one().domain == domain
+
+
 def test_startup_check_logs_mismatch(app, db_session, caplog):
     add_domain('other.example', is_default=True)
     with caplog.at_level(logging.ERROR, logger=app.logger.name):

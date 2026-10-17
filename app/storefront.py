@@ -33,15 +33,53 @@ def registration_from_mode(mode: str) -> str:
     return _REGISTRATION_FROM_MODE.get(mode, 'admin')
 
 
+def _bare_host(authority: str) -> str:
+    """The host of an authority (`host`, `host:port`, `[v6]:port`), lower-cased, brackets and trailing dot stripped;
+    '' when it names none. A bare IPv6 literal (`::1`, as `site_domain.domain` holds it) is its own host."""
+    authority = authority.strip()
+    if authority.count(':') > 1 and not authority.startswith('['):
+        authority = f'[{authority}]'
+    try:
+        return (urlsplit(f'//{authority}').hostname or '').rstrip('.')
+    except ValueError:   # an unbalanced IPv6 bracket
+        return ''
+
+
 def normalise_host(host: str) -> str:
-    """Lower-case, port stripped, trailing dot stripped."""
-    return host.lower().partition(':')[0].rstrip('.')
+    """Lower-case, port stripped, trailing dot stripped, IPv6 brackets stripped. The form `site_domain.domain` holds."""
+    return _bare_host(host)
+
+
+def _port_of(authority: str) -> int | None:
+    """The port an authority names, or None when it has none or an invalid one."""
+    try:
+        return urlsplit(f'//{authority.strip()}').port
+    except ValueError:
+        return None
+
+
+_DEFAULT_PORTS = {'http': 80, 'https': 443}
+
+
+def _authority(storefront) -> str:
+    """`host[:port]` for building URLs on `storefront`. The port is the one the request came in on, or SERVER_NAME's
+    when there is no request and `storefront` is that host (a dev install on 127.0.0.1:5000). A scheme's default
+    port is left out."""
+    server_name = current_app.config.get('SERVER_NAME') or ''
+    if has_request_context():
+        port = _port_of(request.host)
+    elif storefront.domain == _bare_host(server_name):
+        port = _port_of(server_name)
+    else:
+        port = None
+    host = f'[{storefront.domain}]' if ':' in storefront.domain else storefront.domain
+    return host if port in (None, _DEFAULT_PORTS.get(storefront.scheme)) else f'{host}:{port}'
 
 
 def _synthesised_default() -> DomainInfo:
     protocol = current_app.config['HTTP_PROTOCOL']
     scheme = 'https' if protocol in ('https', 'mixed') else protocol
-    domain = current_app.config['SERVER_NAME']
+    domain = normalise_host(current_app.config['SERVER_NAME'])
     return DomainInfo(domain, scheme, True, 'anyone', True, domain.endswith('.onion'))
 
 
@@ -60,7 +98,7 @@ def clear_domain_cache() -> None:
 
 def domain_for_host(host: str) -> DomainInfo | None:
     wanted = normalise_host(host)
-    return next((row for row in domain_rows() if row.domain == wanted), None)
+    return next((row for row in domain_rows() if normalise_host(row.domain) == wanted), None)
 
 
 def default_domain() -> DomainInfo:
@@ -69,15 +107,6 @@ def default_domain() -> DomainInfo:
 
 def is_registered_host(host: str) -> bool:
     return domain_for_host(host) is not None
-
-
-def _bare_host(authority: str) -> str:
-    """The host of an authority (`host`, `host:port`, `[v6]:port`), lower-cased, trailing dot stripped; '' when it
-    names none."""
-    try:
-        return (urlsplit(f'//{authority.strip()}').hostname or '').rstrip('.')
-    except ValueError:   # an unbalanced IPv6 bracket
-        return ''
 
 
 def is_local_host(host: str | None) -> bool:
@@ -112,7 +141,7 @@ def check_default_domain() -> None:
         return
     if not any(row.is_default for row in domain_rows()):
         current_app.logger.error('site_domain has rows but none is the default; using SERVER_NAME')
-    elif default.domain != current_app.config['SERVER_NAME']:
+    elif normalise_host(default.domain) != normalise_host(current_app.config['SERVER_NAME']):
         current_app.logger.error('site_domain default %s does not match SERVER_NAME %s',
                                  default.domain, current_app.config['SERVER_NAME'])
 
@@ -125,7 +154,7 @@ def current_storefront() -> DomainInfo:
 def storefront_url() -> str:
     """Origin of the current storefront. Use for links a visitor follows, never for federation identity."""
     storefront = current_storefront()
-    return f'{storefront.scheme}://{storefront.domain}'
+    return f'{storefront.scheme}://{_authority(storefront)}'
 
 
 def canonical_url() -> str:
@@ -149,6 +178,6 @@ def resolve_storefront() -> Response | None:
     if storefront is None:
         return Response('Misdirected Request: this host is not served here.\n', status=421, mimetype='text/plain')
     g.storefront = storefront
-    request_ctx.url_adapter = current_app.url_map.bind(storefront.domain, script_name=request.script_root,
+    request_ctx.url_adapter = current_app.url_map.bind(_authority(storefront), script_name=request.script_root,
                                                        url_scheme=storefront.scheme)
     return None
