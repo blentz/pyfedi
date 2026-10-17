@@ -291,6 +291,16 @@ def test_an_owner_name_that_is_not_xml_text_falls_back_to_the_community_title(ap
     assert channel.findtext('itunes:author', namespaces=NS) == pod.title
 
 
+def test_an_owner_name_and_community_title_that_are_not_xml_text_fall_back_to_the_community_name(app, pod):
+    db.session.get(User, pod.user_id).title = 'Al\x13ice'
+    pod.title = 'po\x13d'
+    db.session.commit()
+
+    channel = channel_of(app.test_client())
+
+    assert channel.findtext('itunes:author', namespaces=NS) == pod.name
+
+
 def test_a_flair_or_tag_that_is_not_xml_text_is_left_out_of_the_items(app, pod, episode_post):
     episode_post.flair.append(make_community_flair(pod, 'bad\x13flair'))
     episode_post.flair.append(make_community_flair(pod, 'good flair'))
