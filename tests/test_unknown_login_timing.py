@@ -1,11 +1,12 @@
 """A login naming no account costs what a wrong password costs (gap G1a).
 
-When nothing matched the typed username or email, web login, API login and verify_credentials used to fail without
-any password-hash work, so the response time alone told a caller which names have accounts, clearnet and onion
-alike. The not-found branch now runs `verify_password_hash(DUMMY_PASSWORD_HASH, password)`, the same verification a
+When nothing matched the typed username or email, web login, API login, verify_credentials and NNTP AUTHINFO used to
+fail without any password-hash work, so the response time alone told a caller which names have accounts, clearnet and
+onion alike. So did an account with no stored hash (OAuth or LDAP only). The not-found branch now runs `verify_password_hash(DUMMY_PASSWORD_HASH, password)`, the same verification a
 real check does, and then fails exactly as before. Each test counts the hash verifications by wrapping werkzeug's
 `check_password_hash` where app.models calls it, and compares the answer with a wrong password's.
 """
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -14,6 +15,8 @@ import app.models as models
 from app import db
 from app.api.alpha.utils.user import post_user_verify_credentials
 from app.models import DUMMY_PASSWORD_HASH, User
+from app.nntp.nntpserver import NNTPAuthenticationError
+from app.nntp.server import PieFedNNTPServer
 from app.shared.auth import api_log_user_in
 from tests.factories import make_user
 from tests.test_onion_guard_limits import (LOGIN, PASSWORD, a_session, alice, ldap_off, login_form,  # noqa: F401
@@ -142,3 +145,31 @@ def test_verify_credentials_for_a_passwordless_account_verifies_a_hash_and_answe
         none = verify_attempt(app, 'bob')
     verified.assert_called_once_with(DUMMY_PASSWORD_HASH, 'a wrong password')
     assert none == verify_attempt(app, 'alice')
+
+
+# --------------------------------------------------------------------------
+# NNTP AUTHINFO
+# --------------------------------------------------------------------------
+
+def nntp_attempt(app, typed):
+    with pytest.raises(NNTPAuthenticationError) as raised:
+        PieFedNNTPServer.auth_user(SimpleNamespace(_app=app), typed, 'a wrong password')
+    return str(raised.value)
+
+
+@pytest.mark.parametrize('typed', ['ghost', 'ghost@example.com', 'gh\x00ost'], ids=['name', 'email', 'nul'])
+def test_nntp_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wrong_password(app, alice, typed):
+    with counted() as verified:
+        unknown = nntp_attempt(app, typed)
+    verified.assert_called_once_with(DUMMY_PASSWORD_HASH, 'a wrong password')
+    with counted() as verified:
+        wrong = nntp_attempt(app, 'alice')
+    verified.assert_called_once()
+    assert unknown == wrong == 'Invalid username or password'
+
+
+def test_nntp_for_a_passwordless_account_verifies_a_hash_and_answers_as_a_wrong_password(app, passwordless):
+    with counted() as verified:
+        none = nntp_attempt(app, 'bob')
+    verified.assert_called_once_with(DUMMY_PASSWORD_HASH, 'a wrong password')
+    assert none == nntp_attempt(app, 'alice')
