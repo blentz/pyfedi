@@ -301,19 +301,19 @@ def _rebase(url, base: str, hosts: frozenset[str]):
     return base + url[start + 2 + len(parts.netloc):]
 
 
+_SPACE_RUN = re.compile(r'\s*')
+_NON_SPACE_RUN = re.compile(r'\S+')
+
+
 def _srcset_urls(srcset: str) -> list[tuple[int, int]]:
     """The (start, end) of each candidate URL in a `srcset`: the first non-space run at the start and after each
     comma, less the commas that end it (`a.jpg, b.jpg 2x`, `a,b.jpg,`). A scan, not a pattern: linear in `srcset`
     whatever runs of commas, spaces or letters it holds."""
     spans, i, size = [], 0, len(srcset)
     while True:
-        while i < size and srcset[i].isspace():
-            i += 1
+        i = _SPACE_RUN.match(srcset, i).end()
         if i < size and srcset[i] != ',':
-            end = i
-            while end < size and not srcset[end].isspace():
-                end += 1
-            stop = end
+            stop = _NON_SPACE_RUN.match(srcset, i).end()
             while srcset[stop - 1] == ',':
                 stop -= 1   # the first character is no comma, so this stops
             spans.append((i, stop))

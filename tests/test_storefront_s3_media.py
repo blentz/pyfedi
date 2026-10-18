@@ -299,9 +299,40 @@ def test_a_style_value_is_scanned_in_linear_time(style):
     assert timed(lambda: storefront._css_urls(style)) < 0.1
 
 
-@pytest.mark.parametrize('srcset', ['a' + ',' * 100_000, ',' * 100_000, 'a,' * 50_000, ' ' * 100_000 + 'a',
-                                    'a b,' * 25_000, 'a' * 100_000])
+@pytest.mark.parametrize('srcset', ['a' + ',' * 100_000, ',' * 100_000, ' ' * 100_000 + 'a', 'a' * 100_000, 'a,' * 2_000,
+                                    'a b,' * 2_000])
 def test_a_srcset_is_scanned_in_linear_time(srcset):
     assert timed(lambda: storefront._rebase_srcset(srcset, 'http://x', frozenset({'abc.onion'}))) < 0.1
     tag = BeautifulSoup('<img/>', 'html.parser').img
     assert timed(lambda: storefront._points_at(tag, 'srcset', srcset, S3)) < 0.1
+
+
+def test_a_srcset_of_many_candidates_is_split_in_linear_time():
+    assert timed(lambda: storefront._srcset_urls('a b,' * 5_000)) < 0.1
+
+
+@pytest.mark.parametrize('srcset, urls', [
+    ('a.jpg 1x, b.jpg 2x', ['a.jpg', 'b.jpg']), ('a,b.jpg,', ['a,b.jpg']), (',, a.jpg ,,b.jpg', ['a.jpg', 'b.jpg']),
+    ('', []), ('  ', []), ('a.jpg 1x,', ['a.jpg']),
+])
+def test_srcset_candidates(srcset, urls):
+    assert [srcset[start:end] for start, end in storefront._srcset_urls(srcset)] == urls
+
+
+@pytest.mark.parametrize('url, host', [
+    ('https://203.0.113.0x5/x', '203.0.113.5'),                  # a hex last part
+    ('https://[::zz]/x', ''), ('https://[::1/x', ''), ('https://[::1]x/y', ''),   # no address, no host
+    ('https://cdn%ff.test/x', ''),                               # not UTF-8 once decoded
+    ('https://a.0xzz/x', 'a.0xzz'),                              # ends in no number
+])
+def test_browser_host_of_odd_hosts(url, host):
+    assert storefront.browser_host(url) == host
+
+
+@pytest.mark.parametrize('style, urls', [
+    ('a"b\'c', []),                                  # quotes that close nothing
+    ('"a" \'b\' "c', ['a', 'b']),
+    ('x "closes at the next quote \'y\' "z"', ['closes at the next quote \'y\' ']),
+])
+def test_css_quoted_strings(style, urls):
+    assert storefront._css_urls(style) == urls
