@@ -11,14 +11,24 @@ This module imports nothing from `app`, so `app/__init__.py` can import it witho
 from __future__ import annotations
 
 import ipaddress
+import secrets
 from typing import TypeVar
 from urllib.parse import urlsplit
 
-from flask import current_app, has_request_context, request
+from flask import current_app, has_request_context, request, session
 
 ONION_MARKER_HEADER = 'X-PieFed-Via'
 ONION_MARKER_VALUE = 'onion'
 PROXY_FIX_ORIG = 'werkzeug.proxy_fix.orig'
+
+# Rate-limit keys for onion requests (section 3.7). Every cookieless or unauthenticated onion client shares
+# ONION_ANON_KEY, so each endpoint's own limit applies to all of them together.
+ONION_ANON_KEY = 'onion-anon'
+ONION_API_PREFIX = '/api/alpha/'
+# Kept on the request's WSGI environ rather than in g: an app context, and so g, can outlive one request (the test
+# suite pushes one for the whole session), while the environ is the request's own.
+ARRIVED_SID = 'piefed.onion_sid_arrived'
+API_RATE_KEY = 'piefed.onion_api_rate_key'
 
 T = TypeVar('T')
 
@@ -74,3 +84,39 @@ def audit_field(value: T) -> T | None:
     """An IP-derived value to store (`user.ip_address`, its country, an instance's address): None for an onion
     request, whose only address is the tor container's and so everybody's; `value` unchanged otherwise."""
     return None if is_onion_request() else value
+
+
+def is_api_path() -> bool:
+    """Whether the request is for the alpha API, whose clients authenticate with a bearer token and keep no cookies."""
+    return request.path.startswith(ONION_API_PREFIX)
+
+
+def arrived_onion_sid() -> str | None:
+    """The onion sid the request's session cookie brought back, None when it brought none. Read once, on first use, and
+    every mint goes through `mint_onion_sid`, which reads it first: a sid minted during this request is never taken
+    for one that came back."""
+    if ARRIVED_SID not in request.environ:
+        request.environ[ARRIVED_SID] = session.get('onion_sid')
+    return request.environ[ARRIVED_SID]
+
+
+def mint_onion_sid() -> None:
+    """Give the session an onion sid if it has none, so the response's session cookie carries one."""
+    arrived_onion_sid()
+    if not session.get('onion_sid'):
+        session['onion_sid'] = secrets.token_urlsafe(16)
+
+
+def onion_rate_key() -> str:
+    """The rate-limit key of an onion request.
+
+    - Alpha API: `onion-user:<id>` for a valid bearer token, as `resolve_onion_api_rate_key` (app/onion_guard.py)
+      found before the view; otherwise the shared key. No sid is minted: API clients do not keep cookies.
+    - Web: `onion-session:<sid>` only for a sid that came back in the session cookie. A sid minted now is free to
+      anyone who drops cookies, so until it comes back the request is in the shared bucket. One is minted here so
+      the response carries it."""
+    if is_api_path():
+        return request.environ.get(API_RATE_KEY) or ONION_ANON_KEY
+    sid = arrived_onion_sid()
+    mint_onion_sid()
+    return f'onion-session:{sid}' if sid else ONION_ANON_KEY

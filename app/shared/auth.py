@@ -1,8 +1,11 @@
+from flask_smorest import abort
+
 from app import db, cache
 from app.auth.util import find_user, get_country
 from app.ldap_utils import sync_user_to_ldap
 from app.models import IpBan, utcnow
 from app.onion import audit_field, is_onion_request
+from app.onion_guard import onion_login_failed, onion_login_succeeded, onion_login_wait
 from app.utils import ip_address, user_ip_banned, user_cookie_banned, banned_ip_addresses
 
 
@@ -15,12 +18,19 @@ def api_log_user_in(input):
 
     # D584: the web login's finder, so both accept the same forms
     user = find_user(username)
+    # Onion only (spec 3.7), counted as the web login counts it (app.auth.util.process_login)
+    failures_of = user.user_name if user else username
+    wait = onion_login_wait(failures_of)
+    if wait:
+        abort(429, message=f'Too many failed logins for this account. Try again in {wait} seconds.')
 
     if not user:
         # No match for username, email or profile url was found
+        onion_login_failed(failures_of)
         raise Exception('incorrect_login')
 
     if not user.check_password(password):
+        onion_login_failed(failures_of)
         raise Exception('incorrect_login')
 
     if not user.is_ban_exempt() and (user.banned or user_ip_banned() or user_cookie_banned()):
@@ -34,6 +44,7 @@ def api_log_user_in(input):
 
         raise Exception('incorrect_login')
 
+    onion_login_succeeded(failures_of)
     user.last_seen = utcnow()
     user.ip_address = audit_field(ip)
     user.ip_address_country = audit_field(country)

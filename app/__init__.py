@@ -4,7 +4,6 @@
 import logging
 from logging.handlers import SMTPHandler, RotatingFileHandler
 import os
-import secrets
 import warnings
 from PIL import Image
 from flask import json as flask_json, Flask, Request, request, current_app, session, g, has_app_context
@@ -32,7 +31,7 @@ from config import Config
 from app.constants import IMAGE_PIXEL_CAP
 from app.pinned_http import pinned_transport
 from app.cookies import StorefrontLoginManager, StorefrontSessionInterface, secure_set_cookies
-from app.onion import is_onion_request
+from app.onion import is_onion_request, onion_rate_key
 import sentry_sdk
 from app.plugins import load_plugins
 
@@ -105,16 +104,11 @@ def get_ip_address() -> str:
 
 def rate_limit_key() -> str:
     """Flask-Limiter's key function. An onion request has no address of its own (see `get_ip_address`), so it is
-    limited per session: `onion-session:<sid>`, the sid made on the first onion request that needs one. Everything
-    else is limited per client IP, as before.
-
-    A client that drops its cookie gets a new sid, and so a new bucket, on every request. The onion session-first
-    redirect (spec section 3.7a) is what closes that, not this function."""
+    limited per session once its sid has come back in the session cookie, per account on the alpha API, and in one
+    shared `onion-anon` bucket otherwise (`app.onion.onion_rate_key`). Everything else is limited per client IP, as
+    before."""
     if is_onion_request():
-        sid = session.get('onion_sid')
-        if not sid:
-            sid = session['onion_sid'] = secrets.token_urlsafe(16)
-        return f'onion-session:{sid}'
+        return onion_rate_key()
     return get_ip_address()
 
 
