@@ -95,16 +95,36 @@ def test_the_profile_url_is_matched_whole_and_case_insensitively(app, people):
         assert find_user('CARO') is None
 
 
-@pytest.mark.parametrize('which', ['name', 'email', 'profile-url'])
-def test_each_lookup_uses_its_index_and_does_not_scan_the_table(app, people, which):
+BULK_USERS = """
+    INSERT INTO "user" (user_name, email, instance_id, verified, banned, deleted, searchable, indexable, hide_nsfw,
+                        hide_nsfl, created, last_seen, ap_fetched_at, ap_profile_id, password_hash, alt_user_name)
+    SELECT 'bulk' || g, 'bulk' || g || '@example.com', :instance_id, true, false, false, true, true, 1, 1, now(),
+           now(), now(), 'https://bulk.example/u/' || g, 'x', 'bulk-alt' || g
+    FROM generate_series(1, 2000) g"""
+
+
+@pytest.mark.parametrize('which, index', [('name', 'idx_user_user_name_lower'), ('email', 'idx_user_email_lower'),
+                                          ('profile-url', 'idx_user_ap_profile_id_lower')])
+def test_each_lookup_uses_its_index_and_does_not_scan_the_table(app, people, which, index):
     """Postgres can use an expression index only for the same expression: lower(user_name), lower(email) and
-    lower(ap_profile_id) each have one. A tiny test table would be scanned anyway, so sequential scans are off."""
-    index = {'name': 0, 'email': 1, 'profile-url': 2}[which]
+    lower(ap_profile_id) each have one.
+
+    The plan must not depend on what earlier tests left in "user". A table of five rows is scanned anyway, and with
+    sequential scans off every index on it is a full-index-scan substitute of almost the same cost, so which one the
+    planner took (once ix_user_cover_id, after an autovacuum had reset the table's statistics) was a coin toss. So the
+    transaction gives the table a few thousand rows and ANALYZEs it: an equality probe on the right expression index
+    is then far cheaper than reading any other index end to end, whatever state the table was left in. All of it is
+    rolled back."""
+    position = {'name': 0, 'email': 1, 'profile-url': 2}[which]
     with app.test_request_context('/'):
-        statement = find_user_lookups('carol')[index].statement
+        statement = find_user_lookups('carol')[position].statement
         compiled = statement.compile(dialect=db.engine.dialect, compile_kwargs={'literal_binds': True})
-    db.session.execute(db.text('SET LOCAL enable_seqscan = off'))
-    plan = '\n'.join(row[0] for row in db.session.execute(db.text(f'EXPLAIN {compiled}')))
-    db.session.rollback()
+    try:
+        db.session.execute(db.text(BULK_USERS), {'instance_id': people['carol'].instance_id})
+        db.session.execute(db.text('ANALYZE "user"'))
+        db.session.execute(db.text('SET LOCAL enable_seqscan = off'))
+        plan = '\n'.join(row[0] for row in db.session.execute(db.text(f'EXPLAIN {compiled}')))
+    finally:
+        db.session.rollback()
     assert 'Seq Scan on "user"' not in plan, plan
-    assert 'idx_user_' in plan, plan
+    assert f'Index Scan using {index} on "user"' in plan or f'Bitmap Index Scan on {index}' in plan, plan
