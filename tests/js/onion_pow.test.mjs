@@ -50,7 +50,9 @@ function page({ withNonce = true, solved = '' } = {}) {
     const form = new FakeElement({ requestSubmit: submitter => submits.push(submitter) });
     const nonce = new FakeElement({ form, value: solved, dataset: { salt: SHARED_SALT, bits: String(SHARED_BITS) } });
     const button = new FakeElement({ disabled: false });
+    const view = new FakeElement();                 // the window: document.defaultView
     const document = {
+        defaultView: view,
         querySelector: selector => (selector === 'input[name="pow_nonce"]' && withNonce ? nonce : null),
         getElementById: id => (id === 'onion_pow_fallback' ? fallback : null),
     };
@@ -59,7 +61,7 @@ function page({ withNonce = true, solved = '' } = {}) {
         const done = form.listeners.submit(event);
         return { event, done };
     };
-    return { document, form, nonce, fallback, submits, submit, button };
+    return { document, form, nonce, fallback, submits, submit, button, view };
 }
 
 test('a page with no challenge is left alone', () => {
@@ -131,4 +133,20 @@ test('a page without a fallback element still copes', async () => {
     assert.equal(setupOnionPow({ document, subtle: undefined }), false);
     setupOnionPow({ document, subtle: { digest: async () => { throw new Error('no'); } } });
     await submit().done;
+});
+
+test('a page the browser restores from its back-forward cache solves again', async () => {
+    const { document, nonce, submits, submit, button, view } = page();
+    setupOnionPow({ document, subtle: webcrypto.subtle });
+    await submit().done;
+    assert.equal(nonce.value, SHARED_NONCE);
+    view.listeners.pageshow({ persisted: false });  // an ordinary load: nothing to forget
+    assert.equal(nonce.value, SHARED_NONCE);
+    view.listeners.pageshow({ persisted: true });   // Back to the page: its proof was spent with the submit
+    assert.equal(nonce.value, '');
+    const { event, done } = submit();
+    assert.equal(event.prevented, true);            // held and solved again, not sent with the spent proof
+    await done;
+    assert.equal(nonce.value, SHARED_NONCE);
+    assert.deepEqual(submits, [button, button]);
 });
