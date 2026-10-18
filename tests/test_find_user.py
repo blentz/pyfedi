@@ -4,7 +4,7 @@ It used to try the user name, then the email, then the profile URL, stopping at 
 three queries and a known user name one: a small timing difference that says which names have accounts (gaps G1
 review, Minor 2). A single OR of the three fixed that but could not use any of their indexes, so it scans "user" on
 every login and mention. Now all three indexed lookups always run, and the winner is the user name, then the email,
-then the profile URL. The matching is unchanged:
+then the profile URL; each uses its own lower() expression index. The matching is unchanged:
 
 * user name: case-insensitive, local and not deleted;
 * email: case-insensitive, local and not deleted;
@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import event
 
 from app import db
-from app.auth.util import find_user
+from app.auth.util import find_user, find_user_lookups
 from tests.factories import make_instance, make_user
 
 
@@ -93,3 +93,18 @@ def test_the_profile_url_is_matched_whole_and_case_insensitively(app, people):
     with app.test_request_context('/'):
         assert find_user('CAROL') is people['carol']   # now through the profile URL alone
         assert find_user('CARO') is None
+
+
+@pytest.mark.parametrize('which', ['name', 'email', 'profile-url'])
+def test_each_lookup_uses_its_index_and_does_not_scan_the_table(app, people, which):
+    """Postgres can use an expression index only for the same expression: lower(user_name), lower(email) and
+    lower(ap_profile_id) each have one. A tiny test table would be scanned anyway, so sequential scans are off."""
+    index = {'name': 0, 'email': 1, 'profile-url': 2}[which]
+    with app.test_request_context('/'):
+        statement = find_user_lookups('carol')[index].statement
+        compiled = statement.compile(dialect=db.engine.dialect, compile_kwargs={'literal_binds': True})
+    db.session.execute(db.text('SET LOCAL enable_seqscan = off'))
+    plan = '\n'.join(row[0] for row in db.session.execute(db.text(f'EXPLAIN {compiled}')))
+    db.session.rollback()
+    assert 'Seq Scan on "user"' not in plan, plan
+    assert 'idx_user_' in plan, plan

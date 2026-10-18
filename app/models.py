@@ -1952,6 +1952,14 @@ class User(UserMixin, db.Model):
             'last_seen',
             postgresql_where=db.text('ap_id is null AND verified is true AND banned is false AND deleted is false')
         ),
+        db.Index(
+            'idx_user_email_lower',
+            db.text('lower(email)')
+        ),
+        db.Index(
+            'idx_user_ap_profile_id_lower',
+            db.text('lower(ap_profile_id)')
+        ),
     )
 
     def __repr__(self):
