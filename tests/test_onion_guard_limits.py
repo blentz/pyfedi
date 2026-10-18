@@ -24,6 +24,7 @@ from werkzeug.datastructures import Headers
 import app as app_pkg
 import app.onion_guard as onion_guard
 from app import create_app, db, limiter, rate_limit_key
+from app.auth.util import find_user
 from app.models import SiteDomain
 from app.onion import ONION_ANON_KEY, arrived_onion_sid, mint_onion_sid
 from app.onion_guard import (COOKIE_CHECK, ONION_SESSION_ENDPOINTS, ONION_SESSION_EXEMPT,
@@ -658,3 +659,35 @@ def test_delay_covers_api(app, alice, redis_double, clock, ldap_off, alpha_api):
     assert accepted.status_code == 200 and accepted.get_json()['jwt']
     assert not redis_double.exists('onion_login_fail:alice')
     assert redis_double.hget('onion_login_fail:nobody', 'count') == '1'
+
+
+# --------------------------------------------------------------------------
+# find_user's profile-URL lookup takes the name literally
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def profiled(alice):
+    """Local accounts carry their actor URL. carol was renamed, so only her profile URL still says 'carol'."""
+    alice.ap_profile_id = 'https://test.piefed.local/u/alice'
+    carol = make_user(None, 'carol2', local=True)
+    carol.ap_profile_id = 'https://test.piefed.local/u/carol'
+    db.session.commit()
+    return SimpleNamespace(alice=alice, carol=carol)
+
+
+@pytest.mark.parametrize('typed', ['%', 'alic_', 'a%', '_lice', 'alic\\e', 'alic%', 'carol%', '___'])
+def test_wildcards_match_no_profile_url(app, profiled, typed):
+    assert find_user(typed) is None
+
+
+def test_a_profile_url_still_finds_its_account(app, profiled):
+    assert find_user('carol').id == profiled.carol.id
+    assert find_user(' CAROL ').id == profiled.carol.id
+
+
+def test_a_wildcard_cannot_log_in(app, profiled, ldap_off):
+    client = app.test_client()
+    assert not logged_in(client.post('/auth/login', base_url=CLEARNET_URL,
+                                     data={'user_name': '%', 'password': PASSWORD, **LOGIN}))
+    assert logged_in(client.post('/auth/login', base_url=CLEARNET_URL,
+                                 data={'user_name': 'alice', 'password': PASSWORD, **LOGIN}))
