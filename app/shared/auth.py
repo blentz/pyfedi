@@ -6,7 +6,7 @@ from app.ldap_utils import sync_user_to_ldap
 from app.models import IpBan, utcnow
 from app.onion import audit_field, is_onion_request
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message
-from app.utils import ip_address, user_ip_banned, user_cookie_banned, banned_ip_addresses
+from app.utils import ip_address, user_ip_banned, user_cookie_banned, banned_ip_addresses, log_login_failure
 
 
 # D582: the API's login. The web logs in through app.auth.util.log_user_in.
@@ -25,10 +25,12 @@ def api_log_user_in(input):
 
     if not user:
         # No match for username, email or profile url was found
+        log_login_failure()
         raise Exception('incorrect_login')
 
     # (onion) an account in hidden backoff is verified all the same and refused: a wrong password's answer and cost
     if not user.check_password(password, refuse=gate.hidden):
+        log_login_failure()
         raise Exception('incorrect_login')
 
     if not user.is_ban_exempt() and (user.banned or user_ip_banned() or user_cookie_banned()):
