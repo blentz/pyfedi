@@ -15,7 +15,7 @@ from urllib.parse import urlsplit, urlunsplit
 from bs4 import BeautifulSoup
 from bs4.dammit import EntitySubstitution
 from bs4.formatter import HTMLFormatter
-from flask import Response, current_app, g, has_request_context, request
+from flask import Response, current_app, g, has_app_context, has_request_context, request
 from flask.globals import request_ctx
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -313,7 +313,10 @@ def _rebase_links(html: str, base: str, hosts: frozenset[str], render: bool) -> 
 
 def canonicalise_links(html: str) -> str:
     """`html` with every `href`/`src`/`srcset` naming any host of this site moved onto the canonical origin, for
-    content about to be stored or federated. The end of `allowlist_html`."""
+    content about to be stored or federated. The end of `allowlist_html`. With no app context (a fuzz campaign)
+    there is no registry of hosts, so `html` comes back as it is."""
+    if not has_app_context():
+        return html
     return _rebase_links(html, canonical_url(), _local_hosts(), render=False)
 
 
@@ -330,8 +333,9 @@ def canonicalise_text(text: str | None) -> str | None:
     rendered in preference to the HTML. Hosts match as `is_local_link` matches them (case, a port, a trailing dot
     ignored); everything after the authority is kept byte for byte. Foreign hosts, the canonical host as written and
     text that is not a URL are left alone, and `text` itself comes back when nothing moved. Sentence punctuation
-    straight after a bare host stays in the text."""
-    if not text:
+    straight after a bare host stays in the text. With no app context (a fuzz campaign) there is no registry of
+    hosts, so nothing moves."""
+    if not text or not has_app_context():
         return text
     hosts = _local_hosts() - {_bare_host(current_app.config.get('SERVER_NAME') or '')}
     lowered = text.lower()

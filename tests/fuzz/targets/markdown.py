@@ -32,6 +32,7 @@ from app.discovery.credits import _document_urls, _normal_url, _urls_in
 from app.discovery.sources import is_hostname
 from app.instance.util import is_fedi_handle
 from app.markdown_extras import EnhancedImages, apply_enhanced_image_attributes
+from app.storefront import canonicalise_text
 from app.utils import (COMMUNITY_PATTERN, FEED_PATTERN, LINK_PATTERN, PERSON_PATTERN, allowlist_html,
                        community_link_to_href, escape_img, escape_non_html_angle_brackets, feed_link_to_href,
                        first_paragraph, fix_www_links, handle_better_lists, handle_blockquotes, handle_bold_em,
@@ -256,7 +257,11 @@ def _check_fix_www_links(text, result):
 
 
 def _check_lemmy_markdown(text, result):
-    """Two spaces go in before every CRLF that follows a non-space character, and nothing else changes."""
+    """Two spaces go in before every CRLF that follows a non-space character, and links to another host of this site
+    are moved onto the canonical one (canonicalise_text); nothing else changes. The two commute: a moved authority
+    holds no whitespace and ends in a non-space, as the one it replaced did. With no app context (the campaign)
+    canonicalise_text passes the text through, so only the CRLF rule applies."""
+    text = canonicalise_text(text)
     assert result.replace('  \r\n', '\r\n') == text.replace('  \r\n', '\r\n')
     assert len(result) == len(text) + 2 * len(re.findall(r'\S\r\n', text))
 

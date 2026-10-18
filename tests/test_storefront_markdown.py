@@ -5,6 +5,7 @@ too (`source.content`, which Lemmy and PieFed prefer), and so is `post.url`. A l
 the onion UI showed them, names the onion host. `canonicalise_text` rebases such URLs onto the canonical origin
 before they are saved; foreign hosts, the canonical host itself and plain text are left alone.
 """
+import contextvars
 import json
 from datetime import timedelta
 from unittest.mock import patch
@@ -15,7 +16,7 @@ from flask import current_app, g
 from app import db
 from app.activitypub.util import comment_model_to_json, post_to_page
 from app.models import ChatMessage, Language, Post, PostReply, Site
-from app.storefront import canonicalise_text
+from app.storefront import canonicalise_links, canonicalise_text
 from app.utils import markdown_to_html, piefed_markdown_to_lemmy_markdown, utcnow
 from tests.factories import a_keypair, make_community, make_community_member, make_post
 from tests.test_storefront_presentation import CANONICAL, ONION, onion  # noqa: F401  (onion is a fixture)
@@ -52,6 +53,18 @@ def test_canonicalise_text_leaves_the_rest_alone(app, onion, text):
 
 def test_canonicalise_text_passes_none(app, onion):
     assert canonicalise_text(None) is None
+
+
+def test_canonicalise_text_outside_an_app_passes_the_text_through(app, onion):
+    # no app context (a fuzz campaign): no registry to read, so nothing to rebase. An empty context has none pushed
+    text = 'see http://abc.onion/post/1'
+    assert contextvars.Context().run(canonicalise_text, text) is text
+
+
+def test_canonicalise_links_outside_an_app_passes_the_html_through(app, onion):
+    # sanitise_posting_warning reaches allowlist_html with no app in the posting_warning_html fuzz campaign
+    html = '<a href="http://abc.onion/post/1">x</a>'
+    assert contextvars.Context().run(canonicalise_links, html) is html
 
 
 def test_canonicalise_text_with_no_other_host_reads_no_text(app):
