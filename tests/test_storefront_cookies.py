@@ -1,5 +1,6 @@
 """Cookies per storefront: host-only everywhere, Secure only on https storefronts (onion storefront spec, task 7)."""
 import pytest
+from werkzeug.exceptions import NotFound
 from flask import Response, g, session
 
 from app import db, login
@@ -163,7 +164,15 @@ def test_ad_hoc_cookie_route(app, storefronts, secure_config, base_url, secure):
     assert all(('; Secure' in h) is secure for h in headers)
 
 
-def test_hook_runs_on_error_responses(app, storefronts, secure_config):
+def test_hook_runs_on_error_responses(app, storefronts, secure_config, monkeypatch):
+    def not_found(_error):   # an error page that sets a cookie of its own, without Secure
+        response = Response('gone', status=404)
+        response.set_cookie('low_bandwidth', '1')
+        return response
+
+    monkeypatch.setitem(app.error_handler_spec[None].setdefault(404, {}), NotFound, not_found)
     response = app.test_client().get('/no-such-page-here', base_url='https://test.piefed.local')
     assert response.status_code == 404
-    assert all('; Secure' in h for h in response.headers.getlist('Set-Cookie'))
+    cookies = response.headers.getlist('Set-Cookie')
+    assert [h for h in cookies if h.startswith('low_bandwidth=1')]
+    assert all('; Secure' in h for h in cookies)
