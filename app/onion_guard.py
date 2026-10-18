@@ -18,7 +18,8 @@ account on the alpha API (`app.onion.onion_rate_key`). This module adds the part
 - **Proof-of-work** (3.7a A). An onion login or registration POST must carry a solved challenge (`issue_challenge`,
   solved by app/static/js/onion_pow.js) or, without JavaScript, a wait token at least 15 s old (`issue_wait_token`).
   It is checked first, before the login delay, any account lookup, LDAP or password check, and each proof is good
-  once. A refused proof is a form error and costs the account nothing. API logins are not asked: an app cannot solve
+  once. Both are bound to the session's onion sid and count only when that sid came back from the browser, and a
+  session has one wait token outstanding at a time. A refused proof is a form error and costs the account nothing. API logins are not asked: an app cannot solve
   a form's puzzle, so they rely on the login delay and the per-account buckets alone.
 """
 from __future__ import annotations
@@ -31,7 +32,7 @@ from secrets import token_hex
 from typing import NamedTuple
 from urllib.parse import quote, quote_from_bytes
 
-from flask import current_app, flash, make_response, redirect, request, url_for
+from flask import current_app, flash, make_response, redirect, request, session, url_for
 from flask_babel import _, ngettext
 from itsdangerous import BadData, TimestampSigner, URLSafeTimedSerializer
 from markupsafe import escape
@@ -39,13 +40,14 @@ from redis.exceptions import WatchError
 
 import app as app_pkg
 from app import limiter
-from app.onion import API_RATE_KEY, is_api_path, is_onion_request, mint_onion_sid
+from app.onion import API_RATE_KEY, arrived_onion_sid, is_api_path, is_onion_request, mint_onion_sid
 from app.utils import authorise_api_user, get_setting
 
 # Every endpoint with a `@limiter.limit` decorator is in exactly one of these two sets
 # (tests/test_onion_guard_limits.py finds the decorators by parsing app/ and fails on one in neither).
 ONION_SESSION_ENDPOINTS: frozenset[str] = frozenset({
     'auth.login',
+    'auth.onion_wait',
     'auth.register',
     'auth.resend_email',
     'auth.reset_password_request',
@@ -85,6 +87,7 @@ POW_SALT = 'onion-pow'
 WAIT_SALT = 'onion-wait'
 POW_USED_KEY = 'onion_pow_used:{}'
 WAIT_USED_KEY = 'onion_wait_used:{}'
+WAIT_CURRENT_KEY = 'onion_wait_current:{}'    # per sid: the salt of its one outstanding wait token
 POW_MAX_AGE = 600
 WAIT_MIN_AGE = 15
 WAIT_MAX_AGE = 600
@@ -352,6 +355,20 @@ def _spend(key: str, salt: str, ttl: int) -> bool:
     return bool(app_pkg.redis_client.set(key.format(salt), '1', nx=True, ex=ttl))
 
 
+def _issuing_sid() -> str | None:
+    """The sid a proof issued now is bound to: the session's, which the browser sends back with the form. The pages
+    that issue proofs are session first, so it is there (minted during this request at worst, for a session cookie
+    that had none)."""
+    return session.get('onion_sid')
+
+
+def _from_this_session(body: dict) -> bool:
+    """Whether a proof's body names the sid this request's cookie brought back. A sid minted during this request has
+    not been round-tripped, so it proves nothing about a session and matches nothing."""
+    sid = arrived_onion_sid()
+    return sid is not None and body.get('sid') == sid
+
+
 def pow_difficulty() -> int:
     """The admin's `onion_pow_difficulty` in leading zero bits, held to 0..MAX_POW_DIFFICULTY. 0 asks no work: any
     nonce will do, but the challenge is still signed, timed and good once."""
@@ -364,23 +381,24 @@ def leading_zero_bits(digest: bytes) -> int:
 
 def _new_challenge() -> tuple[str, str, int]:
     salt, bits = token_hex(16), pow_difficulty()
-    return _serializer(POW_SALT).dumps({'salt': salt, 'bits': bits}), salt, bits
+    return _serializer(POW_SALT).dumps({'salt': salt, 'bits': bits, 'sid': _issuing_sid()}), salt, bits
 
 
 def issue_challenge() -> str:
-    """A signed challenge `{salt, bits}`, good for POW_MAX_AGE seconds."""
+    """A signed challenge `{salt, bits, sid}`, good for POW_MAX_AGE seconds in this session."""
     return _new_challenge()[0]
 
 
 def verify_pow(token, nonce) -> bool:
-    """Whether `nonce` solves the challenge `token`: signed here, at most POW_MAX_AGE old, at least as hard as the
+    """Whether `nonce` solves the challenge `token`: signed here for this session, at most POW_MAX_AGE old, at least as hard as the
     difficulty is now (so raising it applies at once), `sha256(f"{salt}:{nonce}")` with at least its bits of leading
     zeros, and not used before. A success uses it up; a refusal leaves it as it was."""
     loaded = _load(POW_SALT, token, POW_MAX_AGE)
     if loaded is None or not isinstance(nonce, str) or not NONCE_PATTERN.fullmatch(nonce):
         return False
     body = loaded[0]
-    if not (isinstance(body, dict) and isinstance(body.get('salt'), str) and type(body.get('bits')) is int):
+    if not (isinstance(body, dict) and isinstance(body.get('salt'), str) and type(body.get('bits')) is int
+            and _from_this_session(body)):
         return False
     salt, bits = body['salt'], body['bits']
     if bits < pow_difficulty() or leading_zero_bits(sha256(f'{salt}:{nonce}'.encode()).digest()) < bits:
@@ -389,18 +407,26 @@ def verify_pow(token, nonce) -> bool:
 
 
 def issue_wait_token() -> str:
-    """A signed token for the no-JavaScript wait step, good from WAIT_MIN_AGE to WAIT_MAX_AGE seconds after now."""
-    return _serializer(WAIT_SALT).dumps({'salt': token_hex(16)})
+    """A signed token for the no-JavaScript wait step, good from WAIT_MIN_AGE to WAIT_MAX_AGE seconds after now in
+    this session. It replaces the session's last one, so a session cannot queue up waits in parallel. That record is
+    in Redis, by sid, not in the session: the session is a cookie, and an old cookie could be sent again."""
+    salt, sid = token_hex(16), _issuing_sid()
+    if sid is not None:
+        app_pkg.redis_client.set(WAIT_CURRENT_KEY.format(sid), salt, ex=WAIT_MAX_AGE)
+    return _serializer(WAIT_SALT).dumps({'salt': salt, 'sid': sid})
 
 
 def wait_token_ready(token) -> bool:
-    """Whether `token` is a wait token signed here, WAIT_MIN_AGE to WAIT_MAX_AGE seconds old, not used before. A
-    success uses it up; one that is too early is left as it was."""
+    """Whether `token` is a wait token signed here for this session, WAIT_MIN_AGE to WAIT_MAX_AGE seconds old, the
+    session's latest, and not used before. A success uses it up; one that is too early is left as it was."""
     loaded = _load(WAIT_SALT, token, WAIT_MAX_AGE)
     if loaded is None:
         return False
     body, age = loaded
-    if not (isinstance(body, dict) and isinstance(body.get('salt'), str)) or age < WAIT_MIN_AGE:
+    if not (isinstance(body, dict) and isinstance(body.get('salt'), str) and _from_this_session(body)) \
+            or age < WAIT_MIN_AGE:
+        return False
+    if app_pkg.redis_client.get(WAIT_CURRENT_KEY.format(body['sid'])) != body['salt']:
         return False
     return _spend(WAIT_USED_KEY, body['salt'], WAIT_MAX_AGE)
 

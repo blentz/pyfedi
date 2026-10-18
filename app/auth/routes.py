@@ -87,6 +87,7 @@ def register():
 
 
 @bp.route('/onion_wait', methods=['GET'])
+@limiter.limit("300 per day;10 per 5 minutes", methods=["GET"])
 def onion_wait():
     """The no-JavaScript wait step for the onion login and registration forms (spec 3.7a A)."""
     if not is_onion_request():
