@@ -633,16 +633,17 @@ _UTS46 = _Uts46Table()
 
 
 def _read_as_a_host(text: str) -> str:
-    """All of `text` read the way a browser reads a host: CSS escapes undone, tab and line breaks removed, percent-
-    decoded until stable, UTS-46-mapped one character at a time, NFC-composed and lower-cased. Applied to the whole
-    value, not only to what looks like a host, so no spelling of a host in it survives as a different text."""
-    text = _css_unescape(text)
+    """All of `text` read the way a browser reads a host: line breaks normalised and CSS escapes undone as CSS does,
+    tab and line breaks removed and percent-decoded until stable, then UTS-46-mapped one character at a time (which
+    lower-cases) and NFC-composed. Applied to the whole value, not only to what looks like a host, so no spelling of
+    a host in it survives as a different text."""
+    text = _css_unescape(_CSS_NEWLINE.sub('\n', text))
     for _pass in range(_PERCENT_PASSES):
         decoded = unquote(text, errors='replace').translate(URL_STRIPPED_BY_BROWSERS)
         if decoded == text:
             break
         text = decoded
-    return unicodedata.normalize('NFC', text.translate(_UTS46)).translate(URL_STRIPPED_BY_BROWSERS).lower()
+    return unicodedata.normalize('NFC', text.translate(_UTS46))
 
 
 def _is_address(host: str) -> bool:

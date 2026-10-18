@@ -511,3 +511,19 @@ def test_the_uts46_table_stops_growing():
     table = storefront._Uts46Table.fromkeys(range(0x10000), '')
     assert '\U0001d400'.translate(table) == 'a'   # still mapped, just not kept
     assert 0x1d400 not in table
+
+
+@pytest.mark.parametrize('text', ['cdn.exa\\\fmple.test', 'cdn.exa\\\r\nmple.test', 'cdn.exa\\\rmple.test'])
+def test_the_backstop_reads_a_css_line_continuation(text):
+    # CSS turns \f, \r and \r\n into \n before it reads an escape, so a backslash before any of them joins the halves
+    # (round 4 M-1). The backstop alone, without the scan, which reads these strings too.
+    assert storefront._read_as_a_host(text) == S3
+    assert storefront._names_host(text, S3)
+
+
+@pytest.mark.parametrize('text', ['\u13a0x.test', '\uab70x.test', '%E1%8E%A0x.test'])
+def test_the_backstop_does_not_lower_case_what_uts46_keeps(text):
+    # UTS-46 maps lower-case Cherokee to upper case, so str.lower() after it would turn the host into another text
+    # (round 4 M-2: the step was removed, with the final tab and line-break strip that nothing could need)
+    host = storefront.browser_host('https://\u13a0x.test/')
+    assert host.startswith('xn--') and storefront._names_host(text, host)
