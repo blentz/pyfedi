@@ -238,7 +238,7 @@ def test_verify_pow_accepts_a_solution_once(app, easy, clock):
         assert not verify_pow(token, nonce)          # reused
     redis = onion_guard.app_pkg.redis_client
     assert redis.get(f'onion_pow_used:{salt}') is not None
-    assert 0 < redis.ttl(f'onion_pow_used:{salt}') <= 600
+    assert redis.ttl(f'onion_pow_used:{salt}') == 660   # the token's 600 s, plus slack for its whole-second stamp
 
 
 def test_verify_pow_refuses_an_expired_challenge(app, easy, clock):
@@ -353,6 +353,8 @@ def test_wait_token_ready_between_15_and_600_seconds(app, onion, clock):
         clock.t = T0 + 15
         assert wait_token_ready(token)
         assert not wait_token_ready(token)            # used
+        salt = URLSafeTimedSerializer(app.config['SECRET_KEY'], salt='onion-wait').loads(token)['salt']
+        assert onion.ttl(f'onion_wait_used:{salt}') == 660
         late = issue_wait_token()
         clock.t += 601
         assert not wait_token_ready(late)
