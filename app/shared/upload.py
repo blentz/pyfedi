@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from app import db
 from app.models import File, User, user_file, served_path
+from app.storefront import canonical_link
 from app.utils import gibberish, ensure_directory_exists, is_video_url, store_files_in_s3, guess_mime_type, sanitize_svg, \
     save_image_without_metadata
 
@@ -157,6 +158,7 @@ def process_upload(image_file, destination='posts', user: User | None = None):
 
 
 def process_file_delete(url: str, user_id: int):
+    url = canonical_link(url)   # the media library sends back the storefront form it was shown; source_url is canonical
     if user_id:
         file = db.session.query(File).join(user_file).filter(user_file.c.file_id == File.id, user_file.c.user_id == user_id)\
             .filter(File.source_url == url).first()

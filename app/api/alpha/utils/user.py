@@ -22,6 +22,7 @@ import app.shared.user as shared_user
 from app.utils import authorise_api_user, in_sorted_list, user_in_restricted_country, user_access, user_notes
 from app.utils import markdown_to_html, log_login_failure
 from app.visibility import visible_to_clause
+from app.storefront import storefront_link
 
 
 def get_user(auth, data):
@@ -284,7 +285,7 @@ def get_user_media(auth, data):
     for file in files:
         file_json = {}
         file_json['name'] = file.file_name or str(furl(file.source_url).path).split('/')[-1]
-        file_json['url'] = file.source_url
+        file_json['url'] = storefront_link(file.source_url)   # the media library shows it on this storefront
         file_list.append(file_json)
 
     result_json = {
