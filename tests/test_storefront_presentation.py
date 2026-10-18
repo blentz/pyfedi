@@ -11,18 +11,22 @@ import xml.etree.ElementTree as ET  # parses only this app's own feed
 
 import pytest
 from bs4 import BeautifulSoup
-from flask import current_app, g
+from flask import current_app, g, session as flask_session, url_for
+from flask_login import login_user
+from flask_wtf.csrf import generate_csrf
 
 from app import cache, cli, db
 from app.activitypub.util import served_by_us
-from app.constants import NOTIF_POST, POST_TYPE_IMAGE
+from app.constants import NOTIF_POST, POST_TYPE_IMAGE, SRC_WEB
+from app.email import send_topic_suggestion
 from app.models import File, Notification, Site, SiteDomain, Tag
 from app.request_hooks import OnUse
+from app.shared.community import invite_with_email
 import app.storefront as storefront
 from app.storefront import clear_domain_cache
 from app.utils import community_link_to_href, feed_link_to_href, person_link_to_href, utcnow
-from tests.factories import (make_community, make_community_member, make_domain, make_instance, make_post,
-                             make_user)
+from tests.factories import (grant_permission, make_community, make_community_member, make_domain, make_instance,
+                             make_post, make_user, make_user_registration)
 from tests.podcast_fixtures import episode_post  # noqa: F401  (a fixture)
 
 ONION = 'abc.onion'
@@ -278,3 +282,102 @@ def test_template_storefront_values_are_computed_only_on_use():
     assert value + '/p/1' == 'http://abc.onion/p/1'
     assert bool(value) and not OnUse(lambda: '')
     assert len(calls) == 3
+
+
+# --- mail to someone other than the requester follows the default storefront (fix round 1, I1) ---------------------
+
+def post_on_onion(app, user, path, data=None, headers=None):
+    """A logged-in POST on the onion, carrying the CSRF token login_required checks."""
+    client = on_onion(app, user)
+    with app.test_request_context(base_url=f'https://{ONION}'):
+        token = generate_csrf()
+        raw = flask_session['csrf_token']
+    with client.session_transaction(base_url=f'https://{ONION}') as session:
+        session['csrf_token'] = raw
+    return client.post(path, base_url=f'https://{ONION}', data={**(data or {}), 'csrf_token': token},
+                       headers={**(headers or {}), 'X-CSRFToken': token})
+
+
+def _assert_on_default(bodies):
+    assert any(f'https://{CANONICAL}/' in body for body in bodies)
+    assert not any(ONION in body for body in bodies)
+
+
+def test_default_storefront_renders_under_the_default_and_restores(app, onion):
+    with app.test_request_context(base_url=f'http://{ONION}'):
+        app.preprocess_request()
+        with storefront.default_storefront():
+            assert storefront.storefront_url() == f'https://{CANONICAL}'
+            assert url_for('main.index', _external=True) == f'https://{CANONICAL}/home'
+        assert storefront.storefront_url() == f'http://{ONION}'
+        assert url_for('main.index', _external=True) == f'http://{ONION}/home'
+    with app.test_request_context(base_url=f'http://{ONION}'):
+        g.pop('storefront', None)   # a request whose storefront was never resolved
+        with storefront.default_storefront():
+            assert g.storefront.domain == CANONICAL
+        assert 'storefront' not in g
+    with app.app_context():
+        with storefront.default_storefront():   # outside a request it is already the default
+            assert storefront.storefront_url() == f'https://{CANONICAL}'
+
+
+def test_newsletter_sent_from_the_onion_links_to_the_default(app, world):
+    founder = world[0]
+    grant_permission(founder, 'change instance settings')
+    sent = []
+    with patch('app.admin.util.send_email', side_effect=lambda **kwargs: sent.append(kwargs)):
+        response = post_on_onion(app, founder, '/admin/newsletter',
+                                 {'subject': 'Hi', 'body_text': 'text', 'body_html': '<p>html</p>'})
+    assert response.status_code == 302
+    _assert_on_default([body for kwargs in sent for body in (kwargs['text_body'], kwargs['html_body'])])
+
+
+def test_registration_approved_from_the_onion_links_to_the_default(app, world):
+    founder = world[0]
+    grant_permission(founder, 'approve registrations')
+    newcomer = make_user(None, 'newcomer', local=True)
+    make_user_registration(newcomer)
+    with patch('app.email.send_email') as send:
+        response = post_on_onion(app, founder, f'/admin/approve_registrations/{newcomer.id}/approve')
+    assert response.status_code == 302
+    _assert_on_default([send.call_args.kwargs['html_body']])
+
+
+def test_verification_resent_by_an_admin_on_the_onion_links_to_the_default(app, world):
+    founder, author = world[0], world[1]
+    grant_permission(founder, 'administer all users')
+    with patch('app.email.send_email') as send:
+        response = post_on_onion(app, founder, f'/admin/user/{author.id}/resend_email', headers={'HX-Request': 'true'})
+    assert response.status_code == 200
+    _assert_on_default([send.call_args.kwargs['text_body'], send.call_args.kwargs['html_body']])
+
+
+def test_community_invite_from_the_onion_links_to_the_default(app, world):
+    author, community = world[1], world[2]
+    with app.test_request_context(base_url=f'http://{ONION}'):
+        app.preprocess_request()
+        login_user(author)
+        with patch('app.shared.community.send_email') as send:
+            assert invite_with_email(community.id, 'friend@example.com', SRC_WEB) == 1
+    _assert_on_default([send.call_args.args[3], send.call_args.args[4]])
+
+
+def test_topic_suggestion_from_the_onion_links_to_the_default(app, world):
+    author = world[1]
+    with app.test_request_context(base_url=f'http://{ONION}'):
+        app.preprocess_request()
+        with patch('app.email.send_email') as send:
+            send_topic_suggestion('general', author, ['admin@example.com'], 'A topic', 'Pies')
+    _assert_on_default([send.call_args.kwargs['html_body']])
+
+
+def test_community_move_request_from_the_onion_links_to_the_default(app, world):
+    author = world[1]
+    remote = make_community('elsewhere', host='remote.example')
+    remote.ap_id = 'elsewhere@remote.example'
+    db.session.commit()
+    with patch('app.community.routes.send_email') as send:
+        response = post_on_onion(app, author, '/community/elsewhere@remote.example/move',
+                                 {'old_community_locked': 'y', 'post_link': 'https://remote.example/post/1'})
+    assert response.status_code == 200
+    _assert_on_default([send.call_args.args[3], send.call_args.args[4]])

@@ -26,7 +26,7 @@ from app.models import CommunityBlock, CommunityMember, Notification, Notificati
 from app.shared.tasks import task_selector
 from app.shared.upload import process_upload
 from app.user.utils import search_for_user
-from app.storefront import storefront_url
+from app.storefront import default_storefront, storefront_url
 from app.utils import authorise_api_user, blocked_communities, shorten_string, markdown_to_html, \
     instance_banned, community_membership, joined_communities, moderating_communities, is_image_url, \
     communities_banned_from, piefed_markdown_to_lemmy_markdown, community_moderators, add_to_modlog, \
@@ -211,8 +211,9 @@ def invite_with_email(community_id: int, to: str, src, auth=None):
     if community.invitations > INVITE_APPLY:
         subscribe = f'accept_invite/{user.lemmy_link()}'
 
-    message = flask.render_template('email/invite_to_community.txt', user=user, community=community,
-                              host=storefront_url(), subscribe=subscribe)
+    with default_storefront():   # the invitee may not use the inviter's storefront (onion spec §3.4)
+        message = flask.render_template('email/invite_to_community.txt', user=user, community=community,
+                                        host=storefront_url(), subscribe=subscribe)
 
     send_email(f"{community.display_name()} on {current_app.config['SERVER_NAME']}",
                f"{user.display_name()} <{current_app.config['MAIL_FROM']}>",

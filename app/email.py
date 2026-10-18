@@ -11,7 +11,7 @@ from flask import current_app, render_template, g, url_for, flash
 from flask_babel import _  # todo: set the locale based on account_id so that _() works
 
 from app import celery
-from app.storefront import storefront_url
+from app.storefront import default_storefront, storefront_url
 from app.utils import get_setting, markdown_to_html, html_to_text
 
 CHARSET = "UTF-8"
@@ -55,15 +55,16 @@ def send_registration_approved_email(user):
 
 
 def send_topic_suggestion(communities_for_topic, user, recipients, subject, topic_name):
+    with default_storefront():   # mail to the admins, not to the member suggesting (onion spec §3.4)
+        text_body = render_template('email/suggested_topic.txt', site_name=g.site.name,
+                                    current_user_name=user.user_name, topic_name=topic_name,
+                                    communities_for_topic=communities_for_topic)
+        html_body = render_template('email/suggested_topic.html', site_name=g.site.name,
+                                    current_user_name=user.user_name, topic_name=topic_name,
+                                    communities_for_topic=communities_for_topic)
     send_email(subject,
                sender=f'{g.site.name} <{current_app.config["MAIL_FROM"]}>',
-               recipients=recipients,
-               text_body=render_template('email/suggested_topic.txt', site_name=g.site.name,
-                                         current_user_name=user.user_name, topic_name=topic_name,
-                                         communities_for_topic=communities_for_topic),
-               html_body=render_template('email/suggested_topic.html', site_name=g.site.name,
-                                         current_user_name=user.user_name, topic_name=topic_name,
-                                         communities_for_topic=communities_for_topic))
+               recipients=recipients, text_body=text_body, html_body=html_body)
 
 
 @celery.task

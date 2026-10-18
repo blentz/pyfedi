@@ -5,6 +5,7 @@ implicit default, so installs that never ran the migration's seed still work.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import NamedTuple
 from urllib.parse import urlsplit, urlunsplit
 
@@ -168,6 +169,37 @@ def canonical_url() -> str:
 HEALTH_ENDPOINTS = frozenset({'main.health', 'main.health2'})   # probes name localhost or an internal hostname
 
 
+def _bind(storefront) -> None:
+    """Point this request's URL building (`url_for(_external=True)`) at `storefront`."""
+    request_ctx.url_adapter = current_app.url_map.bind(_authority(storefront), script_name=request.script_root,
+                                                       url_scheme=storefront.scheme)
+
+
+@contextmanager
+def default_storefront():
+    """Render under the default storefront for the duration of the block, whatever the request's Host was.
+
+    For mail to someone other than the requester (a newsletter, an approval, an invite, a message to the admins):
+    its recipient may not use Tor, and links on the sender's storefront would tell them which one the sender uses.
+    Mail to the requester themself (their password reset, their own verification) follows their storefront.
+    Outside a request the default storefront is already in effect."""
+    if not has_request_context():
+        yield
+        return
+    had_storefront, before = 'storefront' in g, g.get('storefront')
+    adapter = request_ctx.url_adapter
+    g.storefront = default_domain()
+    _bind(g.storefront)
+    try:
+        yield
+    finally:
+        request_ctx.url_adapter = adapter
+        if had_storefront:
+            g.storefront = before
+        else:
+            del g.storefront
+
+
 def resolve_storefront() -> Response | None:
     """First `before_request`: set `g.storefront` from the Host header, or refuse an unregistered host with 421.
 
@@ -181,6 +213,5 @@ def resolve_storefront() -> Response | None:
     if storefront is None:
         return Response('Misdirected Request: this host is not served here.\n', status=421, mimetype='text/plain')
     g.storefront = storefront
-    request_ctx.url_adapter = current_app.url_map.bind(_authority(storefront), script_name=request.script_root,
-                                                       url_scheme=storefront.scheme)
+    _bind(storefront)
     return None
