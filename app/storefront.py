@@ -262,7 +262,6 @@ def canonical_url() -> str:
 URL_STRIPPED_BY_BROWSERS = str.maketrans('', '', '\t\n\r')
 _STORED_LINK_ATTRS = frozenset({'href', 'src', 'srcset'})
 _RENDER_LINK_ATTRS = _STORED_LINK_ATTRS | {'action'}
-# A srcset candidate's URL: after the start or a comma, up to whitespace; trailing commas end the candidate.
 # the characters a browser strips from both ends of a URL
 _C0_OR_SPACE = ''.join(chr(c) for c in range(0x21))
 _REDIRECT_HEADERS = ('Location', 'HX-Redirect')
@@ -301,13 +300,14 @@ def _rebase(url, base: str, hosts: frozenset[str]):
     return base + url[start + 2 + len(parts.netloc):]
 
 
-_SPACE_RUN = re.compile(r'\s*')
-_NON_SPACE_RUN = re.compile(r'\S+')
+# srcset (and a URL list in general) splits on these five characters only, not on Unicode white space
+_SPACE_RUN = re.compile(r'[\t\n\f\r ]*')
+_NON_SPACE_RUN = re.compile(r'[^\t\n\f\r ]+')
 
 
 def _srcset_urls(srcset: str) -> list[tuple[int, int]]:
-    """The (start, end) of each candidate URL in a `srcset`: the first non-space run at the start and after each
-    comma, less the commas that end it (`a.jpg, b.jpg 2x`, `a,b.jpg,`). A scan, not a pattern: linear in `srcset`
+    """The (start, end) of each candidate URL in a `srcset`: the first run free of ASCII white space at the start and
+    after each comma, less the commas that end it (`a.jpg, b.jpg 2x`, `a,b.jpg,`). A scan, not a pattern: linear in `srcset`
     whatever runs of commas, spaces or letters it holds."""
     spans, i, size = [], 0, len(srcset)
     while True:
@@ -514,7 +514,10 @@ def browser_host(url) -> str:
     if authority.startswith('['):
         literal, closed, after = authority[1:].partition(']')
         try:
-            return ipaddress.IPv6Address(literal).compressed if closed and not after.partition(':')[0] else ''
+            if not closed or after.partition(':')[0]:
+                return ''
+            address = ipaddress.IPv6Address(literal)
+            return str(address.ipv4_mapped or address.compressed)   # the IPv4 host a dual-stack client reaches
         except ValueError:
             return ''
     try:
@@ -525,6 +528,10 @@ def browser_host(url) -> str:
         host = idna.uts46_remap(host, std3_rules=False, transitional=False)
     except idna.IDNAError:
         return UNMAPPABLE
+    if not host.isascii():
+        # one spelling for an IDN: its labels in punycode (idna.encode would refuse hosts a browser loads)
+        host = '.'.join(label if label.isascii() else 'xn--' + label.encode('punycode').decode()
+                        for label in host.split('.'))
     if _FORBIDDEN_IN_HOST & set(host):
         return ''
     if _ends_in_a_number(host):
@@ -540,32 +547,42 @@ def _s3_host() -> str:
     return '' if host == UNMAPPABLE else host
 
 
-def _quoted_strings(text: str) -> list[str]:
-    strings, pos = [], 0
-    while True:
-        opener = _QUOTE.search(text, pos)
-        if opener is None:
-            return strings
-        pos = opener.end()
-        end = text.find(opener[0], pos)
-        if end < 0:
-            continue   # no later quote of this kind exists, so this is the one scan it will cost
-        strings.append(text[pos:end])
-        pos = end + 1
+_CSS_TOKEN = re.compile(r'url\(|["\']|/\*', re.IGNORECASE | re.ASCII)
+_CSS_SPACE = re.compile(r'[ \t\n\r\f]*')
+_CSS_STRING_END = {'"': re.compile(r'["\n]'), "'": re.compile(r"['\n]")}
 
 
 def _css_urls(style: str) -> list[str]:
-    """The `url(...)` tokens and quoted strings (`image-set('x' 1x)`) of a `style` value, CSS escapes undone. Found
-    with `str.find`, not a pattern: a `url(` that never closes costs one scan, not one per `url(`."""
+    """The `url(...)` tokens and quoted strings (`image-set('x' 1x)`) of a `style` value, CSS escapes undone, in one
+    left-to-right scan of the value: a `url(` inside a string or comment is not a token, and a quote inside an
+    unquoted `url(...)` is not a string. A string ends at its quote or a line break, an unclosed `url(` and comment
+    at the end. Every character is passed once (`str.find` and anchored searches), so the scan is linear."""
     style = _CSS_ESCAPE.sub(lambda m: chr(int(m[1], 16) % 0x110000 or 0xfffd) if m[1] else m[2], style)
-    urls, lowered, pos = [], style.lower(), 0
+    found, pos = [], 0
     while True:
-        start = lowered.find('url(', pos)
-        end = lowered.find(')', start + 4) if start >= 0 else -1
-        if end < 0:
-            return urls + _quoted_strings(style)
-        urls.append(style[start + 4:end].strip())
-        pos = end + 1
+        token = _CSS_TOKEN.search(style, pos)
+        if token is None:
+            return found
+        pos = token.end()
+        if token[0] == '/*':
+            end = style.find('*/', pos)
+            if end < 0:
+                return found
+            pos = end + 2
+        elif token[0] in _CSS_STRING_END:
+            end = _CSS_STRING_END[token[0]].search(style, pos)
+            end = end.start() if end else len(style)
+            if end > pos:
+                found.append(style[pos:end])
+            pos = end + 1
+        else:
+            pos = _CSS_SPACE.match(style, pos).end()
+            if style[pos:pos + 1] in _CSS_STRING_END:
+                continue   # url("x"): the string is the token
+            end = style.find(')', pos)
+            end = len(style) if end < 0 else end
+            found.append(style[pos:end].strip())
+            pos = end + 1
 
 
 def _points_at(tag, name: str, value, host: str) -> bool:
