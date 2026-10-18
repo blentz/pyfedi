@@ -12,7 +12,7 @@ from flask import current_app, flash, g, make_response, redirect, request, sessi
 from flask_babel import _
 from flask_login import current_user, login_user
 from markupsafe import Markup
-from sqlalchemy import func
+from sqlalchemy import and_, case, func, or_
 from wtforms import Label
 
 from app import cache, db, plugins
@@ -517,17 +517,18 @@ def process_login(form: LoginForm):
 
 
 def find_user(user_name):
+    """The account a typed login identifier names: a local user name, else a local email (both case-insensitive),
+    else this site's profile URL for it. One query whatever matches, or the query count would tell which names
+    have accounts."""
     username = user_name.strip()
-    user = User.query.filter(func.lower(User.user_name) == func.lower(username)).filter_by(ap_id=None, deleted=False).first()
-
-    if not user:
-        user = User.query.filter(func.lower(User.email) == func.lower(username)).filter_by(ap_id=None, deleted=False).first()
-    if not user:
-        # Equality, not ILIKE: in a pattern the typed '%' and '_' were wildcards, so '%' found some account
-        ap_id = f"{current_app.config['SERVER_URL']}/u/{username}".lower()
-        user = User.query.filter(func.lower(User.ap_profile_id) == ap_id, User.deleted.is_(False)).first()
-
-    return user
+    local = and_(User.ap_id.is_(None), User.deleted.is_(False))
+    by_name = and_(local, func.lower(User.user_name) == func.lower(username))
+    by_email = and_(local, func.lower(User.email) == func.lower(username))
+    # Equality, not ILIKE: in a pattern the typed '%' and '_' were wildcards, so '%' found some account
+    ap_id = f"{current_app.config['SERVER_URL']}/u/{username}".lower()
+    by_profile = and_(User.deleted.is_(False), func.lower(User.ap_profile_id) == ap_id)
+    return User.query.filter(or_(by_name, by_email, by_profile)) \
+        .order_by(case((by_name, 0), (by_email, 1), else_=2)).first()
 
 
 def validate_user_login(user, password, ip, refuse=False):
