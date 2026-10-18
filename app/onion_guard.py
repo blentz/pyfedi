@@ -11,7 +11,7 @@ account on the alpha API (`app.onion.onion_rate_key`). This module adds the part
   their clients do not keep cookies, and are keyed by account instead.
 - **API keys.** For an onion alpha-API request, the bearer token's account is found before the view runs, so its
   `with limiter.limit(...)` blocks count per account.
-- **Login delay.** Failed onion logins slow down the identifier that was typed: after 5 failures each attempt waits
+- **Login delay.** Failed onion logins slow down the identifier that was typed and the account it names: after 5 failures each attempt waits
   `min(2 ** (count - 5), 300)` seconds from the last one. The counter is onion-only, so an onion attacker cannot slow
   the account down on clearnet. It covers web and API login.
 """
@@ -152,11 +152,18 @@ def _now() -> float:
 
 
 def onion_login_identifier(typed: str) -> str:
-    """What an onion login's failure counter is kept under: the identifier as typed (a name, an email or a profile
-    URL), stripped and lower-cased. Never the account it resolves to: then failing as `alice` would delay a login
-    typed as alice's email, which tells an attacker whose email that is, and an existing identifier would behave
-    differently from an unknown one. Web login, API login and verify_credentials all count through this."""
+    """The one normalisation of an onion login counter's name: stripped and lower-cased. Applied both to what was
+    typed (a name or an email) and to the account's user_name (`login_counters`), for web login, API login and
+    verify_credentials alike."""
     return typed.strip().lower()
+
+
+def login_counters(typed: str, user=None) -> tuple[str, ...]:
+    """The counters an onion login attempt is checked and counted against: what was typed, and the account it names
+    when it names one. The account's counter stops an attacker rotating the ways of naming it (name, email, profile
+    URL, case, spaces) for fresh free attempts. The typed one gives an identifier that names no account the same
+    delay as one that does. The wait is the longer of the two, and the answer is the same whichever it was."""
+    return (typed, user.user_name) if user is not None else (typed,)
 
 
 def _login_key(username: str) -> str:
