@@ -49,7 +49,7 @@ import logging
 from app.models import Post, PostReply, User, utcnow, Site, Community
 from sqlalchemy.orm import load_only
 from app.utils import communities_banned_from, blocked_or_banned_instances, filtered_out_communities, get_setting, \
-    get_request, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS
+    get_request, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, log_login_failure
 from sqlalchemy import func
 from app import db
 from app.visibility import can_view, visible_to_clause
@@ -423,6 +423,44 @@ class PieFedNNTPGroup(NNTPGroup):
 # NNTP server
 # ---------------------------------------------------------------------------
 
+def _authenticate(user: str, password: str) -> bytes:
+    """The bearer token for an AUTHINFO USER/PASS pair, or NNTPAuthenticationError. Inside an app context. A failed
+    credential check logs fail2ban's line with the connection's peer (PieFedNNTPConnectionHandler.setup); a banned or
+    unverified account that gave the right password does not."""
+    if '\x00' in user:  # no account has one, and psycopg2 refuses it in a query with ValueError
+        _credential_check_failed()
+    u = (
+        db.session.query(User)
+        .filter(func.lower(User.user_name) == user.lower())
+        .filter_by(ap_id=None, deleted=False)
+        .first()
+    )
+    if u is None:
+        u = (
+            db.session.query(User)
+            .filter(func.lower(User.email) == user.lower())
+            .filter_by(ap_id=None, deleted=False)
+            .first()
+        )
+    if u is None or not u.check_password(password):
+        _credential_check_failed()
+    if u.banned:
+        raise NNTPAuthenticationError("Account is banned")
+    if not u.verified:
+        raise NNTPAuthenticationError("Account is not verified")
+
+    u.last_seen = utcnow()
+    db.session.commit()
+
+    _tl.user_id = u.id
+    return f"Bearer {u.encode_jwt_token()}".encode()
+
+
+def _credential_check_failed():
+    log_login_failure(getattr(_tl, 'peer', ''))   # there is no HTTP request to read an address from
+    raise NNTPAuthenticationError("Invalid username or password")
+
+
 class PieFedNNTPServer(NNTPServer):
     """NNTP server that maps PieFed communities/posts/replies to newsgroups/articles."""
 
@@ -524,35 +562,8 @@ class PieFedNNTPServer(NNTPServer):
     # -- Auth and posting ---------------------------------------------------
 
     def auth_user(self, user: str, password: str) -> bytes:
-        if '\x00' in user:  # no account has one, and psycopg2 refuses it in a query with ValueError
-            raise NNTPAuthenticationError("Invalid username or password")
         with self._app.app_context():
-
-            u = (
-                db.session.query(User)
-                .filter(func.lower(User.user_name) == user.lower())
-                .filter_by(ap_id=None, deleted=False)
-                .first()
-            )
-            if u is None:
-                u = (
-                    db.session.query(User)
-                    .filter(func.lower(User.email) == user.lower())
-                    .filter_by(ap_id=None, deleted=False)
-                    .first()
-                )
-            if u is None or not u.check_password(password):
-                raise NNTPAuthenticationError("Invalid username or password")
-            if u.banned:
-                raise NNTPAuthenticationError("Account is banned")
-            if not u.verified:
-                raise NNTPAuthenticationError("Account is not verified")
-
-            u.last_seen = utcnow()
-            db.session.commit()
-
-            _tl.user_id = u.id
-            return f"Bearer {u.encode_jwt_token()}".encode()
+            return _authenticate(user, password)
 
     def post(self, auth_token: Optional[bytes], lines: str) -> None:
         log = logging.getLogger('nntp.post')
@@ -800,6 +811,10 @@ class PieFedNNTPServer(NNTPServer):
 
 class PieFedNNTPConnectionHandler(NNTPConnectionHandler):
     """Extends NNTPConnectionHandler to keep thread-local community context."""
+
+    def setup(self) -> None:
+        super().setup()
+        _tl.peer = self.client_address[0]   # each connection has its own thread: auth_user logs a refusal with it
 
     def select_group(self, group_name: str) -> bool:
         result = super().select_group(group_name)

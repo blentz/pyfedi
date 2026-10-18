@@ -3583,9 +3583,14 @@ ip_address = get_ip_address
 LOGGABLE_IP_RE = re.compile(r'[0-9a-fA-F:.]+')
 
 
-def log_login_failure():
+# The rule: this logs failed CREDENTIAL checks only -- a wrong password, an unknown name, a failed LDAP bind, a failed
+# NNTP credential check. A refusal of an account that authenticated correctly (banned, deleted, unverified,
+# registrations closed, a declined country, an OAuth profile with no email or an email already in use) is not one,
+# whichever way the credential was accepted.
+def log_login_failure(client: str | None = None):
     """One WARNING line for a failed credential check: `auth: login failed ip=<ip>`, which fail2ban on the host
-    matches to ban a clearnet address that keeps failing.
+    matches to ban a clearnet address that keeps failing. `client` is the peer address of a login that has no HTTP
+    request to read one from (NNTP, which is not served on the onion); otherwise the request's address is used.
 
     Onion requests all share the proxy's address (get_ip_address() is '' for them), so they log `ip=onion`, which no
     ban can ever act on. An address with anything outside [0-9a-fA-F:.] logs as `ip=invalid`. The line never holds
@@ -3593,8 +3598,8 @@ def log_login_failure():
     a refused proof-of-work or wait token, and a visible wait refusal, are not failed checks.
     """
     where = 'onion'
-    if not is_onion_request():
-        client = ip_address()
+    if client is not None or not is_onion_request():
+        client = ip_address() if client is None else client
         where = client if client and LOGGABLE_IP_RE.fullmatch(client) else 'invalid'
     current_app.logger.warning('auth: login failed ip=%s', where)
 
