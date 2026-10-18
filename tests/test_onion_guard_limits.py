@@ -29,7 +29,7 @@ from app.models import SiteDomain
 from app.onion import ONION_ANON_KEY, arrived_onion_sid, mint_onion_sid
 from app.onion_guard import (COOKIE_CHECK, ONION_SESSION_ENDPOINTS, ONION_SESSION_EXEMPT,
                              clear_onion_login_failures, login_delay_remaining, onion_session_missing,
-                             record_onion_login_failure, reserve_onion_login_attempt, resolve_onion_api_rate_key,
+                             OnionLoginGate, record_onion_login_failure, reserve_onion_login_attempt, resolve_onion_api_rate_key,
                              same_url)
 from app.storefront import clear_domain_cache
 from tests.conftest import TestConfig
@@ -479,25 +479,40 @@ def test_reserving_is_the_failure(app, redis_double, clock):
     """An attempt is counted when it is let through, before its password is checked. A failure needs nothing more;
     a success clears the counter. So the first 5 attempts are free, the 6th still goes ahead, and then the wait is
     2 s from the 6th."""
-    assert [reserve_onion_login_attempt('alice') for _ in range(6)] == [0] * 6
+    assert [reserve_onion_login_attempt('alice').wait for _ in range(6)] == [0] * 6
     assert redis_double.hget('onion_login_fail:alice', 'count') == '6'
-    assert reserve_onion_login_attempt('alice') == 2
+    assert reserve_onion_login_attempt('alice').wait == 2
     assert redis_double.hget('onion_login_fail:alice', 'count') == '6'   # a refused attempt is not counted
     assert 3500 < redis_double.ttl('onion_login_fail:alice') <= 3600
     clear_onion_login_failures('alice')
-    assert reserve_onion_login_attempt('alice') == 0
+    assert reserve_onion_login_attempt('alice').wait == 0
 
 
 def test_parallel_attempts_get_one_per_wait_window(app, redis_double, clock):
     """N attempts arriving together, none of them finished yet: only one goes ahead per window."""
     for _ in range(5):
         record_onion_login_failure('alice')
-    assert [reserve_onion_login_attempt('alice') for _ in range(10)] == [0] + [2] * 9
+    assert [reserve_onion_login_attempt('alice').wait for _ in range(10)] == [0] + [2] * 9
     clock.t += 2
-    assert [reserve_onion_login_attempt('alice') for _ in range(10)] == [0] + [4] * 9
+    assert [reserve_onion_login_attempt('alice').wait for _ in range(10)] == [0] + [4] * 9
     clock.t += 4
-    assert [reserve_onion_login_attempt('alice') for _ in range(3)] == [0, 8, 8]
+    assert [reserve_onion_login_attempt('alice').wait for _ in range(3)] == [0, 8, 8]
     assert redis_double.hget('onion_login_fail:alice', 'count') == '8'
+
+
+def test_an_account_in_backoff_is_refused_silently(app, redis_double, clock):
+    """A typed identifier that is free, naming an account in backoff, is refused without a wait to show (`hidden`),
+    and counted on both counters like a wrong password. The typed counter's own backoff is the visible one."""
+    for _ in range(6):
+        record_onion_login_failure('alice')
+    gate = reserve_onion_login_attempt('alice@example.com', 'alice')
+    assert gate == OnionLoginGate(wait=0, hidden=True) and not gate.proceed
+    assert redis_double.hget('onion_login_fail:alice', 'count') == '7'
+    assert redis_double.hget('onion_login_fail:alice@example.com', 'count') == '1'
+    assert reserve_onion_login_attempt('alice', 'alice') == OnionLoginGate(wait=4)
+    clock.t += 4
+    assert reserve_onion_login_attempt('alice@example.com', 'alice').proceed
+    assert reserve_onion_login_attempt('nobody').proceed
 
 
 def test_a_concurrent_change_is_retried(app, redis_double, clock, monkeypatch):
@@ -515,7 +530,7 @@ def test_a_concurrent_change_is_retried(app, redis_double, clock, monkeypatch):
             redis_double.hset('onion_login_fail:alice', 'last', clock.t)
         return clock.t
     monkeypatch.setattr('app.onion_guard._now', racing_now)
-    assert reserve_onion_login_attempt('alice') == 4
+    assert reserve_onion_login_attempt('alice').wait == 4
     assert redis_double.hget('onion_login_fail:alice', 'count') == '7'
 
 
@@ -528,7 +543,7 @@ def test_endless_contention_is_a_short_wait(app, redis_double, clock, monkeypatc
         redis_double.hset('onion_login_fail:alice', 'other', clock.t)
         return clock.t
     monkeypatch.setattr('app.onion_guard._now', always_racing)
-    assert reserve_onion_login_attempt('alice') == 1
+    assert reserve_onion_login_attempt('alice').wait == 1
     assert redis_double.hget('onion_login_fail:alice', 'count') == '6'
 
 
@@ -568,15 +583,29 @@ def test_login_delay_grows(app, alice, redis_double, clock, ldap_off):
     assert 'try again in 4 seconds' in flashes(client)
 
 
-def test_the_account_and_the_typed_identifier_are_both_counted(app, alice, redis_double, clock, ldap_off):
-    """Each attempt counts against what was typed and against the account it names. Failing as 'alice' delays a
-    login typed as alice's email, because the account's counter is shared."""
+def answer(client, response):
+    """What a login attempt shows: its status, where it sends the browser, and the messages it flashed."""
+    shown = (response.status_code, response.headers.get('Location'), flashes(client), response.get_data())
+    with client.session_transaction(base_url=ONION_URL) as stored:
+        stored.pop('_flashes', None)
+    return shown
+
+
+def test_an_account_in_backoff_answers_like_a_wrong_password(app, alice, redis_double, clock, ldap_off):
+    """After 6 failures typed as 'alice', alice's email with the CORRECT password gets exactly the answer an unknown
+    email with a wrong password gets: no wait message, nothing linking the email to the account. 'alice' itself
+    still shows the wait."""
     client = app.test_client()
     a_session(client)
     for _ in range(6):
         web_login(client, ' Alice ', 'wrong password')
-    assert not logged_in(web_login(client, 'ALICE@example.com', PASSWORD))
-    assert 'Please try again in 2 seconds' in flashes(client)
+    answer(client, onion_get(client, '/robots.txt'))
+    unknown = answer(client, web_login(client, 'nobody@example.com', 'wrong password'))
+    hidden = answer(client, web_login(client, 'ALICE@example.com', PASSWORD))
+    assert hidden == unknown
+    assert 'Invalid user name or password' in hidden[2] and 'try again' not in hidden[2].lower()
+    assert 'Please try again in 4 seconds' in answer(client, web_login(client, 'alice', PASSWORD))[2]
+    assert redis_double.hget('onion_login_fail:alice@example.com', 'count') == '1'   # counted like a failure
 
 
 def test_rotating_variants_does_not_reset_the_delay(app, alice, redis_double, clock, ldap_off):
@@ -586,9 +615,9 @@ def test_rotating_variants_does_not_reset_the_delay(app, alice, redis_double, cl
     for typed in variants:
         assert not logged_in(web_login(client, typed, 'wrong password'))
     assert redis_double.hget('onion_login_fail:alice', 'count') == '6'
-    assert not logged_in(web_login(client, 'aLICE@example.COM', PASSWORD))   # a variant not tried yet
-    assert 'Please try again in 2 seconds' in flashes(client)
-    clock.t += 2
+    assert not logged_in(web_login(client, 'aLICE@example.COM', PASSWORD))   # a variant whose own counter is free
+    assert redis_double.hget('onion_login_fail:alice', 'count') == '7'
+    clock.t += 4
     assert logged_in(web_login(client, 'alice@example.com', PASSWORD))
     assert not redis_double.exists('onion_login_fail:alice')
     assert not redis_double.exists('onion_login_fail:alice@example.com')   # a success clears both counters
@@ -612,8 +641,11 @@ def test_unknown_identifiers_behave_like_known_ones(app, alice, redis_double, cl
 def test_api_login_counts_the_account_too(app, alice, redis_double, clock, ldap_off, alpha_api):
     client = app.test_client(use_cookies=False)
     for _ in range(6):
-        onion_post(client, '/api/alpha/user/login', json={'username': 'Alice@Example.com', 'password': 'wrong one'})
-    assert login_delay_remaining('alice@example.com') == login_delay_remaining('alice') == 2
+        onion_post(client, '/api/alpha/user/login', json={'username': 'Alice', 'password': 'wrong one'})
+    unknown = onion_post(client, '/api/alpha/user/login', json={'username': 'nobody@example.com', 'password': 'x' * 8})
+    hidden = onion_post(client, '/api/alpha/user/login', json={'username': 'alice@example.com', 'password': PASSWORD})
+    assert (hidden.status_code, hidden.get_data()) == (unknown.status_code, unknown.get_data()) \
+        and hidden.status_code == 400
     assert onion_post(client, '/api/alpha/user/login', json={'username': 'alice', 'password': PASSWORD}) \
         .status_code == 429
 

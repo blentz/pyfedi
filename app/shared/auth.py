@@ -5,7 +5,7 @@ from app.auth.util import find_user, get_country
 from app.ldap_utils import sync_user_to_ldap
 from app.models import IpBan, utcnow
 from app.onion import audit_field, is_onion_request
-from app.onion_guard import login_counters, onion_login_succeeded, onion_login_wait
+from app.onion_guard import onion_login_gate, onion_login_succeeded
 from app.utils import ip_address, user_ip_banned, user_cookie_banned, banned_ip_addresses
 
 
@@ -18,14 +18,13 @@ def api_log_user_in(input):
 
     # D584: the web login's finder, so both accept the same forms
     user = find_user(username)
-    # Onion only (spec 3.7): failed logins slow down what was typed and the account it names (login_counters)
-    counters = login_counters(username, user)
-    wait = onion_login_wait(*counters)
-    if wait:
-        abort(429, message=f'Too many failed logins for this account. Try again in {wait} seconds.')
+    # Onion only (spec 3.7): failed logins slow down what was typed and the account it names (OnionLoginGate)
+    gate = onion_login_gate(username, user)
+    if gate.wait:
+        abort(429, message=f'Too many failed logins for this account. Try again in {gate.wait} seconds.')
 
-    if not user:
-        # No match for username, email or profile url was found
+    if not user or gate.hidden:
+        # No match for username, email or profile url was found, or (onion) its account is in hidden backoff
         raise Exception('incorrect_login')
 
     if not user.check_password(password):
@@ -42,7 +41,7 @@ def api_log_user_in(input):
 
         raise Exception('incorrect_login')
 
-    onion_login_succeeded(*counters)
+    onion_login_succeeded(username, user)
     user.last_seen = utcnow()
     user.ip_address = audit_field(ip)
     user.ip_address_country = audit_field(country)

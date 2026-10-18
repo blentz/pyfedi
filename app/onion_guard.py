@@ -11,14 +11,16 @@ account on the alpha API (`app.onion.onion_rate_key`). This module adds the part
   their clients do not keep cookies, and are keyed by account instead.
 - **API keys.** For an onion alpha-API request, the bearer token's account is found before the view runs, so its
   `with limiter.limit(...)` blocks count per account.
-- **Login delay.** Failed onion logins slow down the identifier that was typed and the account it names: after 5 failures each attempt waits
-  `min(2 ** (count - 5), 300)` seconds from the last one. The counter is onion-only, so an onion attacker cannot slow
-  the account down on clearnet. It covers web and API login.
+- **Login delay.** Failed onion logins slow down the identifier that was typed and the account it names: after 5
+  failures each attempt waits `min(2 ** (count - 5), 300)` seconds from the last one. The typed identifier's wait is
+  shown; the account's is enforced silently, as a wrong password (`OnionLoginGate`). The counters are onion-only, so
+  an onion attacker cannot slow the account down on clearnet. It covers web login, API login and verify_credentials.
 """
 from __future__ import annotations
 
 import math
 import time
+from typing import NamedTuple
 from urllib.parse import quote, quote_from_bytes
 
 from flask import current_app, flash, make_response, redirect, request
@@ -153,17 +155,22 @@ def _now() -> float:
 
 def onion_login_identifier(typed: str) -> str:
     """The one normalisation of an onion login counter's name: stripped and lower-cased. Applied both to what was
-    typed (a name or an email) and to the account's user_name (`login_counters`), for web login, API login and
+    typed (a name or an email) and to the account's user_name (`reserve_onion_login_attempt`), for web login, API login and
     verify_credentials alike."""
     return typed.strip().lower()
 
 
-def login_counters(typed: str, user=None) -> tuple[str, ...]:
-    """The counters an onion login attempt is checked and counted against: what was typed, and the account it names
-    when it names one. The account's counter stops an attacker rotating the ways of naming it (name, email, profile
-    URL, case, spaces) for fresh free attempts. The typed one gives an identifier that names no account the same
-    delay as one that does. The wait is the longer of the two, and the answer is the same whichever it was."""
-    return (typed, user.user_name) if user is not None else (typed,)
+class OnionLoginGate(NamedTuple):
+    """What an onion login attempt may do. `wait` > 0: the typed identifier is in backoff, and the caller says so
+    ("try again in N seconds", or 429). `hidden`: the typed identifier is free but the account it names is in
+    backoff; the caller refuses exactly as for a wrong password, without checking it, so nothing shows that this
+    identifier and that account are linked (on the onion that would deanonymise). Otherwise it may go ahead."""
+    wait: int = 0
+    hidden: bool = False
+
+    @property
+    def proceed(self) -> bool:
+        return not self.wait and not self.hidden
 
 
 def _login_key(username: str) -> str:
@@ -194,34 +201,42 @@ def login_delay_remaining(username: str) -> int:
     return _remaining(count, last, _now())
 
 
-def reserve_onion_login_attempt(*usernames: str) -> int:
-    """Check and reserve one onion login attempt against every counter in `usernames`, atomically.
+def reserve_onion_login_attempt(typed: str, account: str | None = None) -> OnionLoginGate:
+    """Check and reserve one onion login attempt, typed as `typed` and naming the account `account` (its user_name,
+    None when it names none), atomically.
 
-    Answers the longest wait among them. When that is 0 the attempt goes ahead and is counted at once, on every
-    counter, as a failure: a failure then needs nothing more and a success clears it (`clear_onion_login_failures`).
+    - The typed identifier's counter in backoff: a visible wait, and nothing counted.
+    - Otherwise the attempt is counted at once, on both counters, as a failure. A failure then needs nothing more
+      and a success clears both (`clear_onion_login_failures`). If the account's counter was in backoff the attempt
+      is `hidden`: refused as a wrong password would be. Counting both stops an attacker rotating the ways of naming
+      one account (name, email, case, spaces) for fresh free attempts; hiding the account's backoff keeps an email
+      from being linked to its account.
+
     Counting before the password is checked is what stops parallel attempts all passing the check before any of them
     has failed: the read and the increment are one optimistic transaction (WATCH/MULTI, which fakeredis supports; it
     has no Lua), and one that another attempt changed under it is decided again on the new state. Past
     RESERVE_RETRIES such collisions the caller is told to wait a second."""
-    keys = sorted({_login_key(name) for name in usernames})
+    typed_key = _login_key(typed)
+    account_key = _login_key(account) if account is not None else typed_key
+    keys = sorted({typed_key, account_key})
     with app_pkg.redis_client.pipeline() as pipe:
         for _ in range(RESERVE_RETRIES):
             try:
                 pipe.watch(*keys)
-                states = [pipe.hmget(key, 'count', 'last') for key in keys]
                 now = _now()
-                wait = max(_remaining(count, last, now) for count, last in states)
+                wait = _remaining(*pipe.hmget(typed_key, 'count', 'last'), now)
                 if wait:
                     pipe.unwatch()
-                    return wait
+                    return OnionLoginGate(wait=wait)
+                hidden = account_key != typed_key and _remaining(*pipe.hmget(account_key, 'count', 'last'), now) > 0
                 pipe.multi()
                 for key in keys:
                     _queue_failure(pipe, key, now)
                 pipe.execute()
-                return 0
+                return OnionLoginGate(hidden=hidden)
             except WatchError:
                 continue
-    return 1
+    return OnionLoginGate(wait=1)
 
 
 def record_onion_login_failure(username: str) -> None:
@@ -236,12 +251,15 @@ def clear_onion_login_failures(*usernames: str) -> None:
     app_pkg.redis_client.delete(*{_login_key(name) for name in usernames})
 
 
-def onion_login_wait(*usernames: str) -> int:
-    """`reserve_onion_login_attempt` for an onion request, 0 on clearnet (never touching Redis). Once it answers 0
-    the attempt is already counted as failed, until `onion_login_succeeded` clears it."""
-    return reserve_onion_login_attempt(*usernames) if is_onion_request() else 0
+def onion_login_gate(typed: str, user=None) -> OnionLoginGate:
+    """`reserve_onion_login_attempt` for an onion request, typed as `typed` and naming `user` (None for no account);
+    always go-ahead on clearnet, never touching Redis. Once it says go ahead the attempt is already counted as
+    failed, until `onion_login_succeeded` clears it."""
+    if not is_onion_request():
+        return OnionLoginGate()
+    return reserve_onion_login_attempt(typed, user.user_name if user is not None else None)
 
 
-def onion_login_succeeded(*usernames: str) -> None:
+def onion_login_succeeded(typed: str, user) -> None:
     if is_onion_request():
-        clear_onion_login_failures(*usernames)
+        clear_onion_login_failures(typed, user.user_name)
