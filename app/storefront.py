@@ -6,11 +6,15 @@ implicit default, so installs that never ran the migration's seed still work.
 from __future__ import annotations
 
 import hashlib
+import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import NamedTuple
 from urllib.parse import urlsplit, urlunsplit
 
+from bs4 import BeautifulSoup
+from bs4.dammit import EntitySubstitution
+from bs4.formatter import HTMLFormatter
 from flask import Response, current_app, g, has_request_context, request
 from flask.globals import request_ctx
 from sqlalchemy.exc import SQLAlchemyError
@@ -109,17 +113,21 @@ def is_local_host(host: str | None) -> bool:
     return bool(bare) and (bare == _bare_host(current_app.config.get('SERVER_NAME') or '') or is_registered_host(bare))
 
 
-def is_local_link(url) -> bool:
-    """Whether absolute (or scheme-relative) `url` points at this site: `is_local_host` of its host. The host is
-    urlsplit's, after any userinfo. A browser reads `\\` as `/`, so a URL with a backslash has no host we can name
-    and is not local."""
+def _link_host(url) -> str:
+    """The bare host of absolute (or scheme-relative) `url`, '' when it names none. The host is urlsplit's, after
+    any userinfo. A browser reads `\\` as `/`, so a URL with a backslash has no host we can name."""
     if not isinstance(url, str) or '\\' in url:
-        return False
+        return ''
     try:
-        host = urlsplit(url).hostname
+        return _bare_host(urlsplit(url).hostname or '')
     except ValueError:
-        return False
-    return is_local_host(host)
+        return ''
+
+
+def is_local_link(url) -> bool:
+    """Whether absolute (or scheme-relative) `url` points at this site: `is_local_host` of its host (`_link_host`).
+    A URL with a backslash is not local."""
+    return is_local_host(_link_host(url))
 
 
 def check_default_domain() -> None:
@@ -215,6 +223,128 @@ def canonical_link(url):
 def canonical_url() -> str:
     """The federation origin. It never varies with the request host."""
     return current_app.config['SERVER_URL']
+
+
+# Stored and rendered links (spec §3.5). Attributes only, never text.
+_STORED_LINK_ATTRS = frozenset({'href', 'src', 'srcset'})
+_RENDER_LINK_ATTRS = _STORED_LINK_ATTRS | {'action'}
+# A srcset candidate's URL: after the start or a comma, up to whitespace; trailing commas end the candidate.
+_SRCSET_URL = re.compile(r'(^|,)(\s*)([^\s,]\S*?)(?=,*(?:\s|$))')
+_REDIRECT_HEADERS = ('Location', 'HX-Redirect')
+
+
+class _SourceOrderFormatter(HTMLFormatter):
+    """bs4's 'minimal' formatter (only &, < and > escaped; script and style text verbatim) without its alphabetical
+    sort of attributes: a rewritten page keeps its attributes in the order the template wrote them."""
+
+    def attributes(self, tag):
+        return list(tag.attrs.items())
+
+
+_FORMATTER = _SourceOrderFormatter(entity_substitution=EntitySubstitution.substitute_xml)
+
+
+def _local_hosts() -> frozenset[str]:
+    """Every bare host of this site: SERVER_NAME's and each registered domain's, lower-case."""
+    hosts = {_bare_host(current_app.config.get('SERVER_NAME') or '')} | {normalise_host(r.domain) for r in domain_rows()}
+    return frozenset(hosts - {''})
+
+
+def _origin(storefront) -> str:
+    return f'{storefront.scheme}://{_authority(storefront)}'
+
+
+def _rebase(url, base: str, hosts: frozenset[str]):
+    """`url` on origin `base` when it is an http(s) or scheme-relative URL whose host is in `hosts`. Everything after
+    the authority (path, query, fragment, a bare '?') is kept byte for byte. Any other value comes back unchanged."""
+    if _link_host(url) not in hosts:
+        return url
+    parts = urlsplit(url)
+    start = url.find(f'//{parts.netloc}')
+    if parts.scheme not in ('', 'http', 'https') or start < 0:   # < 0: urlsplit dropped a tab or newline from it
+        return url
+    return base + url[start + 2 + len(parts.netloc):]
+
+
+def _rebase_srcset(srcset: str, base: str, hosts: frozenset[str]) -> str:
+    return _SRCSET_URL.sub(lambda m: m[1] + m[2] + _rebase(m[3], base, hosts), srcset)
+
+
+def _is_link_attr(tag, name: str, render: bool) -> bool:
+    if name in _STORED_LINK_ATTRS:
+        return True
+    # On render, also what JavaScript and a page's metadata follow: a form's action, <meta content> (og:url,
+    # og:image) and data-* attributes (data-sse-url). _rebase only moves a value that is a URL of ours.
+    return render and (name in _RENDER_LINK_ATTRS or name.startswith('data-') or
+                       (name == 'content' and tag.name == 'meta'))
+
+
+def _rebase_links(html: str, base: str, hosts: frozenset[str], render: bool) -> str:
+    """`html` with its link attributes on `base` where their host is in `hosts`. The parse is skipped when no host
+    appears in the text at all (case-insensitively), and `html` itself comes back when no attribute moved, so markup
+    is re-serialised only when a link really changes."""
+    lowered = html.lower()
+    if not any(host in lowered for host in hosts):
+        return html
+    soup = BeautifulSoup(html, 'html.parser')
+    changed = False
+    for tag in soup.find_all(True):
+        for name, value in tag.attrs.items():
+            if not _is_link_attr(tag, name, render):
+                continue
+            moved = _rebase_srcset(value, base, hosts) if name == 'srcset' else _rebase(value, base, hosts)
+            if moved != value:
+                tag.attrs[name] = moved
+                changed = True
+    return soup.decode(formatter=_FORMATTER) if changed else html
+
+
+def canonicalise_links(html: str) -> str:
+    """`html` with every `href`/`src`/`srcset` naming any host of this site moved onto the canonical origin, for
+    content about to be stored or federated. The end of `allowlist_html`."""
+    return _rebase_links(html, canonical_url(), _local_hosts(), render=False)
+
+
+def rewrite_links(body: str, storefront: DomainInfo) -> str:
+    """`body` with the links of this site's other hosts (`href`, `src`, `srcset`, `action`, `<meta content>`,
+    `data-*`) moved onto `storefront`. `body` itself, unparsed, when no such host appears in it. Links already on
+    `storefront` are left alone, so a page that names only its own storefront is never parsed."""
+    return _rebase_links(body, _origin(storefront), _local_hosts() - {normalise_host(storefront.domain)}, render=True)
+
+
+def _on_default_storefront(storefront) -> bool:
+    """`is_default` first: the default storefront's every response passes here, and it then reads no domain rows
+    (an error handler's response may come from a request whose session can no longer query)."""
+    return storefront.is_default or storefront.domain == default_domain().domain
+
+
+def storefront_html(html: str | None) -> str | None:
+    """Stored HTML as the current storefront shows it: `rewrite_links` off the default storefront. For HTML that
+    leaves in something other than a text/html response (an RSS item body)."""
+    storefront = current_storefront()
+    if html is None or _on_default_storefront(storefront):
+        return html
+    return rewrite_links(html, storefront)
+
+
+def rewrite_response_for_storefront(response: Response) -> Response:
+    """`after_request`: a response on a storefront other than the default has its registered-host links moved onto
+    that storefront (spec §3.5), once per response instead of at each `|safe` in the templates. A redirect header
+    naming another host of ours moves too; a relative one is already on the storefront. Streamed and passthrough
+    bodies (SSE, files) are never read. set_data recomputes Content-Length; status and other headers are kept."""
+    storefront = current_storefront()
+    if _on_default_storefront(storefront):
+        return response
+    base, hosts = _origin(storefront), _local_hosts() - {normalise_host(storefront.domain)}
+    for header in _REDIRECT_HEADERS:
+        if header in response.headers:
+            response.headers[header] = _rebase(response.headers[header], base, hosts)
+    if response.mimetype == 'text/html' and not response.direct_passthrough and not response.is_streamed:
+        body = response.get_data(as_text=True)
+        rewritten = rewrite_links(body, storefront)
+        if rewritten is not body:
+            response.set_data(rewritten)
+    return response
 
 
 HEALTH_ENDPOINTS = frozenset({'main.health', 'main.health2'})   # probes name localhost or an internal hostname
