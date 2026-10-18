@@ -4,9 +4,11 @@ With `S3_PUBLIC_URL` set, uploaded media is served from that clearnet host, whic
 On an onion storefront the response rewrite replaces whatever points at that host with a placeholder, so the onion
 never makes a request to it. Clearnet is unchanged, and with S3 unset nothing is parsed or changed.
 """
+import time
 from unittest.mock import patch
 
 import pytest
+from bs4 import BeautifulSoup
 from flask import Response, current_app, render_template_string
 
 import app.storefront as storefront
@@ -75,6 +77,19 @@ def hide(body, mimetype='text/html'):
     (f'<img src="https://{S3.replace("c", "&#99;")}/x"/>', HIDDEN),
     (f'<img src="https://u:p@{S3}:8443/x"/>', HIDDEN),
     (f'<img src="ht\ntps://{S3}/x"/>', HIDDEN),
+    # C0 controls a browser strips from the ends, and characters UTS-46 maps to nothing (re-review I-A, I-B)
+    (f'<img src="&#x1;https://{S3}/x"/>'.replace('&#x1;', chr(1)), HIDDEN),
+    (f'<img src="{chr(0x1b)}https://{S3}/x{chr(0x1f)}"/>', HIDDEN),
+    (f'<img src="https://cdn.exampl{chr(0xfe00)}e.test/x"/>', HIDDEN),
+    (f'<img src="https://cdn.exampl&#xFE00;e.test/x"/>', HIDDEN),
+    (f'<img src="https://cdn.exampl%EF%B8%80e.test/x"/>', HIDDEN),
+    (f'<img src="https://cdn.exampl{chr(0x34f)}e.test/x"/>', HIDDEN),
+    (f'<img src="https://cdn.exampl{chr(0x3164)}e.test/x"/>', HIDDEN),
+    (f'<img src="https://cdn.exampl%E3%85%A4e.test/x"/>', HIDDEN),
+    (f'<img src="https://cdn.exampl{chr(0xe0100)}e.test/x"/>', HIDDEN),
+    (f'<img src="https://cdn.example.test{chr(0xfffe)}/x"/>', HIDDEN),   # cannot be mapped: hidden, never kept
+    (f'<img src="https://\u212a.test/x"/>', '<img src="https://\u212a.test/x"/>'),   # a different host
+    (f'<img src="https://{S3}/first" src="/second.jpg"/>', HIDDEN),   # a browser uses the first of two attributes
     # style: url(), image-set() and quoted strings, with CSS escapes (review M2)
     (f'<div style="background-image:image-set(\'https://{S3}/x\' 1x)">t</div>', '<div>t</div>'),
     (f'<div style="background-image:image-set(url(https://{S3}/x) 1x)">t</div>', '<div>t</div>'),
@@ -204,13 +219,14 @@ def test_a_feed_entry_on_the_onion_hides_s3_media(app, onion, s3):
         assert feed_entry_body(Post()) == Post.body_html
 
 
-def page(app, base_url):
+def page(app, base_url, rewrite=True):
     # a small page that extends base.html, so the layout's preconnect is under test too
     with app.test_request_context(base_url=base_url):
         app.preprocess_request()
         body = render_template_string("{% extends 'base.html' %}{% block app_content %}<p>look</p>"
                                       f'<img src="https://{S3}/posts/ab/cd/x.jpg"/>{{% endblock %}}')
-        return rewrite_response_for_storefront(Response(body, mimetype='text/html')).get_data(as_text=True)
+        response = Response(body, mimetype='text/html')
+        return (rewrite_response_for_storefront(response) if rewrite else response).get_data(as_text=True)
 
 
 def test_an_onion_page_with_an_s3_image_shows_the_placeholder_and_no_s3_host(app, onion, s3):
@@ -235,3 +251,57 @@ def test_an_onion_page_is_unchanged_when_s3_is_not_configured(app, onion, monkey
     onion_page = page(app, f'https://{ONION}')
     assert f'<img src="https://{S3}/posts/ab/cd/x.jpg"/>' in onion_page
     assert 'onion-media-hidden' not in onion_page
+
+
+def test_the_layout_writes_no_s3_preconnect_on_an_onion_page(app, onion, s3):
+    # without the rewrite: the template itself must not contact the S3 host
+    assert f'rel="preconnect" href="{S3}"' not in page(app, f'https://{ONION}', rewrite=False)
+    assert f'rel="preconnect" href="{S3}"' in page(app, f'https://{CANONICAL}', rewrite=False)
+
+
+def test_nothing_about_domains_is_read_when_s3_is_not_configured(app, onion, monkeypatch):
+    monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', '')
+    with app.test_request_context(base_url=f'https://{ONION}'):
+        app.preprocess_request()
+        with patch.object(storefront, '_local_hosts') as local_hosts:
+            assert storefront._s3_host_to_hide(storefront.current_storefront()) == ''
+    local_hosts.assert_not_called()
+
+
+@pytest.mark.parametrize('public, src', [
+    ('203.0.113.5', 'https://3405803781/x'),
+    ('203.0.113.5', 'https://0xcb.0.113.5/x'),
+    ('203.0.113.5:9000', 'http://0313.0.0161.05./x'),
+    ('203.0.113.5', 'https://203.0.113.5/x'),
+    ('[::1]', 'https://[0:0::1]/x'),
+    ('https://[2001:db8::1]:9000/p', 'https://[2001:0db8:0:0:0:0:0:1]/x'),
+])
+def test_an_ip_literal_s3_host_is_compared_as_the_address(app, onion, monkeypatch, public, src):
+    monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', public)
+    assert hide(f'<img src="{src}"/>') == HIDDEN
+
+
+@pytest.mark.parametrize('src', ['https://203.0.113.6/x', 'https://[::2]/x', 'https://256.1.1.1/x', 'https://1.2.3.4.5/x'])
+def test_another_address_is_not_the_s3_host(app, onion, monkeypatch, src):
+    monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', '203.0.113.5')
+    assert hide(f'<img src="{src}"/>') == f'<img src="{src}"/>'
+
+
+def timed(call):
+    started = time.perf_counter()
+    call()
+    return time.perf_counter() - started
+
+
+@pytest.mark.parametrize('style', ['url(' + ' ' * 100_000, 'url(' * 25_000, 'url(' + 'x' * 100_000, '"' * 100_000,
+                                   "'a\"" * 30_000, "\\" * 50_000, 'url(' + ' ) ' * 30_000])
+def test_a_style_value_is_scanned_in_linear_time(style):
+    assert timed(lambda: storefront._css_urls(style)) < 0.1
+
+
+@pytest.mark.parametrize('srcset', ['a' + ',' * 100_000, ',' * 100_000, 'a,' * 50_000, ' ' * 100_000 + 'a',
+                                    'a b,' * 25_000, 'a' * 100_000])
+def test_a_srcset_is_scanned_in_linear_time(srcset):
+    assert timed(lambda: storefront._rebase_srcset(srcset, 'http://x', frozenset({'abc.onion'}))) < 0.1
+    tag = BeautifulSoup('<img/>', 'html.parser').img
+    assert timed(lambda: storefront._points_at(tag, 'srcset', srcset, S3)) < 0.1

@@ -6,13 +6,14 @@ implicit default, so installs that never ran the migration's seed still work.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import re
-import unicodedata
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import NamedTuple
-from urllib.parse import unquote, urlsplit, urlunsplit
+from urllib.parse import unquote_to_bytes, urlsplit, urlunsplit
 
+import idna
 from bs4 import BeautifulSoup
 from bs4.dammit import EntitySubstitution
 from bs4.formatter import HTMLFormatter
@@ -262,7 +263,8 @@ URL_STRIPPED_BY_BROWSERS = str.maketrans('', '', '\t\n\r')
 _STORED_LINK_ATTRS = frozenset({'href', 'src', 'srcset'})
 _RENDER_LINK_ATTRS = _STORED_LINK_ATTRS | {'action'}
 # A srcset candidate's URL: after the start or a comma, up to whitespace; trailing commas end the candidate.
-_SRCSET_URL = re.compile(r'(^|,)(\s*)([^\s,]\S*?)(?=,*(?:\s|$))')
+# the characters a browser strips from both ends of a URL
+_C0_OR_SPACE = ''.join(chr(c) for c in range(0x21))
 _REDIRECT_HEADERS = ('Location', 'HX-Redirect')
 
 
@@ -299,8 +301,35 @@ def _rebase(url, base: str, hosts: frozenset[str]):
     return base + url[start + 2 + len(parts.netloc):]
 
 
+def _srcset_urls(srcset: str) -> list[tuple[int, int]]:
+    """The (start, end) of each candidate URL in a `srcset`: the first non-space run at the start and after each
+    comma, less the commas that end it (`a.jpg, b.jpg 2x`, `a,b.jpg,`). A scan, not a pattern: linear in `srcset`
+    whatever runs of commas, spaces or letters it holds."""
+    spans, i, size = [], 0, len(srcset)
+    while True:
+        while i < size and srcset[i].isspace():
+            i += 1
+        if i < size and srcset[i] != ',':
+            end = i
+            while end < size and not srcset[end].isspace():
+                end += 1
+            stop = end
+            while srcset[stop - 1] == ',':
+                stop -= 1   # the first character is no comma, so this stops
+            spans.append((i, stop))
+            i = stop
+        comma = srcset.find(',', i)
+        if comma < 0:
+            return spans
+        i = comma + 1
+
+
 def _rebase_srcset(srcset: str, base: str, hosts: frozenset[str]) -> str:
-    return _SRCSET_URL.sub(lambda m: m[1] + m[2] + _rebase(m[3], base, hosts), srcset)
+    out, last = [], 0
+    for start, end in _srcset_urls(srcset):
+        out += [srcset[last:start], _rebase(srcset[start:end], base, hosts)]
+        last = end
+    return ''.join(out) + srcset[last:]
 
 
 def _is_link_attr(tag, name: str, render: bool) -> bool:
@@ -323,7 +352,7 @@ def _rebase_links(html: str, base: str, hosts: frozenset[str], render: bool, emb
     lowered = html.lower()
     if not s3_host and not any(host in lowered for host in hosts):
         return html
-    soup = BeautifulSoup(html, 'html.parser')
+    soup = BeautifulSoup(html, 'html.parser', on_duplicate_attribute='ignore')   # the first, as a browser does
     changed = False
     for tag in soup.find_all(True):
         if tag.decomposed:   # inside something already replaced or removed
@@ -415,22 +444,65 @@ _REMOVED_TAGS = frozenset({'link', 'meta', 'script'})   # a preload, a preview i
 _URL_ATTRS = frozenset({'src', 'srcset', 'href', 'xlink:href', 'poster', 'data', 'action', 'formaction', 'background',
                         'ping', 'manifest', 'cite', 'longdesc'})
 _PRECONNECT_RELS = frozenset({'preconnect', 'dns-prefetch'})
-_CSS_URL = re.compile(r'url\(\s*([^)]*?)\s*\)|(["\'])(.*?)\2', re.IGNORECASE)
 _CSS_ESCAPE = re.compile(r'\\(?:([0-9a-fA-F]{1,6})[ \t\n\r\f]?|(.))', re.DOTALL)
-_IDEOGRAPHIC_STOPS = str.maketrans('。．｡', '...')   # UTS-46 maps all three to a full stop
+_QUOTE = re.compile(r'["\']')
 _SPECIAL_SCHEME = re.compile(r'([A-Za-z][A-Za-z0-9+.-]*):')
 _SPECIAL_SCHEMES = frozenset({'http', 'https', 'ws', 'wss', 'ftp'})
+# Code points a browser refuses in a host once it is decoded and mapped (the WHATWG forbidden domain code points)
+_FORBIDDEN_IN_HOST = frozenset(''.join(chr(c) for c in range(0x21)) + '#%/:<>?@[\\]^|\x7f')
+UNMAPPABLE = '\0unmappable'   # browser_host of a host UTS-46 cannot map: neither "this host" nor "another", see below
+
+
+_IPV4_DIGITS = {10: frozenset('0123456789'), 16: frozenset('0123456789abcdefABCDEF'), 8: frozenset('01234567')}
+
+
+def _ipv4_part(part: str):
+    """One part of a WHATWG IPv4 address as an int, None when it is no number (int() alone takes `-1`, `1_0`)."""
+    radix = 10
+    if part[:2] in ('0x', '0X'):
+        part, radix = part[2:], 16
+    elif len(part) > 1 and part[0] == '0':
+        part, radix = part[1:], 8
+    if not set(part) <= _IPV4_DIGITS[radix]:
+        return None
+    return int(part, radix) if part else 0
+
+
+def _ipv4_host(host: str) -> str:
+    """The dotted-decimal address of a host that ends in a number (`3405803781`, `0xcb.0.113.5`), as the WHATWG
+    IPv4 parser reads it; '' when it is no address, which a browser refuses."""
+    parts = host.split('.')
+    if parts[-1] == '' and len(parts) > 1:
+        parts.pop()
+    numbers = [_ipv4_part(part) for part in parts] if len(parts) <= 4 and '' not in parts else [None]
+    if None in numbers or any(n > 255 for n in numbers[:-1]) or numbers[-1] >= 256 ** (5 - len(numbers)):
+        return ''
+    value = numbers[-1] + sum(n * 256 ** (3 - i) for i, n in enumerate(numbers[:-1]))
+    return str(ipaddress.IPv4Address(value))
+
+
+def _ends_in_a_number(host: str) -> bool:
+    parts = host.split('.')
+    if parts[-1] == '' and len(parts) > 1:
+        parts.pop()   # one trailing dot only: `a.1..` ends in an empty part, so in no number
+    last = parts[-1]
+    if last[:2] in ('0x', '0X'):
+        return set(last[2:]) <= _IPV4_DIGITS[16]
+    return last.isascii() and last.isdecimal()
 
 
 def browser_host(url) -> str:
-    """The bare host a browser loads absolute or scheme-relative `url` from, '' when it names none. It reads a URL
-    as a browser does, and as `is_safe_redirect_target` does: spaces around it and tabs and line breaks inside it
-    dropped, `\\` as `/`, any number of slashes after a special scheme or in front of a scheme-relative authority
-    (`https:host`, `https:///host`, `///host`), userinfo and port ignored, the host percent-decoded and NFKC- and
-    UTS-46-folded (`%2e`, a fullwidth or ideographic full stop), a trailing dot and the case dropped."""
+    """The bare host a browser loads absolute or scheme-relative `url` from, '' when it names none or the browser
+    refuses it. It follows the WHATWG URL host parser: C0 controls and spaces stripped from both ends, tab and line
+    breaks removed (the table `is_safe_redirect_target` uses), `\\` as `/`, any number of slashes after a special
+    scheme or in front of a scheme-relative authority (`https:host`, `https:///host`, `///host`), userinfo and
+    port ignored, the host percent-decoded and mapped by UTS-46 (`idna.uts46_remap`: case, fullwidth and ideographic
+    stops, the characters it deletes), a trailing dot dropped. A host ending in a number is the IPv4 address it
+    names, an IPv6 literal its compressed address. A host UTS-46 cannot map comes back as UNMAPPABLE, which callers
+    that hide things must treat as a match: whether a browser loads it is not worth betting on."""
     if not isinstance(url, str):
         return ''
-    candidate = url.strip().translate(URL_STRIPPED_BY_BROWSERS).replace('\\', '/')
+    candidate = url.strip(_C0_OR_SPACE).translate(URL_STRIPPED_BY_BROWSERS).replace('\\', '/')
     scheme = _SPECIAL_SCHEME.match(candidate)
     if scheme and scheme[1].lower() in _SPECIAL_SCHEMES:
         authority = candidate[scheme.end():].lstrip('/')
@@ -439,38 +511,79 @@ def browser_host(url) -> str:
     else:
         return ''
     authority = re.split(r'[/?#]', authority, maxsplit=1)[0].rpartition('@')[2]
-    authority = unicodedata.normalize('NFKC', unquote(authority)).translate(_IDEOGRAPHIC_STOPS)
-    return _bare_host(''.join(c for c in authority if unicodedata.category(c) != 'Cf'))   # soft hyphens, zero-widths
+    if authority.startswith('['):
+        literal, closed, after = authority[1:].partition(']')
+        try:
+            return ipaddress.IPv6Address(literal).compressed if closed and not after.partition(':')[0] else ''
+        except ValueError:
+            return ''
+    try:
+        host = unquote_to_bytes(authority.partition(':')[0]).decode('utf-8')
+    except UnicodeDecodeError:
+        return ''
+    try:
+        host = idna.uts46_remap(host, std3_rules=False, transitional=False)
+    except idna.IDNAError:
+        return UNMAPPABLE
+    if _FORBIDDEN_IN_HOST & set(host):
+        return ''
+    if _ends_in_a_number(host):
+        return _ipv4_host(host)
+    return host.rstrip('.')
 
 
 def _s3_host() -> str:
-    """The bare host of `S3_PUBLIC_URL` (`host`, `host/prefix`, `https://host/`), '' when S3 is not configured or the
-    value names no host. Read as `s3_key_from_url` reads it, then normalised as every other host here is."""
+    """The host of `S3_PUBLIC_URL` (`host`, `host/prefix`, `https://host/`, `203.0.113.5:9000`), '' when S3 is not
+    configured or the value names no host, read as `browser_host` reads a URL so the two compare."""
     public = (current_app.config.get('S3_PUBLIC_URL') or '').strip()
-    try:
-        return _bare_host(urlsplit(public if '//' in public else f'//{public}').hostname or '') if public else ''
-    except ValueError:   # an unbalanced IPv6 bracket
-        return ''
+    host = browser_host(public if '//' in public else f'//{public}') if public else ''
+    return '' if host == UNMAPPABLE else host
+
+
+def _quoted_strings(text: str) -> list[str]:
+    strings, pos, unclosed = [], 0, set()
+    while True:
+        opener = _QUOTE.search(text, pos)
+        if opener is None:
+            return strings
+        pos = opener.end()
+        if opener[0] in unclosed:
+            continue
+        end = text.find(opener[0], pos)
+        if end < 0:
+            unclosed.add(opener[0])   # no later quote of this kind closes anything either: never look again
+            continue
+        strings.append(text[pos:end])
+        pos = end + 1
 
 
 def _css_urls(style: str) -> list[str]:
-    """The `url(...)` tokens and quoted strings (`image-set('x' 1x)`) of a `style` value, CSS escapes undone."""
+    """The `url(...)` tokens and quoted strings (`image-set('x' 1x)`) of a `style` value, CSS escapes undone. Found
+    with `str.find`, not a pattern: a `url(` that never closes costs one scan, not one per `url(`."""
     style = _CSS_ESCAPE.sub(lambda m: chr(int(m[1], 16) % 0x110000 or 0xfffd) if m[1] else m[2], style)
-    return [m[1] or m[3] for m in _CSS_URL.finditer(style)]
+    urls, lowered, pos = [], style.lower(), 0
+    while True:
+        start = lowered.find('url(', pos)
+        end = lowered.find(')', start + 4) if start >= 0 else -1
+        if end < 0:
+            return urls + _quoted_strings(style)
+        urls.append(style[start + 4:end].strip())
+        pos = end + 1
 
 
 def _points_at(tag, name: str, value, host: str) -> bool:
     """Whether attribute `name` of `tag` makes the browser load `value` from `host`."""
     if not isinstance(value, str):
         return False
+    hosts = (host, UNMAPPABLE)
     if name == 'srcset':
-        return any(browser_host(m[3]) == host for m in _SRCSET_URL.finditer(value))
+        return any(browser_host(value[start:end]) in hosts for start, end in _srcset_urls(value))
     if name == 'style':
-        return any(browser_host(url.strip('\'" ')) == host for url in _css_urls(value))
+        return any(browser_host(url.strip('\'" ')) in hosts for url in _css_urls(value))
     if name == 'href' and tag.name == 'link' and _PRECONNECT_RELS & set(tag.get('rel') or ()):
-        return host in (browser_host(value), browser_host(f'//{value}'))   # base.html writes it without a scheme
+        return browser_host(value) in hosts or browser_host(f'//{value}') in hosts   # base.html writes no scheme
     # a data-* value counts only when it is itself a URL
-    return (name in _URL_ATTRS or name.startswith('data-')) and browser_host(value) == host
+    return (name in _URL_ATTRS or name.startswith('data-')) and browser_host(value) in hosts
 
 
 def _hide_s3(soup, tag, host: str) -> bool:
@@ -504,7 +617,7 @@ def _s3_host_to_hide(storefront) -> str:
     if not storefront.is_onion:
         return ''
     host = _s3_host()
-    return '' if host in _local_hosts() else host
+    return host if host and host not in _local_hosts() else ''
 
 
 def rewrite_links(body: str, storefront: DomainInfo) -> str:
