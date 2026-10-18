@@ -21,7 +21,7 @@ from app.models import Domain, SiteDomain, UserFollower
 from app.shared.domain import block_domain
 from app.storefront import clear_domain_cache
 from app.utils import display_back_button, is_local_image_url, is_safe_redirect_target
-from tests.factories import inbox_activity, make_instance, make_site, make_user
+from tests.factories import cavage_signed_headers, inbox_activity, make_instance, make_site, make_user
 from tests.test_api_search_resolve import env, token  # noqa: F401 -- env is a fixture
 
 ALIAS = 'abc.onion'
@@ -147,6 +147,24 @@ def test_an_rfc9421_signature_for_the_canonical_origin_does_not_verify_on_the_al
     response = app.test_client().post('/inbox', data=body, headers=headers, content_type='application/activity+json')
     assert response.status_code == 400
     assert UserFollower.query.count() == 0
+
+
+@pytest.mark.usefixtures('redis_double')
+@pytest.mark.parametrize('signed_host, accepted', [(ALIAS, True), (f'{ALIAS}:6666', False)])
+def test_a_cavage_signature_for_the_alias_on_another_port_is_refused(app, onion, signing_peer, monkeypatch,
+                                                                     signed_host, accepted):
+    """R-HOSTPIN for the alias (fix-B1): a stored domain is a bare host, so a signed Host naming it with a port is not
+    this instance. The request still routes (the storefront ignores the port), but the signature is refused."""
+    monkeypatch.setitem(app.config, 'DEBUG', True)
+    bob = _local_user('bob', manually_approves=True)
+    body = json.dumps(_follow_of(bob, signing_peer)).encode('utf8')
+    headers = cavage_signed_headers(signing_peer.private_key, f'{signing_peer.ap_profile_id}#main-key', body=body,
+                                    host=signed_host)
+    response = app.test_client().post('/inbox', data=body, headers=headers, content_type='application/activity+json')
+    assert (response.status_code in (200, 202)) is accepted, response.status_code
+    if not accepted:
+        assert response.status_code == 400
+    assert UserFollower.query.count() == (1 if accepted else 0)
 
 
 # --------------------------------------------------------------------------
