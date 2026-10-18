@@ -306,7 +306,7 @@
         <a href="javascript:(function(){
           var url = encodeURIComponent(window.location.href);
           var title = encodeURIComponent(document.title);
-          window.open('https://{{ instance_domain }}/share?url=' + url + '&title=' + title, '_blank');
+          window.open('{{ site_url }}/share?url=' + url + '&title=' + title, '_blank');
         })();"
            title="{{ _('Drag this to your bookmarks bar') }}"
            style="cursor: grab; text-decoration: underline;">{{ _('Share on PieFed') }}</a></p>
