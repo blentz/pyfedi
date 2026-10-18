@@ -827,3 +827,11 @@ def test_the_dummy_hash_uses_set_passwords_method():
     probe = User()
     probe.set_password('anything at all')
     assert onion_guard.DUMMY_PASSWORD_HASH.split('$')[0] == probe.password_hash.split('$')[0]
+
+
+def test_verify_password_hash_is_total(app):
+    probe = User()
+    probe.set_password('a good password')
+    assert models.verify_password_hash(probe.password_hash, ' a good password ') == (True, False)
+    assert models.verify_password_hash(probe.password_hash, None) == (False, False)   # not a string: no match
+    assert models.verify_password_hash('not a hash', 'x') == (False, False)
