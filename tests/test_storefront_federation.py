@@ -85,6 +85,33 @@ def test_webfinger_on_alias_is_canonical(app, onion, resource):
     assert ALIAS not in _strings(answer)
 
 
+@pytest.mark.parametrize('resource', [
+    'acct:test.piefed.loed.loctes\x01\x00piefed.localal@test.piectes\x01\x00piefed.localal@test.piefed.local',
+    'acct:alice@evil.example@test.piefed.local',   # an extra '@': the domain is not ours as written
+    'acct:alice@test.piefed.local\x00', 'acct:alice@test.pie\x01fed.local',
+    'acct:alice@ test.piefed.local', 'acct:alice@test.piefed.local ',
+    'acct:alice@abc.onion.',
+])
+def test_webfinger_answers_only_for_a_domain_we_answer_on_as_written(app, onion, resource):
+    """As before the branch, the acct: domain must be exactly (ignoring case) a name this site answers on: now
+    SERVER_NAME or a registered domain. Anything a host parser would tidy into one of them is someone else's."""
+    make_site()
+    _local_user('alice')
+    response = app.test_client().get('/.well-known/webfinger', query_string={'resource': resource})
+    assert response.status_code == 404, resource
+
+
+@pytest.mark.parametrize('resource', ['acct:alice@ABC.onion', 'acct:alice@Test.Piefed.Local',
+                                      # the acct: split stops at the second ':', so a port is never read (as before)
+                                      'acct:alice@test.piefed.local:443', 'acct:alice@abc.onion:80'])
+def test_webfinger_domain_ignores_case(app, onion, resource):
+    make_site()
+    _local_user('alice')
+    response = app.test_client().get('/.well-known/webfinger', query_string={'resource': resource})
+    assert response.status_code == 200
+    assert response.get_json()['subject'] == 'acct:alice@test.piefed.local'
+
+
 def test_webfinger_for_an_unregistered_domain_is_404(app, onion):
     make_site()
     _local_user('alice')
@@ -247,6 +274,11 @@ def test_a_server_view_of_a_registered_domain_is_none(app, onion):
 @pytest.mark.parametrize('host, expected', [
     ('abc.onion', True), ('ABC.onion.', True), ('abc.onion:80', True),
     ('test.piefed.local', True), ('evil.onion', False), ('', False), (None, False), ('[::1', False),
+    # an authority that is not a bare host[:port] names none (webfinger_resource fuzz finding)
+    ('test.pie\x01\x00piefed.localal@test.piefed.local', False), ('evil@test.piefed.local', False),
+    ('test.piefed.local\x00', False), ('test.pi\tefed.local', False), ('test piefed.local', False),
+    ('test.piefed.local/x', False), ('test.piefed.local?x', False), ('test.piefed.local#x', False),
+    ('test.piefed.local\\x', False),
 ])
 def test_is_local_host(app, onion, host, expected):
     assert storefront.is_local_host(host) is expected
