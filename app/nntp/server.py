@@ -46,7 +46,7 @@ from .nntpserver import (
     NNTPArticleNotFound,
 )
 import logging
-from app.models import Post, PostReply, User, utcnow, Site, Community
+from app.models import Post, PostReply, User, utcnow, Site, Community, DUMMY_PASSWORD_HASH, verify_password_hash
 from sqlalchemy.orm import load_only
 from app.utils import communities_banned_from, blocked_or_banned_instances, filtered_out_communities, get_setting, \
     get_request, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, log_login_failure
@@ -427,22 +427,16 @@ def _authenticate(user: str, password: str) -> bytes:
     """The bearer token for an AUTHINFO USER/PASS pair, or NNTPAuthenticationError. Inside an app context. A failed
     credential check logs fail2ban's line with the connection's peer (PieFedNNTPConnectionHandler.setup); a banned or
     unverified account that gave the right password does not."""
-    if '\x00' in user:  # no account has one, and psycopg2 refuses it in a query with ValueError
-        _credential_check_failed()
-    u = (
-        db.session.query(User)
-        .filter(func.lower(User.user_name) == user.lower())
-        .filter_by(ap_id=None, deleted=False)
-        .first()
-    )
+    u = None
+    if '\x00' not in user:  # no account has one, and psycopg2 refuses it in a query with ValueError
+        local = db.session.query(User).filter_by(ap_id=None, deleted=False)
+        u = (local.filter(func.lower(User.user_name) == user.lower()).first()
+             or local.filter(func.lower(User.email) == user.lower()).first())
     if u is None:
-        u = (
-            db.session.query(User)
-            .filter(func.lower(User.email) == user.lower())
-            .filter_by(ap_id=None, deleted=False)
-            .first()
-        )
-    if u is None or not u.check_password(password):
+        # A wrong password's hash work, or the time taken tells which names have accounts
+        verify_password_hash(DUMMY_PASSWORD_HASH, password)
+        _credential_check_failed()
+    if not u.check_password(password):
         _credential_check_failed()
     if u.banned:
         raise NNTPAuthenticationError("Account is banned")
