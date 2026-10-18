@@ -4,6 +4,7 @@ Pages, media URLs, RSS feeds and the emails sent during a request use `storefron
 (ActivityPub ids and the JSON a peer reads) stays on the canonical SERVER_URL, and a background job, which has no
 request, uses the default storefront.
 """
+import json
 from datetime import timedelta
 from unittest.mock import patch
 from urllib.parse import urlsplit
@@ -17,9 +18,9 @@ from flask_wtf.csrf import generate_csrf
 
 from app import cache, cli, db
 from app.activitypub.util import served_by_us
-from app.constants import NOTIF_POST, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, SRC_WEB
+from app.constants import NOTIF_POST, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_LINK, SRC_WEB
 from app.email import send_topic_suggestion
-from app.models import File, Notification, Site, SiteDomain, Tag
+from app.models import File, Notification, Site, SiteDomain, Tag, UserExtraField
 from app.request_hooks import OnUse
 from app.shared.community import invite_with_email
 import app.storefront as storefront
@@ -400,3 +401,41 @@ def test_share_bookmarklet_names_the_storefront_origin(app, world):
     text = response.get_data(as_text=True)
     assert f"window.open('http://{ONION}/share?url=" in text
     assert f'https://{ONION}' not in text
+
+
+# --- JSON-LD page metadata follows the storefront (final review item 9) -------------------------------------------
+
+def _json_ld_urls(html):
+    """Every string value in the page's JSON-LD blocks that is an absolute or scheme-relative URL."""
+    found = []
+
+    def walk(value):
+        if isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+        elif isinstance(value, str) and (value.startswith('//') or '://' in value[:12]):
+            found.append(value)
+
+    for script in BeautifulSoup(html, 'html.parser').find_all('script', type='application/ld+json'):
+        walk(json.loads(script.string))
+    return found
+
+
+@pytest.mark.parametrize('host, origin', [(ONION, f'http://{ONION}'), (CANONICAL, f'https://{CANONICAL}')])
+def test_json_ld_urls_name_the_storefront(app, world, host, origin):
+    founder, author, community, post, image = world
+    post.type = POST_TYPE_LINK   # a link post's image is in the JSON-LD
+    author.indexable = author.searchable = post.indexable = True
+    author.extra_fields.append(UserExtraField(label='home', text=f'https://{CANONICAL}/u/author'))
+    community.ap_profile_id = None   # the fallback URL, built for the page rather than read from the row
+    db.session.commit()
+    for path in (f'/post/{post.id}', '/u/author'):
+        response = on_onion(app).get(path, base_url=f'https://{host}')
+        assert response.status_code == 200, (path, response.status_code)
+        urls = _json_ld_urls(response.get_data(as_text=True))
+        ours = [url for url in urls if is_local_host(urlsplit(url).hostname)]
+        assert ours, (path, urls)
+        assert all(url.startswith(f'{origin}/') or url == origin for url in ours), (path, ours)

@@ -1,3 +1,5 @@
+{#- Page metadata, not federation: every URL of ours names the storefront the page is on. The text is the post's
+    own words, as stored. -#}
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -8,13 +10,13 @@
   {% elif post.nsfw or post.nsfl -%}
   "text": "",
   {% else -%}
-  "text": {{ post.body|tojson if post.body else '""' }},
+  "text": {{ (post.body or '')|tojson }},
   {% endif -%}
   {% if post.url -%}
-  "url": {{ post.ap_id|tojson }},
+  "url": {{ post.ap_id|storefront_link|tojson }},
   {% endif -%}
   {% if post.image and post.type == POST_TYPE_LINK and not (post.content_warning or post.nsfw or post.nsfl) -%}
-  "image": {{ post.image.source_url|tojson }},
+  "image": {{ post.image.source_url|storefront_link|tojson }},
   {% endif -%}
   "datePublished": {{ post.posted_at.isoformat()|tojson }},
   {% if post.edited_at -%}
@@ -24,18 +26,18 @@
     "@type": "Person",
     "name": {{ post.author.display_name()|tojson }},
     {% if post.author.ap_profile_id -%}
-    "url": {{ post.author.ap_profile_id|tojson }}
+    "url": {{ post.author.ap_profile_id|storefront_link|tojson }}
     {% else -%}
-    "url": {{ (request.host_url.rstrip('/') + '/u/' + post.author.user_name)|tojson }}
+    "url": {{ (site_url + '/u/' + post.author.user_name)|tojson }}
     {% endif -%}
   },
   "publisher": {
     "@type": "Organization",
     "name": {{ post.community.display_name()|tojson }},
     {% if post.community.ap_profile_id -%}
-    "url": {{ post.community.ap_profile_id|tojson }}
+    "url": {{ post.community.ap_profile_id|storefront_link|tojson }}
     {% else -%}
-    "url": {{ (request.host_url.rstrip('/') + '/c/' + post.community.name)|tojson }}
+    "url": {{ (site_url + '/c/' + post.community.name)|tojson }}
     {% endif -%}
   },
   {% if post.language -%}

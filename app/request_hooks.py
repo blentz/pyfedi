@@ -126,6 +126,7 @@ def register_request_hooks(app):
     app.jinja_env.filters['person_links'] = person_link_to_href
     app.jinja_env.filters['shorten'] = shorten_string
     app.jinja_env.filters['shorten_url'] = shorten_url
+    app.jinja_env.filters['storefront_link'] = storefront_link   # a stored URL of ours, shown on this storefront
     app.jinja_env.filters['remove_images'] = remove_images
     app.jinja_env.filters["human_filesize"] = human_filesize
 
