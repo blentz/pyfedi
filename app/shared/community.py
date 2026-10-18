@@ -26,7 +26,7 @@ from app.models import CommunityBlock, CommunityMember, Notification, Notificati
 from app.shared.tasks import task_selector
 from app.shared.upload import process_upload
 from app.user.utils import search_for_user
-from app.storefront import canonical_link, default_storefront, storefront_url
+from app.storefront import canonical_link, default_storefront, delete_memoized_everywhere, storefront_url
 from app.utils import authorise_api_user, blocked_communities, shorten_string, markdown_to_html, \
     instance_banned, community_membership, joined_communities, moderating_communities, is_image_url, \
     communities_banned_from, piefed_markdown_to_lemmy_markdown, community_moderators, add_to_modlog, \
@@ -806,7 +806,7 @@ def add_mod_to_community(community_id: int, person_id: int, src, auth=None):
     cache.delete_memoized(moderating_communities_ids_all_users)
     cache.delete_memoized(Community.moderators, community)
     cache.delete_memoized(alpha_views.cached_modlist_for_community)
-    cache.delete_memoized(alpha_views.cached_modlist_for_user, new_moderator)
+    delete_memoized_everywhere(alpha_views.cached_modlist_for_user, new_moderator)
 
     task_selector('add_mod', user_id=user.id, mod_id=person_id, community_id=community_id)
 
@@ -864,7 +864,7 @@ def remove_mod_from_community(community_id: int, person_id: int, src, auth=None)
     cache.delete_memoized(moderating_communities_ids_all_users)
     cache.delete_memoized(Community.moderators, community)
     cache.delete_memoized(alpha_views.cached_modlist_for_community)
-    cache.delete_memoized(alpha_views.cached_modlist_for_user, old_moderator)
+    delete_memoized_everywhere(alpha_views.cached_modlist_for_user, old_moderator)
 
     task_selector('remove_mod', user_id=user.id, mod_id=person_id, community_id=community_id)
 

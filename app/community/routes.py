@@ -84,8 +84,8 @@ from app.shared.tasks import task_selector
 import app.shared.feed as shared_feed
 from app.utils import is_valid_xml_utf8, get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url, joined_server_views
 from app.activitypub.serializers.podcast import uses_podcast_episode
-from app.storefront import (default_storefront, is_local_host, storefront_host, storefront_link,
-                            storefront_query_cache_key, storefront_url)
+from app.storefront import (default_storefront, delete_memoized_everywhere, is_local_host, storefront_host,
+                            storefront_link, storefront_query_cache_key, storefront_url)
 from app.rss_extras import RSSFeed, PodcastChannel, itunes_image_ok
 from datetime import timezone, timedelta
 from flask import render_template as flask_render_template
@@ -1784,7 +1784,7 @@ def community_make_owner(community_id: int, user_id: int):
         cache.delete_memoized(Community.moderators, community)
 
         cache.delete_memoized(alpha_views.cached_modlist_for_community)
-        cache.delete_memoized(alpha_views.cached_modlist_for_user, user)
+        delete_memoized_everywhere(alpha_views.cached_modlist_for_user, user)
 
     else:
         abort(401)
@@ -1829,7 +1829,7 @@ def community_remove_owner(community_id: int, user_id: int):
             cache.delete_memoized(Community.moderators, community)
 
             cache.delete_memoized(alpha_views.cached_modlist_for_community)
-            cache.delete_memoized(alpha_views.cached_modlist_for_user, user)
+            delete_memoized_everywhere(alpha_views.cached_modlist_for_user, user)
 
     else:
         abort(401)
