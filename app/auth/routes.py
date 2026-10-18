@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from flask import flash, g, make_response, redirect, request, url_for, current_app, session
+from flask import abort, flash, g, make_response, redirect, request, url_for, current_app, session
 from flask_babel import _
 from flask_login import current_user, login_user, logout_user
 from sqlalchemy import func
@@ -31,6 +31,8 @@ from app.auth.util import (
 )
 from app.email import send_password_reset_email, send_registration_approved_email
 from app.models import User, UserRegistration
+from app.onion import is_onion_request
+from app.onion_guard import WAIT_MIN_AGE, onion_proof_refused, onion_wait_target
 from app.shared.tasks import task_selector
 from app.utils import (
     finalize_user_setup,
@@ -49,7 +51,8 @@ def login():
         return redirect_next_page()
 
     form = LoginForm()
-    if request.method == "POST" and form.validate_on_submit():
+    # Onion only: the proof-of-work (or wait token) first, before anything that looks the account up or counts
+    if request.method == "POST" and not onion_proof_refused(form) and form.validate_on_submit():
         return process_login(form)
 
     return render_login_form(form)
@@ -76,10 +79,20 @@ def register():
         del form.terms
     if g.site.registration_mode == 'Open':
         del form.question
-    if request.method == "POST" and form.validate_on_submit():
+    # Onion only: the proof first, before the form's validators look the name and email up
+    if request.method == "POST" and not onion_proof_refused(form) and form.validate_on_submit():
         return process_registration_form(form)
 
     return render_registration_form(form)
+
+
+@bp.route('/onion_wait', methods=['GET'])
+def onion_wait():
+    """The no-JavaScript wait step for the onion login and registration forms (spec 3.7a A)."""
+    if not is_onion_request():
+        abort(404)
+    return render_template('auth/onion_wait.html', title=_('One moment'), target=onion_wait_target(),
+                           seconds=WAIT_MIN_AGE)
 
 
 @bp.route('/please_wait', methods=['GET'])

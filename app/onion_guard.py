@@ -15,23 +15,32 @@ account on the alpha API (`app.onion.onion_rate_key`). This module adds the part
   failures each attempt waits `min(2 ** (count - 5), 300)` seconds from the last one. The typed identifier's wait is
   shown; the account's is enforced silently, as a wrong password (`OnionLoginGate`). The counters are onion-only, so
   an onion attacker cannot slow the account down on clearnet. It covers web login, API login and verify_credentials.
+- **Proof-of-work** (3.7a A). An onion login or registration POST must carry a solved challenge (`issue_challenge`,
+  solved by app/static/js/onion_pow.js) or, without JavaScript, a wait token at least 15 s old (`issue_wait_token`).
+  It is checked first, before the login delay, any account lookup, LDAP or password check, and each proof is good
+  once. A refused proof is a form error and costs the account nothing. API logins are not asked: an app cannot solve
+  a form's puzzle, so they rely on the login delay and the per-account buckets alone.
 """
 from __future__ import annotations
 
 import math
+import re
 import time
+from hashlib import sha256
+from secrets import token_hex
 from typing import NamedTuple
 from urllib.parse import quote, quote_from_bytes
 
-from flask import current_app, flash, make_response, redirect, request
+from flask import current_app, flash, make_response, redirect, request, url_for
 from flask_babel import _, ngettext
+from itsdangerous import BadData, TimestampSigner, URLSafeTimedSerializer
 from markupsafe import escape
 from redis.exceptions import WatchError
 
 import app as app_pkg
 from app import limiter
 from app.onion import API_RATE_KEY, is_api_path, is_onion_request, mint_onion_sid
-from app.utils import authorise_api_user
+from app.utils import authorise_api_user, get_setting
 
 # Every endpoint with a `@limiter.limit` decorator is in exactly one of these two sets
 # (tests/test_onion_guard_limits.py finds the decorators by parsing app/ and fails on one in neither).
@@ -71,6 +80,20 @@ FREE_LOGIN_FAILURES = 5
 MAX_LOGIN_WAIT = 300
 LOGIN_FAILURE_TTL = 3600
 RESERVE_RETRIES = 5
+
+POW_SALT = 'onion-pow'
+WAIT_SALT = 'onion-wait'
+POW_USED_KEY = 'onion_pow_used:{}'
+WAIT_USED_KEY = 'onion_wait_used:{}'
+POW_MAX_AGE = 600
+WAIT_MIN_AGE = 15
+WAIT_MAX_AGE = 600
+POW_DIFFICULTY_SETTING = 'onion_pow_difficulty'
+DEFAULT_POW_DIFFICULTY = 16
+MAX_POW_DIFFICULTY = 24       # about 16 million hashes on average: minutes in a browser, so higher would lock people out
+NONCE_PATTERN = re.compile(r'[0-9A-Za-z]{1,32}')
+MAX_TOKEN_LENGTH = 512
+WAIT_TARGETS = {'login': 'auth.login', 'register': 'auth.register'}
 
 
 # --------------------------------------------------------------------------
@@ -295,3 +318,121 @@ def onion_login_gate(typed: str, user=None) -> OnionLoginGate:
 def onion_login_succeeded(typed: str, user) -> None:
     if is_onion_request():
         clear_onion_login_failures(typed, user.id)
+
+
+# --------------------------------------------------------------------------
+# Proof-of-work and the no-JavaScript wait (3.7a A)
+# --------------------------------------------------------------------------
+
+class _ClockSigner(TimestampSigner):
+    """Token timestamps on `_now`, the module's one clock, so a test that freezes it freezes token ages too."""
+
+    def get_timestamp(self) -> int:
+        return int(_now())
+
+
+def _serializer(salt: str) -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(current_app.config['SECRET_KEY'], salt=salt, signer=_ClockSigner)
+
+
+def _load(salt: str, token, max_age: int):
+    """The signed body of `token` and its age in seconds, or None for anything not signed here for `salt` within
+    `max_age` (a forged, altered, expired or future token, or one that is not a string)."""
+    if not isinstance(token, str) or len(token) > MAX_TOKEN_LENGTH:
+        return None
+    try:
+        body, issued = _serializer(salt).loads(token, max_age=max_age, return_timestamp=True)
+    except BadData:
+        return None
+    return body, _now() - issued.timestamp()
+
+
+def _spend(key: str, salt: str, ttl: int) -> bool:
+    """Mark a proof used. SET NX is the decision, so two requests racing with one proof cannot both have it."""
+    return bool(app_pkg.redis_client.set(key.format(salt), '1', nx=True, ex=ttl))
+
+
+def pow_difficulty() -> int:
+    """The admin's `onion_pow_difficulty` in leading zero bits, held to 0..MAX_POW_DIFFICULTY. 0 asks no work: any
+    nonce will do, but the challenge is still signed, timed and good once."""
+    return min(max(int(get_setting(POW_DIFFICULTY_SETTING, DEFAULT_POW_DIFFICULTY)), 0), MAX_POW_DIFFICULTY)
+
+
+def leading_zero_bits(digest: bytes) -> int:
+    return len(digest) * 8 - int.from_bytes(digest, 'big').bit_length()
+
+
+def _new_challenge() -> tuple[str, str, int]:
+    salt, bits = token_hex(16), pow_difficulty()
+    return _serializer(POW_SALT).dumps({'salt': salt, 'bits': bits}), salt, bits
+
+
+def issue_challenge() -> str:
+    """A signed challenge `{salt, bits}`, good for POW_MAX_AGE seconds."""
+    return _new_challenge()[0]
+
+
+def verify_pow(token, nonce) -> bool:
+    """Whether `nonce` solves the challenge `token`: signed here, at most POW_MAX_AGE old, at least as hard as the
+    difficulty is now (so raising it applies at once), `sha256(f"{salt}:{nonce}")` with at least its bits of leading
+    zeros, and not used before. A success uses it up; a refusal leaves it as it was."""
+    loaded = _load(POW_SALT, token, POW_MAX_AGE)
+    if loaded is None or not isinstance(nonce, str) or not NONCE_PATTERN.fullmatch(nonce):
+        return False
+    body = loaded[0]
+    if not (isinstance(body, dict) and isinstance(body.get('salt'), str) and type(body.get('bits')) is int):
+        return False
+    salt, bits = body['salt'], body['bits']
+    if bits < pow_difficulty() or leading_zero_bits(sha256(f'{salt}:{nonce}'.encode()).digest()) < bits:
+        return False
+    return _spend(POW_USED_KEY, salt, POW_MAX_AGE)
+
+
+def issue_wait_token() -> str:
+    """A signed token for the no-JavaScript wait step, good from WAIT_MIN_AGE to WAIT_MAX_AGE seconds after now."""
+    return _serializer(WAIT_SALT).dumps({'salt': token_hex(16)})
+
+
+def wait_token_ready(token) -> bool:
+    """Whether `token` is a wait token signed here, WAIT_MIN_AGE to WAIT_MAX_AGE seconds old, not used before. A
+    success uses it up; one that is too early is left as it was."""
+    loaded = _load(WAIT_SALT, token, WAIT_MAX_AGE)
+    if loaded is None:
+        return False
+    body, age = loaded
+    if not (isinstance(body, dict) and isinstance(body.get('salt'), str)) or age < WAIT_MIN_AGE:
+        return False
+    return _spend(WAIT_USED_KEY, body['salt'], WAIT_MAX_AGE)
+
+
+def onion_proof_refused(form) -> bool:
+    """For an onion POST of the login or registration form: True, with the form error flashed, unless it carries a
+    wait token that is ready or a solved challenge (either will do, and the one accepted is used up). Always False
+    on clearnet, where nothing is asked or read."""
+    if not is_onion_request():
+        return False
+    if wait_token_ready(form.wait_token.data) or verify_pow(form.pow_token.data, form.pow_nonce.data):
+        return False
+    flash(_("Your browser's check did not go through, or took too long. Please try again."), 'error')
+    return True
+
+
+def prepare_onion_proof(form, target: str):
+    """For the onion login (`target` 'login') or registration ('register') page: a fresh challenge on the form's
+    hidden fields, the wait token the wait step sent here (if any), and what the template needs to offer the wait
+    step. None on clearnet, where the template renders none of it."""
+    if not is_onion_request():
+        return None
+    token, salt, bits = _new_challenge()
+    form.pow_token.data = token
+    form.pow_nonce.data = ''
+    form.wait_token.data = request.args.get('wait_token', '')
+    return {'salt': salt, 'bits': bits,
+            'wait_url': url_for('auth.onion_wait', form=target, next=request.args.get('next'))}
+
+
+def onion_wait_target() -> str:
+    """Where the wait step sends the browser once its token is ready: the form it came from, as a relative URL (never
+    built from Host), carrying the token and the login's `next`."""
+    endpoint = WAIT_TARGETS.get(request.args.get('form'), 'auth.login')
+    return url_for(endpoint, wait_token=issue_wait_token(), next=request.args.get('next'))

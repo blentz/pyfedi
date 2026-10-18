@@ -494,6 +494,22 @@ DOCUMENTED_EXEMPTIONS = {
                     "if anoobis() ever gains a redirect(): the scan cannot."),
         ),
     ],
+    'app/onion_guard.py': [
+        Exempt(
+            line="'wait_url': url_for('auth.onion_wait', form=target, next=request.args.get('next'))}",
+            occurrences=1,
+            reason=("not a redirect target here: the login page's `next` is carried as a query "
+                    "parameter to the onion wait step (url_for builds a relative URL on this "
+                    "storefront), which only hands it on to the login form again."),
+        ),
+        Exempt(
+            line="return url_for(endpoint, wait_token=issue_wait_token(), next=request.args.get('next'))",
+            occurrences=1,
+            reason=("not a redirect target here: the wait step's meta refresh goes to the login or "
+                    "register form (a relative url_for), with `next` as a query parameter; login's "
+                    "redirect_next_page checks it with safe_redirect_target before redirecting."),
+        ),
+    ],
     'app/post/routes.py': [
         Exempt(
             line="referrer=request.form.get('referrer')))",

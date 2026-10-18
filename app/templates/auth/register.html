@@ -70,6 +70,7 @@
                                     </div>
                                 {% endif -%}
                                 {{ render_field(form.timezone) }}
+                                {% include 'auth/_onion_proof.html' %}
                                 {{ render_field(form.submit) }}
                             </form>
                         {% else %}

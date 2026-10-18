@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    {# Relative, never built from Host. The form takes the token from 15 s after it was issued. -#}
+    <meta http-equiv="refresh" content="{{ seconds }};url={{ target }}">
+    <title>{{ title }}</title>
+</head>
+<body>
+    <h1>{{ title }}</h1>
+    <p>{{ _('Please wait %(num)d seconds. The form will open by itself.', num=seconds) }}</p>
+    <p><a href="{{ target }}">{{ _('If it does not, follow this link once the time is up.') }}</a></p>
+</body>
+</html>

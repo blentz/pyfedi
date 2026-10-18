@@ -65,6 +65,13 @@ def login_form(monkeypatch):
     monkeypatch.setattr('app.auth.routes.render_login_form', lambda form: 'the login form')
 
 
+@pytest.fixture(autouse=True)
+def proof_given(monkeypatch):
+    """Every onion login here carries its proof-of-work (task 10, tests/test_onion_pow.py, which also shows the proof
+    is checked before anything here runs): these tests are about what comes after it."""
+    monkeypatch.setattr('app.auth.routes.onion_proof_refused', lambda form: False)
+
+
 @pytest.fixture
 def clock(monkeypatch):
     now = SimpleNamespace(t=1_800_000_000.0)

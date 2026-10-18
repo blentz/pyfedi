@@ -4,6 +4,6 @@
   "type": "module",
   "description": "Client-side tests only. No runtime dependencies; nothing here is served.",
   "scripts": {
-    "test:js": "node --test --experimental-test-coverage --test-coverage-include=app/static/js/live_feed.js --test-coverage-lines=100 --test-coverage-branches=100 --test-coverage-functions=100 'tests/js/*.test.mjs'"
+    "test:js": "node --test --experimental-test-coverage --test-coverage-include=app/static/js/live_feed.js --test-coverage-include=app/static/js/onion_pow.js --test-coverage-lines=100 --test-coverage-branches=100 --test-coverage-functions=100 'tests/js/*.test.mjs'"
   }
 }
