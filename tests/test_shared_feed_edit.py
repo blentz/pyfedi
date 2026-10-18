@@ -26,8 +26,9 @@ from flask import g
 from app import db
 from app.constants import SRC_API, SRC_WEB
 from app.models import (Community, Feed, FeedItem, FeedJoinRequest, FeedMember, File,
-                        Role, Site, User, user_role)
+                        Role, Site, SiteDomain, User, user_role)
 from app.shared.feed import edit_feed
+from app.storefront import clear_domain_cache, domain_for_host
 from tests.factories import (make_community, make_feed_item, make_feed_join_request,
                              make_feed_member, make_instance, make_site, make_user,
                              web_ctx)
@@ -909,3 +910,59 @@ def test_edit_feed_from_scratch_removes_the_old_banner_row(app, db_session):
     assert edited.image_id != old_id
     assert db.session.get(File, old_id) is None
     assert unlink.call_count == 1
+
+
+# --- an API client may have read the image URL on another storefront (onion spec §3.4) ------------------------------
+
+@contextmanager
+def _api_ctx_on(app, user, host):
+    """_api_ctx, served as storefront `host` (abc.onion is registered beside the canonical host)."""
+    if SiteDomain.query.filter_by(domain='test.piefed.local').first() is None:   # the canonical host stays served
+        db.session.add(SiteDomain(domain='test.piefed.local', scheme='https', is_default=True))
+    db.session.add(SiteDomain(domain='abc.onion', scheme='http', federates=False))
+    db.session.commit()
+    clear_domain_cache()
+    try:
+        with app.test_request_context(base_url=f'http://{host}'):
+            g.storefront = domain_for_host(host)
+            g.site = db.session.get(Site, 1)
+            g.site.enable_nsfw = g.site.enable_nsfl = True
+            with patch('app.shared.feed.authorise_api_user', return_value=user):
+                yield
+    finally:
+        clear_domain_cache()
+
+
+@pytest.mark.parametrize('field', ['icon_url', 'banner_url'])
+@pytest.mark.parametrize('request_host, sent_origin', [
+    ('abc.onion', 'https://test.piefed.local'),     # read on the clearnet, edited on the onion
+    ('test.piefed.local', 'http://abc.onion'),      # read on the onion, edited on the clearnet
+])
+def test_edit_feed_keeps_an_upload_named_on_another_storefront(app, db_session, field, request_host, sent_origin):
+    s = _seed()
+    existing = (_attach_icon if field == 'icon_url' else _attach_banner)(s.feed, source_url=None)
+    sent = f"{sent_origin}/static/media/feeds/{'old-icon' if field == 'icon_url' else 'old-banner'}.png"
+
+    with _api_ctx_on(app, s.owner, request_host):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.is_image_url', side_effect=lambda url: pytest.fail(f'refetched {url}')), \
+                patch('app.models.File.delete_from_disk') as unlink:
+            edit_feed(_api_payload(**{field: sent}), s.feed, SRC_API, auth='Bearer x')
+
+    edited = db.session.get(Feed, s.feed.id)
+    assert (edited.icon_id if field == 'icon_url' else edited.image_id) == existing.id
+    assert unlink.call_count == 0
+    assert db.session.get(File, existing.id).source_url is None
+
+
+def test_edit_feed_stores_a_new_image_named_on_the_onion_canonically(app, db_session):
+    s = _seed()
+    with _api_ctx_on(app, s.owner, 'abc.onion'):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.is_image_url', return_value=True), \
+                patch('app.shared.feed.make_image_sizes'):
+            edit_feed(_api_payload(icon_url='http://abc.onion/static/media/feeds/new.png'), s.feed, SRC_API,
+                      auth='Bearer x')
+
+    assert db.session.get(File, db.session.get(Feed, s.feed.id).icon_id).source_url == \
+        'https://test.piefed.local/static/media/feeds/new.png'

@@ -19,6 +19,7 @@ from app.shared.tasks import task_selector
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
 from app.shared.upload import process_upload
+from app.storefront import canonical_link
 from app.utils import authorise_api_user, feed_membership, get_request, menu_subscribed_feeds, joined_communities, \
     community_membership, gibberish, get_task_session, instance_banned, menu_instance_feeds, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, is_image_url
@@ -243,8 +244,9 @@ def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_fi
         title = input['title']
         public = input['public']
         description = input['description']
-        icon_url = input['icon_url']
-        banner_url = input['banner_url']
+        # the client may have read them on any storefront; stored and federated, they are canonical
+        icon_url = canonical_link(input['icon_url'])
+        banner_url = canonical_link(input['banner_url'])
         nsfw = input['nsfw']
         nsfl = input['nsfl']
         communities = input['communities']
@@ -369,8 +371,9 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
         title = input['title']
         public = input['public']
         description = input['description']
-        icon_url = input['icon_url']
-        banner_url = input['banner_url']
+        # the client may have read them on any storefront; stored and federated, they are canonical
+        icon_url = canonical_link(input['icon_url'])
+        banner_url = canonical_link(input['banner_url'])
         nsfw = input['nsfw']
         nsfl = input['nsfl']
         communities = input['communities']
@@ -466,12 +469,12 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
         icon_url_changed = banner_url_changed = False
 
         if feed.icon_id and icon_url != feed.icon.source_url:
-            if icon_url != feed.icon.medium_url():
+            if icon_url != feed.icon.medium_url(canonical=True):
                 icon_url_changed = True
         if not feed.icon_id:
             icon_url_changed = True
         if feed.image_id and banner_url != feed.image.source_url:
-            if banner_url != feed.image.medium_url():
+            if banner_url != feed.image.medium_url(canonical=True):
                 banner_url_changed = True
         if not feed.image_id:
             cache.delete_memoized(Feed.header_image, feed)

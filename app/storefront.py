@@ -151,14 +151,26 @@ def storefront_host() -> str:
     return _authority(current_storefront())
 
 
-def storefront_link(url):
-    """`url` moved onto the current storefront when it points at this site (any registered host); any other URL,
-    or a value that is not a string, unchanged. For stored links shown where no HTML rewrite reaches (RSS)."""
+def _moved_to(url, base: str):
+    """`url` on origin `base` when it points at this site (any registered host); any other URL, or a value that is
+    not a string, unchanged."""
     if not is_local_link(url):
         return url
     parts = urlsplit(url)
-    origin = urlsplit(storefront_url())
+    origin = urlsplit(base)
     return urlunsplit((origin.scheme, origin.netloc, parts.path, parts.query, parts.fragment))
+
+
+def storefront_link(url):
+    """`url` moved onto the current storefront when it points at this site. For stored links shown where no HTML
+    rewrite reaches (RSS)."""
+    return _moved_to(url, storefront_url())
+
+
+def canonical_link(url):
+    """`url` moved onto the canonical origin when it points at this site: what a URL a client read on any storefront
+    becomes before it is stored or federated."""
+    return _moved_to(url, canonical_url())
 
 
 def canonical_url() -> str:
