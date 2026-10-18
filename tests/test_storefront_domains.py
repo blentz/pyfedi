@@ -167,3 +167,23 @@ def test_startup_check_survives_missing_table(app, db_session, caplog):
     finally:
         db.session.execute(db.text('ALTER TABLE site_domain_gone RENAME TO site_domain'))
         db.session.commit()
+
+
+@pytest.mark.parametrize('rows', [
+    [{'domain': 'abc.onion', 'scheme': 'http'}],                                           # no row names SERVER_NAME
+    [{'domain': 'other.example', 'is_default': True}, {'domain': 'abc.onion', 'scheme': 'http'}],   # a stale seed
+])
+def test_server_name_is_served_when_no_row_names_it(app, db_session, site, rows):
+    """final review Minor 5: the canonical site, inbox included, must never answer 421 because the table's rows
+    were seeded under another SERVER_NAME. Its host is served as the synthesised default; check_default_domain
+    still logs the mismatch."""
+    db.session.query(SiteDomain).delete()   # the migration's seed row survives until the first truncate
+    for row in rows:
+        add_domain(**row)
+    served = domain_for_host('TEST.piefed.local:443')
+    assert served is not None
+    assert (served.domain, served.scheme, served.is_default) == ('test.piefed.local', 'https', True)
+    assert domain_for_host('abc.onion').domain == 'abc.onion'
+    assert domain_for_host('evil.example') is None
+    response = app.test_client().get('/robots.txt', base_url='https://test.piefed.local')
+    assert response.status_code == 200
