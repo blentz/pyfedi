@@ -61,6 +61,22 @@ def test_canonicalise_text_leaves_the_rest_alone(app, onion, text):
     assert canonicalise_text(text) is text
 
 
+@pytest.mark.parametrize('text, saved', [
+    ('run `curl http://abc.onion/x` now', f'run `curl https://{CANONICAL}/x` now'),
+    ('```\ncurl http://abc.onion/x\n```', f'```\ncurl https://{CANONICAL}/x\n```'),
+    ('https://ex.com/?u=http://abc.onion/x', f'https://ex.com/?u=https://{CANONICAL}/x'),
+])
+def test_canonicalise_text_rewrites_our_urls_in_code_and_in_foreign_urls(app, onion, text, saved):
+    # documented choice: the privacy invariant (nothing stored names the onion) beats fidelity
+    assert canonicalise_text(text) == saved
+
+
+def test_canonicalise_links_rewrites_our_urls_in_a_foreign_url(app, onion):
+    html = '<a href="https://ex.com/?u=http://abc.onion/x">x</a><a href="http://abc.onion/y">y</a>'
+    assert canonicalise_links(html) == (f'<a href="https://ex.com/?u=http://abc.onion/x">x</a>'
+                                        f'<a href="https://{CANONICAL}/y">y</a>')
+
+
 def test_canonicalise_text_passes_none(app, onion):
     assert canonicalise_text(None) is None
 
