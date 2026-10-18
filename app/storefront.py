@@ -311,6 +311,36 @@ def canonicalise_links(html: str) -> str:
     return _rebase_links(html, canonical_url(), _local_hosts(), render=False)
 
 
+# An http(s) or scheme-relative URL's start and authority in plain text (Markdown): not inside a word, another
+# scheme or a path, and ending before the path or any character Markdown or prose wraps a link in. Only the authority is matched:
+# `_rebase` keeps everything after it, so where the path ends does not matter.
+_TEXT_URL_AUTHORITY = re.compile(r'(?:(?<![\w+.-])https?:|(?<![\w+.:/-]))//[^\s/?#<>()"\'`\\{}|^*]*', re.IGNORECASE)
+_TRAILING_PUNCTUATION = '.,;:!?'
+
+
+def canonicalise_text(text: str | None) -> str | None:
+    """`text` (Markdown, a plain-text body) with every absolute http(s) or scheme-relative URL on a non-canonical host
+    of this site moved onto the canonical origin, for text about to be stored or federated: `source.content` is
+    rendered in preference to the HTML. Hosts match as `is_local_link` matches them (case, a port, a trailing dot
+    ignored); everything after the authority is kept byte for byte. Foreign hosts, the canonical host as written and
+    text that is not a URL are left alone, and `text` itself comes back when nothing moved. Sentence punctuation
+    straight after a bare host stays in the text."""
+    if not text:
+        return text
+    hosts = _local_hosts() - {_bare_host(current_app.config.get('SERVER_NAME') or '')}
+    lowered = text.lower()
+    if not any(host in lowered for host in hosts):
+        return text
+    base = canonical_url()
+
+    def move(match):
+        authority = match[0].rstrip(_TRAILING_PUNCTUATION)
+        return _rebase(authority, base, hosts) + match[0][len(authority):]
+
+    moved = _TEXT_URL_AUTHORITY.sub(move, text)
+    return text if moved == text else moved
+
+
 def rewrite_links(body: str, storefront: DomainInfo) -> str:
     """`body` with the links of this site's other hosts (`href`, `src`, `srcset`, `action`, `<meta content>`,
     `data-*`) moved onto `storefront`. `body` itself, unparsed, when no such host appears in it. Links already on
@@ -402,3 +432,4 @@ def resolve_storefront() -> Response | None:
     g.storefront = storefront
     _bind(storefront)
     return None
+
