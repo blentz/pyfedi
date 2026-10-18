@@ -23,7 +23,7 @@ from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role
 from app.onion import audit_field, is_onion_request
-from app.onion_guard import onion_login_failed, onion_login_succeeded, onion_login_wait
+from app.onion_guard import onion_login_succeeded, onion_login_wait
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, \
     finalize_user_setup, get_request, get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
@@ -492,12 +492,10 @@ def process_login(form: LoginForm):
         # Either LDAP is disabled or LDAP auth failed - try local authentication
         user = find_user(username)
         if not user:
-            onion_login_failed(username)
             flash(invalid_login_message(), "error")  # D1131
             return redirect(url_for("auth.login"))
 
         if not validate_user_login(user, password, ip):
-            onion_login_failed(username)
             return redirect(url_for("auth.login"))
 
     onion_login_succeeded(username)

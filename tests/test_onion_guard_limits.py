@@ -28,7 +28,8 @@ from app.models import SiteDomain
 from app.onion import ONION_ANON_KEY, arrived_onion_sid, mint_onion_sid
 from app.onion_guard import (COOKIE_CHECK, ONION_SESSION_ENDPOINTS, ONION_SESSION_EXEMPT,
                              clear_onion_login_failures, login_delay_remaining, onion_session_missing,
-                             record_onion_login_failure, resolve_onion_api_rate_key, same_url)
+                             record_onion_login_failure, reserve_onion_login_attempt, resolve_onion_api_rate_key,
+                             same_url)
 from app.storefront import clear_domain_cache
 from tests.conftest import TestConfig
 from tests.factories import make_instance, make_user
@@ -473,26 +474,61 @@ def test_the_key_is_the_lower_case_name(app, redis_double, clock):
     assert login_delay_remaining('alice') == 0
 
 
-def test_an_expired_wait_lets_one_attempt_through(app, redis_double, clock):
-    """Once the wait is over, the first caller claims the slot: callers racing it see the wait again, so parallel
-    attempts cannot all slip through at the moment it ends."""
+def test_reserving_is_the_failure(app, redis_double, clock):
+    """An attempt is counted when it is let through, before its password is checked. A failure needs nothing more;
+    a success clears the counter. So the first 5 attempts are free, the 6th still goes ahead, and then the wait is
+    2 s from the 6th."""
+    assert [reserve_onion_login_attempt('alice') for _ in range(6)] == [0] * 6
+    assert redis_double.hget('onion_login_fail:alice', 'count') == '6'
+    assert reserve_onion_login_attempt('alice') == 2
+    assert redis_double.hget('onion_login_fail:alice', 'count') == '6'   # a refused attempt is not counted
+    assert 3500 < redis_double.ttl('onion_login_fail:alice') <= 3600
+    clear_onion_login_failures('alice')
+    assert reserve_onion_login_attempt('alice') == 0
+
+
+def test_parallel_attempts_get_one_per_wait_window(app, redis_double, clock):
+    """N attempts arriving together, none of them finished yet: only one goes ahead per window."""
+    for _ in range(5):
+        record_onion_login_failure('alice')
+    assert [reserve_onion_login_attempt('alice') for _ in range(10)] == [0] + [2] * 9
+    clock.t += 2
+    assert [reserve_onion_login_attempt('alice') for _ in range(10)] == [0] + [4] * 9
+    clock.t += 4
+    assert [reserve_onion_login_attempt('alice') for _ in range(3)] == [0, 8, 8]
+    assert redis_double.hget('onion_login_fail:alice', 'count') == '8'
+
+
+def test_a_concurrent_change_is_retried(app, redis_double, clock, monkeypatch):
+    """Another attempt reserving between the read and the write aborts this transaction (WATCH); it is decided
+    again on the new state, so the two are never both let through."""
     for _ in range(6):
         record_onion_login_failure('alice')
     clock.t += 2
-    assert login_delay_remaining('alice') == 0
-    assert login_delay_remaining('alice') == 2
-
-
-def test_a_concurrent_change_is_a_wait(app, redis_double, clock, monkeypatch):
-    for _ in range(6):
-        record_onion_login_failure('alice')
-    clock.t += 2
+    raced = []
 
     def racing_now():
-        redis_double.hincrby('onion_login_fail:alice', 'count', 1)   # another attempt failed meanwhile
+        if not raced:
+            raced.append(1)
+            redis_double.hincrby('onion_login_fail:alice', 'count', 1)   # another attempt was let through meanwhile
+            redis_double.hset('onion_login_fail:alice', 'last', clock.t)
         return clock.t
     monkeypatch.setattr('app.onion_guard._now', racing_now)
-    assert login_delay_remaining('alice') == 2
+    assert reserve_onion_login_attempt('alice') == 4
+    assert redis_double.hget('onion_login_fail:alice', 'count') == '7'
+
+
+def test_endless_contention_is_a_short_wait(app, redis_double, clock, monkeypatch):
+    for _ in range(6):
+        record_onion_login_failure('alice')
+    clock.t += 2
+
+    def always_racing():
+        redis_double.hset('onion_login_fail:alice', 'other', clock.t)
+        return clock.t
+    monkeypatch.setattr('app.onion_guard._now', always_racing)
+    assert reserve_onion_login_attempt('alice') == 1
+    assert redis_double.hget('onion_login_fail:alice', 'count') == '6'
 
 
 def web_login(client, user_name, password, **kwargs):
