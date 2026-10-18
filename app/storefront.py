@@ -321,9 +321,12 @@ def canonicalise_links(html: str) -> str:
 
 
 # An http(s) or scheme-relative URL's start and authority in plain text (Markdown): not inside a word, another
-# scheme or a path, and ending before the path or any character Markdown or prose wraps a link in. Only the authority is matched:
-# `_rebase` keeps everything after it, so where the path ends does not matter.
-_TEXT_URL_AUTHORITY = re.compile(r'(?:(?<![\w+.-])https?:|(?<![\w+.:/-]))//[^\s/?#<>()"\'`\\{}|^*]*', re.IGNORECASE)
+# scheme or a path. Only `[userinfo@]host[:port]` is matched, so whatever follows a bare host (`]`, `~`, `_`, `,`, a
+# path) stays text: `_rebase` keeps everything after the authority, so where the URL itself ends does not matter.
+_TEXT_URL_AUTHORITY = re.compile(r'(?:(?<![^\W_])(?<![+.-])https?:|(?<![^\W_])(?<![+.:/-]))//'
+                                 r'(?:[^\s/?#@<>()\[\]"\'`\\{}|^*]*@)?'   # userinfo
+                                 r'(?:\[[0-9A-Fa-f:.]*\]|(?:[^\W_]|[.-])+)'   # an IPv6 literal, or a name
+                                 r'(?::[0-9]*)?', re.IGNORECASE)
 _TRAILING_PUNCTUATION = '.,;:!?'
 
 

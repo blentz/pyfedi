@@ -33,16 +33,26 @@ pytestmark = pytest.mark.usefixtures('site')
     ('(http://abc.onion/post/1), http://abc.onion/u/a;', f'(https://{CANONICAL}/post/1), https://{CANONICAL}/u/a;'),
     ('http://abc.onion', f'https://{CANONICAL}'),
     ('link:http://abc.onion/x', f'link:https://{CANONICAL}/x'),
+    # a bare host ends at whatever follows it (final re-review M-1)
+    ('[http://abc.onion](http://abc.onion)', f'[https://{CANONICAL}](https://{CANONICAL})'),
+    ('~~http://abc.onion~~', f'~~https://{CANONICAL}~~'),
+    ('_http://abc.onion_', f'_https://{CANONICAL}_'),
+    ('http://abc.onion,http://abc.onion', f'https://{CANONICAL},https://{CANONICAL}'),
+    ('http://abc.onion;x http://abc.onion&x http://abc.onion=', f'https://{CANONICAL};x https://{CANONICAL}&x https://{CANONICAL}='),
+    ('http://abc.onion]x http://abc.onion[x', f'https://{CANONICAL}]x https://{CANONICAL}[x'),
+    ('http://me@abc.onion:8080~/x', f'https://{CANONICAL}~/x'),
     ('a\nhttp://abc.onion/x\r\nb', f'a\nhttps://{CANONICAL}/x\r\nb'),
 ])
 def test_canonicalise_text_rebases_our_other_hosts(app, onion, text, saved):
     assert canonicalise_text(text) == saved
+    assert canonicalise_text(saved) is saved   # idempotent: what was saved is saved again unchanged
 
 
 @pytest.mark.parametrize('text', [
     'no links here, just abc.onion in words',
     'https://example.com/abc.onion/x and https://notabc.onion/x and https://abc.onion.example/x',
     f'http://{CANONICAL}/post/1 and //{CANONICAL}/x',   # the canonical host is left as written (clearnet unchanged)
+    f'[http://{CANONICAL}](http://{CANONICAL}), ~~http://{CANONICAL}~~ _http://{CANONICAL}_',
     'ftp://abc.onion/x xhttps://abc.onion/x mailto:me@abc.onion',
     'https:\\\\abc.onion/x',                             # a backslash URL names no host we can trust
     '',
