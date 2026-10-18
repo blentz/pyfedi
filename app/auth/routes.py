@@ -266,6 +266,7 @@ def google_connect():
 
 
 @bp.route("/google_authorize")
+@clearnet_only('auth.login')
 def google_authorize():
     return handle_oauth_authorize(
         provider='google',
@@ -275,6 +276,7 @@ def google_authorize():
 
 
 @bp.route("/google_connect_callback")
+@clearnet_only('user.connect_oauth')
 @login_required
 def google_connect_callback():
     try:
@@ -317,6 +319,7 @@ def mastodon_login():
 
 
 @bp.route("/mastodon_authorize", methods=["GET", "POST"])
+@clearnet_only('auth.login')
 def mastodon_authorize():
     oauth_id_key = 'mastodon_oauth_id'
     form = RegisterByMastodonForm()
@@ -395,6 +398,7 @@ def mastodon_connect():
 
 
 @bp.route("/mastodon_connect_callback")
+@clearnet_only('user.connect_oauth')
 @login_required
 def mastodon_connect_callback():
     """
@@ -448,6 +452,7 @@ def discord_connect():
 
 
 @bp.route("/discord_authorize")
+@clearnet_only('auth.login')
 def discord_authorize():
     return handle_oauth_authorize(
         provider="discord",
@@ -457,6 +462,7 @@ def discord_authorize():
 
 
 @bp.route("/discord_connect_callback")
+@clearnet_only('user.connect_oauth')
 @login_required
 def discord_connect_callback():
     try:
