@@ -27,7 +27,7 @@ from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, \
     finalize_user_setup, get_request, get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
-    user_ip_banned, role_access, actor_contains_blocked_words, get_site_as_dict, user_name_is_taken
+    user_ip_banned, log_login_failure, role_access, actor_contains_blocked_words, get_site_as_dict, user_name_is_taken
 from app.shared.tasks import task_selector
 
 
@@ -495,6 +495,7 @@ def process_login(form: LoginForm):
         # Either LDAP is disabled or LDAP auth failed - try local authentication
         user = find_user(username)
         if not user:
+            log_login_failure()
             flash(invalid_login_message(), "error")  # D1131
             return redirect(url_for("auth.login"))
 
@@ -528,10 +529,12 @@ def find_user(user_name):
 
 def validate_user_login(user, password, ip, refuse=False):
     if user.deleted:
+        log_login_failure()
         flash(invalid_login_message(), "error")  # D1131
         return False
 
     if not user.check_password(password, refuse=refuse):
+        log_login_failure()
         # D1131. One message whether or not the account has a password, and
         # whether or not it exists at all.
         flash(invalid_login_message(), "error")

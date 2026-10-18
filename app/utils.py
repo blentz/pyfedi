@@ -3575,6 +3575,26 @@ class MultiCheckboxField(SelectMultipleField):
 # is trusted and why.
 ip_address = get_ip_address
 
+# What fail2ban may be handed: an address is hex digits, '.' and ':' and nothing else, so the value can never carry
+# a second log line or a field of its own.
+LOGGABLE_IP_RE = re.compile(r'[0-9a-fA-F:.]+')
+
+
+def log_login_failure():
+    """One WARNING line for a failed credential check: `auth: login failed ip=<ip>`, which fail2ban on the host
+    matches to ban a clearnet address that keeps failing.
+
+    Onion requests all share the proxy's address (get_ip_address() is '' for them), so they log `ip=onion`, which no
+    ban can ever act on. An address with anything outside [0-9a-fA-F:.] logs as `ip=invalid`. The line never holds
+    the user name or email. Callers log only after a password was really checked (or the account was not found):
+    a refused proof-of-work or wait token, and a visible wait refusal, are not failed checks.
+    """
+    where = 'onion'
+    if not is_onion_request():
+        client = ip_address()
+        where = client if client and LOGGABLE_IP_RE.fullmatch(client) else 'invalid'
+    current_app.logger.warning('auth: login failed ip=%s', where)
+
 
 def user_ip_banned() -> bool:
     current_ip_address = ip_address()

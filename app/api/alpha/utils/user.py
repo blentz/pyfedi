@@ -20,7 +20,7 @@ from app.models import Conversation, ChatMessage, Notification, PostReply, User,
 # package before they are defined (import cycle: app.shared.user)
 import app.shared.user as shared_user
 from app.utils import authorise_api_user, in_sorted_list, user_in_restricted_country, user_access, user_notes
-from app.utils import markdown_to_html
+from app.utils import markdown_to_html, log_login_failure
 from app.visibility import visible_to_clause
 
 
@@ -944,8 +944,10 @@ def post_user_verify_credentials(data):
         api_abort(429, message=str(onion_wait_message(gate.wait)))
 
     # An account in hidden backoff is verified all the same and refused: a wrong password's answer and cost
-    if user is None or not user.check_password(password, refuse=gate.hidden) or \
-            (not user.is_ban_exempt() and user.banned):
+    if user is None or not user.check_password(password, refuse=gate.hidden):
+        log_login_failure()
+        raise BlockingIOError
+    if not user.is_ban_exempt() and user.banned:
         raise BlockingIOError
 
     onion_login_succeeded(username, user)
