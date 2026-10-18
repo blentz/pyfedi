@@ -44,6 +44,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import app.shared.tasks.users as users_module
 from app import db
 from app.models import UserRegistration
 from app.shared.tasks.users import check_user_application
@@ -777,3 +778,26 @@ def test_the_session_is_closed_on_the_happy_path(db_session, monkeypatch):
     check_user_application(s.application.id)
 
     assert calls == ['close']
+
+
+@pytest.mark.parametrize('ip', [None, ''])
+def test_an_applicant_with_no_ip_still_gets_the_email_check(db_session, monkeypatch, ip):
+    """An onion registration stores no IP (`user.ip_address` is NULL, onion storefront spec 3.7). The IP leg has
+    nothing to ask about and is skipped; the email leg still runs against every server, and nothing is logged.
+    It used to put None into the `','.join`, whose TypeError skipped the email leg too and logged an error."""
+    s = _seed(ip=ip)
+    set_setting('ban_check_servers', 'one.example\ntwo.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    client = _recording_client(monkeypatch, (200, [True]), (200, [False]))
+    errors = []
+    monkeypatch.setattr(users_module.current_app.logger, 'error', lambda msg: errors.append(msg))
+
+    check_user_application(s.application.id)
+
+    assert [url for url, _ in client.posts] == ['https://one.example/api/is_email_banned',
+                                                'https://two.example/api/is_email_banned']
+    assert all(APPLICANT_EMAIL in data['emails'].split(',') for _, data in client.posts)
+    assert errors == []
+    db.session.expire_all()
+    assert db.session.get(UserRegistration, s.application.id).warning == '1 instances have banned this account.'
