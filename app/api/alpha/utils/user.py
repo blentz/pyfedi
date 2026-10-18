@@ -22,7 +22,7 @@ import app.shared.user as shared_user
 from app.utils import authorise_api_user, in_sorted_list, user_in_restricted_country, user_access, user_notes
 from app.utils import markdown_to_html, log_login_failure
 from app.visibility import visible_to_clause
-from app.storefront import storefront_link
+from app.storefront import canonicalise_text, storefront_link
 
 
 def get_user(auth, data):
@@ -471,7 +471,7 @@ def put_user_save_user_settings(auth, data):
         user.hide_read_posts = True
 
     if isinstance(about, str):
-        user.about = about
+        user.about = about = canonicalise_text(about)
         user.about_html = markdown_to_html(about)
 
     if avatar:

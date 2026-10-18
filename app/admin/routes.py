@@ -44,7 +44,7 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, RolePermission, Domain, \
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, SiteDomain
-from app.storefront import clear_domain_cache, default_domain, default_storefront, storefront_url
+from app.storefront import canonicalise_text, clear_domain_cache, default_domain, default_storefront, storefront_url
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
@@ -149,13 +149,13 @@ def admin_site():
         site.name = form.name.data
         site.description = form.description.data  # tagline
 
-        site.about = form.about.data
+        site.about = canonicalise_text(form.about.data)
         if form.about.data:
             site.about_html = markdown_to_html(form.about.data, a_target="")
         else:
             site.about_html = ""
 
-        site.sidebar = form.sidebar.data
+        site.sidebar = canonicalise_text(form.sidebar.data)
         if form.sidebar.data:
             site.sidebar_html = markdown_to_html(form.sidebar.data, a_target="")
         else:
@@ -1639,9 +1639,9 @@ def admin_community_edit(community_id):
             community.ap_domain = current_app.config['SERVER_NAME']
         community.name = form.url.data
         community.title = form.title.data
-        community.description = form.description.data
+        community.description = canonicalise_text(form.description.data)
         community.description_html = markdown_to_html(form.description.data)
-        community.rules = form.rules.data
+        community.rules = canonicalise_text(form.rules.data)
         community.nsfw = form.nsfw.data
         community.ai_generated = form.ai_generated.data
         community.banned = form.banned.data
@@ -2297,7 +2297,7 @@ def admin_users_add():
         user.title = form.user_name.data
         user.set_password(form.password.data)
         user.verification_token = random_token(16)
-        user.about = form.about.data
+        user.about = canonicalise_text(form.about.data)
         user.email = form.email.data
         user.about_html = markdown_to_html(form.about.data)
         user.matrix_user_id = form.matrix_user_id.data
@@ -2824,7 +2824,7 @@ def admin_cms_pages():
 def admin_cms_page_add():
     form = CmsPageForm()
     if form.validate_on_submit():
-        page = CmsPage(url=form.url.data, title=form.title.data, body=form.body.data,
+        page = CmsPage(url=form.url.data, title=form.title.data, body=canonicalise_text(form.body.data),
                        body_html=markdown_to_html(form.body.data), last_edited_by=current_user.display_name())
         db.session.add(page)
         db.session.commit()
@@ -2845,7 +2845,7 @@ def admin_cms_page_edit(page_id):
     if form.validate_on_submit():
         page.url = form.url.data
         page.title = form.title.data
-        page.body = form.body.data
+        page.body = canonicalise_text(form.body.data)
         page.body_html = markdown_to_html(form.body.data, a_target="")
         page.last_edited_by = current_user.display_name()
         page.edited_at = utcnow()

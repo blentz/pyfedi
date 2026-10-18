@@ -26,6 +26,7 @@ from app.models import File, Notification, NotificationSubscription, Poll, PollC
 from app.shared.media import MediaRefused, can_upload_media, episode_form_wanted, media_kind_for, media_of, \
     queue_probe, store_uploaded_media, with_episode
 from app.onion import audit_field
+from app.storefront import canonical_link
 from app.shared.tasks import task_selector
 from app.shared.upload import open_uploaded_image
 from app.visibility import is_open, post_title_for
@@ -529,6 +530,8 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
             }
         else:
             event_data = None
+
+    url = canonical_link(url)   # a link to this site pasted on another of its hosts is stored on the canonical one
 
     # WARNING: beyond this point do not use the input variable as it can be either a dict or a form object!
 

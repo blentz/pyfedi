@@ -84,7 +84,7 @@ from app.shared.tasks import task_selector
 import app.shared.feed as shared_feed
 from app.utils import is_valid_xml_utf8, get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url, joined_server_views
 from app.activitypub.serializers.podcast import uses_podcast_episode
-from app.storefront import (default_storefront, delete_memoized_everywhere, is_local_host, storefront_host,
+from app.storefront import (canonicalise_text, default_storefront, delete_memoized_everywhere, is_local_host, storefront_host,
                             storefront_link, storefront_query_cache_key, storefront_url)
 from app.rss_extras import RSSFeed, PodcastChannel, itunes_image_ok
 from datetime import timezone, timedelta
@@ -2486,7 +2486,7 @@ def community_wiki_add(actor):
             form = EditCommunityWikiPageForm()
             if form.validate_on_submit():
                 new_page = CommunityWikiPage(community_id=community.id, slug=form.slug.data, title=form.title.data,
-                                             body=form.body.data, who_can_edit=form.who_can_edit.data)
+                                             body=canonicalise_text(form.body.data), who_can_edit=form.who_can_edit.data)
                 new_page.body_html = markdown_to_html(new_page.body, a_target="")
                 db.session.add(new_page)
                 db.session.commit()
@@ -2668,7 +2668,7 @@ def community_wiki_edit(actor, page_id):
             if form.validate_on_submit():
                 page.title = form.title.data
                 page.slug = form.slug.data
-                page.body = form.body.data
+                page.body = canonicalise_text(form.body.data)
                 page.body_html = markdown_to_html(page.body, a_target="")
                 page.who_can_edit = form.who_can_edit.data
                 page.edited_at = utcnow()

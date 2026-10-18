@@ -75,7 +75,7 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     PostReply, PostReplyBookmark, AllowedInstances, InstanceBan, Tag, Emoji, UserExtraField, ArchivedPostReply, \
     RevokedToken, CommunityFavorite, UserFollower, CommunityFlairBlock, s3_key_from_url, Role, RolePermission, \
     ServerViewMember
-from app.storefront import canonicalise_links, is_local_host, is_local_link, storefront_host, storefront_html, \
+from app.storefront import canonicalise_links, canonicalise_text, is_local_host, is_local_link, storefront_host, storefront_html, \
     storefront_url
 from collections import Counter
 from flask import has_request_context
@@ -2039,6 +2039,8 @@ def markdown_to_html(markdown_text, anchors_new_tab=True, allow_img=True, a_targ
         # Cut before anything else, so no stash placeholder exists yet for the cut to split.
         if len(markdown_text) > MARKDOWN_RENDER_CAP:
             markdown_text = markdown_text[:MARKDOWN_RENDER_CAP] + '…'
+        if not test_env:   # the HTML is stored and federated: its text names no other host of ours either
+            markdown_text = canonicalise_text(markdown_text)
         markdown_text = limit_quote_depth(markdown_text)
 
         markdown_text = handle_reddit_spoilers(markdown_text)
@@ -2117,10 +2119,11 @@ def markdown_to_html(markdown_text, anchors_new_tab=True, allow_img=True, a_targ
 #    b. anything coming from another PieFed instance would get reduced with html_to_text()
 #    c. raw 'https' strings in code blocks are being converted into <a> links for HTML that Lemmy then converts back into []()
 def piefed_markdown_to_lemmy_markdown(piefed_markdown: str):
-    # only difference is newlines for soft breaks.
+    """Markdown a person wrote, as it is stored and federated: soft breaks made hard (the only difference from
+    Lemmy's Markdown), and links to another host of this site moved onto the canonical origin (`canonicalise_text`)."""
     re_breaks = re.compile(r'(\S)(\r\n)')
     lemmy_markdown = re_breaks.sub(r'\1  \2', piefed_markdown)
-    return lemmy_markdown
+    return canonicalise_text(lemmy_markdown)
 
 
 def markdown_to_text(markdown_text) -> str:

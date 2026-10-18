@@ -6,11 +6,13 @@ from app import db
 from app.activitypub.signature import send_post_request
 from app.constants import NOTIF_MESSAGE, SRC_WEB
 from app.models import User, ChatMessage, Notification, utcnow, Conversation
+from app.storefront import canonicalise_text
 from app.utils import shorten_string, gibberish, markdown_to_html, publish_sse_event
 
 
 def send_message(message: str, conversation_id: int, user: User = current_user, src=SRC_WEB) -> ChatMessage:
     conversation = db.session.get(Conversation, conversation_id)
+    message = canonicalise_text(message)   # stored and federated: a link to this site names its canonical host
     reply = ChatMessage(sender_id=user.id, conversation_id=conversation.id,
                         body=message, body_html=markdown_to_html(message))
     conversation.updated_at = utcnow()
