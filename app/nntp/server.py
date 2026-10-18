@@ -31,7 +31,7 @@ import time
 import threading
 import datetime
 import uuid
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, NoReturn, Optional, Tuple, Union
 
 from .nntpserver import (
     NNTPServer,
@@ -46,7 +46,7 @@ from .nntpserver import (
     NNTPArticleNotFound,
 )
 import logging
-from app.models import Post, PostReply, User, utcnow, Site, Community, DUMMY_PASSWORD_HASH, verify_password_hash
+from app.models import Post, PostReply, User, utcnow, Site, Community, dummy_password_hash, verify_password_hash
 from sqlalchemy.orm import load_only
 from app.utils import communities_banned_from, blocked_or_banned_instances, filtered_out_communities, get_setting, \
     get_request, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, log_login_failure
@@ -434,7 +434,7 @@ def _authenticate(user: str, password: str) -> bytes:
              or local.filter(func.lower(User.email) == user.lower()).first())
     if u is None:
         # A wrong password's hash work, or the time taken tells which names have accounts
-        verify_password_hash(DUMMY_PASSWORD_HASH, password)
+        verify_password_hash(dummy_password_hash(), password)
         _credential_check_failed()
     if not u.check_password(password):
         _credential_check_failed()
@@ -450,7 +450,7 @@ def _authenticate(user: str, password: str) -> bytes:
     return f"Bearer {u.encode_jwt_token()}".encode()
 
 
-def _credential_check_failed():
+def _credential_check_failed() -> NoReturn:
     log_login_failure(getattr(_tl, 'peer', ''))   # there is no HTTP request to read an address from
     raise NNTPAuthenticationError("Invalid username or password")
 

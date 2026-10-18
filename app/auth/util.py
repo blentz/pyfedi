@@ -21,7 +21,7 @@ from app.auth.forms import LoginForm
 from app.constants import NOTIF_REGISTRATION
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
-from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role, DUMMY_PASSWORD_HASH, \
+from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role, dummy_password_hash, \
     verify_password_hash
 from app.onion import audit_field, is_onion_request
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message, prepare_onion_proof
@@ -497,7 +497,7 @@ def process_login(form: LoginForm):
         user = find_user(username)
         if not user:
             # A wrong password's hash work, or the time taken tells which names have accounts
-            verify_password_hash(DUMMY_PASSWORD_HASH, password)
+            verify_password_hash(dummy_password_hash(), password)
             log_login_failure()
             flash(invalid_login_message(), "error")  # D1131
             return redirect(url_for("auth.login"))

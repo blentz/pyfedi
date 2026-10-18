@@ -8,6 +8,7 @@ import re
 import secrets
 import unicodedata
 from contextlib import suppress
+from functools import cache as cache_function
 from datetime import datetime, timedelta, date, timezone
 from hashlib import sha256
 from time import time
@@ -1736,10 +1737,12 @@ class Passkey(db.Model):
         return f"<Passkey {self.id} {self.device}>"
 
 
-# What a login for an account that does not exist is checked against, so it costs what a wrong password costs and
-# its time does not tell which names have accounts: werkzeug's default method and cost, as set_password uses, over a
-# random password nobody knows
-DUMMY_PASSWORD_HASH = generate_password_hash(secrets.token_urlsafe(32))
+@cache_function
+def dummy_password_hash() -> str:
+    """What a login for an account that does not exist (or has no password) is checked against, so it costs what a
+    wrong password costs and its time does not tell which names have accounts: werkzeug's default method and cost, as
+    set_password uses, over a random password nobody knows. Made on first use and kept, not at import."""
+    return generate_password_hash(secrets.token_urlsafe(32))
 
 
 def verify_password_hash(password_hash, password) -> tuple[bool, bool]:
@@ -1759,7 +1762,7 @@ def verify_password_hash(password_hash, password) -> tuple[bool, bool]:
     if not password_hash:
         # An account with no password (OAuth or LDAP only) matches nothing, after a wrong password's hash work, or the
         # time taken tells which names are such accounts
-        verify_password_hash(DUMMY_PASSWORD_HASH, password)
+        verify_password_hash(dummy_password_hash(), password)
         return False, False
     if isinstance(password, str):
         password = password.strip()  # D862, as set_password stores it

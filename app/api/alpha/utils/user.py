@@ -15,7 +15,7 @@ from app.api.alpha.views import user_view, reply_view, post_view, community_view
 from app.constants import *
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message
 from app.models import Conversation, ChatMessage, Notification, PostReply, User, Post, Community, File, UserFlair, \
-    user_file, UserExtraField, UserNote, RevokedToken, utcnow, _as_url, DUMMY_PASSWORD_HASH, verify_password_hash
+    user_file, UserExtraField, UserNote, RevokedToken, utcnow, _as_url, dummy_password_hash, verify_password_hash
 # The module, not the names: app.shared.user reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.user)
 import app.shared.user as shared_user
@@ -947,7 +947,7 @@ def post_user_verify_credentials(data):
     # An account in hidden backoff is verified all the same and refused: a wrong password's answer and cost. So is a
     # name with no account, against a dummy hash, or the time taken tells which names have accounts.
     if user is None:
-        verify_password_hash(DUMMY_PASSWORD_HASH, password)
+        verify_password_hash(dummy_password_hash(), password)
     if user is None or not user.check_password(password, refuse=gate.hidden):
         log_login_failure()
         raise BlockingIOError

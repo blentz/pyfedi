@@ -3586,7 +3586,8 @@ LOGGABLE_IP_RE = re.compile(r'[0-9a-fA-F:.]+')
 # The rule: this logs failed CREDENTIAL checks only -- a wrong password, an unknown name, a failed LDAP bind, a failed
 # NNTP credential check. A refusal of an account that authenticated correctly (banned, deleted, unverified,
 # registrations closed, a declined country, an OAuth profile with no email or an email already in use) is not one,
-# whichever way the credential was accepted.
+# whichever way the credential was accepted. The one exception is the onion's hidden-backoff refusal, which logs as the
+# wrong password it imitates; it is always `ip=onion`, which no ban acts on.
 def log_login_failure(client: str | None = None):
     """One WARNING line for a failed credential check: `auth: login failed ip=<ip>`, which fail2ban on the host
     matches to ban a clearnet address that keeps failing. `client` is the peer address of a login that has no HTTP
