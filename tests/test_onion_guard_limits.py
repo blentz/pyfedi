@@ -567,30 +567,54 @@ def test_login_delay_grows(app, alice, redis_double, clock, ldap_off):
     assert 'try again in 4 seconds' in flashes(client)
 
 
-def test_the_counter_is_the_typed_identifier(app, alice, redis_double, clock, ldap_off):
-    """The counter is what was typed (stripped, lower-cased), never the account it resolves to: failing as 'alice'
-    does not delay a login typed as alice's email, nor the other way round. An existing and an unknown identifier
-    therefore behave exactly alike, and the delay says nothing about which accounts exist or which email is whose."""
+def test_the_account_and_the_typed_identifier_are_both_counted(app, alice, redis_double, clock, ldap_off):
+    """Each attempt counts against what was typed and against the account it names. Failing as 'alice' delays a
+    login typed as alice's email, because the account's counter is shared."""
     client = app.test_client()
     a_session(client)
     for _ in range(6):
         web_login(client, ' Alice ', 'wrong password')
-    for _ in range(6):
-        web_login(client, 'Nobody ', 'wrong password')
-    assert login_delay_remaining('alice') == login_delay_remaining('nobody') == 2
-    assert not redis_double.exists('onion_login_fail:alice@example.com')
-    assert logged_in(web_login(client, 'ALICE@example.com', PASSWORD))
-    assert redis_double.exists('onion_login_fail:alice')          # clearing the email's counter leaves the name's
+    assert not logged_in(web_login(client, 'ALICE@example.com', PASSWORD))
+    assert 'Please try again in 2 seconds' in flashes(client)
 
 
-def test_failures_by_email_do_not_delay_the_name(app, alice, redis_double, clock, ldap_off, alpha_api):
+def test_rotating_variants_does_not_reset_the_delay(app, alice, redis_double, clock, ldap_off):
+    client = app.test_client()
+    a_session(client)
+    variants = ['alice', 'ALICE@example.com', ' aLiCe ', 'alice@EXAMPLE.com', 'ALICE', 'Alice@example.com ']
+    for typed in variants:
+        assert not logged_in(web_login(client, typed, 'wrong password'))
+    assert redis_double.hget('onion_login_fail:alice', 'count') == '6'
+    assert not logged_in(web_login(client, 'aLICE@example.COM', PASSWORD))   # a variant not tried yet
+    assert 'Please try again in 2 seconds' in flashes(client)
+    clock.t += 2
+    assert logged_in(web_login(client, 'alice@example.com', PASSWORD))
+    assert not redis_double.exists('onion_login_fail:alice')
+    assert not redis_double.exists('onion_login_fail:alice@example.com')   # a success clears both counters
+
+
+def test_unknown_identifiers_behave_like_known_ones(app, alice, redis_double, clock, ldap_off):
+    client = app.test_client()
+    a_session(client)
+    for typed in ('Nobody ', 'alice'):
+        for _ in range(6):
+            web_login(client, typed, 'wrong password')
+    messages = []
+    for typed in ('nobody', 'alice'):
+        with client.session_transaction(base_url=ONION_URL) as stored:
+            stored.pop('_flashes', None)
+        web_login(client, typed, PASSWORD)
+        messages.append(flashes(client))
+    assert messages[0] == messages[1] and 'Please try again in 2 seconds' in messages[0]
+
+
+def test_api_login_counts_the_account_too(app, alice, redis_double, clock, ldap_off, alpha_api):
     client = app.test_client(use_cookies=False)
     for _ in range(6):
         onion_post(client, '/api/alpha/user/login', json={'username': 'Alice@Example.com', 'password': 'wrong one'})
-    assert login_delay_remaining('alice@example.com') == 2
-    assert not redis_double.exists('onion_login_fail:alice')
+    assert login_delay_remaining('alice@example.com') == login_delay_remaining('alice') == 2
     assert onion_post(client, '/api/alpha/user/login', json={'username': 'alice', 'password': PASSWORD}) \
-        .status_code == 200
+        .status_code == 429
 
 
 def test_success_clears(app, alice, redis_double, clock, ldap_off):
