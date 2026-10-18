@@ -704,3 +704,70 @@ def test_a_deleted_account_cannot_log_in_locally(app, env):
             assert validate_user_login(person, 'a-good-password',
                                        '127.0.0.1') is False
     assert 'Invalid user name or password' in str(flashed.call_args.args[0])
+
+
+# --------------------------------------------------------------------------
+# A wrong directory password costs what a right one does (onion task 9, M1)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize('bound, answer', [(True, 'someone@example.com'), (False, False)],
+                         ids=['right password', 'wrong password'])
+def test_the_search_runs_whether_or_not_the_bind_worked(app, env, bound, answer):
+    """The search after the bind is a round trip to the directory. It used to run only after a bind that worked, so
+    timing told a right password from a wrong one. It now runs on the same connection either way, and a failed
+    bind's results are thrown away."""
+    client, person = env
+    patcher, conn = with_entries(an_entry('someone@example.com'))
+    conn.bind.return_value = bound
+
+    with ldap_config(app):
+        with patch('app.ldap_utils.Server'):
+            with patcher:
+                assert login_with_ldap('person', 'a-good-password') == answer
+    conn.bind.assert_called_once()
+    conn.search.assert_called_once()
+    conn.unbind.assert_called_once()
+
+
+@pytest.mark.parametrize('refuse', [False, True], ids=['clearnet', 'onion refuse'])
+@pytest.mark.parametrize('bound', [True, False], ids=['right password', 'wrong password'])
+def test_a_directory_login_searches_once_with_or_without_refuse(app, env, refuse, bound):
+    client, person = env
+    patcher, conn = with_entries(an_entry('person@example.com'))
+    conn.bind.return_value = bound
+    before = User.query.count()
+
+    with ldap_config(app):
+        with app.test_request_context('/'):
+            with patch('app.ldap_utils.Server'), patcher, patch('app.auth.util.flash') as flashed:
+                result = validate_user_ldap_login('person', 'a-good-password', '127.0.0.1', refuse=refuse)
+    conn.search.assert_called_once()
+    assert result == (person if bound and not refuse else None)
+    assert (flashed.call_count == 1) is (refuse or not bound)   # 'Login failed'
+    assert User.query.count() == before
+
+
+def test_tls_starts_whether_or_not_the_bind_worked(app, env):
+    client, person = env
+    patcher, conn = with_entries()
+    conn.bind.return_value = False
+
+    with ldap_config(app, LDAP_USE_TLS=True):
+        with patch('app.ldap_utils.Server'):
+            with patcher:
+                assert login_with_ldap('person', 'a-good-password') is False
+    conn.start_tls.assert_called_once()
+
+
+def test_a_refused_service_bind_is_no_connection(app, env):
+    """`_bind_user` (the service bind behind sync and the connection test) still answers None for a refused bind,
+    and closes the connection it opened."""
+    patcher, conn = with_entries()
+    conn.bind.return_value = False
+
+    with ldap_config(app):
+        with patch('app.ldap_utils.Server'):
+            with patcher:
+                assert check_the_connection() is False
+    conn.unbind.assert_called_once()
