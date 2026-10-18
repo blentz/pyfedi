@@ -1,9 +1,10 @@
-"""`find_user` (app/auth/util.py): the account a typed login identifier names, in one query whatever matches.
+"""`find_user` (app/auth/util.py): the account a typed login identifier names, in the same three queries whatever matches.
 
-It used to try the user name, then the email, then the profile URL, one query each, so an unknown name ran three
-queries and a known user name one: a small timing difference that says which names have accounts (gaps G1 review,
-Minor 2). One query now does all three, the user name first, then the email, then the profile URL. The matching is
-unchanged:
+It used to try the user name, then the email, then the profile URL, stopping at the first hit, so an unknown name ran
+three queries and a known user name one: a small timing difference that says which names have accounts (gaps G1
+review, Minor 2). A single OR of the three fixed that but could not use any of their indexes, so it scans "user" on
+every login and mention. Now all three indexed lookups always run, and the winner is the user name, then the email,
+then the profile URL. The matching is unchanged:
 
 * user name: case-insensitive, local and not deleted;
 * email: case-insensitive, local and not deleted;
@@ -55,10 +56,10 @@ def queries(app, typed):
 @pytest.mark.parametrize('typed', ['carol', 'carol@example.com', 'https://test.piefed.local/u/carol', 'ghost',
                                    'ghost@example.com'],
                          ids=['name', 'email', 'a-typed-url', 'unknown-name', 'unknown-email'])
-def test_every_identifier_costs_one_query(app, people, typed):
+def test_every_identifier_costs_three_queries(app, people, typed):
     with app.test_request_context('/'):
         _found, count = queries(app, typed)
-    assert count == 1
+    assert count == 3
 
 
 @pytest.mark.parametrize('typed, who', [

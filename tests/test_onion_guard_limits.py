@@ -21,6 +21,7 @@ from unittest.mock import patch
 
 import pytest
 from flask import session
+from sqlalchemy import event
 from werkzeug.datastructures import Headers
 from werkzeug.security import generate_password_hash
 
@@ -58,6 +59,9 @@ def cheap_hashes(monkeypatch):
     monkeypatch.setattr('app.models.generate_password_hash',
                         functools.partial(generate_password_hash, method='pbkdf2:sha256:1'))
     models.dummy_password_hash.cache_clear()
+    probe = models.User()
+    probe.set_password('x')
+    assert probe.password_hash.startswith('pbkdf2:sha256:1$')   # the patch took: a slow hash here would be a slow test
     yield
     models.dummy_password_hash.cache_clear()
 
@@ -817,6 +821,46 @@ def test_wildcards_match_no_profile_url(app, profiled, typed):
 def test_a_profile_url_still_finds_its_account(app, profiled):
     assert find_user('carol').id == profiled.carol.id
     assert find_user(' CAROL ').id == profiled.carol.id
+
+
+def queries_run_by_find_user(typed):
+    statements = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append((statement, parameters))
+
+    event.listen(db.engine, 'before_cursor_execute', record)
+    try:
+        found = find_user(typed)
+    finally:
+        event.remove(db.engine, 'before_cursor_execute', record)
+    return found, statements
+
+
+def test_find_user_runs_the_same_three_queries_whatever_matches(app, profiled):
+    """The query count must not tell which names have accounts; each lookup is its own, parameterised, equality."""
+    by_name, name_queries = queries_run_by_find_user('alice')
+    by_email, email_queries = queries_run_by_find_user('Alice@Example.com')
+    by_profile, profile_queries = queries_run_by_find_user('carol')
+    nobody, no_queries = queries_run_by_find_user('nobody')
+    assert (by_name.id, by_email.id, by_profile.id, nobody) == (profiled.alice.id, profiled.alice.id,
+                                                                profiled.carol.id, None)
+    assert len(name_queries) == len(email_queries) == len(profile_queries) == len(no_queries) == 3
+    assert all(' OR ' not in statement for statement, _ in no_queries)
+    assert all('nobody' not in statement for statement, _ in no_queries)   # the typed text is a bound parameter
+    assert all('nobody' in str(parameters) for _, parameters in no_queries)
+
+
+def test_find_user_prefers_a_name_then_an_email_then_a_profile_url(app, profiled):
+    profiled.carol.email = 'alice'   # an email that is also alice's user name
+    db.session.commit()
+    assert find_user('alice').id == profiled.alice.id   # the name beats the email
+    profiled.alice.user_name = 'renamed'
+    db.session.commit()
+    assert find_user('alice').id == profiled.carol.id   # the email beats alice's profile URL
+    profiled.carol.email = 'other@example.com'
+    db.session.commit()
+    assert find_user('alice').id == profiled.alice.id   # only the profile URL is left
 
 
 def test_a_wildcard_cannot_log_in(app, profiled, ldap_off):
