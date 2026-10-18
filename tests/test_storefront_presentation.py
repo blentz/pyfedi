@@ -247,6 +247,8 @@ def test_storefront_link_moves_only_our_urls(app, onion):
         assert storefront.storefront_link(f'//{CANONICAL}/a') == f'http://{ONION}/a'
         assert storefront.storefront_link('https://cdn.example/a.mp3') == 'https://cdn.example/a.mp3'
         assert storefront.storefront_link(None) is None
+        assert storefront.canonical_link(f'http://{ONION}/static/a.png') == f'https://{CANONICAL}/static/a.png'
+        assert storefront.canonical_link('https://cdn.example/a.png') == 'https://cdn.example/a.png'
     with app.app_context():
         assert storefront.storefront_host() == CANONICAL
         assert storefront.storefront_link(f'http://{ONION}/a') == f'https://{CANONICAL}/a'

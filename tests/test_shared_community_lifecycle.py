@@ -168,18 +168,20 @@ bases the way `test_shared_community_invites.py`'s `get_comm_flair_list` did.
 from types import SimpleNamespace
 
 import pytest
+from flask import g
 from slugify import slugify
 from sqlalchemy import event, text
 
 from app import db
 from app.constants import SRC_API, SRC_WEB
-from app.models import Community, CommunityMember, File, Language, Topic, User
+from app.models import Community, CommunityMember, File, Language, SiteDomain, Topic, User
 # The module object itself, not just the two functions: the final fix round's
 # `authorise_api_user` / `current_user` observations (C2) need the REAL bound
 # function to delegate to before monkeypatch replaces the module global, and
 # `monkeypatch.setattr('app.shared.community.<name>', ...)` cannot hand it back.
 from app.shared import community as community_module
 from app.shared.community import edit_community, make_community
+from app.storefront import clear_domain_cache, domain_for_host
 from app.utils import markdown_to_html, piefed_markdown_to_lemmy_markdown
 # `make_community` (tests/factories.py:124) is renamed on import here, per
 # this file's own module docstring's naming-trap note: the
@@ -3116,3 +3118,65 @@ def test_edit_community_giving_a_topicless_community_a_topic_counts_it_in_the_to
     db.session.refresh(topic)
     assert s.community.topic_id == topic.id
     assert topic.num_communities == 1
+
+
+# --- an API client may have read the image URL on another storefront (onion spec §3.4) ------------------------------
+
+def _onion_registered():
+    if SiteDomain.query.filter_by(domain='test.piefed.local').first() is None:   # the canonical host stays served
+        db.session.add(SiteDomain(domain='test.piefed.local', scheme='https', is_default=True))
+    db.session.add(SiteDomain(domain='abc.onion', scheme='http', federates=False))
+    db.session.commit()
+    clear_domain_cache()
+
+
+@pytest.mark.parametrize('field', ['icon', 'image'])
+@pytest.mark.parametrize('request_host, sent_origin', [
+    ('abc.onion', 'https://test.piefed.local'),     # read on the clearnet, edited on the onion
+    ('test.piefed.local', 'http://abc.onion'),      # read on the onion, edited on the clearnet
+])
+def test_edit_community_keeps_an_upload_named_on_another_storefront(app, db_session, monkeypatch, field,
+                                                                     request_host, sent_origin):
+    s = _seed()
+    _seed_und_language()
+    _onion_registered()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    upload = File(file_path='app/static/media/communities/ab/cd/upload.png')
+    db.session.add(upload)
+    db.session.commit()
+    setattr(s.community, f'{field}_id', upload.id)
+    db.session.commit()
+    monkeypatch.setattr('app.shared.community.is_image_url', lambda url: pytest.fail(f'refetched {url}'))
+    delete_calls = []
+    monkeypatch.setattr(File, 'delete_from_disk', lambda self, *a, **kw: delete_calls.append(self.id))
+    sent = f'{sent_origin}/static/media/communities/ab/cd/upload.png'
+    api_input = _api_input(icon_url=sent if field == 'icon' else None, banner_url=sent if field == 'image' else None)
+
+    with app.test_request_context(base_url=f'http://{request_host}'):
+        g.storefront = domain_for_host(request_host)
+        edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    clear_domain_cache()
+    assert delete_calls == []
+    assert getattr(s.community, f'{field}_id') == upload.id
+    assert db.session.get(File, upload.id).source_url is None
+
+
+def test_edit_community_stores_a_new_image_named_on_the_onion_canonically(app, db_session, monkeypatch):
+    s = _seed()
+    _seed_und_language()
+    _onion_registered()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    monkeypatch.setattr('app.shared.community.is_image_url', lambda url: True)
+    monkeypatch.setattr('app.shared.community.make_image_sizes', lambda *a, **kw: None)
+    api_input = _api_input(icon_url='http://abc.onion/static/media/communities/ab/cd/other.png', banner_url=None)
+
+    with app.test_request_context(base_url='http://abc.onion'):
+        g.storefront = domain_for_host('abc.onion')
+        edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    clear_domain_cache()
+    assert db.session.get(File, s.community.icon_id).source_url == \
+        'https://test.piefed.local/static/media/communities/ab/cd/other.png'

@@ -26,7 +26,7 @@ from app.models import CommunityBlock, CommunityMember, Notification, Notificati
 from app.shared.tasks import task_selector
 from app.shared.upload import process_upload
 from app.user.utils import search_for_user
-from app.storefront import default_storefront, storefront_url
+from app.storefront import canonical_link, default_storefront, storefront_url
 from app.utils import authorise_api_user, blocked_communities, shorten_string, markdown_to_html, \
     instance_banned, community_membership, joined_communities, moderating_communities, is_image_url, \
     communities_banned_from, piefed_markdown_to_lemmy_markdown, community_moderators, add_to_modlog, \
@@ -379,8 +379,9 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
         title = input['title']
         description = input['description']
         rules = input['rules']
-        icon_url = input['icon_url']
-        banner_url = input['banner_url']
+        # the client may have read them on any storefront; stored and federated, they are canonical
+        icon_url = canonical_link(input['icon_url'])
+        banner_url = canonical_link(input['banner_url'])
         nsfw = input['nsfw']
         restricted_to_mods = input['restricted_to_mods']
         local_only = input['local_only']
@@ -463,7 +464,7 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
         # when a file is uploaded, below.
         if src == SRC_API:
             if community.icon_id and icon_url != community.icon.source_url:
-                if icon_url != community.icon.medium_url():
+                if icon_url != community.icon.medium_url(canonical=True):
                     icon_url_changed = True
                     remove_file = db.session.get(File, community.icon_id)
                     community.icon_id = None
@@ -473,7 +474,7 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
             if not community.icon_id:
                 icon_url_changed = True
             if community.image_id and banner_url != community.image.source_url:
-                if banner_url != community.image.medium_url():
+                if banner_url != community.image.medium_url(canonical=True):
                     banner_url_changed = True
                     remove_file = db.session.get(File, community.image_id)
                     community.image_id = None
