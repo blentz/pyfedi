@@ -75,8 +75,8 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     PostReply, PostReplyBookmark, AllowedInstances, InstanceBan, Tag, Emoji, UserExtraField, ArchivedPostReply, \
     RevokedToken, CommunityFavorite, UserFollower, CommunityFlairBlock, s3_key_from_url, Role, RolePermission, \
     ServerViewMember
-from app.storefront import canonicalise_links, canonicalise_text, is_local_host, is_local_link, storefront_host, storefront_html, \
-    storefront_url
+from app.storefront import URL_STRIPPED_BY_BROWSERS, canonicalise_links, canonicalise_text, is_local_host, is_local_link, \
+    storefront_host, storefront_html, storefront_url
 from collections import Counter
 from flask import has_request_context
 import app as app_pkg
@@ -3301,9 +3301,6 @@ def is_bot(user_agent) -> bool:
     return False
 
 
-# Characters a browser strips from a URL before parsing it (tab, LF, CR). We strip
-# them too, so this function and the browser cannot disagree about the host.
-_URL_STRIPPED_BY_BROWSERS = str.maketrans('', '', '\t\n\r')
 
 # The admin-configurable redirect policy: which HOSTS is_safe_redirect_target will
 # accept, over and above this server itself. Stored in the Setting table (no
@@ -3457,7 +3454,7 @@ def is_safe_redirect_target(url) -> bool:
     """
     if not isinstance(url, str):
         return False
-    candidate = url.strip().translate(_URL_STRIPPED_BY_BROWSERS)
+    candidate = url.strip().translate(URL_STRIPPED_BY_BROWSERS)
     if not candidate:
         return False
     if any(ord(char) < 0x20 or ord(char) == 0x7f for char in candidate):

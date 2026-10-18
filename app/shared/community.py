@@ -377,7 +377,7 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
     settings = {}
     if src == SRC_API:
         title = input['title']
-        description = input['description']
+        description = canonicalise_text(input['description'])   # stored and federated: canonical, as rules are
         rules = input['rules']
         # the client may have read them on any storefront; stored and federated, they are canonical
         icon_url = canonical_link(input['icon_url'])

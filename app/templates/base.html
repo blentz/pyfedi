@@ -110,7 +110,7 @@
       {% if preconnect and not low_bandwidth -%}
         <link rel="preconnect" href='{{ preconnect }}'>
       {% endif -%}
-      {% if config["S3_PUBLIC_URL"] and not low_bandwidth -%}
+      {% if config["S3_PUBLIC_URL"] and not low_bandwidth and not (g.storefront and g.storefront.is_onion) -%}
         <link rel="preconnect" href="{{ config['S3_PUBLIC_URL'] }}">
       {% endif -%}
       {% if g.site.additional_css -%}

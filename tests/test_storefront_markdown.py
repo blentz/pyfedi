@@ -20,10 +20,9 @@ from app.models import ChatMessage, Language, Post, PostReply, Site
 from app.shared.community import edit_community
 from app.storefront import canonicalise_links, canonicalise_text
 from app.utils import markdown_to_html, piefed_markdown_to_lemmy_markdown, utcnow
-from tests.factories import a_keypair, make_community, make_community_member, make_post
-from tests.factories import bearer
+from tests.factories import a_keypair, bearer, make_community, make_community_member, make_post
 from tests.test_admin_site_profile import _post, admin_client  # noqa: F401  (admin_client is a fixture)
-from tests.test_shared_community_lifecycle import _api_input, _seed
+from tests.test_shared_community_lifecycle import _api_input, _seed, _seed_und_language
 from tests.test_storefront_presentation import CANONICAL, ONION, onion  # noqa: F401  (onion is a fixture)
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -76,10 +75,29 @@ def test_canonicalise_text_rewrites_our_urls_in_code_and_in_foreign_urls(app, on
     assert canonicalise_text(text) == saved
 
 
-def test_canonicalise_links_rewrites_our_urls_in_a_foreign_url(app, onion):
-    html = '<a href="https://ex.com/?u=http://abc.onion/x">x</a><a href="http://abc.onion/y">y</a>'
-    assert canonicalise_links(html) == (f'<a href="https://ex.com/?u=http://abc.onion/x">x</a>'
-                                        f'<a href="https://{CANONICAL}/y">y</a>')
+@pytest.mark.parametrize('html, saved', [
+    ('<a href="https://ex.com/?u=http://abc.onion/x">x</a><a href="http://abc.onion/y">y</a>',
+     f'<a href="https://ex.com/?u=https://{CANONICAL}/x">x</a><a href="https://{CANONICAL}/y">y</a>'),
+    ('<a href="https://web.archive.org/web/1/http://abc.onion/p">x</a>',
+     f'<a href="https://web.archive.org/web/1/https://{CANONICAL}/p">x</a>'),
+    ('<img src="https://ex.com/r?to=//abc.onion/a.jpg"/>', f'<img src="https://ex.com/r?to=https://{CANONICAL}/a.jpg"/>'),
+    ('<img srcset="https://ex.com/r?u=http://abc.onion/a.jpg 1x, https://ex.com/b.jpg 2x"/>',
+     f'<img srcset="https://ex.com/r?u=https://{CANONICAL}/a.jpg 1x, https://ex.com/b.jpg 2x"/>'),
+    ('<a href="http://abc.onion/x?u=http://abc.onion/y">x</a>',
+     f'<a href="https://{CANONICAL}/x?u=https://{CANONICAL}/y">x</a>'),
+])
+def test_canonicalise_links_rewrites_our_urls_inside_a_foreign_url_too(app, onion, html, saved):
+    assert canonicalise_links(html) == saved
+    assert canonicalise_links(saved) == saved   # idempotent
+
+
+@pytest.mark.parametrize('html', [
+    '<a href="https://ex.com/?u=http%3A%2F%2Fabc.onion%2Fx">x</a>',   # percent-encoded forms are left as they are
+    '<a href="https://ex.com/?u=notabc.onion">x</a>',
+    '<p>http://abc.onion/x as text</p>',
+])
+def test_canonicalise_links_leaves_encoded_and_non_link_text_alone(app, onion, html):
+    assert canonicalise_links(html) is html
 
 
 def test_canonicalise_text_passes_none(app, onion):
@@ -208,10 +226,17 @@ def test_private_message_edited_on_the_onion_is_canonical(env):
 
 # --- the other saves that store Markdown -------------------------------------------------------------------------
 
-def test_community_rules_saved_through_the_api_are_canonical(app, onion, db_session):
+@pytest.mark.parametrize('from_scratch', [True, False])   # the API create and the API edit
+def test_community_rules_and_description_saved_through_the_api_are_canonical(app, onion, db_session, monkeypatch,
+                                                                             from_scratch):
     s = _seed()
-    edit_community(_api_input(rules=PASTED), s.community, SRC_API, bearer(s.user), from_scratch=True)
+    _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    edit_community(_api_input(rules=PASTED, description=PASTED), s.community, SRC_API, bearer(s.user),
+                   from_scratch=from_scratch)
     assert s.community.rules == STORED
+    assert s.community.description == STORED
 
 
 def test_site_legal_information_saved_by_an_admin_is_canonical(app, onion, admin_client):

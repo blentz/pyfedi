@@ -327,6 +327,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         '_local_hosts': 1,   # SERVER_NAME's host is one of ours, as in is_local_host: it names no URL
         '_synthesised_default': 1,
         'canonical_url': 1,
+        'canonicalise_links': 1,   # as canonicalise_text: the embedded URLs of SERVER_NAME's host stay as written
         'canonicalise_text': 1,   # SERVER_NAME's host is left as written in text: only the other hosts move
         'check_default_domain': 2,
         'is_local_host': 1,
