@@ -26,13 +26,13 @@ def post_upload_image(auth, image_file=None):
 def post_upload_community_image(auth, image_file=None):
     authorise_api_user(auth)
     url = process_upload(image_file, destination='communities')
-    return {'url': url}
+    return {'url': storefront_link(url)}
 
 
 def post_upload_user_image(auth, image_file=None):
     authorise_api_user(auth)
     url = process_upload(image_file, destination='users')
-    return {'url': url}
+    return {'url': storefront_link(url)}
 
 
 def post_image_delete(auth, data):

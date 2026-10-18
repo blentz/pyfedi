@@ -22,7 +22,7 @@ import app.shared.user as shared_user
 from app.utils import authorise_api_user, in_sorted_list, user_in_restricted_country, user_access, user_notes
 from app.utils import markdown_to_html, log_login_failure
 from app.visibility import visible_to_clause
-from app.storefront import canonicalise_text, storefront_link
+from app.storefront import canonical_link, canonicalise_text, storefront_link
 
 
 def get_user(auth, data):
@@ -384,7 +384,7 @@ def put_user_save_user_settings(auth, data):
             avatar = None
             remove_avatar = True
         else:
-            avatar = _as_url(data["avatar"], 1024)
+            avatar = _as_url(canonical_link(data["avatar"]), 1024)
             if avatar is None:
                 raise Exception('avatar must be an http:// or https:// url')
             remove_avatar = False
@@ -398,7 +398,7 @@ def put_user_save_user_settings(auth, data):
             cover = None
             remove_cover = True
         else:
-            cover = _as_url(data["cover"], 1024)
+            cover = _as_url(canonical_link(data["cover"]), 1024)
             if cover is None:
                 raise Exception('cover must be an http:// or https:// url')
             remove_cover = False
