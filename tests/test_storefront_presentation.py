@@ -23,7 +23,7 @@ from app.models import File, Notification, Site, SiteDomain, Tag
 from app.request_hooks import OnUse
 from app.shared.community import invite_with_email
 import app.storefront as storefront
-from app.storefront import clear_domain_cache
+from app.storefront import clear_domain_cache, is_local_host
 from app.utils import community_link_to_href, feed_link_to_href, person_link_to_href, utcnow
 from tests.factories import (grant_permission, make_community, make_community_member, make_domain, make_instance,
                              make_post, make_user, make_user_registration)
@@ -115,15 +115,23 @@ def test_page_urls_stay_on_storefront(app, world):
         f'https://{CANONICAL}',     # Task 6 rewrites at render time: Instance.domain, stored (new-instances sidebar)
     }
     pages = {'/': None, '/c/general': None, f'/post/{post.id}': None, '/u/author': None, '/auth/login': None,
-             '/auth/register': None, '/user/settings': founder, '/search?q=x': None}
+             '/auth/register': None, '/user/settings': founder, '/search?q=x': None,
+             f'/post/{post.id}/embed_code': None}
     offenders, exempted = [], set()
     for path, user in pages.items():
         with patch.dict(app.config, {'WTF_CSRF_ENABLED': True}):   # the login and register forms render their token
             response = on_onion(app, user).get(path, base_url=f'https://{ONION}')  # https: the session cookie is Secure
         assert response.status_code == 200, (path, response.status_code, response.headers.get('Location'))
-        for url in absolute_urls(response.get_data(as_text=True)):
-            host = urlsplit(url).hostname
-            if host == CANONICAL:
+        text = response.get_data(as_text=True)
+        # the embed code is markup inside a <textarea>, to be pasted elsewhere: its URLs are checked as markup too
+        for textarea in BeautifulSoup(text, 'html.parser').find_all('textarea'):
+            text += textarea.get_text()
+        for url in absolute_urls(text):
+            parts = urlsplit(url)
+            if parts.hostname == ONION:
+                if parts.scheme != 'http':   # the alias's configured scheme: an http onion serves no TLS
+                    offenders.append((path, url))
+            elif is_local_host(parts.hostname):   # any other host of ours is a different storefront
                 if url in task_6_rewrites:
                     exempted.add(url)
                 else:
