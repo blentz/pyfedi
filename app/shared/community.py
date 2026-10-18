@@ -26,7 +26,7 @@ from app.models import CommunityBlock, CommunityMember, Notification, Notificati
 from app.shared.tasks import task_selector
 from app.shared.upload import process_upload
 from app.user.utils import search_for_user
-from app.storefront import canonical_link, default_storefront, delete_memoized_everywhere, storefront_url
+from app.storefront import canonical_link, canonicalise_text, default_storefront, delete_memoized_everywhere, storefront_url
 from app.utils import authorise_api_user, blocked_communities, shorten_string, markdown_to_html, \
     instance_banned, community_membership, joined_communities, moderating_communities, is_image_url, \
     communities_banned_from, piefed_markdown_to_lemmy_markdown, community_moderators, add_to_modlog, \
@@ -528,7 +528,7 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
 
     community.title = title
     community.description = description
-    community.rules = rules
+    community.rules = canonicalise_text(rules)
     community.nsfw = nsfw
     community.description_html = description_html
     community.restricted_to_mods = restricted_to_mods

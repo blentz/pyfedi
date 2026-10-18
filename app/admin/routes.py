@@ -161,7 +161,7 @@ def admin_site():
         else:
             site.sidebar_html = ""
 
-        site.legal_information = form.legal_information.data
+        site.legal_information = canonicalise_text(form.legal_information.data)
         if form.legal_information.data:
             site.legal_information_html = markdown_to_html(form.legal_information.data, a_target="")
         else:
