@@ -2,8 +2,9 @@
 
 When nothing matched the typed username or email, web login, API login, verify_credentials and NNTP AUTHINFO used to
 fail without any password-hash work, so the response time alone told a caller which names have accounts, clearnet and
-onion alike. So did an account with no stored hash (OAuth or LDAP only). The not-found branch now runs `verify_password_hash(DUMMY_PASSWORD_HASH, password)`, the same verification a
-real check does, and then fails exactly as before. Each test counts the hash verifications by wrapping werkzeug's
+onion alike. So did an account with no stored hash (OAuth or LDAP only). Both now run
+`verify_password_hash(dummy_password_hash(), password)`, the same verification a real check does, and then fail
+exactly as before. Each test counts the hash verifications by wrapping werkzeug's
 `check_password_hash` where app.models calls it, and compares the answer with a wrong password's.
 """
 from types import SimpleNamespace
@@ -14,7 +15,7 @@ import pytest
 import app.models as models
 from app import db
 from app.api.alpha.utils.user import post_user_verify_credentials
-from app.models import DUMMY_PASSWORD_HASH, User
+from app.models import dummy_password_hash, User
 from app.nntp.nntpserver import NNTPAuthenticationError
 from app.nntp.server import PieFedNNTPServer
 from app.shared.auth import api_log_user_in
@@ -32,7 +33,16 @@ def counted():
 def test_the_dummy_hash_uses_set_passwords_method():
     probe = User()
     probe.set_password('anything at all')
-    assert DUMMY_PASSWORD_HASH.split('$')[0] == probe.password_hash.split('$')[0]
+    assert dummy_password_hash().split('$')[0] == probe.password_hash.split('$')[0]
+
+
+def test_the_dummy_hash_is_made_on_first_use_and_kept():
+    """Not at import: one scrypt there cost every process that imports app.models, whether or not it logs anyone in."""
+    dummy_password_hash.cache_clear()
+    with patch('app.models.generate_password_hash', wraps=models.generate_password_hash) as made:
+        first = dummy_password_hash()
+        assert dummy_password_hash() == first
+    made.assert_called_once()
 
 
 def flashed(client, **where):
@@ -50,7 +60,7 @@ def clearnet_attempt(app, typed):
 def test_web_login_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wrong_password(app, alice, ldap_off):
     with counted() as verified:
         unknown, unknown_flashes = clearnet_attempt(app, 'ghost')
-    verified.assert_called_once_with(DUMMY_PASSWORD_HASH, 'a wrong password')
+    verified.assert_called_once_with(dummy_password_hash(), 'a wrong password')
 
     with counted() as verified:
         wrong, wrong_flashes = clearnet_attempt(app, 'alice')
@@ -68,7 +78,8 @@ def test_onion_web_login_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wr
         with counted() as verified:
             response = web_login(client, typed, 'a wrong password')
         verified.assert_called_once()
-        answers.append((response.status_code, response.headers['Location'], flashed(client, base_url='http://abc.onion')))
+        answers.append((response.status_code, response.headers['Location'],
+                        flashed(client, base_url='http://abc.onion')))
     assert answers[0] == answers[1]
 
 
@@ -82,7 +93,7 @@ def api_attempt(app, typed):
 def test_api_login_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wrong_password(app, alice, ldap_off):
     with counted() as verified:
         unknown = api_attempt(app, 'ghost')
-    verified.assert_called_once_with(DUMMY_PASSWORD_HASH, 'a wrong password')
+    verified.assert_called_once_with(dummy_password_hash(), 'a wrong password')
     with counted() as verified:
         wrong = api_attempt(app, 'alice')
     verified.assert_called_once()
@@ -100,7 +111,7 @@ def verify_attempt(app, typed):
 def test_verify_credentials_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wrong_password(app, alice, typed):
     with counted() as verified:
         unknown = verify_attempt(app, typed)
-    verified.assert_called_once_with(DUMMY_PASSWORD_HASH, 'a wrong password')
+    verified.assert_called_once_with(dummy_password_hash(), 'a wrong password')
     with counted() as verified:
         wrong = verify_attempt(app, 'alice')
     verified.assert_called_once()
@@ -125,7 +136,7 @@ def test_web_login_for_a_passwordless_account_verifies_a_hash_and_answers_as_a_w
                                                                                               ldap_off):
     with counted() as verified:
         none, none_flashes = clearnet_attempt(app, 'bob')
-    verified.assert_called_once_with(DUMMY_PASSWORD_HASH, 'a wrong password')
+    verified.assert_called_once_with(dummy_password_hash(), 'a wrong password')
     wrong, wrong_flashes = clearnet_attempt(app, 'alice')
     assert (none.status_code, none.headers['Location'], none_flashes) == \
         (wrong.status_code, wrong.headers['Location'], wrong_flashes)
@@ -135,7 +146,7 @@ def test_api_login_for_a_passwordless_account_verifies_a_hash_and_answers_as_a_w
                                                                                               ldap_off):
     with counted() as verified:
         none = api_attempt(app, 'bob')
-    verified.assert_called_once_with(DUMMY_PASSWORD_HASH, 'a wrong password')
+    verified.assert_called_once_with(dummy_password_hash(), 'a wrong password')
     assert none == api_attempt(app, 'alice') == (Exception, 'incorrect_login')
 
 
@@ -143,7 +154,7 @@ def test_verify_credentials_for_a_passwordless_account_verifies_a_hash_and_answe
                                                                                                      passwordless):
     with counted() as verified:
         none = verify_attempt(app, 'bob')
-    verified.assert_called_once_with(DUMMY_PASSWORD_HASH, 'a wrong password')
+    verified.assert_called_once_with(dummy_password_hash(), 'a wrong password')
     assert none == verify_attempt(app, 'alice')
 
 
@@ -161,7 +172,7 @@ def nntp_attempt(app, typed):
 def test_nntp_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wrong_password(app, alice, typed):
     with counted() as verified:
         unknown = nntp_attempt(app, typed)
-    verified.assert_called_once_with(DUMMY_PASSWORD_HASH, 'a wrong password')
+    verified.assert_called_once_with(dummy_password_hash(), 'a wrong password')
     with counted() as verified:
         wrong = nntp_attempt(app, 'alice')
     verified.assert_called_once()
@@ -171,5 +182,5 @@ def test_nntp_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wrong_passwor
 def test_nntp_for_a_passwordless_account_verifies_a_hash_and_answers_as_a_wrong_password(app, passwordless):
     with counted() as verified:
         none = nntp_attempt(app, 'bob')
-    verified.assert_called_once_with(DUMMY_PASSWORD_HASH, 'a wrong password')
+    verified.assert_called_once_with(dummy_password_hash(), 'a wrong password')
     assert none == nntp_attempt(app, 'alice')
