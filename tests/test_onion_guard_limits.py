@@ -531,17 +531,30 @@ def test_login_delay_grows(app, alice, redis_double, clock, ldap_off):
     assert 'try again in 4 seconds' in flashes(client)
 
 
-def test_unknown_names_and_emails_are_counted_too(app, alice, redis_double, clock, ldap_off):
-    """The same answer for an account that does not exist, so the delay is no oracle. Email login counts for the
-    account it names."""
+def test_the_counter_is_the_typed_identifier(app, alice, redis_double, clock, ldap_off):
+    """The counter is what was typed (stripped, lower-cased), never the account it resolves to: failing as 'alice'
+    does not delay a login typed as alice's email, nor the other way round. An existing and an unknown identifier
+    therefore behave exactly alike, and the delay says nothing about which accounts exist or which email is whose."""
     client = app.test_client()
     a_session(client)
     for _ in range(6):
-        web_login(client, 'Nobody ', 'wrong password')
-    assert login_delay_remaining('nobody') == 2
+        web_login(client, ' Alice ', 'wrong password')
     for _ in range(6):
-        web_login(client, 'ALICE@example.com', 'wrong password')
-    assert login_delay_remaining('alice') == 2
+        web_login(client, 'Nobody ', 'wrong password')
+    assert login_delay_remaining('alice') == login_delay_remaining('nobody') == 2
+    assert not redis_double.exists('onion_login_fail:alice@example.com')
+    assert logged_in(web_login(client, 'ALICE@example.com', PASSWORD))
+    assert redis_double.exists('onion_login_fail:alice')          # clearing the email's counter leaves the name's
+
+
+def test_failures_by_email_do_not_delay_the_name(app, alice, redis_double, clock, ldap_off, alpha_api):
+    client = app.test_client(use_cookies=False)
+    for _ in range(6):
+        onion_post(client, '/api/alpha/user/login', json={'username': 'Alice@Example.com', 'password': 'wrong one'})
+    assert login_delay_remaining('alice@example.com') == 2
+    assert not redis_double.exists('onion_login_fail:alice')
+    assert onion_post(client, '/api/alpha/user/login', json={'username': 'alice', 'password': PASSWORD}) \
+        .status_code == 200
 
 
 def test_success_clears(app, alice, redis_double, clock, ldap_off):
