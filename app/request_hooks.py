@@ -17,6 +17,7 @@ from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, PO
     SUBSCRIPTION_MODERATOR, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_PENDING, ROLE_ADMIN_NAME, VERSION, \
     POST_TYPE_EVENT, AP_MEDIA_TYPES, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO
 from app.models import Site, utcnow
+from app.onion_guard import require_onion_session, resolve_onion_api_rate_key
 from app.storefront import check_default_domain, is_local_link, resolve_storefront, \
     rewrite_response_for_storefront, storefront_host, storefront_link, storefront_url
 from app.shared.media import can_upload_media, media_kind_for, media_of, upload_byte_limit
@@ -129,6 +130,8 @@ def register_request_hooks(app):
     app.jinja_env.filters["human_filesize"] = human_filesize
 
     app.before_request(resolve_storefront)   # first: an unregistered host is refused before anything else runs
+    app.before_request(require_onion_session)   # spec 3.7a C: a cookieless onion request is sent round for a cookie
+    app.before_request(resolve_onion_api_rate_key)   # spec 3.7: onion API limits per account, found before the view
     # Registered before after_request below, so it runs after it (Flask runs them in reverse) and before Flask-Compress
     app.after_request(rewrite_response_for_storefront)
 

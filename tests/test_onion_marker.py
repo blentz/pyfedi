@@ -188,15 +188,17 @@ def test_the_limiter_keys_by_rate_limit_key():
 
 
 def test_onion_rate_limit_key_is_per_session(app):
+    """A sid made during this request is not yet a session: it is keyed per session only once it comes back in the
+    session cookie (tests/test_onion_guard_limits.py has the round trip)."""
     with proxy_ip(app), onion_context(app):
         assert 'onion_sid' not in session
-        key = rate_limit_key()
+        assert rate_limit_key() == 'onion-anon'
         sid = session['onion_sid']
-        assert key == f'onion-session:{sid}'
         assert len(sid) >= 16
-        assert rate_limit_key() == key
+        assert rate_limit_key() == 'onion-anon'
     with proxy_ip(app), onion_context(app):
-        assert rate_limit_key() != key
+        rate_limit_key()
+        assert session['onion_sid'] != sid
 
 
 def test_clearnet_rate_limit_key_is_the_ip(app):
@@ -313,9 +315,11 @@ def test_onion_signup_ip_null(app, site):
             patch('app.auth.forms.get_setting', return_value=False), \
             patch('app.auth.util.ip2location') as located, \
             patch('app.auth.util.send_email_verification'), patch('app.auth.util.sync_user_with_ldap'):
-        response = app.test_client().post('/auth/register', data=REGISTRATION,
-                                          headers={**ONION, 'CF-IPCountry': 'NZ'},
-                                          environ_base={'REMOTE_ADDR': PROXY})
+        client = app.test_client()
+        # Session first (task 9): the cookieless request picks up the session cookie the POST then sends
+        assert client.get('/auth/register', headers=ONION, environ_base={'REMOTE_ADDR': PROXY}).status_code == 303
+        response = client.post('/auth/register', data=REGISTRATION, headers={**ONION, 'CF-IPCountry': 'NZ'},
+                               environ_base={'REMOTE_ADDR': PROXY})
     assert response.status_code == 302
     user = User.query.filter_by(user_name='newperson').one()
     assert user.ip_address is None

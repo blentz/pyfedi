@@ -23,6 +23,7 @@ from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role
 from app.onion import audit_field, is_onion_request
+from app.onion_guard import onion_login_failed, onion_login_succeeded, onion_login_wait
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, \
     finalize_user_setup, get_request, get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
@@ -466,6 +467,16 @@ def process_login(form: LoginForm):
     username = form.user_name.data.strip()
     password = form.password.data.strip()
 
+    # Onion only (spec 3.7): failed logins slow the account down. The counter is the account's own whichever of
+    # its name, email or profile URL was typed, and the typed name's when no account matches, so the delay answers
+    # the same either way and says nothing about which accounts exist.
+    if is_onion_request():
+        wait = onion_login_wait(onion_login_name(username))
+        if wait:
+            flash(_('Too many failed logins for this account. Please try again in %(seconds)d seconds.',
+                    seconds=wait), 'error')
+            return redirect(url_for("auth.login"))
+
     # attempt authentication with LDAP first (if enabled), then fall back to local
     user = None
     ldap_sync = True
@@ -484,11 +495,14 @@ def process_login(form: LoginForm):
         # Either LDAP is disabled or LDAP auth failed - try local authentication
         user = find_user(username)
         if not user:
+            onion_login_failed(username)
             flash(invalid_login_message(), "error")  # D1131
             return redirect(url_for("auth.login"))
 
         if not validate_user_login(user, password, ip):
             return redirect(url_for("auth.login"))
+
+    onion_login_succeeded(user.user_name)
 
     if requires_email_verification(user):
         return redirect(url_for("auth.check_email"))
@@ -512,6 +526,13 @@ def find_user(user_name):
     return user
 
 
+def onion_login_name(user_name):
+    """The name an onion login's failure counter is kept under: the account's own name when `user_name` finds one
+    (by name, email or profile URL), else what was typed."""
+    user = find_user(user_name)
+    return user.user_name if user else user_name
+
+
 def validate_user_login(user, password, ip):
     if user.deleted:
         flash(invalid_login_message(), "error")  # D1131
@@ -520,6 +541,7 @@ def validate_user_login(user, password, ip):
     if not user.check_password(password):
         # D1131. One message whether or not the account has a password, and
         # whether or not it exists at all.
+        onion_login_failed(user.user_name)
         flash(invalid_login_message(), "error")
         return False
 
