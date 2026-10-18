@@ -37,6 +37,7 @@ pytesseract==0.3.13
 sentry-sdk==2.71.0
 python-slugify==9.1.3
 furl==2.1.4
+idna~=3.18   # UTS-46 host mapping: app.storefront.browser_host
 ua-parser[regex]
 captcha
 # Test-only dependencies live in requirements-test.txt: this file IS the

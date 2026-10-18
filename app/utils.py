@@ -3301,7 +3301,6 @@ def is_bot(user_agent) -> bool:
     return False
 
 
-
 # The admin-configurable redirect policy: which HOSTS is_safe_redirect_target will
 # accept, over and above this server itself. Stored in the Setting table (no
 # migration), read through the memoized get_setting.

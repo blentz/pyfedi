@@ -759,6 +759,34 @@ def check_nodeinfo_hrefs(data: bytes) -> None:
                     assert href_host == own_host, f'{href!r} accepted for {remote_url!r}'
 
 
+def check_browser_host(data: bytes) -> None:
+    """storefront.browser_host reads the host a browser loads a URL from, as whatwg_reading does.
+
+    For every URL the independent reading parses to an ASCII domain or an IPv4 address, browser_host is that host
+    (less a trailing dot); for an IPv6 literal it is the same address; for a URL the browser refuses it may still
+    name a host (hiding too much is safe) but never raises. It never returns a host for a URL that has none.
+    The S3 media scanners (_css_urls, _srcset_urls) finish inside the target's budget on any input and return
+    slices of it."""
+    url = _text(data[:MAX_INPUT])
+    for candidate in (url, 'https:' + url, '//' + url):
+        host = storefront.browser_host(candidate)
+        assert isinstance(host, str), f'browser_host({candidate!r}) = {host!r}'
+        scheme, expected = whatwg_reading(candidate if not candidate.startswith('//') else 'https:' + candidate)
+        if scheme not in SPECIAL_SCHEMES or expected is INVALID or expected is None:
+            continue
+        if host == storefront.UNMAPPABLE:
+            continue   # the caller hides it
+        if ':' in expected:
+            assert host and ipaddress.ip_address(host) == ipaddress.ip_address(expected), (
+                f'browser_host({candidate!r}) = {host!r}, a browser reads [{expected}]')
+        elif expected.isascii():
+            assert host == expected.rstrip('.'), f'browser_host({candidate!r}) = {host!r}, a browser reads {expected!r}'
+    for token in storefront._css_urls(url):
+        assert isinstance(token, str)
+    for start, end in storefront._srcset_urls(url):
+        assert 0 <= start < end <= len(url) and not url[start:end].isspace() and url[start] != ','
+
+
 # None is budgeted: no regex here has a backtracking shape. The redirect, request-host, webfinger and resolver
 # targets need an app: they read current_app.config or push a request context.
 TARGETS = [
@@ -771,5 +799,6 @@ TARGETS = [
     Target(name='webfinger_resource', check=check_webfinger_resource, surface='urls', budget_ms=None,
            needs_app=True),
     Target(name='strip_tracking', check=check_strip_tracking, surface='urls', budget_ms=None, needs_app=False),
+    Target(name='storefront_browser_host', check=check_browser_host, surface='urls', budget_ms=200, needs_app=False),
     Target(name='nodeinfo_hrefs', check=check_nodeinfo_hrefs, surface='urls', budget_ms=None, needs_app=False),
 ]
