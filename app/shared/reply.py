@@ -10,6 +10,7 @@ from app import db, limiter
 from app.constants import *
 from app.models import Notification, NotificationSubscription, Post, PostReply, PostReplyBookmark, PostReplyVote, \
     Report, Site, User, utcnow, Instance, votes_cast_today
+from app.onion import audit_field
 from app.shared.tasks import task_selector
 from app.visibility import post_title_for
 from app.utils import render_template, authorise_api_user, shorten_string, \
@@ -237,7 +238,7 @@ def make_reply(input, post, parent_id, src, auth=None):
                           language_id=language_id, distinguished=distinguished, answer=answer)
 
     user.language_id = language_id
-    user.ip_address = ip_address()
+    user.ip_address = audit_field(ip_address())
     reply.ap_id = reply.profile_id()
     db.session.commit()
     if src == SRC_WEB:

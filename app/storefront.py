@@ -20,6 +20,7 @@ from flask.globals import request_ctx
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import cache, db
+from app.onion import onion_proxy_address
 # The module, not the name: app.models imports this module for File's media URLs, so whichever of the two is
 # imported first finds the other mid-import (import cycle: models)
 import app.models as models
@@ -131,7 +132,9 @@ def is_local_link(url) -> bool:
 
 
 def check_default_domain() -> None:
-    """Log an error when the default row is not SERVER_NAME. Quiet when the table does not exist yet
+    """Log an error when the default row is not SERVER_NAME, and a warning when an onion domain is registered while
+    `ONION_PROXY_IP` is unset (or not one address): no request is then treated as onion, so onion visitors are
+    banned, limited and recorded as the one shared tor address. Quiet when the table does not exist yet
     (CLI commands and `flask db upgrade` run this before the migration has made it)."""
     try:
         default = default_domain()
@@ -143,6 +146,9 @@ def check_default_domain() -> None:
     elif normalise_host(default.domain) != normalise_host(current_app.config['SERVER_NAME']):
         current_app.logger.error('site_domain default %s does not match SERVER_NAME %s',
                                  default.domain, current_app.config['SERVER_NAME'])
+    if onion_proxy_address() is None and any(row.is_onion for row in domain_rows()):
+        current_app.logger.warning('an onion domain is registered but ONION_PROXY_IP is unset or not one address; '
+                                   'no request will be treated as onion')
 
 
 def current_storefront() -> DomainInfo:

@@ -22,6 +22,7 @@ from app.constants import NOTIF_REGISTRATION
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role
+from app.onion import audit_field, is_onion_request
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, \
     finalize_user_setup, get_request, get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
@@ -83,6 +84,10 @@ def ip2location(ip: str):
 
 
 def get_country(ip: str, fallback: Any = '') -> str:
+    # An onion request is not geolocated: its address is the tor container's, and a country header on it was written
+    # by the client, not by a CDN.
+    if is_onion_request():
+        return fallback
     country_header = current_app.config['COUNTRY_SOURCE_HEADER']
 
     if country_header and country_header in request.headers:
@@ -333,13 +338,13 @@ def create_new_user(form, ip, country, verification_token):
         verification_token=verification_token,
         verified=not get_setting("email_verification", True),
         instance_id=1,
-        ip_address=ip,
+        ip_address=audit_field(ip),
         banned=user_ip_banned() or user_cookie_banned(),
         email_unread_sent=False,
         referrer=session.get("Referer", ""),
         alt_user_name=gibberish(random.randint(8, 20)),
         font=get_font_preference(),
-        ip_address_country=country,
+        ip_address_country=audit_field(country),
         timezone=form.timezone.data,
         language_id=g.site.language_id
     )
@@ -361,7 +366,7 @@ def create_new_user_from_ldap(user_name, email, password, ip):
         email=email,
         verified=True,
         instance_id=1,
-        ip_address=ip,
+        ip_address=audit_field(ip),
         banned=False,
         email_unread_sent=False,
         referrer=session.get("Referer", ""),
@@ -604,7 +609,7 @@ def handle_banned_user(user, ip):
     flash(_("You have been banned."), "error")
     response = make_response(redirect(url_for("auth.login")))
 
-    if user.banned and not user_ip_banned():
+    if user.banned and not user_ip_banned() and not is_onion_request():
         new_ip_ban = IpBan(ip_address=ip, notes=f"{user.user_name} used new IP address")
         db.session.add(new_ip_ban)
         db.session.commit()
@@ -628,10 +633,10 @@ def log_user_in(user, form, ip, country, ldap_sync=True):
 
 def update_user_session(user, form, ip, country):
     user.last_seen = utcnow()
-    user.ip_address = ip
+    user.ip_address = audit_field(ip)
     if user.timezone is None:
         user.timezone = form.timezone.data
-    user.ip_address_country = country or user.ip_address_country
+    user.ip_address_country = audit_field(country or user.ip_address_country)
     db.session.commit()
 
 

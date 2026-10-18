@@ -40,6 +40,7 @@ from app.api.alpha.utils.user import get_user, post_user_block, get_user_unread_
     post_user_logout, post_user_follow, post_user_unfollow
 from app.api.alpha.utils.admin import get_registration_list, put_registration_approve
 from app.constants import *
+from app.onion import is_onion_request
 from app.utils import orjson_response, get_setting
 from app.api.alpha.schema import *
 
@@ -66,6 +67,9 @@ def is_trusted_request():
     """
     if current_app.debug:
         return True
+    # remote_addr of an onion request is the tor container, shared by every onion visitor: never an exemption.
+    if is_onion_request():
+        return False
     if request.remote_addr in ip_list(current_app.config['SKIP_RATE_LIMIT_IPS']):
         return True
     return False
