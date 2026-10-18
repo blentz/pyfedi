@@ -2,6 +2,7 @@ from app.models import User
 from flask_login import current_user
 
 from app.shared.upload import process_upload, process_file_delete
+from app.storefront import storefront_link
 from app.utils import authorise_api_user
 
 
@@ -17,7 +18,9 @@ def post_upload_image(auth, image_file=None):
 
     # D881/D1061: no storage quota is enforced on uploads, so nothing sums the caller's stored files
     url = process_upload(image_file, user=user)
-    return {'url': url}
+    # stored canonical; the editor that asked shows it, so it names the storefront it was asked on. The URL it then
+    # writes into Markdown is canonicalised when that is saved
+    return {'url': storefront_link(url)}
 
 
 def post_upload_community_image(auth, image_file=None):

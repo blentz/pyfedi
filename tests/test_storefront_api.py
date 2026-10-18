@@ -4,12 +4,14 @@ Identifiers a client may federate or compare (`ap_id`, `actor_id`) stay on the c
 shows or fetches (media, the site icon, the OpenAPI server) and the notification stream a page opens follow the
 host the request named.
 """
+import io
 import logging
 from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
 from flask import current_app, g
+from sqlalchemy import text
 
 from app import cache, create_app, db
 from app.models import File, Language, Site, SiteDomain
@@ -148,3 +150,62 @@ def test_add_local_hint_names_the_storefront(app, onion):
         response = client.get('/community/add_local', base_url=f'http://{ONION}')
     assert response.status_code == 200, response.headers.get('Location')
     assert f'Only people using {ONION} can post or reply' in response.get_data(as_text=True)
+
+
+# --- JSON an onion page reads with JavaScript (final review Important 1) -----------------------------------------
+
+UPLOADED = f'https://{CANONICAL}/static/media/posts/zz/yy/zzyyuploaded.png'
+
+
+@pytest.fixture
+def uploader(app, onion, monkeypatch):
+    """A logged-in local user owning one uploaded File, stored canonical as process_upload stores it."""
+    monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')
+    g.site = db.session.get(Site, 1)
+    user = make_user(make_instance(CANONICAL, software='piefed'), 'uploader', local=True)
+    file = File(source_url=UPLOADED, file_name='zzyyuploaded.png')
+    db.session.add(file)
+    db.session.commit()
+    db.session.execute(text('INSERT INTO "user_file" (file_id, user_id, size) VALUES (:f, :u, 1)'),
+                       {'f': file.id, 'u': user.id})
+    db.session.commit()
+    return user, file.id
+
+
+def session_client(app, user, origin):
+    client = app.test_client()
+    with client.session_transaction(base_url=origin) as session:
+        session['_user_id'] = str(user.id)
+        session['_fresh'] = True
+    g.pop('_login_user', None)
+    return client
+
+
+@pytest.mark.parametrize('origin', [f'http://{ONION}', f'https://{CANONICAL}'])
+def test_media_library_lists_urls_on_the_storefront(app, uploader, origin):
+    user, _ = uploader
+    response = session_client(app, user, origin).get('/api/alpha/user/media', base_url=origin)
+    assert response.status_code == 200
+    assert [item['url'] for item in response.get_json()['media']] == [
+        UPLOADED.replace(f'https://{CANONICAL}', origin)]
+
+
+@pytest.mark.parametrize('origin', [f'http://{ONION}', f'https://{CANONICAL}'])
+def test_uploaded_image_url_is_on_the_storefront(app, uploader, origin):
+    user, _ = uploader
+    with patch('app.api.alpha.utils.upload.process_upload', return_value=UPLOADED) as upload:
+        response = session_client(app, user, origin).post(
+            '/api/alpha/upload/image', base_url=origin,
+            data={'file': (io.BytesIO(b'png'), 'a.png')}, content_type='multipart/form-data')
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert upload.called
+    assert response.get_json()['url'] == UPLOADED.replace(f'https://{CANONICAL}', origin)
+
+
+@pytest.mark.parametrize('origin', [f'http://{ONION}', f'https://{CANONICAL}'])
+def test_deleting_by_the_storefront_url_removes_the_canonical_file(app, uploader, origin):
+    user, file_id = uploader
+    response = session_client(app, user, origin).post(
+        '/api/alpha/image/delete', base_url=origin, json={'file': UPLOADED.replace(f'https://{CANONICAL}', origin)})
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert db.session.get(File, file_id) is None
