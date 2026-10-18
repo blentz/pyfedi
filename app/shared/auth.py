@@ -5,7 +5,7 @@ from app.auth.util import find_user, get_country
 from app.ldap_utils import sync_user_to_ldap
 from app.models import IpBan, utcnow
 from app.onion import audit_field, is_onion_request
-from app.onion_guard import onion_login_gate, onion_login_succeeded, spend_password_check
+from app.onion_guard import onion_login_gate, onion_login_succeeded
 from app.utils import ip_address, user_ip_banned, user_cookie_banned, banned_ip_addresses
 
 
@@ -23,15 +23,12 @@ def api_log_user_in(input):
     if gate.wait:
         abort(429, message=f'Too many failed logins for this account. Try again in {gate.wait} seconds.')
 
-    if gate.hidden:   # (onion) the account is in hidden backoff: the wrong-password answer, at its cost
-        spend_password_check(user, password)
-        raise Exception('incorrect_login')
-
     if not user:
         # No match for username, email or profile url was found
         raise Exception('incorrect_login')
 
-    if not user.check_password(password):
+    # (onion) an account in hidden backoff is verified all the same and refused: a wrong password's answer and cost
+    if not user.check_password(password, refuse=gate.hidden):
         raise Exception('incorrect_login')
 
     if not user.is_ban_exempt() and (user.banned or user_ip_banned() or user_cookie_banned()):
