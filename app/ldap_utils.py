@@ -55,13 +55,18 @@ def _bind_for_login(dn: str, password: str) -> tuple[Optional[Connection], bool]
             use_ssl=current_app.config.get('LDAP_USE_SSL', False),
             get_info=ALL
         )
-        conn = Connection(server, user=dn, password=password)
+        # Nothing is sent while the connection is made: a simple bind carries the password in the clear, so with
+        # LDAP_USE_TLS the StartTLS goes first and the bind only on the encrypted connection
+        conn = Connection(server, user=dn, password=password, auto_bind=False)
+        if current_app.config.get('LDAP_USE_TLS', False):
+            try:
+                conn.start_tls()
+            except Exception:
+                conn.unbind()   # no bind was made and none will be: the connection it opened is closed
+                raise
         bound = bool(conn.bind())
         if not bound:
             logger.error(f"LDAP bind failed: {conn.result}")
-        # Enable TLS if configured (after the bind, as before), whichever way the bind went
-        if current_app.config.get('LDAP_USE_TLS', False):
-            conn.start_tls()
         return conn, bound
 
     except LDAPException as e:
