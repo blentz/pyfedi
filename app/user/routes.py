@@ -53,7 +53,7 @@ from app.utils import user_banned_from_community, back, render_template, markdow
 from app.rss_extras import RSSFeed
 import app.api.alpha.views as alpha_views
 from app.utils import user_filters_languages
-from app.storefront import is_local_host, storefront_url
+from app.storefront import is_local_host, storefront_cache_key, storefront_url
 from app.utils import ap_alternate_url
 from app.utils import canonical_host
 import app as app_pkg
@@ -2479,7 +2479,7 @@ def user_feeds(actor):
 # RSS feed of the community
 @bp.route('/u/<actor>/feed', methods=['GET'])
 @refuse_if_private_instance
-@cache.cached(timeout=600)
+@cache.cached(timeout=600, key_prefix=storefront_cache_key)
 def show_profile_rss(actor):
     actor = actor.strip()
     if '@' in actor:

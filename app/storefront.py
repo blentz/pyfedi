@@ -5,6 +5,7 @@ implicit default, so installs that never ran the migration's seed still work.
 """
 from __future__ import annotations
 
+import hashlib
 from contextlib import contextmanager
 from typing import NamedTuple
 from urllib.parse import urlsplit, urlunsplit
@@ -149,6 +150,28 @@ def storefront_url() -> str:
 def storefront_host() -> str:
     """`host[:port]` of the current storefront, for naming this site in text a visitor reads."""
     return _authority(current_storefront())
+
+
+def storefront_cache_key() -> str:
+    """`key_prefix` for an `@cache.cached` presentation view (spec §3.4a). Flask-Caching's default key is the path
+    alone, so a page cached on one storefront, and the storefront URLs in it, would be served on every other.
+    ActivityPub documents name only the canonical origin and keep their path keys."""
+    return f'view/{current_storefront().domain}{request.path}'
+
+
+def storefront_query_cache_key(*_view_args, **_view_kwargs) -> str:
+    """`make_cache_key` for an `@cache.cached` presentation view that reads its query string: `storefront_cache_key`
+    plus a hash of the arguments, in any order. Flask-Caching's `query_string=True` ignores `key_prefix`, so a view
+    keyed by its query string names its storefront through this instead. The view's own arguments are in the path."""
+    pairs = str(tuple(sorted(request.args.items(multi=True)))).encode()
+    return f'{storefront_cache_key()}?{hashlib.md5(pairs, usedforsecurity=False).hexdigest()}'
+
+
+def storefront_memo_name(fname: str) -> str:
+    """`make_name` for an `@cache.memoize` function whose result holds storefront URLs: one entry per storefront.
+    `cache.delete_memoized(f)` with no arguments still clears every storefront's entry, because the version it
+    bumps is keyed by `fname`; with arguments it would clear only the current storefront's."""
+    return f'{fname}@{current_storefront().domain}'
 
 
 def _moved_to(url, base: str):

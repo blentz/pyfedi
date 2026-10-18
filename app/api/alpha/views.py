@@ -27,7 +27,7 @@ import app.shared.community as shared_community
 # The module, not the names: app.shared.post reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.post)
 import app.shared.post as shared_post
-from app.storefront import storefront_link, storefront_url
+from app.storefront import storefront_link, storefront_memo_name, storefront_url
 from app.visibility import can_view, visible_to_sql
 
 
@@ -383,7 +383,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
 
 
 # 'user' param can be anyone (including the logged in user), 'user_id' param belongs to the user making the request
-@cache.memoize(timeout=600)
+@cache.memoize(timeout=600, make_name=storefront_memo_name)
 def user_view(user: User | int, variant, stub=False, user_id=None, flair_community_id=None, usernotes=None) -> dict:
 
     if isinstance(user, int):
@@ -1546,7 +1546,7 @@ def federated_instances_view():
     return v1
 
 
-@cache.memoize(timeout=3000)
+@cache.memoize(timeout=3000, make_name=storefront_memo_name)
 def cached_modlist_for_community(community_id):
     moderator_ids = db.session.execute(
         text('SELECT user_id FROM "community_member" WHERE community_id = :community_id and (is_moderator = True or is_owner = True)'),
@@ -1561,7 +1561,7 @@ def cached_modlist_for_community(community_id):
     return modlist
 
 
-@cache.memoize(timeout=3000)
+@cache.memoize(timeout=3000, make_name=storefront_memo_name)
 def cached_modlist_for_user(user):
     if user is None:
         return []

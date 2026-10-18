@@ -16,7 +16,7 @@ from app.constants import SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, POST_TYPE_
 from app.email import send_topic_suggestion
 from app.inoculation import inoculation
 from app.models import Topic, Community, NotificationSubscription, PostReply, utcnow
-from app.storefront import storefront_link, storefront_url
+from app.storefront import storefront_cache_key, storefront_link, storefront_url
 from app.topic import bp
 from app.topic.forms import SuggestTopicsForm
 from app.visibility import listable_clause
@@ -216,7 +216,7 @@ def show_topic(topic_path):
 
 @bp.route('/topic/<path:topic_path>.rss', methods=['GET'])
 @refuse_if_private_instance
-@cache.cached(timeout=600)
+@cache.cached(timeout=600, key_prefix=storefront_cache_key)
 def show_topic_rss(topic_path):
     topic_url_parts = topic_path.split('/')
     last_topic_machine_name = topic_url_parts[-1]

@@ -41,7 +41,7 @@ from app.main.util import sidebar_active_communities, sidebar_new_instances, sid
     sidebar_new_communities, _base_list_communities_context, reload_url
 from app.translation import LibreTranslateAPI
 from app.visibility import listable_clause, modlog_open_clause, visible_to_clause
-from app.storefront import storefront_link, storefront_url
+from app.storefront import storefront_cache_key, storefront_link, storefront_url
 from app.utils import etag_stamp
 from app.utils import render_template, ensure_rss_token, get_setting, request_etag_matches, return_304, blocked_domains, rss_token_user, \
     ap_datetime, shorten_string, user_filters_home, \
@@ -773,7 +773,7 @@ def security():
 
 @bp.route('/sitemap.xml')
 @refuse_if_private_instance
-@cache.cached(timeout=6000)
+@cache.cached(timeout=6000, key_prefix=storefront_cache_key)
 def sitemap():
     posts = Post.query.join(Community, Post.community_id == Community.id).filter(
         Post.from_bot == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
