@@ -440,6 +440,12 @@ def finalize_user_registration(user, form):
         login_user(user, remember=True)
 
 
+def oauth_client_id(provider):
+    """The provider's client id, which is what the login and registration pages test to offer its button; empty on
+    the onion, where the redirect_uri would name the onion host to the provider."""
+    return '' if is_onion_request() else current_app.config[f"{provider.upper()}_OAUTH_CLIENT_ID"]
+
+
 def render_registration_form(form):
     if g.site.registration_mode == "RequireApplication" and g.site.application_question:
         form.question.label = Label("question", markdown_to_html(g.site.application_question))
@@ -450,8 +456,8 @@ def render_registration_form(form):
                            onion_proof=prepare_onion_proof(form, 'register'),
                            instance_chooser_enabled=get_setting('enable_instance_chooser', False),
                            #google_oauth=current_app.config["GOOGLE_OAUTH_CLIENT_ID"],
-                           mastodon_oauth=current_app.config["MASTODON_OAUTH_CLIENT_ID"],
-                           discord_oauth=current_app.config["DISCORD_OAUTH_CLIENT_ID"])
+                           mastodon_oauth=oauth_client_id("mastodon"),
+                           discord_oauth=oauth_client_id("discord"))
 
 
 def redirect_next_page():
@@ -686,6 +692,6 @@ def configure_bandwidth_cookies(response, low_bandwidth_mode):
 def render_login_form(form):
     return render_template("auth/login.html", title=_("Login"), form=form,
                            onion_proof=prepare_onion_proof(form, 'login'),
-                           google_oauth=current_app.config["GOOGLE_OAUTH_CLIENT_ID"],
-                           mastodon_oauth=current_app.config["MASTODON_OAUTH_CLIENT_ID"],
-                           discord_oauth=current_app.config["DISCORD_OAUTH_CLIENT_ID"])
+                           google_oauth=oauth_client_id("google"),
+                           mastodon_oauth=oauth_client_id("mastodon"),
+                           discord_oauth=oauth_client_id("discord"))

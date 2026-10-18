@@ -20,6 +20,7 @@ from app.constants import *
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap
 from app.visibility import OPEN_VISIBILITIES, visible_to_clause
+from app.onion import is_onion_request
 from app.models import Post, Community, CommunityMember, User, PostReply, Notification, utcnow, File, Site, \
     Instance, Report, UserBlock, CommunityJoinRequest, CommunityBlock, Filter, Domain, DomainBlock, \
     InstanceBlock, NotificationSubscription, PostBookmark, PostReplyBookmark, read_posts, Topic, UserNote, \
@@ -797,10 +798,11 @@ def connect_oauth():
         'mastodon': user.mastodon_oauth_id is not None
     }
 
+    onion = is_onion_request()   # the redirect_uri would name the onion host to the provider
     oauth_providers = {
-        'google': current_app.config["GOOGLE_OAUTH_CLIENT_ID"] != '',
-        'mastodon': current_app.config["MASTODON_OAUTH_CLIENT_ID"] != '',
-        'discord': current_app.config["DISCORD_OAUTH_CLIENT_ID"] != ''
+        'google': not onion and current_app.config["GOOGLE_OAUTH_CLIENT_ID"] != '',
+        'mastodon': not onion and current_app.config["MASTODON_OAUTH_CLIENT_ID"] != '',
+        'discord': not onion and current_app.config["DISCORD_OAUTH_CLIENT_ID"] != ''
     }
 
     # Handle disconnect requests

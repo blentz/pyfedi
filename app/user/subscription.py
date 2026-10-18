@@ -6,6 +6,7 @@ from flask_babel import _, lazy_gettext as _l
 from app import db
 from app.pinned_http import pinned_transport
 from app.models import User, CmsPage
+from app.onion import clearnet_only, is_onion_request
 from app.user import bp
 from app.utils import render_template, login_required
 
@@ -18,7 +19,7 @@ def choose_plan():
         if current_user.stripe_subscription_id is not None:
             flash(_('Thank you for supporting %(instance_name)s! Any choice you make below will replace your current donation plan.', instance_name=current_app.config['SERVER_NAME']))
 
-        if current_app.config['STRIPE_SECRET_KEY']:
+        if current_app.config['STRIPE_SECRET_KEY'] and not is_onion_request():
             return render_template('user/choose_plan.html', title=_('Choose a donation plan'),
                                    instance_name=current_app.config['SERVER_NAME'], monthly_small=current_app.config['STRIPE_MONTHLY_SMALL'],
                                    monthly_big=current_app.config['STRIPE_MONTHLY_BIG'], monthly_small_text=current_app.config['STRIPE_MONTHLY_SMALL_TEXT'],
@@ -27,12 +28,13 @@ def choose_plan():
         else:
             return render_template('donate.html', title=_('Donate'), cms_page=cms_page)
     else:
-        if current_app.config['STRIPE_SECRET_KEY']:
+        if current_app.config['STRIPE_SECRET_KEY'] and not is_onion_request():
             flash(_('Log in to donate to %(instance_name)s or donate to the PieFed project using the button below.', instance_name=current_app.config['SERVER_NAME']))
         return render_template('donate.html', title=_('Donate'), cms_page=cms_page)
 
 
 @bp.route('/stripe_redirect/<plan>', methods=['GET'])
+@clearnet_only('user.choose_plan')
 @login_required
 def stripe_redirect(plan):
     import stripe  # lazy: stripe is slow to import (0.7s) and only billing uses it

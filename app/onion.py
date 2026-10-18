@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import ipaddress
 import secrets
+from functools import wraps
 from typing import TypeVar
 from urllib.parse import urlsplit
 
-from flask import current_app, has_request_context, request, session
+from flask import current_app, flash, has_request_context, redirect, request, session, url_for
+from flask_babel import _
 
 ONION_MARKER_HEADER = 'X-PieFed-Via'
 ONION_MARKER_VALUE = 'onion'
@@ -78,6 +80,21 @@ def is_onion_request() -> bool:
         return False
     original = request.environ.get(PROXY_FIX_ORIG) or {}
     return single_address(original.get('REMOTE_ADDR')) == proxy
+
+
+def clearnet_only(fallback_endpoint: str):
+    """View decorator: on the onion, flash that the feature is on the clearnet site and redirect to
+    `fallback_endpoint`. For flows that hand a third party (an OAuth provider, Stripe) a URL back to this site,
+    which would name the onion host to it."""
+    def decorate(view):
+        @wraps(view)
+        def guarded(*args, **kwargs):
+            if is_onion_request():
+                flash(_('This is only available on the clearnet site.'), 'error')
+                return redirect(url_for(fallback_endpoint))
+            return view(*args, **kwargs)
+        return guarded
+    return decorate
 
 
 def audit_field(value: T) -> T | None:

@@ -31,7 +31,7 @@ from app.auth.util import (
 )
 from app.email import send_password_reset_email, send_registration_approved_email
 from app.models import User, UserRegistration
-from app.onion import is_onion_request
+from app.onion import clearnet_only, is_onion_request
 from app.onion_guard import WAIT_MIN_AGE, onion_proof_refused, onion_wait_target
 from app.shared.tasks import task_selector
 from app.utils import (
@@ -250,6 +250,7 @@ def permission_denied():
 
 
 @bp.route("/google_login")
+@clearnet_only('auth.login')
 def google_login():
     # If user is already logged in, redirect to connect route
     if current_user.is_authenticated:
@@ -258,6 +259,7 @@ def google_login():
 
 
 @bp.route("/google_connect")
+@clearnet_only('user.connect_oauth')
 @login_required
 def google_connect():
     return oauth.google.authorize_redirect(redirect_uri=url_for('auth.google_connect_callback', _external=True))
@@ -306,6 +308,7 @@ def google_connect_callback():
 
 
 @bp.route("/mastodon_login")
+@clearnet_only('auth.login')
 def mastodon_login():
     # If user is already logged in, redirect to the connect route
     if current_user.is_authenticated:
@@ -378,6 +381,7 @@ def mastodon_authorize():
 
 
 @bp.route("/mastodon_connect")
+@clearnet_only('user.connect_oauth')
 @login_required
 def mastodon_connect():
     # D1135. `google_connect`, `discord_connect` and both of their callbacks
@@ -428,6 +432,7 @@ def mastodon_connect_callback():
 
 
 @bp.route("/discord_login")
+@clearnet_only('auth.login')
 def discord_login():
     # If user is already logged in, redirect to connect route
     if current_user.is_authenticated:
@@ -436,6 +441,7 @@ def discord_login():
 
 
 @bp.route("/discord_connect")
+@clearnet_only('user.connect_oauth')
 @login_required
 def discord_connect():
     return oauth.discord.authorize_redirect(redirect_uri=url_for('auth.discord_connect_callback', _external=True))
