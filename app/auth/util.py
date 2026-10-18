@@ -23,7 +23,7 @@ from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role
 from app.onion import audit_field, is_onion_request
-from app.onion_guard import login_counters, onion_login_succeeded, onion_login_wait
+from app.onion_guard import onion_login_gate, onion_login_succeeded
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, \
     finalize_user_setup, get_request, get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
@@ -467,12 +467,14 @@ def process_login(form: LoginForm):
     username = form.user_name.data.strip()
     password = form.password.data.strip()
 
-    # Onion only (spec 3.7): failed logins slow down what was typed and the account it names (login_counters)
-    counters = login_counters(username, find_user(username)) if is_onion_request() else (username,)
-    wait = onion_login_wait(*counters)
-    if wait:
+    # Onion only (spec 3.7): failed logins slow down what was typed and the account it names (OnionLoginGate)
+    gate = onion_login_gate(username, find_user(username) if is_onion_request() else None)
+    if gate.wait:
         flash(_('Too many failed logins for this account. Please try again in %(seconds)d seconds.',
-                seconds=wait), 'error')
+                seconds=gate.wait), 'error')
+        return redirect(url_for("auth.login"))
+    if gate.hidden:   # exactly the unknown-account answer below
+        flash(invalid_login_message(), "error")  # D1131
         return redirect(url_for("auth.login"))
 
     # attempt authentication with LDAP first (if enabled), then fall back to local
@@ -499,7 +501,7 @@ def process_login(form: LoginForm):
         if not validate_user_login(user, password, ip):
             return redirect(url_for("auth.login"))
 
-    onion_login_succeeded(*counters)
+    onion_login_succeeded(username, user)
 
     if requires_email_verification(user):
         return redirect(url_for("auth.check_email"))
