@@ -53,9 +53,13 @@ export function setupOnionPow({ document, subtle }) {
         return false;
     }
     const form = nonce.form;
+    // A browser can restore an old value into the field (Firefox does, on reload, for hidden inputs): it belongs to
+    // an old challenge, so it is cleared, and only this page's own solve counts.
+    nonce.value = '';
+    let solved = false;
     let solving = false;
     form.addEventListener('submit', async event => {
-        if (nonce.value) return;              // solved: this is the resubmit, let it go
+        if (solved) return;                   // this is the resubmit after the solve, let it go
         event.preventDefault();
         if (solving) return;
         solving = true;
@@ -64,13 +68,14 @@ export function setupOnionPow({ document, subtle }) {
         try {
             nonce.value = await solve(nonce.dataset.salt, Number(nonce.dataset.bits),
                                       data => subtle.digest('SHA-256', data));
+            solved = true;
         } catch {
             offerWait();
         } finally {
             solving = false;
             if (submitter) submitter.disabled = false;
         }
-        if (nonce.value) form.requestSubmit(submitter);
+        if (solved) form.requestSubmit(submitter);
     });
     return true;
 }

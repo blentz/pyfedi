@@ -91,6 +91,18 @@ test('a submit is held, solved, then sent with the same button', async () => {
     assert.equal(after.event.prevented, false);
 });
 
+test('a nonce the browser restored is cleared and solved again, never sent as it was', async () => {
+    const { document, nonce, submits, submit, button } = page({ solved: 'stale' });
+    setupOnionPow({ document, subtle: webcrypto.subtle });
+    assert.equal(nonce.value, '');
+    nonce.value = 'stale';                         // restored again after setup: still not trusted
+    const { event, done } = submit();
+    assert.equal(event.prevented, true);
+    await done;
+    assert.equal(nonce.value, SHARED_NONCE);
+    assert.deepEqual(submits, [button]);
+});
+
 test('a submit with no button is sent with none', async () => {
     const { document, submits, submit } = page();
     setupOnionPow({ document, subtle: webcrypto.subtle });
