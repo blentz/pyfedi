@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ipaddress
 from typing import TypeVar
+from urllib.parse import urlsplit
 
 from flask import current_app, has_request_context, request
 
@@ -39,12 +40,28 @@ def onion_proxy_address() -> ipaddress.IPv4Address | ipaddress.IPv6Address | Non
     return single_address(current_app.config.get('ONION_PROXY_IP'))
 
 
+def is_onion_host(host) -> bool:
+    """Whether a Host header names a .onion: lower-cased, port and IPv6 brackets stripped, one trailing dot stripped.
+    A host that does not parse is not an onion."""
+    try:
+        name = urlsplit(f'//{host}').hostname or ''
+    except ValueError:   # an unbalanced IPv6 bracket
+        return False
+    if name.endswith('.'):
+        name = name[:-1]
+    return name.endswith('.onion')
+
+
 def is_onion_request() -> bool:
-    """Whether this request came over the onion: Caddy's marker header and Caddy as the TCP peer. False outside a
-    request, when `ONION_PROXY_IP` is unset, and when ProxyFix did not run (no original environ to read)."""
+    """Whether this request came over the onion: Caddy's marker header, a .onion Host, and Caddy as the TCP peer.
+    False outside a request, when `ONION_PROXY_IP` is unset, and when ProxyFix did not run (no original environ to
+    read). The Host check is defence in depth: should a public listener fail to strip a client's marker, a clearnet
+    request still names a clearnet host."""
     if not has_request_context():
         return False
     if request.headers.get(ONION_MARKER_HEADER) != ONION_MARKER_VALUE:
+        return False
+    if not is_onion_host(request.host):
         return False
     proxy = onion_proxy_address()
     if proxy is None:

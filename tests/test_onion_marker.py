@@ -18,7 +18,7 @@ from app import cache, db, get_ip_address, limiter, rate_limit_key
 from app.api.alpha.routes import is_trusted_request
 from app.auth.util import get_country, handle_banned_user, update_user_session
 from app.models import Instance, IpBan, Site, SiteDomain, User
-from app.onion import audit_field, is_onion_request
+from app.onion import audit_field, is_onion_host, is_onion_request
 from app.shared.auth import api_log_user_in
 from app.storefront import check_default_domain, clear_domain_cache
 from app.utils import banned_ip_addresses, block_honey_pot, user_ip_banned
@@ -26,7 +26,8 @@ from tests.factories import make_instance, make_user
 
 PROXY = '10.89.0.2'
 TOR_CONTAINER = '10.89.0.7'
-ONION = {'X-PieFed-Via': 'onion', 'X-Forwarded-For': TOR_CONTAINER}
+ONION_HOST = 'abc.onion'
+ONION = {'X-PieFed-Via': 'onion', 'X-Forwarded-For': TOR_CONTAINER, 'Host': ONION_HOST}
 
 
 def proxy_ip(app, value=PROXY):
@@ -73,6 +74,37 @@ def test_the_proxy_without_the_header_is_clearnet(app, site):
     with proxy_ip(app):
         assert through_proxy_fix(app, PROXY, {'X-Forwarded-For': TOR_CONTAINER}) == (False, TOR_CONTAINER)
         assert through_proxy_fix(app, PROXY, {**ONION, 'X-PieFed-Via': 'Onion'}) == (False, TOR_CONTAINER)
+
+
+@pytest.mark.parametrize('host, onion', [
+    ('test.piefed.local', False),
+    ('hell.cloud', False),
+    ('abc.onion.evil.example', False),
+    ('onion', False),
+    ('[::1]:80', False),
+    ('[::1', False),
+    ('abc.onion', True),
+    ('ABC.ONION:80', True),
+    ('abc.onion.', True),
+    ('abc.onion.:8080', True),
+])
+def test_the_host_must_be_an_onion(app, site, host, onion):
+    """Defence in depth: the marker from Caddy's address counts only on a .onion Host. Should a public listener ever
+    fail to strip a client's X-PieFed-Via, a clearnet request is still not treated as onion."""
+    with proxy_ip(app):
+        expected = (True, '') if onion else (False, TOR_CONTAINER)
+        assert through_proxy_fix(app, PROXY, {**ONION, 'Host': host}) == expected
+
+
+@pytest.mark.parametrize('host, onion', [
+    ('[::1', False),            # Werkzeug's request.host already drops this; the parser must not raise on it either
+    ('[fd00::1]:80', False),
+    ('', False),
+    ('abc.onion', True),
+    ('Abc.Onion.:443', True),
+])
+def test_is_onion_host(host, onion):
+    assert is_onion_host(host) is onion
 
 
 def test_a_forwarded_for_naming_the_proxy_is_not_the_proxy(app, site):
@@ -211,6 +243,7 @@ def test_onion_honeypot_ban_is_not_applied(app, site, redis_double):
 
 
 def test_onion_honeypot_ends_session(app, site, redis_double):
+    add_onion_domain()
     with proxy_ip(app):
         with app.test_client() as client:
             with client.session_transaction() as stored:
@@ -275,6 +308,7 @@ REGISTRATION = {'user_name': 'newperson', 'email': '', 'real_email': 'new@exampl
 
 def test_onion_signup_ip_null(app, site):
     registration_env()
+    add_onion_domain()
     with proxy_ip(app), patch.dict(app.config, {'COUNTRY_SOURCE_HEADER': 'CF-IPCountry'}), \
             patch('app.auth.forms.get_setting', return_value=False), \
             patch('app.auth.util.ip2location') as located, \
