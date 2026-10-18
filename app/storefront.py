@@ -541,18 +541,15 @@ def _s3_host() -> str:
 
 
 def _quoted_strings(text: str) -> list[str]:
-    strings, pos, unclosed = [], 0, set()
+    strings, pos = [], 0
     while True:
         opener = _QUOTE.search(text, pos)
         if opener is None:
             return strings
         pos = opener.end()
-        if opener[0] in unclosed:
-            continue
         end = text.find(opener[0], pos)
         if end < 0:
-            unclosed.add(opener[0])   # no later quote of this kind closes anything either: never look again
-            continue
+            continue   # no later quote of this kind exists, so this is the one scan it will cost
         strings.append(text[pos:end])
         pos = end + 1
 
