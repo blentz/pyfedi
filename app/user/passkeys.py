@@ -10,6 +10,7 @@ from flask_login import current_user
 from app import db, cache
 from app.user import bp
 from app.models import Passkey
+from app.storefront import current_storefront, storefront_url
 from app.utils import render_template, login_required
 
 
@@ -38,7 +39,7 @@ def user_passkey_delete(passkey_id):
 @login_required(csrf=False)
 def user_passkey_options():
     options = generate_registration_options(
-        rp_id=request.host,
+        rp_id=current_storefront().domain,
         rp_name=g.site.name,
         user_name=current_user.user_name,
         user_id=generate_user_handle(),
@@ -99,8 +100,8 @@ def user_passkey_verification():
         registration_verification = verify_registration_response(
             credential = registration_credential,
             expected_challenge = cache.get(f'challenge_{current_user.id}'),
-            expected_origin = f"https://{request.host}",
-            expected_rp_id = request.host,
+            expected_origin = storefront_url(),
+            expected_rp_id = current_storefront().domain,
             require_user_verification = False,
         )
     except InvalidRegistrationResponse:

@@ -12,6 +12,7 @@ from webauthn.helpers.structs import UserVerificationRequirement, PublicKeyCrede
 from app import db, cache
 from app.auth import bp
 from app.models import User, utcnow
+from app.storefront import current_storefront, storefront_url
 from app.utils import safe_redirect_target
 
 
@@ -34,7 +35,7 @@ def passkey_options():
     # exists or has a passkey. The login then fails generically.
     credentials = allowed_credentials(user) if user else []
     options = generate_authentication_options(
-        rp_id=request.host,
+        rp_id=current_storefront().domain,
         timeout=120000,
         allow_credentials=credentials or [decoy_credential(username)],
         user_verification=UserVerificationRequirement.PREFERRED,
@@ -110,9 +111,9 @@ def passkey_verification():
                     # authenticator with no counter. The reported count is then kept.
                     verification = verify_authentication_response(
                         credential=auth_credential,
-                        expected_rp_id=request.host,
+                        expected_rp_id=current_storefront().domain,
                         expected_challenge=challenge,
-                        expected_origin=f'https://{request.host}',
+                        expected_origin=storefront_url(),
                         credential_public_key=credential_public_key,
                         credential_current_sign_count=passkey.counter,
                         require_user_verification=False,
