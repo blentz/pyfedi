@@ -1,7 +1,8 @@
 """OAuth login/connect and Stripe checkout are unavailable on the onion (onion storefront spec §3): their
 redirect_uri / success_url would name the onion host to the provider. The buttons are hidden and the routes refuse
 without building a provider URL. Clearnet is unchanged."""
-from unittest.mock import patch
+import sys
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -120,9 +121,11 @@ def test_the_clearnet_donate_page_offers_the_plans(app, configured):
 
 @pytest.mark.parametrize('plan', ['monthly_small', 'monthly_big', 'billing'])
 def test_the_onion_refuses_a_checkout(app, configured, plan):
-    with patch('stripe.checkout.Session.create') as create, patch('app.user.subscription.httpx.Client') as client:
+    configured.stripe_customer_id = 'cus_test'   # so the billing portal would be reached without the refusal
+    db.session.commit()
+    stripe = MagicMock()
+    with patch.dict(sys.modules, {'stripe': stripe}), patch('app.user.subscription.httpx.Client') as client:
         response = visit(app, configured, f'/stripe_redirect/{plan}', onion=True)
     assert response.status_code == 302
     assert response.headers['Location'].endswith('/donate')
-    assert not create.called and not client.called
-
+    assert not stripe.checkout.Session.create.called and not client.called
