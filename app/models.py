@@ -1738,8 +1738,8 @@ class Passkey(db.Model):
 def verify_password_hash(password_hash, password) -> tuple[bool, bool]:
     """Whether `password` matches `password_hash`, and whether the match was against a legacy bcrypt hash: the
     verification half of User.check_password, with no side effects. Also run, result ignored, for an onion login
-    refused in hidden backoff (app.onion_guard.spend_password_check), which is why the two share it: that refusal
-    must cost exactly what a wrong password costs.
+    refused in hidden backoff (User.check_password(refuse=True)), which is why the two share it: that refusal must
+    cost exactly what a wrong password costs.
 
     Total: any stored hash, however malformed, yields a non-match. The bcrypt fallback deliberately runs OUTSIDE the
     first try, not inside its `except ValueError:` block. Handlers on the same `try` guard the try body, not one

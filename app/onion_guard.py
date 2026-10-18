@@ -230,21 +230,6 @@ def _queue_failure(pipe, key: str, now: float) -> None:
     pipe.expire(key, LOGIN_FAILURE_TTL)
 
 
-def _key_remaining(key: str) -> int:
-    count, last = app_pkg.redis_client.hmget(key, 'count', 'last')
-    return _remaining(count, last, _now())
-
-
-def login_delay_remaining(username: str) -> int:
-    """Seconds an onion login typed as `username` must still wait (its visible wait); 0 if none. Reads only."""
-    return _key_remaining(_login_key(username))
-
-
-def account_delay_remaining(account_id: int) -> int:
-    """Seconds the account's own (hidden) counter still holds its onion logins back; 0 if none. Reads only."""
-    return _key_remaining(_account_key(account_id))
-
-
 def reserve_onion_login_attempt(typed: str, account_id: int | None = None) -> OnionLoginGate:
     """Check and reserve one onion login attempt, typed as `typed` and naming the account `account_id` (None when it
     names none), atomically.
@@ -281,21 +266,6 @@ def reserve_onion_login_attempt(typed: str, account_id: int | None = None) -> On
                 continue
     # Contention that will not settle: a refusal with nothing counted, showing the first wait a real backoff shows
     return OnionLoginGate(wait=login_wait(FREE_LOGIN_FAILURES + 1))
-
-
-def record_onion_login_failure(username: str) -> None:
-    """One more failed onion login for `username`, counted and timed in one transaction. The key lasts an hour from
-    the latest failure."""
-    pipe = app_pkg.redis_client.pipeline()
-    _queue_failure(pipe, _login_key(username), _now())
-    pipe.execute()
-
-
-def record_onion_account_failure(account_id: int) -> None:
-    """One more failed onion login naming the account `account_id`, as `record_onion_login_failure` counts one typed."""
-    pipe = app_pkg.redis_client.pipeline()
-    _queue_failure(pipe, _account_key(account_id), _now())
-    pipe.execute()
 
 
 def clear_onion_login_failures(username: str, account_id: int | None = None) -> None:

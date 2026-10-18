@@ -28,11 +28,10 @@ from app import app_bcrypt, create_app, db, limiter, rate_limit_key
 from app.auth.util import find_user
 from app.models import SiteDomain, User
 from app.onion import ONION_ANON_KEY, arrived_onion_sid, mint_onion_sid
-from app.onion_guard import (COOKIE_CHECK, ONION_SESSION_ENDPOINTS, ONION_SESSION_EXEMPT,
-                             clear_onion_login_failures, login_delay_remaining, onion_session_missing,
-                             OnionLoginGate, account_delay_remaining, record_onion_account_failure,
-                             record_onion_login_failure, reserve_onion_login_attempt, resolve_onion_api_rate_key,
-                             same_url)
+from app.onion_guard import (ACCOUNT_FAILURE_KEY, COOKIE_CHECK, LOGIN_FAILURE_TTL, ONION_SESSION_ENDPOINTS,
+                             ONION_SESSION_EXEMPT, TYPED_FAILURE_KEY, clear_onion_login_failures,
+                             onion_session_missing, OnionLoginGate, reserve_onion_login_attempt,
+                             resolve_onion_api_rate_key, same_url)
 from app.storefront import clear_domain_cache
 from tests.conftest import TestConfig
 from tests.factories import make_instance, make_user
@@ -70,6 +69,22 @@ def proof_given(monkeypatch):
     """Every onion login here carries its proof-of-work (task 10, tests/test_onion_pow.py, which also shows the proof
     is checked before anything here runs): these tests are about what comes after it."""
     monkeypatch.setattr('app.auth.routes.onion_proof_refused', lambda form: False)
+
+
+def _seed_failures(key: str, count: int) -> None:
+    """`count` failed onion logins on counter `key`, the latest of them now: the state reserve_onion_login_attempt
+    reads and counts on. Written to Redis directly, as the reservation itself writes it."""
+    redis = app_pkg.redis_client
+    redis.hset(key, mapping={'count': count, 'last': onion_guard._now()})
+    redis.expire(key, LOGIN_FAILURE_TTL)
+
+
+def typed_failures(typed: str, count: int) -> None:
+    _seed_failures(TYPED_FAILURE_KEY.format(typed.strip().lower()), count)
+
+
+def account_failures(account_id: int, count: int) -> None:
+    _seed_failures(ACCOUNT_FAILURE_KEY.format(account_id), count)
 
 
 @pytest.fixture
@@ -454,19 +469,18 @@ def test_onion_api_buckets_are_per_account(limits):
 # --------------------------------------------------------------------------
 
 def test_login_delay_formula(app, redis_double, clock):
-    for _ in range(5):
-        record_onion_login_failure('alice')
-    assert login_delay_remaining('alice') == 0
-    record_onion_login_failure('alice')
-    assert login_delay_remaining('alice') == 2
-    record_onion_login_failure('alice')
-    assert login_delay_remaining('alice') == 4
+    """None for the first 5 failures, then doubling from 2 s, capped at 300 s, counted from the latest failure."""
+    typed_failures('alice', 5)
+    assert reserve_onion_login_attempt('alice').wait == 0   # the 6th goes ahead, and is counted
+    assert reserve_onion_login_attempt('alice').wait == 2
+    clock.t += 2
+    assert reserve_onion_login_attempt('alice').wait == 0   # the 7th
+    assert reserve_onion_login_attempt('alice').wait == 4
     clock.t += 1.5
-    assert login_delay_remaining('alice') == 3
-    for _ in range(30):
-        record_onion_login_failure('alice')
-    assert login_delay_remaining('alice') == 300
-    assert redis_double.hget('onion_login_fail:typed:alice', 'count') == '37'
+    assert reserve_onion_login_attempt('alice').wait == 3
+    typed_failures('alice', 36)
+    assert reserve_onion_login_attempt('alice').wait == 300
+    assert redis_double.hget('onion_login_fail:typed:alice', 'count') == '36'   # a refused attempt is not counted
     assert 3500 < redis_double.ttl('onion_login_fail:typed:alice') <= 3600
 
 
@@ -475,13 +489,12 @@ def test_the_clock_is_the_wall_clock():
 
 
 def test_the_key_is_the_lower_case_name(app, redis_double, clock):
-    for _ in range(6):
-        record_onion_login_failure(' Alice ')
-    assert login_delay_remaining('ALICE') == 2
+    assert [reserve_onion_login_attempt(' Alice ').wait for _ in range(6)] == [0] * 6
+    assert reserve_onion_login_attempt('ALICE').wait == 2
     assert redis_double.exists('onion_login_fail:typed:alice')
     clear_onion_login_failures('aLiCe')
     assert not redis_double.exists('onion_login_fail:typed:alice')
-    assert login_delay_remaining('alice') == 0
+    assert reserve_onion_login_attempt('alice').wait == 0
 
 
 def test_reserving_is_the_failure(app, redis_double, clock):
@@ -499,8 +512,7 @@ def test_reserving_is_the_failure(app, redis_double, clock):
 
 def test_parallel_attempts_get_one_per_wait_window(app, redis_double, clock):
     """N attempts arriving together, none of them finished yet: only one goes ahead per window."""
-    for _ in range(5):
-        record_onion_login_failure('alice')
+    typed_failures('alice', 5)
     assert [reserve_onion_login_attempt('alice').wait for _ in range(10)] == [0] + [2] * 9
     clock.t += 2
     assert [reserve_onion_login_attempt('alice').wait for _ in range(10)] == [0] + [4] * 9
@@ -512,15 +524,14 @@ def test_parallel_attempts_get_one_per_wait_window(app, redis_double, clock):
 def test_an_account_in_backoff_is_refused_silently(app, redis_double, clock):
     """A typed identifier that is free, naming an account in backoff, is refused without a wait to show (`hidden`),
     and counted on both counters like a wrong password. The typed counter's own backoff is the visible one."""
-    for _ in range(6):
-        record_onion_account_failure(42)
+    account_failures(42, 6)
     gate = reserve_onion_login_attempt('alice@example.com', 42)
     assert gate == OnionLoginGate(wait=0, hidden=True) and not gate.proceed
     assert redis_double.hget('onion_login_fail:acct:42', 'count') == '7'
     assert redis_double.hget('onion_login_fail:typed:alice@example.com', 'count') == '1'
     # The account's name typed is a typed counter of its own, free here: hidden too, never a visible wait
     assert reserve_onion_login_attempt('alice', 42) == OnionLoginGate(hidden=True)
-    assert account_delay_remaining(42) == 8
+    assert redis_double.hget('onion_login_fail:acct:42', 'count') == '8'   # 8 failures: an 8 s hidden wait
     clock.t += 8
     assert reserve_onion_login_attempt('alice@example.com', 42).proceed
     assert reserve_onion_login_attempt('nobody').proceed
@@ -529,8 +540,7 @@ def test_an_account_in_backoff_is_refused_silently(app, redis_double, clock):
 def test_a_concurrent_change_is_retried(app, redis_double, clock, monkeypatch):
     """Another attempt reserving between the read and the write aborts this transaction (WATCH); it is decided
     again on the new state, so the two are never both let through."""
-    for _ in range(6):
-        record_onion_login_failure('alice')
+    typed_failures('alice', 6)
     clock.t += 2
     raced = []
 
@@ -558,8 +568,7 @@ def test_a_one_second_wait_is_singular(app, alice, redis_double, clock, ldap_off
 
 
 def test_endless_contention_is_a_short_wait(app, redis_double, clock, monkeypatch):
-    for _ in range(6):
-        record_onion_login_failure('alice')
+    typed_failures('alice', 6)
     clock.t += 2
 
     def always_racing():
@@ -703,8 +712,7 @@ def test_success_clears(app, alice, redis_double, clock, ldap_off):
 
 
 def test_delay_onion_only(app, alice, redis_double, clock, ldap_off, alpha_api):
-    for _ in range(10):
-        record_onion_login_failure('alice')
+    typed_failures('alice', 10)
     client = app.test_client()
     response = client.post('/auth/login', base_url=CLEARNET_URL,
                            data={'user_name': 'alice', 'password': 'wrong password', **LOGIN})
@@ -827,8 +835,7 @@ def hidden_verify(app, client):
 def test_a_hidden_refusal_hashes_the_password_once(app, alice, redis_double, clock, ldap_off, alpha_api, attempt):
     """The account is in backoff: the correct password is refused, but only after the same hash verification a wrong
     password gets, because it goes through the same check_password, told to refuse."""
-    for _ in range(6):
-        record_onion_account_failure(alice.id)
+    account_failures(alice.id, 6)
     with patch('app.models.check_password_hash', wraps=models.check_password_hash) as verified:
         assert not attempt(app, app.test_client())
     verified.assert_called_once()
@@ -842,8 +849,7 @@ def test_a_legacy_bcrypt_hash_costs_its_bcrypt_check(app, alice, redis_double, c
     legacy = app_bcrypt.generate_password_hash(PASSWORD).decode()
     alice.password_hash = legacy
     db.session.commit()
-    for _ in range(6):
-        record_onion_account_failure(alice.id)
+    account_failures(alice.id, 6)
     with patch('app.models.app_bcrypt.check_password_hash', wraps=app_bcrypt.check_password_hash) as bcrypt_verified:
         assert not attempt(app, app.test_client())
     bcrypt_verified.assert_called_once_with(legacy, PASSWORD)
@@ -887,8 +893,7 @@ def test_a_hidden_refusal_runs_the_whole_wrong_password_flow(app, alice, bob, re
     bind = request.getfixturevalue('directory') if ldap else None
     if not ldap:
         request.getfixturevalue('ldap_off')
-    for _ in range(6):
-        record_onion_account_failure(alice.id)
+    account_failures(alice.id, 6)
     client = app.test_client()
     a_session(client)
     calls = []

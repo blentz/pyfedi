@@ -17,13 +17,12 @@ from werkzeug.exceptions import HTTPException
 from app import db
 from app.auth.util import validate_user_login   # a deleted row is reached by name only: find_user never returns one
 from app.models import User
-from app.onion_guard import record_onion_account_failure, record_onion_login_failure
 from app.shared.auth import api_log_user_in
 from app.utils import log_login_failure
 from app.api.alpha.utils.user import post_user_verify_credentials
-from tests.test_onion_guard_limits import (FROM_CADDY, LOGIN, PASSWORD, a_session, alice, clock, directory,  # noqa: F401
-                                           ldap_off, login_form, onion, onion_context, onion_post, proof_given,
-                                           web_login)
+from tests.test_onion_guard_limits import (FROM_CADDY, LOGIN, PASSWORD, a_session, account_failures,  # noqa: F401
+                                           alice, clock, directory, ldap_off, login_form, onion, onion_context,
+                                           onion_post, proof_given, typed_failures, web_login)
 
 CLEARNET = {'REMOTE_ADDR': '203.0.113.9'}
 LINE = 'auth: login failed ip='
@@ -125,8 +124,7 @@ def test_an_onion_unknown_user_logs_onion(app, alice, ldap_off, caplog):
                          ids=['wrong', 'hidden-refusal-of-the-right-one'])
 def test_the_hidden_refusal_logs_as_a_wrong_password_does(app, alice, ldap_off, redis_double, clock, caplog,
                                                           typed, password):
-    for _ in range(6):
-        record_onion_account_failure(alice.id)
+    account_failures(alice.id, 6)
     client = app.test_client()
     a_session(client)
     web_login(client, typed, password)
@@ -134,8 +132,7 @@ def test_the_hidden_refusal_logs_as_a_wrong_password_does(app, alice, ldap_off, 
 
 
 def test_the_hidden_refusal_with_a_directory_logs_once(app, alice, directory, redis_double, clock, caplog):
-    for _ in range(6):
-        record_onion_account_failure(alice.id)
+    account_failures(alice.id, 6)
     client = app.test_client()
     a_session(client)
     web_login(client, 'alice', PASSWORD)
@@ -143,8 +140,7 @@ def test_the_hidden_refusal_with_a_directory_logs_once(app, alice, directory, re
 
 
 def test_a_visible_wait_refusal_logs_nothing(app, alice, ldap_off, redis_double, clock, caplog):
-    for _ in range(6):
-        record_onion_login_failure('alice')
+    typed_failures('alice', 6)
     client = app.test_client()
     a_session(client)
     web_login(client, 'alice', PASSWORD)
@@ -196,8 +192,7 @@ def test_api_login_logs_nothing_for_a_banned_account_with_the_right_password(app
 
 
 def test_api_login_hidden_refusal_logs_onion(app, alice, ldap_off, redis_double, clock, caplog):
-    for _ in range(6):
-        record_onion_account_failure(alice.id)
+    account_failures(alice.id, 6)
     with onion_context(app):
         with pytest.raises(Exception, match='incorrect_login'):
             api_log_user_in({'username': 'alice', 'password': PASSWORD})
@@ -219,8 +214,7 @@ def test_verify_credentials_logs_an_unknown_user(app, alice, caplog):
 
 
 def test_verify_credentials_logs_onion_for_a_hidden_refusal(app, alice, redis_double, clock, caplog):
-    for _ in range(6):
-        record_onion_account_failure(alice.id)
+    account_failures(alice.id, 6)
     with onion_context(app):
         with pytest.raises(BlockingIOError):
             post_user_verify_credentials({'username': 'alice', 'password': PASSWORD})
@@ -238,8 +232,7 @@ def test_verify_credentials_logs_nothing_for_success_or_ban(app, alice, caplog):
 
 
 def test_verify_credentials_wait_refusal_logs_nothing(app, alice, redis_double, clock, caplog):
-    for _ in range(6):
-        record_onion_login_failure('alice')
+    typed_failures('alice', 6)
     with onion_context(app):
         with pytest.raises(HTTPException):
             post_user_verify_credentials({'username': 'alice', 'password': PASSWORD})
