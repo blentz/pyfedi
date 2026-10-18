@@ -6,7 +6,7 @@ from logging.handlers import SMTPHandler, RotatingFileHandler
 import os
 import warnings
 from PIL import Image
-from flask import Flask, Request, request, current_app, session, g, has_app_context
+from flask import json as flask_json, Flask, Request, request, current_app, session, g, has_app_context
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_login import LoginManager, current_user
@@ -135,7 +135,20 @@ def _forget_the_previous_tasks_site(**kwargs):
 httpx_client = httpx.Client(http2=True, transport=pinned_transport(http2=True))  # R162
 oauth = OAuth()
 redis_client = None  # Will be initialized in create_app()
-rest_api = Api()
+
+
+class StorefrontApi(Api):
+    """The API whose OpenAPI document names the storefront it is read on as "This instance"."""
+
+    def _openapi_json(self):
+        document = self.spec.to_dict()
+        # the first server is "This instance". A new list and dict: the spec's own servers are shared by every request
+        document['servers'] = [{**document['servers'][0], 'url': storefront_url()}, *document['servers'][1:]]
+        return current_app.response_class(flask_json.dumps(document, indent=2, sort_keys=False),
+                                          mimetype='application/json')
+
+
+rest_api = StorefrontApi()
 app_bcrypt = Bcrypt()
 
 
@@ -234,7 +247,7 @@ def create_app(config_class=Config):
             },
             "servers": [
                 {
-                    "url": f"{app.config['HTTP_PROTOCOL']}://{app.config['SERVER_NAME']}",
+                    "url": "/",   # a placeholder: StorefrontApi serves the request's own storefront here
                     "description": "This instance",
                 },
                 {
@@ -442,3 +455,4 @@ def create_app(config_class=Config):
 
 
 from app import models
+from app.storefront import storefront_url
