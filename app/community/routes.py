@@ -84,7 +84,7 @@ from app.shared.tasks import task_selector
 import app.shared.feed as shared_feed
 from app.utils import is_valid_xml_utf8, get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url, joined_server_views
 from app.activitypub.serializers.podcast import uses_podcast_episode
-from app.storefront import is_local_host, storefront_host, storefront_link, storefront_url
+from app.storefront import default_storefront, is_local_host, storefront_host, storefront_link, storefront_url
 from app.rss_extras import RSSFeed, PodcastChannel, itunes_image_ok
 from datetime import timezone, timedelta
 from flask import render_template as flask_render_template
@@ -2115,15 +2115,16 @@ def community_move(actor):
         form = MoveCommunityForm()
         if form.validate_on_submit():
 
-            # Notify admin
-            text_body = flask_render_template('email/move_community.txt', current_user=current_user,
-                                              community=community,
-                                              post_url=form.post_link.data,
-                                              home_domain=storefront_host())
-            html_body = flask_render_template('email/move_community.html', current_user=current_user,
-                                              community=community,
-                                              post_url=form.post_link.data,
-                                              home_domain=storefront_host())
+            # Notify admin, on the default storefront: not the requester's (onion spec §3.4)
+            with default_storefront():
+                text_body = flask_render_template('email/move_community.txt', current_user=current_user,
+                                                  community=community,
+                                                  post_url=form.post_link.data,
+                                                  home_domain=storefront_host())
+                html_body = flask_render_template('email/move_community.html', current_user=current_user,
+                                                  community=community,
+                                                  post_url=form.post_link.data,
+                                                  home_domain=storefront_host())
             send_email(f'Request to move {community.link()}', f'{current_app.config["MAIL_FROM"]}',
                        g.site.contact_email, text_body, html_body, current_user.email)
 
