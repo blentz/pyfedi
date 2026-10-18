@@ -723,3 +723,41 @@ def test_a_wildcard_cannot_log_in(app, profiled, ldap_off):
                                      data={'user_name': '%', 'password': PASSWORD, **LOGIN}))
     assert logged_in(client.post('/auth/login', base_url=CLEARNET_URL,
                                  data={'user_name': 'alice', 'password': PASSWORD, **LOGIN}))
+
+
+# --------------------------------------------------------------------------
+# verify_credentials checks a password too
+# --------------------------------------------------------------------------
+
+def verify(client, username, password, onion=True):
+    post = onion_post if onion else (lambda c, path, **kw: c.post(path, base_url=CLEARNET_URL, **kw))
+    return post(client, '/api/alpha/user/verify_credentials', json={'username': username, 'password': password})
+
+
+def test_verify_credentials_honours_the_delay(app, alice, redis_double, clock, alpha_api):
+    client = app.test_client(use_cookies=False)
+    assert [verify(client, 'alice', 'wrong one').status_code for _ in range(6)] == [400] * 6
+    assert verify(client, 'alice', PASSWORD).status_code == 429
+    assert verify(client, 'alice', PASSWORD, onion=False).status_code == 200   # clearnet is not delayed
+    clock.t += 2
+    assert verify(client, 'alice', PASSWORD).status_code == 200
+    assert not redis_double.exists('onion_login_fail:alice')
+
+
+def test_verify_credentials_counts_with_login(app, alice, redis_double, clock, ldap_off, alpha_api):
+    """Guesses here slow down /user/login and the other way round, and an account in backoff answers as a wrong
+    password does."""
+    client = app.test_client(use_cookies=False)
+    for _ in range(3):
+        verify(client, 'alice', 'wrong one')
+        onion_post(client, '/api/alpha/user/login', json={'username': 'alice', 'password': 'wrong one'})
+    assert onion_post(client, '/api/alpha/user/login', json={'username': 'alice', 'password': PASSWORD}) \
+        .status_code == 429
+    unknown = verify(client, 'nobody@example.com', 'wrong one')
+    hidden = verify(client, 'alice@example.com', PASSWORD)
+    assert (hidden.status_code, hidden.get_data()) == (unknown.status_code, unknown.get_data()) == \
+        (400, unknown.get_data())
+    clock.t += 300
+    assert verify(client, 'alice@example.com', PASSWORD).status_code == 200
+    assert not redis_double.exists('onion_login_fail:alice')
+    assert not redis_double.exists('onion_login_fail:alice@example.com')

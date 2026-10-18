@@ -1,4 +1,5 @@
 from flask import current_app, abort
+from flask_smorest import abort as api_abort
 from flask_login import current_user
 from furl import furl
 from sqlalchemy import text, desc, func, asc
@@ -12,6 +13,7 @@ from app.api.alpha.utils.post import get_post_list
 from app.api.alpha.utils.reply import get_reply_list
 from app.api.alpha.views import user_view, reply_view, post_view, community_view
 from app.constants import *
+from app.onion_guard import onion_login_gate, onion_login_succeeded
 from app.models import Conversation, ChatMessage, Notification, PostReply, User, Post, Community, File, UserFlair, \
     user_file, UserExtraField, UserNote, RevokedToken, utcnow, _as_url
 # The module, not the names: app.shared.user reaches this file through a blueprint
@@ -936,10 +938,16 @@ def post_user_verify_credentials(data):
     # D1131 closed on the web arm. Measured: `PROBE bf6 outcome: accepted`.
     # `is_ban_exempt()` matches the login's own carve-out for whoever set the
     # instance up.
-    if user is None or not user.check_password(password) or \
+    # Onion only (spec 3.7): a password check like /user/login, counted on the same counters (OnionLoginGate)
+    gate = onion_login_gate(username, user)
+    if gate.wait:
+        api_abort(429, message=f'Too many failed logins for this account. Try again in {gate.wait} seconds.')
+
+    if gate.hidden or user is None or not user.check_password(password) or \
             (not user.is_ban_exempt() and user.banned):
         raise BlockingIOError
 
+    onion_login_succeeded(username, user)
     return {}
 
 
