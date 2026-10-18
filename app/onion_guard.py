@@ -27,6 +27,7 @@ from flask import current_app, flash, make_response, redirect, request
 from flask_babel import _
 from markupsafe import escape
 from redis.exceptions import WatchError
+from werkzeug.security import check_password_hash
 
 import app as app_pkg
 from app import limiter
@@ -258,6 +259,17 @@ def onion_login_gate(typed: str, user=None) -> OnionLoginGate:
     if not is_onion_request():
         return OnionLoginGate()
     return reserve_onion_login_attempt(typed, user.user_name if user is not None else None)
+
+
+def spend_password_check(user, password) -> None:
+    """For a hidden refusal: the hash verification a wrong password would get (`User.check_password`'s), its result
+    ignored, so the refusal takes as long as a wrong password does. The attempt is refused whatever it says.
+    `check_password` itself is not called: on a correct legacy bcrypt hash it re-saves the hash, which a refused
+    attempt must not do."""
+    try:
+        check_password_hash(user.password_hash, password.strip())   # stripped as check_password strips it (D862)
+    except Exception:   # no password, or a hash werkzeug cannot read: refused all the same
+        pass
 
 
 def onion_login_succeeded(typed: str, user) -> None:

@@ -13,7 +13,7 @@ from app.api.alpha.utils.post import get_post_list
 from app.api.alpha.utils.reply import get_reply_list
 from app.api.alpha.views import user_view, reply_view, post_view, community_view
 from app.constants import *
-from app.onion_guard import onion_login_gate, onion_login_succeeded
+from app.onion_guard import onion_login_gate, onion_login_succeeded, spend_password_check
 from app.models import Conversation, ChatMessage, Notification, PostReply, User, Post, Community, File, UserFlair, \
     user_file, UserExtraField, UserNote, RevokedToken, utcnow, _as_url
 # The module, not the names: app.shared.user reaches this file through a blueprint
@@ -943,7 +943,11 @@ def post_user_verify_credentials(data):
     if gate.wait:
         api_abort(429, message=f'Too many failed logins for this account. Try again in {gate.wait} seconds.')
 
-    if gate.hidden or user is None or not user.check_password(password) or \
+    if gate.hidden:   # the account is in hidden backoff: the wrong-password answer, at its cost
+        spend_password_check(user, password)
+        raise BlockingIOError
+
+    if user is None or not user.check_password(password) or \
             (not user.is_ban_exempt() and user.banned):
         raise BlockingIOError
 
