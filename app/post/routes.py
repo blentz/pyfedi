@@ -9,6 +9,7 @@ from random import randint
 from flask import redirect, url_for, flash, current_app, abort, request, g, make_response, jsonify
 from flask_babel import _, force_locale, gettext
 from flask_login import current_user
+from app.onion import audit_field
 from furl import furl
 from sqlalchemy import text, desc, Integer, case
 from sqlalchemy.orm.exc import NoResultFound
@@ -1065,7 +1066,7 @@ def add_reply(post_id: int, comment_id: int):
     form.language_id.choices = languages_for_form()
     if form.validate_on_submit():
         current_user.last_seen = utcnow()
-        current_user.ip_address = ip_address()
+        current_user.ip_address = audit_field(ip_address())
 
         try:
             reply = make_reply(form, post, in_reply_to.id, SRC_WEB)

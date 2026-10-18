@@ -2,6 +2,7 @@ from app import db, cache
 from app.auth.util import find_user, get_country
 from app.ldap_utils import sync_user_to_ldap
 from app.models import IpBan, utcnow
+from app.onion import audit_field, is_onion_request
 from app.utils import ip_address, user_ip_banned, user_cookie_banned, banned_ip_addresses
 
 
@@ -24,7 +25,7 @@ def api_log_user_in(input):
 
     if not user.is_ban_exempt() and (user.banned or user_ip_banned() or user_cookie_banned()):
         # Detect if a banned user tried to log in from a new IP address
-        if user.banned and not user_ip_banned():
+        if user.banned and not user_ip_banned() and not is_onion_request():
             # If so, ban their new IP address as well
             new_ip_ban = IpBan(ip_address=ip_address(), notes=user.user_name + ' used new IP address')
             db.session.add(new_ip_ban)
@@ -34,8 +35,8 @@ def api_log_user_in(input):
         raise Exception('incorrect_login')
 
     user.last_seen = utcnow()
-    user.ip_address = ip
-    user.ip_address_country = country
+    user.ip_address = audit_field(ip)
+    user.ip_address_country = audit_field(country)
     db.session.commit()
 
     try:

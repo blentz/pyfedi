@@ -96,6 +96,9 @@ class Config(object):
     # when a CDN in front of PieFed publishes the real client there and the client
     # cannot supply it themselves (Cloudflare: CF-Connecting-IP). See env.sample.
     TRUSTED_CLIENT_IP_HEADER = os.environ.get('TRUSTED_CLIENT_IP_HEADER') or ''
+    # The address of Caddy's internal onion listener on pyfedi.network (onion storefront spec section 3.7). A request
+    # is onion only when it carries `X-PieFed-Via: onion` AND its TCP peer is this one address. Unset, no request is.
+    ONION_PROXY_IP = os.environ.get('ONION_PROXY_IP')
 
     BOUNCE_ADDRESS = os.environ.get('BOUNCE_ADDRESS') or MAIL_FROM or ''    # Warning: all emails in this inbox will be deleted!
     BOUNCE_HOST = os.environ.get('BOUNCE_HOST') or ''

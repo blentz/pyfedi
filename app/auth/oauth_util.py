@@ -9,6 +9,7 @@ from sqlalchemy import func
 from app import db, oauth
 from app.auth.util import create_registration_application, get_country, handle_banned_user
 from app.models import User, utcnow
+from app.onion import audit_field
 from app.shared.tasks import task_selector
 from app.utils import RESERVED_USER_NAMES, actor_contains_blocked_words, finalize_user_setup, get_setting, gibberish, \
     ip_address, user_cookie_banned, user_ip_banned, user_name_is_taken
@@ -119,8 +120,8 @@ def initialize_new_user(email, username, oauth_id_key, user_info, ip, country):
         verified=True,
         verification_token='',
         instance_id=1,
-        ip_address=ip,
-        ip_address_country=country,
+        ip_address=audit_field(ip),
+        ip_address_country=audit_field(country),
         banned=user_ip_banned() or user_cookie_banned(),
         alt_user_name=gibberish(randint(8, 20)),
     )
@@ -239,8 +240,8 @@ def finalize_user_login(user, token, ip, country):
     Performs final steps of logging in a user once verified.
     """
     user.last_seen = utcnow()
-    user.ip_address = ip
-    user.ip_address_country = country
+    user.ip_address = audit_field(ip)
+    user.ip_address_country = audit_field(country)
     db.session.commit()
 
     login_user(user, remember=True)

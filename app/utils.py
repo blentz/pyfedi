@@ -58,6 +58,7 @@ from wtforms.validators import ValidationError
 from markupsafe import Markup
 import boto3
 from app import db, cache, httpx_client, celery, get_ip_address, plugins
+from app.onion import is_onion_request
 from app.pinned_http import fetch_deadline, is_refused_address
 from app.visibility import OPEN_VISIBILITIES, listable_sql, visible_to_sql
 from app.constants import *
@@ -2909,6 +2910,10 @@ def blocked_referrers() -> List[str]:
 
 def block_honey_pot():
     # Return 403 for any IP address that has visited /honey/* too many times. See honey_pot()
+    # An onion request has no address of its own (every onion visitor shares the tor container's), so it is never
+    # banned by address; honey_pot ends its session instead.
+    if is_onion_request():
+        return
     if current_user.is_anonymous and g.site.honeypot:
         if app_pkg.redis_client.exists(f"ban:{ip_address()}"):
             abort(403)

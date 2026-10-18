@@ -4,6 +4,7 @@
 import logging
 from logging.handlers import SMTPHandler, RotatingFileHandler
 import os
+import secrets
 import warnings
 from PIL import Image
 from flask import json as flask_json, Flask, Request, request, current_app, session, g, has_app_context
@@ -31,6 +32,7 @@ from config import Config
 from app.constants import IMAGE_PIXEL_CAP
 from app.pinned_http import pinned_transport
 from app.cookies import StorefrontLoginManager, StorefrontSessionInterface, secure_set_cookies
+from app.onion import is_onion_request
 import sentry_sdk
 from app.plugins import load_plugins
 
@@ -81,7 +83,13 @@ def get_ip_address() -> str:
     so the last entry is the one written by the proxy nearest PieFed - the only entry
     a client cannot forge. The first entry is simply whatever the client sent, which
     is what this function used to return.
+
+    An onion request (`app.onion.is_onion_request`, checked before any header) gets
+    `''`: its address is the tor container's, shared by every onion visitor, so it
+    identifies nobody and must not be banned, geolocated or stored.
     """
+    if is_onion_request():
+        return ''
     try:
         header_name = current_app.config.get('TRUSTED_CLIENT_IP_HEADER')
         ip = request.headers.get(header_name) if header_name else None
@@ -93,6 +101,21 @@ def get_ip_address() -> str:
     except RuntimeError:  # no application or request context (e.g. a CLI command)
         ip = ''
     return ip
+
+
+def rate_limit_key() -> str:
+    """Flask-Limiter's key function. An onion request has no address of its own (see `get_ip_address`), so it is
+    limited per session: `onion-session:<sid>`, the sid made on the first onion request that needs one. Everything
+    else is limited per client IP, as before.
+
+    A client that drops its cookie gets a new sid, and so a new bucket, on every request. The onion session-first
+    redirect (spec section 3.7a) is what closes that, not this function."""
+    if is_onion_request():
+        sid = session.get('onion_sid')
+        if not sid:
+            sid = session['onion_sid'] = secrets.token_urlsafe(16)
+        return f'onion-session:{sid}'
+    return get_ip_address()
 
 
 # IMAGE_PIXEL_CAP, for every image this process decodes. Pillow checks an image's declared size against its
@@ -116,7 +139,7 @@ bootstrap = Bootstrap5()
 babel = Babel(locale_selector=get_locale)
 cache = Cache()
 compress = Compress()
-limiter = Limiter(get_ip_address, storage_uri='redis+'+Config.CACHE_REDIS_URL if Config.CACHE_REDIS_URL.startswith("unix://") else Config.CACHE_REDIS_URL)
+limiter = Limiter(rate_limit_key, storage_uri='redis+'+Config.CACHE_REDIS_URL if Config.CACHE_REDIS_URL.startswith("unix://") else Config.CACHE_REDIS_URL)
 celery = Celery(__name__, broker=Config.CELERY_BROKER_URL)
 
 

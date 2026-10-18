@@ -31,7 +31,8 @@ from app.inoculation import inoculation
 from app.community import server_view_list
 from app.community.live import HOME_LIVE_FILTERS, LIVE_LIMIT, LIVE_WINDOW, home_live_available, home_live_key
 from app.main import bp
-from flask import g, flash, request, current_app, url_for, redirect, make_response, jsonify, send_file, abort
+from app.onion import is_onion_request
+from flask import g, flash, request, current_app, url_for, redirect, make_response, jsonify, send_file, abort, session
 from flask_login import current_user
 from flask_babel import _
 from sqlalchemy import desc, text
@@ -829,6 +830,11 @@ def honey_pot(whatever=None):
         do_not_track = ['image', 'audio', 'video']
         if request.headers.get('Sec-Fetch-Dest', '') in do_not_track or request.headers.get('Accept', '').startswith('image/'):
             return ''
+    if is_onion_request():
+        # Every onion visitor shares the tor container's address, so banning it would ban them all. The session is
+        # what identifies this visitor: end it, and record nothing against the address.
+        session.clear()
+        return gibberish(100)
     ip = ip_address()
     key = f"honeypot:{ip}"
 
