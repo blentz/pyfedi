@@ -1756,6 +1756,11 @@ def verify_password_hash(password_hash, password) -> tuple[bool, bool]:
     ValueError can also make bcrypt raise: a truncated column, a partial migration from another system, a
     hand-edited row.
     """
+    if not password_hash:
+        # An account with no password (OAuth or LDAP only) matches nothing, after a wrong password's hash work, or the
+        # time taken tells which names are such accounts
+        verify_password_hash(DUMMY_PASSWORD_HASH, password)
+        return False, False
     if isinstance(password, str):
         password = password.strip()  # D862, as set_password stores it
     try:
