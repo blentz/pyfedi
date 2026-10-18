@@ -52,4 +52,11 @@ def request_too_large_413(error):
 
 @bp.app_errorhandler(429)
 def rate_limited_429(error):
+    # The API's clients parse JSON in its own error shape (see shared_error_handler), not a rendered page
+    if request.path.startswith('/api/'):
+        response = jsonify({"code": 429, "message": error.description, "status": "Bad Request"})
+        retry_after = dict(error.get_headers()).get('Retry-After')
+        if retry_after:
+            response.headers['Retry-After'] = retry_after
+        return response, 429
     return render_template('errors/429.html', error=error), 429
