@@ -11,9 +11,11 @@ from unittest.mock import patch
 import pytest
 
 import app.models as models
+from app import db
 from app.api.alpha.utils.user import post_user_verify_credentials
 from app.models import DUMMY_PASSWORD_HASH, User
 from app.shared.auth import api_log_user_in
+from tests.factories import make_user
 from tests.test_onion_guard_limits import (LOGIN, PASSWORD, a_session, alice, ldap_off, login_form,  # noqa: F401
                                            onion, proof_given, web_login)
 
@@ -100,3 +102,43 @@ def test_verify_credentials_for_an_unknown_name_verifies_a_hash_and_answers_as_a
         wrong = verify_attempt(app, 'alice')
     verified.assert_called_once()
     assert unknown == wrong
+
+
+# --------------------------------------------------------------------------
+# An account with no password (OAuth or LDAP only) costs the same as well
+# --------------------------------------------------------------------------
+
+@pytest.fixture(params=[None, ''], ids=['null', 'empty'])
+def passwordless(request, alice):
+    """bob: an account with no stored hash, beside alice's real one."""
+    bob = make_user(alice.instance, 'bob', local=True)
+    bob.verified = True
+    bob.password_hash = request.param
+    db.session.commit()
+    return bob
+
+
+def test_web_login_for_a_passwordless_account_verifies_a_hash_and_answers_as_a_wrong_password(app, passwordless,
+                                                                                              ldap_off):
+    with counted() as verified:
+        none, none_flashes = clearnet_attempt(app, 'bob')
+    verified.assert_called_once_with(DUMMY_PASSWORD_HASH, 'a wrong password')
+    wrong, wrong_flashes = clearnet_attempt(app, 'alice')
+    assert (none.status_code, none.headers['Location'], none_flashes) == \
+        (wrong.status_code, wrong.headers['Location'], wrong_flashes)
+
+
+def test_api_login_for_a_passwordless_account_verifies_a_hash_and_answers_as_a_wrong_password(app, passwordless,
+                                                                                              ldap_off):
+    with counted() as verified:
+        none = api_attempt(app, 'bob')
+    verified.assert_called_once_with(DUMMY_PASSWORD_HASH, 'a wrong password')
+    assert none == api_attempt(app, 'alice') == (Exception, 'incorrect_login')
+
+
+def test_verify_credentials_for_a_passwordless_account_verifies_a_hash_and_answers_as_a_wrong_password(app,
+                                                                                                     passwordless):
+    with counted() as verified:
+        none = verify_attempt(app, 'bob')
+    verified.assert_called_once_with(DUMMY_PASSWORD_HASH, 'a wrong password')
+    assert none == verify_attempt(app, 'alice')
