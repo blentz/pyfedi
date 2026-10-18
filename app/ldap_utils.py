@@ -8,7 +8,7 @@ from typing import Optional
 
 from flask import current_app
 from ldap3 import Server, Connection, ALL, SUBTREE, MODIFY_REPLACE
-from ldap3.core.exceptions import LDAPException, LDAPBindError
+from ldap3.core.exceptions import LDAPException
 from ldap3.utils.conv import escape_filter_chars
 from ldap3.utils.dn import escape_rdn
 
@@ -17,12 +17,23 @@ logger = logging.getLogger(__name__)
 
 def _bind_user(dn: str, password: str) -> Optional[Connection]:
     """
-    Create and return an LDAP connection using configuration from Flask app.
-    Returns None if LDAP is not configured or connection fails.
+    Create and return a bound LDAP connection using configuration from Flask app.
+    Returns None if LDAP is not configured, the bind is refused or the connection fails.
     """
+    conn, bound = _bind_for_login(dn, password)
+    if conn is not None and not bound:
+        conn.unbind()
+        return None
+    return conn
+
+
+def _bind_for_login(dn: str, password: str) -> tuple[Optional[Connection], bool]:
+    """An LDAP connection and whether its bind worked. A bind refused for its credentials still answers its
+    connection (`bound` False), so a login can make the same round trips either way (`login_with_ldap`). None, and
+    no connection, when LDAP is not configured, for an empty password, or on a connection error."""
     if not current_app.config.get('LDAP_SERVER'):
         logger.info("LDAP_SERVER not configured, skipping LDAP operations")
-        return None
+        return None, False
 
     # D1147. A simple bind carrying an empty password is an UNAUTHENTICATED
     # bind, which RFC 4513 says a server should treat as anonymous -- and an
@@ -35,40 +46,30 @@ def _bind_user(dn: str, password: str) -> Optional[Connection]:
     # the refusal belongs here, where every caller passes through.
     if not password or not password.strip():
         logger.error("refusing an LDAP bind with an empty password")
-        return None
+        return None, False
 
     try:
-        # Create server object
         server = Server(
             current_app.config['LDAP_SERVER'],
             port=current_app.config.get('LDAP_PORT', 389),
             use_ssl=current_app.config.get('LDAP_USE_SSL', False),
             get_info=ALL
         )
-
-        # Create connection
-        conn = Connection(
-            server,
-            user=dn,
-            password=password,
-            auto_bind=True
-        )
-
-        # Enable TLS if configured
+        conn = Connection(server, user=dn, password=password)
+        bound = bool(conn.bind())
+        if not bound:
+            logger.error(f"LDAP bind failed: {conn.result}")
+        # Enable TLS if configured (after the bind, as before), whichever way the bind went
         if current_app.config.get('LDAP_USE_TLS', False):
             conn.start_tls()
+        return conn, bound
 
-        return conn
-
-    except LDAPBindError as e:
-        logger.error(f"LDAP bind failed: {e}")
-        return None
     except LDAPException as e:
         logger.error(f"LDAP connection error: {e}")
-        return None
+        return None, False
     except Exception as e:
         logger.error(f"Unexpected error connecting to LDAP: {e}")
-        return None
+        return None, False
 
 
 def sync_user_to_ldap(username: str, email: str, password: Optional[str]) -> bool:
@@ -196,10 +197,13 @@ def login_with_ldap(user_name: str, password: str) -> str | bool:
     # first. The DN chooses which subtree the bind is attempted against.
     full_dn = f"{user_name_attr}={escape_rdn(user_name)},{base_dn}"
 
-    conn = _bind_user(full_dn, password)
+    conn, bound = _bind_for_login(full_dn, password)
     if not conn:
         return False
 
+    # The search runs whether or not the bind worked, on the same connection (anonymous after a failed bind), and a
+    # failed bind's results are thrown away: a right and a wrong password then cost the same round trips, so timing
+    # does not tell them apart (onion task 9, M1). The answer and every side effect are as before.
     try:
         user_filter = current_app.config.get('LDAP_READ_USER_FILTER', '(uid={username})').format(
             username=escape_filter_chars(user_name))
@@ -211,6 +215,9 @@ def login_with_ldap(user_name: str, password: str) -> str | bool:
             search_scope=SUBTREE,
             attributes=[email_attr]
         )
+
+        if not bound:
+            return False
 
         if conn.entries:
             email = getattr(conn.entries[0], email_attr)
