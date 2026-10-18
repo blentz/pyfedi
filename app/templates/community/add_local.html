@@ -40,7 +40,7 @@
                             <legend>{{ _('Access control') }}</legend>
                             <div id="local_only_field">
                                 {{ render_field(form.local_only) }}
-                                <small class="field_hint">{{ _('Only people using %(name)s can post or reply', name=current_app.config['SERVER_NAME']) }}.</small>
+                                <small class="field_hint">{{ _('Only people using %(name)s can post or reply', name=instance_domain) }}.</small>
                             </div>
                             <div id="private_field">
                                 {{ render_field(form.private) }}

@@ -82,7 +82,6 @@ def _mismatches(actual: dict, listed: dict) -> list[str]:
     return problems
 
 
-@pytest.mark.xfail(strict=True, reason='presentation uses pending Tasks 4b/4c')
 def test_every_direct_use_is_inventoried():
     problems = _mismatches(direct_uses(), CANONICAL_USES)
     assert problems == [], (

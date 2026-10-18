@@ -27,6 +27,7 @@ import app.shared.community as shared_community
 # The module, not the names: app.shared.post reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.post)
 import app.shared.post as shared_post
+from app.storefront import storefront_link, storefront_url
 from app.visibility import can_view, visible_to_sql
 
 
@@ -105,7 +106,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
                     v1['alt_text'] = post.image.alt_text
         if post.type == POST_TYPE_IMAGE:
             if post.image_id:
-                valid_url = post.image.view_url()
+                valid_url = storefront_link(post.image.view_url())
                 if valid_url:
                     v1['url'] = valid_url
                 valid_url = post.image.medium_url()
@@ -134,7 +135,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
             # Fork extension (spec D17): the album's images after the first, kept out of the bare Lemmy fields
             # A listing passes `galleries` (galleries_for_posts), so the page costs one query
             images = galleries.get(post.id, []) if galleries is not None else post.gallery
-            gallery = [{'url': image.view_url(), 'alt_text': image.alt_text, 'width': image.width, 'height': image.height}
+            gallery = [{'url': storefront_link(image.view_url()), 'alt_text': image.alt_text, 'width': image.width, 'height': image.height}
                        for image in images]
             if gallery:
                 v1.setdefault('extensions', {})['gallery'] = gallery
@@ -1400,7 +1401,7 @@ def site_view(user) -> dict:
 
     site = {
         "enable_downvotes": g.site.enable_downvotes,
-        "icon": f"{current_app.config['SERVER_URL']}{logo}",
+        "icon": f"{storefront_url()}{logo}",
         "registration_mode": g.site.registration_mode,
         "name": g.site.name,
         "actor_id": f"{current_app.config['SERVER_URL']}/",
@@ -1495,7 +1496,7 @@ def site_instance_chooser_view():
         'description': g.site.description or '',
         'about': g.site.about_html or '',
         'sidebar': g.site.sidebar_html or '',
-        'logo_url': f"{current_app.config['SERVER_URL']}{logo}",
+        'logo_url': f"{storefront_url()}{logo}",
         'maturity': maturity,
         'mau': active_month(),
         'can_make_communities': not g.site.community_creation_admin_only,

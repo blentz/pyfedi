@@ -17,7 +17,8 @@ from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, PO
     SUBSCRIPTION_MODERATOR, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_PENDING, ROLE_ADMIN_NAME, VERSION, \
     POST_TYPE_EVENT, AP_MEDIA_TYPES, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO
 from app.models import Site, utcnow
-from app.storefront import check_default_domain, is_local_link, resolve_storefront, storefront_host, storefront_url
+from app.storefront import check_default_domain, is_local_link, resolve_storefront, storefront_host, storefront_link, \
+    storefront_url
 from app.shared.media import can_upload_media, media_kind_for, media_of, upload_byte_limit
 from app.utils import getmtime, gibberish, shorten_string, shorten_url, digits, user_access, community_membership, joined_server_views, \
     can_upvote, can_downvote, shorten_number, ap_datetime, current_theme, community_link_to_href, \
@@ -63,7 +64,7 @@ def register_request_hooks(app):
     def app_context_processor():
         return dict(getmtime=getmtime, instance_domain=OnUse(storefront_host), site_url=OnUse(storefront_url),
                     debug_mode=current_app.debug,
-                    pendulum=pendulum, locale=g.locale if hasattr(g, 'locale') else None, notif_server=current_app.config['NOTIF_SERVER'],
+                    pendulum=pendulum, locale=g.locale if hasattr(g, 'locale') else None, notif_server=OnUse(lambda: storefront_link(current_app.config['NOTIF_SERVER'])),
                     site=g.site if hasattr(g, 'site') else None, nonce=g.nonce if hasattr(g, 'nonce') else None,
                     admin_ids=g.admin_ids if hasattr(g, 'admin_ids') else [], low_bandwidth=g.low_bandwidth if hasattr(g, 'low_bandwidth') else None,
                     can_translate=current_app.config['TRANSLATE_ENDPOINT'] != '', can_detect_ai=current_app.config['DETECT_AI_ENDPOINT'] != '',
