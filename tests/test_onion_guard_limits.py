@@ -25,7 +25,7 @@ import app as app_pkg
 import app.onion_guard as onion_guard
 from app import create_app, db, limiter, rate_limit_key
 from app.auth.util import find_user
-from app.models import SiteDomain
+from app.models import SiteDomain, User
 from app.onion import ONION_ANON_KEY, arrived_onion_sid, mint_onion_sid
 from app.onion_guard import (COOKIE_CHECK, ONION_SESSION_ENDPOINTS, ONION_SESSION_EXEMPT,
                              clear_onion_login_failures, login_delay_remaining, onion_session_missing,
@@ -761,3 +761,39 @@ def test_verify_credentials_counts_with_login(app, alice, redis_double, clock, l
     assert verify(client, 'alice@example.com', PASSWORD).status_code == 200
     assert not redis_double.exists('onion_login_fail:alice')
     assert not redis_double.exists('onion_login_fail:alice@example.com')
+
+
+# --------------------------------------------------------------------------
+# A hidden refusal costs what a wrong password costs
+# --------------------------------------------------------------------------
+
+def hidden_web(app, client):
+    a_session(client)
+    return logged_in(web_login(client, 'alice@example.com', PASSWORD))
+
+
+def hidden_api(app, client):
+    return onion_post(client, '/api/alpha/user/login',
+                      json={'username': 'alice@example.com', 'password': PASSWORD}).status_code == 200
+
+
+def hidden_verify(app, client):
+    return verify(client, 'alice@example.com', PASSWORD).status_code == 200
+
+
+@pytest.mark.parametrize('attempt', [hidden_web, hidden_api, hidden_verify])
+def test_a_hidden_refusal_hashes_the_password_once(app, alice, redis_double, clock, ldap_off, alpha_api, attempt):
+    """The account is in backoff: the correct password is refused, but only after the same hash verification a wrong
+    password gets, so the refusal takes as long as one."""
+    for _ in range(6):
+        record_onion_login_failure('alice')
+    with patch('app.onion_guard.check_password_hash', wraps=onion_guard.check_password_hash) as verified, \
+            patch.object(User, 'check_password', side_effect=AssertionError('the password must not be checked')):
+        assert not attempt(app, app.test_client())
+    verified.assert_called_once()
+    assert verified.call_args.args == (alice.password_hash, PASSWORD)
+
+
+def test_hashing_an_account_without_a_password_is_quiet(app, alice):
+    alice.password_hash = None
+    onion_guard.spend_password_check(alice, PASSWORD)   # a refusal either way: nothing to raise
