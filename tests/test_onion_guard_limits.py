@@ -677,9 +677,11 @@ def test_rotating_variants_does_not_reset_the_delay(app, alice, redis_double, cl
 def test_unknown_identifiers_behave_like_known_ones(app, alice, redis_double, clock, ldap_off):
     client = app.test_client()
     a_session(client)
-    for typed in ('Nobody ', 'alice'):
-        for _ in range(6):
-            web_login(client, typed, 'wrong password')
+    # The unknown name's dummy hash check (tests/test_unknown_login_timing.py) is skipped: six of them cost 0.6 s here
+    with patch('app.auth.util.verify_password_hash'):
+        for typed in ('Nobody ', 'alice'):
+            for _ in range(6):
+                web_login(client, typed, 'wrong password')
     messages = []
     for typed in ('nobody', 'alice'):
         with client.session_transaction(base_url=ONION_URL) as stored:
