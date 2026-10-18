@@ -19,7 +19,6 @@ account on the alpha API (`app.onion.onion_rate_key`). This module adds the part
 from __future__ import annotations
 
 import math
-import secrets
 import time
 from typing import NamedTuple
 from urllib.parse import quote, quote_from_bytes
@@ -28,11 +27,9 @@ from flask import current_app, flash, make_response, redirect, request
 from flask_babel import _
 from markupsafe import escape
 from redis.exceptions import WatchError
-from werkzeug.security import generate_password_hash
 
 import app as app_pkg
 from app import limiter
-from app.models import verify_password_hash
 from app.onion import API_RATE_KEY, is_api_path, is_onion_request, mint_onion_sid
 from app.utils import authorise_api_user
 
@@ -74,9 +71,6 @@ FREE_LOGIN_FAILURES = 5
 MAX_LOGIN_WAIT = 300
 LOGIN_FAILURE_TTL = 3600
 RESERVE_RETRIES = 5
-# What an account with no password (OAuth or LDAP only) is checked against in a hidden refusal: werkzeug's default
-# method and cost, as set_password uses, over a random password nobody knows
-DUMMY_PASSWORD_HASH = generate_password_hash(secrets.token_urlsafe(32))
 
 
 # --------------------------------------------------------------------------
@@ -172,8 +166,9 @@ def onion_login_identifier(typed: str) -> str:
 class OnionLoginGate(NamedTuple):
     """What an onion login attempt may do. `wait` > 0: the typed identifier is in backoff, and the caller says so
     ("try again in N seconds", or 429). `hidden`: the typed identifier is free but the account it names is in
-    backoff; the caller refuses exactly as for a wrong password, without checking it, so nothing shows that this
-    identifier and that account are linked (on the onion that would deanonymise). Otherwise it may go ahead."""
+    backoff; the caller runs its normal flow told to refuse (User.check_password(refuse=True) and the LDAP bind's
+    refuse), so it answers and costs exactly what a wrong password does and nothing shows that this identifier and
+    that account are linked (on the onion that would deanonymise). Otherwise it may go ahead."""
     wait: int = 0
     hidden: bool = False
 
@@ -288,14 +283,6 @@ def onion_login_gate(typed: str, user=None) -> OnionLoginGate:
     if not is_onion_request():
         return OnionLoginGate()
     return reserve_onion_login_attempt(typed, user.id if user is not None else None)
-
-
-def spend_password_check(user, password) -> None:
-    """For a hidden refusal: the verification a wrong password would get, its result ignored, so the refusal takes as
-    long as a wrong password does. The attempt is refused whatever it says. It is `User.check_password`'s own
-    `verify_password_hash` (werkzeug, then the legacy bcrypt fallback), without check_password's re-save of a legacy
-    hash, which a refused attempt must not do. An account with no password is checked against DUMMY_PASSWORD_HASH."""
-    verify_password_hash(user.password_hash or DUMMY_PASSWORD_HASH, password)
 
 
 def onion_login_succeeded(typed: str, user) -> None:

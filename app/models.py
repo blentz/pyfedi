@@ -1924,10 +1924,15 @@ class User(UserMixin, db.Model):
         if revoke_sessions:
             self.password_updated_at = utcnow()
 
-    def check_password(self, password):
+    def check_password(self, password, refuse=False):
         """Total: any stored hash, however malformed, yields True or False (`verify_password_hash`). A match against
-        a legacy bcrypt hash re-saves it with the current method."""
+        a legacy bcrypt hash re-saves it with the current method.
+
+        `refuse`: verify all the same, then answer False and save nothing. For an onion login whose account is in
+        hidden backoff (app.onion_guard.OnionLoginGate), which must cost and answer what a wrong password does."""
         matched, legacy = verify_password_hash(self.password_hash, password)
+        if refuse:
+            return False
 
         # If pw validates, resave the hash using a more secure hashing algorithm.
         # revoke_sessions=False: this is a hash migration on a successful

@@ -589,10 +589,10 @@ def test_login_delay_grows(app, alice, redis_double, clock, ldap_off):
 
 def answer(client, response):
     """What a login attempt shows: its status, where it sends the browser, and the messages it flashed."""
-    shown = (response.status_code, response.headers.get('Location'), flashes(client), response.get_data())
     with client.session_transaction(base_url=ONION_URL) as stored:
-        stored.pop('_flashes', None)
-    return shown
+        flashed = stored.pop('_flashes', [])
+    return (response.status_code, response.headers.get('Location'), ' '.join(message for _, message in flashed),
+            [tuple(item) for item in flashed], response.get_data())
 
 
 def test_an_account_in_backoff_answers_like_a_wrong_password(app, alice, redis_double, clock, ldap_off):
@@ -807,11 +807,10 @@ def hidden_verify(app, client):
 @pytest.mark.parametrize('attempt', [hidden_web, hidden_api, hidden_verify])
 def test_a_hidden_refusal_hashes_the_password_once(app, alice, redis_double, clock, ldap_off, alpha_api, attempt):
     """The account is in backoff: the correct password is refused, but only after the same hash verification a wrong
-    password gets, so the refusal takes as long as one."""
+    password gets, because it goes through the same check_password, told to refuse."""
     for _ in range(6):
         record_onion_account_failure(alice.id)
-    with patch('app.models.check_password_hash', wraps=models.check_password_hash) as verified, \
-            patch.object(User, 'check_password', side_effect=AssertionError('the password must not be checked')):
+    with patch('app.models.check_password_hash', wraps=models.check_password_hash) as verified:
         assert not attempt(app, app.test_client())
     verified.assert_called_once()
     assert verified.call_args.args == (alice.password_hash, PASSWORD)
@@ -819,8 +818,8 @@ def test_a_hidden_refusal_hashes_the_password_once(app, alice, redis_double, clo
 
 @pytest.mark.parametrize('attempt', [hidden_web, hidden_api, hidden_verify])
 def test_a_legacy_bcrypt_hash_costs_its_bcrypt_check(app, alice, redis_double, clock, ldap_off, alpha_api, attempt):
-    """check_password falls back to bcrypt for a legacy hash, so the hidden refusal does too; and it does not
-    re-save the hash, as check_password would on a match."""
+    """check_password falls back to bcrypt for a legacy hash, so the hidden refusal does too; and a refused match is
+    not re-saved, as an accepted one would be."""
     legacy = app_bcrypt.generate_password_hash(PASSWORD).decode()
     alice.password_hash = legacy
     db.session.commit()
@@ -833,22 +832,57 @@ def test_a_legacy_bcrypt_hash_costs_its_bcrypt_check(app, alice, redis_double, c
     assert alice.password_hash == legacy
 
 
-@pytest.mark.parametrize('attempt', [hidden_web, hidden_api, hidden_verify])
-def test_an_account_without_a_password_costs_a_dummy_check(app, alice, redis_double, clock, ldap_off, alpha_api,
-                                                           attempt):
-    alice.password_hash = None
+def test_check_password_refuse_still_verifies(app, alice):
+    assert alice.check_password(PASSWORD) is True
+    with patch('app.models.check_password_hash', wraps=models.check_password_hash) as verified:
+        assert alice.check_password(PASSWORD, refuse=True) is False
+    verified.assert_called_once()
+
+
+@pytest.fixture
+def bob(alice):
+    user = make_user(db.session.get(User, alice.id).instance, 'bob', local=True)
+    user.email = 'bob@example.com'
+    user.verified = True
+    user.set_password('bob has his own password')
     db.session.commit()
+    return user
+
+
+@pytest.fixture
+def directory(app, monkeypatch):
+    """LDAP on, as tests/test_ldap.py runs it: the bind succeeds only for alice's real password."""
+    monkeypatch.setitem(app.config, 'LDAP_READ_ENABLE', True)
+    with patch('app.auth.util.login_with_ldap',
+               side_effect=lambda name, password: 'alice@example.com' if password == PASSWORD else False) as bind, \
+            patch('app.auth.util.sync_user_to_ldap'), patch('app.shared.auth.sync_user_to_ldap'):
+        yield bind
+
+
+@pytest.mark.parametrize('ldap', [True, False], ids=['ldap', 'no-ldap'])
+def test_a_hidden_refusal_runs_the_whole_wrong_password_flow(app, alice, bob, redis_double, clock, monkeypatch,
+                                                             request, ldap):
+    """alice's account is in backoff and her email is typed with her CORRECT password; bob's email is typed with a
+    wrong one. The two answers are the same in every part (status, Location, each flash with its category, body),
+    and with LDAP on each tries the directory bind once."""
+    bind = request.getfixturevalue('directory') if ldap else None
+    if not ldap:
+        request.getfixturevalue('ldap_off')
     for _ in range(6):
         record_onion_account_failure(alice.id)
-    with patch('app.models.check_password_hash', wraps=models.check_password_hash) as verified:
-        assert not attempt(app, app.test_client())
-    verified.assert_called_once_with(onion_guard.DUMMY_PASSWORD_HASH, PASSWORD)
-
-
-def test_the_dummy_hash_uses_set_passwords_method():
-    probe = User()
-    probe.set_password('anything at all')
-    assert onion_guard.DUMMY_PASSWORD_HASH.split('$')[0] == probe.password_hash.split('$')[0]
+    client = app.test_client()
+    a_session(client)
+    calls = []
+    for typed, password in (('bob@example.com', 'a wrong password'), ('alice@example.com', PASSWORD)):
+        before = bind.call_count if ldap else 0
+        calls.append((answer(client, web_login(client, typed, password)), (bind.call_count if ldap else 0) - before))
+    assert calls[0] == calls[1]
+    (status, location, text, flashed, _), binds = calls[1]
+    assert status == 302 and location.endswith('/auth/login') and binds == (1 if ldap else 0)
+    assert flashed[-1][0] == 'error' and 'Invalid user name' in text
+    if ldap:
+        assert ('message', 'Login failed') in flashed
+    assert User.query.count() == 3   # the bind's success created no one
 
 
 def test_verify_password_hash_is_total(app):

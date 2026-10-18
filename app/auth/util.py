@@ -23,7 +23,7 @@ from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role
 from app.onion import audit_field, is_onion_request
-from app.onion_guard import onion_login_gate, onion_login_succeeded, spend_password_check
+from app.onion_guard import onion_login_gate, onion_login_succeeded
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, \
     finalize_user_setup, get_request, get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
@@ -468,23 +468,21 @@ def process_login(form: LoginForm):
     password = form.password.data.strip()
 
     # Onion only (spec 3.7): failed logins slow down what was typed and the account it names (OnionLoginGate)
-    account = find_user(username) if is_onion_request() else None
-    gate = onion_login_gate(username, account)
+    gate = onion_login_gate(username, find_user(username) if is_onion_request() else None)
     if gate.wait:
         flash(_('Too many failed logins for this account. Please try again in %(seconds)d seconds.',
                 seconds=gate.wait), 'error')
         return redirect(url_for("auth.login"))
-    if gate.hidden:   # exactly the wrong-password answer, at a wrong password's cost
-        spend_password_check(account, password)
-        flash(invalid_login_message(), "error")  # D1131
-        return redirect(url_for("auth.login"))
+    # The account is in hidden backoff: the whole normal flow runs (lookups, directory bind, hash check, the same
+    # messages), told to refuse at the points where it would accept, so it answers and costs as a wrong password.
+    refuse = gate.hidden
 
     # attempt authentication with LDAP first (if enabled), then fall back to local
     user = None
     ldap_sync = True
 
     if current_app.config['LDAP_READ_ENABLE']:
-        user = validate_user_ldap_login(username, password, ip)
+        user = validate_user_ldap_login(username, password, ip, refuse=refuse)
         if user is False:
             # The directory authenticated them and this instance will not have
             # them: banned, deleted, or a name that cannot be a local account
@@ -500,7 +498,7 @@ def process_login(form: LoginForm):
             flash(invalid_login_message(), "error")  # D1131
             return redirect(url_for("auth.login"))
 
-        if not validate_user_login(user, password, ip):
+        if not validate_user_login(user, password, ip, refuse=refuse):
             return redirect(url_for("auth.login"))
 
     onion_login_succeeded(username, user)
@@ -528,12 +526,12 @@ def find_user(user_name):
     return user
 
 
-def validate_user_login(user, password, ip):
+def validate_user_login(user, password, ip, refuse=False):
     if user.deleted:
         flash(invalid_login_message(), "error")  # D1131
         return False
 
-    if not user.check_password(password):
+    if not user.check_password(password, refuse=refuse):
         # D1131. One message whether or not the account has a password, and
         # whether or not it exists at all.
         flash(invalid_login_message(), "error")
@@ -570,7 +568,7 @@ def refuse_if_banned(user, ip):
     return True
 
 
-def validate_user_ldap_login(user_name: str, password: str, ip: str):
+def validate_user_ldap_login(user_name: str, password: str, ip: str, refuse: bool = False):
     """The account a successful directory bind resolves to.
 
     Answers None when LDAP did not authenticate -- the caller then tries a
@@ -579,7 +577,7 @@ def validate_user_ldap_login(user_name: str, password: str, ip: str):
     override.
     """
     result = login_with_ldap(user_name, password)
-    if result is False:
+    if result is False or refuse:   # refuse: the bind is tried all the same, and its answer is not taken
         flash(_('Login failed'))
         return None
 
