@@ -748,6 +748,37 @@ def test_a_directory_login_searches_once_with_or_without_refuse(app, env, refuse
     assert User.query.count() == before
 
 
+@pytest.mark.parametrize('bound', [True, False], ids=['right password', 'wrong password'])
+def test_tls_starts_before_the_password_is_sent(app, env, bound):
+    """A simple bind sends the password: with LDAP_USE_TLS, StartTLS must come first, never after the bind. The
+    search still runs after the bind either way (onion task 9, M1)."""
+    client, person = env
+    patcher, conn = with_entries(an_entry('someone@example.com'))
+    conn.bind.return_value = bound
+
+    with ldap_config(app, LDAP_USE_TLS=True):
+        with patch('app.ldap_utils.Server'):
+            with patcher as connection:
+                assert login_with_ldap('person', 'a-good-password') == ('someone@example.com' if bound else False)
+    assert connection.call_args.kwargs.get('auto_bind') is False   # nothing is sent while the connection is made
+    calls = [name for name, _args, _kwargs in conn.method_calls]
+    assert calls.index('start_tls') < calls.index('bind') < calls.index('search')
+
+
+@pytest.mark.parametrize('raised', [LDAPException('tls refused'), Exception('something else')])
+def test_a_start_tls_that_fails_sends_no_password_and_closes_the_connection(app, env, raised):
+    client, person = env
+    patcher, conn = with_entries(an_entry())
+    conn.start_tls.side_effect = raised
+
+    with ldap_config(app, LDAP_USE_TLS=True):
+        with patch('app.ldap_utils.Server'):
+            with patcher:
+                assert login_with_ldap('person', 'a-good-password') is False
+    conn.bind.assert_not_called()
+    conn.unbind.assert_called_once()
+
+
 def test_tls_starts_whether_or_not_the_bind_worked(app, env):
     client, person = env
     patcher, conn = with_entries()
