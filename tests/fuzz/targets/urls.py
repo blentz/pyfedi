@@ -759,14 +759,21 @@ def check_nodeinfo_hrefs(data: bytes) -> None:
                     assert href_host == own_host, f'{href!r} accepted for {remote_url!r}'
 
 
+_IGNORED_BY_UTS46 = ('\u00ad', '\u034f', '\u180b', '\u200b', '\u2060', '\u3164', '\ufe00', '\ufe0f', '\U000e0100')
+_CSS_PREFIXES = ('', "'x' ", '"url(" ', '/* url( \' */ ', '\u0130' * 3, "url('a') ", "url(b'c) ", 'URL( d ) ')
+
+
 def check_browser_host(data: bytes) -> None:
     """storefront.browser_host reads the host a browser loads a URL from, as whatwg_reading does.
 
-    For every URL the independent reading parses to an ASCII domain or an IPv4 address, browser_host is that host
-    (less a trailing dot); for an IPv6 literal it is the same address; for a URL the browser refuses it may still
-    name a host (hiding too much is safe) but never raises. It never returns a host for a URL that has none.
-    The S3 media scanners (_css_urls, _srcset_urls) finish inside the target's budget on any input and return
-    slices of it."""
+    The oracle is compared on PURE ASCII hosts only: an input that is ASCII even after percent-decoding, whose host
+    is an ASCII domain, an IPv4 address (an IPv4-mapped IPv6 literal is that address) or an IPv6 literal. whatwg_reading
+    approximates UTS-46 for anything else (NFKC and casefold, where a browser maps non-transitionally: it keeps
+    the sharp s), so a non-ASCII host is covered by the metamorphic checks instead: spelling an ASCII domain with a
+    character UTS-46 deletes, or with its fullwidth forms, does not change the host. For a URL the browser refuses,
+    browser_host may still name a host (hiding too much is safe) but never raises.
+    The S3 media scanners finish inside the target's budget on any input; _srcset_urls returns slices of it, and
+    _css_urls finds the URL of a url(...) behind any prefix of balanced quotes, comments and earlier tokens."""
     url = _text(data[:MAX_INPUT])
     for candidate in (url, 'https:' + url, '//' + url):
         host = storefront.browser_host(candidate)
@@ -774,17 +781,33 @@ def check_browser_host(data: bytes) -> None:
         scheme, expected = whatwg_reading(candidate if not candidate.startswith('//') else 'https:' + candidate)
         if scheme not in SPECIAL_SCHEMES or expected is INVALID or expected is None:
             continue
-        if host == storefront.UNMAPPABLE:
-            continue   # the caller hides it
+        if host == storefront.UNMAPPABLE or not unquote_to_bytes(candidate.encode('utf-8', 'surrogatepass')).isascii():
+            continue
         if ':' in expected:
-            assert host and ipaddress.ip_address(host) == ipaddress.ip_address(expected), (
+            address = ipaddress.ip_address(expected)
+            address = getattr(address, 'ipv4_mapped', None) or address
+            assert host and ipaddress.ip_address(host) == address, (
                 f'browser_host({candidate!r}) = {host!r}, a browser reads [{expected}]')
-        elif expected.isascii():
+        else:
             assert host == expected.rstrip('.'), f'browser_host({candidate!r}) = {host!r}, a browser reads {expected!r}'
+
+    host = storefront.browser_host('https:' + url)
+    if host.isascii() and host.isprintable() and host and ':' not in host and host != storefront.UNMAPPABLE \
+            and not storefront._ends_in_a_number(host):   # a dropped trailing dot ('0..') made it a domain, not an address
+        cut = len(data) % len(host)
+        spellings = [f'https://{host[:cut]}{ignored}{host[cut:]}/x' for ignored in _IGNORED_BY_UTS46]
+        spellings.append('https://' + ''.join(chr(ord(c) + 0xfee0) if '!' <= c <= '~' else c for c in host) + '/x')
+        for spelling in spellings:
+            assert storefront.browser_host(spelling) == host, f'{spelling!r} is not read as {host!r}'
+
     for token in storefront._css_urls(url):
         assert isinstance(token, str)
     for start, end in storefront._srcset_urls(url):
-        assert 0 <= start < end <= len(url) and not url[start:end].isspace() and url[start] != ','
+        assert 0 <= start < end <= len(url) and url[start] not in '\t\n\f\r ,'
+    bare = ''.join(c for c in url if not c.isspace() and c not in ')\'"\\/*(')
+    if bare:
+        for prefix in _CSS_PREFIXES:
+            assert bare in storefront._css_urls(f'{prefix}url({bare})'), f'{prefix!r} hides url({bare!r})'
 
 
 # None is budgeted: no regex here has a backtracking shape. The redirect, request-host, webfinger and resolver

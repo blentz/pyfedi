@@ -90,6 +90,17 @@ def hide(body, mimetype='text/html'):
     (f'<img src="https://cdn.example.test{chr(0xfffe)}/x"/>', HIDDEN),   # cannot be mapped: hidden, never kept
     (f'<img src="https://\u212a.test/x"/>', '<img src="https://\u212a.test/x"/>'),   # a different host
     (f'<img src="https://{S3}/first" src="/second.jpg"/>', HIDDEN),   # a browser uses the first of two attributes
+    # a peer's source_url inside a style attribute (re-review 2, I-1): a later layer must still be found
+    (f'<div style="background-image: url(https://evil.test/a);--a:\'url(\';background:url(https://{S3}/x);">t</div>',
+     '<div>t</div>'),
+    (f'<div style="background-image: url(https://evil.test/a\'b);background:image-set(\'https://{S3}/y\' 1x);">t</div>',
+     '<div>t</div>'),
+    (f'<div style="background-image: url(https://evil.test/{chr(0x130)}),url(https://{S3}/y);">t</div>', '<div>t</div>'),
+    (f'<div style="/* url( */ background: URL( https://{S3}/x )">t</div>', '<div>t</div>'),
+    # IDN spellings of one host (re-review 2, M-2) are the other tests' business: see test_an_idn_s3_host
+    # srcset splits on ASCII white space only (M-6)
+    (f'<img srcset="https://a{chr(0xa0)}b@{S3}/x 1x"/>', HIDDEN),
+    (f'<img srcset="https://a{chr(0x1c)}b@{S3}/x 1x"/>', HIDDEN),
     # style: url(), image-set() and quoted strings, with CSS escapes (review M2)
     (f'<div style="background-image:image-set(\'https://{S3}/x\' 1x)">t</div>', '<div>t</div>'),
     (f'<div style="background-image:image-set(url(https://{S3}/x) 1x)">t</div>', '<div>t</div>'),
@@ -299,7 +310,7 @@ def test_a_style_value_is_scanned_in_linear_time(style):
     assert timed(lambda: storefront._css_urls(style)) < 0.1
 
 
-@pytest.mark.parametrize('srcset', ['a' + ',' * 100_000, ',' * 100_000, ' ' * 100_000 + 'a', 'a' * 100_000, 'a,' * 2_000,
+@pytest.mark.parametrize('srcset', ['a' + ',' * 100_000 + 'b', 'a' + ',' * 20_000 + 'b 1x', 'a' + ',' * 100_000, ',' * 100_000, ' ' * 100_000 + 'a', 'a' * 100_000, 'a,' * 2_000,
                                     'a b,' * 2_000])
 def test_a_srcset_is_scanned_in_linear_time(srcset):
     assert timed(lambda: storefront._rebase_srcset(srcset, 'http://x', frozenset({'abc.onion'}))) < 0.1
@@ -330,9 +341,42 @@ def test_browser_host_of_odd_hosts(url, host):
 
 
 @pytest.mark.parametrize('style, urls', [
-    ('a"b\'c', []),                                  # quotes that close nothing
-    ('"a" \'b\' "c', ['a', 'b']),
+    ('a"b\'c', ["b'c"]),                              # a quote that closes nothing runs to the end of its line
+    ('"a" \'b\' "c', ['a', 'b', 'c']),
     ('x "closes at the next quote \'y\' "z"', ['closes at the next quote \'y\' ']),
 ])
 def test_css_quoted_strings(style, urls):
+    assert storefront._css_urls(style) == urls
+
+
+@pytest.mark.parametrize('public, src', [
+    ('xn--bcher-kva.test', 'https://b\u00fccher.test/x'),
+    ('b\u00fccher.test', 'https://xn--bcher-kva.test/x'),
+    ('b\u00fccher.test', 'https://B\u00dcCHER.test/x'),
+    ('xn--bcher-kva.test', 'https://b%C3%BCcher.test/x'),
+    ('203.0.113.5', 'https://[::ffff:203.0.113.5]/x'),
+    ('203.0.113.5', 'https://[::ffff:cb00:7105]/x'),
+])
+def test_an_idn_or_mapped_s3_host_matches_every_spelling(app, onion, monkeypatch, public, src):
+    monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', public)
+    assert hide(f'<img src="{src}"/>') == HIDDEN
+
+
+def test_another_idn_is_not_the_s3_host(app, onion, monkeypatch):
+    monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', 'xn--bcher-kva.test')
+    assert hide('<img src="https://b\u00fcchers.test/x"/>') == '<img src="https://b\u00fcchers.test/x"/>'
+
+
+@pytest.mark.parametrize('style, urls', [
+    ('\u0130\u0130\u0130url(https://x/y)', ['https://x/y']),
+    ('"url(" url(https://x/y)', ['url(', 'https://x/y']),
+    ("url(a'b) 'https://x/y'", ["a'b", 'https://x/y']),
+    ('/* url( */ url(z) /* \' */ "w"', ['z', 'w']),
+    ('URL(  q  )', ['q']),
+    ("url('a') url( \"b\" )", ['a', 'b']),
+    ('url(never closed', ['never closed']),
+    ('"never closed\nurl(next)', ['never closed', 'next']),
+    ('/* never closed url(x)', []),
+])
+def test_css_urls_are_read_in_one_pass(style, urls):
     assert storefront._css_urls(style) == urls
