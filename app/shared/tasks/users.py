@@ -25,34 +25,37 @@ def check_user_application(application_id, send_async=True):
                 continue
 
             try:
-                # Generate fake IP addresses
-                fake_ips = []
-                for _ in range(3):
-                    ip = f"{random.randint(1, 223)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
-                    fake_ips.append(ip)
+                # An applicant who registered over the onion has no stored IP (spec 2026-10-17 section 3.7): there
+                # is nothing to ask about, so only the email leg runs.
+                if application.user.ip_address:
+                    # Generate fake IP addresses
+                    fake_ips = []
+                    for _ in range(3):
+                        ip = f"{random.randint(1, 223)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
+                        fake_ips.append(ip)
                 
-                ip_index = random.randint(0, len(fake_ips))
-                ip_list = fake_ips[:]
-                ip_list.insert(ip_index, application.user.ip_address)
-                # a peer-controlled domain: its answer is read under the cap and the deadline, the status kept
-                ip_response = _capped_request(
-                    'POST',
-                    f'https://{domain.strip()}/api/is_ip_banned',
-                    data={'ip_addresses': ','.join(ip_list)},
-                    timeout=5,
-                    keep_status=True,
-                )
+                    ip_index = random.randint(0, len(fake_ips))
+                    ip_list = fake_ips[:]
+                    ip_list.insert(ip_index, application.user.ip_address)
+                    # a peer-controlled domain: its answer is read under the cap and the deadline, the status kept
+                    ip_response = _capped_request(
+                        'POST',
+                        f'https://{domain.strip()}/api/is_ip_banned',
+                        data={'ip_addresses': ','.join(ip_list)},
+                        timeout=5,
+                        keep_status=True,
+                    )
 
-                try:
-                    if ip_response.status_code == 200:
-                        ip_results = ip_response.json()
-                        # Check the result at the index where real IP was inserted
-                        if ip_results and len(ip_results) > ip_index and ip_results[ip_index]:
-                            banned_domains.add(domain.strip())
-                finally:
-                    ip_response.close()
+                    try:
+                        if ip_response.status_code == 200:
+                            ip_results = ip_response.json()
+                            # Check the result at the index where real IP was inserted
+                            if ip_results and len(ip_results) > ip_index and ip_results[ip_index]:
+                                banned_domains.add(domain.strip())
+                    finally:
+                        ip_response.close()
 
-                sleep(random.randint(1, 30))
+                    sleep(random.randint(1, 30))
 
                 # Generate fake email addresses
                 fake_emails = []
