@@ -7,8 +7,7 @@ never makes a request to it. Clearnet is unchanged, and with S3 unset nothing is
 from unittest.mock import patch
 
 import pytest
-from bs4 import BeautifulSoup
-from flask import Response, current_app
+from flask import Response, current_app, render_template_string
 
 import app.storefront as storefront
 from app import db
@@ -16,7 +15,7 @@ from app.models import SiteDomain
 from app.storefront import clear_domain_cache, rewrite_response_for_storefront, storefront_html
 from app.utils import feed_entry_body
 from tests.test_storefront_links import in_onion_request
-from tests.test_storefront_presentation import CANONICAL, ONION, on_onion, onion, world  # noqa: F401  (fixtures)
+from tests.test_storefront_presentation import CANONICAL, ONION, onion  # noqa: F401  (onion is a fixture)
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -50,7 +49,7 @@ def hide(body, mimetype='text/html'):
     (f'<a href="https://{S3}/files/doc.pdf">the file</a>', 'the file'),
     (f'<a href="https://{S3}/x.jpg"><img src="https://{S3}/x.jpg"/></a>', HIDDEN),
     (f'<area href="https://{S3}/x" alt="a"/>', '<area alt="a"/>'),
-    (f'<link rel="preload" as="image" href="https://{S3}/x.jpg"/><meta property="og:image" content="https://{S3}/x.jpg"/>'
+    (f'<link rel="preload" as="image" href="https://{S3}/x.jpg"/>'
      f'<script src="https://{S3}/x.js"></script>', ''),
     (f'<div class="c" data-media="https://{S3}/x.jpg" data-keep="https://elsewhere.test/x">t</div>',
      '<div class="c" data-keep="https://elsewhere.test/x">t</div>'),
@@ -58,6 +57,29 @@ def hide(body, mimetype='text/html'):
     (f'<img src="https:\\\\{S3}/x.jpg"/>', HIDDEN),   # a browser reads the backslashes as slashes
     (f'<link rel="preconnect" href="{S3}"/><link rel="preconnect" href="{S3}/prefix"/>', ''),
     (f'<iframe src="https://{S3}/x.html"></iframe>', HIDDEN),
+    # spellings a browser reads as the S3 host (review I1)
+    (f'<img src="https:{S3}/x"/>', HIDDEN),
+    (f'<img src="https:/{S3}/x"/>', HIDDEN),
+    (f'<img src="https:///{S3}/x"/>', HIDDEN),
+    (f'<img src="///{S3}/x"/>', HIDDEN),
+    (f'<img src="/\\{S3}/x"/>', HIDDEN),
+    (f'<img src="  https://{S3}/x"/>', HIDDEN),
+    (f'<img src="https://{S3.replace(".", "%2e")}/x"/>', HIDDEN),
+    (f'<img src="https://{S3.replace(".", "%2E")}/x"/>', HIDDEN),
+    (f'<img src="https://{S3.replace(".", chr(0x3002))}/x"/>', HIDDEN),
+    (f'<img src="https://{S3.replace(".", chr(0xff0e))}/x"/>', HIDDEN),
+    (f'<img src="https://{S3.replace(".", chr(0xff61))}/x"/>', HIDDEN),
+    (f'<img src="https://{S3}./x"/>', HIDDEN),
+    (f'<img src="https://{S3.upper()}/x"/>', HIDDEN),
+    (f'<img src="https://{S3.replace(".", "&#46;")}/x"/>', HIDDEN),            # an entity: the parser decodes it
+    (f'<img src="https://{S3.replace("c", "&#99;")}/x"/>', HIDDEN),
+    (f'<img src="https://u:p@{S3}:8443/x"/>', HIDDEN),
+    (f'<img src="ht\ntps://{S3}/x"/>', HIDDEN),
+    # style: url(), image-set() and quoted strings, with CSS escapes (review M2)
+    (f'<div style="background-image:image-set(\'https://{S3}/x\' 1x)">t</div>', '<div>t</div>'),
+    (f'<div style="background-image:image-set(url(https://{S3}/x) 1x)">t</div>', '<div>t</div>'),
+    (f'<div style="background:url(https\\3a //{S3}/x)">t</div>', '<div>t</div>'),
+    (f'<div style="background:url(\'https://\\63 dn.example.test/x\')">t</div>', '<div>t</div>'),
 ])
 def test_s3_media_is_hidden_on_the_onion(app, onion, s3, body, shown):
     out = hide(body)
@@ -74,15 +96,33 @@ def test_s3_media_is_hidden_on_the_onion(app, onion, s3, body, shown):
     f'<div style="color: red; content: \'{S3}\'">t</div>',
     f'<img src="/static/{S3}/x.jpg" class="a b"/>',
     '<img src="/static/x.jpg" class="a b"/>',
+    # only URL-bearing attributes count (review M1): a text value is never requested
+    f'<img src="/a.jpg" alt="{S3}" title="https://{S3}/x"/>',
+    f'<input type="text" name="link_url" value="https://{S3}/v.mp4"/>',
+    f'<input type="text" value="{S3}"/>',
+    f'<div data-label="{S3}" data-note="see {S3}/x" data-json=\'{{"u": "https://{S3}/x"}}\'>t</div>',
+    f'<meta name="description" content="https://{S3}/x"/><meta property="og:image" content="https://{S3}/x.jpg"/>',
+    f'<a href="/x" title="{S3}">x</a>',
+    f'<div style="font-family: \'{S3}\'">t</div>',
+    f'<link rel="stylesheet" href="{S3}.css"/>',
+    f'<img src="{S3}/x.jpg"/>',   # a relative path whose first segment happens to be the host
 ])
 def test_what_is_not_on_the_s3_host_is_left_alone(app, onion, s3, body):
     assert hide(body) == body
 
 
-def test_a_page_with_no_s3_mention_is_not_parsed(app, onion, s3):
-    with patch.object(storefront, 'BeautifulSoup') as parser:
+def test_a_page_without_s3_media_is_still_parsed_once_when_s3_is_set(app, onion, s3):
+    # a raw-text pre-check could be fooled by an entity or a percent-escape, so with S3 set the onion always parses
+    with patch.object(storefront, 'BeautifulSoup', wraps=storefront.BeautifulSoup) as parser:
         assert hide('<img src="/x.jpg"/>') == '<img src="/x.jpg"/>'
-    parser.assert_not_called()
+    assert parser.call_count == 1
+
+
+def test_s3_hiding_and_the_link_rewrite_share_one_parse(app, onion, s3):
+    with patch.object(storefront, 'BeautifulSoup', wraps=storefront.BeautifulSoup) as parser:
+        out = hide(f'<img src="https://{S3}/x.jpg"/><a href="https://{CANONICAL}/x">x</a>')
+    assert out == f'{HIDDEN}<a href="http://{ONION}/x">x</a>'
+    assert parser.call_count == 1
 
 
 @pytest.mark.parametrize('public, hidden', [
@@ -105,10 +145,10 @@ def test_nothing_is_parsed_when_s3_is_not_configured(app, onion, monkeypatch):
     finally:
         context.pop()
     assert out == f'<img src="https://{S3}/x.jpg"/><a href="http://{ONION}/x">x</a>'
-    assert parser.call_count == 1   # the link rewrite's own parse, none for S3
+    assert parser.call_count == 1   # the link rewrite's own parse
 
 
-def test_s3_media_is_hidden_before_the_links_move(app, onion, s3):
+def test_s3_media_is_hidden_and_the_links_move(app, onion, s3):
     out = hide(f'<img src="https://{S3}/x.jpg"/><a href="https://{CANONICAL}/x">x</a>')
     assert out == f'{HIDDEN}<a href="http://{ONION}/x">x</a>'
 
@@ -164,22 +204,34 @@ def test_a_feed_entry_on_the_onion_hides_s3_media(app, onion, s3):
         assert feed_entry_body(Post()) == Post.body_html
 
 
-def test_an_onion_page_with_an_s3_image_shows_the_placeholder_and_no_s3_host(app, world, s3):
-    founder, author, community, post, image = world
-    post.body_html = f'<p>look</p><img src="https://{S3}/posts/ab/cd/x.jpg"/><a href="https://{S3}/y.mp4">v</a>'
-    db.session.commit()
-    onion_page = on_onion(app).get(f'/post/{post.id}', base_url=f'https://{ONION}').get_data(as_text=True)
+def page(app, base_url):
+    # a small page that extends base.html, so the layout's preconnect is under test too
+    with app.test_request_context(base_url=base_url):
+        app.preprocess_request()
+        body = render_template_string("{% extends 'base.html' %}{% block app_content %}<p>look</p>"
+                                      f'<img src="https://{S3}/posts/ab/cd/x.jpg"/>{{% endblock %}}')
+        return rewrite_response_for_storefront(Response(body, mimetype='text/html')).get_data(as_text=True)
+
+
+def test_an_onion_page_with_an_s3_image_shows_the_placeholder_and_no_s3_host(app, onion, s3):
+    onion_page = page(app, f'https://{ONION}')
     assert 'Media hidden on the onion site' in onion_page
-    assert S3 not in onion_page
-    clearnet_page = on_onion(app).get(f'/post/{post.id}', headers={'Host': CANONICAL}).get_data(as_text=True)
-    assert f'<img src="https://{S3}/posts/ab/cd/x.jpg"/>' in clearnet_page
+    assert S3 not in onion_page   # base.html's preconnect is not written for an onion page either
 
 
-def test_an_onion_page_is_unchanged_when_s3_is_not_configured(app, world, monkeypatch):
-    founder, author, community, post, image = world
+def test_a_clearnet_page_keeps_its_s3_image_and_preconnect(app, onion, s3):
+    clearnet = page(app, f'https://{CANONICAL}')
+    assert f'<img src="https://{S3}/posts/ab/cd/x.jpg"/>' in clearnet
+    assert f'<link rel="preconnect" href="{S3}">' in clearnet
+
+
+def test_browser_host_of_something_that_is_no_url():
+    assert storefront.browser_host(None) == ''
+    assert storefront.browser_host('/relative/x') == ''
+
+
+def test_an_onion_page_is_unchanged_when_s3_is_not_configured(app, onion, monkeypatch):
     monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', '')
-    post.body_html = f'<p>look</p><img src="https://{S3}/posts/ab/cd/x.jpg"/>'
-    db.session.commit()
-    page = on_onion(app).get(f'/post/{post.id}', base_url=f'https://{ONION}').get_data(as_text=True)
-    assert f'<img src="https://{S3}/posts/ab/cd/x.jpg"/>' in page
-    assert 'onion-media-hidden' not in page
+    onion_page = page(app, f'https://{ONION}')
+    assert f'<img src="https://{S3}/posts/ab/cd/x.jpg"/>' in onion_page
+    assert 'onion-media-hidden' not in onion_page

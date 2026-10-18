@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import NamedTuple
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 from bs4.dammit import EntitySubstitution
@@ -255,6 +256,9 @@ def canonical_url() -> str:
 
 
 # Stored and rendered links (spec §3.5). Attributes only, never text.
+# Characters a browser strips from a URL before parsing it (tab, LF, CR). We strip them too, so this module and the
+# browser cannot disagree about the host (`is_safe_redirect_target` uses the same table).
+URL_STRIPPED_BY_BROWSERS = str.maketrans('', '', '\t\n\r')
 _STORED_LINK_ATTRS = frozenset({'href', 'src', 'srcset'})
 _RENDER_LINK_ATTRS = _STORED_LINK_ATTRS | {'action'}
 # A srcset candidate's URL: after the start or a comma, up to whitespace; trailing commas end the candidate.
@@ -308,20 +312,32 @@ def _is_link_attr(tag, name: str, render: bool) -> bool:
                        (name == 'content' and tag.name == 'meta'))
 
 
-def _rebase_links(html: str, base: str, hosts: frozenset[str], render: bool) -> str:
+def _rebase_links(html: str, base: str, hosts: frozenset[str], render: bool, embedded: frozenset[str] = frozenset(),
+                  s3_host: str = '') -> str:
     """`html` with its link attributes on `base` where their host is in `hosts`. The parse is skipped when no host
     appears in the text at all (case-insensitively), and `html` itself comes back when no attribute moved, so markup
-    is re-serialised only when a link really changes."""
+    is re-serialised only when a link really changes. With `embedded`, a stored link also has any URL of those hosts
+    inside it moved (`?u=http://abc.onion/x`), as `canonicalise_text` moves them in text. With `s3_host`, the one
+    parse also hides what loads from that host (`_hide_s3`), and is never skipped: no raw-text check can see a host
+    spelled with an entity or a percent-escape."""
     lowered = html.lower()
-    if not any(host in lowered for host in hosts):
+    if not s3_host and not any(host in lowered for host in hosts):
         return html
     soup = BeautifulSoup(html, 'html.parser')
     changed = False
     for tag in soup.find_all(True):
+        if tag.decomposed:   # inside something already replaced or removed
+            continue
+        if s3_host and _hide_s3(soup, tag, s3_host):
+            changed = True
+        if tag.parent is None or tag.decomposed:   # replaced, removed or unwrapped: nothing left to rebase
+            continue
         for name, value in tag.attrs.items():
             if not _is_link_attr(tag, name, render):
                 continue
             moved = _rebase_srcset(value, base, hosts) if name == 'srcset' else _rebase(value, base, hosts)
+            if embedded:
+                moved = _rebase_text(moved, base, embedded)
             if moved != value:
                 tag.attrs[name] = moved
                 changed = True
@@ -330,13 +346,16 @@ def _rebase_links(html: str, base: str, hosts: frozenset[str], render: bool) -> 
 
 def canonicalise_links(html: str) -> str:
     """`html` with every `href`/`src`/`srcset` naming any host of this site moved onto the canonical origin, for
-    content about to be stored or federated. The end of `allowlist_html`. With no app context (a fuzz campaign)
-    there is no registry of hosts, so `html` comes back as it is. A link of ours is moved wherever it sits, including
-    inside a foreign URL's query (`?u=http://abc.onion/x`): leaving it would store the onion host, and the privacy
-    invariant outranks fidelity to what the author typed."""
+    content about to be stored or federated. The end of `allowlist_html`. A link of ours is also moved where it sits
+    inside another URL (`https://ex.com/?u=http://abc.onion/x`, `https://web.archive.org/web/1/http://abc.onion/p`)
+    when it appears literally, as `canonicalise_text` moves it in text: leaving it would store the onion host, and
+    the privacy invariant outranks fidelity to what the author typed. A percent-encoded copy stays as written. With
+    no app context (a fuzz campaign) there is no registry of hosts, so `html` comes back as it is."""
     if not has_app_context():
         return html
-    return _rebase_links(html, canonical_url(), _local_hosts(), render=False)
+    hosts = _local_hosts()
+    return _rebase_links(html, canonical_url(), hosts, render=False,
+                         embedded=hosts - {_bare_host(current_app.config.get('SERVER_NAME') or '')})
 
 
 # An http(s) or scheme-relative URL's start and authority in plain text (Markdown): not inside a word, another
@@ -349,23 +368,11 @@ _TEXT_URL_AUTHORITY = re.compile(r'(?:(?<![^\W_])(?<![+.-])https?:|(?<![^\W_])(?
 _TRAILING_PUNCTUATION = '.,;:!?'
 
 
-def canonicalise_text(text: str | None) -> str | None:
-    """`text` (Markdown, a plain-text body) with every absolute http(s) or scheme-relative URL on a non-canonical host
-    of this site moved onto the canonical origin, for text about to be stored or federated: `source.content` is
-    rendered in preference to the HTML. Hosts match as `is_local_link` matches them (case, a port, a trailing dot
-    ignored); everything after the authority is kept byte for byte. Foreign hosts, the canonical host as written and
-    text that is not a URL are left alone, and `text` itself comes back when nothing moved. Sentence punctuation
-    straight after a bare host stays in the text. A URL of ours is moved wherever it sits in the text, inside inline
-    code, a fenced block or a foreign URL's query (`https://ex.com/?u=http://abc.onion/x`): leaving it would store the
-    onion host, and the privacy invariant outranks fidelity to what the author typed. With no app context (a fuzz
-    campaign) there is no registry of hosts, so nothing moves."""
-    if not text or not has_app_context():
-        return text
-    hosts = _local_hosts() - {_bare_host(current_app.config.get('SERVER_NAME') or '')}
+def _rebase_text(text: str, base: str, hosts: frozenset[str]) -> str:
+    """`text` with every URL of `hosts` in it moved onto `base`, `text` itself when none moved."""
     lowered = text.lower()
     if not any(host in lowered for host in hosts):
         return text
-    base = canonical_url()
 
     def move(match):
         authority = match[0].rstrip(_TRAILING_PUNCTUATION)
@@ -375,11 +382,20 @@ def canonicalise_text(text: str | None) -> str | None:
     return text if moved == text else moved
 
 
-def rewrite_links(body: str, storefront: DomainInfo) -> str:
-    """`body` with the links of this site's other hosts (`href`, `src`, `srcset`, `action`, `<meta content>`,
-    `data-*`) moved onto `storefront`. `body` itself, unparsed, when no such host appears in it. Links already on
-    `storefront` are left alone, so a page that names only its own storefront is never parsed."""
-    return _rebase_links(body, _origin(storefront), _local_hosts() - {normalise_host(storefront.domain)}, render=True)
+def canonicalise_text(text: str | None) -> str | None:
+    """`text` (Markdown, a plain-text body) with every absolute http(s) or scheme-relative URL on a non-canonical host
+    of this site moved onto the canonical origin, for text about to be stored or federated: `source.content` is
+    rendered in preference to the HTML. Hosts match as `is_local_link` matches them (case, a port, a trailing dot
+    ignored); everything after the authority is kept byte for byte. Foreign hosts, the canonical host as written and
+    text that is not a URL are left alone, and `text` itself comes back when nothing moved. Sentence punctuation
+    straight after a bare host stays in the text. A URL of ours is moved wherever it appears literally in the text, inside
+    inline code, a fenced block or a foreign URL (`https://ex.com/?u=http://abc.onion/x`): leaving it would store the
+    onion host, and the privacy invariant outranks fidelity to what the author typed. A percent-encoded copy stays
+    as written. With no app context (a fuzz
+    campaign) there is no registry of hosts, so nothing moves."""
+    if not text or not has_app_context():
+        return text
+    return _rebase_text(text, canonical_url(), _local_hosts() - {_bare_host(current_app.config.get('SERVER_NAME') or '')})
 
 
 def _on_default_storefront(storefront) -> bool:
@@ -388,13 +404,43 @@ def _on_default_storefront(storefront) -> bool:
     return storefront.is_default or storefront.domain == default_domain().domain
 
 
-# Media on the S3 public host is not loaded on an onion storefront (owner ruling 2026-10-18): the rewrite replaces it
-# with a placeholder, so the onion never makes a request to that clearnet host.
+# Media on the S3 public host is not loaded on an onion storefront (owner ruling 2026-10-18): the link rewrite's one
+# parse replaces it with a placeholder, so the onion never makes a request to that clearnet host.
 _MEDIA_TAGS = frozenset({'img', 'video', 'audio', 'picture', 'iframe', 'embed', 'object'})
 _MEDIA_PARTS = frozenset({'source', 'track'})   # part of the <video>, <audio> or <picture> around them
 _MEDIA_CONTAINERS = frozenset({'video', 'audio', 'picture'})
 _REMOVED_TAGS = frozenset({'link', 'meta', 'script'})   # a preload, a preview image, a script: nothing to show
-_CSS_URL = re.compile(r'url\(\s*([^)]*?)\s*\)', re.IGNORECASE)
+# The attributes a browser reads as a URL to load or follow. Never alt, title or a form field's value: they are
+# text, and a post's edit form holds its URL in one.
+_URL_ATTRS = frozenset({'src', 'srcset', 'href', 'xlink:href', 'poster', 'data', 'action', 'formaction', 'background',
+                        'ping', 'manifest', 'cite', 'longdesc'})
+_PRECONNECT_RELS = frozenset({'preconnect', 'dns-prefetch'})
+_CSS_URL = re.compile(r'url\(\s*([^)]*?)\s*\)|(["\'])(.*?)\2', re.IGNORECASE)
+_CSS_ESCAPE = re.compile(r'\\(?:([0-9a-fA-F]{1,6})[ \t\n\r\f]?|(.))', re.DOTALL)
+_IDEOGRAPHIC_STOPS = str.maketrans('。．｡', '...')   # UTS-46 maps all three to a full stop
+_SPECIAL_SCHEME = re.compile(r'([A-Za-z][A-Za-z0-9+.-]*):')
+_SPECIAL_SCHEMES = frozenset({'http', 'https', 'ws', 'wss', 'ftp'})
+
+
+def browser_host(url) -> str:
+    """The bare host a browser loads absolute or scheme-relative `url` from, '' when it names none. It reads a URL
+    as a browser does, and as `is_safe_redirect_target` does: spaces around it and tabs and line breaks inside it
+    dropped, `\\` as `/`, any number of slashes after a special scheme or in front of a scheme-relative authority
+    (`https:host`, `https:///host`, `///host`), userinfo and port ignored, the host percent-decoded and NFKC- and
+    UTS-46-folded (`%2e`, a fullwidth or ideographic full stop), a trailing dot and the case dropped."""
+    if not isinstance(url, str):
+        return ''
+    candidate = url.strip().translate(URL_STRIPPED_BY_BROWSERS).replace('\\', '/')
+    scheme = _SPECIAL_SCHEME.match(candidate)
+    if scheme and scheme[1].lower() in _SPECIAL_SCHEMES:
+        authority = candidate[scheme.end():].lstrip('/')
+    elif candidate.startswith('//'):
+        authority = candidate.lstrip('/')
+    else:
+        return ''
+    authority = re.split(r'[/?#]', authority, maxsplit=1)[0].rpartition('@')[2]
+    authority = unicodedata.normalize('NFKC', unquote(authority)).translate(_IDEOGRAPHIC_STOPS)
+    return _bare_host(''.join(c for c in authority if unicodedata.category(c) != 'Cf'))   # soft hyphens, zero-widths
 
 
 def _s3_host() -> str:
@@ -407,61 +453,67 @@ def _s3_host() -> str:
         return ''
 
 
-def _on_host(url: str, host: str) -> bool:
-    """Whether `url` loads from `host`. A browser reads `\\` as `/`, so here it does too: a URL this check cannot
-    name a host for must still not slip past it. A value with no scheme (`<link rel="preconnect" href="cdn.test">`,
-    which base.html writes from `S3_PUBLIC_URL`) is read as an authority as well."""
-    url = url.strip().replace('\\', '/')
-    return host in (_link_host(url), _link_host(f'//{url}'))
+def _css_urls(style: str) -> list[str]:
+    """The `url(...)` tokens and quoted strings (`image-set('x' 1x)`) of a `style` value, CSS escapes undone."""
+    style = _CSS_ESCAPE.sub(lambda m: chr(int(m[1], 16) % 0x110000 or 0xfffd) if m[1] else m[2], style)
+    return [m[1] or m[3] for m in _CSS_URL.finditer(style)]
 
 
-def _points_at(name: str, value: str, host: str) -> bool:
+def _points_at(tag, name: str, value, host: str) -> bool:
+    """Whether attribute `name` of `tag` makes the browser load `value` from `host`."""
+    if not isinstance(value, str):
+        return False
     if name == 'srcset':
-        return any(_on_host(m[3], host) for m in _SRCSET_URL.finditer(value))
+        return any(browser_host(m[3]) == host for m in _SRCSET_URL.finditer(value))
     if name == 'style':
-        return any(_on_host(url.strip('\'"'), host) for url in _CSS_URL.findall(value))
-    return _on_host(value, host)
+        return any(browser_host(url.strip('\'" ')) == host for url in _css_urls(value))
+    if name == 'href' and tag.name == 'link' and _PRECONNECT_RELS & set(tag.get('rel') or ()):
+        return host in (browser_host(value), browser_host(f'//{value}'))   # base.html writes it without a scheme
+    # a data-* value counts only when it is itself a URL
+    return (name in _URL_ATTRS or name.startswith('data-')) and browser_host(value) == host
 
 
-def hide_s3_media(html: str, storefront) -> str:
-    """`html` with whatever loads from the S3 public host replaced, on an onion storefront; `html` itself otherwise.
-    Hosts are compared (`_link_host` against the host of `S3_PUBLIC_URL`), never searched for as text. An `img`,
-    `video`, `audio`, `picture`, `iframe`, `embed` or `object` with any attribute (`src`, `srcset`, `poster`, `data-*`)
-    on that host becomes a placeholder, a `source` or `track` taking its `video`, `audio` or `picture` with it. A `link`,
-    `meta` or `script` is removed, a link (`a`) loses its anchor and keeps its text, and any other tag loses the
-    attribute. A host that is one of ours is left to the link rewrite, which moves it onto the onion. The parse is
-    skipped when the host does not appear in the text at all, and nothing is read when S3 is not configured."""
+def _hide_s3(soup, tag, host: str) -> bool:
+    """Replace what loads from the S3 public host `host` on `tag`; whether anything changed. An `img`, `video`,
+    `audio`, `picture`, `iframe`, `embed` or `object` with a URL attribute (`src`, `srcset`, `poster`, `data-*`,
+    `style` url(...) and image-set(...)) on that host becomes a placeholder, a `source` or `track` taking its `video`,
+    `audio` or `picture` with it. A `link`, `meta` or `script` is removed, a link (`a`) loses its anchor and keeps its
+    text, and any other tag loses the attribute. Hosts are compared (`browser_host`), never searched for as text.
+    The text of a `<style>` block or a script is not read."""
+    hits = [name for name, value in tag.attrs.items() if _points_at(tag, name, value, host)]
+    if not hits:
+        return False
+    if tag.name in _REMOVED_TAGS:
+        tag.decompose()
+    elif tag.name == 'a':
+        tag.unwrap()
+    elif tag.name in _MEDIA_TAGS | _MEDIA_PARTS:
+        media = tag.parent if tag.name in _MEDIA_PARTS and tag.parent.name in _MEDIA_CONTAINERS else tag
+        placeholder = soup.new_tag('span', attrs={'class': 'onion-media-hidden'})
+        placeholder.string = _('Media hidden on the onion site')
+        media.replace_with(placeholder).decompose()
+    else:
+        for name in hits:
+            del tag.attrs[name]
+    return True
+
+
+def _s3_host_to_hide(storefront) -> str:
+    """The S3 host to hide on `storefront`: '' off the onion, with S3 unset, or when that host is one of ours (the
+    link rewrite moves it onto the onion). A clearnet or S3-less install reads nothing more than that."""
     if not storefront.is_onion:
-        return html
+        return ''
     host = _s3_host()
-    if not host or host not in html.lower() or host in _local_hosts():
-        return html
-    soup = BeautifulSoup(html, 'html.parser')
-    changed = False
+    return '' if host in _local_hosts() else host
 
-    def placeholder():
-        tag = soup.new_tag('span', attrs={'class': 'onion-media-hidden'})
-        tag.string = _('Media hidden on the onion site')
-        return tag
 
-    for tag in soup.find_all(True):
-        if tag.decomposed:   # inside something already replaced
-            continue
-        hits = [name for name, value in tag.attrs.items() if isinstance(value, str) and _points_at(name, value, host)]
-        if not hits:
-            continue
-        changed = True
-        if tag.name in _REMOVED_TAGS:
-            tag.decompose()
-        elif tag.name == 'a':
-            tag.unwrap()
-        elif tag.name in _MEDIA_TAGS | _MEDIA_PARTS:
-            media = tag.parent if tag.name in _MEDIA_PARTS and tag.parent.name in _MEDIA_CONTAINERS else tag
-            media.replace_with(placeholder()).decompose()
-        else:
-            for name in hits:
-                del tag.attrs[name]
-    return soup.decode(formatter=_FORMATTER) if changed else html
+def rewrite_links(body: str, storefront: DomainInfo) -> str:
+    """`body` with the links of this site's other hosts (`href`, `src`, `srcset`, `action`, `<meta content>`,
+    `data-*`) moved onto `storefront`, and on an onion storefront whatever loads from the S3 public host hidden
+    (`_hide_s3`), in one parse. `body` itself, unparsed, when no such host appears in it and there is no S3 host to
+    hide. Links already on `storefront` are left alone, so a page that names only its own storefront is never parsed."""
+    return _rebase_links(body, _origin(storefront), _local_hosts() - {normalise_host(storefront.domain)}, render=True,
+                         s3_host=_s3_host_to_hide(storefront))
 
 
 def storefront_html(html: str | None) -> str | None:
@@ -470,7 +522,7 @@ def storefront_html(html: str | None) -> str | None:
     storefront = current_storefront()
     if html is None or _on_default_storefront(storefront):
         return html
-    return rewrite_links(hide_s3_media(html, storefront), storefront)
+    return rewrite_links(html, storefront)
 
 
 def rewrite_response_for_storefront(response: Response) -> Response:
@@ -489,7 +541,7 @@ def rewrite_response_for_storefront(response: Response) -> Response:
     if (response.mimetype == 'text/html' and not response.direct_passthrough and not response.is_streamed
             and 'Content-Encoding' not in response.headers):   # an encoded body is bytes, never decoded here
         body = response.get_data(as_text=True)
-        rewritten = rewrite_links(hide_s3_media(body, storefront), storefront)
+        rewritten = rewrite_links(body, storefront)
         if rewritten is not body:
             response.set_data(rewritten)
     return response
