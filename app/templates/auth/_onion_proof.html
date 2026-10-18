@@ -1,9 +1,11 @@
 {# Onion login and registration only (spec 3.7a A): the challenge onion_pow.js solves before the form is sent, and,
-   for a browser without JavaScript (or without crypto.subtle), a link to the timed wait step. Every URL is relative. -#}
+   for a browser without JavaScript (or without crypto.subtle), a link to the timed wait step. Every URL is relative.
+   autocomplete=off: Firefox would otherwise restore the old hidden values on reload, beside the new challenge's
+   data attributes. -#}
 {% if onion_proof -%}
-    {{ form.pow_token() }}
-    {{ form.pow_nonce(**{'data-salt': onion_proof.salt, 'data-bits': onion_proof.bits}) }}
-    {{ form.wait_token() }}
+    {{ form.pow_token(autocomplete='off') }}
+    {{ form.pow_nonce(autocomplete='off', **{'data-salt': onion_proof.salt, 'data-bits': onion_proof.bits}) }}
+    {{ form.wait_token(autocomplete='off') }}
     <noscript>
         <p class="small"><a href="{{ onion_proof.wait_url }}">{{ _('Without JavaScript? Wait a few seconds here first.') }}</a></p>
     </noscript>

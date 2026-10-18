@@ -637,6 +637,14 @@ def test_the_wait_step_is_onion_only(app, site):
     assert app.test_client().get('/auth/onion_wait?form=login').status_code == 404
 
 
+def test_the_proof_fields_are_not_restored_by_the_browser(app, onion):
+    """Firefox restores hidden inputs' values on reload but not their data attributes: an old token beside a new
+    salt is a refusal. autocomplete=off stops the restore."""
+    page = onion_page(app.test_client(), '/auth/login')
+    for name in ('pow_token', 'pow_nonce', 'wait_token'):
+        assert page.find('input', attrs={'name': name})['autocomplete'] == 'off'
+
+
 def test_pow_js_self_hosted(app, onion):
     page = onion_page(app.test_client(), '/auth/login')
     sources = [script['src'] for script in page.find_all('script', src=True) if 'onion_pow' in script['src']]
