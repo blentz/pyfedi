@@ -486,6 +486,18 @@ def test_cookieless_clients_share_a_limit_where_there_is_no_redirect(limits):
     assert 429 not in statuses[:60] and statuses[60] == 429
 
 
+def test_a_breached_api_limit_is_a_json_429(limits):
+    """The code-keyed app-wide 429 handler wins over the API blueprints' own, so it has to answer in JSON itself."""
+    client = limits.test_client(use_cookies=False)
+    assert [onion_get(client, '/api/alpha/onion_probe').status_code for _ in range(2)] == [200, 200]
+    refused = onion_get(client, '/api/alpha/onion_probe')
+    assert refused.status_code == 429
+    assert refused.is_json
+    body = refused.get_json()
+    assert body['code'] == 429 and body['status'] == 'Bad Request'
+    assert 0 < int(refused.headers['Retry-After']) <= 61
+
+
 def test_onion_api_buckets_are_per_account(limits):
     with limits.app_context():
         make_instance('test.piefed.local', software='piefed')
@@ -769,8 +781,10 @@ def test_delay_covers_api(app, alice, redis_double, clock, ldap_off, alpha_api):
         response = onion_post(client, '/api/alpha/user/login', json={'username': 'Alice', 'password': 'wrong one'})
         assert response.status_code == 400
     refused = onion_post(client, '/api/alpha/user/login', json={'username': 'alice', 'password': PASSWORD})
-    # The app-wide 429 handler answers every 429 (the limiter's own too) with its page, ahead of the API's JSON one
+    # The app-wide 429 handler answers every 429 (the limiter's own too), in JSON under /api/, keeping the wait text
     assert refused.status_code == 429
+    assert refused.is_json
+    assert re.search(r'in \d+ seconds?\.?$', refused.get_json()['message'])
     assert 'jwt' not in refused.get_data(as_text=True)
     clock.t += 2
     assert onion_post(client, '/api/alpha/user/login', json={'username': 'nobody', 'password': 'x' * 8}) \

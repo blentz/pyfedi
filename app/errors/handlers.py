@@ -1,6 +1,9 @@
+import math
+import time
+
 from flask import jsonify, render_template, request
 
-from app import db
+from app import db, limiter
 from app.errors import bp
 from app.models import CmsPage
 
@@ -54,8 +57,16 @@ def request_too_large_413(error):
 def rate_limited_429(error):
     # The API's clients parse JSON in its own error shape (see shared_error_handler), not a rendered page
     if request.path.startswith('/api/'):
-        response = jsonify({"code": 429, "message": error.description, "status": "Bad Request"})
+        # flask_smorest's abort() keeps the reason in `data`, as shared_error_handler reads it
+        data = getattr(error, 'data', None)
+        message = data['message'] if isinstance(data, dict) and 'message' in data else error.description
+        response = jsonify({"code": 429, "message": message, "status": "Bad Request"})
         retry_after = dict(error.get_headers()).get('Retry-After')
+        # The limiter only adds its own headers when RATELIMIT_HEADERS_ENABLED is set; its breached limit's window
+        # reset says how long a client has to back off either way
+        current = limiter.current_limit
+        if not retry_after and current is not None and current.breached:
+            retry_after = str(max(1, math.ceil(current.reset_at - time.time())))
         if retry_after:
             response.headers['Retry-After'] = retry_after
         return response, 429
