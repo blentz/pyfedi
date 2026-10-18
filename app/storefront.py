@@ -92,8 +92,14 @@ def clear_domain_cache() -> None:
 
 
 def domain_for_host(host: str) -> DomainInfo | None:
+    """The row serving `host`, or None. SERVER_NAME's host is always served: when no row names it (a seed made under
+    another SERVER_NAME, or SERVER_NAME changed since) it is the synthesised default, so the canonical site and its
+    inbox never answer 421. `check_default_domain` logs that mismatch at startup."""
     wanted = normalise_host(host)
-    return next((row for row in domain_rows() if normalise_host(row.domain) == wanted), None)
+    found = next((row for row in domain_rows() if normalise_host(row.domain) == wanted), None)
+    if found is None and wanted == _synthesised_default().domain:
+        return _synthesised_default()
+    return found
 
 
 def default_domain() -> DomainInfo:
