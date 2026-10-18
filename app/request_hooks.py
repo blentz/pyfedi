@@ -17,6 +17,7 @@ from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, PO
     SUBSCRIPTION_MODERATOR, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_PENDING, ROLE_ADMIN_NAME, VERSION, \
     POST_TYPE_EVENT, AP_MEDIA_TYPES, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO
 from app.models import Site, utcnow
+from app.onion import is_onion_request
 from app.onion_guard import require_onion_session, resolve_onion_api_rate_key
 from app.storefront import check_default_domain, is_local_link, resolve_storefront, \
     rewrite_response_for_storefront, storefront_host, storefront_link, storefront_url
@@ -64,7 +65,7 @@ def register_request_hooks(app):
     @app.context_processor
     def app_context_processor():
         return dict(getmtime=getmtime, instance_domain=OnUse(storefront_host), site_url=OnUse(storefront_url),
-                    debug_mode=current_app.debug,
+                    debug_mode=current_app.debug, on_onion=is_onion_request(),
                     pendulum=pendulum, locale=g.locale if hasattr(g, 'locale') else None, notif_server=OnUse(lambda: storefront_link(current_app.config['NOTIF_SERVER'])),
                     site=g.site if hasattr(g, 'site') else None, nonce=g.nonce if hasattr(g, 'nonce') else None,
                     admin_ids=g.admin_ids if hasattr(g, 'admin_ids') else [], low_bandwidth=g.low_bandwidth if hasattr(g, 'low_bandwidth') else None,
