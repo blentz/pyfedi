@@ -58,6 +58,13 @@ export function setupOnionPow({ document, subtle }) {
     nonce.value = '';
     let solved = false;
     let solving = false;
+    // Back to a page the browser kept in its back-forward cache: the script does not run again, and the proof it
+    // solved was spent by the submit that left the page. It is forgotten, so the next submit solves afresh.
+    document.defaultView.addEventListener('pageshow', event => {
+        if (!event.persisted) return;
+        solved = false;
+        nonce.value = '';
+    });
     form.addEventListener('submit', async event => {
         if (solved) return;                   // this is the resubmit after the solve, let it go
         event.preventDefault();
