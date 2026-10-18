@@ -34,6 +34,7 @@ from furl import furl
 from werkzeug.exceptions import HTTPException
 
 import app.activitypub.routes as ap_routes
+import app.storefront as storefront
 import app.utils as app_utils
 from app.cli import strip_tracking
 from app.pinned_http import is_refused_address
@@ -394,14 +395,15 @@ def check_redirect_targets(data: bytes) -> None:
     /\\host, ///host). An accepted relative reference has no scheme and no authority. An accepted absolute URL's
     browser host is this server's under same_origin (and an unrecognised policy); under trusted/federated it is
     this server's or one instance_redirect_allowed was asked about, with the right trusted flag, and allowed.
-    safe_redirect_target gives the candidate exactly when it is accepted, else the default."""
+    safe_redirect_target gives the candidate exactly when it is accepted, else the default. The domain registry is
+    stubbed to its no-rows reading, so SERVER_NAME is the one host served."""
     head, rest = data[:1], data[1:MAX_INPUT]
     selector = head[0] if head else 0
     policy, allowed = _POLICIES[selector % len(_POLICIES)], bool(selector & 0x80)
     url = _json_or_text(rest)
     server = current_app.config['SERVER_NAME'].lower()
 
-    with _redirect_policy(policy, allowed) as asked:
+    with _redirect_policy(policy, allowed) as asked, _no_domain_rows():
         accepted = is_safe_redirect_target(url)
         assert safe_redirect_target(url, '/fallback') == (url if accepted else '/fallback')
     assert isinstance(accepted, bool)
@@ -422,7 +424,7 @@ def check_redirect_targets(data: bytes) -> None:
     if host is INVALID:
         return   # a browser refuses it: no navigation happens
     assert host, f'{url!r} has no host and was accepted'
-    own = host == server.partition(':')[0]
+    own = host.rstrip('.') == server.partition(':')[0]   # is_local_host ignores a trailing dot
     if policy == REDIRECT_POLICY_ALL_REFERRERS:
         return
     if policy in (REDIRECT_POLICY_TRUSTED_SERVERS, REDIRECT_POLICY_FEDERATED_SERVERS) and not own:
@@ -607,8 +609,19 @@ def _no_actor_lookups():
         ap_routes.User, ap_routes.Community, ap_routes.Feed = saved
 
 
+@contextmanager
+def _no_domain_rows():
+    """The domain registry with no rows, which serves SERVER_NAME alone, without the database read behind it."""
+    saved = storefront.domain_rows
+    storefront.domain_rows = lambda: (storefront._synthesised_default(),)
+    try:
+        yield
+    finally:
+        storefront.domain_rows = saved
+
+
 def check_webfinger_resource(data: bytes) -> None:
-    """process_webfinger_request's resource parse and domain check, with the actor lookups stubbed.
+    """process_webfinger_request's resource parse and domain check, with the actor lookups and domain rows stubbed.
 
     Only an HTTPException with a 4xx code or a response escapes -- never another exception, which is a 500. A
     response is the instance actor's, and only for a resource naming it on this server. A lookup happens only for
@@ -616,7 +629,8 @@ def check_webfinger_resource(data: bytes) -> None:
     its RFC 3986 host."""
     resource = _text(data[:MAX_INPUT])
     server = current_app.config['SERVER_NAME'].lower()
-    with _no_actor_lookups() as lookups, current_app.test_request_context('/.well-known/webfinger'):
+    with _no_actor_lookups() as lookups, _no_domain_rows(), \
+            current_app.test_request_context('/.well-known/webfinger'):
         try:
             response = ap_routes.process_webfinger_request.uncached(resource)
         except HTTPException as refusal:
