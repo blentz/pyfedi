@@ -103,6 +103,17 @@ def test_the_clearnet_still_redirects_to_the_provider(app, configured, provider)
     assert response.data == b'redirected'
 
 
+@pytest.mark.parametrize('provider', PROVIDERS)
+@pytest.mark.parametrize('route, signed_in, refused_to', [('authorize', False, '/auth/login'),
+                                                          ('connect_callback', True, '/user/connect_oauth')])
+def test_the_onion_refuses_an_oauth_callback(app, configured, provider, route, signed_in, refused_to):
+    with patch('app.auth.routes.oauth') as fake, patch('app.auth.routes.handle_oauth_authorize') as handle:
+        response = visit(app, configured if signed_in else None, f'/auth/{provider}_{route}', onion=True)
+    assert response.status_code == 302
+    assert response.headers['Location'].endswith(refused_to)
+    assert not handle.called and not getattr(fake, provider).authorize_access_token.called
+
+
 def test_the_onion_connect_page_offers_no_providers(app, configured):
     with patch('app.user.routes.render_template', return_value='rendered') as render:
         visit(app, configured, '/user/connect_oauth', onion=True)
