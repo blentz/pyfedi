@@ -23,7 +23,7 @@ from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role
 from app.onion import audit_field, is_onion_request
-from app.onion_guard import onion_login_gate, onion_login_succeeded
+from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, \
     finalize_user_setup, get_request, get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
@@ -470,8 +470,7 @@ def process_login(form: LoginForm):
     # Onion only (spec 3.7): failed logins slow down what was typed and the account it names (OnionLoginGate)
     gate = onion_login_gate(username, find_user(username) if is_onion_request() else None)
     if gate.wait:
-        flash(_('Too many failed logins for this account. Please try again in %(seconds)d seconds.',
-                seconds=gate.wait), 'error')
+        flash(onion_wait_message(gate.wait), 'error')
         return redirect(url_for("auth.login"))
     # The account is in hidden backoff: the whole normal flow runs (lookups, directory bind, hash check, the same
     # messages), told to refuse at the points where it would accept, so it answers and costs as a wrong password.
