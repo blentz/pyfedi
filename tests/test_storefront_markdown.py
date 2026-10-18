@@ -15,10 +15,15 @@ from flask import current_app, g
 
 from app import db
 from app.activitypub.util import comment_model_to_json, post_to_page
+from app.constants import SRC_API
 from app.models import ChatMessage, Language, Post, PostReply, Site
+from app.shared.community import edit_community
 from app.storefront import canonicalise_links, canonicalise_text
 from app.utils import markdown_to_html, piefed_markdown_to_lemmy_markdown, utcnow
 from tests.factories import a_keypair, make_community, make_community_member, make_post
+from tests.factories import bearer
+from tests.test_admin_site_profile import _post, admin_client  # noqa: F401  (admin_client is a fixture)
+from tests.test_shared_community_lifecycle import _api_input, _seed
 from tests.test_storefront_presentation import CANONICAL, ONION, onion  # noqa: F401  (onion is a fixture)
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -199,3 +204,19 @@ def test_private_message_edited_on_the_onion_is_canonical(env):
     on_onion(client, 'put', '/api/alpha/private_message', author,
              {'private_message_id': message_id, 'content': PASTED + '!'})
     assert db.session.get(ChatMessage, message_id).body == STORED + '!'
+
+
+# --- the other saves that store Markdown -------------------------------------------------------------------------
+
+def test_community_rules_saved_through_the_api_are_canonical(app, onion, db_session):
+    s = _seed()
+    edit_community(_api_input(rules=PASTED), s.community, SRC_API, bearer(s.user), from_scratch=True)
+    assert s.community.rules == STORED
+
+
+def test_site_legal_information_saved_by_an_admin_is_canonical(app, onion, admin_client):
+    client, token = admin_client
+    response, _ = _post(client, token, legal_information=PASTED)
+    assert response.status_code == 200
+    db.session.expire_all()
+    assert db.session.get(Site, 1).legal_information == STORED
