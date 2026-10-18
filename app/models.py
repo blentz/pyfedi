@@ -5,6 +5,7 @@ import math
 import os
 import uuid
 import re
+import secrets
 import unicodedata
 from contextlib import suppress
 from datetime import datetime, timedelta, date, timezone
@@ -1733,6 +1734,12 @@ class Passkey(db.Model):
 
     def __repr__(self):
         return f"<Passkey {self.id} {self.device}>"
+
+
+# What a login for an account that does not exist is checked against, so it costs what a wrong password costs and
+# its time does not tell which names have accounts: werkzeug's default method and cost, as set_password uses, over a
+# random password nobody knows
+DUMMY_PASSWORD_HASH = generate_password_hash(secrets.token_urlsafe(32))
 
 
 def verify_password_hash(password_hash, password) -> tuple[bool, bool]:
