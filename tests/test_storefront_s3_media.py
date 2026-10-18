@@ -98,6 +98,18 @@ def hide(body, mimetype='text/html'):
     (f'<div style="background-image: url(https://evil.test/{chr(0x130)}),url(https://{S3}/y);">t</div>', '<div>t</div>'),
     (f'<div style="/* url( */ background: URL( https://{S3}/x )">t</div>', '<div>t</div>'),
     # IDN spellings of one host (re-review 2, M-2) are the other tests' business: see test_an_idn_s3_host
+    # CSS is tokenised raw: an escaped quote or `*/` opens and closes nothing (security review)
+    (f'<div style="--a:\\22 ;background:url(https://{S3}/x);--b:\\22 ">t</div>', '<div>t</div>'),
+    (f'<div style="--a:\'\\27 ;background:url(https://{S3}/x);">t</div>', '<div>t</div>'),
+    (f'<div style="/* \\2a/ */background:url(https://{S3}/x)">t</div>', '<div>t</div>'),
+    (f'<div style="--a:"x\\"y;background:url(https://{S3}/x);">t</div>'.replace('"x', "'x").replace('\\"y', "\\'y"), '<div>t</div>'),
+    (f'<div style="--a:\'x&#13;url(https://{S3}/x)">t</div>', '<div>t</div>'),
+    (f'<div style="--a:\'x&#12;url(https://{S3}/x)">t</div>', '<div>t</div>'),
+    (f'<div style="--a:\\2f* ;background:url(https://{S3}/x) */">t</div>', '<div>t</div>'),
+    # the backstop: the host is still named in a style value, so the element goes
+    (f'<div style="font-family: \'{S3}\'">t</div>', '<div>t</div>'),
+    (f'<div style="--x: {S3.replace(".", "%2e")}">t</div>', '<div>t</div>'),
+    (f'<div style="--x: \\63 dn.example.test">t</div>', '<div>t</div>'),
     # srcset splits on ASCII white space only (M-6)
     (f'<img srcset="https://a{chr(0xa0)}b@{S3}/x 1x"/>', HIDDEN),
     (f'<img srcset="https://a{chr(0x1c)}b@{S3}/x 1x"/>', HIDDEN),
@@ -119,7 +131,6 @@ def test_s3_media_is_hidden_on_the_onion(app, onion, s3, body, shown):
     f'<img src="https://evil.test/?u=https://{S3}/x.jpg"/>',   # ours in a query
     f'<img src="https://user@evil.test/{S3}"/>',
     f'<p>{S3} and https://{S3}/x.jpg as text</p>',
-    f'<div style="color: red; content: \'{S3}\'">t</div>',
     f'<img src="/static/{S3}/x.jpg" class="a b"/>',
     '<img src="/static/x.jpg" class="a b"/>',
     # only URL-bearing attributes count (review M1): a text value is never requested
@@ -129,7 +140,6 @@ def test_s3_media_is_hidden_on_the_onion(app, onion, s3, body, shown):
     f'<div data-label="{S3}" data-note="see {S3}/x" data-json=\'{{"u": "https://{S3}/x"}}\'>t</div>',
     f'<meta name="description" content="https://{S3}/x"/><meta property="og:image" content="https://{S3}/x.jpg"/>',
     f'<a href="/x" title="{S3}">x</a>',
-    f'<div style="font-family: \'{S3}\'">t</div>',
     f'<link rel="stylesheet" href="{S3}.css"/>',
     f'<img src="{S3}/x.jpg"/>',   # a relative path whose first segment happens to be the host
 ])
@@ -377,6 +387,17 @@ def test_another_idn_is_not_the_s3_host(app, onion, monkeypatch):
     ('url(never closed', ['never closed']),
     ('"never closed\nurl(next)', ['never closed', 'next']),
     ('/* never closed url(x)', []),
+    ("'a\\27 b' url(c)", ["a'b", 'c']),                 # an escaped quote does not end the string
+    ("'a\\\nb' url(c)", ['ab', 'c']),                  # an escaped newline continues it
+    ('\\22 url(c)', ['c']),                              # an escaped quote outside a string opens none
+    ('/* \\2a/ */ url(c)', ['c']),
+    ("'a\rurl(c)", ['a', 'c']), ("'a\furl(c)", ['a', 'c']), ("'a\r\nurl(c)", ['a', 'c']),
+    ('url(a\\)b)', ['a)b']),
 ])
 def test_css_urls_are_read_in_one_pass(style, urls):
     assert storefront._css_urls(style) == urls
+
+
+def test_a_host_with_no_unicode_spelling_is_still_looked_for_in_a_style():
+    assert storefront._names_host('background: url(xn--zzzz-)', 'xn--zzzz-')   # not decodable: plain spelling only
+    assert not storefront._names_host('color: red', 'xn--zzzz-')
