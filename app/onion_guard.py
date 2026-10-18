@@ -64,6 +64,7 @@ LOGIN_FAILURE_KEY = 'onion_login_fail:{}'
 FREE_LOGIN_FAILURES = 5
 MAX_LOGIN_WAIT = 300
 LOGIN_FAILURE_TTL = 3600
+RESERVE_RETRIES = 5
 
 
 # --------------------------------------------------------------------------
@@ -169,57 +170,71 @@ def login_wait(count: int) -> int:
     return min(2 ** min(count - FREE_LOGIN_FAILURES, 9), MAX_LOGIN_WAIT)
 
 
-def login_delay_remaining(username: str) -> int:
-    """Seconds the caller must still wait before trying `username`'s password over the onion; 0 to go ahead.
+def _remaining(count, last, now: float) -> int:
+    wait = login_wait(int(count or 0))
+    return max(math.ceil(float(last or 0) + wait - now), 0) if wait else 0
 
-    Going ahead claims the attempt: when a wait has just ended, `last` is moved to now in the same optimistic
-    transaction (WATCH/MULTI) as the read, so callers racing this one see the wait again rather than all slipping
-    through together. A concurrent change to the key while this one decides counts as a wait too."""
-    key = _login_key(username)
+
+def _queue_failure(pipe, key: str, now: float) -> None:
+    pipe.hincrby(key, 'count', 1)
+    pipe.hset(key, 'last', now)
+    pipe.expire(key, LOGIN_FAILURE_TTL)
+
+
+def login_delay_remaining(username: str) -> int:
+    """Seconds an onion login for `username` must still wait; 0 when it may go ahead. Reads only."""
+    count, last = app_pkg.redis_client.hmget(_login_key(username), 'count', 'last')
+    return _remaining(count, last, _now())
+
+
+def reserve_onion_login_attempt(*usernames: str) -> int:
+    """Check and reserve one onion login attempt against every counter in `usernames`, atomically.
+
+    Answers the longest wait among them. When that is 0 the attempt goes ahead and is counted at once, on every
+    counter, as a failure: a failure then needs nothing more and a success clears it (`clear_onion_login_failures`).
+    Counting before the password is checked is what stops parallel attempts all passing the check before any of them
+    has failed: the read and the increment are one optimistic transaction (WATCH/MULTI, which fakeredis supports; it
+    has no Lua), and one that another attempt changed under it is decided again on the new state. Past
+    RESERVE_RETRIES such collisions the caller is told to wait a second."""
+    keys = sorted({_login_key(name) for name in usernames})
     with app_pkg.redis_client.pipeline() as pipe:
-        try:
-            pipe.watch(key)
-            count, last = pipe.hmget(key, 'count', 'last')
-            wait = login_wait(int(count or 0))
-            if not wait:
+        for _ in range(RESERVE_RETRIES):
+            try:
+                pipe.watch(*keys)
+                states = [pipe.hmget(key, 'count', 'last') for key in keys]
+                now = _now()
+                wait = max(_remaining(count, last, now) for count, last in states)
+                if wait:
+                    pipe.unwatch()
+                    return wait
+                pipe.multi()
+                for key in keys:
+                    _queue_failure(pipe, key, now)
+                pipe.execute()
                 return 0
-            now = _now()
-            remaining = math.ceil(float(last or 0) + wait - now)
-            if remaining > 0:
-                return remaining
-            pipe.multi()
-            pipe.hset(key, 'last', now)
-            pipe.execute()
-            return 0
-        except WatchError:
-            return wait
+            except WatchError:
+                continue
+    return 1
 
 
 def record_onion_login_failure(username: str) -> None:
     """One more failed onion login for `username`, counted and timed in one transaction. The key lasts an hour from
     the latest failure."""
-    key = _login_key(username)
     pipe = app_pkg.redis_client.pipeline()
-    pipe.hincrby(key, 'count', 1)
-    pipe.hset(key, 'last', _now())
-    pipe.expire(key, LOGIN_FAILURE_TTL)
+    _queue_failure(pipe, _login_key(username), _now())
     pipe.execute()
 
 
-def clear_onion_login_failures(username: str) -> None:
-    app_pkg.redis_client.delete(_login_key(username))
+def clear_onion_login_failures(*usernames: str) -> None:
+    app_pkg.redis_client.delete(*{_login_key(name) for name in usernames})
 
 
-def onion_login_wait(username: str) -> int:
-    """`login_delay_remaining` for an onion request, 0 on clearnet (never touching Redis)."""
-    return login_delay_remaining(username) if is_onion_request() else 0
+def onion_login_wait(*usernames: str) -> int:
+    """`reserve_onion_login_attempt` for an onion request, 0 on clearnet (never touching Redis). Once it answers 0
+    the attempt is already counted as failed, until `onion_login_succeeded` clears it."""
+    return reserve_onion_login_attempt(*usernames) if is_onion_request() else 0
 
 
-def onion_login_failed(username: str) -> None:
+def onion_login_succeeded(*usernames: str) -> None:
     if is_onion_request():
-        record_onion_login_failure(username)
-
-
-def onion_login_succeeded(username: str) -> None:
-    if is_onion_request():
-        clear_onion_login_failures(username)
+        clear_onion_login_failures(*usernames)
