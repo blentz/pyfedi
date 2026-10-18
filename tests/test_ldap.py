@@ -779,6 +779,21 @@ def test_a_start_tls_that_fails_sends_no_password_and_closes_the_connection(app,
     conn.unbind.assert_called_once()
 
 
+def test_a_start_tls_that_answers_false_sends_no_password_and_closes_the_connection(app, env):
+    """ldap3's start_tls can report failure by answering False rather than raising: the connection is still in the
+    clear, so it is treated as a failed StartTLS -- no bind, connection closed, login fails."""
+    client, person = env
+    patcher, conn = with_entries(an_entry())
+    conn.start_tls.return_value = False
+
+    with ldap_config(app, LDAP_USE_TLS=True):
+        with patch('app.ldap_utils.Server'):
+            with patcher:
+                assert login_with_ldap('person', 'a-good-password') is False
+    conn.bind.assert_not_called()
+    conn.unbind.assert_called_once()
+
+
 def test_tls_starts_whether_or_not_the_bind_worked(app, env):
     client, person = env
     patcher, conn = with_entries()

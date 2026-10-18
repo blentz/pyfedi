@@ -60,7 +60,8 @@ def _bind_for_login(dn: str, password: str) -> tuple[Optional[Connection], bool]
         conn = Connection(server, user=dn, password=password, auto_bind=False)
         if current_app.config.get('LDAP_USE_TLS', False):
             try:
-                conn.start_tls()
+                if not conn.start_tls():   # ldap3 can answer False rather than raise: still in the clear
+                    raise LDAPException(f"StartTLS failed: {conn.result}")
             except Exception:
                 conn.unbind()   # no bind was made and none will be: the connection it opened is closed
                 raise
