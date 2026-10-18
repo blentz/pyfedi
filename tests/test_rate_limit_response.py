@@ -32,3 +32,12 @@ def test_web_429_stays_html(app):
     response = _limited(app, '/auth/login')
     assert response.status_code == 429
     assert response.mimetype == 'text/html'
+
+
+def test_api_429_message_comes_from_abort_data(app):
+    """flask_smorest's abort() keeps the reason in `data`, as in the onion login delay's "try again in N seconds"."""
+    error = TooManyRequests('generic')
+    error.data = {'message': 'try again in 4 seconds.'}
+    with app.test_request_context('/api/alpha/user/login'):
+        response, _ = rate_limited_429(error)
+        assert response.get_json()['message'] == 'try again in 4 seconds.'
