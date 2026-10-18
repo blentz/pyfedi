@@ -111,6 +111,7 @@ class Config(object):
 
     SESSION_COOKIE_SECURE = os.environ.get('SESSION_COOKIE_SECURE', '1') in ('1', 'true', 'True')
     SESSION_COOKIE_HTTPONLY = os.environ.get('SESSION_COOKIE_HTTPONLY', '1') in ('1', 'true', 'True')
+    REMEMBER_COOKIE_SECURE = SESSION_COOKIE_SECURE   # per storefront at request time: app.cookies
     SESSION_COOKIE_SAMESITE = 'Lax'
 
     CLOUDFLARE_API_TOKEN = os.environ.get('CLOUDFLARE_API_TOKEN') or ''

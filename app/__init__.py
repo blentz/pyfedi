@@ -30,6 +30,7 @@ from authlib.integrations.flask_client import OAuth
 from config import Config
 from app.constants import IMAGE_PIXEL_CAP
 from app.pinned_http import pinned_transport
+from app.cookies import StorefrontLoginManager, StorefrontSessionInterface
 import sentry_sdk
 from app.plugins import load_plugins
 
@@ -107,7 +108,7 @@ warnings.filterwarnings('ignore', category=Image.DecompressionBombWarning)
 db = SQLAlchemy(session_options={"autoflush": False}, engine_options={'pool_size': Config.DB_POOL_SIZE, 'max_overflow': Config.DB_MAX_OVERFLOW, 'pool_recycle': 3600})
 make_searchable(db.metadata)
 migrate = Migrate()
-login = LoginManager()
+login = StorefrontLoginManager()
 login.login_view = 'auth.login'
 login.login_message = _l('Please log in to access this page.')
 mail = Mail()
@@ -222,6 +223,7 @@ def create_app(config_class=Config):
             enable_tracing=False,
         )
 
+    app.session_interface = StorefrontSessionInterface()
     app.wsgi_app = StripCookieVaryForAnonymous(ProxyFix(app.wsgi_app, x_for=1))
 
     app.config["API_TITLE"] = "PieFed 1.7 Alpha API"
