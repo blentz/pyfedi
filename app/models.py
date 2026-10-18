@@ -1735,6 +1735,39 @@ class Passkey(db.Model):
         return f"<Passkey {self.id} {self.device}>"
 
 
+def verify_password_hash(password_hash, password) -> tuple[bool, bool]:
+    """Whether `password` matches `password_hash`, and whether the match was against a legacy bcrypt hash: the
+    verification half of User.check_password, with no side effects. Also run, result ignored, for an onion login
+    refused in hidden backoff (app.onion_guard.spend_password_check), which is why the two share it: that refusal
+    must cost exactly what a wrong password costs.
+
+    Total: any stored hash, however malformed, yields a non-match. The bcrypt fallback deliberately runs OUTSIDE the
+    first try, not inside its `except ValueError:` block. Handlers on the same `try` guard the try body, not one
+    another, so a fallback that raised from inside the ValueError handler escaped check_password entirely -- past
+    the sibling `except Exception: return False` that was written to make it total -- and turned a login against a
+    malformed password_hash into a 500 rather than a failed login. Every hash shape that makes werkzeug raise
+    ValueError can also make bcrypt raise: a truncated column, a partial migration from another system, a
+    hand-edited row.
+    """
+    if isinstance(password, str):
+        password = password.strip()  # D862, as set_password stores it
+    try:
+        return check_password_hash(password_hash, password), False
+    except ValueError:
+        # Caused when invalid hash method used, check bcrypt as a fallback
+        # (below, so that its own failures are caught too).
+        pass
+    except Exception:
+        return False, False
+
+    try:
+        return bool(app_bcrypt.check_password_hash(password_hash, password)), True
+    except Exception:
+        # The hash is not usable by werkzeug OR by bcrypt: nothing can
+        # authenticate against it, which is a failed login, not an error.
+        return False, False
+
+
 class User(UserMixin, db.Model):
     query_class = FullTextSearchQuery
     id = db.Column(db.Integer, primary_key=True)
@@ -1892,44 +1925,18 @@ class User(UserMixin, db.Model):
             self.password_updated_at = utcnow()
 
     def check_password(self, password):
-        """Total: any stored hash, however malformed, yields True or False.
-
-        The bcrypt fallback deliberately runs OUTSIDE the first try, not inside
-        its `except ValueError:` block. Handlers on the same `try` guard the try
-        body, not one another, so a fallback that raised from inside the
-        ValueError handler escaped check_password entirely -- past the sibling
-        `except Exception: return False` that was written to make this method
-        total -- and turned a login against a malformed password_hash into a 500
-        rather than a failed login. Every hash shape that makes werkzeug raise
-        ValueError can also make bcrypt raise: a truncated column, a partial
-        migration from another system, a hand-edited row.
-        """
-        if isinstance(password, str):
-            password = password.strip()  # D862, as set_password stores it
-        try:
-            return check_password_hash(self.password_hash, password)
-        except ValueError:
-            # Caused when invalid hash method used, check bcrypt as a fallback
-            # (below, so that its own failures are caught too).
-            pass
-        except Exception:
-            return False
-
-        try:
-            result = app_bcrypt.check_password_hash(self.password_hash, password)
-        except Exception:
-            # The hash is not usable by werkzeug OR by bcrypt: nothing can
-            # authenticate against it, which is a failed login, not an error.
-            return False
+        """Total: any stored hash, however malformed, yields True or False (`verify_password_hash`). A match against
+        a legacy bcrypt hash re-saves it with the current method."""
+        matched, legacy = verify_password_hash(self.password_hash, password)
 
         # If pw validates, resave the hash using a more secure hashing algorithm.
         # revoke_sessions=False: this is a hash migration on a successful
         # login, not a password change -- see set_password's docstring.
-        if result:
+        if matched and legacy:
             self.set_password(password, revoke_sessions=False)
             db.session.commit()
 
-        return result
+        return matched
 
     def get_id(self):
         if self.is_authenticated:

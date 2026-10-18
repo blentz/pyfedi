@@ -22,8 +22,9 @@ from flask import session
 from werkzeug.datastructures import Headers
 
 import app as app_pkg
+import app.models as models
 import app.onion_guard as onion_guard
-from app import create_app, db, limiter, rate_limit_key
+from app import app_bcrypt, create_app, db, limiter, rate_limit_key
 from app.auth.util import find_user
 from app.models import SiteDomain, User
 from app.onion import ONION_ANON_KEY, arrived_onion_sid, mint_onion_sid
@@ -787,13 +788,42 @@ def test_a_hidden_refusal_hashes_the_password_once(app, alice, redis_double, clo
     password gets, so the refusal takes as long as one."""
     for _ in range(6):
         record_onion_login_failure('alice')
-    with patch('app.onion_guard.check_password_hash', wraps=onion_guard.check_password_hash) as verified, \
+    with patch('app.models.check_password_hash', wraps=models.check_password_hash) as verified, \
             patch.object(User, 'check_password', side_effect=AssertionError('the password must not be checked')):
         assert not attempt(app, app.test_client())
     verified.assert_called_once()
     assert verified.call_args.args == (alice.password_hash, PASSWORD)
 
 
-def test_hashing_an_account_without_a_password_is_quiet(app, alice):
+@pytest.mark.parametrize('attempt', [hidden_web, hidden_api, hidden_verify])
+def test_a_legacy_bcrypt_hash_costs_its_bcrypt_check(app, alice, redis_double, clock, ldap_off, alpha_api, attempt):
+    """check_password falls back to bcrypt for a legacy hash, so the hidden refusal does too; and it does not
+    re-save the hash, as check_password would on a match."""
+    legacy = app_bcrypt.generate_password_hash(PASSWORD).decode()
+    alice.password_hash = legacy
+    db.session.commit()
+    for _ in range(6):
+        record_onion_login_failure('alice')
+    with patch('app.models.app_bcrypt.check_password_hash', wraps=app_bcrypt.check_password_hash) as bcrypt_verified:
+        assert not attempt(app, app.test_client())
+    bcrypt_verified.assert_called_once_with(legacy, PASSWORD)
+    db.session.refresh(alice)
+    assert alice.password_hash == legacy
+
+
+@pytest.mark.parametrize('attempt', [hidden_web, hidden_api, hidden_verify])
+def test_an_account_without_a_password_costs_a_dummy_check(app, alice, redis_double, clock, ldap_off, alpha_api,
+                                                           attempt):
     alice.password_hash = None
-    onion_guard.spend_password_check(alice, PASSWORD)   # a refusal either way: nothing to raise
+    db.session.commit()
+    for _ in range(6):
+        record_onion_login_failure('alice')
+    with patch('app.models.check_password_hash', wraps=models.check_password_hash) as verified:
+        assert not attempt(app, app.test_client())
+    verified.assert_called_once_with(onion_guard.DUMMY_PASSWORD_HASH, PASSWORD)
+
+
+def test_the_dummy_hash_uses_set_passwords_method():
+    probe = User()
+    probe.set_password('anything at all')
+    assert onion_guard.DUMMY_PASSWORD_HASH.split('$')[0] == probe.password_hash.split('$')[0]
