@@ -547,42 +547,66 @@ def _s3_host() -> str:
     return '' if host == UNMAPPABLE else host
 
 
-_CSS_TOKEN = re.compile(r'url\(|["\']|/\*', re.IGNORECASE | re.ASCII)
+# CSS Syntax 3 section 4, on the raw value: a backslash and the character (or hex escape) after it are one unit that
+# opens and closes nothing; a string ends at its quote or an unescaped newline; escapes are undone per token only.
+_CSS_TOKEN = re.compile(r'\\(?:[0-9a-fA-F]{1,6}[ \t\n\r\f]?|.)|url\(|["\']|/\*', re.IGNORECASE | re.ASCII | re.DOTALL)
 _CSS_SPACE = re.compile(r'[ \t\n\r\f]*')
-_CSS_STRING_END = {'"': re.compile(r'["\n]'), "'": re.compile(r"['\n]")}
+_CSS_STRING = {'"': re.compile(r'[^"\\\n]*(?:\\.[^"\\\n]*)*', re.DOTALL),
+               "'": re.compile(r"[^'\\\n]*(?:\\.[^'\\\n]*)*", re.DOTALL)}
+_CSS_BARE_URL = re.compile(r'[^)\\]*(?:\\.[^)\\]*)*', re.DOTALL)
+_CSS_NEWLINE = re.compile(r'\r\n?|\f')
+
+
+def _css_unescape(text: str) -> str:
+    return _CSS_ESCAPE.sub(lambda m: chr(int(m[1], 16) % 0x110000 or 0xfffd) if m[1] else '' if m[2] == '\n' else m[2],
+                           text)
 
 
 def _css_urls(style: str) -> list[str]:
-    """The `url(...)` tokens and quoted strings (`image-set('x' 1x)`) of a `style` value, CSS escapes undone, in one
-    left-to-right scan of the value: a `url(` inside a string or comment is not a token, and a quote inside an
-    unquoted `url(...)` is not a string. A string ends at its quote or a line break, an unclosed `url(` and comment
-    at the end. Every character is passed once (`str.find` and anchored searches), so the scan is linear."""
-    style = _CSS_ESCAPE.sub(lambda m: chr(int(m[1], 16) % 0x110000 or 0xfffd) if m[1] else m[2], style)
+    """The `url(...)` tokens and quoted strings (`image-set('x' 1x)`) of a `style` value, in one left-to-right scan
+    of the raw value as CSS Syntax tokenises it (newlines normalised first): a `url(` inside a string or comment is
+    not a token, a quote inside an unquoted `url(...)` is not a string, and an escaped quote, `*/` or newline opens
+    or closes nothing. Escapes are undone on each token found, not before. A string ends at its quote or an unescaped
+    line break, an unclosed `url(` and comment at the end. Every character is passed once, so the scan is linear."""
+    style = _CSS_NEWLINE.sub('\n', style)
     found, pos = [], 0
     while True:
         token = _CSS_TOKEN.search(style, pos)
         if token is None:
             return found
         pos = token.end()
+        if token[0][0] == '\\':
+            continue
         if token[0] == '/*':
             end = style.find('*/', pos)
             if end < 0:
                 return found
             pos = end + 2
-        elif token[0] in _CSS_STRING_END:
-            end = _CSS_STRING_END[token[0]].search(style, pos)
-            end = end.start() if end else len(style)
+        elif token[0] in _CSS_STRING:
+            end = _CSS_STRING[token[0]].match(style, pos).end()
             if end > pos:
-                found.append(style[pos:end])
+                found.append(_css_unescape(style[pos:end]))
             pos = end + 1
         else:
             pos = _CSS_SPACE.match(style, pos).end()
-            if style[pos:pos + 1] in _CSS_STRING_END:
+            if style[pos:pos + 1] in _CSS_STRING:
                 continue   # url("x"): the string is the token
-            end = style.find(')', pos)
-            end = len(style) if end < 0 else end
-            found.append(style[pos:end].strip())
+            end = _CSS_BARE_URL.match(style, pos).end()
+            found.append(_css_unescape(style[pos:end]).strip())
             pos = end + 1
+
+
+def _names_host(text: str, host: str) -> bool:
+    """Whether `text`, raw or with its CSS escapes undone, mentions `host` anywhere: plain, in punycode, in Unicode
+    or with its dots percent-encoded. A backstop for what the scan of a `style` value does not read as a URL."""
+    spellings = {host, host.replace('.', '%2e')}
+    try:
+        spellings.add(idna.decode(host))
+    except (idna.IDNAError, UnicodeError):
+        pass   # an address, or a name with no Unicode spelling
+    spellings = {spelling.lower() for spelling in spellings}
+    lowered = (text.lower(), _css_unescape(text).lower())
+    return any(spelling in value for spelling in spellings for value in lowered)
 
 
 def _points_at(tag, name: str, value, host: str) -> bool:
@@ -593,7 +617,7 @@ def _points_at(tag, name: str, value, host: str) -> bool:
     if name == 'srcset':
         return any(browser_host(value[start:end]) in hosts for start, end in _srcset_urls(value))
     if name == 'style':
-        return any(browser_host(url.strip('\'" ')) in hosts for url in _css_urls(value))
+        return any(browser_host(url.strip('\'" ')) in hosts for url in _css_urls(value)) or _names_host(value, host)
     if name == 'href' and tag.name == 'link' and _PRECONNECT_RELS & set(tag.get('rel') or ()):
         return browser_host(value) in hosts or browser_host(f'//{value}') in hosts   # base.html writes no scheme
     # a data-* value counts only when it is itself a URL
