@@ -8,10 +8,11 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import re
+import unicodedata
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import NamedTuple
-from urllib.parse import unquote_to_bytes, urlsplit, urlunsplit
+from urllib.parse import unquote, unquote_to_bytes, urlsplit, urlunsplit
 
 import idna
 from bs4 import BeautifulSoup
@@ -357,7 +358,7 @@ def _rebase_links(html: str, base: str, hosts: frozenset[str], render: bool, emb
     for tag in soup.find_all(True):
         if tag.decomposed:   # inside something already replaced or removed
             continue
-        if s3_host and _hide_s3(soup, tag, s3_host):
+        if s3_host and _hide_s3_or_the_tag(soup, tag, s3_host):
             changed = True
         if tag.parent is None or tag.decomposed:   # replaced, removed or unwrapped: nothing left to rebase
             continue
@@ -524,6 +525,8 @@ def browser_host(url) -> str:
         host = unquote_to_bytes(authority.partition(':')[0]).decode('utf-8')
     except UnicodeDecodeError:
         return ''
+    except UnicodeEncodeError:
+        return UNMAPPABLE   # a lone surrogate: no browser text holds one, so no answer is worth betting on
     try:
         host = idna.uts46_remap(host, std3_rules=False, transitional=False)
     except idna.IDNAError:
@@ -547,9 +550,13 @@ def _s3_host() -> str:
     return '' if host == UNMAPPABLE else host
 
 
-# CSS Syntax 3 section 4, on the raw value: a backslash and the character (or hex escape) after it are one unit that
-# opens and closes nothing; a string ends at its quote or an unescaped newline; escapes are undone per token only.
-_CSS_TOKEN = re.compile(r'\\(?:[0-9a-fA-F]{1,6}[ \t\n\r\f]?|.)|url\(|["\']|/\*', re.IGNORECASE | re.ASCII | re.DOTALL)
+# CSS Syntax 3 section 4, on the raw value. A name is a whole run of ident code points and escapes (an ident, a
+# function's name, a number's unit, a hash or an at-keyword: none of them opens or closes anything, so they need not be
+# told apart), and it is url( only when, escapes undone, it is "url" in any case. A string ends at its quote or an
+# unescaped newline; escapes are undone per token only.
+_CSS_NAME_ESCAPE = r'\\(?:[0-9a-fA-F]{1,6}[ \t\n]?|[^\n0-9a-fA-F])'
+_CSS_TOKEN = re.compile(r'([@#]?(?:[\w\x00\x80-\U0010ffff-]|' + _CSS_NAME_ESCAPE + r')+)(\()?|["\']|/\*',
+                        re.ASCII | re.DOTALL)
 _CSS_SPACE = re.compile(r'[ \t\n\r\f]*')
 _CSS_STRING = {'"': re.compile(r'[^"\\\n]*(?:\\.[^"\\\n]*)*', re.DOTALL),
                "'": re.compile(r"[^'\\\n]*(?:\\.[^'\\\n]*)*", re.DOTALL)}
@@ -557,17 +564,23 @@ _CSS_BARE_URL = re.compile(r'[^)\\]*(?:\\.[^)\\]*)*', re.DOTALL)
 _CSS_NEWLINE = re.compile(r'\r\n?|\f')
 
 
+def _css_code_point(digits: str) -> str:
+    """The character of a hex escape; U+FFFD for zero, a surrogate or past U+10FFFF (CSS Syntax 4.3.7)."""
+    code = int(digits, 16)
+    return chr(code) if 0 < code <= 0x10FFFF and not 0xD800 <= code <= 0xDFFF else '\ufffd'
+
+
 def _css_unescape(text: str) -> str:
-    return _CSS_ESCAPE.sub(lambda m: chr(int(m[1], 16) % 0x110000 or 0xfffd) if m[1] else '' if m[2] == '\n' else m[2],
-                           text)
+    return _CSS_ESCAPE.sub(lambda m: _css_code_point(m[1]) if m[1] else '' if m[2] == '\n' else m[2], text)
 
 
 def _css_urls(style: str) -> list[str]:
-    """The `url(...)` tokens and quoted strings (`image-set('x' 1x)`) of a `style` value, in one left-to-right scan
-    of the raw value as CSS Syntax tokenises it (newlines normalised first): a `url(` inside a string or comment is
-    not a token, a quote inside an unquoted `url(...)` is not a string, and an escaped quote, `*/` or newline opens
-    or closes nothing. Escapes are undone on each token found, not before. A string ends at its quote or an unescaped
-    line break, an unclosed `url(` and comment at the end. Every character is passed once, so the scan is linear."""
+    """The `url(...)` tokens and quoted strings (`image-set('x' 1x)`, `src("x")`) of a `style` value, in one
+    left-to-right scan of the raw value as CSS Syntax tokenises it (newlines normalised first): a `url(` inside a
+    string, a comment or a longer name (`xurl(`, `1url(`) is not a token, `u\\72l(` and `\\75 rl(` are, a quote
+    inside an unquoted `url(...)` is not a string, and an escaped quote, `*/` or newline opens or closes nothing.
+    Escapes are undone on each token found, not before. A string ends at its quote or an unescaped line break, an
+    unclosed `url(` and comment at the end. Every character is passed once, so the scan is linear."""
     style = _CSS_NEWLINE.sub('\n', style)
     found, pos = [], 0
     while True:
@@ -575,38 +588,87 @@ def _css_urls(style: str) -> list[str]:
         if token is None:
             return found
         pos = token.end()
-        if token[0][0] == '\\':
-            continue
-        if token[0] == '/*':
-            end = style.find('*/', pos)
-            if end < 0:
-                return found
-            pos = end + 2
-        elif token[0] in _CSS_STRING:
-            end = _CSS_STRING[token[0]].match(style, pos).end()
-            if end > pos:
-                found.append(_css_unescape(style[pos:end]))
-            pos = end + 1
-        else:
+        if token[1]:
+            if not token[2] or _css_unescape(token[1]).lower() != 'url':
+                continue   # a name, or another function: what follows is scanned like the rest
             pos = _CSS_SPACE.match(style, pos).end()
             if style[pos:pos + 1] in _CSS_STRING:
                 continue   # url("x"): the string is the token
             end = _CSS_BARE_URL.match(style, pos).end()
             found.append(_css_unescape(style[pos:end]).strip())
             pos = end + 1
+        elif token[0] == '/*':
+            end = style.find('*/', pos)
+            if end < 0:
+                return found
+            pos = end + 2
+        else:
+            end = _CSS_STRING[token[0]].match(style, pos).end()
+            if end > pos:
+                found.append(_css_unescape(style[pos:end]))
+            pos = end + 1
+
+
+_PERCENT_PASSES = 4   # %2563 is %63 is c: decoded until it no longer changes, at most this often
+_IPV4_RUN = re.compile(r'[0-9a-fx.]+')   # all an IPv4 host is made of, once read as a browser reads a host
+_IPV6_LITERAL = re.compile(r'\[[0-9a-f:.]*\]')
+
+
+class _Uts46Table(dict):
+    """A `str.translate` table: each code point mapped by UTS-46 as a browser maps a host (case, fullwidth forms,
+    ideographic stops, the code points it ignores dropped), itself when UTS-46 refuses it. Filled as characters are
+    met, up to a bound, so a page of distinct characters cannot grow it without end."""
+
+    def __missing__(self, code: int) -> str:
+        try:
+            mapped = idna.uts46_remap(chr(code), std3_rules=False, transitional=False)
+        except idna.IDNAError:
+            mapped = chr(code)
+        if len(self) < 0x10000:
+            self[code] = mapped
+        return mapped
+
+
+_UTS46 = _Uts46Table()
+
+
+def _read_as_a_host(text: str) -> str:
+    """All of `text` read the way a browser reads a host: CSS escapes undone, tab and line breaks removed, percent-
+    decoded until stable, UTS-46-mapped one character at a time, NFC-composed and lower-cased. Applied to the whole
+    value, not only to what looks like a host, so no spelling of a host in it survives as a different text."""
+    text = _css_unescape(text)
+    for _pass in range(_PERCENT_PASSES):
+        decoded = unquote(text, errors='replace').translate(URL_STRIPPED_BY_BROWSERS)
+        if decoded == text:
+            break
+        text = decoded
+    return unicodedata.normalize('NFC', text.translate(_UTS46)).translate(URL_STRIPPED_BY_BROWSERS).lower()
+
+
+def _is_address(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
 
 
 def _names_host(text: str, host: str) -> bool:
-    """Whether `text`, raw or with its CSS escapes undone, mentions `host` anywhere: plain, in punycode, in Unicode
-    or with its dots percent-encoded. A backstop for what the scan of a `style` value does not read as a URL."""
-    spellings = {host, host.replace('.', '%2e')}
+    """Whether `text` names `host` in any spelling a browser reads as that host: `text` is read as a host
+    (`_read_as_a_host`) and searched for the host in punycode and in Unicode. An address host is also found in any
+    numeric spelling (`3405803781`, `0xcb.0.113.5`, `[::ffff:cb00:7105]`): every run that could be an address is
+    read by `browser_host`. A backstop for what the scan of a `style` value does not read as a URL; it hides too much
+    (a host in a comment or a font name) rather than too little."""
+    value = _read_as_a_host(text)
+    spellings = {host}
     try:
         spellings.add(idna.decode(host))
     except (idna.IDNAError, UnicodeError):
         pass   # an address, or a name with no Unicode spelling
-    spellings = {spelling.lower() for spelling in spellings}
-    lowered = (text.lower(), _css_unescape(text).lower())
-    return any(spelling in value for spelling in spellings for value in lowered)
+    if any(spelling in value for spelling in spellings):
+        return True
+    candidates = set(_IPV4_RUN.findall(value)) | set(_IPV6_LITERAL.findall(value)) if _is_address(host) else ()
+    return any(browser_host(f'//{candidate}') == host for candidate in candidates)
 
 
 def _points_at(tag, name: str, value, host: str) -> bool:
@@ -629,8 +691,8 @@ def _hide_s3(soup, tag, host: str) -> bool:
     `audio`, `picture`, `iframe`, `embed` or `object` with a URL attribute (`src`, `srcset`, `poster`, `data-*`,
     `style` url(...) and image-set(...)) on that host becomes a placeholder, a `source` or `track` taking its `video`,
     `audio` or `picture` with it. A `link`, `meta` or `script` is removed, a link (`a`) loses its anchor and keeps its
-    text, and any other tag loses the attribute. Hosts are compared (`browser_host`), never searched for as text.
-    The text of a `<style>` block or a script is not read."""
+    text, and any other tag loses the attribute. Hosts are compared (`browser_host`); a `style` value is also hidden
+    when it names the host in any spelling (`_names_host`). The text of a `<style>` block or a script is not read."""
     hits = [name for name, value in tag.attrs.items() if _points_at(tag, name, value, host)]
     if not hits:
         return False
@@ -640,13 +702,28 @@ def _hide_s3(soup, tag, host: str) -> bool:
         tag.unwrap()
     elif tag.name in _MEDIA_TAGS | _MEDIA_PARTS:
         media = tag.parent if tag.name in _MEDIA_PARTS and tag.parent.name in _MEDIA_CONTAINERS else tag
-        placeholder = soup.new_tag('span', attrs={'class': 'onion-media-hidden'})
-        placeholder.string = _('Media hidden on the onion site')
-        media.replace_with(placeholder).decompose()
+        media.replace_with(_placeholder(soup)).decompose()
     else:
         for name in hits:
             del tag.attrs[name]
     return True
+
+
+def _placeholder(soup):
+    placeholder = soup.new_tag('span', attrs={'class': 'onion-media-hidden'})
+    placeholder.string = _('Media hidden on the onion site')
+    return placeholder
+
+
+def _hide_s3_or_the_tag(soup, tag, host: str) -> bool:
+    """`_hide_s3`, failing closed: should it raise, the error is logged and `tag` is replaced by the placeholder
+    whole, so the page is still served and still makes no request to the S3 host."""
+    try:
+        return _hide_s3(soup, tag, host)
+    except Exception:
+        current_app.logger.exception('storefront: the S3 media check failed; the element is hidden')
+        tag.replace_with(_placeholder(soup)).decompose()
+        return True
 
 
 def _s3_host_to_hide(storefront) -> str:
