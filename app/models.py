@@ -1910,6 +1910,14 @@ class User(UserMixin, db.Model):
             'idx_user_user_name_lower',
             db.text('lower(user_name)')
         ),
+        db.Index(
+            'idx_user_email_lower',
+            db.text('lower(email)')
+        ),
+        db.Index(
+            'idx_user_ap_profile_id_lower',
+            db.text('lower(ap_profile_id)')
+        ),
     )
 
     def __repr__(self):

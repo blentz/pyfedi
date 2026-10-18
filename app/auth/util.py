@@ -522,18 +522,24 @@ def process_login(form: LoginForm):
     return log_user_in(user, form, ip, country, ldap_sync=ldap_sync)
 
 
-def find_user(user_name):
-    """The account a typed login identifier names: a local user name, else a local email (both case-insensitive),
-    else this site's profile URL for it. All three lookups run every time, whatever matches, or the query count
-    would tell which names have accounts; each is a single equality on one column, not one OR across them, which
-    could not use any of their indexes."""
+def find_user_lookups(user_name):
+    """The three queries `find_user` runs, in precedence order: user name, email, profile URL."""
     username = user_name.strip()
     local = and_(User.ap_id.is_(None), User.deleted.is_(False))
     # Equality, not ILIKE: in a pattern the typed '%' and '_' were wildcards, so '%' found some account
     ap_id = f"{current_app.config['SERVER_URL']}/u/{username}".lower()
-    by_name = User.query.filter(local, func.lower(User.user_name) == func.lower(username)).first()
-    by_email = User.query.filter(local, func.lower(User.email) == func.lower(username)).first()
-    by_profile = User.query.filter(User.deleted.is_(False), func.lower(User.ap_profile_id) == ap_id).first()
+    return (User.query.filter(local, func.lower(User.user_name) == func.lower(username)),
+            User.query.filter(local, func.lower(User.email) == func.lower(username)),
+            User.query.filter(User.deleted.is_(False), func.lower(User.ap_profile_id) == ap_id))
+
+
+def find_user(user_name):
+    """The account a typed login identifier names: a local user name, else a local email (both case-insensitive),
+    else this site's profile URL for it. All three lookups run every time, whatever matches, or the query count
+    would tell which names have accounts; each is a single equality on one lower() expression, which has its own
+    expression index (idx_user_user_name_lower, idx_user_email_lower, idx_user_ap_profile_id_lower), unlike one OR
+    across them."""
+    by_name, by_email, by_profile = (query.first() for query in find_user_lookups(user_name))
     return by_name or by_email or by_profile
 
 
