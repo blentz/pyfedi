@@ -91,6 +91,7 @@ WAIT_CURRENT_KEY = 'onion_wait_current:{}'    # per sid: the salt of its one out
 POW_MAX_AGE = 600
 WAIT_MIN_AGE = 15
 WAIT_MAX_AGE = 600
+USED_KEY_SLACK = 60    # a used key outlives its token: the stamp is whole seconds, and Redis keeps its own clock
 POW_DIFFICULTY_SETTING = 'onion_pow_difficulty'
 DEFAULT_POW_DIFFICULTY = 16
 MAX_POW_DIFFICULTY = 24       # about 16 million hashes on average: minutes in a browser, so higher would lock people out
@@ -403,7 +404,7 @@ def verify_pow(token, nonce) -> bool:
     salt, bits = body['salt'], body['bits']
     if bits < pow_difficulty() or leading_zero_bits(sha256(f'{salt}:{nonce}'.encode()).digest()) < bits:
         return False
-    return _spend(POW_USED_KEY, salt, POW_MAX_AGE)
+    return _spend(POW_USED_KEY, salt, POW_MAX_AGE + USED_KEY_SLACK)
 
 
 def issue_wait_token() -> str:
@@ -428,7 +429,7 @@ def wait_token_ready(token) -> bool:
         return False
     if app_pkg.redis_client.get(WAIT_CURRENT_KEY.format(body['sid'])) != body['salt']:
         return False
-    return _spend(WAIT_USED_KEY, body['salt'], WAIT_MAX_AGE)
+    return _spend(WAIT_USED_KEY, body['salt'], WAIT_MAX_AGE + USED_KEY_SLACK)
 
 
 def onion_proof_refused(form) -> bool:
