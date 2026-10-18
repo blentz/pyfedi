@@ -11,8 +11,10 @@ for the suite (conftest `disable_rate_limiter`); the tests that need it build th
 tests/test_home_live.py does, and reset its storage before and after.
 """
 import ast
+import functools
 import inspect
 import pathlib
+import re
 import time
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -20,6 +22,7 @@ from unittest.mock import patch
 import pytest
 from flask import session
 from werkzeug.datastructures import Headers
+from werkzeug.security import generate_password_hash
 
 import app as app_pkg
 import app.models as models
@@ -44,6 +47,19 @@ MARKER = {'X-PieFed-Via': 'onion', 'X-Forwarded-For': TOR_CONTAINER}
 FROM_CADDY = {'REMOTE_ADDR': PROXY}
 LOGIN = {'timezone': 'UTC', 'submit': 'Log In'}
 PASSWORD = 'correct horse battery'
+
+
+@pytest.fixture(autouse=True)
+def cheap_hashes(monkeypatch):
+    """These tests are about counters, waits and answers, not hash cost: set_password and the dummy hash use pbkdf2 at
+    one iteration, so each verification is microseconds, not scrypt's 0.1 s. Every login still verifies exactly the
+    hashes it would, which is what the "costs like a wrong password" tests count. Hash cost and method are pinned in
+    tests/test_unknown_login_timing.py."""
+    monkeypatch.setattr('app.models.generate_password_hash',
+                        functools.partial(generate_password_hash, method='pbkdf2:sha256:1'))
+    models.dummy_password_hash.cache_clear()
+    yield
+    models.dummy_password_hash.cache_clear()
 
 
 @pytest.fixture
@@ -263,20 +279,42 @@ def test_onion_session_missing(app, onion):
 # Which endpoints are session first
 # --------------------------------------------------------------------------
 
+# A `@limiter.limit` decorator at the start of a line, with any whitespace or line continuation around the dot
+LIMIT_DECORATOR_RE = re.compile(r'^([ \t]*)@[ \t]*limiter[\s\\]*\.[\s\\]*limit\b', re.MULTILINE)
+
+
+def is_limit_decorator(decorator) -> bool:
+    target = decorator.func if isinstance(decorator, ast.Call) else decorator
+    return isinstance(target, ast.Attribute) and target.attr == 'limit' \
+        and isinstance(target.value, ast.Name) and target.value.id == 'limiter'
+
+
+def decorated_function(source: str, at: int, indent: str):
+    """The function a decorator starting at `at` decorates, by parsing from it to the end of the function's header
+    (with a `pass` body), so a decorator or header split over several lines is read as Python reads it. Parsing
+    only these few lines, not each whole file, is what keeps the scan fast."""
+    lines = source[at:].splitlines()
+    for end in range(1, len(lines) + 1):
+        snippet = '\n'.join(lines[:end]) + f'\n{indent}    pass\n'
+        try:
+            tree = ast.parse(f'if 1:\n{snippet}' if indent else snippet)
+        except SyntaxError:
+            continue
+        node = tree.body[0].body[0] if indent else tree.body[0]
+        assert isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and \
+            any(is_limit_decorator(d) for d in node.decorator_list), f'not a limit decorator: {lines[0]}'
+        return node.name
+    raise AssertionError(f'no function after: {lines[0]}')
+
+
 def limiter_decorated_functions():
-    """(file, function name) of every function under app/ with a `@limiter.limit(...)` decorator, found by parsing,
-    so a decorator split over several lines is found too."""
+    """(file, function name) of every function under app/ with a `@limiter.limit(...)` decorator."""
     root = pathlib.Path(app_pkg.__file__).resolve().parent
     found = set()
     for path in root.rglob('*.py'):
-        for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            for decorator in node.decorator_list:
-                target = decorator.func if isinstance(decorator, ast.Call) else decorator
-                if isinstance(target, ast.Attribute) and target.attr == 'limit' \
-                        and isinstance(target.value, ast.Name) and target.value.id == 'limiter':
-                    found.add((str(path), node.name))
+        source = path.read_text(encoding='utf-8')
+        for match in LIMIT_DECORATOR_RE.finditer(source):
+            found.add((str(path), decorated_function(source, match.start(), match.group(1))))
     return found
 
 
@@ -677,11 +715,9 @@ def test_rotating_variants_does_not_reset_the_delay(app, alice, redis_double, cl
 def test_unknown_identifiers_behave_like_known_ones(app, alice, redis_double, clock, ldap_off):
     client = app.test_client()
     a_session(client)
-    # The unknown name's dummy hash check (tests/test_unknown_login_timing.py) is skipped: six of them cost 0.6 s here
-    with patch('app.auth.util.verify_password_hash'):
-        for typed in ('Nobody ', 'alice'):
-            for _ in range(6):
-                web_login(client, typed, 'wrong password')
+    for typed in ('Nobody ', 'alice'):
+        for _ in range(6):
+            web_login(client, typed, 'wrong password')
     messages = []
     for typed in ('nobody', 'alice'):
         with client.session_transaction(base_url=ONION_URL) as stored:
@@ -848,7 +884,7 @@ def test_a_hidden_refusal_hashes_the_password_once(app, alice, redis_double, clo
 def test_a_legacy_bcrypt_hash_costs_its_bcrypt_check(app, alice, redis_double, clock, ldap_off, alpha_api, attempt):
     """check_password falls back to bcrypt for a legacy hash, so the hidden refusal does too; and a refused match is
     not re-saved, as an accepted one would be."""
-    legacy = app_bcrypt.generate_password_hash(PASSWORD).decode()
+    legacy = app_bcrypt.generate_password_hash(PASSWORD, rounds=4).decode()   # bcrypt's cheapest cost: still bcrypt
     alice.password_hash = legacy
     db.session.commit()
     account_failures(alice.id, 6)
