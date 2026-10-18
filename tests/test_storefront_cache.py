@@ -8,6 +8,8 @@ canonical origin, so they keep their path keys and are shared by every host.
 The suite runs on NullCache, under which nothing is ever cached and no test of a cache key can fail. Each test here
 swaps in a real SimpleCache for its own duration.
 """
+import re
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
@@ -17,9 +19,9 @@ from flask_login import login_user
 
 from app import cache, db
 from app.api.alpha.views import cached_modlist_for_community, cached_modlist_for_user, user_view
-from app.models import File, Site, SiteDomain, Topic
-from app.storefront import (clear_domain_cache, storefront_cache_key, storefront_memo_name,
-                            storefront_query_cache_key)
+from app.models import CommunityMember, File, Site, SiteDomain, Topic
+from app.storefront import (clear_domain_cache, delete_memoized_everywhere, storefront_cache_key,
+                            storefront_memo_name, storefront_query_cache_key)
 from app.utils import make_cache_key
 from tests.factories import make_community, make_community_member, make_instance, make_post, make_user
 
@@ -210,3 +212,49 @@ def test_user_view_delete_memoized_clears_every_storefront(app, world):
     call_on(app, ONION, cache.delete_memoized, user_view)
     for host in (ONION, CANONICAL):
         assert call_on(app, host, user_view, author.id, variant=1)['title'] == 'Renamed'
+
+
+def demote(author, community):
+    CommunityMember.query.filter_by(user_id=author.id, community_id=community.id).update({'is_moderator': False})
+    db.session.commit()
+
+
+@pytest.mark.parametrize('cleared_on', [ONION, CANONICAL, None])   # None: a background job, outside any request
+def test_delete_memoized_everywhere_clears_one_argument_on_every_storefront(app, world, cleared_on):
+    """`cache.delete_memoized(f, arg)` on a per-storefront function deletes the key the current storefront makes,
+    so the other storefronts kept serving the stale entry. The helper deletes that argument's entry on every
+    registered storefront and on the default."""
+    author, community, post = world
+    for host in (ONION, CANONICAL):
+        assert call_on(app, host, cached_modlist_for_user, author) != []
+    demote(author, community)
+    if cleared_on is None:
+        delete_memoized_everywhere(cached_modlist_for_user, author)
+    else:
+        call_on(app, cleared_on, delete_memoized_everywhere, cached_modlist_for_user, author)
+    for host in (ONION, CANONICAL):
+        assert call_on(app, host, cached_modlist_for_user, author) == [], host
+
+
+def test_delete_memoized_everywhere_keeps_other_arguments(app, world):
+    """Per-argument precision: another argument's entry is not cleared."""
+    author, community, post = world
+    other = make_user(author.instance, 'other', local=True)
+    make_community_member(other, community, is_moderator=True)
+    for host in (ONION, CANONICAL):
+        call_on(app, host, cached_modlist_for_user, other)
+    demote(other, community)
+    call_on(app, ONION, delete_memoized_everywhere, cached_modlist_for_user, author)
+    for host in (ONION, CANONICAL):
+        assert call_on(app, host, cached_modlist_for_user, other) != [], host
+
+
+PER_STOREFRONT = r'(?:alpha_views\.)?(?:user_view|cached_modlist_for_community|cached_modlist_for_user)'
+
+
+def test_no_single_storefront_delete_with_arguments():
+    """Every argument-taking delete of a per-storefront memoized function goes through delete_memoized_everywhere."""
+    pattern = re.compile(r'cache\.delete_memoized\(\s*' + PER_STOREFRONT + r'\s*,')
+    found = [f'{path}:{number}' for path in Path('app').rglob('*.py')
+             for number, line in enumerate(path.read_text().splitlines(), 1) if pattern.search(line)]
+    assert found == []

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import NamedTuple
 from urllib.parse import urlsplit, urlunsplit
 
@@ -171,7 +172,22 @@ def storefront_memo_name(fname: str) -> str:
     """`make_name` for an `@cache.memoize` function whose result holds storefront URLs: one entry per storefront.
     `cache.delete_memoized(f)` with no arguments still clears every storefront's entry, because the version it
     bumps is keyed by `fname`; with arguments it would clear only the current storefront's."""
-    return f'{fname}@{current_storefront().domain}'
+    return f'{fname}@{_memo_domain.get() or current_storefront().domain}'
+
+
+_memo_domain: ContextVar[str | None] = ContextVar('storefront_memo_domain', default=None)
+
+
+def delete_memoized_everywhere(fn, *args, **kwargs) -> None:
+    """`cache.delete_memoized(fn, *args, **kwargs)` on every storefront: each registered domain and the default.
+    For a `storefront_memo_name` function called with arguments, the plain call deletes only the entry the current
+    storefront keyed, and every other storefront went on serving the stale one. Only these arguments' entries go."""
+    for domain in sorted({row.domain for row in domain_rows()} | {default_domain().domain}):
+        token = _memo_domain.set(domain)
+        try:
+            cache.delete_memoized(fn, *args, **kwargs)
+        finally:
+            _memo_domain.reset(token)
 
 
 def _moved_to(url, base: str):
