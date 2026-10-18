@@ -43,10 +43,17 @@ def registration_from_mode(mode: str) -> str:
     return _REGISTRATION_FROM_MODE.get(mode, 'admin')
 
 
+_NOT_IN_AUTHORITY = frozenset('@/\\?#')
+
+
 def _bare_host(authority: str) -> str:
     """The host of an authority (`host`, `host:port`, `[v6]:port`), lower-cased, brackets and trailing dot stripped;
     '' when it names none. A bare IPv6 literal (`::1`, as `site_domain.domain` holds it) is its own host."""
     authority = authority.strip()
+    # urlsplit would read `x@host` as userinfo and drop a tab or newline from it: a value with either, a path or
+    # query delimiter, or any other whitespace or control character is not an authority this site can be named by
+    if any(c in _NOT_IN_AUTHORITY or c.isspace() or not c.isprintable() for c in authority):
+        return ''
     if authority.count(':') > 1 and not authority.startswith('['):
         authority = f'[{authority}]'
     try:
@@ -118,6 +125,15 @@ def is_local_host(host: str | None) -> bool:
     clearnet. The canonical host is compared first, so the common case reads no rows."""
     bare = _bare_host(host or '')
     return bool(bare) and (bare == _bare_host(current_app.config.get('SERVER_NAME') or '') or is_registered_host(bare))
+
+
+def is_served_name(name: str | None) -> bool:
+    """Whether `name` is, exactly and ignoring case only, a name this site answers on: SERVER_NAME as configured
+    (its port included) or a registered domain. Stricter than `is_local_host`, which also takes a port or a trailing
+    dot: for an identifier a peer resolves, such as a WebFinger acct: domain, as before the storefronts."""
+    name = (name or '').lower()
+    return bool(name) and (name == (current_app.config.get('SERVER_NAME') or '').lower() or
+                           (name == normalise_host(name) and is_registered_host(name)))
 
 
 def _link_host(url) -> str:

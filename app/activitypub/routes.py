@@ -50,7 +50,7 @@ from app.discovery import SYNC_ACCEPTED, SYNC_REJECTED
 from app.discovery.instance_answers import instance_actor_answer, record_answer
 from app.relays import current_relay_id
 from app.relays import inbound as relay_inbound
-from app.storefront import is_local_host
+from app.storefront import is_served_name
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
@@ -177,7 +177,7 @@ def process_webfinger_request(resource):
         abort(400, description='Webfinger regex failed to match')
 
     # only answer for resources on this instance (any domain it answers on), not for a same-named actor elsewhere
-    if not is_local_host(domain):
+    if not is_served_name(domain):
         abort(404)
 
     # special case: instance actor

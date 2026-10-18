@@ -330,6 +330,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'canonicalise_text': 1,   # SERVER_NAME's host is left as written in text: only the other hosts move
         'check_default_domain': 2,
         'is_local_host': 1,
+        'is_served_name': 1,   # SERVER_NAME as configured is a name this site answers on: it names no URL
     },
     'app/user/routes.py': {
         'ban_profile': 1,
