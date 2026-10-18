@@ -760,7 +760,9 @@ def check_nodeinfo_hrefs(data: bytes) -> None:
 
 
 _IGNORED_BY_UTS46 = ('\u00ad', '\u034f', '\u180b', '\u200b', '\u2060', '\u3164', '\ufe00', '\ufe0f', '\U000e0100')
-_CSS_PREFIXES = ('', "'x' ", '"url(" ', '/* url( \' */ ', '\u0130' * 3, "url('a') ", "url(b'c) ", 'URL( d ) ')
+_CSS_PREFIXES = ('', "'x' ", '"url(" ', '/* url( \' */ ', '\u0130' * 3 + ' ', "url('a') ", "url(b'c) ", 'URL( d ) ',
+                 "xurl(a')' ) ", '\\"x ', 'u\\72l(z) ', "1url(a')' ) ", '@url(a) ')
+_CSS_URL_SPELLINGS = ('url(', 'u\\72l(', '\\75 rl(', '\\url(', 'UR\\4c(')
 
 
 def check_browser_host(data: bytes) -> None:
@@ -772,8 +774,10 @@ def check_browser_host(data: bytes) -> None:
     the sharp s), so a non-ASCII host is covered by the metamorphic checks instead: spelling an ASCII domain with a
     character UTS-46 deletes, or with its fullwidth forms, does not change the host. For a URL the browser refuses,
     browser_host may still name a host (hiding too much is safe) but never raises.
-    The S3 media scanners finish inside the target's budget on any input; _srcset_urls returns slices of it, and
-    _css_urls finds the URL of a url(...) behind any prefix of balanced quotes, comments and earlier tokens."""
+    The S3 media scanners finish inside the target's budget on any input and never raise; _srcset_urls returns slices
+    of it, _css_urls finds the URL of a url(...), its name spelled with or without escapes, behind any prefix of
+    balanced quotes, comments, earlier tokens and functions whose name ends in url, and browser_host reads each
+    token it returns."""
     url = _text(data[:MAX_INPUT])
     for candidate in (url, 'https:' + url, '//' + url):
         host = storefront.browser_host(candidate)
@@ -802,12 +806,16 @@ def check_browser_host(data: bytes) -> None:
 
     for token in storefront._css_urls(url):
         assert isinstance(token, str)
+        assert isinstance(storefront.browser_host(token), str)   # a token may hold any code point an escape names
+    for s3_host in ('cdn.example.test', '203.0.113.5'):
+        assert isinstance(storefront._names_host(url, s3_host), bool)
     for start, end in storefront._srcset_urls(url):
         assert 0 <= start < end <= len(url) and url[start] not in '\t\n\f\r ,'
     bare = ''.join(c for c in url if not c.isspace() and c not in ')\'"\\/*(')
     if bare:
         for prefix in _CSS_PREFIXES:
-            assert bare in storefront._css_urls(f'{prefix}url({bare})'), f'{prefix!r} hides url({bare!r})'
+            for spelling in _CSS_URL_SPELLINGS:
+                assert bare in storefront._css_urls(f'{prefix}{spelling}{bare})'), f'{prefix!r} hides {spelling}{bare!r})'
 
 
 # None is budgeted: no regex here has a backtracking shape. The redirect, request-host, webfinger and resolver
