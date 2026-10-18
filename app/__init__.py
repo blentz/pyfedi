@@ -30,7 +30,7 @@ from authlib.integrations.flask_client import OAuth
 from config import Config
 from app.constants import IMAGE_PIXEL_CAP
 from app.pinned_http import pinned_transport
-from app.cookies import StorefrontLoginManager, StorefrontSessionInterface
+from app.cookies import StorefrontLoginManager, StorefrontSessionInterface, secure_set_cookies
 import sentry_sdk
 from app.plugins import load_plugins
 
@@ -224,6 +224,7 @@ def create_app(config_class=Config):
         )
 
     app.session_interface = StorefrontSessionInterface()
+    app.after_request(secure_set_cookies)
     app.wsgi_app = StripCookieVaryForAnonymous(ProxyFix(app.wsgi_app, x_for=1))
 
     app.config["API_TITLE"] = "PieFed 1.7 Alpha API"
