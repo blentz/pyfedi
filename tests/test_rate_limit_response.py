@@ -1,8 +1,11 @@
 """A rate-limited request under /api/ is answered in the API's JSON error shape; web pages keep the HTML page."""
 import json
+import logging
+from unittest.mock import PropertyMock, patch
 
 from werkzeug.exceptions import TooManyRequests
 
+from app import limiter
 from app.errors.handlers import rate_limited_429
 
 
@@ -41,3 +44,21 @@ def test_api_429_message_comes_from_abort_data(app):
     with app.test_request_context('/api/alpha/user/login'):
         response, _ = rate_limited_429(error)
         assert response.get_json()['message'] == 'try again in 4 seconds.'
+
+
+def test_api_429_survives_a_limiter_storage_failure(app, caplog):
+    """The window read behind Retry-After is a storage round trip: if it fails, the client still gets its 429."""
+    class Broken:
+        breached = True
+
+        @property
+        def reset_at(self):
+            raise ConnectionError('redis is down')
+
+    with patch.object(type(limiter), 'current_limit', new_callable=PropertyMock, return_value=Broken()):
+        with caplog.at_level(logging.WARNING):
+            response = _limited(app, '/api/alpha/post/list')
+    assert response.status_code == 429
+    assert response.is_json
+    assert 'Retry-After' not in response.headers
+    assert 'Retry-After' in caplog.text

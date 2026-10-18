@@ -1,7 +1,7 @@
 import math
 import time
 
-from flask import jsonify, render_template, request
+from flask import current_app, jsonify, render_template, request
 
 from app import db, limiter
 from app.errors import bp
@@ -64,9 +64,13 @@ def rate_limited_429(error):
         retry_after = dict(error.get_headers()).get('Retry-After')
         # The limiter only adds its own headers when RATELIMIT_HEADERS_ENABLED is set; its breached limit's window
         # reset says how long a client has to back off either way
-        current = limiter.current_limit
-        if not retry_after and current is not None and current.breached:
-            retry_after = str(max(1, math.ceil(current.reset_at - time.time())))
+        if not retry_after:
+            try:
+                current = limiter.current_limit
+                if current is not None and current.breached:
+                    retry_after = str(max(1, math.ceil(current.reset_at - time.time())))
+            except Exception as e:   # reset_at reads the limiter's storage; a 429 is still the answer without it
+                current_app.logger.warning('No Retry-After on an API 429: %s', e)
         if retry_after:
             response.headers['Retry-After'] = retry_after
         return response, 429
