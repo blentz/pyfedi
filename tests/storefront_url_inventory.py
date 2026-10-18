@@ -324,6 +324,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     },
     'app/storefront.py': {
         '_authority': 1,   # SERVER_NAME verbatim is the canonical host's authority; no other host may borrow its port
+        '_local_hosts': 1,   # SERVER_NAME's host is one of ours, as in is_local_host: it names no URL
         '_synthesised_default': 1,
         'canonical_url': 1,
         'check_default_domain': 2,

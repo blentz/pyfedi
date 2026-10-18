@@ -74,7 +74,8 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     PostReply, PostReplyBookmark, AllowedInstances, InstanceBan, Tag, Emoji, UserExtraField, ArchivedPostReply, \
     RevokedToken, CommunityFavorite, UserFollower, CommunityFlairBlock, s3_key_from_url, Role, RolePermission, \
     ServerViewMember
-from app.storefront import is_local_host, is_local_link, storefront_host, storefront_url
+from app.storefront import canonicalise_links, is_local_host, is_local_link, storefront_host, storefront_html, \
+    storefront_url
 from collections import Counter
 from flask import has_request_context
 import app as app_pkg
@@ -1292,7 +1293,9 @@ def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
             if tag.name == 'table':
                 tag.attrs['class'] = 'table'
 
-    return str(soup)
+    # Links to any host of this site are stored on the canonical one (spec §3.5); test_env reads no domains, like
+    # fediverse_domains above
+    return str(soup) if test_env else canonicalise_links(str(soup))
 
 
 def escape_non_html_angle_brackets(text: str) -> str:
@@ -2985,10 +2988,11 @@ def ensure_directory_exists(directory):
 
 
 def feed_entry_body(post) -> str | None:
-    """What a feed entry says for a post: a content warning stands in for the body, which a reader cannot collapse."""
+    """What a feed entry says for a post: a content warning stands in for the body, which a reader cannot collapse.
+    Its links are on the current storefront."""
     if post.content_warning:
         return f'<p>{html_escape(post.content_warning)}</p>'
-    return post.body_html
+    return storefront_html(post.body_html)   # no response rewrite reaches a feed: its links follow the storefront here
 
 
 def mimetype_from_url(url):

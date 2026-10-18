@@ -104,20 +104,11 @@ def absolute_urls(html):
 
 def test_page_urls_stay_on_storefront(app, world):
     founder, author, community, post, image = world
-    # Task 6 rewrites at render time: each of these comes from a source the Task 4a inventory classified canonical
-    # (an ActivityPub id or url base) or from stored content (spec §3.5). Task 6's response rewrite moves them onto
-    # the storefront; it deletes this set and asserts the offenders are [] with nothing subtracted.
-    task_6_rewrites = {
-        community.public_url(),     # Task 6 rewrites at render time: Community.public_url() (canonical <link>, hrefs)
-        author.public_url(),        # Task 6 rewrites at render time: User.public_url() (canonical <link>, ap alternate)
-        post.ap_id,                 # Task 6 rewrites at render time: Post.ap_id, the post page's <link rel=canonical>
-        image.source_url,           # Task 6 rewrites at render time: File.source_url, stored (og:image, post.url)
-        f'https://{CANONICAL}',     # Task 6 rewrites at render time: Instance.domain, stored (new-instances sidebar)
-    }
+    # canonical sources (ActivityPub ids, stored content) are moved onto the storefront by the response rewrite
     pages = {'/': None, '/c/general': None, f'/post/{post.id}': None, '/u/author': None, '/auth/login': None,
              '/auth/register': None, '/user/settings': founder, '/search?q=x': None,
              f'/post/{post.id}/embed_code': None}
-    offenders, exempted = [], set()
+    offenders = []
     for path, user in pages.items():
         with patch.dict(app.config, {'WTF_CSRF_ENABLED': True}):   # the login and register forms render their token
             response = on_onion(app, user).get(path, base_url=f'https://{ONION}')  # https: the session cookie is Secure
@@ -132,12 +123,8 @@ def test_page_urls_stay_on_storefront(app, world):
                 if parts.scheme != 'http':   # the alias's configured scheme: an http onion serves no TLS
                     offenders.append((path, url))
             elif is_local_host(parts.hostname):   # any other host of ours is a different storefront
-                if url in task_6_rewrites:
-                    exempted.add(url)
-                else:
-                    offenders.append((path, url))
+                offenders.append((path, url))
     assert offenders == [], offenders
-    assert exempted == task_6_rewrites   # each exemption is still needed: the set stays minimal
 
 
 def test_page_urls_on_the_canonical_host_are_unchanged(app, world):
