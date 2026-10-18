@@ -140,3 +140,11 @@ def test_the_onion_refuses_a_checkout(app, configured, plan):
     assert response.status_code == 302
     assert response.headers['Location'].endswith('/donate')
     assert not stripe.checkout.Session.create.called and not client.called
+
+
+def test_the_onion_settings_nav_has_no_connect_oauth_link(app, configured):
+    assert '/user/connect_oauth' not in visit(app, configured, '/user/passkeys', onion=True).get_data(as_text=True)
+
+
+def test_the_clearnet_settings_nav_keeps_the_connect_oauth_link(app, configured):
+    assert '/user/connect_oauth' in visit(app, configured, '/user/passkeys', onion=False).get_data(as_text=True)
