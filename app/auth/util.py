@@ -467,15 +467,12 @@ def process_login(form: LoginForm):
     username = form.user_name.data.strip()
     password = form.password.data.strip()
 
-    # Onion only (spec 3.7): failed logins slow the account down. The counter is the account's own whichever of
-    # its name, email or profile URL was typed, and the typed name's when no account matches, so the delay answers
-    # the same either way and says nothing about which accounts exist.
-    if is_onion_request():
-        wait = onion_login_wait(onion_login_name(username))
-        if wait:
-            flash(_('Too many failed logins for this account. Please try again in %(seconds)d seconds.',
-                    seconds=wait), 'error')
-            return redirect(url_for("auth.login"))
+    # Onion only (spec 3.7): failed logins slow down whatever was typed (app.onion_guard.onion_login_identifier)
+    wait = onion_login_wait(username)
+    if wait:
+        flash(_('Too many failed logins for this account. Please try again in %(seconds)d seconds.',
+                seconds=wait), 'error')
+        return redirect(url_for("auth.login"))
 
     # attempt authentication with LDAP first (if enabled), then fall back to local
     user = None
@@ -500,9 +497,10 @@ def process_login(form: LoginForm):
             return redirect(url_for("auth.login"))
 
         if not validate_user_login(user, password, ip):
+            onion_login_failed(username)
             return redirect(url_for("auth.login"))
 
-    onion_login_succeeded(user.user_name)
+    onion_login_succeeded(username)
 
     if requires_email_verification(user):
         return redirect(url_for("auth.check_email"))
@@ -526,13 +524,6 @@ def find_user(user_name):
     return user
 
 
-def onion_login_name(user_name):
-    """The name an onion login's failure counter is kept under: the account's own name when `user_name` finds one
-    (by name, email or profile URL), else what was typed."""
-    user = find_user(user_name)
-    return user.user_name if user else user_name
-
-
 def validate_user_login(user, password, ip):
     if user.deleted:
         flash(invalid_login_message(), "error")  # D1131
@@ -541,7 +532,6 @@ def validate_user_login(user, password, ip):
     if not user.check_password(password):
         # D1131. One message whether or not the account has a password, and
         # whether or not it exists at all.
-        onion_login_failed(user.user_name)
         flash(invalid_login_message(), "error")
         return False
 

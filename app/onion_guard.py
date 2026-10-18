@@ -11,7 +11,7 @@ account on the alpha API (`app.onion.onion_rate_key`). This module adds the part
   their clients do not keep cookies, and are keyed by account instead.
 - **API keys.** For an onion alpha-API request, the bearer token's account is found before the view runs, so its
   `with limiter.limit(...)` blocks count per account.
-- **Login delay.** Failed onion logins slow that account down: after 5 failures each attempt waits
+- **Login delay.** Failed onion logins slow down the identifier that was typed: after 5 failures each attempt waits
   `min(2 ** (count - 5), 300)` seconds from the last one. The counter is onion-only, so an onion attacker cannot slow
   the account down on clearnet. It covers web and API login.
 """
@@ -150,8 +150,16 @@ def _now() -> float:
     return time.time()
 
 
+def onion_login_identifier(typed: str) -> str:
+    """What an onion login's failure counter is kept under: the identifier as typed (a name, an email or a profile
+    URL), stripped and lower-cased. Never the account it resolves to: then failing as `alice` would delay a login
+    typed as alice's email, which tells an attacker whose email that is, and an existing identifier would behave
+    differently from an unknown one. Web login, API login and verify_credentials all count through this."""
+    return typed.strip().lower()
+
+
 def _login_key(username: str) -> str:
-    return LOGIN_FAILURE_KEY.format(username.strip().lower())
+    return LOGIN_FAILURE_KEY.format(onion_login_identifier(username))
 
 
 def login_wait(count: int) -> int:
