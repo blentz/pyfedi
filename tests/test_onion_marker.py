@@ -314,7 +314,8 @@ def test_onion_signup_ip_null(app, site):
     with proxy_ip(app), patch.dict(app.config, {'COUNTRY_SOURCE_HEADER': 'CF-IPCountry'}), \
             patch('app.auth.forms.get_setting', return_value=False), \
             patch('app.auth.util.ip2location') as located, \
-            patch('app.auth.util.send_email_verification'), patch('app.auth.util.sync_user_with_ldap'):
+            patch('app.auth.util.send_email_verification'), patch('app.auth.util.sync_user_with_ldap'), \
+            patch('app.auth.routes.onion_proof_refused', return_value=False):   # task 10's proof: test_onion_pow.py
         client = app.test_client()
         # Session first (task 9): the cookieless request picks up the session cookie the POST then sends
         assert client.get('/auth/register', headers=ONION, environ_base={'REMOTE_ADDR': PROXY}).status_code == 303

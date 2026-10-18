@@ -17,6 +17,10 @@ class LoginForm(FlaskForm):
                              render_kw={'title': _l('Minimum length 8, maximum 128')})
     low_bandwidth_mode = BooleanField(_l('Low bandwidth mode'))
     timezone = HiddenField(render_kw={'id': 'timezone'})
+    # Onion only (app/onion_guard.py, prepare_onion_proof and onion_proof_refused): rendered and read only there
+    pow_token = HiddenField()
+    pow_nonce = HiddenField()
+    wait_token = HiddenField()
     submit = SubmitField(_l('Log In'))
 
 
@@ -35,6 +39,10 @@ class RegistrationForm(FlaskForm):
     terms = BooleanField(_l('I agree to the terms of service & privacy policy (see links in footer)'), validators=[DataRequired()])
     captcha = CaptchaField(_l('Enter captcha code below'), validators=[DataRequired()])
     timezone = HiddenField(render_kw={'id': 'timezone'})
+    # Onion only, as on LoginForm
+    pow_token = HiddenField()
+    pow_nonce = HiddenField()
+    wait_token = HiddenField()
 
     submit = SubmitField(_l('Register'))
 

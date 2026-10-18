@@ -45,6 +45,7 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, RolePermission, Domain, \
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, SiteDomain
 from app.storefront import clear_domain_cache, default_domain, default_storefront, storefront_url
+from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
 from app.translation import LibreTranslateAPI
@@ -433,6 +434,8 @@ def admin_misc():
         set_setting('enable_report_em_dash_replies', form.enable_report_em_dash_replies.data)
         set_setting('limit_one_em_report_per_user', form.limit_one_em_report_per_user.data)
         set_setting('read_posts_cutoff', int(form.read_posts_cutoff.data))
+        if form.onion_pow_difficulty.data is not None:
+            set_setting(POW_DIFFICULTY_SETTING, form.onion_pow_difficulty.data)
         flash(_('Settings saved.'))
     elif request.method == 'GET':
         form.enable_downvotes.data = site.enable_downvotes
@@ -478,6 +481,7 @@ def admin_misc():
         # setting on the next save -- arriving through a mismatched DEFAULT rather
         # than a missing line.
         form.captcha_enabled.data = get_setting('captcha_enabled', True)
+        form.onion_pow_difficulty.data = pow_difficulty()
         form.choose_topics.data = get_setting('choose_topics', True)
         form.filter_selection.data = get_setting('filter_selection', True)
         form.private_instance.data = site.private_instance

@@ -15,6 +15,7 @@ from app import db
 from app.constants import DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
     DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE
 from app.models import Community, User, CmsPage, Instance, SiteDomain
+from app.onion_guard import MAX_POW_DIFFICULTY
 from app.utils import REDIRECT_POLICY_ALL_REFERRERS, REDIRECT_POLICY_FEDERATED_SERVERS, \
     REDIRECT_POLICY_SAME_ORIGIN, REDIRECT_POLICY_TRUSTED_SERVERS, validate_user_name_charset
 
@@ -103,6 +104,10 @@ class SiteMiscForm(FlaskForm):
     show_inoculation_block = BooleanField(_l('Show Rational Discourse Toolkit in sidebar'))
     allow_default_user_add_remote_community = BooleanField(_l('Allow non-admins to add remote communities'))
     honeypot = BooleanField(_l('Honeypot to block bad crawlers'))
+    # Onion login and registration (app/onion_guard.py): leading zero bits of the proof-of-work. 0 asks no work, though
+    # a challenge or the no-JavaScript wait is still required. Optional: a save that leaves it out keeps the setting.
+    onion_pow_difficulty = IntegerField(_l('Onion login proof-of-work difficulty (bits; each one doubles the work)'),
+                                        validators=[Optional(), NumberRange(min=0, max=MAX_POW_DIFFICULTY)])
 
     submit = SubmitField(_l('Save'))
 

@@ -23,7 +23,7 @@ from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role
 from app.onion import audit_field, is_onion_request
-from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message
+from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message, prepare_onion_proof
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, \
     finalize_user_setup, get_request, get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
@@ -446,6 +446,7 @@ def render_registration_form(form):
         del form.terms
 
     return render_template("auth/register.html", title=_("Register"), form=form, site=g.site,
+                           onion_proof=prepare_onion_proof(form, 'register'),
                            instance_chooser_enabled=get_setting('enable_instance_chooser', False),
                            #google_oauth=current_app.config["GOOGLE_OAUTH_CLIENT_ID"],
                            mastodon_oauth=current_app.config["MASTODON_OAUTH_CLIENT_ID"],
@@ -677,6 +678,7 @@ def configure_bandwidth_cookies(response, low_bandwidth_mode):
 
 def render_login_form(form):
     return render_template("auth/login.html", title=_("Login"), form=form,
+                           onion_proof=prepare_onion_proof(form, 'login'),
                            google_oauth=current_app.config["GOOGLE_OAUTH_CLIENT_ID"],
                            mastodon_oauth=current_app.config["MASTODON_OAUTH_CLIENT_ID"],
                            discord_oauth=current_app.config["DISCORD_OAUTH_CLIENT_ID"])
