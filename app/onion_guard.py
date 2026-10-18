@@ -24,7 +24,7 @@ from typing import NamedTuple
 from urllib.parse import quote, quote_from_bytes
 
 from flask import current_app, flash, make_response, redirect, request
-from flask_babel import _
+from flask_babel import _, ngettext
 from markupsafe import escape
 from redis.exceptions import WatchError
 
@@ -232,7 +232,7 @@ def reserve_onion_login_attempt(typed: str, account_id: int | None = None) -> On
     Counting before the password is checked is what stops parallel attempts all passing the check before any of them
     has failed: the read and the increment are one optimistic transaction (WATCH/MULTI, which fakeredis supports; it
     has no Lua), and one that another attempt changed under it is decided again on the new state. Past
-    RESERVE_RETRIES such collisions the caller is told to wait a second."""
+    RESERVE_RETRIES such collisions the caller is told to wait 2 s, the shortest wait a backoff can show."""
     typed_key = _login_key(typed)
     keys = [typed_key] if account_id is None else [typed_key, _account_key(account_id)]
     with app_pkg.redis_client.pipeline() as pipe:
@@ -252,7 +252,8 @@ def reserve_onion_login_attempt(typed: str, account_id: int | None = None) -> On
                 return OnionLoginGate(hidden=hidden)
             except WatchError:
                 continue
-    return OnionLoginGate(wait=1)
+    # Contention that will not settle: a refusal with nothing counted, showing the first wait a real backoff shows
+    return OnionLoginGate(wait=login_wait(FREE_LOGIN_FAILURES + 1))
 
 
 def record_onion_login_failure(username: str) -> None:
@@ -274,6 +275,12 @@ def clear_onion_login_failures(username: str, account_id: int | None = None) -> 
     """Forget the failures typed as `username`, and the account's own when `account_id` is given."""
     keys = [_login_key(username)] + ([] if account_id is None else [_account_key(account_id)])
     app_pkg.redis_client.delete(*keys)
+
+
+def onion_wait_message(seconds: int) -> str:
+    """What a typed identifier's visible wait says, on the web (a flash) and the API (the 429's message)."""
+    return ngettext('Too many failed logins for this account. Please try again in %(num)d second.',
+                    'Too many failed logins for this account. Please try again in %(num)d seconds.', seconds)
 
 
 def onion_login_gate(typed: str, user=None) -> OnionLoginGate:

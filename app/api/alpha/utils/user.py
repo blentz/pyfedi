@@ -13,7 +13,7 @@ from app.api.alpha.utils.post import get_post_list
 from app.api.alpha.utils.reply import get_reply_list
 from app.api.alpha.views import user_view, reply_view, post_view, community_view
 from app.constants import *
-from app.onion_guard import onion_login_gate, onion_login_succeeded
+from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message
 from app.models import Conversation, ChatMessage, Notification, PostReply, User, Post, Community, File, UserFlair, \
     user_file, UserExtraField, UserNote, RevokedToken, utcnow, _as_url
 # The module, not the names: app.shared.user reaches this file through a blueprint
@@ -941,7 +941,7 @@ def post_user_verify_credentials(data):
     # Onion only (spec 3.7): a password check like /user/login, counted on the same counters (OnionLoginGate)
     gate = onion_login_gate(username, user)
     if gate.wait:
-        api_abort(429, message=f'Too many failed logins for this account. Try again in {gate.wait} seconds.')
+        api_abort(429, message=str(onion_wait_message(gate.wait)))
 
     # An account in hidden backoff is verified all the same and refused: a wrong password's answer and cost
     if user is None or not user.check_password(password, refuse=gate.hidden) or \

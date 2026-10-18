@@ -538,6 +538,18 @@ def test_a_concurrent_change_is_retried(app, redis_double, clock, monkeypatch):
     assert redis_double.hget('onion_login_fail:typed:alice', 'count') == '7'
 
 
+def test_a_one_second_wait_is_singular(app, alice, redis_double, clock, ldap_off):
+    client = app.test_client()
+    a_session(client)
+    for _ in range(6):
+        web_login(client, 'alice', 'wrong password')
+    clock.t += 1.5
+    web_login(client, 'alice', PASSWORD)
+    assert 'Please try again in 1 second.' in flashes(client)
+    assert onion_guard.onion_wait_message(1).endswith('in 1 second.')
+    assert onion_guard.onion_wait_message(300).endswith('in 300 seconds.')
+
+
 def test_endless_contention_is_a_short_wait(app, redis_double, clock, monkeypatch):
     for _ in range(6):
         record_onion_login_failure('alice')
@@ -547,7 +559,7 @@ def test_endless_contention_is_a_short_wait(app, redis_double, clock, monkeypatc
         redis_double.hset('onion_login_fail:typed:alice', 'other', clock.t)
         return clock.t
     monkeypatch.setattr('app.onion_guard._now', always_racing)
-    assert reserve_onion_login_attempt('alice').wait == 1
+    assert reserve_onion_login_attempt('alice').wait == 2   # a wait a real backoff can show, not a tell
     assert redis_double.hget('onion_login_fail:typed:alice', 'count') == '6'
 
 
