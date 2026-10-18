@@ -372,8 +372,9 @@ def storefront_html(html: str | None) -> str | None:
 def rewrite_response_for_storefront(response: Response) -> Response:
     """`after_request`: a response on a storefront other than the default has its registered-host links moved onto
     that storefront (spec §3.5), once per response instead of at each `|safe` in the templates. A redirect header
-    naming another host of ours moves too; a relative one is already on the storefront. Streamed and passthrough
-    bodies (SSE, files) are never read. set_data recomputes Content-Length; status and other headers are kept."""
+    naming another host of ours moves too; a relative one is already on the storefront. Streamed, passthrough
+    (SSE, files) and encoded (Content-Encoding) bodies are never read. set_data recomputes Content-Length; status
+    and other headers are kept."""
     storefront = current_storefront()
     if _on_default_storefront(storefront):
         return response
@@ -381,7 +382,8 @@ def rewrite_response_for_storefront(response: Response) -> Response:
     for header in _REDIRECT_HEADERS:
         if header in response.headers:
             response.headers[header] = _rebase(response.headers[header], base, hosts)
-    if response.mimetype == 'text/html' and not response.direct_passthrough and not response.is_streamed:
+    if (response.mimetype == 'text/html' and not response.direct_passthrough and not response.is_streamed
+            and 'Content-Encoding' not in response.headers):   # an encoded body is bytes, never decoded here
         body = response.get_data(as_text=True)
         rewritten = rewrite_links(body, storefront)
         if rewritten is not body:

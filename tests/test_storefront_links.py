@@ -5,6 +5,7 @@ On save, `allowlist_html` (which `markdown_to_html` and federated HTML both pass
 a storefront other than the default has its registered-host links moved onto that storefront, once, by an
 `after_request` hook, and RSS item bodies get the same rewrite. Attributes only, never text; foreign hosts never.
 """
+import gzip
 import re
 from unittest.mock import patch
 from urllib.parse import quote
@@ -253,6 +254,20 @@ def test_rewrite_ignores_other_content_types(app, onion):
     finally:
         context.pop()
     assert response.get_data(as_text=True) == body
+
+
+def test_rewrite_never_reads_an_encoded_body(app, onion):
+    """An encoded body (gzip from an upstream or a view) is bytes, not markup: it is passed on as it is, never
+    decoded or rewritten. Its redirect header is still moved."""
+    body = gzip.compress(f'<a href="https://{CANONICAL}/x">x</a>'.encode())
+    context = in_onion_request(app)
+    try:
+        response = rewrite_response_for_storefront(Response(body, mimetype='text/html', headers={
+            'Content-Encoding': 'gzip', 'Location': f'https://{CANONICAL}/y'}))
+    finally:
+        context.pop()
+    assert response.get_data() == body
+    assert response.headers['Location'] == f'http://{ONION}/y'
 
 
 def test_clearnet_response_untouched(app, world):
