@@ -17,7 +17,7 @@ from flask_wtf.csrf import generate_csrf
 
 from app import cache, cli, db
 from app.activitypub.util import served_by_us
-from app.constants import NOTIF_POST, POST_TYPE_IMAGE, SRC_WEB
+from app.constants import NOTIF_POST, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, SRC_WEB
 from app.email import send_topic_suggestion
 from app.models import File, Notification, Site, SiteDomain, Tag
 from app.request_hooks import OnUse
@@ -381,3 +381,25 @@ def test_community_move_request_from_the_onion_links_to_the_default(app, world):
                                  {'old_community_locked': 'y', 'post_link': 'https://remote.example/post/1'})
     assert response.status_code == 200
     _assert_on_default([send.call_args.args[3], send.call_args.args[4]])
+
+
+# --- page snippets that name the storefront's origin (fix round 1, I2) ---------------------------------------------
+
+def test_embed_code_names_the_storefront_origin(app, world):
+    post = world[3]
+    response = on_onion(app).get(f'/post/{post.id}/embed_code', base_url=f'https://{ONION}')
+    text = response.get_data(as_text=True)
+    assert f'<script src="http://{ONION}/static/js/embed.js"' in text
+    assert f'https://{ONION}' not in text
+
+
+def test_share_bookmarklet_names_the_storefront_origin(app, world):
+    author, post = world[1], world[3]
+    post.type, post.url, post.image_id = POST_TYPE_ARTICLE, None, None   # an image post's edit page HEADs its url
+    db.session.commit()
+    with patch.dict(app.config, {'WTF_CSRF_ENABLED': True}):   # the edit form renders its token
+        response = on_onion(app, author).get(f'/post/{post.id}/edit', base_url=f'https://{ONION}')
+    assert response.status_code == 200
+    text = response.get_data(as_text=True)
+    assert f"window.open('http://{ONION}/share?url=" in text
+    assert f'https://{ONION}' not in text
