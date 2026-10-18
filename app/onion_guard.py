@@ -65,7 +65,11 @@ _COOKIE_CHECK = COOKIE_CHECK.encode()
 PATH_SAFE = "/:@!$&'()*+,;=-._~"            # not '%' (the path is decoded) and not '\\' (a browser reads it as '/')
 QUERY_SAFE = PATH_SAFE + '%?'               # the query string is still percent-encoded as it arrived
 
-LOGIN_FAILURE_KEY = 'onion_login_fail:{}'
+# Two namespaces, so a typed name and the account it names never share a counter. Each typed identifier's counter
+# (its wait shown) is filled only by attempts typed that way; the account's (enforced silently) by every attempt
+# naming it. Shared, attempts typed as an email would have shown up as a wait on the account's name, linking the two.
+TYPED_FAILURE_KEY = 'onion_login_fail:typed:{}'
+ACCOUNT_FAILURE_KEY = 'onion_login_fail:acct:{}'
 FREE_LOGIN_FAILURES = 5
 MAX_LOGIN_WAIT = 300
 LOGIN_FAILURE_TTL = 3600
@@ -160,9 +164,8 @@ def _now() -> float:
 
 
 def onion_login_identifier(typed: str) -> str:
-    """The one normalisation of an onion login counter's name: stripped and lower-cased. Applied both to what was
-    typed (a name or an email) and to the account's user_name (`reserve_onion_login_attempt`), for web login, API login and
-    verify_credentials alike."""
+    """The one normalisation of a typed onion login identifier (a name or an email): stripped and lower-cased. Web
+    login, API login and verify_credentials all count through it."""
     return typed.strip().lower()
 
 
@@ -180,7 +183,11 @@ class OnionLoginGate(NamedTuple):
 
 
 def _login_key(username: str) -> str:
-    return LOGIN_FAILURE_KEY.format(onion_login_identifier(username))
+    return TYPED_FAILURE_KEY.format(onion_login_identifier(username))
+
+
+def _account_key(account_id: int) -> str:
+    return ACCOUNT_FAILURE_KEY.format(int(account_id))
 
 
 def login_wait(count: int) -> int:
@@ -201,15 +208,24 @@ def _queue_failure(pipe, key: str, now: float) -> None:
     pipe.expire(key, LOGIN_FAILURE_TTL)
 
 
-def login_delay_remaining(username: str) -> int:
-    """Seconds an onion login for `username` must still wait; 0 when it may go ahead. Reads only."""
-    count, last = app_pkg.redis_client.hmget(_login_key(username), 'count', 'last')
+def _key_remaining(key: str) -> int:
+    count, last = app_pkg.redis_client.hmget(key, 'count', 'last')
     return _remaining(count, last, _now())
 
 
-def reserve_onion_login_attempt(typed: str, account: str | None = None) -> OnionLoginGate:
-    """Check and reserve one onion login attempt, typed as `typed` and naming the account `account` (its user_name,
-    None when it names none), atomically.
+def login_delay_remaining(username: str) -> int:
+    """Seconds an onion login typed as `username` must still wait (its visible wait); 0 if none. Reads only."""
+    return _key_remaining(_login_key(username))
+
+
+def account_delay_remaining(account_id: int) -> int:
+    """Seconds the account's own (hidden) counter still holds its onion logins back; 0 if none. Reads only."""
+    return _key_remaining(_account_key(account_id))
+
+
+def reserve_onion_login_attempt(typed: str, account_id: int | None = None) -> OnionLoginGate:
+    """Check and reserve one onion login attempt, typed as `typed` and naming the account `account_id` (None when it
+    names none), atomically.
 
     - The typed identifier's counter in backoff: a visible wait, and nothing counted.
     - Otherwise the attempt is counted at once, on both counters, as a failure. A failure then needs nothing more
@@ -223,8 +239,7 @@ def reserve_onion_login_attempt(typed: str, account: str | None = None) -> Onion
     has no Lua), and one that another attempt changed under it is decided again on the new state. Past
     RESERVE_RETRIES such collisions the caller is told to wait a second."""
     typed_key = _login_key(typed)
-    account_key = _login_key(account) if account is not None else typed_key
-    keys = sorted({typed_key, account_key})
+    keys = [typed_key] if account_id is None else [typed_key, _account_key(account_id)]
     with app_pkg.redis_client.pipeline() as pipe:
         for _ in range(RESERVE_RETRIES):
             try:
@@ -234,7 +249,7 @@ def reserve_onion_login_attempt(typed: str, account: str | None = None) -> Onion
                 if wait:
                     pipe.unwatch()
                     return OnionLoginGate(wait=wait)
-                hidden = account_key != typed_key and _remaining(*pipe.hmget(account_key, 'count', 'last'), now) > 0
+                hidden = account_id is not None and _remaining(*pipe.hmget(keys[1], 'count', 'last'), now) > 0
                 pipe.multi()
                 for key in keys:
                     _queue_failure(pipe, key, now)
@@ -253,8 +268,17 @@ def record_onion_login_failure(username: str) -> None:
     pipe.execute()
 
 
-def clear_onion_login_failures(*usernames: str) -> None:
-    app_pkg.redis_client.delete(*{_login_key(name) for name in usernames})
+def record_onion_account_failure(account_id: int) -> None:
+    """One more failed onion login naming the account `account_id`, as `record_onion_login_failure` counts one typed."""
+    pipe = app_pkg.redis_client.pipeline()
+    _queue_failure(pipe, _account_key(account_id), _now())
+    pipe.execute()
+
+
+def clear_onion_login_failures(username: str, account_id: int | None = None) -> None:
+    """Forget the failures typed as `username`, and the account's own when `account_id` is given."""
+    keys = [_login_key(username)] + ([] if account_id is None else [_account_key(account_id)])
+    app_pkg.redis_client.delete(*keys)
 
 
 def onion_login_gate(typed: str, user=None) -> OnionLoginGate:
@@ -263,7 +287,7 @@ def onion_login_gate(typed: str, user=None) -> OnionLoginGate:
     failed, until `onion_login_succeeded` clears it."""
     if not is_onion_request():
         return OnionLoginGate()
-    return reserve_onion_login_attempt(typed, user.user_name if user is not None else None)
+    return reserve_onion_login_attempt(typed, user.id if user is not None else None)
 
 
 def spend_password_check(user, password) -> None:
@@ -276,4 +300,4 @@ def spend_password_check(user, password) -> None:
 
 def onion_login_succeeded(typed: str, user) -> None:
     if is_onion_request():
-        clear_onion_login_failures(typed, user.user_name)
+        clear_onion_login_failures(typed, user.id)
