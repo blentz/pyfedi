@@ -17,6 +17,7 @@ from bs4.dammit import EntitySubstitution
 from bs4.formatter import HTMLFormatter
 from flask import Response, current_app, g, has_app_context, has_request_context, request
 from flask.globals import request_ctx
+from flask_babel import _
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import cache, db
@@ -387,13 +388,89 @@ def _on_default_storefront(storefront) -> bool:
     return storefront.is_default or storefront.domain == default_domain().domain
 
 
+# Media on the S3 public host is not loaded on an onion storefront (owner ruling 2026-10-18): the rewrite replaces it
+# with a placeholder, so the onion never makes a request to that clearnet host.
+_MEDIA_TAGS = frozenset({'img', 'video', 'audio', 'picture', 'iframe', 'embed', 'object'})
+_MEDIA_PARTS = frozenset({'source', 'track'})   # part of the <video>, <audio> or <picture> around them
+_MEDIA_CONTAINERS = frozenset({'video', 'audio', 'picture'})
+_REMOVED_TAGS = frozenset({'link', 'meta', 'script'})   # a preload, a preview image, a script: nothing to show
+_CSS_URL = re.compile(r'url\(\s*([^)]*?)\s*\)', re.IGNORECASE)
+
+
+def _s3_host() -> str:
+    """The bare host of `S3_PUBLIC_URL` (`host`, `host/prefix`, `https://host/`), '' when S3 is not configured or the
+    value names no host. Read as `s3_key_from_url` reads it, then normalised as every other host here is."""
+    public = (current_app.config.get('S3_PUBLIC_URL') or '').strip()
+    try:
+        return _bare_host(urlsplit(public if '//' in public else f'//{public}').hostname or '') if public else ''
+    except ValueError:   # an unbalanced IPv6 bracket
+        return ''
+
+
+def _on_host(url: str, host: str) -> bool:
+    """Whether `url` loads from `host`. A browser reads `\\` as `/`, so here it does too: a URL this check cannot
+    name a host for must still not slip past it. A value with no scheme (`<link rel="preconnect" href="cdn.test">`,
+    which base.html writes from `S3_PUBLIC_URL`) is read as an authority as well."""
+    url = url.strip().replace('\\', '/')
+    return host in (_link_host(url), _link_host(f'//{url}'))
+
+
+def _points_at(name: str, value: str, host: str) -> bool:
+    if name == 'srcset':
+        return any(_on_host(m[3], host) for m in _SRCSET_URL.finditer(value))
+    if name == 'style':
+        return any(_on_host(url.strip('\'"'), host) for url in _CSS_URL.findall(value))
+    return _on_host(value, host)
+
+
+def hide_s3_media(html: str, storefront) -> str:
+    """`html` with whatever loads from the S3 public host replaced, on an onion storefront; `html` itself otherwise.
+    Hosts are compared (`_link_host` against the host of `S3_PUBLIC_URL`), never searched for as text. An `img`,
+    `video`, `audio`, `picture`, `iframe`, `embed` or `object` with any attribute (`src`, `srcset`, `poster`, `data-*`)
+    on that host becomes a placeholder, a `source` or `track` taking its `video`, `audio` or `picture` with it. A `link`,
+    `meta` or `script` is removed, a link (`a`) loses its anchor and keeps its text, and any other tag loses the
+    attribute. A host that is one of ours is left to the link rewrite, which moves it onto the onion. The parse is
+    skipped when the host does not appear in the text at all, and nothing is read when S3 is not configured."""
+    if not storefront.is_onion:
+        return html
+    host = _s3_host()
+    if not host or host not in html.lower() or host in _local_hosts():
+        return html
+    soup = BeautifulSoup(html, 'html.parser')
+    changed = False
+
+    def placeholder():
+        tag = soup.new_tag('span', attrs={'class': 'onion-media-hidden'})
+        tag.string = _('Media hidden on the onion site')
+        return tag
+
+    for tag in soup.find_all(True):
+        if tag.decomposed:   # inside something already replaced
+            continue
+        hits = [name for name, value in tag.attrs.items() if isinstance(value, str) and _points_at(name, value, host)]
+        if not hits:
+            continue
+        changed = True
+        if tag.name in _REMOVED_TAGS:
+            tag.decompose()
+        elif tag.name == 'a':
+            tag.unwrap()
+        elif tag.name in _MEDIA_TAGS | _MEDIA_PARTS:
+            media = tag.parent if tag.name in _MEDIA_PARTS and tag.parent.name in _MEDIA_CONTAINERS else tag
+            media.replace_with(placeholder()).decompose()
+        else:
+            for name in hits:
+                del tag.attrs[name]
+    return soup.decode(formatter=_FORMATTER) if changed else html
+
+
 def storefront_html(html: str | None) -> str | None:
     """Stored HTML as the current storefront shows it: `rewrite_links` off the default storefront. For HTML that
     leaves in something other than a text/html response (an RSS item body)."""
     storefront = current_storefront()
     if html is None or _on_default_storefront(storefront):
         return html
-    return rewrite_links(html, storefront)
+    return rewrite_links(hide_s3_media(html, storefront), storefront)
 
 
 def rewrite_response_for_storefront(response: Response) -> Response:
@@ -412,7 +489,7 @@ def rewrite_response_for_storefront(response: Response) -> Response:
     if (response.mimetype == 'text/html' and not response.direct_passthrough and not response.is_streamed
             and 'Content-Encoding' not in response.headers):   # an encoded body is bytes, never decoded here
         body = response.get_data(as_text=True)
-        rewritten = rewrite_links(body, storefront)
+        rewritten = rewrite_links(hide_s3_media(body, storefront), storefront)
         if rewritten is not body:
             response.set_data(rewritten)
     return response
