@@ -25,7 +25,7 @@ import pytest
 from flask import current_app, g
 
 from app import db
-from app.models import CronJobLog, File, Instance, Post, Site, Tag, utcnow
+from app.models import CronJobLog, Emoji, File, Instance, Post, Site, Tag, utcnow
 from app.utils import (allowed_instance_domains, allowlist_html, archive_post, instance_banned,
                        instance_redirect_allowed, log_cron_task_to_db)
 from tests.factories import (make_community, make_community_member, make_instance, make_post,
@@ -403,6 +403,29 @@ class TestTheEmojiReplacement:
         assert 'https://cdn.example/parrot.gif' in html
         assert ':PartyParrot:' not in html
         assert 'width="30"' in html
+
+    def test_a_mixed_case_stored_token_is_replaced(self, app, db_session):
+        """Remote emoji are stored as their instance spells them (':Blobhaj_Knife:'). The pattern matched them
+        case-insensitively and then looked up the lowercased match, so a remote actor's bio carrying one raised
+        KeyError(':blobhaj_knife:') and the actor was never created (prod, 2026-10-19)."""
+        db.session.add(Emoji(token=':Blobhaj_Knife:', url='https://cdn.example/knife.png'))
+        db.session.commit()
+
+        html = allowlist_html('<p>stab :Blobhaj_Knife: and :blobhaj_knife:</p>', test_env=False)
+
+        assert html.count('https://cdn.example/knife.png') == 2
+        assert 'blobhaj_knife' not in html.lower()
+
+    def test_an_emoji_row_without_a_token_is_skipped(self, app, db_session):
+        """emoji.token is nullable, and re.escape(None) would raise TypeError on every rendered body."""
+        db.session.add_all([Emoji(token=None, url='https://cdn.example/none.png'),
+                            Emoji(token=':parrot:', url='https://cdn.example/parrot.gif')])
+        db.session.commit()
+
+        html = allowlist_html('<p>:parrot:</p>', test_env=False)
+
+        assert 'https://cdn.example/parrot.gif' in html
+        assert 'none.png' not in html
 
     def test_no_configured_emoji_leaves_the_text_alone(self, env):
         """`if emoji_replacements:`. The pattern is `"|".join(...)` over the keys, and an empty

@@ -2141,7 +2141,9 @@ def html_to_text(html) -> str:
 
 @cache.memoize(timeout=5000)
 def get_emoji_replacements():
-    return {e.token: e.url for e in db.session.query(Emoji)}
+    # Keyed lowercase: allowlist_html matches tokens case-insensitively and looks the match up lowercased, and
+    # remote emoji keep their instance's spelling (':Blobhaj_Knife:').
+    return {e.token.lower(): e.url for e in db.session.query(Emoji) if e.token}
 
 
 def mastodon_extra_field_link(extra_field: str) -> str:
