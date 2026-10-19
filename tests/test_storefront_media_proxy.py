@@ -170,3 +170,14 @@ def test_a_failure_hides_the_element(app, onion):
             patch.object(current_app.logger, 'exception') as logged:
         assert on_onion(f'<p>a</p><img src="{IMG}"/>') == f'<p>a</p>{HIDDEN}'
     logged.assert_called_once()
+
+
+@pytest.mark.parametrize('url', ['//{.[/.', 'https://[/a.png', 'http://[::1/a.png'])
+def test_fetchable_refuses_a_url_urlsplit_rejects_without_raising(app, url):
+    assert storefront._fetchable(url) is None
+
+
+def test_a_style_url_urlsplit_rejects_does_not_raise(app):
+    # found by the onion_media_style campaign
+    style = b'backgtpround:\\75rl(https://\x7f\xd1]\x9ast/a.png)'.decode(errors='replace')
+    assert storefront._proxied_style(style) in (None, style)
