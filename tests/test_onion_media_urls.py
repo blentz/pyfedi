@@ -1,7 +1,7 @@
 """Signed onion media proxy URLs and their cache file names (onion media proxy spec 2026-10-19, section 3.2)."""
 import pytest
 
-from app.onion_media import EXTENSIONS, cache_name, cached_file, proxy_url, remote_for
+from app.onion_media import EXTENSIONS, MEDIA_SUFFIXES, cache_name, cached_file, kind, proxy_url, remote_for
 
 URLS = ['https://lemmy.zip/pictrs/image/a.webp', 'https://example.org/p/é中.png?w=1&x=ü']
 
@@ -54,3 +54,11 @@ def test_cached_file_finds_any_allowed_extension(app, tmp_path, monkeypatch):
     assert cached_file(URLS[0]) == path
     assert cached_file(URLS[1]) is None
     assert set(EXTENSIONS) >= {'image/jpeg', 'audio/flac'}
+
+
+def test_every_stored_extension_is_a_media_suffix_of_its_kind():
+    """A URL that names a file the proxy would store is proxied and guessed as the same kind."""
+    for content_type, extension in EXTENSIONS.items():
+        assert MEDIA_SUFFIXES[extension] == kind(content_type)
+    assert EXTENSIONS['video/quicktime'] == '.mov' and EXTENSIONS['audio/aac'] == '.aac'
+    assert {'.jpeg', '.jpe', '.jfif', '.m4v', '.oga', '.opus'} <= set(MEDIA_SUFFIXES)

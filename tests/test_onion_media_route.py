@@ -95,6 +95,12 @@ def test_url_kind(app):
     assert url_kind('https://a.example/v/clip.mp4') == 'av'
     assert url_kind('https://a.example/a/song.FLAC#t=1') == 'av'
     assert url_kind('https://a.example/a/track.weba') == 'av'
+    assert url_kind('https://a.example/x/photo.jpeg') == 'image'       # Mastodon's spelling
+    assert url_kind('https://a.example/x/photo.JFIF') == 'image'
+    assert url_kind('https://a.example/v/clip.mov') == 'av'
+    assert url_kind('https://a.example/v/clip.m4v') == 'av'
+    assert url_kind('https://a.example/a/voice.opus') == 'av'
+    assert url_kind('https://a.example/a/song.aac') == 'av'
     assert url_kind('https://a.example/media/12345') == 'unknown'
     assert url_kind('https://a.example/page.html') == 'unknown'
     assert url_kind('https://a.example/clip.mp4.html') == 'unknown'

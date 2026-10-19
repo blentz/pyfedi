@@ -49,7 +49,9 @@ def test_srcset_candidates_are_proxied_with_descriptors(app, onion):
 
 
 @pytest.mark.parametrize('href', [IMG, 'https://lemmy.world/x/a.JPG', 'https://lemmy.world/pictrs/image/abc?f=webp',
-                                  'https://files.test/v.mp4?x=1', 'https://files.test/s.FLAC'])
+                                  'https://files.test/v.mp4?x=1', 'https://files.test/s.FLAC',
+                                  'https://media.mastodon.test/media_attachments/files/1/original/a.jpeg',
+                                  'https://files.test/clip.MOV', 'https://files.test/voice.opus'])
 def test_media_link_is_proxied_page_link_is_not(app, onion, href):
     out = on_onion(f'<a href="{href}" rel="nofollow">x</a><a href="https://lemmy.world/post/1">p</a>')
     assert out == f'<a href="{proxy_url(href)}" rel="nofollow">x</a><a href="https://lemmy.world/post/1">p</a>'

@@ -25,7 +25,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app import cache, db
 from app.onion import onion_proxy_address
-from app.onion_media import EXTENSIONS, proxy_url
+from app.onion_media import MEDIA_SUFFIXES, proxy_url
 # The module, not the name: app.models imports this module for File's media URLs, so whichever of the two is
 # imported first finds the other mid-import (import cycle: models)
 import app.models as models
@@ -743,7 +743,7 @@ def _hide_s3_or_the_tag(soup, tag, host: str) -> bool:
 # rewrite's one parse points it at the signed proxy, so the visitor's browser never asks a remote host for it.
 _PROXIED_TAGS = frozenset({'img', 'video', 'audio', 'source', 'track', 'picture'})
 _EMBED_TAGS = frozenset({'iframe', 'embed', 'object'})
-_MEDIA_EXTENSIONS = tuple(sorted(set(EXTENSIONS.values())))
+_MEDIA_EXTENSIONS = tuple(MEDIA_SUFFIXES)
 
 
 def _is_remote(url) -> bool:
@@ -831,7 +831,7 @@ def _proxy_remote(soup, tag) -> bool:
     """Point what `tag` loads from a remote host at the media proxy; whether anything changed. On an `img`, `video`,
     `audio`, `source`, `track` or `picture`: `src`, `poster`, `data-*`, each `srcset` candidate and `style` url(...).
     On any other element: `style` url(...) (a community, feed or profile banner), and on an `a` also `href`, only
-    when it names a media file (an extension of EXTENSIONS, or a `/pictrs/image/` path). A remote `iframe`, `embed`
+    when it names a media file (an extension of MEDIA_SUFFIXES, or a `/pictrs/image/` path). A remote `iframe`, `embed`
     or `object` becomes the placeholder and a plain link to it, which loads nothing until the visitor follows it.
     What cannot be proxied as written is hidden: a media element becomes the placeholder, an `a` keeps its text, and
     any other element loses the `style`."""
