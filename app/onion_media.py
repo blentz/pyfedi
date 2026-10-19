@@ -32,7 +32,13 @@ import app as app_pkg
 EXTENSIONS = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp',
               'image/avif': '.avif', 'image/apng': '.apng', 'video/mp4': '.mp4', 'video/webm': '.webm',
               'video/ogg': '.ogv', 'audio/mpeg': '.mp3', 'audio/ogg': '.ogg', 'audio/mp4': '.m4a',
-              'audio/wav': '.wav', 'audio/webm': '.weba', 'audio/flac': '.flac'}
+              'audio/wav': '.wav', 'audio/webm': '.weba', 'audio/flac': '.flac', 'video/quicktime': '.mov',
+              'audio/aac': '.aac'}
+# Every extension a URL may spell a media file with, by kind: EXTENSIONS holds only the one a file is stored under
+MEDIA_SUFFIXES = {**dict.fromkeys(('.jpg', '.jpeg', '.jpe', '.jfif', '.png', '.gif', '.webp', '.avif', '.apng'),
+                                   'image'),
+                  **dict.fromkeys(('.mp4', '.m4v', '.mov', '.webm', '.ogv', '.mp3', '.ogg', '.oga', '.opus', '.m4a',
+                                   '.aac', '.wav', '.weba', '.flac'), 'av')}
 
 CACHE_FILE = re.compile(r'[0-9a-f]{64}\.[a-z0-9]+')
 TEMPORARY_FILE = re.compile(r'\.tmp-[0-9a-f]{32}')
@@ -85,13 +91,12 @@ def kind(content_type: str) -> str | None:
 
 
 def url_kind(remote: str) -> str:
-    """'image' or 'av' by the extension of the URL's path (one of EXTENSIONS, any case), else 'unknown'. A pict-rs
+    """'image' or 'av' by the extension of the URL's path (one of MEDIA_SUFFIXES, any case), else 'unknown'. A pict-rs
     `/pictrs/image/` path has no extension and is an image."""
     path = urlsplit(remote).path
     extension = posixpath.splitext(path)[1].lower()
-    for content_type, known in EXTENSIONS.items():
-        if extension == known:
-            return 'image' if content_type.startswith('image/') else 'av'
+    if extension in MEDIA_SUFFIXES:
+        return MEDIA_SUFFIXES[extension]
     return 'image' if '/pictrs/image/' in path else 'unknown'
 
 
