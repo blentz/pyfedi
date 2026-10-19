@@ -16,7 +16,7 @@ from bs4 import BeautifulSoup
 from flask import Response
 
 from app import db
-from app.models import Site, Tag
+from app.models import Site, SiteDomain, Tag
 import app.storefront as storefront
 from app.storefront import (canonicalise_links, current_storefront, domain_for_host, rewrite_links,
                             rewrite_response_for_storefront, storefront_html)
@@ -138,9 +138,13 @@ def test_rewrite_links_returns_unchanged_body_when_nothing_moves(app, onion):
 
 
 def test_rewrite_skips_when_absent(app, onion):
-    body = f'<a href="http://{ONION}/post/1">x</a><a href="https://example.com/">y</a>'
+    # off the onion: an onion page is always parsed, since any host may be remote media to proxy
+    db.session.add(SiteDomain(domain='alias.test', scheme='https', federates=False))
+    db.session.commit()
+    storefront.clear_domain_cache()
+    body = '<a href="https://alias.test/post/1">x</a><a href="https://example.com/">y</a>'
     with patch.object(storefront, 'BeautifulSoup') as parser:
-        assert rewrite_links(body, domain_for_host(ONION)) is body
+        assert rewrite_links(body, domain_for_host('alias.test')) is body
         assert canonicalise_links('<a href="https://example.com/">y</a>') == '<a href="https://example.com/">y</a>'
     parser.assert_not_called()
 
