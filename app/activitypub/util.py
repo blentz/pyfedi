@@ -37,7 +37,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
-    UserFollower, PostBoost, QuoteAuthorization, Relay, parse_ap_timestamp, parse_ap_published, image_url_from, markdown_source, \
+    UserFollower, PostBoost, QuoteAuthorization, Relay, storable_alt_text, parse_ap_timestamp, parse_ap_published, image_url_from, markdown_source, \
     _as_text, _as_int, _as_float, _as_dict, _as_url, property_value_fields, public_key_pem, \
     more_info_link, is_more_info_link, more_info_url_from, \
     language_from_ap, mark_audio_attachment, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError, post_file, GALLERY_BLOCKED_WEIGHT
@@ -2885,7 +2885,7 @@ def gallery_attachments(request_json: dict, primary_urls) -> list:
         seen.add(url)
         alt_text = attachment.get('name')
         found.append({'url': url,
-                      'alt_text': alt_text[:1500] if isinstance(alt_text, str) and alt_text else None,
+                      'alt_text': storable_alt_text(alt_text),
                       'width': _as_int(attachment.get('width'), None),
                       'height': _as_int(attachment.get('height'), None)})
     if has_link and len(found) < 2:
@@ -5282,9 +5282,9 @@ def update_post_from_activity(post: Post, request_json: dict):
                     # _as_dict: element 0 may be a junk entry now that it does not gate the loop above (R202)
                     if isinstance(attachment_list, list) and attachment_list and \
                             _as_dict(attachment_list[0]).get('name') is not None:
-                        image.alt_text = attachment_list[0]['name']
+                        image.alt_text = storable_alt_text(attachment_list[0]['name'])
                     elif object_type == 'Image' and isinstance(request_json['object'].get('name'), str):
-                        image.alt_text = request_json['object']['name']
+                        image.alt_text = storable_alt_text(request_json['object']['name'])
                 else:
                     image_url = image_url_from(request_json['object'].get('image'))  # D1352
                     if image_url:

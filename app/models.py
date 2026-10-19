@@ -1018,13 +1018,22 @@ user_file = db.Table('user_file',
                      )
 
 
+ALT_TEXT_MAX = 1500  # the width of File.alt_text
+
+
+def storable_alt_text(value) -> str | None:
+    """A peer's alt text as File.alt_text can hold it: a non-empty string, cut to the column, else None.
+    A longer one was a StringDataRightTruncation at the next flush, and a dict one could not be adapted at all."""
+    return value[:ALT_TEXT_MAX] if isinstance(value, str) and value else None
+
+
 class File(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     file_path = db.Column(db.String(255))
     file_name = db.Column(db.String(255))
     width = db.Column(db.Integer)
     height = db.Column(db.Integer)
-    alt_text = db.Column(db.String(1500))
+    alt_text = db.Column(db.String(ALT_TEXT_MAX))
     source_url = db.Column(db.String(1024))
     thumbnail_path = db.Column(db.String(255))
     thumbnail_width = db.Column(db.Integer)
@@ -2997,8 +3006,7 @@ class Post(db.Model):
                         return None
 
                 image = File(source_url=post.url, hash=image_hash)
-                if alt_text:
-                    image.alt_text = alt_text
+                image.alt_text = storable_alt_text(alt_text)
                 if file_path:
                     image.file_path = file_path
                 db.session.add(image)

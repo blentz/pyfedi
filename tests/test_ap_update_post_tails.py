@@ -2384,6 +2384,27 @@ class TestUrlChangeImageUrl:
         assert image.source_url == CHANGED_IMAGE_URL
         assert image.alt_text == ATTACHMENT_ALT
 
+    def test_alt_text_longer_than_the_column_is_cut_to_it(self, app, db_session, http_mock, redis_lock_only_double):
+        """File.alt_text is varchar(1500); a longer caption was a StringDataRightTruncation at commit."""
+        post = _seed_link_post()
+        _taken(http_mock, CHANGED_IMAGE_URL)
+
+        update_post_from_activity(post, _attachment_update(
+            {'type': 'Image', 'url': CHANGED_IMAGE_URL, 'name': 'a' * 4600}))
+
+        db.session.expire_all()
+        assert db.session.get(File, post.image_id).alt_text == 'a' * 1500
+
+    def test_alt_text_that_is_not_a_string_is_not_stored(self, app, db_session, http_mock, redis_lock_only_double):
+        post = _seed_link_post()
+        _taken(http_mock, CHANGED_IMAGE_URL)
+
+        update_post_from_activity(post, _attachment_update(
+            {'type': 'Image', 'url': CHANGED_IMAGE_URL, 'name': {'en': 'a caption'}}))
+
+        db.session.expire_all()
+        assert db.session.get(File, post.image_id).alt_text is None
+
     def test_an_attachment_whose_name_is_null_leaves_the_alt_text_unset(
             self, app, db_session, http_mock, redis_lock_only_double):
         """`:3484`'s third conjunct, `...[0]['name'] is not None`, on the peer
