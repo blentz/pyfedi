@@ -22,6 +22,7 @@ behind a monthly schedule.
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from flask import g
@@ -177,6 +178,39 @@ class TestTheDecoratorsThatRefuse:
 
         assert response.status_code == 302
         assert 'login' in response.headers['Location']
+        assert reached == []
+
+    @pytest.mark.parametrize('path, expected', [('/c/news?sort=new', '/c/news?sort=new'), ('/', '/')])
+    def test_a_stranger_is_sent_back_to_the_page_they_asked_for(self, env, path, expected):
+        """Not to the page before it: from the login page itself, that nested the login URL in its own `next` on
+        every click of the logo."""
+        from app.utils import login_required_if_private_instance
+
+        env.site.private_instance = True
+        db.session.commit()
+        view, reached = self._wrap(login_required_if_private_instance)
+
+        with env.app.test_request_context(path, headers={
+                'Accept': 'text/html', 'Referer': 'https://test.piefed.local/auth/login?next=/home'}):
+            response = view()
+
+        location = urlsplit(response.headers['Location'])
+        assert location.path == '/auth/login'
+        assert parse_qs(location.query) == {'next': [expected]}
+        assert reached == []
+
+    def test_a_strangers_post_goes_back_to_the_page_it_came_from(self, env):
+        from app.utils import login_required_if_private_instance
+
+        env.site.private_instance = True
+        db.session.commit()
+        view, reached = self._wrap(login_required_if_private_instance)
+
+        with env.app.test_request_context('/post/1/vote', method='POST', headers={
+                'Accept': 'text/html', 'Referer': 'https://test.piefed.local/post/1'}):
+            response = view()
+
+        assert parse_qs(urlsplit(response.headers['Location']).query) == {'next': ['https://test.piefed.local/post/1']}
         assert reached == []
 
     def test_a_private_instance_lets_an_account_through(self, env):
