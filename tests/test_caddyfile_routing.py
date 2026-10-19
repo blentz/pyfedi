@@ -107,3 +107,12 @@ def test_cached_onion_media_stays_in_the_browser_cache():
     """A signed URL names fixed content, so a visitor's browser keeps the file for a week without asking again.
     `handle_response` copies no upstream header, so Caddy must set it."""
     assert accel_headers()['Cache-Control'] == '"public, max-age=604800, immutable"'
+
+
+def test_cached_onion_media_is_served_as_inert_media():
+    """The cached file is remote content on the onion origin: the browser must not sniff it into HTML or run it as a
+    document. `handle_response` copies none of the route's headers, so the accel block must set each one itself."""
+    assert accel_headers() == {'X-Content-Type-Options': 'nosniff',
+                               'Content-Security-Policy': '"default-src \'none\'; sandbox"',
+                               'Cache-Control': '"public, max-age=604800, immutable"'}
+    assert accel_block()[-1] == 'file_server'           # every header is set before the file goes out
