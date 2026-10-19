@@ -202,3 +202,10 @@ def test_onion_requests_log_ip_onion(app, onion, caplog):
     onion_get(client, '/.env')
     assert event_lines(caplog, 'auth: register attempt') == ['auth: register attempt ip=onion']
     assert event_lines(caplog, 'scan:') == ['scan: probe refused ip=onion']
+
+
+@pytest.mark.parametrize('site, logged', [('cross-site', False), ('same-site', False), ('same-origin', False),
+                                          ('none', True)])
+def test_a_register_post_logs_only_when_not_page_initiated(app, db_session, caplog, site, logged):
+    app.test_client().post('/auth/register', data={}, environ_base=CLEARNET, headers={'Sec-Fetch-Site': site})
+    assert bool(event_lines(caplog, 'auth: register attempt')) is logged

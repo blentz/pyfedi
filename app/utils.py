@@ -3599,6 +3599,14 @@ def loggable_client(client: str | None = None) -> str:
     return client if client and LOGGABLE_IP_RE.fullmatch(client) else 'invalid'
 
 
+def fetched_by_hand() -> bool:
+    """False for a request a web page made (an <img>, a form, a fetch); true for a typed URL, or a client that sends
+    no Sec-Fetch-Site (scanners and bots). Browsers always send it, as `none` only for a typed URL. A fail2ban line
+    written for a page-made request would let any web page get its visitors' addresses banned, so register attempts
+    and refused probes are logged only when this is true."""
+    return request.headers.get('Sec-Fetch-Site', 'none') == 'none'
+
+
 # The rule: this logs failed CREDENTIAL checks only -- a wrong password, an unknown name, a failed LDAP bind, a failed
 # NNTP credential check. A refusal of an account that authenticated correctly (banned, deleted, unverified,
 # registrations closed, a declined country, an OAuth profile with no email or an email already in use) is not one,
