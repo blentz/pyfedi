@@ -157,6 +157,24 @@ class TestWhereTheUrlComesFrom:
         assert post.type == POST_TYPE_IMAGE
         assert post.image.alt_text == 'a photograph'
 
+    def test_alt_text_longer_than_the_column_is_cut_to_it(self, env, http_mock):
+        """File.alt_text is varchar(1500). A Mastodon post with 4,600 characters of alt text was a
+        StringDataRightTruncation at the next flush, which rolled the session back and lost the post (prod,
+        2026-10-19)."""
+        an_image_head(http_mock)
+        post = new(env, attachment=[{'type': 'Document', 'url': 'https://example.test/photo.png',
+                                     'name': 'a' * 4600}])
+        db.session.flush()
+        assert post.image.alt_text == 'a' * 1500
+
+    def test_alt_text_that_is_not_a_string_is_not_stored(self, env, http_mock):
+        an_image_head(http_mock)
+        post = new(env, attachment=[{'type': 'Document', 'url': 'https://example.test/photo.png',
+                                     'name': {'en': 'a photograph'}}])
+        db.session.flush()
+        assert post.type == POST_TYPE_IMAGE
+        assert post.image.alt_text is None
+
     def test_a_wordpress_podcast_names_the_post_after_the_audio(self, env,
                                                                 http_mock):
         http_mock.head('https://example.test/episode.mp3').mock(
