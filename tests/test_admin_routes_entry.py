@@ -105,8 +105,9 @@ def _valid_misc_payload(language):
             assert field.choices, f'{field.name} has no choices; seed its table'
             data[field.name] = str(field.choices[0][0])
         elif isinstance(field, IntegerField):
-            # The upload limits are NumberRange(min=1); the rest take 0.
-            data[field.name] = '1' if field.name.endswith('_upload_mb') else '0'
+            # The upload limits and the onion media sizes have a minimum above 0; the rest take 0.
+            data[field.name] = ('1' if field.name.endswith('_upload_mb') or field.name.endswith('_max_mb') else
+                                '1024' if field.name == 'onion_media_cache_mb' else '0')
         elif isinstance(field, (StringField, TextAreaField)) and field.name != 'csrf_token':
             data[field.name] = ''
     return data

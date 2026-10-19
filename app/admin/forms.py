@@ -108,6 +108,13 @@ class SiteMiscForm(FlaskForm):
     # a challenge or the no-JavaScript wait is still required. Optional: a save that leaves it out keeps the setting.
     onion_pow_difficulty = IntegerField(_l('Onion login proof-of-work difficulty (bits; each one doubles the work)'),
                                         validators=[Optional(), NumberRange(min=0, max=MAX_POW_DIFFICULTY)])
+    # Onion remote-media cache (app/onion_media.py), in MiB here and bytes in the settings. Optional like the above.
+    onion_media_cache_mb = IntegerField(_l('Onion media cache size (MB)'),
+                                        validators=[Optional(), NumberRange(min=1024, max=1048576)])
+    onion_media_image_max_mb = IntegerField(_l('Onion media largest image (MB)'),
+                                            validators=[Optional(), NumberRange(min=1, max=100)])
+    onion_media_av_max_mb = IntegerField(_l('Onion media largest video or audio file (MB)'),
+                                         validators=[Optional(), NumberRange(min=1, max=2048)])
 
     submit = SubmitField(_l('Save'))
 
