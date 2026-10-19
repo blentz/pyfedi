@@ -5,6 +5,9 @@ sent, and is sent through `app.httpx_client`, whose pinned transport refuses a n
 address and connects only to an address it checked (app/pinned_http.py). The body is streamed to a temporary file in
 the cache directory under its type's size cap and renamed into place only when complete, so a partial file is never
 served.
+
+Video, audio and the images the route cannot fill in the request are filled by `fill_task` on the `onion_media` Celery
+queue. `queue_fill` queues one task per URL in ten minutes, however many requests miss it.
 """
 import contextlib
 import hashlib
@@ -18,12 +21,16 @@ from flask import current_app
 from redis.exceptions import RedisError
 
 import app as app_pkg
+from app import celery
 from app.onion_media import cache_name, kind
 from app.pinned_http import fetch_deadline
 from app.utils import domain_from_url, get_setting, instance_banned, is_invalid_get_request_uri
 
 DEAD_KEY = 'onion_media:dead:{}'
 DEAD_SECONDS = 3600             # a refused or failed URL is not fetched again for an hour
+QUEUED_KEY = 'onion_media:queued:{}'
+QUEUED_SECONDS = 600            # one queued fill per URL in this time
+BACKGROUND_SECONDS = 600        # a background fill's deadline: a 500 MiB video over a slow link
 MAX_REDIRECTS = 5
 READ_TIMEOUT = 10               # per read; the whole fill is bounded by max_seconds
 _REDIRECTS = {301, 302, 303, 307, 308}
@@ -140,3 +147,15 @@ def _store(response: httpx.Response, temporary: pathlib.Path, deadline: float) -
                 raise Refused(f'{response.url} was still sending at the deadline')
             file.write(chunk)
     return content_type
+
+
+@celery.task
+def fill_task(remote: str) -> None:
+    fill(remote, max_seconds=BACKGROUND_SECONDS)
+
+
+def queue_fill(remote: str) -> None:
+    """Queue `fill_task` for `remote` unless it was queued within the last QUEUED_SECONDS."""
+    key = QUEUED_KEY.format(hashlib.sha256(remote.encode()).hexdigest())
+    if app_pkg.redis_client.set(key, '1', nx=True, ex=QUEUED_SECONDS):
+        fill_task.delay(remote)

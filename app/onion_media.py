@@ -7,14 +7,17 @@ remote server. It links `/onion_media/<sig>/<key>`, where `<key>` is the remote 
 The cache file name is the sha256 of the remote URL plus an extension chosen from the response type, so Caddy's
 `file_server` sends the right Content-Type without a record of the type kept beside the file.
 
-`kind` sorts an allowed type into images and video/audio, which have separate size caps. The fill itself is in
-app/onion_media_fill.py: it needs app.utils, which imports app.models, which imports this module through
-app.storefront.
+`kind` sorts an allowed type into images and video/audio, which have separate size caps. `url_kind` guesses the
+same from a URL before anything is fetched, so the route can choose to fill in the request or in the background.
+The fill itself is in app/onion_media_fill.py: it needs app.utils, which imports app.models, which imports this
+module through app.storefront.
 """
 import base64
 import hashlib
 import hmac
 import pathlib
+import posixpath
+from urllib.parse import urlsplit
 
 from flask import current_app
 
@@ -65,3 +68,14 @@ def kind(content_type: str) -> str | None:
     if content_type not in EXTENSIONS:
         return None
     return 'image' if content_type.startswith('image/') else 'av'
+
+
+def url_kind(remote: str) -> str:
+    """'image' or 'av' by the extension of the URL's path (one of EXTENSIONS, any case), else 'unknown'. A pict-rs
+    `/pictrs/image/` path has no extension and is an image."""
+    path = urlsplit(remote).path
+    extension = posixpath.splitext(path)[1].lower()
+    for content_type, known in EXTENSIONS.items():
+        if extension == known:
+            return 'image' if content_type.startswith('image/') else 'av'
+    return 'image' if '/pictrs/image/' in path else 'unknown'
