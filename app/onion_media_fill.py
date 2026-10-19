@@ -7,7 +7,11 @@ the cache directory under its type's size cap and renamed into place only when c
 served.
 
 Video, audio and the images the route cannot fill in the request are filled by `fill_task` on the `onion_media` Celery
-queue. `queue_fill` queues one task per URL in ten minutes, however many requests miss it.
+queue. `queue_fill` queues one task per URL in ten minutes, however many requests miss it. The queue shares the
+background worker's slots, so a fill must not hold them all: at most one fill per remote host runs at once (in the
+request or in the background), at most one background fill that is not plainly an image, and a body slower than
+MIN_BYTES_PER_SECOND on average is refused once MIN_RATE_AFTER seconds have passed. A task that finds its slot taken
+queues itself again REQUEUE_SECONDS later.
 """
 import contextlib
 import hashlib
@@ -15,6 +19,7 @@ import os
 import pathlib
 import uuid
 from time import monotonic
+from urllib.parse import urlsplit
 
 import httpx
 from flask import current_app
@@ -22,7 +27,7 @@ from redis.exceptions import RedisError
 
 import app as app_pkg
 from app import celery
-from app.onion_media import cache_name, kind
+from app.onion_media import cache_name, kind, url_kind
 from app.pinned_http import fetch_deadline
 from app.utils import domain_from_url, get_setting, instance_banned, is_invalid_get_request_uri
 
@@ -31,6 +36,12 @@ DEAD_SECONDS = 3600             # a refused or failed URL is not fetched again f
 QUEUED_KEY = 'onion_media:queued:{}'
 QUEUED_SECONDS = 600            # one queued fill per URL in this time
 BACKGROUND_SECONDS = 600        # a background fill's deadline: a 500 MiB video over a slow link
+AV_SLOT_KEY = 'onion_media:av_inflight'     # the one background fill that is not plainly an image
+HOST_KEY = 'onion_media:host:{}'            # the one fill from this remote host
+SLOT_SLACK = 30                 # a slot outlives its fill's deadline by this, and frees itself if a worker dies
+REQUEUE_SECONDS = 30            # a task whose slot is taken runs again this much later
+MIN_RATE_AFTER = 20             # seconds of body transfer before the throughput floor applies
+MIN_BYTES_PER_SECOND = 64 * 1024    # a slower body is refused: a trickle would hold a worker for the whole deadline
 MAX_REDIRECTS = 5
 READ_TIMEOUT = 10               # per read; the whole fill is bounded by max_seconds
 _REDIRECTS = {301, 302, 303, 307, 308}
@@ -59,14 +70,35 @@ def _remember_dead(remote: str) -> None:
         current_app.logger.warning(f'onion media: could not remember {remote} as dead: {error}')
 
 
-def _hop_refused(url: str) -> bool:
-    """Whether a hop to `url` is refused before it is sent: the SSRF guard, a banned instance or a banned Domain."""
-    if is_invalid_get_request_uri(url):
-        return True
+def is_banned(url: str) -> bool:
+    """Whether `url` is on a banned instance or a banned Domain. Checked on each hop of a fill and on each cache hit,
+    so a file from a host banned after it was cached is not served."""
     if instance_banned(httpx.URL(url).host):
         return True
     domain = domain_from_url(url, create=False)
     return domain is not None and bool(domain.banned)
+
+
+def _hop_refused(url: str) -> bool:
+    """Whether a hop to `url` is refused before it is sent: the SSRF guard, a banned instance or a banned Domain."""
+    return is_invalid_get_request_uri(url) or is_banned(url)
+
+
+def take_slot(key: str, seconds: int) -> str | None:
+    """Take the Redis slot `key` for `seconds` and return its token, or None when another fill holds it."""
+    token = uuid.uuid4().hex
+    return token if app_pkg.redis_client.set(key, token, nx=True, ex=seconds) else None
+
+
+def give_back(key: str, token: str) -> None:
+    """Free the slot unless it expired and another fill has taken it since."""
+    if app_pkg.redis_client.get(key) == token:
+        app_pkg.redis_client.delete(key)
+
+
+def host_key(remote: str) -> str:
+    """The slot key for `remote`'s host (lowercase)."""
+    return HOST_KEY.format(urlsplit(remote).hostname or '')
 
 
 def fill(remote: str, *, max_seconds: float) -> pathlib.Path | None:
@@ -134,6 +166,7 @@ def _store(response: httpx.Response, temporary: pathlib.Path, deadline: float) -
     else:
         cap = get_setting('onion_media_av_max_bytes', 524288000)
     cap = min(cap, get_setting('onion_media_cache_bytes', 10737418240))   # one file never fills the whole cache
+    started = monotonic()
     declared = response.headers.get('Content-Length')
     if declared is not None and (not declared.strip().isdigit() or int(declared) > cap):
         raise Refused(f'{response.url} declared {declared} bytes, over the cap of {cap}')
@@ -143,19 +176,41 @@ def _store(response: httpx.Response, temporary: pathlib.Path, deadline: float) -
             written += len(chunk)
             if written > cap:
                 raise Refused(f'{response.url} sent more than {cap} bytes')
-            if monotonic() > deadline:
+            now = monotonic()
+            if now > deadline:
                 raise Refused(f'{response.url} was still sending at the deadline')
+            elapsed = now - started
+            if elapsed > MIN_RATE_AFTER and written < MIN_BYTES_PER_SECOND * elapsed:
+                raise Refused(f'{response.url} sent {written} bytes in {elapsed:.0f} s, under the throughput floor')
             file.write(chunk)
     return content_type
 
 
 @celery.task
 def fill_task(remote: str) -> None:
-    fill(remote, max_seconds=BACKGROUND_SECONDS)
+    """Fill `remote` in the background, or queue this task again when its host's slot, or for a URL that is not
+    plainly an image the one audio/video slot, is taken."""
+    keys = [host_key(remote)] if url_kind(remote) == 'image' else [AV_SLOT_KEY, host_key(remote)]
+    slots = []
+    try:
+        for key in keys:
+            token = take_slot(key, BACKGROUND_SECONDS + SLOT_SLACK)
+            if token is None:
+                app_pkg.redis_client.expire(_queued_key(remote), QUEUED_SECONDS)    # still queued: no duplicate
+                fill_task.apply_async((remote,), countdown=REQUEUE_SECONDS)
+                return
+            slots.append((key, token))
+        fill(remote, max_seconds=BACKGROUND_SECONDS)
+    finally:
+        for key, token in slots:
+            give_back(key, token)
+
+
+def _queued_key(remote: str) -> str:
+    return QUEUED_KEY.format(hashlib.sha256(remote.encode()).hexdigest())
 
 
 def queue_fill(remote: str) -> None:
     """Queue `fill_task` for `remote` unless it was queued within the last QUEUED_SECONDS."""
-    key = QUEUED_KEY.format(hashlib.sha256(remote.encode()).hexdigest())
-    if app_pkg.redis_client.set(key, '1', nx=True, ex=QUEUED_SECONDS):
+    if app_pkg.redis_client.set(_queued_key(remote), '1', nx=True, ex=QUEUED_SECONDS):
         fill_task.delay(remote)

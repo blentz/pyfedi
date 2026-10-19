@@ -5,20 +5,18 @@ Onion only, and only for URLs the server signed (`remote_for`), so it is not an 
 body and `X-Accel-Redirect` naming the cached file, which Caddy's onion site serves itself (Range, ETag), so no
 gunicorn slot is held while the bytes go out. A miss is decided by the URL's extension, since the type is not known
 before the fetch: an image (or an unknown extension) is filled in the request when one of the two in-request slots is
-free, and anything else is queued to the `onion_media` Celery queue with a 503 and `Retry-After`. A refused or failed
+free and no other fill is reading from its host, and anything else is queued to the `onion_media` Celery queue with a 503 and `Retry-After`. A refused or failed
 URL answers 404 and the browser shows its broken-media box.
 """
 import contextlib
 import os
 import pathlib
-import uuid
 
 from flask import Blueprint, Response, abort
 
-import app as app_pkg
 from app.onion import is_onion_request
 from app.onion_media import cached_file, remote_for, url_kind
-from app.onion_media_fill import fill, is_dead, queue_fill
+from app.onion_media_fill import SLOT_SLACK, fill, give_back, host_key, is_banned, is_dead, queue_fill, take_slot
 
 bp = Blueprint('onion_media', __name__)
 
@@ -39,16 +37,20 @@ def onion_media(sig, key):
     if remote is None or is_dead(remote):
         abort(404)
     path = cached_file(remote)
-    if path is None:
+    if path is not None:
+        if is_banned(remote):           # banned since it was cached
+            abort(404)
+    else:
         if url_kind(remote) == 'av':
             return _queued(remote, RETRY_AV)
-        slot = _take_slot()
-        if slot is None:
+        slots = _take_request_slots(remote)
+        if slots is None:
             return _queued(remote, RETRY_IMAGE)
         try:
             path = fill(remote, max_seconds=REQUEST_FILL_SECONDS)
         finally:
-            _give_back(slot)
+            for key, token in slots:
+                give_back(key, token)
         if path is None:
             abort(404)
     with contextlib.suppress(FileNotFoundError):    # evicted since it was found: Caddy answers 404
@@ -56,21 +58,22 @@ def onion_media(sig, key):
     return _accel(path)
 
 
-def _take_slot() -> tuple[str, str] | None:
-    """One of the INFLIGHT_SLOTS in-request fill slots as (key, token), or None when all are taken."""
-    token = uuid.uuid4().hex
+def _take_request_slots(remote: str) -> list[tuple[str, str]] | None:
+    """One of the INFLIGHT_SLOTS in-request fill slots and `remote`'s host slot, as (key, token) pairs, or None (and
+    nothing held) when all in-request slots are taken or another fill is reading from the host."""
     for slot in range(INFLIGHT_SLOTS):
         key = INFLIGHT_KEY.format(slot)
-        if app_pkg.redis_client.set(key, token, nx=True, ex=INFLIGHT_SECONDS):
-            return key, token
-    return None
-
-
-def _give_back(slot: tuple[str, str]) -> None:
-    """Free the slot unless it expired and another request has taken it since."""
-    key, token = slot
-    if app_pkg.redis_client.get(key) == token:
-        app_pkg.redis_client.delete(key)
+        token = take_slot(key, INFLIGHT_SECONDS)
+        if token is not None:
+            break
+    else:
+        return None
+    host = host_key(remote)
+    host_token = take_slot(host, REQUEST_FILL_SECONDS + SLOT_SLACK)
+    if host_token is None:
+        give_back(key, token)
+        return None
+    return [(key, token), (host, host_token)]
 
 
 def _queued(remote: str, retry_after: int) -> Response:

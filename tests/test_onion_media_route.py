@@ -16,9 +16,9 @@ import app.onion_media_routes as onion_media_routes
 from app import celery, db
 from app.models import SiteDomain
 from app.onion_media import cache_name, proxy_url, url_kind
-from app.onion_media_fill import DEAD_SECONDS, fill_task, queue_fill
+from app.onion_media_fill import AV_SLOT_KEY, DEAD_SECONDS, fill_task, queue_fill
 from app.storefront import clear_domain_cache
-from tests.factories import make_instance, make_user
+from tests.factories import make_banned_instance, make_instance, make_user
 
 PROXY = '10.89.0.2'
 ONION_URL = 'http://abc.onion'
@@ -213,6 +213,40 @@ def test_video_miss_is_queued_never_fetched_in_request(app, onion, no_fetch, que
     assert onion.keys('onion_media:inflight:*') == []
 
 
+def test_hit_on_an_instance_banned_since_it_was_cached_is_404(app, onion, no_fetch, queued, tmp_path):
+    other = 'https://Other.example/b.png'
+    for remote in (IMAGE, other):
+        (tmp_path / cache_name(remote, 'image/png')).write_bytes(b'png')
+    make_banned_instance('media.example')
+    client = app.test_client()
+    assert onion_get(client, proxy_url(IMAGE)).status_code == 404
+    assert_served(onion_get(client, proxy_url(other)), other)
+    assert queued == []
+
+
+def test_image_miss_whose_host_is_busy_is_queued_503_and_another_host_fills(app, onion, fills, queued, monkeypatch):
+    onion.set(HOST, 'a background fill', ex=630)
+    client = app.test_client()
+    response = onion_get(client, proxy_url(IMAGE))
+    assert response.status_code == 503
+    assert response.headers['Retry-After'] == '10'
+    assert queued == [IMAGE]
+    assert fills == []
+    assert onion.keys('onion_media:inflight:*') == []           # the in-request slot it took is given back
+    other = 'https://Other.example/b.png'
+    seen = {}
+    original = onion_media_routes.fill
+
+    def fill(remote, *, max_seconds):
+        seen.update({key: onion.ttl(key) for key in onion.keys('onion_media:host:*')})
+        return original(remote, max_seconds=max_seconds)
+    monkeypatch.setattr(onion_media_routes, 'fill', fill)
+    assert_served(onion_get(client, proxy_url(other)), other)
+    assert seen == {HOST: onion.ttl(HOST), 'onion_media:host:other.example': 45}    # the host key is lowercase
+    assert onion.keys('onion_media:host:other.example') == []
+    assert fills == [(other, 15)]
+
+
 def test_dead_url_404(app, onion, no_fetch, queued, tmp_path):
     onion.set('onion_media:dead:' + hashlib.sha256(IMAGE.encode()).hexdigest(), '1', ex=DEAD_SECONDS)
     (tmp_path / cache_name(IMAGE, 'image/png')).write_bytes(b'png')
@@ -228,11 +262,67 @@ def test_queue_fill_de_duplicates_for_ten_minutes(app, onion, queued):
     assert 590 < onion.ttl(key) <= 600
 
 
-def test_fill_task_fills_with_a_ten_minute_deadline(app, monkeypatch):
+HOST = 'onion_media:host:media.example'
+
+
+@pytest.fixture
+def requeued(monkeypatch):
+    """Every (args, countdown) fill_task queued itself again with."""
     calls = []
-    monkeypatch.setattr(onion_media_fill, 'fill', lambda remote, *, max_seconds: calls.append((remote, max_seconds)))
+    monkeypatch.setattr(fill_task, 'apply_async', lambda args, countdown: calls.append((args, countdown)))
+    return calls
+
+
+@pytest.fixture
+def background(monkeypatch):
+    """The fill as fill_task calls it: records (remote, max_seconds) and the slots held while it runs."""
+    calls = []
+
+    def fill(remote, *, max_seconds):
+        held = {key: onion_media_fill.app_pkg.redis_client.ttl(key)
+                for key in onion_media_fill.app_pkg.redis_client.keys('onion_media:*')
+                if not key.startswith('onion_media:queued:')}
+        calls.append((remote, max_seconds, held))
+    monkeypatch.setattr(onion_media_fill, 'fill', fill)
+    return calls
+
+
+def test_fill_task_fills_with_a_ten_minute_deadline(app, redis_double, background, requeued):
     fill_task(VIDEO)
-    assert calls == [(VIDEO, 600)]
+    assert background == [(VIDEO, 600, {AV_SLOT_KEY: 630, HOST: 630})]
+    fill_task(IMAGE)                                            # a plain image needs only its host's slot
+    assert background[1] == (IMAGE, 600, {HOST: 630})
+    assert redis_double.keys('*') == []                         # every slot given back
+    assert requeued == []
+
+
+def test_second_av_task_while_the_av_slot_is_held_requeues_without_fetching(app, redis_double, background, requeued,
+                                                                           queued):
+    queue_fill(VIDEO)
+    redis_double.set(AV_SLOT_KEY, 'another task', ex=630)
+    redis_double.expire('onion_media:queued:' + hashlib.sha256(VIDEO.encode()).hexdigest(), 5)
+    other = 'https://other.example/a/song.mp3'
+    for remote in (VIDEO, other, 'https://media.example/media/12345'):    # unknown is not plainly an image
+        fill_task(remote)
+    assert background == []
+    assert requeued == [((VIDEO,), 30), ((other,), 30), (('https://media.example/media/12345',), 30)]
+    assert redis_double.ttl('onion_media:queued:' + hashlib.sha256(VIDEO.encode()).hexdigest()) > 590   # still de-duped
+    assert redis_double.get(AV_SLOT_KEY) == 'another task'
+    assert redis_double.keys('onion_media:host:*') == []
+    assert queued == [VIDEO]
+
+
+def test_background_fill_whose_host_is_busy_requeues_and_another_host_proceeds(app, redis_double, background,
+                                                                              requeued):
+    redis_double.set(HOST, 'a request', ex=45)
+    fill_task(IMAGE)
+    fill_task(VIDEO)                                            # the av slot it took is given back
+    assert requeued == [((IMAGE,), 30), ((VIDEO,), 30)]
+    assert background == []
+    assert redis_double.get(AV_SLOT_KEY) is None
+    other = 'https://other.example/b.png'
+    fill_task(other)
+    assert background == [(other, 600, {HOST: redis_double.ttl(HOST), 'onion_media:host:other.example': 630})]
 
 
 def test_fill_task_routes_to_onion_media_queue(app):
