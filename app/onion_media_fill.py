@@ -11,10 +11,11 @@ before the fetch and every CHECK_BYTES written, while the disk has under DISK_RE
 Video, audio and the images the route cannot fill in the request are filled by `fill_task` on the `onion_media` Celery
 queue. `queue_fill` queues one task per URL in ten minutes, however many requests miss it. The queue shares the
 background worker's slots, so a fill must not hold them all: at most one fill per remote host runs at once (in the
-request or in the background), at most one background fill that is not plainly an image (a URL that looks like an
-image is held to the image cap whatever it answers), and once MIN_RATE_AFTER seconds have passed each RATE_WINDOW
-seconds of body must bring MIN_BYTES_PER_SECOND on average. A task that finds its slot taken queues itself again
-REQUEUE_SECONDS later, at most MAX_REQUEUES times; then it is dropped and the next view queues it afresh.
+request or in the background), at most one background fill of any kind (BG_SLOT_KEY), with BACKGROUND_IMAGE_SECONDS
+for a URL that looks like an image (held to the image cap whatever it answers), and once MIN_RATE_AFTER seconds have
+passed each RATE_WINDOW seconds of body must bring MIN_BYTES_PER_SECOND on average. A task that finds its slot taken
+queues itself again REQUEUE_SECONDS later, at most MAX_REQUEUES times; then it is dropped and the next view queues it
+afresh.
 """
 import contextlib
 import hashlib
@@ -40,7 +41,8 @@ DEAD_SECONDS = 3600             # a refused or failed URL is not fetched again f
 QUEUED_KEY = 'onion_media:queued:{}'
 QUEUED_SECONDS = 600            # one queued fill per URL in this time
 BACKGROUND_SECONDS = 600        # a background fill's deadline: a 500 MiB video over a slow link
-AV_SLOT_KEY = 'onion_media:av_inflight'     # the one background fill that is not plainly an image
+BACKGROUND_IMAGE_SECONDS = 60   # a background image fill's: a 20 MiB image does not wait behind a 600 s video
+BG_SLOT_KEY = 'onion_media:bg_inflight'     # the one background fill, so the worker's other slot stays free
 HOST_KEY = 'onion_media:host:{}'            # the one fill from this remote host
 SLOT_SLACK = 30                 # a slot outlives its fill's deadline by this, and frees itself if a worker dies
 REQUEUE_SECONDS = 30            # a task whose slot is taken runs again this much later
@@ -190,7 +192,7 @@ def _fetch(remote: str, temporary: pathlib.Path, deadline: float) -> str:
 
 def _store(response: httpx.Response, temporary: pathlib.Path, deadline: float, image_url: bool) -> str:
     """Stream an allowed, uncompressed 200 body to `temporary` under its type's cap (the image cap for a URL that
-    looks like an image, `image_url`, since only that guess chose its fill slot), the deadline, the throughput
+    looks like an image, `image_url`, since only that guess chose its deadline), the deadline, the throughput
     floor and the room left (`_check_room`, each CHECK_BYTES)."""
     if response.status_code != 200:
         raise Refused(f'{response.url} answered {response.status_code}')
@@ -235,14 +237,13 @@ def _store(response: httpx.Response, temporary: pathlib.Path, deadline: float, i
 
 @celery.task
 def fill_task(remote: str, attempt: int = 0) -> None:
-    """Fill `remote` in the background, or queue this task again when its host's slot, or for a URL that is not
-    plainly an image the one audio/video slot, is taken. `attempt` counts the re-queues; the one after
-    MAX_REQUEUES is dropped."""
-    keys = [host_key(remote)] if url_kind(remote) == 'image' else [AV_SLOT_KEY, host_key(remote)]
+    """Fill `remote` in the background, or queue this task again when the one background slot or its host's slot is
+    taken. `attempt` counts the re-queues; the one after MAX_REQUEUES is dropped."""
+    seconds = BACKGROUND_IMAGE_SECONDS if url_kind(remote) == 'image' else BACKGROUND_SECONDS
     slots = []
     try:
-        for key in keys:
-            token = take_slot(key, BACKGROUND_SECONDS + SLOT_SLACK)
+        for key in (BG_SLOT_KEY, host_key(remote)):
+            token = take_slot(key, seconds + SLOT_SLACK)
             if token is None:
                 if attempt >= MAX_REQUEUES:
                     current_app.logger.info(f'onion media: {remote} not filled, its slot stayed busy')
@@ -251,7 +252,7 @@ def fill_task(remote: str, attempt: int = 0) -> None:
                 fill_task.apply_async((remote, attempt + 1), countdown=REQUEUE_SECONDS)
                 return
             slots.append((key, token))
-        fill(remote, max_seconds=BACKGROUND_SECONDS)
+        fill(remote, max_seconds=seconds)
     finally:
         for key, token in slots:
             give_back(key, token)
