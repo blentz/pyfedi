@@ -185,6 +185,23 @@ def test_av_cap_and_cache_cap(remote, tmp_path):
     assert leftovers(tmp_path) == [cache_name(video, 'video/mp4')]
 
 
+
+def test_an_image_url_has_the_image_cap_whatever_type_it_answers(remote, tmp_path):
+    """The background fill holds the audio/video slot only for a URL that does not look like an image, so a URL that
+    does is held to the image cap even when it answers video."""
+    set_setting('onion_media_image_max_bytes', 1000)
+    big = 'https://media.example/x.jpg'
+    remote.routes[big] = image(body=b'v' * 1001, content_type='video/mp4')
+    assert fill(big, max_seconds=15) is None
+    assert is_dead(big)
+    small = 'https://media.example/y.jpg'
+    remote.routes[small] = image(body=b'v' * 1000, content_type='video/mp4')
+    assert fill(small, max_seconds=15) == tmp_path / cache_name(small, 'video/mp4')
+    assert leftovers(tmp_path) == [cache_name(small, 'video/mp4')]
+    video = 'https://media.example/z.mp4'
+    remote.routes[video] = image(body=b'v' * 1001, content_type='video/mp4')
+    assert fill(video, max_seconds=15) is not None             # a video URL keeps the audio/video cap
+
 @pytest.mark.parametrize('encoding', ['gzip', 'br', 'identity, gzip'])
 def test_compressed_body_refused(remote, tmp_path, encoding):
     remote.routes[REMOTE] = httpx.Response(200, headers={'Content-Type': 'image/png', 'Content-Encoding': encoding},
@@ -257,6 +274,27 @@ def test_a_body_under_the_throughput_floor_is_refused_and_a_fast_one_passes(remo
     assert path is not None and path.stat().st_size == 65536 * 11 * 4
     assert not is_dead(fast)
 
+
+
+def test_a_body_fast_at_first_then_trickling_is_refused_at_the_first_slow_window(remote, tmp_path, monkeypatch):
+    """Front-loading does not buy a trickle: after 20 s each 10 s window must bring 64 KiB/s on its own."""
+    clock = [0.0]
+    monkeypatch.setattr('app.onion_media_fill.monotonic', lambda: clock[0])
+    sent = []
+
+    def body():
+        for chunk in [b'x' * 1048576] * 4 + [b'x' * 1024] * 4:  # 4 MiB in 20 s, then 1 KiB every 5 s
+            clock[0] += 5
+            sent.append(clock[0])
+            yield chunk
+
+    front = 'https://media.example/front.mp4'
+    monkeypatch.setattr('app.httpx_client', httpx.Client(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={'Content-Type': 'video/mp4'}, content=body()))))
+    assert fill(front, max_seconds=600) is None
+    assert sent[-1] == 30                                  # refused at the end of the first window, 20 s to 30 s
+    assert is_dead(front)
+    assert leftovers(tmp_path) == []
 
 def test_disk_error_leaves_no_file_and_is_not_remembered(remote, tmp_path, monkeypatch):
     remote.routes[REMOTE] = image()

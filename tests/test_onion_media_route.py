@@ -16,7 +16,7 @@ import app.onion_media_routes as onion_media_routes
 from app import celery, db
 from app.models import SiteDomain
 from app.onion_media import cache_name, proxy_url, url_kind
-from app.onion_media_fill import AV_SLOT_KEY, DEAD_SECONDS, fill_task, queue_fill
+from app.onion_media_fill import AV_SLOT_KEY, DEAD_SECONDS, MAX_REQUEUES, fill_task, queue_fill
 from app.storefront import clear_domain_cache
 from tests.factories import make_banned_instance, make_instance, make_user
 
@@ -305,11 +305,29 @@ def test_second_av_task_while_the_av_slot_is_held_requeues_without_fetching(app,
     for remote in (VIDEO, other, 'https://media.example/media/12345'):    # unknown is not plainly an image
         fill_task(remote)
     assert background == []
-    assert requeued == [((VIDEO,), 30), ((other,), 30), (('https://media.example/media/12345',), 30)]
+    assert requeued == [((VIDEO, 1), 30), ((other, 1), 30), (('https://media.example/media/12345', 1), 30)]
     assert redis_double.ttl('onion_media:queued:' + hashlib.sha256(VIDEO.encode()).hexdigest()) > 590   # still de-duped
     assert redis_double.get(AV_SLOT_KEY) == 'another task'
     assert redis_double.keys('onion_media:host:*') == []
     assert queued == [VIDEO]
+
+
+def test_a_task_requeued_twenty_times_is_dropped_and_its_queued_key_left_to_lapse(app, redis_double, background,
+                                                                                requeued):
+    queued_key = 'onion_media:queued:' + hashlib.sha256(VIDEO.encode()).hexdigest()
+    redis_double.set(AV_SLOT_KEY, 'another task', ex=630)
+    assert MAX_REQUEUES == 20
+    for attempt in range(MAX_REQUEUES):
+        redis_double.delete(queued_key)                         # lapsed: each re-queue sets it again
+        fill_task(VIDEO, attempt)
+        assert requeued[-1] == ((VIDEO, attempt + 1), 30)
+        assert 590 < redis_double.ttl(queued_key) <= 600
+    redis_double.expire(queued_key, 5)
+    fill_task(VIDEO, MAX_REQUEUES)                              # the 21st run
+    assert len(requeued) == MAX_REQUEUES
+    assert background == []
+    assert redis_double.ttl(queued_key) <= 5                    # left to lapse, so the next view queues it again
+    assert not onion_media_fill.is_dead(VIDEO)
 
 
 def test_background_fill_whose_host_is_busy_requeues_and_another_host_proceeds(app, redis_double, background,
@@ -317,7 +335,7 @@ def test_background_fill_whose_host_is_busy_requeues_and_another_host_proceeds(a
     redis_double.set(HOST, 'a request', ex=45)
     fill_task(IMAGE)
     fill_task(VIDEO)                                            # the av slot it took is given back
-    assert requeued == [((IMAGE,), 30), ((VIDEO,), 30)]
+    assert requeued == [((IMAGE, 1), 30), ((VIDEO, 1), 30)]
     assert background == []
     assert redis_double.get(AV_SLOT_KEY) is None
     other = 'https://other.example/b.png'

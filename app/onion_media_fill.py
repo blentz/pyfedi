@@ -9,9 +9,10 @@ served.
 Video, audio and the images the route cannot fill in the request are filled by `fill_task` on the `onion_media` Celery
 queue. `queue_fill` queues one task per URL in ten minutes, however many requests miss it. The queue shares the
 background worker's slots, so a fill must not hold them all: at most one fill per remote host runs at once (in the
-request or in the background), at most one background fill that is not plainly an image, and a body slower than
-MIN_BYTES_PER_SECOND on average is refused once MIN_RATE_AFTER seconds have passed. A task that finds its slot taken
-queues itself again REQUEUE_SECONDS later.
+request or in the background), at most one background fill that is not plainly an image (a URL that looks like an
+image is held to the image cap whatever it answers), and once MIN_RATE_AFTER seconds have passed each RATE_WINDOW
+seconds of body must bring MIN_BYTES_PER_SECOND on average. A task that finds its slot taken queues itself again
+REQUEUE_SECONDS later, at most MAX_REQUEUES times; then it is dropped and the next view queues it afresh.
 """
 import contextlib
 import hashlib
@@ -40,8 +41,10 @@ AV_SLOT_KEY = 'onion_media:av_inflight'     # the one background fill that is no
 HOST_KEY = 'onion_media:host:{}'            # the one fill from this remote host
 SLOT_SLACK = 30                 # a slot outlives its fill's deadline by this, and frees itself if a worker dies
 REQUEUE_SECONDS = 30            # a task whose slot is taken runs again this much later
+MAX_REQUEUES = 20               # then it is dropped, not marked dead: the queued key lapses and a later view requeues
 MIN_RATE_AFTER = 20             # seconds of body transfer before the throughput floor applies
 MIN_BYTES_PER_SECOND = 64 * 1024    # a slower body is refused: a trickle would hold a worker for the whole deadline
+RATE_WINDOW = 10                # the floor applies to each window of this many seconds, so a fast start buys nothing
 MAX_REDIRECTS = 5
 READ_TIMEOUT = 10               # per read; the whole fill is bounded by max_seconds
 _REDIRECTS = {301, 302, 303, 307, 308}
@@ -141,7 +144,7 @@ def _fetch(remote: str, temporary: pathlib.Path, deadline: float) -> str:
         response = app_pkg.httpx_client.send(request, stream=True, follow_redirects=False)
         try:
             if response.status_code not in _REDIRECTS:
-                return _store(response, temporary, deadline)
+                return _store(response, temporary, deadline, url_kind(remote) == 'image')
             location = response.headers.get('Location')
             if not location:
                 raise Refused(f'{url} redirected without a Location')
@@ -151,8 +154,10 @@ def _fetch(remote: str, temporary: pathlib.Path, deadline: float) -> str:
     raise Refused(f'{remote} redirected more than {MAX_REDIRECTS} times')
 
 
-def _store(response: httpx.Response, temporary: pathlib.Path, deadline: float) -> str:
-    """Stream an allowed, uncompressed 200 body to `temporary` under its type's cap and the deadline."""
+def _store(response: httpx.Response, temporary: pathlib.Path, deadline: float, image_url: bool) -> str:
+    """Stream an allowed, uncompressed 200 body to `temporary` under its type's cap (the image cap for a URL that
+    looks like an image, `image_url`, since only that guess chose its fill slot), the deadline and the throughput
+    floor."""
     if response.status_code != 200:
         raise Refused(f'{response.url} answered {response.status_code}')
     content_type = response.headers.get('Content-Type', '').split(';')[0].strip().lower()
@@ -161,7 +166,7 @@ def _store(response: httpx.Response, temporary: pathlib.Path, deadline: float) -
         raise Refused(f'{response.url} is {content_type!r}')
     if response.headers.get('Content-Encoding', 'identity').strip().lower() != 'identity':
         raise Refused(f'{response.url} sent a {response.headers["Content-Encoding"]} body')
-    if media == 'image':
+    if media == 'image' or image_url:
         cap = get_setting('onion_media_image_max_bytes', 20971520)
     else:
         cap = get_setting('onion_media_av_max_bytes', 524288000)
@@ -171,6 +176,7 @@ def _store(response: httpx.Response, temporary: pathlib.Path, deadline: float) -
     if declared is not None and (not declared.strip().isdigit() or int(declared) > cap):
         raise Refused(f'{response.url} declared {declared} bytes, over the cap of {cap}')
     written = 0
+    window_start, window_bytes = started + MIN_RATE_AFTER, 0
     with open(temporary, 'xb') as file:
         for chunk in response.iter_raw():
             written += len(chunk)
@@ -179,25 +185,33 @@ def _store(response: httpx.Response, temporary: pathlib.Path, deadline: float) -
             now = monotonic()
             if now > deadline:
                 raise Refused(f'{response.url} was still sending at the deadline')
-            elapsed = now - started
-            if elapsed > MIN_RATE_AFTER and written < MIN_BYTES_PER_SECOND * elapsed:
-                raise Refused(f'{response.url} sent {written} bytes in {elapsed:.0f} s, under the throughput floor')
+            if now > window_start:
+                window_bytes += len(chunk)
+                if now - window_start >= RATE_WINDOW:
+                    if window_bytes < MIN_BYTES_PER_SECOND * (now - window_start):
+                        raise Refused(f'{response.url} sent {window_bytes} bytes in {now - window_start:.0f} s, '
+                                      'under the throughput floor')
+                    window_start, window_bytes = now, 0
             file.write(chunk)
     return content_type
 
 
 @celery.task
-def fill_task(remote: str) -> None:
+def fill_task(remote: str, attempt: int = 0) -> None:
     """Fill `remote` in the background, or queue this task again when its host's slot, or for a URL that is not
-    plainly an image the one audio/video slot, is taken."""
+    plainly an image the one audio/video slot, is taken. `attempt` counts the re-queues; the one after
+    MAX_REQUEUES is dropped."""
     keys = [host_key(remote)] if url_kind(remote) == 'image' else [AV_SLOT_KEY, host_key(remote)]
     slots = []
     try:
         for key in keys:
             token = take_slot(key, BACKGROUND_SECONDS + SLOT_SLACK)
             if token is None:
-                app_pkg.redis_client.expire(_queued_key(remote), QUEUED_SECONDS)    # still queued: no duplicate
-                fill_task.apply_async((remote,), countdown=REQUEUE_SECONDS)
+                if attempt >= MAX_REQUEUES:
+                    current_app.logger.info(f'onion media: {remote} not filled, its slot stayed busy')
+                    return
+                app_pkg.redis_client.set(_queued_key(remote), '1', ex=QUEUED_SECONDS)   # still queued: no duplicate
+                fill_task.apply_async((remote, attempt + 1), countdown=REQUEUE_SECONDS)
                 return
             slots.append((key, token))
         fill(remote, max_seconds=BACKGROUND_SECONDS)
