@@ -27,7 +27,8 @@ from app.utils import getmtime, gibberish, shorten_string, shorten_url, digits, 
     in_sorted_list, role_access, first_paragraph, person_link_to_href, feed_membership, html_to_text, remove_images, \
     notif_id_to_string, feed_link_to_href, get_setting, set_setting, show_explore, human_filesize, can_upload_video, can_upload_audio, \
     debug_checkpoint, compaction_level, humanize_number, round_invisible_digits, get_site_as_dict, localize_datetime, \
-    display_back_button, favorite_communities, get_event_start, reply_filter_keyword, user_banned_from_community
+    display_back_button, favorite_communities, get_event_start, reply_filter_keyword, user_banned_from_community, \
+    PROBE_PATH_RE, log_probe_refused
 from app.quotes import prime_quotes, quote_state
 from app.variants import shown, switch_url
 from app.visibility import can_view
@@ -216,6 +217,9 @@ def register_request_hooks(app):
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, User-Agent'
 
         secure_mode_cache_headers(response)   # S6 secure mode: a signed answer must not reach a shared cache
+
+        if 400 <= response.status_code < 500 and PROBE_PATH_RE.match(request.path):
+            log_probe_refused()
 
         # An ActivityPub answer's content type follows the Accept header (ap_media_type), so it varies on it
         ap_response = response.mimetype in AP_MEDIA_TYPES

@@ -22,11 +22,14 @@ so this never leaks between tests.
 
 from datetime import datetime
 
+import logging
+import re
+
 import pytest
 from flask import g, render_template_string
 from sqlalchemy import text
 
-from app import db
+from app import db, request_hooks
 from app.constants import ROLE_ADMIN, ROLE_ADMIN_NAME
 from app.models import Role, Settings, Site
 from app.utils import etag_stamp
@@ -686,3 +689,37 @@ def test_shell_context_processor_returns_db_and_app(app, db_session):
     )
 
     assert make_shell_context() == {'db': db, 'app': app}
+
+
+# ---------------------------------------------------------------------------
+# after_request: a probe path answered 4xx logs `scan: probe refused ip=<ip>` for fail2ban
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def captured(caplog):
+    caplog.set_level(logging.DEBUG)
+    return caplog
+
+
+def scan_lines(caplog):
+    return [r.getMessage() for r in caplog.records if r.getMessage().startswith('scan:')]
+
+
+@pytest.mark.parametrize('path', ['/wp-login.php', '/.env', '/phpmyadmin/', '/cgi-bin/x', '/xmlrpc.php'])
+def test_a_probe_answered_4xx_logs_one_line(app, db_session, captured, path):
+    app.test_client().get(path, environ_base={'REMOTE_ADDR': '203.0.113.9'})
+    assert scan_lines(captured) == ['scan: probe refused ip=203.0.113.9']
+
+
+def test_a_non_probe_404_and_an_inner_wp_path_log_nothing(app, db_session, captured):
+    client = app.test_client()
+    client.get('/no-such-page')
+    client.get('/c/wp-fans')
+    assert not scan_lines(captured)
+
+
+def test_a_probe_path_answered_200_logs_nothing(app, db_session, captured, monkeypatch):
+    monkeypatch.setattr(request_hooks, 'PROBE_PATH_RE', re.compile(r'/robots'))   # a real path that answers 200
+    response = app.test_client().get('/robots.txt')
+    assert response.status_code == 200
+    assert not scan_lines(captured)

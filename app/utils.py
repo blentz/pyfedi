@@ -3589,6 +3589,16 @@ ip_address = get_ip_address
 LOGGABLE_IP_RE = re.compile(r'[0-9a-fA-F:.]+')
 
 
+def loggable_client(client: str | None = None) -> str:
+    """What a fail2ban line may say about the caller: the address, `onion` for an onion request (they all share the
+    proxy's address, so no ban can act on it), or `invalid` for anything outside [0-9a-fA-F:.]. `client` is a peer
+    address given by a caller with no HTTP request to read one from (NNTP, which is not served on the onion)."""
+    if client is None and is_onion_request():
+        return 'onion'
+    client = ip_address() if client is None else client
+    return client if client and LOGGABLE_IP_RE.fullmatch(client) else 'invalid'
+
+
 # The rule: this logs failed CREDENTIAL checks only -- a wrong password, an unknown name, a failed LDAP bind, a failed
 # NNTP credential check. A refusal of an account that authenticated correctly (banned, deleted, unverified,
 # registrations closed, a declined country, an OAuth profile with no email or an email already in use) is not one,
@@ -3604,11 +3614,23 @@ def log_login_failure(client: str | None = None):
     the user name or email. Callers log only after a password was really checked (or the account was not found):
     a refused proof-of-work or wait token, and a visible wait refusal, are not failed checks.
     """
-    where = 'onion'
-    if client is not None or not is_onion_request():
-        client = ip_address() if client is None else client
-        where = client if client and LOGGABLE_IP_RE.fullmatch(client) else 'invalid'
-    current_app.logger.warning('auth: login failed ip=%s', where)
+    current_app.logger.warning('auth: login failed ip=%s', loggable_client(client))
+
+
+def log_register_attempt():
+    """One WARNING line per registration POST, valid or not: `auth: register attempt ip=<ip>`, which fail2ban on the
+    host matches to ban a clearnet address that keeps posting the form. The address is as in log_login_failure."""
+    current_app.logger.warning('auth: register attempt ip=%s', loggable_client())
+
+
+# What scanners ask for: WordPress, dotenv files, phpMyAdmin, CGI, XML-RPC. Matched at the start of the path, so a
+# community called wp-fans (/c/wp-fans) is not one.
+PROBE_PATH_RE = re.compile(r'/(?:wp-|\.env|phpmyadmin|cgi-bin|xmlrpc\.php)')
+
+
+def log_probe_refused():
+    """One WARNING line for a probe path the site answered with a 4xx: `scan: probe refused ip=<ip>`, for fail2ban."""
+    current_app.logger.warning('scan: probe refused ip=%s', loggable_client())
 
 
 def user_ip_banned() -> bool:
