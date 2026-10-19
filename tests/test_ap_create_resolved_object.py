@@ -511,6 +511,30 @@ class TestTheUserOperand:
         assert ActivityPubLog.query.count() == 0
 
 
+class TestAnAuthorThatIsNotAUser:
+    """find_actor_or_create returns whatever actor the URI names, and a peer can attribute a document to a Group:
+    a relayed PeerTube video did, on 2026-10-19. The posting gates read User-only fields, so a Community author
+    raised AttributeError('Community' object has no attribute 'ban_posts') out of the relay task. Such a document
+    is refused instead, on both the post and the reply branch.
+
+    Production change that fails these: dropping the isinstance(user, User) refusal."""
+
+    def test_a_post_attributed_to_a_community_is_refused(self, app, peer_author, monkeypatch):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        author_lookup_spy(monkeypatch, community)
+
+        assert resolved(public_note(), community) is None
+        assert Post.query.filter_by(ap_id=URI).count() == 0
+
+    def test_a_reply_attributed_to_a_community_is_refused(self, app, peer_author, monkeypatch):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        parent_post(community, peer_author)
+        author_lookup_spy(monkeypatch, community)
+
+        assert resolved(reply_note(), community) is None
+        assert PostReply.query.filter_by(ap_id=URI).count() == 0
+
+
 class TestTheCommunityOperand:
     """`community` is the second operand, and its falsy case is simply None --
     the alpha API reaches this function with whatever find_community returned,

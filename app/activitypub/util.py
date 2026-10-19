@@ -6415,7 +6415,8 @@ def create_resolved_object(uri, post_data, uri_domain, community, announce_id, s
         return None
 
     user = find_actor_or_create(actor)
-    if user and community and post_data:
+    # A peer can attribute a document to a Group; the posting gates below read User-only fields.
+    if isinstance(user, User) and community and post_data:
         activity = 'update' if 'updated' in post_data else 'create'
         request_json = {'id': f"https://{uri_domain}/activities/{activity}/{gibberish(15)}", 'object': post_data}
         if 'inReplyTo' in request_json['object'] and request_json['object']['inReplyTo']:
@@ -6621,7 +6622,8 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
         community = find_community(topic_post_data, author=actor)  # use 'audience' from topic if post has no info for how it got there
     # find the post's author
     user = find_actor_or_create(actor)
-    if user and community and post_data:
+    # A peer can attribute a document to a Group; the posting gates below read User-only fields.
+    if isinstance(user, User) and community and post_data:
         request_json = {'id': f"https://{uri_domain}/activities/create/{gibberish(15)}", 'object': post_data}
         # not really what this function is intended for, but get comment or fail if comment URL is searched for
         if 'inReplyTo' in post_data and post_data['inReplyTo'] is not None:

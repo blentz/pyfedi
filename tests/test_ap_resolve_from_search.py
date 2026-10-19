@@ -869,6 +869,16 @@ class TestTheInboundCreateGate:
         assert resolve_remote_post_from_search(URI) is None
         assert PostReply.query.filter_by(ap_id=URI).count() == 0
 
+    def test_a_post_attributed_to_a_community_is_not_stored(self, app, peer_author, http_mock, monkeypatch):
+        """A peer can attribute a document to a Group. The gates read User-only fields (ban_posts), so a Community
+        author raised AttributeError instead of being refused, as create_resolved_object's did from a relay."""
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        serve_remote_object(http_mock, URI, resolvable(public_note(), community))
+        author_lookup_spy(monkeypatch, community)
+
+        assert resolve_remote_post_from_search(URI) is None
+        assert Post.query.filter_by(ap_id=URI).count() == 0
+
 
 class TestTheEnrichment:
     """`object.posted_at` is set whenever the document carries 'published', and
