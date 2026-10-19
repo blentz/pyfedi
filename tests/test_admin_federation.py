@@ -31,9 +31,10 @@ from unittest.mock import Mock, patch
 import pytest
 
 from app import cache, db
+from app.activitypub.util import hosted_inbox_hosts
 from app.models import (AllowedInstances, BannedInstances,
                         DefederationSubscription, Domain, Site, Tag, User)
-from app.utils import LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS
+from app.utils import LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS, get_setting
 from tests.factories import grant_permission, make_instance, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -1160,3 +1161,25 @@ def test_saving_the_federation_form_drops_the_memoized_site(admin_client, monkey
     _post(client, token)
 
     assert 'get_site_as_dict' in dropped
+
+
+def test_the_hosted_inbox_platforms_are_stored_and_take_effect_now(admin_client):
+    """Owner ruling 2026-10-19: the hosted-inbox list sits with the other federation lists. It is memoized and read
+    on every actor fetch, so a saved list must apply now rather than when the cache expires."""
+    client, token = admin_client
+    assert hosted_inbox_hosts() == frozenset({'public-api.wordpress.com', 'micro.blog'})
+
+    _post(client, token, hosted_inbox_hosts='micro.blog\nwrite.as')
+
+    assert get_setting('hosted_inbox_hosts') == 'micro.blog\nwrite.as'
+    assert hosted_inbox_hosts() == frozenset({'micro.blog', 'write.as'})
+
+
+def test_the_form_shows_the_hosted_inbox_platforms_in_force(admin_client):
+    """Before any save the defaults are in force, so the form shows them rather than an empty box."""
+    client, _token = admin_client
+
+    with patch('app.admin.routes.render_template', return_value='rendered') as render:
+        client.get('/admin/federation')
+
+    assert render.call_args.kwargs['form'].hosted_inbox_hosts.data == 'micro.blog\npublic-api.wordpress.com'
