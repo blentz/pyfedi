@@ -4,6 +4,7 @@ The cache directory is a tmp_path put in `MEDIA_PROXY_DIR`. File ages are set wi
 """
 import os
 import time
+from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
@@ -94,6 +95,14 @@ def test_cli_command_default_cap_leaves_a_small_cache(app, db_session, cache):
     cli.register(app)
     assert app.test_cli_runner().invoke(args=['evict_onion_media']).exit_code == 0
     assert kept.exists()
+
+
+def test_cli_command_logs_the_run_like_the_other_cron_jobs(app, db_session, cache):
+    from app.models import CronJobLog
+    cli.register(app)
+    assert app.test_cli_runner().invoke(args=['evict_onion_media']).exit_code == 0
+    row = CronJobLog.query.filter_by(name='evict_onion_media').one()
+    assert row.get_frequency() == timedelta(hours=1)
 
 
 def _post(app, db_session, **fields):

@@ -5841,6 +5841,8 @@ class CronJobLog(db.Model):
             return timedelta(hours=25)
         elif self.name == 'send_queue':
             return timedelta(minutes=5)
+        elif self.name == 'evict_onion_media':
+            return timedelta(hours=1)  # runs every 15 minutes
         # D1334. This used to fall off the end and answer None for any name not
         # listed above, and `app/admin/routes.py` does
         # `if diff_last_run > cron_task.get_frequency():`, so the admin dashboard

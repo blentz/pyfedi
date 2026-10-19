@@ -1597,6 +1597,7 @@ def register(app):
         """ Keep the onion remote-media cache under the admin's size cap, dropping the least recently used files """
         with app.app_context():
             evict(get_setting('onion_media_cache_bytes', 10737418240))
+            log_cron_task_to_db("evict_onion_media")
 
     @app.cli.command("send_missed_notifs")
     def send_missed_notifs():
