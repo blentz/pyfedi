@@ -4,7 +4,9 @@ Every hop, redirects included, passes the SSRF guard (`is_invalid_get_request_ur
 sent, and is sent through `app.httpx_client`, whose pinned transport refuses a name that resolves to a refused
 address and connects only to an address it checked (app/pinned_http.py). The body is streamed to a temporary file in
 the cache directory under its type's size cap and renamed into place only when complete, so a partial file is never
-served.
+served. The cache dir shares its disk with Postgres, and eviction runs only every 15 minutes, so a fill is refused,
+before the fetch and every CHECK_BYTES written, while the disk has under DISK_RESERVE free or the byte counter
+(BYTES_KEY) is past OVER_CAP times the cache cap. That refusal is a local condition and does not mark the URL dead.
 
 Video, audio and the images the route cannot fill in the request are filled by `fill_task` on the `onion_media` Celery
 queue. `queue_fill` queues one task per URL in ten minutes, however many requests miss it. The queue shares the
@@ -18,6 +20,7 @@ import contextlib
 import hashlib
 import os
 import pathlib
+import shutil
 import uuid
 from time import monotonic
 from urllib.parse import urlsplit
@@ -28,7 +31,7 @@ from redis.exceptions import RedisError
 
 import app as app_pkg
 from app import celery
-from app.onion_media import cache_name, kind, url_kind
+from app.onion_media import BYTES_KEY, cache_name, kind, url_kind
 from app.pinned_http import fetch_deadline
 from app.utils import domain_from_url, get_setting, instance_banned, is_invalid_get_request_uri
 
@@ -47,11 +50,18 @@ MIN_BYTES_PER_SECOND = 64 * 1024    # a slower body is refused: a trickle would 
 RATE_WINDOW = 10                # the floor applies to each window of this many seconds, so a fast start buys nothing
 MAX_REDIRECTS = 5
 READ_TIMEOUT = 10               # per read; the whole fill is bounded by max_seconds
+DISK_RESERVE = 20 * 1024 ** 3   # free bytes a fill leaves on the disk: Postgres shares it
+CHECK_BYTES = 8 * 1024 * 1024   # the disk and the byte counter are checked again each time a fill writes this much
+OVER_CAP = 1.1                  # the byte counter may pass the cache cap by this factor before fills stop
 _REDIRECTS = {301, 302, 303, 307, 308}
 
 
 class Refused(Exception):
     """The URL, or what it answered, is one the proxy does not fetch or keep."""
+
+
+class NoRoom(OSError):
+    """The cache has no room for a fill: the disk is nearly full, or the cache is past its cap. Not the URL's fault."""
 
 
 def _dead_key(remote: str) -> str:
@@ -112,12 +122,15 @@ def fill(remote: str, *, max_seconds: float) -> pathlib.Path | None:
     temporary = directory / f'.tmp-{uuid.uuid4().hex}'
     try:
         directory.mkdir(parents=True, exist_ok=True)
+        _check_room(directory, 0)
         with fetch_deadline(max_seconds):
             content_type = _fetch(remote, temporary, monotonic() + max_seconds)
         path = directory / cache_name(remote, content_type)
+        size = temporary.stat().st_size
         os.replace(temporary, path)
+        _count(remote, size)
         return path
-    except OSError as error:            # the cache directory, not the remote server
+    except OSError as error:            # the cache directory or its disk (NoRoom), not the remote server
         current_app.logger.warning(f'onion media: could not store {remote}: {error}')
         return None
     except Exception as error:          # Refused, httpx errors (InvalidURL included), anything the remote caused
@@ -127,6 +140,27 @@ def fill(remote: str, *, max_seconds: float) -> pathlib.Path | None:
     finally:
         with contextlib.suppress(OSError):
             temporary.unlink(missing_ok=True)
+
+
+def _check_room(directory: pathlib.Path, written: int) -> None:
+    """Raise NoRoom when the disk under `directory` has less than DISK_RESERVE free, or when `written` more bytes take
+    the byte counter past OVER_CAP times the cache cap. A counter Redis cannot read refuses nothing."""
+    if shutil.disk_usage(directory).free < DISK_RESERVE:
+        raise NoRoom(f'under {DISK_RESERVE} bytes free on the disk')
+    try:
+        counted = int(app_pkg.redis_client.get(BYTES_KEY) or 0)
+    except RedisError:
+        return
+    cap = get_setting('onion_media_cache_bytes', 10737418240)
+    if counted + written > cap * OVER_CAP:
+        raise NoRoom(f'the cache holds {counted} bytes, past its cap of {cap}')
+
+
+def _count(remote: str, size: int) -> None:
+    try:
+        app_pkg.redis_client.incrby(BYTES_KEY, size)
+    except RedisError as error:
+        current_app.logger.warning(f'onion media: could not count {remote} in the byte counter: {error}')
 
 
 def _fetch(remote: str, temporary: pathlib.Path, deadline: float) -> str:
@@ -156,8 +190,8 @@ def _fetch(remote: str, temporary: pathlib.Path, deadline: float) -> str:
 
 def _store(response: httpx.Response, temporary: pathlib.Path, deadline: float, image_url: bool) -> str:
     """Stream an allowed, uncompressed 200 body to `temporary` under its type's cap (the image cap for a URL that
-    looks like an image, `image_url`, since only that guess chose its fill slot), the deadline and the throughput
-    floor."""
+    looks like an image, `image_url`, since only that guess chose its fill slot), the deadline, the throughput
+    floor and the room left (`_check_room`, each CHECK_BYTES)."""
     if response.status_code != 200:
         raise Refused(f'{response.url} answered {response.status_code}')
     content_type = response.headers.get('Content-Type', '').split(';')[0].strip().lower()
@@ -175,13 +209,16 @@ def _store(response: httpx.Response, temporary: pathlib.Path, deadline: float, i
     declared = response.headers.get('Content-Length')
     if declared is not None and (not declared.strip().isdigit() or int(declared) > cap):
         raise Refused(f'{response.url} declared {declared} bytes, over the cap of {cap}')
-    written = 0
+    written, next_check = 0, CHECK_BYTES
     window_start, window_bytes = started + MIN_RATE_AFTER, 0
     with open(temporary, 'xb') as file:
         for chunk in response.iter_raw():
             written += len(chunk)
             if written > cap:
                 raise Refused(f'{response.url} sent more than {cap} bytes')
+            if written >= next_check:
+                _check_room(temporary.parent, written)
+                next_check = written + CHECK_BYTES
             now = monotonic()
             if now > deadline:
                 raise Refused(f'{response.url} was still sending at the deadline')
