@@ -42,6 +42,7 @@ app.utils.is_valid_xml_utf8's character table disagree with XML 1.0 -- or that
 makes a budgeted target's input exceed its budget.
 """
 
+import gc
 import pathlib
 import time
 
@@ -109,12 +110,23 @@ def run_case(target, data: bytes, clock=time.thread_time, slowdown=machine_slowd
     scaled budget allows for the machine, not for a slower function: a
     regression is as many times slower than reference_work on any machine.
 
+    The cycle collector is off while the check runs: a gen-2 pass over a
+    long-running worker's heap costs hundreds of ms of CPU (619 ms for 8.4 M
+    objects), which is no input's doing, and fell inside c2pa_inspect/avif
+    once its place in the run moved.
+
     `clock` and `slowdown` are parameters only so the budget assertion can be
     tested without a genuinely slow check or machine.
     """
-    started = clock()
-    target.check(data)
-    elapsed_ms = (clock() - started) * 1000
+    collecting = gc.isenabled()
+    gc.disable()
+    try:
+        started = clock()
+        target.check(data)
+        elapsed_ms = (clock() - started) * 1000
+    finally:
+        if collecting:
+            gc.enable()
     if target.budget_ms is not None:
         hold_to_budget(f'{target.name}: one input', elapsed_ms, target.budget_ms, slowdown)
 
@@ -218,6 +230,21 @@ class TestRunCase:
                 pass
         with pytest.raises(AssertionError, match='over its 50 ms budget'):
             run_case(self._target(spin, budget_ms=50), b'x', slowdown=lambda: 1.0)
+
+    def test_the_cycle_collector_never_runs_inside_the_timed_check(self):
+        """A full collection of a long-running worker's heap (8.4 M objects) took 619 ms of CPU, and a gen-2 pass
+        that fell inside c2pa_inspect/avif charged it 752 ms against its 50 ms budget. That is the interpreter's
+        time spent on other tests' objects, not the check's."""
+        seen = []
+        run_case(self._target(lambda data: seen.append(gc.isenabled()), budget_ms=50), b'x')
+        assert seen == [False]
+        assert gc.isenabled()
+
+        def breaks(data):
+            raise AssertionError('property broke')
+        with pytest.raises(AssertionError, match='property broke'):
+            run_case(self._target(breaks, budget_ms=50), b'x')
+        assert gc.isenabled()
 
     def test_the_check_receives_the_bytes_unchanged(self):
         seen = []
