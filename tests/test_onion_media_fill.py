@@ -4,10 +4,11 @@ The remote servers are an httpx.MockTransport put in place of `app.httpx_client`
 through, so no test reaches the network. Host names under `.example` resolve to a public address through a stubbed
 `socket.getaddrinfo`, so `is_invalid_get_request_uri` runs its real checks (DEBUG off) without a DNS lookup. A refused
 hop is proven refused before connecting: the mock transport never sees its request. Redis is the `redis_double`
-fakeredis.
+fakeredis. Free disk space is a stubbed `shutil.disk_usage`, plenty unless a test says otherwise.
 """
 import hashlib
 import socket
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -16,13 +17,14 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 import app as app_pkg
 from app import db
 from app.models import Domain
-from app.onion_media import cache_name, cached_file, kind
-from app.onion_media_fill import fill, is_dead
+from app.onion_media import BYTES_KEY, cache_name, cached_file, kind
+from app.onion_media_fill import CHECK_BYTES, DISK_RESERVE, fill, is_dead
 from app.pinned_http import PinnedNetworkBackend
 from app.utils import set_setting
 from tests.factories import make_banned_instance
 
 PNG = b'\x89PNG\r\n\x1a\n' + b'x' * 100
+GIB = 1024 ** 3
 REMOTE = 'https://media.example/pictrs/image/a.png'
 _real_getaddrinfo = socket.getaddrinfo
 
@@ -58,7 +60,20 @@ def remote(app, db_session, redis_double, tmp_path, monkeypatch):
     monkeypatch.setattr(app, 'debug', False)
     monkeypatch.setitem(app.config, 'MEDIA_PROXY_DIR', str(tmp_path))
     monkeypatch.setattr('app.httpx_client', httpx.Client(transport=httpx.MockTransport(web.handler)))
+    free_disk(monkeypatch, 100 * GIB)
     return web
+
+
+def free_disk(monkeypatch, *free):
+    """`shutil.disk_usage` answers each of `free` in turn as the free bytes, then the last one again. Returns the
+    paths it was asked about."""
+    asked = []
+
+    def disk_usage(path):
+        asked.append(path)
+        return SimpleNamespace(free=free[min(len(asked), len(free)) - 1])
+    monkeypatch.setattr('app.onion_media_fill.shutil.disk_usage', disk_usage)
+    return asked
 
 
 def image(body=PNG, content_type='image/png', **headers):
@@ -350,6 +365,77 @@ def test_redis_failure_does_not_raise(remote, monkeypatch):
         def exists(self, *args):
             raise RedisConnectionError('redis down')
 
+        def get(self, *args):
+            raise RedisConnectionError('redis down')
+
+        def incrby(self, *args):
+            raise RedisConnectionError('redis down')
+
     monkeypatch.setattr('app.redis_client', Down())
     assert fill('http://127.0.0.1/a.png', max_seconds=15) is None
     assert not is_dead(REMOTE)
+    remote.routes[REMOTE] = image()
+    assert fill(REMOTE, max_seconds=15) is not None     # an unread byte counter refuses nothing
+
+
+def test_a_fill_is_refused_without_a_request_while_the_disk_is_nearly_full(remote, tmp_path, monkeypatch):
+    """Postgres shares the disk, so a fill never takes it under 20 GiB free. That is a local condition, not the
+    URL's: the URL is not remembered as dead."""
+    assert DISK_RESERVE == 20 * GIB
+    asked = free_disk(monkeypatch, 20 * GIB - 1)
+    remote.routes[REMOTE] = image()
+    assert fill(REMOTE, max_seconds=15) is None
+    assert remote.seen == []
+    assert asked == [tmp_path]
+    assert not is_dead(REMOTE)
+    assert leftovers(tmp_path) == []
+    free_disk(monkeypatch, 20 * GIB)
+    assert fill(REMOTE, max_seconds=15) is not None
+
+
+def chunked(count, size=60):
+    return httpx.Response(200, headers={'Content-Type': 'video/mp4'}, content=iter([b'x' * size] * count))
+
+
+def test_a_fill_stops_when_the_disk_fills_while_it_streams(remote, tmp_path, monkeypatch):
+    assert CHECK_BYTES == 8 * 1024 * 1024
+    monkeypatch.setattr('app.onion_media_fill.CHECK_BYTES', 100)
+    asked = free_disk(monkeypatch, 30 * GIB, 30 * GIB, 10 * GIB)    # before the fetch, at 120 bytes, at 240 bytes
+    video = 'https://media.example/v.mp4'
+    remote.routes[video] = chunked(5)
+    assert fill(video, max_seconds=15) is None
+    assert len(asked) == 3
+    assert remote.urls() == [video]
+    assert not is_dead(video)
+    assert leftovers(tmp_path) == []
+
+
+def test_a_stored_file_adds_its_size_to_the_byte_counter(remote, redis_double):
+    remote.routes[REMOTE] = image()
+    other = 'https://media.example/b.png'
+    remote.routes[other] = image()
+    fill(REMOTE, max_seconds=15)
+    assert int(redis_double.get(BYTES_KEY)) == len(PNG)
+    fill(other, max_seconds=15)
+    assert int(redis_double.get(BYTES_KEY)) == 2 * len(PNG)
+
+
+def test_a_fill_is_refused_once_the_byte_counter_passes_the_cache_cap(remote, tmp_path, redis_double, monkeypatch):
+    """Eviction runs every 15 minutes; between runs the byte counter holds the cache to 1.1 x its cap."""
+    set_setting('onion_media_cache_bytes', 1000)
+    redis_double.set(BYTES_KEY, 1101)
+    remote.routes[REMOTE] = image()
+    assert fill(REMOTE, max_seconds=15) is None
+    assert remote.seen == []
+    assert not is_dead(REMOTE)
+    redis_double.set(BYTES_KEY, 1100)                   # at 1.1 x the cap is not past it
+    assert fill(REMOTE, max_seconds=15) is not None
+
+    monkeypatch.setattr('app.onion_media_fill.CHECK_BYTES', 100)
+    redis_double.set(BYTES_KEY, 1000)
+    video = 'https://media.example/v.mp4'
+    remote.routes[video] = chunked(5)                   # passes 1100 at the check at 120 bytes
+    assert fill(video, max_seconds=15) is None
+    assert remote.urls()[-1] == video
+    assert not is_dead(video)
+    assert leftovers(tmp_path) == [cache_name(REMOTE, 'image/png')]

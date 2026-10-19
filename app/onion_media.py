@@ -9,7 +9,8 @@ The cache file name is the sha256 of the remote URL plus an extension chosen fro
 
 `kind` sorts an allowed type into images and video/audio, which have separate size caps. `url_kind` guesses the
 same from a URL before anything is fetched, so the route can choose to fill in the request or in the background.
-`evict` keeps the cache under the admin's size cap by deleting the least recently used files.
+`evict` keeps the cache under the admin's size cap by deleting the least recently used files, and sets the byte
+counter that holds fills back between its runs (BYTES_KEY) to the real total.
 The fill itself is in app/onion_media_fill.py: it needs app.utils, which imports app.models, which imports this
 module through app.storefront.
 """
@@ -24,6 +25,9 @@ import time
 from urllib.parse import urlsplit
 
 from flask import current_app
+from redis.exceptions import RedisError
+
+import app as app_pkg
 
 EXTENSIONS = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp',
               'image/avif': '.avif', 'image/apng': '.apng', 'video/mp4': '.mp4', 'video/webm': '.webm',
@@ -34,6 +38,7 @@ CACHE_FILE = re.compile(r'[0-9a-f]{64}\.[a-z0-9]+')
 TEMPORARY_FILE = re.compile(r'\.tmp-[0-9a-f]{32}')
 TEMPORARY_MAX_AGE = 3600        # seconds; a fill that is still running does not take an hour
 EVICT_TARGET = 0.9
+BYTES_KEY = 'onion_media:bytes'         # the cache's bytes: each fill adds its file, each eviction counts afresh
 
 
 def _sign(remote: str) -> str:
@@ -92,8 +97,9 @@ def url_kind(remote: str) -> str:
 
 def evict(cap_bytes: int) -> int:
     """Bytes freed. Deletes `.tmp-*` files older than an hour. When the cache files total more than `cap_bytes`, deletes
-    the oldest by mtime (a hit refreshes it) until the total is at most 90% of the cap. Only regular files named like a
-    cache file or a temporary one are looked at, and a symlink is never followed, so anything else in the directory stays."""
+    the oldest by mtime (a hit refreshes it) until the total is at most 90% of the cap, then sets BYTES_KEY to the total
+    left. Only regular files named like a cache file or a temporary one are looked at, and a symlink is never followed,
+    so anything else in the directory stays."""
     freed = 0
     cached = []
     total = 0
@@ -126,4 +132,8 @@ def evict(cap_bytes: int) -> int:
                 pass
             total -= size
             freed += size
+    try:
+        app_pkg.redis_client.set(BYTES_KEY, total)
+    except RedisError as error:
+        current_app.logger.warning(f'onion media: could not reset the byte counter: {error}')
     return freed

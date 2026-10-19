@@ -9,8 +9,10 @@ from unittest.mock import patch
 
 import pytest
 
+from redis.exceptions import ConnectionError as RedisConnectionError
+
 from app import cli
-from app.onion_media import evict
+from app.onion_media import BYTES_KEY, evict
 from app.utils import get_setting, set_setting
 from tests.test_admin_routes_entry import _language, _seed, _settings_admin, _valid_misc_payload, csrf, login
 
@@ -18,7 +20,7 @@ MIB = 1048576
 
 
 @pytest.fixture
-def cache(app, tmp_path, monkeypatch):
+def cache(app, tmp_path, monkeypatch, redis_double):
     monkeypatch.setitem(app.config, 'MEDIA_PROXY_DIR', str(tmp_path))
     return tmp_path
 
@@ -111,6 +113,28 @@ def test_a_file_that_vanishes_before_its_eviction_still_counts_as_freed(cache):
     _entry(cache, 2, 100, age=10)
     with patch('app.onion_media.os.unlink', side_effect=FileNotFoundError):
         assert evict(100) == 200   # 200 bytes down to the 90-byte target takes both files; another worker removed them first
+
+
+def test_evict_sets_the_byte_counter_to_the_real_total(cache, redis_double):
+    redis_double.set(BYTES_KEY, 10 ** 9)                # counted fills since the last run, files deleted by hand
+    for n in range(1, 11):
+        _entry(cache, n, 100, age=1000 - n)
+    (cache / ('.tmp-' + 'a' * 32)).write_bytes(b'x' * 7)   # a fill still running is not in the total
+    evict(900)
+    assert int(redis_double.get(BYTES_KEY)) == 800
+    evict(10 ** 9)                                      # under the cap: still the real total
+    assert int(redis_double.get(BYTES_KEY)) == 800
+
+
+def test_evict_without_redis_still_evicts(cache, monkeypatch):
+    class Down:
+        def set(self, *args, **kwargs):
+            raise RedisConnectionError('redis down')
+
+    monkeypatch.setattr('app.redis_client', Down())
+    for n in range(1, 4):
+        _entry(cache, n, 100, age=1000 - n)
+    assert evict(0) == 300
 
 
 def test_cli_command_uses_the_setting(app, db_session, cache):
