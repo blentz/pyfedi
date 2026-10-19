@@ -144,6 +144,10 @@ class FederationForm(FlaskForm):
     blocked_phrases = TextAreaField(_l('Discard all posts, comments and PMs with these phrases (one per line)'))
     blocked_actors = TextAreaField(_l('Discard all posts and comments by users with these words in their name (one per line)'))
     blocked_bio = TextAreaField(_l('Discard all posts and comments by users with these phrases in their bio (one per line)'))
+    hosted_inbox_hosts = TextAreaField(
+        _l('Hosting platforms whose inboxes are trusted for any actor (one per line)'),
+        description=_l('An actor whose inbox is on another host is refused, unless that host is listed here. '
+                       'WordPress.com and micro.blog keep their users\' inboxes on their own hosts.'))
     auto_add_remote_communities = BooleanField(_l('Automatically add new remote communities'))
     cross_origin_delete_delay = IntegerField(
         _l("Seconds to wait before applying a moderator's Delete of a post from another server"),

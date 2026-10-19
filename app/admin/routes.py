@@ -23,7 +23,8 @@ from app.visibility import visible_to_clause
 from app.activitypub.routes import process_inbox_request, process_delete_request, replay_inbox_request, \
     SIGNATURE_FAILURE_MESSAGES, UNVERIFIED_LOG_MESSAGES
 from app.activitypub.signature import post_request, default_context, RsaKeys
-from app.activitypub.util import extract_domain_and_actor, cross_origin_delete_delay, LD_SIGNED_LOG_PREFIX
+from app.activitypub.util import extract_domain_and_actor, cross_origin_delete_delay, LD_SIGNED_LOG_PREFIX, \
+    hosted_inbox_hosts
 from app.admin.constants import ReportTypes
 from app.admin.forms import FederationForm, SiteMiscForm, SiteProfileForm, EditCommunityForm, EditUserForm, \
     EditTopicForm, SendNewsletterForm, AddUserForm, PreLoadCommunitiesForm, ImportExportBannedListsForm, \
@@ -572,10 +573,12 @@ def admin_federation():
         site.require_signed_fetch = form.require_signed_fetch.data
         set_setting('actor_blocked_words', form.blocked_actors.data)
         set_setting('actor_bio_blocked_words', form.blocked_bio.data)
+        set_setting('hosted_inbox_hosts', form.hosted_inbox_hosts.data)
         set_setting('auto_add_remote_communities', form.auto_add_remote_communities.data)
         set_setting('cross_origin_delete_delay', form.cross_origin_delete_delay.data)
         cache.delete_memoized(blocked_phrases)
         cache.delete_memoized(get_setting, 'actor_blocked_words')
+        cache.delete_memoized(get_setting, 'hosted_inbox_hosts')
         db.session.commit()
         cache.delete_memoized(get_site_as_dict)   # g.site is read from it: secure mode and allowlist mode apply now
 
@@ -593,6 +596,7 @@ def admin_federation():
         form.blocked_phrases.data = g.site.blocked_phrases
         form.blocked_actors.data = get_setting('actor_blocked_words', '')
         form.blocked_bio.data = get_setting('actor_bio_blocked_words', '')
+        form.hosted_inbox_hosts.data = '\n'.join(sorted(hosted_inbox_hosts()))
         form.auto_add_remote_communities.data = get_setting('auto_add_remote_communities', False)
         form.require_signed_fetch.data = g.site.require_signed_fetch
         form.cross_origin_delete_delay.data = cross_origin_delete_delay()

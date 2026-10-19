@@ -1205,11 +1205,33 @@ def shared_inbox_of(actor_json: dict) -> str | None:
     ruling, 2026-10-11). The actor's host is the host of its `id`; an id with no host matches nothing."""
     actor_host = _actor_host(actor_json.get('id'))
     shared_inbox = _declared_shared_inbox(actor_json, actor_host)
-    return shared_inbox if actor_host and shared_inbox is not None and host_of(shared_inbox) == actor_host else None
+    return shared_inbox if actor_host and shared_inbox is not None and inbox_trusted(shared_inbox, actor_host) else None
 
 
 def _actor_host(actor_id) -> str:
     return host_of(actor_id) if isinstance(actor_id, str) else ''
+
+
+# Hosted-blog platforms keep their users' inboxes on the platform's host, not the blog's (owner ruling 2026-10-19).
+# The admin edits the list in Federation settings; this is the list before they do.
+HOSTED_INBOX_HOSTS_DEFAULT = 'public-api.wordpress.com\nmicro.blog'
+
+
+def hosted_inbox_hosts() -> frozenset[str]:
+    """The hosts whose inboxes are trusted for an actor on any host: one per line in the hosted_inbox_hosts
+    setting, each normalised as host_of reads a host (a pasted URL is reduced to its host)."""
+    # One argument, so the admin save's delete_memoized(get_setting, 'hosted_inbox_hosts') names this cache key
+    setting = get_setting('hosted_inbox_hosts')
+    lines = (HOSTED_INBOX_HOSTS_DEFAULT if setting is None else setting).split('\n')
+    hosts = (host_of(line.strip() if '//' in line else f'//{line.strip()}') for line in lines if line.strip())
+    return frozenset(host for host in hosts if host)
+
+
+def inbox_trusted(url: str, actor_host: str) -> bool:
+    """True when the inbox `url` may carry mail for an actor on `actor_host`: it is on that host (owner ruling
+    2026-10-11), or, for an actor that has a host, on a listed hosting platform (owner ruling 2026-10-19)."""
+    url_host = host_of(url)
+    return url_host == actor_host or (bool(actor_host) and url_host in hosted_inbox_hosts())
 
 
 def _declared_shared_inbox(actor_json: dict, actor_host: str) -> str | None:
@@ -1247,7 +1269,7 @@ def off_host_inbox(actor_json: dict) -> str | None:
     """The actor's `inbox` when it is a non-empty string on a host other than that of the actor's `id`, else None.
     actor_json_to_model refuses such an actor (owner ruling, 2026-10-11): it has no inbox this instance may use."""
     inbox = actor_json.get('inbox')
-    if isinstance(inbox, str) and inbox and host_of(inbox) != _actor_host(actor_json.get('id')):
+    if isinstance(inbox, str) and inbox and not inbox_trusted(inbox, _actor_host(actor_json.get('id'))):
         return inbox
     return None
 
@@ -1272,7 +1294,7 @@ def delivery_inbox_of(actor_json: dict, actor_id: str) -> str | None:
     shared_inbox = _declared_shared_inbox(actor_json, actor_host)
     inbox = actor_json.get('inbox')
     off_host = [url for url in (shared_inbox, inbox)
-                if isinstance(url, str) and url and host_of(url) != actor_host]
+                if isinstance(url, str) and url and not inbox_trusted(url, actor_host)]
     if off_host:
         current_app.logger.warning(f'Refresh of {actor_id} kept the stored inbox: {off_host} '
                                    f'is not on the actor\'s own host')
@@ -2313,7 +2335,7 @@ def actor_json_to_model(activity_json, address, server):
         # The inbox is trusted only on the actor's own host (owner ruling, 2026-10-11). An off-host sharedInbox
         # falls back to the inbox in shared_inbox_of; an off-host inbox leaves nothing this instance may deliver to.
         if off_host_inbox(activity_json):
-            current_app.logger.error(
+            current_app.logger.warning(
                 f'An inbox on another host for {address}@{server} in ' + str(activity_json))
             return None
         user = User(user_name=actor_name,
@@ -2443,7 +2465,7 @@ def actor_json_to_model(activity_json, address, server):
             return None
         # As for the Person branch above: the inbox is trusted only on the actor's own host.
         if off_host_inbox(activity_json):
-            current_app.logger.error(
+            current_app.logger.warning(
                 f'An inbox on another host for {address}@{server} in ' + str(activity_json))
             return None
         try:
@@ -2721,7 +2743,7 @@ def actor_json_to_model(activity_json, address, server):
             return None
         # As for the Person branch above: the inbox is trusted only on the actor's own host.
         if off_host_inbox(activity_json):
-            current_app.logger.error(
+            current_app.logger.warning(
                 f'An inbox on another host for {address}@{server} in ' + str(activity_json))
             return None
         try:

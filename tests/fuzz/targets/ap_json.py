@@ -90,6 +90,20 @@ def _no_db_lookups():
         app_utils.fediverse_domains, app_utils.get_emoji_replacements = saved
 
 
+# The hosted-inbox list the inbox target runs under, in place of the admin setting (which reads the database).
+HOSTED_INBOX = frozenset({'hosted.example'})
+
+
+@contextmanager
+def _hosted_inbox_stubbed():
+    saved = ap_util.hosted_inbox_hosts
+    ap_util.hosted_inbox_hosts = lambda: HOSTED_INBOX
+    try:
+        yield
+    finally:
+        ap_util.hosted_inbox_hosts = saved
+
+
 # RFC 3986, read independently of urllib: the characters a URI may hold at all, and the authority grammar.
 _URI_CHARS = frozenset('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&\'()*+,;=%')
 _SCHEME = re.compile(r'[A-Za-z][A-Za-z0-9+.\-]*')
@@ -334,20 +348,24 @@ def check_inboxes(data: bytes) -> None:
 
     A shared inbox is None or on the host of the document's own `id`; an off-host inbox is None or a string NOT on
     that host; the delivery inbox is None or at most INBOX_URL_MAX characters on the host of the STORED actor id,
-    the shared inbox when it is usable, else `inbox`, and None whenever either names another host. An id with no
-    host trusts nothing. No call reaches the network: `endpoints` as a URL string (the document form, which is
-    fetched) is never given."""
+    the shared inbox when it is usable, else `inbox`, and None whenever either names another host. A host in the
+    hosted-inbox list (stubbed to HOSTED_INBOX, so no setting is read) counts as the actor's own, for an id that has
+    a host. An id with no host trusts nothing. No call reaches the network: `endpoints` as a URL string (the
+    document form, which is fetched) is never given."""
     stored, document = _fields(data, 2)
     actor_id = _text(stored)
     actor_json = _as_object(_json_or_text(document))
     if isinstance(actor_json.get('endpoints'), str):
         actor_json = {**actor_json, 'endpoints': {'sharedInbox': actor_json['endpoints']}}
 
-    with _network_forbidden() as attempts:
+    with _network_forbidden() as attempts, _hosted_inbox_stubbed():
         shared = shared_inbox_of(actor_json)
         off_host = off_host_inbox(actor_json)
         delivery = delivery_inbox_of(actor_json, actor_id)
     assert not attempts, f'an inbox helper reached the network: {attempts!r}'
+
+    def trusted(url, actor_host):
+        return host_of(url) == actor_host or (bool(actor_host) and host_of(url) in HOSTED_INBOX)
 
     document_id = actor_json.get('id')
     document_host = host_of(document_id) if isinstance(document_id, str) else ''
@@ -358,23 +376,23 @@ def check_inboxes(data: bytes) -> None:
     inbox = inbox if isinstance(inbox, str) and inbox else None
 
     if shared is not None:
-        assert shared == declared and document_host and host_of(shared) == document_host, (
+        assert shared == declared and document_host and trusted(shared, document_host), (
             f'shared inbox {shared!r} is not on the actor\'s host {document_host!r}')
     else:
-        assert declared is None or not document_host or host_of(declared) != document_host
+        assert declared is None or not document_host or not trusted(declared, document_host)
 
     if off_host is not None:
-        assert off_host == inbox and host_of(off_host) != document_host, f'off-host inbox {off_host!r}'
+        assert off_host == inbox and not trusted(off_host, document_host), f'off-host inbox {off_host!r}'
     else:
-        assert inbox is None or host_of(inbox) == document_host
+        assert inbox is None or trusted(inbox, document_host)
 
     stored_host = host_of(actor_id)
     if delivery is not None:
         assert len(delivery) <= INBOX_URL_MAX, f'delivery inbox of {len(delivery)} characters'
-        assert stored_host and host_of(delivery) == stored_host, (
+        assert stored_host and trusted(delivery, stored_host), (
             f'delivery inbox {delivery!r} is not on the stored actor\'s host {stored_host!r}')
     candidates = [url for url in (declared, inbox) if url is not None]
-    if not stored_host or any(host_of(url) != stored_host for url in candidates):
+    if not stored_host or any(not trusted(url, stored_host) for url in candidates):
         assert delivery is None, 'a delivery inbox was chosen beside an off-host one, or for a hostless id'
     else:
         usable = [url for url in candidates if len(url) <= INBOX_URL_MAX]
