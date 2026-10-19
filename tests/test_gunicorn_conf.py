@@ -7,6 +7,7 @@ CONF = pathlib.Path(__file__).parent.parent / 'gunicorn.conf.py'
 
 
 @pytest.mark.parametrize('value,expected', [(None, None), ('', None), ('0', None), ('false', None), ('no', None),
+                                            ('off', None), ('2', None), (' 1 ', '-'),
                                             ('1', '-'), ('true', '-'), ('TRUE', '-'), ('yes', '-'), ('on', '-')])
 def test_the_access_log_follows_the_flag(monkeypatch, value, expected):
     monkeypatch.delenv('ACCESS_LOG', raising=False)

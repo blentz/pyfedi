@@ -41,8 +41,6 @@ from app.utils import (
     ip_address,
     user_ip_banned,
     user_cookie_banned,
-    log_register_attempt,
-    fetched_by_hand,
 )
 
 
@@ -71,8 +69,6 @@ def logout():
 @bp.route("/register", methods=["GET", "POST"])
 @limiter.limit("300 per day;10 per 5 minutes", methods=["POST"])
 def register():
-    if request.method == "POST" and fetched_by_hand():
-        log_register_attempt()   # every POST counts, a signed-in one and an invalid form too
     if current_user.is_authenticated:
         return redirect(url_for("main.index"))
 
