@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 from flask import Response, current_app
 
 import app.storefront as storefront
-from app.onion_media import proxy_url
+from app.onion_media import proxy_url, remote_for
 from app.storefront import rewrite_response_for_storefront
 from tests.test_storefront_links import in_onion_request
 from tests.test_storefront_presentation import CANONICAL, ONION, onion  # noqa: F401  (onion is a fixture)
@@ -95,9 +95,9 @@ def test_a_style_on_any_element_is_proxied_or_dropped(app, onion, body, shown):
     assert on_onion(body) == shown.replace('{p}', proxy_url(IMG))
 
 
-def test_a_style_url_that_cannot_be_rewritten_in_place_hides_the_element(app, onion):
-    # escaped in the raw value, so no literal copy to replace: the element goes rather than load the remote host
-    assert on_onion('<img style="background:url(https://lemmy\\2e world/x.jpg)"/>') == HIDDEN
+def test_a_style_url_written_with_an_escape_is_proxied_as_the_browser_reads_it(app, onion):
+    out = on_onion('<img style="background:url(https://lemmy\\2e world/x.jpg)"/>')
+    assert out == f'<img style="background:url({proxy_url("https://lemmy.world/x.jpg")})"/>'
 
 
 def test_local_and_s3_urls_untouched_by_the_proxy(app, onion, s3):
@@ -181,3 +181,12 @@ def test_a_style_url_urlsplit_rejects_does_not_raise(app):
     # found by the onion_media_style campaign
     style = b'backgtpround:\\75rl(https://\x7f\xd1]\x9ast/a.png)'.decode(errors='replace')
     assert storefront._proxied_style(style) in (None, style)
+
+
+def test_each_style_url_is_replaced_at_its_own_position(app):
+    # the shorter URL is a prefix of the escaped longer one, whose text is not in the style literally
+    long, short = 'https://est/anlzurl', 'https://est/an'
+    out = storefront._proxied_style(f'a:\\75rl({short}) b:\\75rl(https://est/anlz\\url) c:url({short})')
+    assert out is not None
+    urls = storefront._css_urls(out)
+    assert [remote_for(*u.split('/')[2:]) for u in urls] == [short, long, short]

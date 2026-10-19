@@ -580,19 +580,15 @@ def _css_unescape(text: str) -> str:
     return _CSS_ESCAPE.sub(lambda m: _css_code_point(m[1]) if m[1] else '' if m[2] == '\n' else m[2], text)
 
 
-def _css_urls(style: str) -> list[str]:
-    """The `url(...)` tokens and quoted strings (`image-set('x' 1x)`, `src("x")`) of a `style` value, in one
-    left-to-right scan of the raw value as CSS Syntax tokenises it (newlines normalised first): a `url(` inside a
-    string, a comment or a longer name (`xurl(`, `1url(`) is not a token, `u\\72l(` and `\\75 rl(` are, a quote
-    inside an unquoted `url(...)` is not a string, and an escaped quote, `*/` or newline opens or closes nothing.
-    Escapes are undone on each token found, not before. A string ends at its quote or an unescaped line break, an
-    unclosed `url(` and comment at the end. Every character is passed once, so the scan is linear."""
+def _css_url_spans(style: str) -> tuple[str, list[tuple[int, int, str]]]:
+    """`style` with its newlines normalised, and the `(start, end, url)` of each token `_css_urls` finds in it:
+    the span of the raw text in that normalised value, and the URL with its escapes undone."""
     style = _CSS_NEWLINE.sub('\n', style)
     found, pos = [], 0
     while True:
         token = _CSS_TOKEN.search(style, pos)
         if token is None:
-            return found
+            return style, found
         pos = token.end()
         if token[1]:
             if not token[2] or _css_unescape(token[1]).lower() != 'url':
@@ -601,18 +597,28 @@ def _css_urls(style: str) -> list[str]:
             if style[pos:pos + 1] in _CSS_STRING:
                 continue   # url("x"): the string is the token
             end = _CSS_BARE_URL.match(style, pos).end()
-            found.append(_css_unescape(style[pos:end]).strip())
+            found.append((pos, end, _css_unescape(style[pos:end]).strip()))
             pos = end + 1
         elif token[0] == '/*':
             end = style.find('*/', pos)
             if end < 0:
-                return found
+                return style, found
             pos = end + 2
         else:
             end = _CSS_STRING[token[0]].match(style, pos).end()
             if end > pos:
-                found.append(_css_unescape(style[pos:end]))
+                found.append((pos, end, _css_unescape(style[pos:end])))
             pos = end + 1
+
+
+def _css_urls(style: str) -> list[str]:
+    """The `url(...)` tokens and quoted strings (`image-set('x' 1x)`, `src("x")`) of a `style` value, in one
+    left-to-right scan of the raw value as CSS Syntax tokenises it (newlines normalised first): a `url(` inside a
+    string, a comment or a longer name (`xurl(`, `1url(`) is not a token, `u\\72l(` and `\\75 rl(` are, a quote
+    inside an unquoted `url(...)` is not a string, and an escaped quote, `*/` or newline opens or closes nothing.
+    Escapes are undone on each token found, not before. A string ends at its quote or an unescaped line break, an
+    unclosed `url(` and comment at the end. Every character is passed once, so the scan is linear."""
+    return [url for _start, _end, url in _css_url_spans(style)[1]]
 
 
 _PERCENT_PASSES = 4   # %2563 is %63 is c: decoded until it no longer changes, at most this often
@@ -791,14 +797,23 @@ def _proxied_srcset(srcset: str) -> str | None:
 
 
 def _proxied_style(style: str) -> str | None:
-    """`style` with each remote `url(...)` or string (`_css_urls`) replaced by its proxy URL where it is written
-    literally, longest first; None when a remote one is still there afterwards (spelled with an escape)."""
-    for url in sorted({url.strip('\'" ') for url in _css_urls(style)} - {''}, key=len, reverse=True):
-        moved = _proxied(url)
+    """`style` with each remote `url(...)` or string (`_css_url_spans`) replaced, at its own position, by its proxy
+    URL; None when one cannot be fetched as written, or a remote one is still there afterwards. `style` itself when
+    nothing is remote, otherwise with its newlines normalised."""
+    text, spans = _css_url_spans(style)
+    out, last = [], 0
+    for start, end, url in spans:
+        url = url.strip('\'" ')
+        moved = _proxied(url) if url else url
         if moved is None:
             return None
-        style = style.replace(url, moved)
-    return None if any(_is_remote(url.strip('\'" ')) for url in _css_urls(style)) else style
+        if moved != url:
+            out += [text[last:start], moved]
+            last = end
+    if not out:
+        return None if any(_is_remote(url.strip('\'" ')) for _s, _e, url in spans) else style
+    result = ''.join(out) + text[last:]
+    return None if any(_is_remote(url.strip('\'" ')) for url in _css_urls(result)) else result
 
 
 def _proxied_value(name: str, value):

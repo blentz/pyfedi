@@ -52,17 +52,8 @@ def _s3_unset():
             del config['S3_PUBLIC_URL']
 
 
-def _assert_proxied_or_local(value: str, where: str, signed: bool = True) -> None:
-    """`value` is local, or the proxy's shape. With `signed`, a proxy-shaped value is also one proxy_url made.
-
-    A style is read with signed=False: _proxied_style replaces a URL by its text, so a url(...) written with an
-    escape that is not in the style literally (`https://h/a\\url`, read back as `https://h/aurl`) is left, and a
-    shorter URL that is a prefix of its text (`https://h/a`) is replaced inside it, which makes a garbled path under
-    /onion_media/. The proxy refuses it (no valid signature), and the visitor's browser asks no remote host: it is
-    fail-closed, a broken image on a hostile page, so the style check holds the shape and 'nothing remote is left'."""
+def _assert_proxied_or_local(value: str, where: str) -> None:
     match = PROXY_PATH.fullmatch(value)
-    if match and not signed:
-        return
     if match:
         remote = remote_for(*match.groups())
         assert remote is not None, f'{where}: {value!r} is proxy-shaped but not signed'
@@ -95,7 +86,7 @@ def check_onion_media_rewrite(data: bytes) -> None:
         style = tag.get('style')
         if isinstance(style, str):
             for url in storefront._css_urls(style):
-                _assert_proxied_or_local(url.strip('\'" '), f'<{tag.name} style>', signed=False)
+                _assert_proxied_or_local(url.strip('\'" '), f'<{tag.name} style>')
 
 
 def check_onion_media_signature(data: bytes) -> None:
@@ -127,7 +118,7 @@ def check_onion_media_style(data: bytes) -> None:
         assert out is None or isinstance(out, str)
         if out is not None:
             for url in storefront._css_urls(out):
-                _assert_proxied_or_local(url.strip('\'" '), 'style', signed=False)
+                _assert_proxied_or_local(url.strip('\'" '), 'style')
 
 
 TARGETS = [
