@@ -80,6 +80,39 @@ def test_evict_with_no_cache_directory_frees_nothing(app, tmp_path, monkeypatch)
     assert evict(1) == 0
 
 
+def test_a_cap_of_zero_evicts_every_file(cache):
+    for n in range(1, 4):
+        _entry(cache, n, 100, age=1000 - n)
+    assert evict(0) == 300
+    assert list(cache.iterdir()) == []
+
+
+def test_a_file_that_vanishes_before_its_stat_is_skipped(cache):
+    kept = _entry(cache, 1, 100, age=10)
+    real_scandir = os.scandir
+
+    class Gone:
+        name = f'{2:064x}.jpg'
+        path = str(cache / name)
+
+        def is_file(self, follow_symlinks=True):
+            return True
+
+        def stat(self, follow_symlinks=True):
+            raise FileNotFoundError
+
+    with patch('app.onion_media.os.scandir', lambda path: [*real_scandir(path), Gone()]):
+        assert evict(10 * MIB) == 0
+    assert kept.exists()
+
+
+def test_a_file_that_vanishes_before_its_eviction_still_counts_as_freed(cache):
+    _entry(cache, 1, 100, age=100)
+    _entry(cache, 2, 100, age=10)
+    with patch('app.onion_media.os.unlink', side_effect=FileNotFoundError):
+        assert evict(100) == 200   # 200 bytes down to the 90-byte target takes both files; another worker removed them first
+
+
 def test_cli_command_uses_the_setting(app, db_session, cache):
     set_setting('onion_media_cache_bytes', 250)
     for n in range(1, 6):
