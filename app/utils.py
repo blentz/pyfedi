@@ -3136,7 +3136,15 @@ def login_required_if_private_instance(func):
         if (g.site.private_instance and current_user.is_authenticated) or is_activitypub_request() or g.site.private_instance is False:
             return func(*args, **kwargs)
         else:
-            return redirect(url_for('auth.login', next=referrer()))
+            # A page asked for is where to come back to; the referrer was the page before it, and on the login page
+            # itself that nested the login URL in its own `next`. A POST came from the page the visitor was on.
+            # From request.args, not request.full_path: the args are where a query that is not UTF-8 becomes a 400.
+            if request.method in ('GET', 'HEAD'):
+                query = urlencode(list(request.args.items(multi=True)))
+                next_url = f'{request.path}?{query}' if query else request.path
+            else:
+                next_url = referrer()
+            return redirect(url_for('auth.login', next=next_url))
 
     return decorated_view
 
