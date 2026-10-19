@@ -32,7 +32,7 @@ from secrets import token_hex
 from typing import NamedTuple
 from urllib.parse import quote, quote_from_bytes
 
-from flask import current_app, flash, make_response, redirect, request, session, url_for
+from flask import current_app, flash, g, make_response, redirect, request, session, url_for
 from flask_babel import _, ngettext
 from itsdangerous import BadData, TimestampSigner, URLSafeTimedSerializer
 from markupsafe import escape
@@ -411,20 +411,23 @@ def onion_proof_refused(form) -> bool:
     if wait_token_ready(form.wait_token.data) or verify_pow(form.pow_token.data, form.pow_nonce.data):
         return False
     flash(_("Your browser's check did not go through, or took too long. Please try again."), 'error')
+    # Trying again cannot work in a browser that runs no JavaScript (Tor Browser at Safest): the form shows the wait step
+    g.onion_proof_refused = True
     return True
 
 
 def prepare_onion_proof(form, target: str):
     """For the onion login (`target` 'login') or registration ('register') page: a fresh challenge on the form's
     hidden fields, the wait token the wait step sent here (if any), and what the template needs to offer the wait
-    step. None on clearnet, where the template renders none of it."""
+    step (shown openly, `refused`, after onion_proof_refused turned this request's form down). None on clearnet, where the
+    template renders none of it."""
     if not is_onion_request():
         return None
     token, salt, bits = _new_challenge()
     form.pow_token.data = token
     form.pow_nonce.data = ''
     form.wait_token.data = request.args.get('wait_token', '')
-    return {'salt': salt, 'bits': bits,
+    return {'salt': salt, 'bits': bits, 'refused': g.get('onion_proof_refused', False),
             'wait_url': url_for('auth.onion_wait', form=target, next=request.args.get('next'))}
 
 
