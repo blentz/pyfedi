@@ -1343,6 +1343,7 @@ class Community(db.Model):
     nsfl = db.Column(db.Boolean, default=False)
     ai_generated = db.Column(db.Boolean, default=False, index=True)
     instance_id = db.Column(db.Integer, db.ForeignKey('instance.id'), index=True)
+    site_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id'))  # the hosted domain it belongs to; NULL for remote rows
     low_quality = db.Column(db.Boolean, default=False)  # upvotes earned in low quality communities don't improve reputation
     created_at = db.Column(db.DateTime, default=utcnow)
     last_active = db.Column(db.DateTime, default=utcnow)
@@ -1418,7 +1419,19 @@ class Community(db.Model):
             'search_vector',
             postgresql_using='gin'
         ),
+        # a local community name is unique per hosted domain, ignoring case; remote rows are not held to it
+        db.Index(
+            'ix_community_domain_lower_name',
+            'site_domain_id',
+            db.text('lower(name)'),
+            unique=True,
+            postgresql_where=db.text('ap_id IS NULL')
+        ),
     )
+
+    def home_domain(self):
+        """The hosted domain this community belongs to (the default domain when it has none)."""
+        return storefront.domain_by_id(self.site_domain_id)
 
     def language_ids(self):
         return [language.id for language in self.languages.all()]
@@ -1831,6 +1844,7 @@ class User(UserMixin, db.Model):
     attitude = db.Column(db.Float, default=None)  # (upvotes cast - downvotes cast) / (upvotes + downvotes). A number between 1 and -1 is the ratio between up and down votes they cast
     post_count = db.Column(db.Integer, default=0)
     post_reply_count = db.Column(db.Integer, default=0)
+    site_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id'))  # the hosted domain it belongs to; NULL for remote rows
     stripe_customer_id = db.Column(db.String(50))
     stripe_subscription_id = db.Column(db.String(50))
     searchable = db.Column(db.Boolean, default=True)        # whether their profile is visible in profile list
@@ -1922,6 +1936,14 @@ class User(UserMixin, db.Model):
         db.Index(
             'idx_user_email_lower',
             db.text('lower(email)')
+        ),
+        # a local user name is unique per hosted domain, ignoring case; remote rows are not held to it
+        db.Index(
+            'ix_user_domain_lower_name',
+            'site_domain_id',
+            db.text('lower(user_name)'),
+            unique=True,
+            postgresql_where=db.text('ap_id IS NULL')
         ),
         db.Index(
             'idx_user_ap_profile_id_lower',
@@ -2047,6 +2069,10 @@ class User(UserMixin, db.Model):
         content += db.session.execute(text('SELECT COUNT(*) as c FROM "post_reply" WHERE user_id = :user_id'),
                                       {'user_id': self.id}).scalar()
         return content
+
+    def home_domain(self):
+        """The hosted domain this user belongs to (the default domain when it has none)."""
+        return storefront.domain_by_id(self.site_domain_id)
 
     def is_local(self):
         return self.ap_id is None or is_local_url(self.ap_profile_id)
@@ -2692,6 +2718,8 @@ class Post(db.Model):
     # read_post is the corresponding User object variable
     read_by = db.relationship('User', secondary=read_posts, back_populates='read_post', lazy='dynamic')
     hidden_by = db.relationship('User', secondary=hidden_posts, back_populates='hidden_post', lazy='dynamic')
+
+    local_only = db.Column(db.Boolean, nullable=False, default=False, server_default='false')  # not federated: stays on its own domain
 
     __table_args__ = (
         db.Index('ix_post_relay_id', 'relay_id', postgresql_where=db.text('relay_id IS NOT NULL')),
@@ -4183,6 +4211,8 @@ class PostReply(db.Model):
     modlog = db.relationship('ModLog', lazy='dynamic', foreign_keys="ModLog.reply_id", back_populates='reply')
     votes = db.relationship('PostReplyVote', lazy='dynamic', backref='reply', cascade='all, delete-orphan', passive_deletes=True)
     bookmarks = db.relationship('PostReplyBookmark', backref='reply', cascade='all, delete-orphan')
+
+    local_only = db.Column(db.Boolean, nullable=False, default=False, server_default='false')  # not federated: stays on its own domain
 
     __table_args__ = (
         db.Index(

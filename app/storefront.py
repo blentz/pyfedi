@@ -38,6 +38,7 @@ class DomainInfo(NamedTuple):
     registration: str
     is_default: bool
     is_onion: bool
+    id: int | None   # the site_domain row; None only for the synthesised default
 
 
 _REGISTRATION_FROM_MODE = {'Open': 'anyone', 'RequireApplication': 'anyone', 'Closed': 'admin'}
@@ -87,7 +88,7 @@ def _synthesised_default() -> DomainInfo:
     protocol = current_app.config['HTTP_PROTOCOL']
     scheme = 'https' if protocol in ('https', 'mixed') else protocol
     domain = normalise_host(current_app.config['SERVER_NAME'])
-    return DomainInfo(domain, scheme, True, 'anyone', True, domain.endswith('.onion'))
+    return DomainInfo(domain, scheme, True, 'anyone', True, domain.endswith('.onion'), None)
 
 
 @cache.memoize(timeout=300)
@@ -95,7 +96,7 @@ def domain_rows() -> tuple[DomainInfo, ...]:
     rows = db.session.query(models.SiteDomain).order_by(models.SiteDomain.id).all()
     if not rows:
         return (_synthesised_default(),)
-    return tuple(DomainInfo(r.domain, r.scheme, r.federates, r.registration, r.is_default, r.is_onion)
+    return tuple(DomainInfo(r.domain, r.scheme, r.federates, r.registration, r.is_default, r.is_onion, r.id)
                  for r in rows)
 
 
@@ -116,6 +117,11 @@ def domain_for_host(host: str) -> DomainInfo | None:
 
 def default_domain() -> DomainInfo:
     return next((row for row in domain_rows() if row.is_default), _synthesised_default())
+
+
+def domain_by_id(site_domain_id: int | None) -> DomainInfo:
+    """The row with this id; the default domain for None or an id no row has (a row since removed)."""
+    return next((row for row in domain_rows() if row.id == site_domain_id), None) or default_domain()
 
 
 def is_registered_host(host: str) -> bool:
