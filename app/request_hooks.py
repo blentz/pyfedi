@@ -28,7 +28,7 @@ from app.utils import getmtime, gibberish, shorten_string, shorten_url, digits, 
     notif_id_to_string, feed_link_to_href, get_setting, set_setting, show_explore, human_filesize, can_upload_video, can_upload_audio, \
     debug_checkpoint, compaction_level, humanize_number, round_invisible_digits, get_site_as_dict, localize_datetime, \
     display_back_button, favorite_communities, get_event_start, reply_filter_keyword, user_banned_from_community, \
-    PROBE_PATH_RE, fetched_by_hand, log_probe_refused
+    PROBE_PATH_RE, fetched_by_hand, log_probe_refused, log_register_attempt
 from app.quotes import prime_quotes, quote_state
 from app.variants import shown, switch_url
 from app.visibility import can_view
@@ -218,6 +218,9 @@ def register_request_hooks(app):
 
         secure_mode_cache_headers(response)   # S6 secure mode: a signed answer must not reach a shared cache
 
+        # Here, not in the view: the limiter answers 429 before register() runs, and those POSTs count too
+        if request.method == 'POST' and request.endpoint == 'auth.register' and fetched_by_hand():
+            log_register_attempt()   # every POST counts, a signed-in one and an invalid form too
         if 400 <= response.status_code < 500 and PROBE_PATH_RE.match(request.path) and fetched_by_hand():
             log_probe_refused()
 

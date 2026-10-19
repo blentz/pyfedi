@@ -15,14 +15,14 @@ from unittest.mock import patch
 
 import pytest
 
-from app import db
+from app import db, limiter
 from app.models import Site
 from app.nntp import server as nntp
 from app.nntp.nntpserver import NNTPAuthenticationError
 from app.nntp.server import PieFedNNTPConnectionHandler, PieFedNNTPServer
 from app.utils import log_login_failure
 from tests.test_login_failure_log import CLEARNET, clearnet_login, failures, only_failure
-from tests.test_onion_guard_limits import (LOGIN, PASSWORD, a_session, alice, directory, ldap_off, login_form, onion,  # noqa: F401
+from tests.test_onion_guard_limits import (LOGIN, PASSWORD, a_session, alice, limited_app, directory, ldap_off, login_form, onion,  # noqa: F401
                                            onion_get, onion_post, proof_given)
 
 
@@ -191,6 +191,7 @@ def test_a_register_get_logs_nothing(app, db_session, caplog):
 def test_a_register_post_by_a_signed_in_user_still_logs(app, alice, ldap_off, caplog):
     client = app.test_client()
     client.post('/auth/login', data={'user_name': 'alice', 'password': PASSWORD, **LOGIN}, environ_base=CLEARNET)
+    assert client.get('/auth/register', environ_base=CLEARNET).status_code == 302   # signed in: sent away
     client.post('/auth/register', data={}, environ_base=CLEARNET)
     assert event_lines(caplog, 'auth: register attempt') == ['auth: register attempt ip=203.0.113.9']
 
@@ -209,3 +210,16 @@ def test_onion_requests_log_ip_onion(app, onion, caplog):
 def test_a_register_post_logs_only_when_not_page_initiated(app, db_session, caplog, site, logged):
     app.test_client().post('/auth/register', data={}, environ_base=CLEARNET, headers={'Sec-Fetch-Site': site})
     assert bool(event_lines(caplog, 'auth: register attempt')) is logged
+
+
+def test_a_register_post_refused_429_by_the_limiter_is_still_logged(limited_app, db_session, caplog):
+    client = limited_app.test_client()
+    limiter.reset()
+    limiter.enabled = True
+    try:
+        codes = [client.post('/auth/register', data={}, environ_base=CLEARNET).status_code for _ in range(11)]
+    finally:
+        limiter.reset()
+        limiter.enabled = False
+    assert codes[-1] == 429                                 # "10 per 5 minutes": the 11th never reaches the view
+    assert len(event_lines(caplog, 'auth: register attempt')) == 11
