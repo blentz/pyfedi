@@ -22,8 +22,8 @@ from app.nntp.nntpserver import NNTPAuthenticationError
 from app.nntp.server import PieFedNNTPConnectionHandler, PieFedNNTPServer
 from app.utils import log_login_failure
 from tests.test_login_failure_log import CLEARNET, clearnet_login, failures, only_failure
-from tests.test_onion_guard_limits import (PASSWORD, alice, directory, ldap_off, login_form, onion,  # noqa: F401
-                                           proof_given)
+from tests.test_onion_guard_limits import (LOGIN, PASSWORD, a_session, alice, directory, ldap_off, login_form, onion,  # noqa: F401
+                                           onion_get, onion_post, proof_given)
 
 
 @pytest.fixture(autouse=True)
@@ -168,3 +168,37 @@ def test_a_banned_account_the_directory_accepted_logs_nothing(app, alice, direct
 def test_a_directory_name_that_cannot_be_local_logs_nothing(app, alice, directory, caplog):
     assert clearnet_login(app, 'not/a name', PASSWORD).headers['Location'].endswith('/auth/login')
     assert failures(caplog) == []
+
+
+# --------------------------------------------------------------------------
+# One line per registration POST and per refused probe, for fail2ban now the access log is off
+# --------------------------------------------------------------------------
+
+def event_lines(caplog, prefix):
+    return [r.getMessage() for r in caplog.records if r.getMessage().startswith(prefix)]
+
+
+def test_a_register_post_logs_one_attempt_line(app, db_session, caplog):
+    app.test_client().post('/auth/register', data={'user_name': ''}, environ_base=CLEARNET)   # invalid form still counts
+    assert event_lines(caplog, 'auth: register attempt') == ['auth: register attempt ip=203.0.113.9']
+
+
+def test_a_register_get_logs_nothing(app, db_session, caplog):
+    app.test_client().get('/auth/register', environ_base=CLEARNET)
+    assert not event_lines(caplog, 'auth: register attempt')
+
+
+def test_a_register_post_by_a_signed_in_user_still_logs(app, alice, ldap_off, caplog):
+    client = app.test_client()
+    client.post('/auth/login', data={'user_name': 'alice', 'password': PASSWORD, **LOGIN}, environ_base=CLEARNET)
+    client.post('/auth/register', data={}, environ_base=CLEARNET)
+    assert event_lines(caplog, 'auth: register attempt') == ['auth: register attempt ip=203.0.113.9']
+
+
+def test_onion_requests_log_ip_onion(app, onion, caplog):
+    client = app.test_client()
+    a_session(client)   # session first, or the guard answers before the route runs
+    onion_post(client, '/auth/register', data={})
+    onion_get(client, '/.env')
+    assert event_lines(caplog, 'auth: register attempt') == ['auth: register attempt ip=onion']
+    assert event_lines(caplog, 'scan:') == ['scan: probe refused ip=onion']
