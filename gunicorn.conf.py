@@ -17,8 +17,13 @@ reload = False
 
 worker_class = 'gthread'
 
+
+def access_log_enabled(value):
+    return (value or '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 #logging
-accesslog = '-'
+accesslog = '-' if access_log_enabled(os.environ.get('ACCESS_LOG')) else None
 errorlog = '-'
 
 if gunicorn_max_requests := os.environ.get('GUNICORN_MAX_REQUESTS'):
