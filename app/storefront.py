@@ -25,6 +25,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app import cache, db
 from app.onion import onion_proxy_address
+from app.onion_media import EXTENSIONS, proxy_url
 # The module, not the name: app.models imports this module for File's media URLs, so whichever of the two is
 # imported first finds the other mid-import (import cycle: models)
 import app.models as models
@@ -343,15 +344,16 @@ def _is_link_attr(tag, name: str, render: bool) -> bool:
 
 
 def _rebase_links(html: str, base: str, hosts: frozenset[str], render: bool, embedded: frozenset[str] = frozenset(),
-                  s3_host: str = '') -> str:
+                  s3_host: str = '', proxy: bool = False) -> str:
     """`html` with its link attributes on `base` where their host is in `hosts`. The parse is skipped when no host
     appears in the text at all (case-insensitively), and `html` itself comes back when no attribute moved, so markup
     is re-serialised only when a link really changes. With `embedded`, a stored link also has any URL of those hosts
     inside it moved (`?u=http://abc.onion/x`), as `canonicalise_text` moves them in text. With `s3_host`, the one
     parse also hides what loads from that host (`_hide_s3`), and is never skipped: no raw-text check can see a host
-    spelled with an entity or a percent-escape."""
+    spelled with an entity or a percent-escape. With `proxy` (an onion storefront), the same parse then points remote
+    media at the onion's media proxy (`_proxy_remote`), and is never skipped either: any host may be remote."""
     lowered = html.lower()
-    if not s3_host and not any(host in lowered for host in hosts):
+    if not s3_host and not proxy and not any(host in lowered for host in hosts):
         return html
     soup = BeautifulSoup(html, 'html.parser', on_duplicate_attribute='ignore')   # the first, as a browser does
     changed = False
@@ -361,6 +363,10 @@ def _rebase_links(html: str, base: str, hosts: frozenset[str], render: bool, emb
         if s3_host and _hide_s3_or_the_tag(soup, tag, s3_host):
             changed = True
         if tag.parent is None or tag.decomposed:   # replaced, removed or unwrapped: nothing left to rebase
+            continue
+        if proxy and _proxy_remote_or_the_tag(soup, tag):   # after S3 hiding: what it hid is gone by now
+            changed = True
+        if tag.parent is None or tag.decomposed:
             continue
         for name, value in tag.attrs.items():
             if not _is_link_attr(tag, name, render):
@@ -727,6 +733,131 @@ def _hide_s3_or_the_tag(soup, tag, host: str) -> bool:
         return True
 
 
+# Remote media on an onion page loads through the onion (onion media proxy spec 2026-10-19, section 3.1): the link
+# rewrite's one parse points it at the signed proxy, so the visitor's browser never asks a remote host for it.
+_PROXIED_TAGS = frozenset({'img', 'video', 'audio', 'source', 'track', 'picture'})
+_EMBED_TAGS = frozenset({'iframe', 'embed', 'object'})
+_MEDIA_EXTENSIONS = tuple(sorted(set(EXTENSIONS.values())))
+
+
+def _is_remote(url) -> bool:
+    """Whether a browser loads `url` from a host that is not one of ours. One UTS-46 cannot map counts as remote."""
+    host = browser_host(url)
+    return bool(host) and (host == UNMAPPABLE or not is_local_host(host))
+
+
+def _fetchable(url: str) -> str | None:
+    """Remote `url` as the absolute http(s) URL the proxy fetches, https for a scheme-relative one; None when it is
+    written in a spelling only a browser reads (`https:host`, a backslash, a tab, a space at an end)."""
+    if url != url.strip(_C0_OR_SPACE) or url != url.translate(URL_STRIPPED_BY_BROWSERS) or '\\' in url:
+        return None
+    if url.startswith('//'):
+        url = 'https:' + url
+    parts = urlsplit(url)
+    if parts.scheme.lower() not in ('http', 'https') or not url[len(parts.scheme) + 1:].startswith('//') \
+            or not parts.netloc:
+        return None
+    return url
+
+
+def _is_media_path(url: str) -> bool:
+    path = urlsplit(url).path.lower()
+    return path.endswith(_MEDIA_EXTENSIONS) or '/pictrs/image/' in path
+
+
+def _proxied(url, media_only: bool = False):
+    """`url` as its proxy URL when it is remote (and, with `media_only`, a media file); `url` itself when it is not;
+    None when it is remote and cannot be fetched as written, so the caller hides it."""
+    if not isinstance(url, str) or not _is_remote(url):
+        return url
+    remote = _fetchable(url)
+    if remote is not None and media_only and not _is_media_path(remote):
+        return url   # a link to a remote page: the visitor's choice to leave
+    return None if remote is None else proxy_url(remote)
+
+
+def _proxied_srcset(srcset: str) -> str | None:
+    out, last = [], 0
+    for start, end in _srcset_urls(srcset):
+        moved = _proxied(srcset[start:end])
+        if moved is None:
+            return None
+        out += [srcset[last:start], moved]
+        last = end
+    return ''.join(out) + srcset[last:]
+
+
+def _proxied_style(style: str) -> str | None:
+    """`style` with each remote `url(...)` or string (`_css_urls`) replaced by its proxy URL where it is written
+    literally, longest first; None when a remote one is still there afterwards (spelled with an escape)."""
+    for url in sorted({url.strip('\'" ') for url in _css_urls(style)} - {''}, key=len, reverse=True):
+        moved = _proxied(url)
+        if moved is None:
+            return None
+        style = style.replace(url, moved)
+    return None if any(_is_remote(url.strip('\'" ')) for url in _css_urls(style)) else style
+
+
+def _proxied_value(name: str, value):
+    """Attribute `name` of a media element with its remote URLs on the proxy, None when one must be hidden."""
+    if not isinstance(value, str):
+        return value
+    if name == 'srcset':
+        return _proxied_srcset(value)
+    if name == 'style':
+        return _proxied_style(value)
+    return _proxied(value) if name in ('src', 'poster') or name.startswith('data-') else value
+
+
+def _proxy_remote(soup, tag) -> bool:
+    """Point what `tag` loads from a remote host at the media proxy; whether anything changed. On an `img`, `video`,
+    `audio`, `source`, `track` or `picture`: `src`, `poster`, `data-*`, each `srcset` candidate and `style` url(...).
+    On an `a`: `href`, only when it names a media file (an extension of EXTENSIONS, or a `/pictrs/image/` path). A
+    remote `iframe`, `embed` or `object` becomes the placeholder and a plain link to it, which loads nothing until the
+    visitor follows it. What cannot be proxied as written is hidden: an `a` keeps its text, anything else becomes the
+    placeholder."""
+    if tag.name in _EMBED_TAGS:
+        if not any(_proxied_value(name, value) != value or (name in _URL_ATTRS and _is_remote(value))
+                   for name, value in tag.attrs.items()):   # `data` on an `object`: the embed itself
+            return False
+        target = next((tag[name] for name in ('src', 'data') if _is_remote(tag.get(name))), None)
+        shown = [_placeholder(soup)]
+        if target:
+            link = soup.new_tag('a', attrs={'href': target, 'rel': 'nofollow noreferrer'})
+            link.string = target
+            shown.append(link)
+        tag.replace_with(*shown).decompose()
+        return True
+    if tag.name == 'a':
+        moved = {'href': _proxied(tag.get('href'), media_only=True)}
+    elif tag.name in _PROXIED_TAGS:
+        moved = {name: _proxied_value(name, value) for name, value in tag.attrs.items()}
+    else:
+        return False
+    moved = {name: value for name, value in moved.items() if value != tag.get(name)}
+    if not moved:
+        return False
+    if None in moved.values():
+        if tag.name == 'a':
+            tag.unwrap()
+        else:
+            tag.replace_with(_placeholder(soup)).decompose()
+        return True
+    tag.attrs.update(moved)
+    return True
+
+
+def _proxy_remote_or_the_tag(soup, tag) -> bool:
+    """`_proxy_remote`, failing closed as `_hide_s3_or_the_tag` does: should it raise, the error is logged and `tag` is
+    replaced by the placeholder whole, so the page is still served and asks no remote host for the element."""
+    try:
+        return _proxy_remote(soup, tag)
+    except Exception:
+        current_app.logger.exception('storefront: the remote media proxy rewrite failed; the element is hidden')
+        tag.replace_with(_placeholder(soup)).decompose()
+        return True
+
+
 def _s3_host_to_hide(storefront) -> str:
     """The S3 host to hide on `storefront`: '' off the onion, with S3 unset, or when that host is one of ours (the
     link rewrite moves it onto the onion). A clearnet or S3-less install reads nothing more than that."""
@@ -739,10 +870,12 @@ def _s3_host_to_hide(storefront) -> str:
 def rewrite_links(body: str, storefront: DomainInfo) -> str:
     """`body` with the links of this site's other hosts (`href`, `src`, `srcset`, `action`, `<meta content>`,
     `data-*`) moved onto `storefront`, and on an onion storefront whatever loads from the S3 public host hidden
-    (`_hide_s3`), in one parse. `body` itself, unparsed, when no such host appears in it and there is no S3 host to
-    hide. Links already on `storefront` are left alone, so a page that names only its own storefront is never parsed."""
+    (`_hide_s3`) and remote media pointed at the media proxy (`_proxy_remote`), in one parse. Off the onion, `body`
+    itself, unparsed, when no such host appears in it and there is no S3 host to hide; an onion page is always
+    parsed. Links already on `storefront` are left alone, so a clearnet page that names only its own storefront is
+    never parsed."""
     return _rebase_links(body, _origin(storefront), _local_hosts() - {normalise_host(storefront.domain)}, render=True,
-                         s3_host=_s3_host_to_hide(storefront))
+                         s3_host=_s3_host_to_hide(storefront), proxy=storefront.is_onion)
 
 
 def storefront_html(html: str | None) -> str | None:
@@ -756,7 +889,8 @@ def storefront_html(html: str | None) -> str | None:
 
 def rewrite_response_for_storefront(response: Response) -> Response:
     """`after_request`: a response on a storefront other than the default has its registered-host links moved onto
-    that storefront (spec §3.5), once per response instead of at each `|safe` in the templates. A redirect header
+    that storefront (spec §3.5), once per response instead of at each `|safe` in the templates, and on an onion
+    storefront its remote media pointed at the media proxy (`rewrite_links`). A redirect header
     naming another host of ours moves too; a relative one is already on the storefront. Streamed, passthrough
     (SSE, files) and encoded (Content-Encoding) bodies are never read. set_data recomputes Content-Length; status
     and other headers are kept."""
