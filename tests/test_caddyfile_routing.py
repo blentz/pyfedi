@@ -62,10 +62,17 @@ def test_the_live_stream_is_proxied_to_fastapi():
 
 
 def web_proxy_block():
-    """The body of the `reverse_proxy web:5000 { ... }` block, comments ignored."""
+    """The directives directly inside the `reverse_proxy web:5000 { ... }` block, comments ignored. Nested
+    blocks (the `handle_response` that serves cached onion media) are skipped."""
     lines = [line.split('#', 1)[0].strip() for line in CADDYFILE.read_text().splitlines()]
     start = lines.index('reverse_proxy web:5000 {')
-    return lines[start + 1:lines.index('}', start)]
+    top_level, depth = [], 1
+    for line in lines[start + 1:]:
+        depth += line.endswith('{') - (line == '}')
+        if depth == 0:
+            return top_level
+        if depth == 1 and line != '}':
+            top_level.append(line)
 
 
 def caddy_seconds(value):
