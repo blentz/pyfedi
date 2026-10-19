@@ -90,3 +90,20 @@ def test_requests_wait_for_the_app_while_it_restarts():
     # A restart took about 10 s (502s from 14:33:04, gunicorn listening at 14:33:12).
     assert caddy_seconds(options['lb_try_duration']) >= 30
     assert caddy_seconds(options['lb_try_interval']) <= 1
+
+
+def accel_block():
+    """The directives of the `handle_response @accel { ... }` block that serves cached onion media, comments ignored."""
+    lines = [line.split('#', 1)[0].strip() for line in CADDYFILE.read_text().splitlines()]
+    start = lines.index('handle_response @accel {')
+    return lines[start + 1:lines.index('}', start)]
+
+
+def accel_headers():
+    return dict(line.split(None, 2)[1:] for line in accel_block() if line.startswith('header '))
+
+
+def test_cached_onion_media_stays_in_the_browser_cache():
+    """A signed URL names fixed content, so a visitor's browser keeps the file for a week without asking again.
+    `handle_response` copies no upstream header, so Caddy must set it."""
+    assert accel_headers()['Cache-Control'] == '"public, max-age=604800, immutable"'

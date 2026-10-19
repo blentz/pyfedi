@@ -11,6 +11,7 @@ URL answers 404 and the browser shows its broken-media box.
 import contextlib
 import os
 import pathlib
+import time
 
 from flask import Blueprint, Response, abort
 
@@ -27,6 +28,7 @@ REQUEST_FILL_SECONDS = 15
 RETRY_IMAGE = 10
 RETRY_AV = 30
 SANDBOX = "default-src 'none'; sandbox"
+TOUCH_AFTER = 3600              # a hit refreshes an mtime older than this: Caddy's ETag and Last-Modified come from it
 
 
 @bp.route('/onion_media/<sig>/<key>', methods=['GET'])
@@ -54,7 +56,8 @@ def onion_media(sig, key):
         if path is None:
             abort(404)
     with contextlib.suppress(FileNotFoundError):    # evicted since it was found: Caddy answers 404
-        os.utime(path)                              # least recently used eviction reads the mtime
+        if time.time() - path.stat().st_mtime > TOUCH_AFTER:
+            os.utime(path)                          # least recently used eviction reads the mtime
     return _accel(path)
 
 
