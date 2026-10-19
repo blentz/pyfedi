@@ -231,6 +231,33 @@ def test_transport_error_and_deadline_fail(remote, tmp_path, monkeypatch):
     assert leftovers(tmp_path) == []
 
 
+def test_a_body_under_the_throughput_floor_is_refused_and_a_fast_one_passes(remote, tmp_path, monkeypatch):
+    """After 20 s of body transfer a body averaging under 64 KiB/s is refused. The clock is the fill's own
+    `monotonic`, moved 10 s by each chunk, so nothing sleeps."""
+    clock = [0.0]
+    monkeypatch.setattr('app.onion_media_fill.monotonic', lambda: clock[0])
+
+    def body(chunk, count):
+        for _ in range(count):
+            clock[0] += 10
+            yield chunk
+
+    def serve(chunk, count):
+        return lambda request: httpx.Response(200, headers={'Content-Type': 'video/mp4'}, content=body(chunk, count))
+
+    slow = 'https://media.example/slow.mp4'
+    monkeypatch.setattr('app.httpx_client', httpx.Client(transport=httpx.MockTransport(serve(b'x' * 65536 * 6, 4))))
+    assert fill(slow, max_seconds=600) is None          # 6 x 64 KiB every 10 s: refused at 30 s, the first check past 20
+    assert is_dead(slow)
+    assert leftovers(tmp_path) == []
+
+    fast = 'https://media.example/fast.mp4'
+    monkeypatch.setattr('app.httpx_client', httpx.Client(transport=httpx.MockTransport(serve(b'x' * 65536 * 11, 4))))
+    path = fill(fast, max_seconds=600)                  # 11 x 64 KiB every 10 s stays above the floor
+    assert path is not None and path.stat().st_size == 65536 * 11 * 4
+    assert not is_dead(fast)
+
+
 def test_disk_error_leaves_no_file_and_is_not_remembered(remote, tmp_path, monkeypatch):
     remote.routes[REMOTE] = image()
 
