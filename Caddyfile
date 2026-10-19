@@ -8,7 +8,8 @@
 	email admin@hell.cloud
 }
 
-hell.cloud {
+# Shared by the clearnet and onion sites, so their handlers cannot drift apart.
+(piefed_routes) {
 	encode zstd gzip
 
 	# Media uploads (deploy/DEPLOY_GUIDE.md, "Media uploads"): the largest upload limit, max_video_upload_bytes
@@ -45,6 +46,22 @@ hell.cloud {
 		lb_try_duration 30s
 		lb_try_interval 250ms
 	}
+}
+
+hell.cloud {
+	# Only the onion site below may mark a request as onion; a client cannot forge the marker here.
+	request_header -X-PieFed-Via
+	# Tor Browser offers the onion address to visitors of the clearnet site.
+	header Onion-Location http://gnzxnayrrmwidxmnmhibwzazwkssf7wkl7i2dpx2izof54yz4am5qzad.onion{uri}
+	import piefed_routes
+}
+
+# The onion storefront. Reached only by the pyfedi_tor container over pf_network (port 8081 is not published).
+# http:// keeps Caddy from asking Let's Encrypt for a certificate it cannot get. The app trusts the marker only
+# from Caddy's static IP (ONION_PROXY_IP).
+http://gnzxnayrrmwidxmnmhibwzazwkssf7wkl7i2dpx2izof54yz4am5qzad.onion:8081 {
+	request_header X-PieFed-Via onion
+	import piefed_routes
 }
 
 # Uncomment to also answer on www and redirect to the apex.
