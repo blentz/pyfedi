@@ -753,7 +753,10 @@ def _fetchable(url: str) -> str | None:
         return None
     if url.startswith('//'):
         url = 'https:' + url
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+    except ValueError:   # an unbalanced bracket in the authority: no client fetches it
+        return None
     if parts.scheme.lower() not in ('http', 'https') or not url[len(parts.scheme) + 1:].startswith('//') \
             or not parts.netloc:
         return None
