@@ -319,6 +319,7 @@ def create_app(config_class=Config):
         'app.admin.routes.*': {'queue': 'background'},
         'app.admin.util.*': {'queue': 'background'},
         'app.shared.tasks.media.*': {'queue': 'background'},   # A13.9: probe_media and transcodes
+        'app.onion_media_fill.fill_task': {'queue': 'onion_media'},   # onion media proxy fills, never behind backfills
     })
 
     # Initialize redis_client
@@ -407,6 +408,8 @@ def create_app(config_class=Config):
     from app.dev import bp as dev_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(dev_bp)
 
+    app.register_blueprint(onion_media_bp)   # imported at the end of this module, below
+
     from app.api.alpha import bp as app_api_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(app_api_bp)
 
@@ -476,3 +479,4 @@ def create_app(config_class=Config):
 
 from app import models
 from app.storefront import storefront_url
+from app.onion_media_routes import bp as onion_media_bp   # down here: it imports db and celery from this package

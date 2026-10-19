@@ -71,7 +71,7 @@ services:
     environment:
       LOG_ACTIVITYPUB_TO_DB: "1"
       DATABASE_URL: postgresql+psycopg2://piefed:piefed@piefed-db/piefed   # not in .env.interop: Mastodon reads DATABASE_URL too
-      CELERY_QUEUES: background
+      CELERY_QUEUES: background,onion_media
       CELERY_CONCURRENCY: "2"
     image: localhost/piefed-interop:latest
     entrypoint: ["/trust_ca.sh", "/app/entrypoint_celery.sh"]

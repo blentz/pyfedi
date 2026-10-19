@@ -256,7 +256,8 @@ def register_request_hooks(app):
                     if not is_htmx and response.status_code != 304:
                         # strict-dynamic allows scripts dynamically added by nonce-validated scripts (needed for htmx)
                         if current_user.is_authenticated:
-                            response.headers['Content-Security-Policy'] = f"script-src 'self' 'nonce-{g.nonce}' 'strict-dynamic'; object-src 'none'; base-uri 'none';"
+                            # setdefault: a view's own policy (the onion media proxy's sandbox) stands
+                            response.headers.setdefault('Content-Security-Policy', f"script-src 'self' 'nonce-{g.nonce}' 'strict-dynamic'; object-src 'none'; base-uri 'none';")
                 if current_app.config['HTTP_PROTOCOL'] == 'https':
                     response.headers['Strict-Transport-Security'] = 'max-age=63072000; includeSubDomains; preload'
                 response.headers['X-Content-Type-Options'] = 'nosniff'

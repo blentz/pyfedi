@@ -1,0 +1,240 @@
+"""The `/onion_media` route and the Celery fill (onion media proxy spec 2026-10-19, sections 3.2 to 3.4 and 3.6).
+
+The route answers from the disk cache with an `X-Accel-Redirect` that Caddy serves. On a miss an image is filled in
+the request, at most two at once (a Redis semaphore), and video, audio and images beyond the two are queued to the
+`onion_media` Celery queue with a 503. The fill itself is stubbed (`app.onion_media_routes.fill`), so no test reaches
+the network; tests/test_onion_media_fill.py covers it. Redis is the `redis_double` fakeredis. An onion request is one
+from Caddy's address with the onion marker, as in tests/test_onion_pow.py.
+"""
+import hashlib
+import os
+
+import pytest
+
+import app.onion_media_fill as onion_media_fill
+import app.onion_media_routes as onion_media_routes
+from app import celery, db
+from app.models import SiteDomain
+from app.onion_media import cache_name, proxy_url, url_kind
+from app.onion_media_fill import DEAD_SECONDS, fill_task, queue_fill
+from app.storefront import clear_domain_cache
+from tests.factories import make_instance, make_user
+
+PROXY = '10.89.0.2'
+ONION_URL = 'http://abc.onion'
+MARKER = {'X-PieFed-Via': 'onion', 'X-Forwarded-For': '10.89.0.7'}
+FROM_CADDY = {'REMOTE_ADDR': PROXY}
+IMAGE = 'https://media.example/pictrs/image/a.png'
+VIDEO = 'https://media.example/v/clip.mp4'
+SANDBOX = "default-src 'none'; sandbox"
+
+
+@pytest.fixture
+def onion(app, site, monkeypatch, redis_double, tmp_path):
+    monkeypatch.setitem(app.config, 'ONION_PROXY_IP', PROXY)
+    monkeypatch.setitem(app.config, 'MEDIA_PROXY_DIR', str(tmp_path))
+    if not SiteDomain.query.filter_by(domain='test.piefed.local').first():
+        db.session.add(SiteDomain(domain='test.piefed.local', scheme='https', is_default=True))
+    db.session.add(SiteDomain(domain='abc.onion', scheme='http', federates=False))
+    db.session.commit()
+    clear_domain_cache()
+    yield redis_double
+    clear_domain_cache()
+
+
+@pytest.fixture
+def queued(monkeypatch):
+    """Every remote URL handed to the Celery fill task, in order."""
+    calls = []
+    monkeypatch.setattr(fill_task, 'delay', calls.append)
+    return calls
+
+
+@pytest.fixture
+def no_fetch(monkeypatch):
+    def fill(remote, *, max_seconds):
+        raise AssertionError(f'fetched {remote}')
+    monkeypatch.setattr(onion_media_routes, 'fill', fill)
+
+
+@pytest.fixture
+def fills(monkeypatch, tmp_path):
+    """The in-request fill: writes the file as the real fill would and records (remote, max_seconds)."""
+    calls = []
+
+    def fill(remote, *, max_seconds):
+        calls.append((remote, max_seconds))
+        path = tmp_path / cache_name(remote, 'image/png')
+        path.write_bytes(b'png')
+        return path
+    monkeypatch.setattr(onion_media_routes, 'fill', fill)
+    return calls
+
+
+def onion_get(client, path):
+    return client.get(path, base_url=ONION_URL, headers=MARKER, environ_base=FROM_CADDY)
+
+
+def assert_served(response, remote, content_type='image/png'):
+    assert response.status_code == 200
+    assert response.data == b''
+    assert response.headers['X-Accel-Redirect'] == '/' + cache_name(remote, content_type)
+    assert response.headers['X-Content-Type-Options'] == 'nosniff'
+    assert response.headers['Content-Security-Policy'] == SANDBOX
+
+
+def _flip(text):
+    """`text` with its first character changed (a base64 key's last character can carry only padding bits)."""
+    return ('b' if text[0] != 'b' else 'c') + text[1:]
+
+
+def test_url_kind(app):
+    assert url_kind('https://a.example/x/photo.JPG') == 'image'
+    assert url_kind('https://a.example/x/anim.webp?w=1') == 'image'
+    assert url_kind('https://a.example/pictrs/image/0b1c2d') == 'image'
+    assert url_kind('https://a.example/v/clip.mp4') == 'av'
+    assert url_kind('https://a.example/a/song.FLAC#t=1') == 'av'
+    assert url_kind('https://a.example/a/track.weba') == 'av'
+    assert url_kind('https://a.example/media/12345') == 'unknown'
+    assert url_kind('https://a.example/page.html') == 'unknown'
+    assert url_kind('https://a.example/clip.mp4.html') == 'unknown'
+    assert url_kind('https://a.example/?f=clip.mp4') == 'unknown'
+
+
+def test_clearnet_and_bad_signature_404_without_fetch(app, onion, no_fetch, queued, tmp_path):
+    client = app.test_client()
+    url = proxy_url(IMAGE)
+    (tmp_path / cache_name(IMAGE, 'image/png')).write_bytes(b'png')    # even a cached file is not served on clearnet
+    assert client.get(url).status_code == 404
+    sig, key = url.split('/')[2:4]
+    assert onion_get(client, f'/onion_media/{_flip(sig)}/{key}').status_code == 404
+    assert onion_get(client, f'/onion_media/{sig}/{_flip(key)}').status_code == 404
+    assert onion_get(client, f'/onion_media/{sig}/_w').status_code == 404
+    assert onion_get(client, proxy_url(VIDEO)).status_code == 503    # a good signature on the onion does reach the cache
+    assert queued == [VIDEO]
+
+
+def test_hit_answers_accel_redirect_and_refreshes_mtime(app, onion, no_fetch, queued, tmp_path):
+    path = tmp_path / cache_name(IMAGE, 'image/png')
+    path.write_bytes(b'png')
+    os.utime(path, (1_000_000, 1_000_000))
+    response = onion_get(app.test_client(), proxy_url(IMAGE))
+    assert_served(response, IMAGE)
+    assert response.mimetype != 'text/html'          # so the onion HTML rewrite and the page headers leave it alone
+    assert path.stat().st_mtime > 1_000_000
+    assert queued == []
+
+
+def test_hit_keeps_its_sandbox_csp_for_a_signed_in_viewer(app, onion, no_fetch, tmp_path):
+    make_instance('test.piefed.local', software='piefed')    # user.instance_id FK target
+    user = make_user(None, 'viewer', local=True)
+    client = app.test_client()
+    with client.session_transaction(base_url=ONION_URL) as session:
+        session['_user_id'] = str(user.id)
+    (tmp_path / cache_name(VIDEO, 'video/mp4')).write_bytes(b'mp4')
+    assert_served(onion_get(client, proxy_url(VIDEO)), VIDEO, 'video/mp4')
+
+
+def test_image_miss_fills_in_request(app, onion, fills, queued):
+    response = onion_get(app.test_client(), proxy_url(IMAGE))
+    assert_served(response, IMAGE)
+    assert fills == [(IMAGE, 15)]
+    assert queued == []
+    assert onion.keys('onion_media:inflight:*') == []        # the slot is given back
+
+
+def test_unknown_extension_miss_fills_in_request_as_an_image(app, onion, fills, queued):
+    remote = 'https://media.example/media/12345'
+    assert_served(onion_get(app.test_client(), proxy_url(remote)), remote)
+    assert fills == [(remote, 15)]
+
+
+def test_image_fill_that_fails_is_404_and_gives_back_its_slot(app, onion, monkeypatch, queued):
+    monkeypatch.setattr(onion_media_routes, 'fill', lambda remote, *, max_seconds: None)
+    assert onion_get(app.test_client(), proxy_url(IMAGE)).status_code == 404
+    assert onion.keys('onion_media:inflight:*') == []
+    assert queued == []
+
+
+def test_slot_is_given_back_when_the_fill_raises(app, onion, monkeypatch):
+    def fill(remote, *, max_seconds):
+        raise RuntimeError('boom')
+    monkeypatch.setattr(onion_media_routes, 'fill', fill)
+    monkeypatch.setitem(app.config, 'PROPAGATE_EXCEPTIONS', True)
+    with pytest.raises(RuntimeError):
+        onion_get(app.test_client(), proxy_url(IMAGE))
+    assert onion.keys('onion_media:inflight:*') == []
+
+
+def test_a_slot_retaken_after_it_expired_is_not_given_back(app, onion, monkeypatch, tmp_path):
+    """A fill that outlived its slot's 20 s leaves the slot to whichever request took it since."""
+    def fill(remote, *, max_seconds):
+        onion.set('onion_media:inflight:0', 'another request')
+        path = tmp_path / cache_name(remote, 'image/png')
+        path.write_bytes(b'png')
+        return path
+    monkeypatch.setattr(onion_media_routes, 'fill', fill)
+    assert_served(onion_get(app.test_client(), proxy_url(IMAGE)), IMAGE)
+    assert onion.get('onion_media:inflight:0') == 'another request'
+
+
+def test_an_image_fill_takes_a_twenty_second_slot(app, onion, monkeypatch, tmp_path):
+    seen = {}
+
+    def fill(remote, *, max_seconds):
+        seen.update({key: onion.ttl(key) for key in onion.keys('onion_media:inflight:*')})
+        return None
+    monkeypatch.setattr(onion_media_routes, 'fill', fill)
+    onion_get(app.test_client(), proxy_url(IMAGE))
+    assert seen == {'onion_media:inflight:0': 20}
+
+
+def test_third_concurrent_image_miss_is_queued_503(app, onion, no_fetch, queued):
+    onion.set('onion_media:inflight:0', 'one', ex=20)
+    onion.set('onion_media:inflight:1', 'two', ex=20)
+    client = app.test_client()
+    for _ in range(2):
+        response = onion_get(client, proxy_url(IMAGE))
+        assert response.status_code == 503
+        assert response.headers['Retry-After'] == '10'
+        assert response.mimetype != 'text/html'
+    assert queued == [IMAGE]                                    # requested twice, queued once
+    assert onion.get('onion_media:inflight:0') == 'one' and onion.get('onion_media:inflight:1') == 'two'
+
+
+def test_video_miss_is_queued_never_fetched_in_request(app, onion, no_fetch, queued):
+    client = app.test_client()
+    audio = 'https://media.example/a/song.ogg'
+    for remote in (VIDEO, VIDEO, audio):
+        response = onion_get(client, proxy_url(remote))
+        assert response.status_code == 503
+        assert response.headers['Retry-After'] == '30'
+    assert queued == [VIDEO, audio]
+    assert onion.keys('onion_media:inflight:*') == []
+
+
+def test_dead_url_404(app, onion, no_fetch, queued, tmp_path):
+    onion.set('onion_media:dead:' + hashlib.sha256(IMAGE.encode()).hexdigest(), '1', ex=DEAD_SECONDS)
+    (tmp_path / cache_name(IMAGE, 'image/png')).write_bytes(b'png')
+    assert onion_get(app.test_client(), proxy_url(IMAGE)).status_code == 404
+    assert queued == []
+
+
+def test_queue_fill_de_duplicates_for_ten_minutes(app, onion, queued):
+    queue_fill(VIDEO)
+    queue_fill(VIDEO)
+    assert queued == [VIDEO]
+    key = 'onion_media:queued:' + hashlib.sha256(VIDEO.encode()).hexdigest()
+    assert 590 < onion.ttl(key) <= 600
+
+
+def test_fill_task_fills_with_a_ten_minute_deadline(app, monkeypatch):
+    calls = []
+    monkeypatch.setattr(onion_media_fill, 'fill', lambda remote, *, max_seconds: calls.append((remote, max_seconds)))
+    fill_task(VIDEO)
+    assert calls == [(VIDEO, 600)]
+
+
+def test_fill_task_routes_to_onion_media_queue(app):
+    assert fill_task.name == 'app.onion_media_fill.fill_task'
+    assert celery.conf.CELERY_ROUTES[fill_task.name] == {'queue': 'onion_media'}

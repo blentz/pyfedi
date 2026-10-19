@@ -94,7 +94,7 @@ services:
     env_file:
      - ./.env.docker
     environment:
-      CELERY_QUEUES: background
+      CELERY_QUEUES: background,onion_media
       CELERY_CONCURRENCY: 2
     entrypoint: ./entrypoint_celery.sh
     volumes:
