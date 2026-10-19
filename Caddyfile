@@ -56,6 +56,8 @@
 			rewrite * {rp.header.X-Accel-Redirect}
 			header X-Content-Type-Options nosniff
 			header Content-Security-Policy "default-src 'none'; sandbox"
+			# A signed URL names fixed content. handle_response copies no upstream header, so Caddy sets this itself.
+			header Cache-Control "public, max-age=604800, immutable"
 			file_server
 		}
 	}

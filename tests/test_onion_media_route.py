@@ -8,6 +8,7 @@ from Caddy's address with the onion marker, as in tests/test_onion_pow.py.
 """
 import hashlib
 import os
+import time
 
 import pytest
 
@@ -129,6 +130,29 @@ def test_hit_answers_accel_redirect_and_refreshes_mtime(app, onion, no_fetch, qu
     assert response.mimetype != 'text/html'          # so the onion HTML rewrite and the page headers leave it alone
     assert path.stat().st_mtime > 1_000_000
     assert queued == []
+
+
+def test_a_hit_within_the_hour_leaves_the_mtime_so_the_browser_can_revalidate(app, onion, no_fetch, queued, tmp_path):
+    """Caddy builds the ETag and Last-Modified from the mtime: touching it on every hit made every revalidation a full
+    download. Eviction runs every 15 minutes, so an hour's precision is enough for least recently used."""
+    path = tmp_path / cache_name(IMAGE, 'image/png')
+    path.write_bytes(b'png')
+    recent = time.time() - 3500
+    os.utime(path, (recent, recent))
+    assert_served(onion_get(app.test_client(), proxy_url(IMAGE)), IMAGE)
+    assert path.stat().st_mtime == recent
+    stale = time.time() - 3700
+    os.utime(path, (stale, stale))
+    assert_served(onion_get(app.test_client(), proxy_url(IMAGE)), IMAGE)
+    assert path.stat().st_mtime > time.time() - 60
+
+
+def test_a_hit_on_a_file_evicted_as_it_is_found_still_answers(app, onion, no_fetch, monkeypatch, tmp_path):
+    path = tmp_path / cache_name(IMAGE, 'image/png')
+    path.write_bytes(b'png')
+    monkeypatch.setattr(onion_media_routes, 'cached_file', lambda remote: tmp_path / 'gone.png')
+    response = onion_get(app.test_client(), proxy_url(IMAGE))
+    assert response.status_code == 200 and response.headers['X-Accel-Redirect'] == '/gone.png'   # Caddy answers 404
 
 
 def test_hit_keeps_its_sandbox_csp_for_a_signed_in_viewer(app, onion, no_fetch, tmp_path):
