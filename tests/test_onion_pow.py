@@ -560,6 +560,33 @@ def test_a_refusal_shows_a_new_challenge(app, alice, easy, no_login):
     assert value(BeautifulSoup(response.get_data(as_text=True), 'html.parser'), 'user_name') == 'alice'
 
 
+def visible_wait_links(page):
+    """Links to the wait step a browser without JavaScript shows: not inside <noscript> (shown only when the browser
+    itself has JavaScript off, not when an extension blocks it) and not under a hidden element."""
+    return [a['href'] for a in page.find_all('a', href=lambda href: href and href.startswith('/auth/onion_wait'))
+            if not a.find_parent('noscript') and not any(p.has_attr('hidden') for p in [a, *a.parents])]
+
+
+def test_a_refused_login_offers_the_wait_step(app, alice, easy, no_login):
+    """Tor Browser at Safest runs no JavaScript, so the challenge is never solved: trying again can never work, and
+    the refusal must show the way that does."""
+    client = app.test_client()
+    page = challenge(onion_page(client, '/auth/login?next=%2Fc%2Fnews'))
+    assert visible_wait_links(onion_page(client, '/auth/login')) == []
+    response = post_refused(client, onion_guard.app_pkg.redis_client, no_login, login_data(page.csrf))
+    assert visible_wait_links(BeautifulSoup(response.get_data(as_text=True), 'html.parser')) == \
+        ['/auth/onion_wait?form=login']
+
+
+def test_a_refused_registration_offers_the_wait_step(app, open_registration, easy):
+    client = app.test_client()
+    page = challenge(onion_page(client, '/auth/register'))
+    response = onion_post(client, '/auth/register', data=register_data(page.csrf))
+    assert refused(response)
+    assert visible_wait_links(BeautifulSoup(response.get_data(as_text=True), 'html.parser')) == \
+        ['/auth/onion_wait?form=register']
+
+
 def test_the_proof_is_checked_before_the_login_delay(app, alice, easy):
     """The Task 9 delay reservation counts an attempt; a refused proof must not, so it cannot lock anyone out."""
     client = app.test_client()
