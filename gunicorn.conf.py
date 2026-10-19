@@ -1,4 +1,5 @@
 import multiprocessing
+import os
 
 cpu_cores = multiprocessing.cpu_count()
 
@@ -13,8 +14,13 @@ reload = False
 
 worker_class = 'gthread'
 
+
+def access_log_enabled(value):
+    return (value or '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 #logging
-accesslog = '-'
+accesslog = '-' if access_log_enabled(os.environ.get('ACCESS_LOG')) else None
 errorlog = '-'
 
 max_requests = 20000
