@@ -30,7 +30,7 @@ from app import db
 from app.models import CronJobLog, Role, Site, utcnow
 from tests.factories import make_instance, make_user
 
-# The seven names and their schedules, read off `get_frequency`'s own arms. Kept
+# The eight names and their schedules, read off `get_frequency`'s own arms. Kept
 # here as data so a change to one of them has to be made twice, deliberately.
 KNOWN_SCHEDULES = {
     'send_missed_notifs': timedelta(hours=7),
@@ -40,6 +40,7 @@ KNOWN_SCHEDULES = {
     'daily_maintenance_celery': timedelta(hours=25),
     'daily_maintenance': timedelta(hours=25),
     'send_queue': timedelta(minutes=5),
+    'evict_onion_media': timedelta(hours=1),
 }
 
 FALLBACK = timedelta(days=1)
