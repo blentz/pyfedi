@@ -711,6 +711,13 @@ def test_a_probe_answered_4xx_logs_one_line(app, db_session, captured, path):
     assert scan_lines(captured) == ['scan: probe refused ip=203.0.113.9']
 
 
+@pytest.mark.parametrize('site, logged', [('cross-site', False), ('same-site', False), ('same-origin', False),
+                                          ('none', True)])
+def test_a_probe_logs_only_when_not_page_initiated(app, db_session, captured, site, logged):
+    app.test_client().get('/.env', headers={'Sec-Fetch-Site': site})
+    assert bool(scan_lines(captured)) is logged
+
+
 def test_a_non_probe_404_and_an_inner_wp_path_log_nothing(app, db_session, captured):
     client = app.test_client()
     client.get('/no-such-page')
