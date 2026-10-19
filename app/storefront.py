@@ -812,10 +812,11 @@ def _proxied_value(name: str, value):
 def _proxy_remote(soup, tag) -> bool:
     """Point what `tag` loads from a remote host at the media proxy; whether anything changed. On an `img`, `video`,
     `audio`, `source`, `track` or `picture`: `src`, `poster`, `data-*`, each `srcset` candidate and `style` url(...).
-    On an `a`: `href`, only when it names a media file (an extension of EXTENSIONS, or a `/pictrs/image/` path). A
-    remote `iframe`, `embed` or `object` becomes the placeholder and a plain link to it, which loads nothing until the
-    visitor follows it. What cannot be proxied as written is hidden: an `a` keeps its text, anything else becomes the
-    placeholder."""
+    On any other element: `style` url(...) (a community, feed or profile banner), and on an `a` also `href`, only
+    when it names a media file (an extension of EXTENSIONS, or a `/pictrs/image/` path). A remote `iframe`, `embed`
+    or `object` becomes the placeholder and a plain link to it, which loads nothing until the visitor follows it.
+    What cannot be proxied as written is hidden: a media element becomes the placeholder, an `a` keeps its text, and
+    any other element loses the `style`."""
     if tag.name in _EMBED_TAGS:
         if not any(_proxied_value(name, value) != value or (name in _URL_ATTRS and _is_remote(value))
                    for name, value in tag.attrs.items()):   # `data` on an `object`: the embed itself
@@ -828,22 +829,23 @@ def _proxy_remote(soup, tag) -> bool:
             shown.append(link)
         tag.replace_with(*shown).decompose()
         return True
-    if tag.name == 'a':
-        moved = {'href': _proxied(tag.get('href'), media_only=True)}
-    elif tag.name in _PROXIED_TAGS:
+    if tag.name in _PROXIED_TAGS:
         moved = {name: _proxied_value(name, value) for name, value in tag.attrs.items()}
-    else:
-        return False
+    else:   # any element's style, a banner's background-image among them (spec section 2)
+        moved = {'style': _proxied_value('style', tag.get('style'))}
+        if tag.name == 'a':
+            moved['href'] = _proxied(tag.get('href'), media_only=True)
     moved = {name: value for name, value in moved.items() if value != tag.get(name)}
     if not moved:
         return False
-    if None in moved.values():
-        if tag.name == 'a':
-            tag.unwrap()
-        else:
-            tag.replace_with(_placeholder(soup)).decompose()
-        return True
-    tag.attrs.update(moved)
+    if tag.name in _PROXIED_TAGS and None in moved.values():
+        tag.replace_with(_placeholder(soup)).decompose()
+    elif tag.name == 'a' and 'href' in moved and moved['href'] is None:
+        tag.unwrap()
+    else:   # a style that cannot be proxied as written goes; the element and its content stay
+        tag.attrs.update({name: value for name, value in moved.items() if value is not None})
+        for name in [name for name, value in moved.items() if value is None]:
+            del tag.attrs[name]
     return True
 
 

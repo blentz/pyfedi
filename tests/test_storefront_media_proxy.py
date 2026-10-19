@@ -73,6 +73,28 @@ def test_style_background_url_is_proxied(app, onion):
                    f'<video poster="{proxy_url(IMG)}" data-src="{proxy_url(IMG)}"></video>')
 
 
+BANNER = '<div class="banner" style="background-image:url(https://remote.test/b.jpg)"><h1>c</h1></div>'
+
+
+def test_a_remote_banner_on_any_element_is_proxied_on_the_onion(app, onion):
+    # a community, feed or profile banner falls back to the remote source_url (review I-1)
+    proxied = proxy_url('https://remote.test/b.jpg')
+    assert on_onion(BANNER) == f'<div class="banner" style="background-image:url({proxied})"><h1>c</h1></div>'
+    with app.test_request_context(base_url=f'https://{CANONICAL}'):
+        app.preprocess_request()
+        assert rewrite_response_for_storefront(Response(BANNER, mimetype='text/html')).get_data(as_text=True) == BANNER
+
+
+@pytest.mark.parametrize('body, shown', [
+    ('<div style="background:url(https:lemmy.world/b.jpg)"><h1>c</h1></div>', '<div><h1>c</h1></div>'),
+    ('<a href="/c" style="background:url(https:lemmy.world/b.jpg)">c</a>', '<a href="/c">c</a>'),
+    (f'<a href="{IMG}" style="background:url({IMG})">c</a>',
+     '<a href="{p}" style="background:url({p})">c</a>'),
+])
+def test_a_style_on_any_element_is_proxied_or_dropped(app, onion, body, shown):
+    assert on_onion(body) == shown.replace('{p}', proxy_url(IMG))
+
+
 def test_a_style_url_that_cannot_be_rewritten_in_place_hides_the_element(app, onion):
     # escaped in the raw value, so no literal copy to replace: the element goes rather than load the remote host
     assert on_onion('<img style="background:url(https://lemmy\\2e world/x.jpg)"/>') == HIDDEN
