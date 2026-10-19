@@ -33,6 +33,7 @@ from app.constants import NOTIF_COMMUNITY, NOTIF_POST, NOTIF_REPLY, POST_STATUS_
     POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_IMAGE, NOTIF_REMINDER, POST_TYPE_VIDEO, POST_TYPE_ARTICLE, SRC_API, \
     ROLE_ADMIN_NAME, ROLE_STAFF_NAME, ANNOUNCE_MAX_OBJECTS
 from app.email import send_email
+from app.onion_media import evict
 from app.models import CronJobLog, Settings, BannedInstances, Role, User, RolePermission, Domain, ActivityPubLog, utcnow, \
     utcnow, Site, Instance, File, Notification, Post, CommunityMember, NotificationSubscription, PostReply, Language, \
     Community, SendQueue, _store_files_in_s3, PostVote, Poll, \
@@ -1590,6 +1591,12 @@ def register(app):
                     os.unlink(file_path)
 
             log_cron_task_to_db("remove_orphan_files")
+
+    @app.cli.command("evict_onion_media")
+    def evict_onion_media():
+        """ Keep the onion remote-media cache under the admin's size cap, dropping the least recently used files """
+        with app.app_context():
+            evict(get_setting('onion_media_cache_bytes', 10737418240))
 
     @app.cli.command("send_missed_notifs")
     def send_missed_notifs():

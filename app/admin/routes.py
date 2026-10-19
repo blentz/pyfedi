@@ -436,6 +436,12 @@ def admin_misc():
         set_setting('read_posts_cutoff', int(form.read_posts_cutoff.data))
         if form.onion_pow_difficulty.data is not None:
             set_setting(POW_DIFFICULTY_SETTING, form.onion_pow_difficulty.data)
+        if form.onion_media_cache_mb.data is not None:
+            set_setting('onion_media_cache_bytes', form.onion_media_cache_mb.data * 1048576)
+        if form.onion_media_image_max_mb.data is not None:
+            set_setting('onion_media_image_max_bytes', form.onion_media_image_max_mb.data * 1048576)
+        if form.onion_media_av_max_mb.data is not None:
+            set_setting('onion_media_av_max_bytes', form.onion_media_av_max_mb.data * 1048576)
         flash(_('Settings saved.'))
     elif request.method == 'GET':
         form.enable_downvotes.data = site.enable_downvotes
@@ -482,6 +488,9 @@ def admin_misc():
         # than a missing line.
         form.captcha_enabled.data = get_setting('captcha_enabled', True)
         form.onion_pow_difficulty.data = pow_difficulty()
+        form.onion_media_cache_mb.data = get_setting('onion_media_cache_bytes', 10737418240) // 1048576
+        form.onion_media_image_max_mb.data = get_setting('onion_media_image_max_bytes', 20971520) // 1048576
+        form.onion_media_av_max_mb.data = get_setting('onion_media_av_max_bytes', 524288000) // 1048576
         form.choose_topics.data = get_setting('choose_topics', True)
         form.filter_selection.data = get_setting('filter_selection', True)
         form.private_instance.data = site.private_instance
