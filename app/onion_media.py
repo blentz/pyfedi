@@ -6,6 +6,10 @@ remote server. It links `/onion_media/<sig>/<key>`, where `<key>` is the remote 
 
 The cache file name is the sha256 of the remote URL plus an extension chosen from the response type, so Caddy's
 `file_server` sends the right Content-Type without a record of the type kept beside the file.
+
+`kind` sorts an allowed type into images and video/audio, which have separate size caps. The fill itself is in
+app/onion_media_fill.py: it needs app.utils, which imports app.models, which imports this module through
+app.storefront.
 """
 import base64
 import hashlib
@@ -53,3 +57,11 @@ def cached_file(remote: str) -> pathlib.Path | None:
         if path.exists():
             return path
     return None
+
+
+def kind(content_type: str) -> str | None:
+    """'image' or 'av' (video or audio) for a type the proxy keeps, else None. Parameters and case are ignored."""
+    content_type = content_type.split(';')[0].strip().lower()
+    if content_type not in EXTENSIONS:
+        return None
+    return 'image' if content_type.startswith('image/') else 'av'

@@ -218,6 +218,9 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/nntp/server.py': {
         'PieFedNNTPServer.__init__': 1,
     },
+    'app/onion_media_fill.py': {
+        '_fetch': 1,      # the User-Agent of a media fetch: the same instance identity get_request sends
+    },
     'app/post/routes.py': {
         'post_cross_post': 1,
         'post_edit': 1,
