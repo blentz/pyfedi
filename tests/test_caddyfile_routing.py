@@ -100,7 +100,16 @@ def accel_block():
 
 
 def accel_headers():
-    return dict(line.split(None, 2)[1:] for line in accel_block() if line.startswith('header '))
+    """{name: value} for each `header` directive in the accel block, any matcher token dropped."""
+    headers = {}
+    for line in accel_block():
+        if line.startswith('header '):
+            words = line.split(None, 1)[1]
+            if words.startswith('@'):
+                words = words.split(None, 1)[1]
+            name, value = words.split(None, 1)
+            headers[name] = value
+    return headers
 
 
 def test_cached_onion_media_stays_in_the_browser_cache():
@@ -116,3 +125,12 @@ def test_cached_onion_media_is_served_as_inert_media():
                                'Content-Security-Policy': '"default-src \'none\'; sandbox"',
                                'Cache-Control': '"public, max-age=604800, immutable"'}
     assert accel_block()[-1] == 'file_server'           # every header is set before the file goes out
+
+
+def test_a_cached_file_evicted_before_caddy_serves_it_is_not_kept_by_the_browser():
+    """Eviction can delete the file between the route's hit and file_server. That 404 must not carry the week-long
+    immutable Cache-Control, or the browser keeps a broken image for a week. `header` runs before `rewrite`, so the
+    `file` matcher names the accel path itself rather than {path}."""
+    block = accel_block()
+    assert '@present file {rp.header.X-Accel-Redirect}' in block
+    assert 'header @present Cache-Control "public, max-age=604800, immutable"' in block
