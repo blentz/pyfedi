@@ -50,6 +50,12 @@ def registration_from_mode(mode: str) -> str:
     return _REGISTRATION_FROM_MODE.get(mode, 'admin')
 
 
+def live_registration(storefront: DomainInfo, site) -> str:
+    """Who may create `storefront`'s accounts, as a `site_domain.registration` value: `site.registration_mode`'s for
+    the default domain (its own column is ignored, as in `public_registration_open`), the row's own for any other."""
+    return registration_from_mode(site.registration_mode) if storefront.is_default else storefront.registration
+
+
 def public_registration_open(storefront: DomainInfo) -> bool:
     """Whether anyone may sign up on `storefront`. The default domain is governed by `Site.registration_mode` alone
     (its own `registration` column is ignored); any other domain takes public sign-ups only when it is 'anyone', and
