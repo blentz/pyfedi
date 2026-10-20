@@ -22,6 +22,7 @@ from app.nntp.nntpserver import NNTPArticleNotFound
 from app.nntp.server import CommunityArticleIndex, IndexArticleDict, PieFedNNTPServer, _make_message_id, _tl
 from app.constants import POST_TYPE_EVENT
 from app.models import CommunityMember, Event, ModLog, Post, PostReply, Site, Tag, Topic, UserBlock, utcnow
+import app.post.util as post_util
 from app.post.util import convert_archived_replies_to_tree
 from app.utils import archive_post, as_rss_reader
 from app.visibility import RestrictedReply, can_view, mark_restricted
@@ -628,6 +629,15 @@ def test_a_thread_with_no_local_only_content_is_still_archived(app, scene, archi
     assert 'PUBLICREPLY' in _text(_anon(app, f'/post/{scene.public.id}'))
 
 
+def _shown(entries):
+    """{reply id: whether it is shown} over a marked tree."""
+    found = {}
+    for item in entries:
+        found[item['comment'].id] = not isinstance(item['comment'], RestrictedReply)
+        found.update(_shown(item['replies']))
+    return found
+
+
 def test_an_archive_from_before_local_only_content_works_out_which_replies_are(app, scene):
     """An archive written before 923e66349 has no 'local_only' key. Each reply is worked out as PostReply.new would,
     and one that cannot be is treated as local-only."""
@@ -643,14 +653,25 @@ def test_an_archive_from_before_local_only_content_works_out_which_replies_are(a
         entry(909, world.onionite.id, local_only=False),                     # the key, when present, is the answer
     ]
     tree = mark_restricted(convert_archived_replies_to_tree(archived, scene.public), None)
-
-    def shown(entries):
-        found = {}
-        for item in entries:
-            found[item['comment'].id] = not isinstance(item['comment'], RestrictedReply)
-            found.update(shown(item['replies']))
-        return found
-    assert shown(tree) == {901: True, 902: True, 903: False, 904: False, 905: False, 906: False, 907: False,
+    assert _shown(tree) == {901: True, 902: True, 903: False, 904: False, 905: False, 906: False, 907: False,
                            908: False, 909: True}
     member = mark_restricted(convert_archived_replies_to_tree(archived, scene.public), scene.alice.id)
-    assert shown(member)[903] and shown(member)[904]
+    assert _shown(member)[903] and _shown(member)[904]
+
+
+def test_one_archived_branch_works_its_root_out_from_its_real_parent(app, scene, monkeypatch):
+    """The comment permalink shows one branch of an archived thread. Its root, from an archive with no 'local_only'
+    key, is worked out from the parent it really has: under a local-only reply it is local-only, and under a
+    followers-only stub it cannot be worked out, so it is too."""
+    def entry(reply_id, replies=(), **extra):
+        return {'id': reply_id, 'body': f'body {reply_id}', 'author_id': scene.alice.id, 'replies': list(replies),
+                **extra}
+    archived = [entry(911, [entry(912, [entry(913)])], local_only=True),
+                entry(914, [entry(915)], visibility='followers'),
+                entry(916, [entry(917)])]
+    monkeypatch.setattr(post_util, 'retrieve_archived_post', lambda url: {'replies': archived})
+    scene.public.archived = 'archived.json.gz'
+    for root, expected in ((912, {912: False, 913: False}), (915, {915: False}), (917, {917: True})):
+        assert _shown(post_util.get_comment_branch(scene.public, root, 'top', None)) == expected, root
+    assert _shown(post_util.get_comment_branch(scene.public, 912, 'top', scene.alice)) == {912: True, 913: True}
+    assert post_util.get_comment_branch(scene.public, 999, 'top', None) == []

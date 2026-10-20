@@ -33,7 +33,7 @@ from app.constants import (POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_LINK,
 from app.models import Language, PostReply, Site
 from app.post.util import (body_has_no_archive_link,
                            convert_archived_replies_to_tree,
-                           find_comment_branch_in_archived,
+                           find_comment_branch,
                            flair_to_string, generate_archive_link,
                            get_comment_branch, get_post_reply_count,
                            post_replies, post_type_to_form_url_type,
@@ -209,23 +209,23 @@ class TestFindingOneReplyInAnArchive:
             {'id': 3, 'body': 'third', 'replies': []}]}]},
         {'id': 4, 'body': 'another top-level one', 'replies': []}]
 
+    def found(self, env, comment_id):
+        return find_comment_branch(convert_archived_replies_to_tree(self.NESTED, env.post), comment_id)
+
     def test_one_at_the_top(self, env):
-        found = find_comment_branch_in_archived(self.NESTED, 1)
-        assert found[0]['body'] == 'first'
+        assert self.found(env, 1)[0]['comment'].body == 'first'
 
     def test_one_further_down(self, env):
-        found = find_comment_branch_in_archived(self.NESTED, 3)
-        assert found[0]['body'] == 'third'
+        assert self.found(env, 3)[0]['comment'].body == 'third'
 
     def test_one_in_the_second_tree(self, env):
-        found = find_comment_branch_in_archived(self.NESTED, 4)
-        assert found[0]['body'] == 'another top-level one'
+        assert self.found(env, 4)[0]['comment'].body == 'another top-level one'
 
     def test_one_that_is_not_there(self, env):
-        assert find_comment_branch_in_archived(self.NESTED, 999) == []
+        assert self.found(env, 999) == []
 
     def test_an_archive_with_nothing_in_it(self, env):
-        assert find_comment_branch_in_archived([], 1) == []
+        assert find_comment_branch([], 1) == []
 
 
 class TestAPostThatHasBeenArchived:

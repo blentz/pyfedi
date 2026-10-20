@@ -156,19 +156,16 @@ def convert_archived_replies_to_tree(archived_replies: list, post: Post) -> List
     return children_of({'replies': archived_replies})
 
 
-def find_comment_branch_in_archived(archived_replies: list, comment_id: int) -> list:
-    """Find a specific comment branch in archived data"""
-    def search_tree(replies, target_id):
-        for reply_data in replies:
-            if reply_data.get('id') == target_id:
-                return [reply_data]  # Found the target comment
-            # Search in child replies
-            found = search_tree(reply_data.get('replies', []), target_id)
-            if found:
-                return found
-        return []
-    
-    return search_tree(archived_replies, comment_id)
+def find_comment_branch(tree: list, comment_id: int) -> list:
+    """The branch of a reply tree (convert_archived_replies_to_tree's) whose root is comment_id: [] when it is not
+    in the tree"""
+    for item in tree:
+        if item['comment'].id == comment_id:
+            return [item]
+        found = find_comment_branch(item['replies'], comment_id)
+        if found:
+            return found
+    return []
 
 
 # replies to a post, in a tree, sorted by a variety of methods
@@ -241,11 +238,10 @@ def get_comment_branch(post: Post, comment_id: int, sort_by: str, viewer: User) 
     if post.archived:
         archived_data = retrieve_archived_post(post.archived)
         if archived_data and 'replies' in archived_data:
-            branch_data = find_comment_branch_in_archived(archived_data['replies'], comment_id)
-            if branch_data:
-                return mark_restricted(convert_archived_replies_to_tree(branch_data, post), viewer.id if viewer else None)
-            else:
-                return []
+            # The whole thread, then the branch: a reply the archive holds no 'local_only' for is worked out from
+            # its real parent, and the branch's root would otherwise have none (and be shown when it should not)
+            branch = find_comment_branch(convert_archived_replies_to_tree(archived_data['replies'], post), comment_id)
+            return mark_restricted(branch, viewer.id if viewer else None)
     
     # Fetch the specified parent comment and its replies
     parent_comment = db.session.get(PostReply, comment_id)
