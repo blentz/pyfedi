@@ -72,7 +72,7 @@ from app.utils import user_banned_from_community, back, get_setting, render_temp
     check_anoobis, \
     community_link_markup, \
     sanitise_posting_warning, \
-    refuse_if_private_instance
+    refuse_if_private_instance, as_rss_reader
 
 # The module, not the names: app.shared.post reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.post)
@@ -841,6 +841,7 @@ def show_community(community: Community, from_instance=None):
 @bp.route('/<actor>/feed', methods=['GET'])
 @refuse_if_private_instance
 @cache.cached(timeout=600, make_cache_key=storefront_query_cache_key)
+@as_rss_reader
 def show_community_rss(actor):
     actor = actor.strip()
     if '@' in actor:

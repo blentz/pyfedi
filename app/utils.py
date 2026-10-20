@@ -3209,6 +3209,28 @@ def rss_token_user():
                              User.deleted == False).first()  # noqa: E712
 
 
+def as_rss_reader(func):
+    """Run an RSS view as the account its `?token=` names (rss_token_user), else as an anonymous reader: never as
+    the session's user. Listed under `@cache.cached`, so a cached feed depends only on its key, which holds the token
+    and not the session; otherwise one member's blocks, NSFW settings and memberships were replayed to every reader
+    of the same URL.
+
+    flask-login keeps the request's user in `g._login_user` (login_user sets it the same way); the session's user is
+    put back afterwards for whatever runs after the view.
+    """
+    @wraps(func)
+    def decorated_view(*args, **kwargs):
+        session_user = g.pop('_login_user', None)
+        g._login_user = rss_token_user() or current_app.login_manager.anonymous_user()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            g.pop('_login_user', None)
+            if session_user is not None:   # else it is looked up again, from the session, if anything asks
+                g._login_user = session_user
+    return decorated_view
+
+
 def check_anoobis(func):
     @wraps(func)
     def decorated_view(*args, **kwargs):

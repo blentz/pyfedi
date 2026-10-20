@@ -27,7 +27,7 @@ from app.utils import etag_stamp, render_template, user_filters_posts, validatio
     joined_or_modding_communities, \
     login_required_if_private_instance, communities_banned_from, reported_posts, user_notes, moderating_communities_ids, \
     approval_required, block_honey_pot, user_pronouns, community_membership_private, check_anoobis, \
-    refuse_if_private_instance
+    refuse_if_private_instance, as_rss_reader
 
 
 @bp.route('/topic/<path:topic_path>', methods=['GET'])
@@ -219,6 +219,7 @@ def show_topic(topic_path):
 @bp.route('/topic/<path:topic_path>.rss', methods=['GET'])
 @refuse_if_private_instance
 @cache.cached(timeout=600, make_cache_key=storefront_query_cache_key)   # ?token= decides what is listed
+@as_rss_reader
 def show_topic_rss(topic_path):
     topic_url_parts = topic_path.split('/')
     last_topic_machine_name = topic_url_parts[-1]

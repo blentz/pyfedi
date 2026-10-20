@@ -14,18 +14,19 @@ from types import SimpleNamespace
 import pytest
 from cachelib import SimpleCache
 from flask import g
+from flask_login import current_user
 
 import app.local_only as local_only
 from app import cache, db
 from app.nntp.nntpserver import NNTPArticleNotFound
 from app.nntp.server import CommunityArticleIndex, IndexArticleDict, PieFedNNTPServer, _make_message_id, _tl
 from app.constants import POST_TYPE_EVENT
-from app.models import Event, ModLog, Post, PostReply, Site, Tag, Topic, utcnow
+from app.models import CommunityMember, Event, ModLog, Post, PostReply, Site, Tag, Topic, UserBlock, utcnow
 from app.post.util import convert_archived_replies_to_tree
-from app.utils import archive_post
+from app.utils import archive_post, as_rss_reader
 from app.visibility import RestrictedReply, can_view, mark_restricted
 from tests.conftest import forget_login
-from tests.factories import bearer, make_domain, make_feed_item, make_local_feed
+from tests.factories import bearer, make_community, make_domain, make_feed_item, make_local_feed
 from tests.test_community_lifecycle import login
 from tests.test_local_only_invisible import _post, _reply, world  # noqa: F401 -- world is a fixture
 
@@ -348,6 +349,67 @@ def test_a_cached_feed_read_with_a_token_is_not_replayed_to_an_anonymous_reader(
     monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
     assert 'HIDDENPOST' in _text(_client(app).get(path, query_string={'token': 'alice-rss-token'}))
     assert 'HIDDENPOST' not in _text(_client(app).get(path))
+
+
+@pytest.fixture
+def filtering_reader(app, scene):
+    """alice blocks bob, sees NSFW and is a member of a private community in the topic: bob's post, an NSFW post and
+    the private community's post are what her own view of a feed changes."""
+    world = scene.world
+    privy = make_community('privy', host=app.config['SERVER_NAME'])
+    privy.private = True
+    privy.topic_id = world.clearnet.topic_id
+    db.session.add(CommunityMember(user_id=world.alice.id, community_id=privy.id))
+    for text, community, author in (('BOBPOST', world.clearnet, world.bob), ('NSFWPOST', world.clearnet, world.alice),
+                                    ('PRIVATEPOST', privy, world.alice)):
+        post = _post(app, community, author)
+        _content(post, text)
+        post.nsfw = text == 'NSFWPOST'
+    db.session.add(UserBlock(blocker_id=world.alice.id, blocked_id=world.bob.id))
+    world.alice.hide_nsfw = 0
+    db.session.commit()
+    return scene
+
+
+@pytest.mark.parametrize('path', ['/community/clearnet/feed', '/u/alice/feed', '/topic/things.rss'])
+def test_a_cached_feed_is_built_for_an_anonymous_reader_whoever_has_a_session(app, filtering_reader, path,
+                                                                             monkeypatch):
+    """A cached feed's key holds the query string, not the session: a member's session must not shape what the next
+    anonymous reader of the same URL is given."""
+    monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
+    _member(app, filtering_reader.alice, path)
+    replayed = _titles(_client(app).get(path))
+    cache.clear()
+    assert replayed == _titles(_client(app).get(path)), path
+    assert 'PUBLICPOST' in replayed and 'PRIVATEPOST' not in replayed, path
+
+
+def _titles(response):
+    """The test posts a feed lists."""
+    return set(re.findall(r'<title>([A-Z]+POST)</title>', _text(response)))
+
+
+def test_a_cached_feed_read_with_a_token_is_built_for_the_token_user(app, filtering_reader, monkeypatch):
+    monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
+    assert _titles(_client(app).get('/topic/things.rss', query_string={'token': 'alice-rss-token'})) == {
+        'PUBLICPOST', 'HIDDENPOST', 'NSFWPOST'}   # her block applies; the private community stays out of a topic
+    assert _titles(_client(app).get('/topic/things.rss')) == {'PUBLICPOST', 'BOBPOST'}
+
+
+def test_as_rss_reader_puts_the_session_user_back_afterwards(app, scene):
+    seen = []
+    view = as_rss_reader(lambda: seen.append((current_user.is_authenticated, current_user.get_id())))
+    with app.test_request_context('/?token=alice-rss-token'):
+        g._login_user = scene.world.bob
+        view()
+        assert g._login_user is scene.world.bob
+        g.pop('_login_user')
+        view()
+        assert '_login_user' not in g   # never loaded: it is looked up from the session when asked for
+    with app.test_request_context('/'):
+        view()
+    forget_login()
+    assert seen == [(True, scene.alice.id), (True, scene.alice.id), (False, None)]
 
 
 def test_the_ical_feed_omits_a_local_only_event(app, scene):
