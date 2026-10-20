@@ -3808,7 +3808,8 @@ def feed_profile(actor, feed_owner=None):
                         "url": f"{current_app.config['SERVER_URL']}{feed.header_image()}"
                     }
             actor_data['childFeeds'] = []
-            for child_feed in feed.children.all():
+            # a local-only account's feed can be a child of a federated one; its URL is not given out
+            for child_feed in feed.children.filter(federating_feed_clause()).all():
                 actor_data['childFeeds'].append(child_feed.ap_profile_id)
             resp = jsonify(actor_document(actor_data))
             resp.content_type = ap_media_type()
