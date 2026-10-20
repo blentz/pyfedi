@@ -177,11 +177,14 @@ class TestTheFrontPageRss:
         assert response.mimetype == 'application/rss+xml'
         assert 'the first post' in response.get_data(as_text=True)
 
-    @pytest.mark.parametrize('feed_type', ['new', 'active', 'hot', 'top',
-                                           'nonsense'])
+    @pytest.mark.parametrize('feed_type', ['local', 'popular', 'all', 'subscribed'])
     def test_every_kind_of_feed(self, env, feed_type):
         response = env.client.get(f'/index/feed/{feed_type}')
         assert response.status_code == 200
+
+    @pytest.mark.parametrize('feed_type', ['new', 'active', 'hot', 'top', 'nonsense'])
+    def test_a_sort_or_a_guess_is_not_a_feed(self, env, feed_type):
+        assert env.client.get(f'/index/feed/{feed_type}').status_code == 404
 
     def test_a_conditional_request_is_answered_with_a_304(self, env):
         first = env.client.get('/index/feed')
