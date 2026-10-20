@@ -16,7 +16,9 @@ from cachelib import SimpleCache
 from app import cache
 from app.main.util import sidebar_active_communities, sidebar_new_communities
 from app.storefront import DomainInfo, domain_rows
-from app.utils import instance_sticky_posts, joined_communities, moderating_communities
+from app.models import Community
+from app.utils import community_moderators, instance_sticky_posts, joined_communities, moderating_communities
+from tests.factories import make_community, make_instance, make_user
 
 
 @pytest.fixture
@@ -62,6 +64,7 @@ def test_an_old_six_field_domain_rows_entry_is_never_read(db_session, real_cache
     (moderating_communities, (1,)),
     (sidebar_active_communities, (None,)),
     (sidebar_new_communities, (None,)),
+    (community_moderators, (1,)),   # R3: CommunityMember rows, each with its User loaded (lazy='joined')
 ])
 def test_an_entry_under_the_old_name_is_ignored(db_session, real_cache, fn, args):
     real_cache.set(_old_key(fn, *args), 'OLD SHAPE', timeout=300)
@@ -72,3 +75,11 @@ def test_a_new_entry_is_not_under_the_old_name(db_session, real_cache):
     """A rollback to the old code reads the old name: nothing the new code writes is there."""
     instance_sticky_posts('hot')
     assert real_cache.get(_old_key(instance_sticky_posts, 'hot')) is None
+
+
+def test_a_communitys_moderators_entry_under_the_old_name_is_ignored(db_session, real_cache):
+    """R3: Community.moderators pickles CommunityMember rows, and each carries a full User."""
+    make_user(make_instance('test.piefed.local'), 'founder', local=True)   # make_community's user_id=1
+    community = make_community('memoed')
+    real_cache.set(_old_key(Community.moderators, community), 'OLD SHAPE', timeout=300)
+    assert community.moderators() != 'OLD SHAPE'

@@ -4355,7 +4355,7 @@ def subscribed_feeds(user_id: int) -> List[int]:
             Feed.query.join(FeedMember, Feed.id == FeedMember.feed_id).filter(FeedMember.user_id == user_id)]
 
 
-@cache.memoize(timeout=300)
+@cache.memoize(timeout=300, make_name=shaped_memo_name)   # CommunityMember rows, each with its User
 def community_moderators(community_id):
     mods = CommunityMember.query.filter((CommunityMember.community_id == community_id) &
                                         (or_(

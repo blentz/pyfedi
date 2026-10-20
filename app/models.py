@@ -36,7 +36,7 @@ from sqlalchemy_utils.types import \
     TSVectorType  # https://sqlalchemy-searchable.readthedocs.io/en/latest/installation.html
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from app import db, login, cache, celery, httpx_client, constants, app_bcrypt
+from app import db, login, cache, celery, httpx_client, constants, app_bcrypt, shaped_memo_name
 from app.constants import SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPTION_MODERATOR, SUBSCRIPTION_OWNER, \
     SUBSCRIPTION_BANNED, SUBSCRIPTION_PENDING, NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC, NOTIF_POST, NOTIF_REPLY, \
     NOTIF_FEED, NOTIF_DEFAULT, NOTIF_REPORT, NOTIF_MENTION, POST_STATUS_REVIEWING, \
@@ -1478,7 +1478,7 @@ class Community(db.Model):
         else:
             return f"!{self.ap_id.lower()}"
 
-    @cache.memoize(timeout=300)
+    @cache.memoize(timeout=300, make_name=shaped_memo_name)   # CommunityMember rows, each with its User
     def moderators(self):
         return CommunityMember.query.filter((CommunityMember.community_id == self.id) &
                                             (or_(
