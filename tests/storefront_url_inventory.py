@@ -183,7 +183,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     },
     'app/models.py': {
         'Community.flair_for_ap': 1,
-        'Community.lemmy_link': 1,
         'Community.local_url': 1,
         'Community.profile_id': 1,
         'Community.public_url': 1,
@@ -201,7 +200,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'PostReply.profile_id': 1,
         'User.encode_jwt_token': 1,
         'User.instance_domain': 1,
-        'User.lemmy_link': 1,
         'User.mention_tag': 1,
         'User.profile_id': 1,
         'User.public_url': 1,

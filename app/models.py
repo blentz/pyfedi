@@ -1470,11 +1470,11 @@ class Community(db.Model):
             return f"{self.title}@{self.ap_domain}"
 
     def link(self) -> str:
-        return self.name if self.ap_id is None else self.ap_id.lower()
+        return storefront.path_name(self.name, self.site_domain_id) if self.ap_id is None else self.ap_id.lower()
 
     def lemmy_link(self) -> str:
         if self.ap_id is None:
-            return f"!{self.name}@{current_app.config['SERVER_NAME']}"
+            return f"!{self.name}@{storefront.link_host(self.home_domain())}"
         else:
             return f"!{self.ap_id.lower()}"
 
@@ -2127,13 +2127,13 @@ class User(UserMixin, db.Model):
 
     def link(self) -> str:
         if self.is_local():
-            return self.user_name
+            return storefront.path_name(self.user_name, self.site_domain_id)
         else:
             return self.ap_id
 
     def lemmy_link(self) -> str:
         if self.ap_id is None:
-            return f"{self.user_name}@{current_app.config['SERVER_NAME']}"
+            return f"{self.user_name}@{storefront.link_host(self.home_domain())}"
         else:
             return self.ap_id.lower()
 
