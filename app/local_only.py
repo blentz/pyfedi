@@ -69,8 +69,11 @@ def federated_mentions(users: list) -> list:
     return [user for user in users if not user_local_only(user)]
 
 
-# The fields of an activity, or of any object inside it, that name actors and objects
-_GUARDED_KEYS = frozenset(('id', 'actor', 'object', 'target', 'inReplyTo', 'audience', 'to', 'cc', 'attributedTo'))
+# The fields of an activity, or of any object inside it, that name actors and objects (quotes and quote
+# authorizations included)
+_GUARDED_KEYS = frozenset(('id', 'actor', 'object', 'target', 'inReplyTo', 'audience', 'to', 'cc', 'attributedTo',
+                           'quote', 'quoteUrl', 'quoteUri', '_misskey_quote', 'interactionTarget', 'interactingObject',
+                           'instrument'))
 # Our own URLs of a post or a comment: /post/<id>[/...], /post/<id>/comment/<id>[/...], /comment/<id>[/...] and the
 # nice URL /c/<community>/p/<id>/<slug>
 _OBJECT_PATH = re.compile(r'^/(?:post/(?P<post>\d+)(?:/comment/(?P<nested>\d+))?|comment/(?P<comment>\d+)|'
@@ -109,8 +112,8 @@ def outbound_refusal(body: dict, session=None) -> str | None:
         try:
             parts = urlsplit(url)
             host = storefront.normalise_host(parts.hostname or '')
-        except ValueError:
-            continue
+        except ValueError:   # fail closed: a URL nobody can parse names a host nobody can check
+            return 'it names a URL that cannot be parsed'
         if host not in federates:
             continue
         if not federates[host]:
