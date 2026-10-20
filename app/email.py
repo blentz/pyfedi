@@ -12,7 +12,7 @@ from flask import current_app, render_template, g, url_for, flash
 from flask_babel import _  # todo: set the locale based on account_id so that _() works
 
 from app import celery
-from app.storefront import default_storefront, home_storefront, storefront_url
+from app.storefront import default_storefront, home_storefront, storefront_html, storefront_url
 from app.utils import get_setting, markdown_to_html, html_to_text
 
 CHARSET = "UTF-8"
@@ -49,7 +49,8 @@ def send_registration_approved_email(user):
     body = get_setting('registration_approved_email', '')
     with home_storefront(user):
         if body:
-            body = render_template('email/welcome.html', user=user, email_body=markdown_to_html(body))
+            # markdown_to_html moves our hosts onto the canonical one, for stored text; this is mail to one account
+            body = render_template('email/welcome.html', user=user, email_body=storefront_html(markdown_to_html(body)))
         else:
             # built as HTML, not Markdown: markdown_to_html moves our hosts onto the canonical one, for stored text
             url = html.escape(storefront_url())
