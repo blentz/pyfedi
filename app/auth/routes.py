@@ -79,6 +79,8 @@ def register():
     form = RegistrationForm()
     if not public_registration_open(current_storefront()):
         return render_registration_form(form)   # this domain's accounts are made by staff, not by sign-up
+    if g.site.registration_mode == 'Closed':
+        return render_registration_form(form)   # the template hides the form; a direct POST gets the same refusal
     if g.site.tos_url is None or not g.site.tos_url.strip():
         del form.terms
     if g.site.registration_mode == 'Open':
