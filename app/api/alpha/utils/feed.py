@@ -3,6 +3,7 @@ from flask import current_app, g
 from app import db
 from app.api.alpha.views import feed_view
 from app.constants import *
+from app.feed.util import feeds_for_form
 from app.models import User, Feed, FeedItem, Community
 # The module, not the names: app.shared.feed reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.feed)
@@ -166,6 +167,19 @@ def post_feed_follow(auth, data):
     return feed
 
 
+def _require_own_parent_feed(parent_feed_id, current_feed_id, user_id):
+    # The web form offers only the caller's own feeds (feeds_for_form), and for an
+    # edit not the feed itself; the API holds to the same list. None/0 means no parent.
+    if not parent_feed_id:
+        return
+    try:
+        parent_feed_id = int(parent_feed_id)
+    except (TypeError, ValueError):
+        raise Exception('parent_feed_not_allowed')
+    if parent_feed_id not in {feed_id for feed_id, _title in feeds_for_form(current_feed_id, user_id)}:
+        raise Exception('parent_feed_not_allowed')
+
+
 def post_feed(auth, data):
     user = authorise_api_user(auth, return_type='model')
     public = data['public'] if 'public' in data else True
@@ -183,6 +197,9 @@ def post_feed(auth, data):
     is_instance_feed = data['is_instance_feed'] if 'is_instance_feed' in data else False
     show_child_posts = data['show_child_posts'] if 'show_child_posts' in data else False
     parent_feed_id = data['parent_feed_id'] if 'parent_feed_id' in data else None
+
+    if 'parent_feed_id' in data:
+        _require_own_parent_feed(parent_feed_id, 0, user.id)
 
     # D708: the site's NSFW/NSFL switches apply here as on the web, refused out loud rather than quietly dropped
     if nsfw and g.site.enable_nsfw is False:
@@ -217,6 +234,8 @@ def put_feed(auth, data):
     is_instance_feed = data['is_instance_feed'] if 'is_instance_feed' in data else feed.is_instance_feed
     show_child_posts = data['show_child_posts'] if 'show_child_posts' in data else feed.show_posts_in_children
     parent_feed_id = data['parent_feed_id'] if 'parent_feed_id' in data else feed.parent_feed_id
+    if 'parent_feed_id' in data:
+        _require_own_parent_feed(parent_feed_id, feed.id, authorise_api_user(auth))
     if 'communities' in data:
         communities = data['communities']
     else:
