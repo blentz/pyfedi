@@ -51,10 +51,11 @@ def registration_from_mode(mode: str) -> str:
 
 
 def public_registration_open(storefront: DomainInfo) -> bool:
-    """Whether anyone may sign up on `storefront`. Only an 'anyone' domain takes public sign-ups, and then
-    `Site.registration_mode` applies as it always has; a 'staff' or 'admin' domain's accounts are made by the admin
+    """Whether anyone may sign up on `storefront`. The default domain is governed by `Site.registration_mode` alone
+    (its own `registration` column is ignored); any other domain takes public sign-ups only when it is 'anyone', and
+    then `Site.registration_mode` applies as well. A 'staff' or 'admin' domain's accounts are made by the admin
     add-user form alone."""
-    return storefront.registration == 'anyone'
+    return storefront.is_default or storefront.registration == 'anyone'
 
 
 _NOT_IN_AUTHORITY = frozenset('@/\\?#')

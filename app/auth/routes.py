@@ -14,15 +14,15 @@ from app.auth.oauth_util import (
     email_already_registered,
     finalize_user_login,
     initialize_new_user,
+    refuse_new_oauth_account,
     refuse_banned_visitor,
 )
-from app.storefront import current_storefront
+from app.storefront import current_storefront, public_registration_open
 from app.auth.util import (
     handle_abandoned_open_instance,
     notify_admins_of_registration,
     process_login,
     process_registration_form,
-    public_registration_open,
     redirect_next_page,
     render_login_form,
     render_registration_form,
@@ -355,6 +355,9 @@ def mastodon_authorize():
                         _('An account with this email address already exists.'))
                     return render_template('auth/mastodon_authorize.html',
                                            form=form, user_info=user_info)
+                refusal = refuse_new_oauth_account()
+                if refusal is not None:
+                    return refusal
                 username = user_info['username']
                 # New user registration
                 user = initialize_new_user(
