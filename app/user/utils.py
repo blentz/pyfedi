@@ -13,6 +13,7 @@ from app.mentions import stored_user, user_address_parts
 from app.models import User, CommunityMember, Community, Site, BannedInstances, Post, \
     PostVote, ArchivedPostReply, PostReply, UserNote
 from app.shared.tasks import task_selector
+from app.storefront import domain_for_host
 from app.utils import gibberish, get_request, get_task_session, patch_db_session, \
     intlist_to_strlist, community_membership_private, paginate_post_ids, post_ids_to_models
 from app.local_only import local_only_visible, without_local_only
@@ -99,7 +100,7 @@ def search_for_user(address: str, allow_fetch: bool = True, retry: bool = False,
         return None
 
     parts = user_address_parts(address)
-    if parts is None or not parts[1]:
+    if parts is None or not parts[1] or domain_for_host(parts[1]):   # a hosted domain's users are all stored
         return None
     name, server = parts
     if address.startswith('@'):

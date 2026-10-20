@@ -31,6 +31,7 @@ from app.constants import SRC_WEB, POST_TYPE_LINK, AP_FETCH_ACCEPT
 from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, _as_dict, parse_ap_published, \
     Instance, User, Tag, CommunityFlair, CommunityThemeAllowed, markdown_source, \
     language_from_ap, _as_url
+from app.storefront import domain_for_host, on_domain
 from app.utils import get_request, gibberish, ensure_directory_exists, ap_datetime, instance_banned, get_task_session, \
     store_files_in_s3, guess_mime_type, patch_db_session, instance_allowed, get_setting, scale_gif, theme_list, \
     save_image_without_metadata, \
@@ -97,10 +98,10 @@ def search_for_community(address: str, allow_fetch: bool = True, retry: bool = F
         if instance_banned(server):
             return None
 
-        if current_app.config['SERVER_NAME'] == server:
-            profile_id = f"https://{server}/c/{name.lower()}"
-            already_exists = db.session.query(Community).filter_by(ap_profile_id=profile_id, ap_id=None).first()
-            return already_exists
+        hosted = domain_for_host(server)
+        if hosted:   # one of ours: that domain's own community, or none. Never fetched (it would be a self-request)
+            return db.session.query(Community).filter(func.lower(Community.name) == name.lower(),
+                                                      Community.ap_id.is_(None), on_domain(hosted, Community)).first()
 
         already_exists = db.session.query(Community).filter_by(ap_id=address[1:]).first()
         if already_exists:

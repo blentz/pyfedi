@@ -12,6 +12,7 @@ from app.activitypub.util import actor_json_to_model, canonical_handle, webfinge
 from app.community.util import search_for_community, retrieve_mods_and_backfill
 from app.constants import AP_FETCH_ACCEPT
 from app.models import BannedInstances, Feed, FeedItem, Community, _as_dict
+from app.storefront import is_local_host
 from app.utils import feed_tree, get_request
 
 
@@ -52,7 +53,7 @@ def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False)
             reason = f" Reason: {banned.reason}" if banned.reason is not None else ''
             raise Exception(f"{server} is blocked.{reason}")  # todo: create custom exception class hierarchy
 
-        if current_app.config['SERVER_NAME'] == server:
+        if is_local_host(server):   # one of ours: never fetched (it would be a self-request)
             already_exists = Feed.query.filter_by(name=name, ap_id=None).first()
             return already_exists
 
