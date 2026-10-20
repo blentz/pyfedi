@@ -16,7 +16,7 @@ from app.api.alpha.views import search_view, post_view, reply_view, user_view, c
 from app.community.util import search_for_community
 from app.discovery.podcast import PODCAST_DROP, podcast_route_for, podcast_twin_named_by_other
 from app.models import Post, PostReply, User, Community, BannedInstances, Feed, ModLog
-from app.storefront import is_local_host
+from app.storefront import domain_for_host, is_local_host
 from app.user.utils import search_for_user
 from app.visibility import can_view, is_open, modlog_local_only_clause, modlog_open_clause
 from app.feed.util import search_for_feed
@@ -166,12 +166,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             local_request = bool(search_for_community(query.lower(), allow_fetch=False))
         elif query.startswith('@'):
             # Check if this user is already federated
-            if query.endswith(current_app.config['SERVER_NAME']):
-                user_name = query[1:]
-                user_name = user_name.split('@')[0]
-                local_request = bool(search_for_user(user_name.lower(), allow_fetch=False))
-            else:
-                local_request = bool(search_for_user(query.lower(), allow_fetch=False))
+            local_request = bool(search_for_user(query.lower(), allow_fetch=False))
         elif query.startswith('~'):
             # Check if this feed is already federated
             local_request = bool(search_for_feed(query.lower(), allow_fetch=False))
@@ -241,13 +236,10 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
         if query.startswith("@") or "/u/" in query:
 
             # This is a user specified using the @user@instance.tld notation
+            # The handle whole: a hosted host's account is looked up on that domain alone (stored_user), never
+            # fetched. Stripping the host left a bare name, which matched that name on every domain
             if query.startswith("@"):
-                if query.endswith(current_app.config['SERVER_NAME']):
-                    user_name = query[1:]
-                    user_name = user_name.split('@')[0]
-                    object = search_for_user(user_name.lower(), allow_fetch=bool(user_id))
-                else:
-                    object = search_for_user(query.lower(), allow_fetch=bool(user_id))
+                object = search_for_user(query.lower(), allow_fetch=bool(user_id))
                 if object:
                     return user_view(user=object, variant=7, user_id=user_id)
                 else:
@@ -258,10 +250,9 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             matches = re.search(user_pattern, query)
             user_name = matches.group(1)
 
-            if user_name.endswith(current_app.config['SERVER_NAME']) and '@' in user_name:
-                user_name = user_name.split('@')[0]
-
-            object = search_for_user(user_name.lower(), allow_fetch=bool(user_id))
+            # `/u/name@host` names its own domain; a bare `/u/name` is on the domain the URL is on
+            object = search_for_user(user_name.lower(), allow_fetch=bool(user_id),
+                                     home=None if '@' in user_name else domain_for_host(server))
             if object:
                 return user_view(user=object, variant=7, user_id=user_id)
             else:

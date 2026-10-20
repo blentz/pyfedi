@@ -367,7 +367,7 @@ def test_a_person_in_at_notation(app, env):
         answer = get_resolve_object(token(user), {'q': name})
 
     assert answer['person']['person']['id'] == author.id
-    assert searched.call_args.args[0] == author.user_name.lower()
+    assert searched.call_args.args[0] == name.lower()   # R1: the handle whole, so it is looked up on its domain
 
 
 def test_a_feed_in_tilde_notation(app, env):
@@ -979,8 +979,8 @@ def test_an_actor_document_with_no_name_is_not_found(app, env):
 
 
 def test_a_local_person_addressed_with_this_instances_domain(app, env):
-    """`@name@this-instance` is trimmed to the bare name before the lookup,
-    on both the local-request test and the search itself."""
+    """`@name@this-instance` is passed whole, on both the local-request test
+    and the search itself: R1, a bare name matched that name on every domain."""
     from app.api.alpha.utils.misc import get_resolve_object
 
     user, author, community, post, reply, baseline = env
@@ -990,7 +990,7 @@ def test_a_local_person_addressed_with_this_instances_domain(app, env):
                return_value=author) as searched:
         get_resolve_object(token(user), {'q': name})
 
-    assert all(call.args[0] == author.user_name.lower()
+    assert all(call.args[0] == name.lower()
                for call in searched.call_args_list)
 
 
@@ -1031,7 +1031,7 @@ def test_a_person_url_carrying_this_instances_domain(app, env):
                return_value=author) as searched:
         get_resolve_object(token(user), {'q': local_url(f'/u/{name}')})
 
-    assert searched.call_args.args[0] == author.user_name.lower()
+    assert searched.call_args.args[0] == name.lower()   # R1: `/u/name@host` names its own domain
 
 
 def test_a_person_url_with_no_name_in_it(app, env):
@@ -1395,8 +1395,9 @@ def test_seven_suggestions_even_when_the_thread_fills_them(app, env):
 
 
 def test_a_lookalike_domain_is_not_this_instance(app, env):
-    """`@name@sub.<server>` ends with our domain but is not it, so the
-    at-notation branch trims the name before asking whether it is here."""
+    """`@name@sub.<server>` ends with our domain but is not it. R1: the old
+    suffix test trimmed it to a bare name and found OUR account; it is asked
+    for whole now, as the remote handle it is."""
     from app.api.alpha.utils.misc import get_resolve_object
 
     user, author, community, post, reply, baseline = env
@@ -1407,7 +1408,7 @@ def test_a_lookalike_domain_is_not_this_instance(app, env):
         answer = get_resolve_object(token(user), {'q': name})
 
     assert answer['person']['person']['id'] == author.id
-    assert searched.call_args_list[0].args[0] == author.user_name.lower()
+    assert searched.call_args_list[0].args[0] == name.lower()
 
 
 def test_seven_suggestions_from_the_looser_search_too(app, env):
