@@ -147,7 +147,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/community/util.py': {
         'delete_post_from_community_task': 2,
         'delete_post_reply_from_community_task': 2,
-        'search_for_community': 1,
     },
     'app/dev/routes.py': {
         'tools': 4,
@@ -170,7 +169,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     },
     'app/feed/util.py': {
         'feed_communities_for_edit': 1,
-        'search_for_feed': 1,
     },
     'app/local_only.py': {
         'outbound_refusal': 1,   # the canonical host is ours in the "names our post or comment" test (plan B task 7)
