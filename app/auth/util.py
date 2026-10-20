@@ -613,12 +613,19 @@ def validate_user_ldap_login(user_name: str, password: str, ip: str, refuse: boo
     let in, which is not something a local password should be able to
     override.
     """
+    name, domain = split_handle(user_name, current_storefront())
+    if domain is None:   # not a handle of a hosted domain: an email, which any storefront takes
+        domain = default_domain()
+    elif not domain.is_default:   # directory accounts belong to the default domain only
+        return None
+    else:
+        user_name = name
     result = login_with_ldap(user_name, password)
     if result is False or refuse:   # refuse: the bind is tried all the same, and its answer is not taken
         flash(_('Login failed'))
         return None
 
-    user = find_user(user_name, default_domain())
+    user = find_user(user_name, domain)
     if user is None:
         if not can_be_a_local_user_name(user_name):  # D1149, D1150
             flash(_('Login failed'))

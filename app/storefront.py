@@ -125,11 +125,13 @@ def domain_by_id(site_domain_id: int | None) -> DomainInfo:
     return next((row for row in domain_rows() if row.id == site_domain_id), None) or default_domain()
 
 
-def on_domain(domain: DomainInfo):
-    """A filter for the local users of `domain`: its own, and on the default domain the ones no domain was stamped on."""
+def on_domain(domain: DomainInfo, model=None):
+    """A filter for the local rows of `model` (users by default) that belong to `domain`: its own, and on the default
+    domain the ones no domain was stamped on."""
+    column = (model or models.User).site_domain_id
     if domain.is_default:
-        return or_(models.User.site_domain_id == domain.id, models.User.site_domain_id.is_(None))
-    return models.User.site_domain_id == domain.id
+        return or_(column == domain.id, column.is_(None))
+    return column == domain.id
 
 
 def domain_base_url(info: DomainInfo) -> str:

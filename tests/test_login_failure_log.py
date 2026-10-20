@@ -16,7 +16,7 @@ from werkzeug.exceptions import HTTPException
 
 from app import db
 from app.auth.util import validate_user_login   # a deleted row is reached by name only: find_user never returns one
-from app.models import User
+from app.models import SiteDomain, User
 from app.shared.auth import api_log_user_in
 from app.utils import log_login_failure
 from app.api.alpha.utils.user import post_user_verify_credentials
@@ -91,7 +91,9 @@ def test_a_deleted_account_logs(app, alice, ldap_off, caplog):
 
 
 def test_a_failed_bind_and_a_wrong_local_password_log_once(app, alice, directory, caplog):
-    clearnet_login(app, 'alice@abc.onion', 'a wrong password')
+    alice.site_domain_id = SiteDomain.query.filter_by(domain='test.piefed.local').first().id   # the directory's domain
+    db.session.commit()
+    clearnet_login(app, 'alice', 'a wrong password')
     assert directory.call_count == 1
     only_failure(caplog, '203.0.113.9')
 

@@ -180,9 +180,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'modlog': 2,
         'test_hashing': 1,
     },
-    'app/mentions.py': {
-        'mentioned_users_found_by': 1,
-    },
     'app/models.py': {
         'Community.flair_for_ap': 1,
         'Community.lemmy_link': 1,
