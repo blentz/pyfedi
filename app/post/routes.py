@@ -2987,7 +2987,9 @@ def show_post_ical(post_id: int):
                                       f"BEGIN:VCALENDAR\nX-WR-CALNAME:{escape(post.title)}\nX-WR-TIMEZONE:UTC")
         resp = make_response(ical_data)
         resp.headers['Content-Disposition'] = 'inline; filename="' + slugify(post.title) + '.ics"'
-        resp.headers['Cache-Control'] = 'public, max-age=3600'  # cache for 1 hour
+        # cache for 1 hour; only in the reader's own cache when logged in, since that calendar can hold local-only
+        # events (and private-instance ones) a shared cache would replay to the next reader of the URL
+        resp.headers['Cache-Control'] = f"{'private' if current_user.is_authenticated else 'public'}, max-age=3600"
         resp.mimetype = 'text/calendar'
         return resp
 

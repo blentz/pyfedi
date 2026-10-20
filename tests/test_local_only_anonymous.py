@@ -422,6 +422,20 @@ def test_the_ical_feed_omits_a_local_only_event(app, scene):
     assert _anon(app, f'/post/{scene.hidden.id}/ical').status_code == 404
 
 
+def test_an_ical_feed_a_logged_in_viewer_reads_is_not_for_shared_caches(app, scene):
+    """What a logged-in viewer is given can hold local-only events, which a shared cache would hand on to the next
+    reader of the URL. Anonymous readers all get the same calendar, which any cache may keep."""
+    for post in (scene.public, scene.hidden):
+        post.type = POST_TYPE_EVENT
+        db.session.add(Event(post_id=post.id, start=post.posted_at, end=post.posted_at))
+    db.session.commit()
+    for path in ('/community/clearnet/ical', f'/post/{scene.public.id}/ical'):
+        assert _anon(app, path).headers['Cache-Control'] == 'public, max-age=3600', path
+        assert _member(app, scene.alice, path).headers['Cache-Control'] == 'private, max-age=3600', path
+    assert _member(app, scene.alice, f'/post/{scene.hidden.id}/ical').headers['Cache-Control'] == \
+        'private, max-age=3600'
+
+
 def test_the_sitemap_omits_local_only_posts_even_for_a_logged_in_crawler(app, scene):
     for response in (_anon(app, '/sitemap.xml'), _member(app, scene.alice, '/sitemap.xml')):
         assert response.status_code == 200
