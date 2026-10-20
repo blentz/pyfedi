@@ -57,7 +57,7 @@ from wtforms.widgets import ListWidget, CheckboxInput, TextInput
 from wtforms.validators import ValidationError
 from markupsafe import Markup
 import boto3
-from app import db, cache, httpx_client, celery, get_ip_address, plugins
+from app import db, cache, httpx_client, celery, get_ip_address, plugins, shaped_memo_name
 from app.onion import is_onion_request
 from app.pinned_http import fetch_deadline, is_refused_address
 from app.local_only import local_only_visible
@@ -4209,7 +4209,7 @@ def user_filters_languages(user_id):
         return None
 
 
-@cache.memoize(timeout=300)
+@cache.memoize(timeout=300, make_name=shaped_memo_name)
 def moderating_communities(user_id) -> List[Community]:
     if user_id is None or user_id == 0:
         return []
@@ -4279,7 +4279,7 @@ def joined_server_views(user_id) -> set:
     return set(db.session.scalars(select(ServerViewMember.instance_id).where(ServerViewMember.user_id == user_id)))
 
 
-@cache.memoize(timeout=300)
+@cache.memoize(timeout=300, make_name=shaped_memo_name)
 def joined_communities(user_id) -> List[Community]:
     if user_id is None or user_id == 0:
         return []
@@ -6028,7 +6028,7 @@ def instance_sticky_post_ids():
     return post_ids
 
 
-@cache.memoize(timeout=3600)
+@cache.memoize(timeout=3600, make_name=shaped_memo_name)
 def instance_sticky_posts(sort: str):
     posts = Post.query.filter(Post.instance_sticky == True, Post.deleted == False, Post.status > 0)
     if sort == '' or sort == 'hot':

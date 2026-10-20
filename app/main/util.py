@@ -5,7 +5,7 @@ from flask import g
 from flask_login import current_user
 from sqlalchemy import desc, text
 
-from app import cache, db
+from app import cache, db, shaped_memo_name
 from app.constants import POST_STATUS_REVIEWING, SUBSCRIPTION_PENDING, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, \
     SUBSCRIPTION_MODERATOR
 from app.models import Community, utcnow, BannedInstances, Instance
@@ -13,7 +13,7 @@ from app.utils import blocked_communities, communities_banned_from, blocked_or_b
     joined_or_modding_communities, pending_communities
 
 
-@cache.memoize(timeout=10)
+@cache.memoize(timeout=10, make_name=shaped_memo_name)
 def sidebar_active_communities(user_id: int) -> List:
     if user_id == 0:
         return Community.query.filter_by(banned=False, nsfw=False, nsfl=False, private=False, show_all=True).order_by(desc(Community.last_active)).limit(5).all()
@@ -30,7 +30,7 @@ def sidebar_active_communities(user_id: int) -> List:
     return q.order_by(desc(Community.last_active)).limit(5).all()
 
 
-@cache.memoize(timeout=60)
+@cache.memoize(timeout=60, make_name=shaped_memo_name)
 def sidebar_new_communities(user_id: int) -> List:
     cutoff = utcnow() - timedelta(days=30)
     if user_id == 0:
