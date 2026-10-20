@@ -9,6 +9,7 @@ from app import db, cache
 from app.api.alpha.views import community_view, user_view, post_view, cached_modlist_for_community, flair_view
 from app.community.util import search_for_community
 from app.constants import *
+from app.storefront import current_storefront, on_domain
 from app.models import Community, CommunityMember, User, CommunityBan, Notification, CommunityJoinRequest, \
     NotificationSubscription, Post, CommunityFlair, Feed, utcnow
 # The module, not the names: app.shared.community reaches this file through a blueprint
@@ -122,7 +123,8 @@ def get_community_list(auth, data):
         communities = Community.query.filter_by(banned=False).join(CommunityMember).filter(
             CommunityMember.user_id == user_id)
     elif type_ == 'Local':
-        communities = Community.query.filter_by(ap_id=None, banned=False)
+        communities = Community.query.filter_by(ap_id=None, banned=False).filter(
+            on_domain(current_storefront(), Community))
     elif type_ == 'ModeratorView' or type_ == 'Moderating':
         communities = Community.query.filter(Community.id.in_(moderating_communities_ids(user_id)))
     else:

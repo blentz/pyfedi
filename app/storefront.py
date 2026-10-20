@@ -142,6 +142,18 @@ def on_domain(domain: DomainInfo, model=None):
     return column == domain.id
 
 
+def on_domain_sql(domain: DomainInfo, alias: str = 'c') -> str:
+    """`on_domain` for raw SQL over a community (or user) table aliased `alias`. It does not say the row is local: a
+    remote row has no domain either, so the default domain's NULL arm matches it. Put the local test beside it. The id
+    comes from a `site_domain` row, never from the request."""
+    column = f'{alias}.site_domain_id'
+    if not domain.is_default:
+        return f'{column} = {int(domain.id)}'
+    if domain.id is None:   # the synthesised default: no row to be stamped with
+        return f'{column} IS NULL'
+    return f'({column} = {int(domain.id)} OR {column} IS NULL)'
+
+
 def domain_base_url(info: DomainInfo) -> str:
     """The origin that identifies accounts and communities owned by `info`, for ActivityPub URLs stored at creation.
     The default domain is SERVER_URL itself, so its identity stays byte-for-byte what it was before storefronts."""
