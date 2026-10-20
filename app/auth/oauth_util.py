@@ -7,10 +7,9 @@ from flask_login import login_user, current_user
 from sqlalchemy import func
 
 from app import db, oauth
-from app.auth.util import create_registration_application, get_country, handle_banned_user, \
-    public_registration_open
+from app.auth.util import create_registration_application, get_country, handle_banned_user
 from app.models import User, utcnow
-from app.storefront import current_storefront, default_domain
+from app.storefront import current_storefront, default_domain, public_registration_open
 from app.onion import audit_field
 from app.shared.tasks import task_selector
 from app.utils import RESERVED_USER_NAMES, actor_contains_blocked_words, finalize_user_setup, get_setting, gibberish, \
@@ -26,6 +25,16 @@ def is_country_blocked(country: str) -> bool:
             if country_code.strip().upper() == country.upper():
                 return True
     return False
+
+
+def refuse_new_oauth_account():
+    """A response when OAuth may not create an account here, otherwise None. OAuth makes default-domain accounts
+    only, so a new one is refused on any other storefront, and on the default one when registration is closed to
+    the public. An existing account's login is not asked this."""
+    if not current_storefront().is_default or not public_registration_open(default_domain()):
+        flash(_('Account registrations are currently closed.'), 'error')
+        return redirect(url_for('auth.login'))
+    return None
 
 
 def handle_user_verification(user, oauth_id_key, token, ip, country, user_info):
@@ -55,6 +64,10 @@ def handle_user_verification(user, oauth_id_key, token, ip, country, user_info):
         if email_already_registered(email):
             flash(_('An account with this email already exists, please login and connect this account over "Connect OAuth" setting.'), 'error')
             return redirect(url_for('auth.login'))
+
+        refusal = refuse_new_oauth_account()
+        if refusal is not None:
+            return refusal
 
         # Register a new user
         user = initialize_new_user(email, username, oauth_id_key, user_info, ip, country)
@@ -187,7 +200,7 @@ def can_user_register():
     """
     Check if the user can register or login based on the site's registration mode.
     """
-    if g.site.registration_mode == 'Closed' or not public_registration_open(current_storefront()):
+    if g.site.registration_mode == 'Closed':
         flash(_('Account registrations are currently closed.'), 'error')
         return redirect(url_for('auth.login'))
     if g.site.registration_mode == 'RequireApplication' and not g.site.application_question:

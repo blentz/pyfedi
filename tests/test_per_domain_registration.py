@@ -6,9 +6,8 @@ from flask import g
 
 from app import db
 from app.api.alpha.views import site_view
-from app.storefront import public_registration_open
 from app.models import Instance, Role, RolePermission, Site, SiteDomain, User, user_role
-from app.storefront import clear_domain_cache, current_storefront, domain_for_host
+from app.storefront import clear_domain_cache, domain_for_host, public_registration_open
 from tests.factories import make_instance, make_user
 from tests.test_admin_user_administration import _add_payload
 from tests.test_community_lifecycle import csrf, login
@@ -142,14 +141,50 @@ def test_adding_a_user_to_a_staff_row_allows_staff(app, onion):
     assert User.query.filter_by(user_name='newbie').one().site_domain_id == row.id
 
 
-def test_oauth_sign_up_follows_the_storefront(app, onion):
-    from app.auth.oauth_util import can_user_register
+def _default_row(registration):
+    row = SiteDomain.query.filter_by(is_default=True).one()
+    row.registration = registration
+    db.session.commit()
+    clear_domain_cache()
+
+
+@pytest.mark.parametrize('row,mode,closed', [('admin', 'Open', False), ('anyone', 'Closed', True)])
+def test_the_default_domain_follows_the_site_mode_whatever_its_row_says(app, onion, monkeypatch, row, mode, closed):
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
+    monkeypatch.setattr('app.auth.routes.handle_abandoned_open_instance', lambda: None)
+    _mode(mode)
+    _default_row(row)
+    text = app.test_client().get('/auth/register').get_data(as_text=True)
+    assert (CLOSED_TEXT in text) is closed
+    assert (FORM_TEXT in text) is not closed
+
+
+def test_a_new_oauth_account_is_refused_off_the_default_domain(app, onion):
+    from app.auth.oauth_util import refuse_new_oauth_account
     _mode('Open')
-    for registration, open_ in (('anyone', True), ('admin', False)):
-        _onion_row(registration)
+    _onion_row('anyone')
+    for host, refused in (('abc.onion', True), ('test.piefed.local', False)):
         with app.test_request_context():
             g.site = db.session.get(Site, 1)
-            g.storefront = domain_for_host('abc.onion')
-            with patch('app.auth.oauth_util.get_country', return_value=None):
-                refused = can_user_register()
-            assert (refused is True) is open_
+            g.storefront = domain_for_host(host)
+            assert (refuse_new_oauth_account() is not None) is refused
+
+
+def test_an_existing_oauth_user_logs_in_on_a_refused_storefront(app, onion):
+    from app.auth.oauth_util import handle_oauth_authorize
+    _mode('Open')
+    _onion_row('admin')
+    instance = db.session.get(Instance, 1) or make_instance('test.piefed.local')
+    make_user(instance, 'founder', local=True)
+    existing = make_user(instance, 'oauthy', local=True)
+    existing.google_oauth_id = 'g-1'
+    db.session.commit()
+    with app.test_request_context():
+        g.site = db.session.get(Site, 1)
+        g.storefront = domain_for_host('abc.onion')
+        with patch('app.auth.oauth_util.get_token_and_user_info', return_value=('t', {'id': 'g-1'})), \
+                patch('app.auth.oauth_util.get_country', return_value=None), \
+                patch('app.auth.oauth_util.finalize_user_login', return_value='logged in') as login_:
+            assert handle_oauth_authorize('google', 'x', 'google_oauth_id') == 'logged in'
+    login_.assert_called_once()
+    assert User.query.filter_by(google_oauth_id='g-1').count() == 1
