@@ -608,6 +608,15 @@ def test_an_ical_feed_a_logged_in_viewer_reads_is_not_for_shared_caches(app, sce
     for path in ('/community/clearnet/ical', f'/post/{scene.public.id}/ical'):
         assert _anon(app, path).headers['Cache-Control'] == 'public, max-age=3600', path
         assert _member(app, scene.alice, path).headers['Cache-Control'] == 'private, max-age=3600', path
+        # Vary: Cookie comes with every request that carries a session cookie (Flask's session interface adds it);
+        # StripCookieVaryForAnonymous takes it off a cookie-less request's response, by design, so a CDN may keep it
+        assert 'Cookie' in _member(app, scene.alice, path).headers.get('Vary', ''), path
+        logged_out = _client(app)
+        logged_out.set_cookie('session', 'not-a-session', domain=app.config['SERVER_NAME'])
+        response = logged_out.get(path, headers=HTML)
+        assert response.headers['Cache-Control'] == 'public, max-age=3600', path
+        assert 'Cookie' in response.headers.get('Vary', ''), path
+        assert 'Cookie' not in _anon(app, path).headers.get('Vary', ''), path
     assert _member(app, scene.alice, f'/post/{scene.hidden.id}/ical').headers['Cache-Control'] == \
         'private, max-age=3600'
 
