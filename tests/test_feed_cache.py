@@ -22,7 +22,7 @@ a chosen `result_id` could seed what the victim's next page would render.
 
 The fix derives ONE key used by both the read and the write:
 
-    cache_key = f'feed:{current_user.id}:{result_id}' if result_id and current_user.is_authenticated else None
+    cache_key = f'feed:{current_storefront().domain}:{current_user.id}:{result_id}' if result_id and current_user.is_authenticated else None
 
 so the cache is per-user, and the read guard and the write guard can no longer
 disagree about whether an entry exists.
@@ -43,6 +43,7 @@ from flask_login import login_user
 
 from app import db
 from app.models import Feed, FeedItem, Topic
+from app.storefront import default_domain
 from app.utils import get_deduped_post_ids
 from tests.factories import (hide_post, make_community, make_community_member, make_instance,
                              make_post, make_user)
@@ -139,8 +140,8 @@ def test_each_user_gets_a_separate_cache_key_for_the_same_result_id(
     ids_for(app, bob, shared_result_id, [community.id])
 
     assert sorted(redis_double.keys('*')) == sorted([
-        f'feed:{alice.id}:{shared_result_id}',
-        f'feed:{bob.id}:{shared_result_id}',
+        f'feed:{default_domain().domain}:{alice.id}:{shared_result_id}',
+        f'feed:{default_domain().domain}:{bob.id}:{shared_result_id}',
     ]), (
         f'expected one cache key per user; got {sorted(redis_double.keys("*"))!r}. '
         f'A single key named {shared_result_id!r} means the cache is not scoped '
@@ -261,7 +262,7 @@ def test_a_users_own_cached_result_is_served_without_re_querying(
 
     result_id = uuid.uuid4().hex
     stale_cached_ids = [-999999]
-    redis_double.set(f'feed:{viewer.id}:{result_id}', json.dumps(stale_cached_ids), ex=86400)
+    redis_double.set(f'feed:{default_domain().domain}:{viewer.id}:{result_id}', json.dumps(stale_cached_ids), ex=86400)
 
     returned = ids_for(app, viewer, result_id, [community.id])
 
@@ -373,7 +374,7 @@ class TestEveryCallSiteStillRenders:
         response = client.get('/?result_id=shared-result-id')
 
         assert response.status_code == 200
-        assert redis_double.keys('*') == [f'feed:{viewer.id}:shared-result-id']
+        assert redis_double.keys('*') == [f'feed:{default_domain().domain}:{viewer.id}:shared-result-id']
 
     def test_the_feed_route_scopes_its_cache_entry_to_the_logged_in_user(
             self, app, db_session, site, redis_double):
@@ -389,7 +390,7 @@ class TestEveryCallSiteStillRenders:
         response = client.get(f'/f/{feed.name}?result_id=shared-result-id')
 
         assert response.status_code == 200
-        assert redis_double.keys('*') == [f'feed:{viewer.id}:shared-result-id']
+        assert redis_double.keys('*') == [f'feed:{default_domain().domain}:{viewer.id}:shared-result-id']
 
     def test_the_topic_route_scopes_its_cache_entry_to_the_logged_in_user(
             self, app, db_session, site, redis_double):
@@ -405,7 +406,7 @@ class TestEveryCallSiteStillRenders:
         response = client.get(f'/topic/{topic.machine_name}?result_id=shared-result-id')
 
         assert response.status_code == 200
-        assert redis_double.keys('*') == [f'feed:{viewer.id}:shared-result-id']
+        assert redis_double.keys('*') == [f'feed:{default_domain().domain}:{viewer.id}:shared-result-id']
 
     def test_the_feed_rss_route_caches_nothing_for_a_logged_in_reader(
             self, app, db_session, site, redis_double):

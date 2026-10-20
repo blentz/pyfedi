@@ -11,7 +11,7 @@ names.
 
 Redis policy: get_deduped_post_ids's cache-write
 (`redis_client.set(cache_key, ..., ex=86400)`, where cache_key is
-`feed:<user id>:<result_id>` -- see tests/test_feed_cache.py for why it is
+`feed:<domain>:<user id>:<result_id>` -- see tests/test_feed_cache.py for why it is
 namespaced per user) targets whatever
 `app.redis_client` currently is. redis_double (tests/conftest.py) now patches that
 attribute, in addition to the four get_redis_connection bindings it already
@@ -30,6 +30,7 @@ import redis
 from flask_login import login_user
 
 from app import db
+from app.storefront import default_domain
 from app.utils import (blocked_communities, blocked_domains, blocked_or_banned_instances,
                        blocked_users, get_deduped_post_ids, get_instance_stickies)
 from tests.factories import (feed_ids as logged_in_ids, hide_post, make_community, make_community_block,
@@ -247,7 +248,7 @@ def test_a_cached_result_id_is_served_without_reaching_the_database(app, db_sess
     sub-project exercised. Task 1's tests (above) proved only the cache-WRITE
     side of this same mechanism.
 
-    The key is `feed:<user id>:<result_id>`, not the bare result_id. That changed
+    The key is `feed:<domain>:<user id>:<result_id>`, not the bare result_id. That changed
     when the cross-user cache leak was fixed: result_id is client-controlled, so
     an unnamespaced key let two sessions sharing one result_id share a cache entry
     filtered for a single viewer's authorisation. tests/test_feed_cache.py holds
@@ -274,7 +275,7 @@ def test_a_cached_result_id_is_served_without_reaching_the_database(app, db_sess
 
     result_id = uuid.uuid4().hex
     stale_cached_ids = [-999999]  # deliberately not post.id, and not a real post
-    redis_double.set(f'feed:{viewer.id}:{result_id}', json.dumps(stale_cached_ids), ex=86400)
+    redis_double.set(f'feed:{default_domain().domain}:{viewer.id}:{result_id}', json.dumps(stale_cached_ids), ex=86400)
 
     with app.test_request_context('/'):
         login_user(viewer)

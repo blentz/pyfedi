@@ -8,7 +8,7 @@ from app import db
 from app.api.alpha.views import reply_view, reply_stub_view, reply_removal_ack_view, reply_report_view, post_view, community_view, user_view
 from app.constants import *
 from app.storefront import current_storefront, on_domain
-from app.models import Notification, PostReply, Post, PostReplyVote, Report, Community, utcnow
+from app.models import Notification, PostReply, Post, PostReplyVote, Report, Community, User, utcnow
 from app.shared.reply import vote_for_reply, bookmark_reply, remove_bookmark_reply, subscribe_reply, make_reply, \
     edit_reply, \
     delete_reply, restore_reply, report_reply, mod_remove_reply, mod_restore_reply, lock_post_reply, choose_answer, \
@@ -134,9 +134,9 @@ def get_reply_list(auth, data, user_details=None):
     if replies:
         if type == 'Local':
             replies = replies.filter(or_(PostReply.ap_id == None, PostReply.ap_id.startswith('https://' + current_app.config['SERVER_NAME'])))
-            # a reply in another domain's community is not local here; one in a remote community is kept, as before
-            replies = replies.filter(PostReply.community_id.in_(
-                db.session.query(Community.id).filter(or_(Community.ap_id != None, on_domain(current_storefront(), Community)))))
+            # and its author belongs to this domain, wherever it was posted
+            replies = replies.filter(PostReply.user_id.in_(
+                db.session.query(User.id).filter(on_domain(current_storefront()))))
         elif type == 'Moderating' or type == 'ModeratorView':
             if user_id:
                 replies = replies.filter(PostReply.community_id.in_(moderating_communities_ids(user_id=user_id)))

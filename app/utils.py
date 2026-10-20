@@ -76,7 +76,7 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     PostReply, PostReplyBookmark, AllowedInstances, InstanceBan, Tag, Emoji, UserExtraField, ArchivedPostReply, \
     RevokedToken, CommunityFavorite, UserFollower, CommunityFlairBlock, s3_key_from_url, Role, RolePermission, \
     ServerViewMember
-from app.storefront import URL_STRIPPED_BY_BROWSERS, canonicalise_links, canonicalise_text, domain_base_url, \
+from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, current_storefront, canonicalise_links, canonicalise_text, domain_base_url, \
     domain_by_id, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
 from collections import Counter
 from flask import has_request_context
@@ -5820,7 +5820,8 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
     # read below and the write at the end of this function -- two separate conditions
     # could disagree, and did: the read used to require a non-empty result_id while
     # the write required only an authenticated user.
-    cache_key = f'feed:{current_user.id}:{result_id}' if result_id and current_user.is_authenticated else None
+    # and per domain: the list was filtered for the domain it was built on (Local, local-only content)
+    cache_key = f'feed:{current_storefront().domain}:{current_user.id}:{result_id}' if result_id and current_user.is_authenticated else None
     if cache_key and app_pkg.redis_client.exists(cache_key):
         return json.loads(app_pkg.redis_client.get(cache_key))
 
@@ -5828,6 +5829,7 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
     post_id_sql = 'SELECT p.id, p.cross_posts, p.user_id, p.reply_count FROM "post" as p\nINNER JOIN "community" as c on p.community_id = c.id\n'
     if community_sql:
         community_disjunct = community_sql
+        params[ON_DOMAIN_PARAM] = current_storefront().id   # community_sql may use on_domain_sql
     elif community_ids[0] == -1:  # A special value meaning to get posts from all communities
         community_disjunct = 'c.show_all is true'
     else:

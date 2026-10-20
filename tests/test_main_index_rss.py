@@ -16,7 +16,7 @@ unverified, banned or deleted account. Three of those four now apply here too;
 has legitimate accounts with `verified = False`.
 """
 import pytest
-from flask import g
+from flask import current_app, g
 
 from app import db
 from app.models import Community, CommunityMember, Post, Site, User, utcnow
@@ -85,7 +85,7 @@ class TestTheFeedAnyoneCanRead:
     def test_the_etag_is_offered(self, env):
         response = env.client.get('/index/feed')
 
-        assert response.headers['ETag'] == f'home_{etag_stamp(env.site.last_active)}'
+        assert response.headers['ETag'] == f"home_local_{current_app.config['SERVER_NAME']}_{etag_stamp(env.site.last_active)}"
 
     def test_a_matching_etag_gets_a_304(self, env):
         etag = env.client.get('/index/feed').headers['ETag']

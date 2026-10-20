@@ -142,16 +142,18 @@ def on_domain(domain: DomainInfo, model=None):
     return column == domain.id
 
 
+ON_DOMAIN_PARAM = 'storefront_site_domain_id'
+
+
 def on_domain_sql(domain: DomainInfo, alias: str = 'c') -> str:
-    """`on_domain` for raw SQL over a community (or user) table aliased `alias`. It does not say the row is local: a
-    remote row has no domain either, so the default domain's NULL arm matches it. Put the local test beside it. The id
-    comes from a `site_domain` row, never from the request."""
+    """`on_domain` for raw SQL over a community (or user) table aliased `alias`; the caller binds
+    `ON_DOMAIN_PARAM` to `domain.id`. It does not say the row is local: a remote row has no domain either, so the
+    default domain's NULL arm matches it. Put the local test beside it. The synthesised default's id is None: its
+    `= NULL` arm matches nothing and the NULL arm takes the unstamped rows."""
     column = f'{alias}.site_domain_id'
     if not domain.is_default:
-        return f'{column} = {int(domain.id)}'
-    if domain.id is None:   # the synthesised default: no row to be stamped with
-        return f'{column} IS NULL'
-    return f'({column} = {int(domain.id)} OR {column} IS NULL)'
+        return f'{column} = :{ON_DOMAIN_PARAM}'
+    return f'({column} = :{ON_DOMAIN_PARAM} OR {column} IS NULL)'
 
 
 def domain_base_url(info: DomainInfo) -> str:

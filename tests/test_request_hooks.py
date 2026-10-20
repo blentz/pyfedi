@@ -357,7 +357,7 @@ def test_no_csp_header_on_a_304_response(app, db_session):
     the page.
 
     The etag is computed here with index_rss()'s exact formula
-    (f"home_{etag_stamp(g.site.last_active)}") rather than read off a prior response,
+    (f"home_local_{SERVER_NAME}_{etag_stamp(g.site.last_active)}") rather than read off a prior response,
     because return_304() only echoes an ETag response header for anonymous
     requests. etag_stamp() is an md5 of the value, the same in every process;
     the hash() it replaced is salted per process for a datetime, as it is for
@@ -373,7 +373,7 @@ def test_no_csp_header_on_a_304_response(app, db_session):
     # opens the door the 304 comes through.
     site.private_instance = False
     db.session.commit()
-    current_etag = f"home_{etag_stamp(site.last_active)}"
+    current_etag = f"home_local_{app.config['SERVER_NAME']}_{etag_stamp(site.last_active)}"
 
     with app.test_client() as client:
         login(client, user)

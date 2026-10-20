@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from flask import current_app, g
+from flask_login import login_user
 
 import app.storefront as storefront
 from app import db
@@ -177,13 +178,17 @@ def test_the_api_local_comment_list_follows_the_domain(app, scene):
     assert ids(_api(app, 'comment/list', scene.world.onionite, onion=True, type_='Local')) == {scene.replies.onion.id}
 
 
-def test_a_local_users_reply_in_a_remote_community_stays_in_the_default_domains_local_comments(app, scene):
+def test_a_local_comment_belongs_to_its_authors_domain_wherever_it_is_posted(app, scene):
+    def local_ids(user, onion=False):
+        response = _api(app, 'comment/list', user, onion=onion, type_='Local')
+        return {item['comment']['id'] for item in response.json['comments']}
     mine = make_post_reply(scene.posts.remote, scene.world.alice)
-    mine.ap_id = f"{app.config['SERVER_URL']}/comment/{mine.id}"
+    theirs = make_post_reply(scene.posts.remote, scene.world.onionite)
+    for reply in (mine, theirs):
+        reply.ap_id = f"{app.config['SERVER_URL']}/comment/{reply.id}"
     db.session.commit()
-    ids = {item['comment']['id'] for item in
-           _api(app, 'comment/list', scene.world.alice, type_='Local').json['comments']}
-    assert ids == {scene.replies.clear.id, mine.id}   # as before storefronts
+    assert local_ids(scene.world.alice) == {scene.replies.clear.id, mine.id}   # as before storefronts
+    assert local_ids(scene.world.onionite, onion=True) == {scene.replies.onion.id, theirs.id}
 
 
 def test_the_api_local_user_list_follows_the_domain(app, scene):
@@ -199,10 +204,46 @@ def test_the_api_local_user_list_follows_the_domain(app, scene):
 
 # The helper
 
-def test_the_domain_sql_is_the_explicit_form_of_on_domain(app, db_session):
+def test_the_domain_sql_binds_the_id_as_a_parameter(app, db_session):
     default = SimpleNamespace(id=7, is_default=True)
     onion = SimpleNamespace(id=9, is_default=False)
     synthesised = SimpleNamespace(id=None, is_default=True)
-    assert storefront.on_domain_sql(default) == '(c.site_domain_id = 7 OR c.site_domain_id IS NULL)'
-    assert storefront.on_domain_sql(onion, 'x') == 'x.site_domain_id = 9'
-    assert storefront.on_domain_sql(synthesised) == 'c.site_domain_id IS NULL'
+    bound = ':' + storefront.ON_DOMAIN_PARAM
+    assert storefront.on_domain_sql(default) == f'(c.site_domain_id = {bound} OR c.site_domain_id IS NULL)'
+    assert storefront.on_domain_sql(synthesised) == f'(c.site_domain_id = {bound} OR c.site_domain_id IS NULL)'
+    assert storefront.on_domain_sql(onion, 'x') == f'x.site_domain_id = {bound}'
+
+
+# The Live feed cache and validators name the domain
+
+def test_a_result_id_from_one_domain_is_not_served_on_another(app, scene, redis_double):
+    viewer = scene.world.alice
+
+    def ids_on(info):
+        with app.test_request_context('/'):
+            login_user(viewer)
+            g.storefront = info
+            return get_deduped_post_ids('shared-result', [scene.world.clearnet.id, scene.world.hidden.id], 'new')
+    default = storefront.domain_by_id(scene.world.default.id)
+    onion = storefront.domain_by_id(scene.world.onion.id)
+    first = ids_on(default)
+    assert first   # cached under the default domain
+    redis_double.set(f'feed:{default.domain}:{viewer.id}:shared-result', '[-999999]', ex=60)
+    assert ids_on(default) == [-999999]
+    assert ids_on(onion) != [-999999]
+
+
+def test_the_etags_name_the_domain(app, scene):
+    clear = _visit(app, '/index/feed/local?token=alice-rss-token')
+    onion = _visit(app, '/index/feed/local?token=onionite-rss-token', onion=True)
+    assert clear.headers['ETag'] != onion.headers['ETag']
+    replay = _visit(app, '/index/feed/local?token=onionite-rss-token', onion=True,
+                    headers={'If-None-Match': clear.headers['ETag']})
+    assert replay.status_code == 200
+    again = _visit(app, '/index/feed/local?token=onionite-rss-token', onion=True,
+                   headers={'If-None-Match': onion.headers['ETag']})
+    assert again.status_code == 304
+    home = _visit(app, '/home/new/local').headers['ETag']
+    assert storefront.current_storefront().domain in home or app.config['SERVER_NAME'] in home
+    assert _visit(app, '/home/new/local', headers={'If-None-Match': home}).status_code == 304
+    assert _visit(app, '/home/new/local', onion=True, headers={'If-None-Match': home}).status_code != 304

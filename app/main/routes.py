@@ -43,7 +43,7 @@ from app.main.util import sidebar_active_communities, sidebar_new_instances, sid
 from app.translation import LibreTranslateAPI
 from app.local_only import local_only_visible, local_only_visible_rss, without_local_only
 from app.visibility import listable_clause, modlog_local_only_clause, modlog_open_clause, visible_to_clause
-from app.storefront import current_storefront, on_domain, on_domain_sql, storefront_cache_key, storefront_link, \
+from app.storefront import ON_DOMAIN_PARAM, current_storefront, on_domain, on_domain_sql, storefront_host, storefront_cache_key, storefront_link, \
     storefront_url
 from app.utils import etag_stamp
 from app.utils import render_template, ensure_rss_token, get_setting, request_etag_matches, return_304, blocked_domains, \
@@ -94,7 +94,7 @@ def index(sort=None, view_filter=None):
         sort = 'new'
 
     # If nothing has changed since their last visit, return HTTP 304
-    current_etag = f"{sort}_{view_filter}_{etag_stamp(g.site.last_active)}"
+    current_etag = f"{sort}_{view_filter}_{storefront_host()}_{etag_stamp(g.site.last_active)}"
     if current_user.is_anonymous and request_etag_matches(current_etag):
         return return_304(current_etag)
 
@@ -170,7 +170,7 @@ def home_feed_source(view_filter: str):
         microblog_community = find_microblogging_community()
         # Local is this domain's own communities: the local test (instance 1) and the domain test both hold, because
         # a remote community has no domain either and on_domain_sql's default arm would take it
-        on_this_domain = on_domain_sql(current_storefront())
+        on_this_domain = on_domain_sql(current_storefront())   # bound by get_deduped_post_ids
         if current_user.is_anonymous:
             community_sql = f'c.private is false and c.instance_id = 1 AND {on_this_domain} and c.id != {microblog_community.id} {low_quality_filter}'
         else:
@@ -281,7 +281,7 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag, live=False
                                              communities_banned_from_list=communities_banned_from_list,
                                              SUBSCRIPTION_PENDING=SUBSCRIPTION_PENDING,
                                              SUBSCRIPTION_MEMBER=SUBSCRIPTION_MEMBER,
-                                             etag=f"{sort}_{view_filter}_{etag_stamp(g.site.last_active)}",
+                                             etag=f"{sort}_{view_filter}_{storefront_host()}_{etag_stamp(g.site.last_active)}",
                                              instance_stickies=instance_stickies,
                                              content_filters=content_filters, sort=sort, view_filter=view_filter,
                                              reported_posts=reported_posts(user_id, user_id in g.admin_ids),
@@ -299,7 +299,7 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag, live=False
                                recently_downvoted=recently_downvoted, new_instances=instances,
                                communities_banned_from_list=communities_banned_from_list,
                                SUBSCRIPTION_PENDING=SUBSCRIPTION_PENDING, SUBSCRIPTION_MEMBER=SUBSCRIPTION_MEMBER,
-                               etag=f"{sort}_{view_filter}_{etag_stamp(g.site.last_active)}", next_url=next_url,
+                               etag=f"{sort}_{view_filter}_{storefront_host()}_{etag_stamp(g.site.last_active)}", next_url=next_url,
                                prev_url=prev_url, instance_stickies=instance_stickies,
                                title=f"{g.site.name} - {g.site.description}",
                                description=shorten_string(html_to_text(g.site.sidebar), 150),
@@ -319,7 +319,7 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag, live=False
                                reload_url='' if live else reload_url(sort, view_filter)
                                ))
     if current_user.is_anonymous:
-        resp.headers.set('ETag', f"{sort}_{view_filter}_{etag_stamp(g.site.last_active)}")
+        resp.headers.set('ETag', f"{sort}_{view_filter}_{storefront_host()}_{etag_stamp(g.site.last_active)}")
         resp.headers.set('Vary', 'Accept, Accept-Language')
         resp.headers.set('Cache-Control', 'public, max-age=60')
     else:
@@ -1470,7 +1470,7 @@ def index_rss(feed_type=None):
         abort(404)
 
     # If nothing has changed since their last visit, return HTTP 304
-    current_etag = f"home_{etag_stamp(g.site.last_active)}"
+    current_etag = f"home_{feed_type or 'local'}_{storefront_host()}_{etag_stamp(g.site.last_active)}"
     if request_etag_matches(current_etag):
         return return_304(current_etag, 'application/rss+xml')
 
@@ -1511,7 +1511,8 @@ def index_rss(feed_type=None):
         community_ids = [-1]  # Special value to indicate 'All'
     elif feed_type == 'local' or feed_type == 'subscribed':
         community_ids = db.session.execute(
-            text(f'SELECT id FROM community as c WHERE c.private is false and c.instance_id = 1 AND {on_domain_sql(current_storefront())} {low_quality_filter}')).scalars()
+            text(f'SELECT id FROM community as c WHERE c.private is false and c.instance_id = 1 AND {on_domain_sql(current_storefront())} {low_quality_filter}'),
+            {ON_DOMAIN_PARAM: current_storefront().id}).scalars()
 
     community_ids = list(community_ids)
 
@@ -1557,7 +1558,7 @@ def index_rss(feed_type=None):
 
     response = make_response(fg.rss_str())
     response.headers.set('Content-Type', 'application/rss+xml')
-    response.headers.add_header('ETag', f"home_{etag_stamp(g.site.last_active)}")
+    response.headers.add_header('ETag', f"home_{feed_type or 'local'}_{storefront_host()}_{etag_stamp(g.site.last_active)}")
     response.headers.add_header('Cache-Control', 'no-cache, max-age=600, must-revalidate')
     return response
 
