@@ -90,6 +90,20 @@ def alice(onion):
     return user
 
 
+@pytest.fixture
+def dora(onion):
+    """An account of the DEFAULT domain: on the onion she is reached as dora@test.piefed.local."""
+    local = make_instance('test.piefed.local', software='piefed')
+    make_user(local, 'founder', local=True)
+    user = make_user(local, 'dora', local=True)
+    user.site_domain_id = SiteDomain.query.filter_by(domain='test.piefed.local').first().id
+    user.email = 'dora@example.com'
+    user.verified = True
+    user.set_password(PASSWORD)
+    db.session.commit()
+    return user
+
+
 def in_session(app, sid='sid-a', **data):
     """A request whose session cookie brought back onion sid `sid` (None: a cookie with no sid), as a browser's does
     once session first has run. Proofs are bound to that round-tripped sid."""
@@ -488,6 +502,22 @@ def test_valid_solution_accepted(app, alice, easy):
                           data=login_data(page.csrf, pow_token=page.token, pow_nonce=solve(page.salt, 8)))
     assert response.status_code == 302
     assert logged_in(client)
+
+
+def test_a_default_domain_account_logs_in_on_the_onion_with_a_proof(app, dora, easy):
+    client = app.test_client()
+    page = challenge(onion_page(client, '/auth/login'))
+    data = {**login_data(page.csrf, pow_token=page.token, pow_nonce=solve(page.salt, 8)),
+            'user_name': 'dora@test.piefed.local'}
+    assert onion_post(client, '/auth/login', data=data).status_code == 302
+    assert logged_in(client)
+
+
+def test_a_default_domain_name_without_a_proof_is_refused_before_any_lookup(app, dora, easy, no_login):
+    client = app.test_client()
+    page = challenge(onion_page(client, '/auth/login'))
+    post_refused(client, onion_guard.app_pkg.redis_client, no_login,
+                 {**login_data(page.csrf), 'user_name': 'dora@test.piefed.local'})
 
 
 @pytest.fixture

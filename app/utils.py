@@ -75,8 +75,8 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     PostReply, PostReplyBookmark, AllowedInstances, InstanceBan, Tag, Emoji, UserExtraField, ArchivedPostReply, \
     RevokedToken, CommunityFavorite, UserFollower, CommunityFlairBlock, s3_key_from_url, Role, RolePermission, \
     ServerViewMember
-from app.storefront import URL_STRIPPED_BY_BROWSERS, canonicalise_links, canonicalise_text, domain_base_url, is_local_host, \
-    is_local_link, storefront_host, storefront_html, storefront_url
+from app.storefront import URL_STRIPPED_BY_BROWSERS, canonicalise_links, canonicalise_text, domain_base_url, \
+    domain_by_id, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
 from collections import Counter
 from flask import has_request_context
 import app as app_pkg
@@ -6633,8 +6633,9 @@ def user_name_is_taken(user_name: str, site_domain_id: int | None = None) -> boo
     users = User.query.filter(func.lower(User.user_name) == func.lower(name), User.ap_id == None)
     communities = Community.query.filter(func.lower(Community.name) == func.lower(name), Community.ap_id == None)
     if site_domain_id is not None:
-        users = users.filter(User.site_domain_id == site_domain_id)
-        communities = communities.filter(Community.site_domain_id == site_domain_id)
+        domain = domain_by_id(site_domain_id)
+        users = users.filter(on_domain(domain))
+        communities = communities.filter(on_domain(domain, Community))
     if users.first() is not None:
         return True
     if communities.first() is not None:

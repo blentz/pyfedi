@@ -767,6 +767,86 @@ def test_success_clears(app, alice, redis_double, clock, ldap_off):
     assert not redis_double.exists('onion_login_fail:typed:alice')
 
 
+# --------------------------------------------------------------------------
+# A default-domain account logging in over the onion, by its full handle
+# --------------------------------------------------------------------------
+
+HELL_HANDLE = 'dora@test.piefed.local'
+
+
+@pytest.fixture
+def dora(onion):
+    """An account of the DEFAULT domain: on the onion she is reached as dora@test.piefed.local."""
+    local = make_instance('test.piefed.local', software='piefed')
+    make_user(local, 'founder', local=True)   # id 1 is exempt from every ban check
+    user = make_user(local, 'dora', local=True)
+    user.site_domain_id = SiteDomain.query.filter_by(domain='test.piefed.local').first().id
+    user.email = 'dora@example.com'
+    user.verified = True
+    user.set_password(PASSWORD)
+    db.session.commit()
+    return user
+
+
+def test_a_default_domain_account_logs_in_on_the_onion_by_its_handle(app, dora, redis_double, clock, ldap_off):
+    client = app.test_client()
+    a_session(client)
+    assert logged_in(web_login(client, HELL_HANDLE, PASSWORD))
+
+
+def test_a_bare_default_domain_name_is_nobody_on_the_onion(app, dora, redis_double, clock, ldap_off):
+    client = app.test_client()
+    a_session(client)
+    assert not logged_in(web_login(client, 'dora', PASSWORD))
+
+
+def test_failures_typed_as_a_handle_make_the_next_attempt_wait(app, dora, redis_double, clock, ldap_off):
+    client = app.test_client()
+    a_session(client)
+    for _ in range(6):
+        web_login(client, HELL_HANDLE, 'wrong password')
+    assert redis_double.hget(f'onion_login_fail:typed:{HELL_HANDLE}', 'count') == '6'
+    assert redis_double.hget(f'onion_login_fail:acct:{dora.id}', 'count') == '6'
+    assert not logged_in(web_login(client, HELL_HANDLE, PASSWORD))
+    assert 'Please try again in 2 seconds' in flashes(client)
+
+
+def test_a_hot_default_domain_account_answers_like_a_wrong_password(app, dora, redis_double, clock, ldap_off):
+    """The account is in backoff and her email is typed with the CORRECT password: no wait message, nothing linking
+    the email to the account, the same answer as an unknown email."""
+    account_failures(dora.id, 6)
+    client = app.test_client()
+    a_session(client)
+    unknown = answer(client, web_login(client, 'nobody@example.com', 'wrong password'))
+    hidden = answer(client, web_login(client, 'DORA@example.com', PASSWORD))
+    assert hidden == unknown
+    assert 'Invalid user name or password' in hidden[2] and 'try again' not in hidden[2].lower()
+    typed_failures(HELL_HANDLE, 6)
+    assert 'Please try again' in answer(client, web_login(client, HELL_HANDLE, PASSWORD))[2]
+
+
+def test_a_success_clears_both_counters_of_a_default_domain_account(app, dora, redis_double, clock, ldap_off):
+    typed_failures(HELL_HANDLE, 2)
+    account_failures(dora.id, 2)
+    client = app.test_client()
+    a_session(client)
+    assert logged_in(web_login(client, HELL_HANDLE, PASSWORD))
+    assert not redis_double.exists(f'onion_login_fail:typed:{HELL_HANDLE}')
+    assert not redis_double.exists(f'onion_login_fail:acct:{dora.id}')
+
+
+def test_api_login_of_a_default_domain_account_over_the_onion(app, dora, redis_double, clock, ldap_off, alpha_api):
+    client = app.test_client(use_cookies=False)
+    for _ in range(6):
+        onion_post(client, '/api/alpha/user/login', json={'username': HELL_HANDLE, 'password': 'wrong one'})
+    assert onion_post(client, '/api/alpha/user/login', json={'username': HELL_HANDLE, 'password': PASSWORD}) \
+        .status_code == 429
+    clock.t += 2
+    assert onion_post(client, '/api/alpha/user/login', json={'username': HELL_HANDLE, 'password': PASSWORD}) \
+        .status_code == 200
+    assert not redis_double.exists(f'onion_login_fail:acct:{dora.id}')
+
+
 def test_delay_onion_only(app, alice, redis_double, clock, ldap_off, alpha_api):
     typed_failures('alice', 10)
     client = app.test_client()
@@ -862,7 +942,8 @@ def test_find_user_prefers_a_name_then_an_email_then_a_profile_url(app, profiled
     assert find_user('alice', domain_for_host('abc.onion')).id == profiled.alice.id   # the name beats the email
     profiled.alice.user_name = 'renamed'
     db.session.commit()
-    assert find_user('alice', domain_for_host('abc.onion')).id == profiled.carol.id   # the email beats alice's profile URL
+    # the email beats alice's profile URL
+    assert find_user('alice', domain_for_host('abc.onion')).id == profiled.carol.id
     profiled.carol.email = 'other@example.com'
     db.session.commit()
     assert find_user('alice', domain_for_host('abc.onion')).id == profiled.alice.id   # only the profile URL is left

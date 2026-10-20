@@ -6,11 +6,10 @@ from there closes an import cycle (app.user's package runs app.user.routes, whic
 """
 import re
 
-from flask import current_app
 
 from app import db
 from app.models import BannedInstances, User
-from app.storefront import on_domain
+from app.storefront import domain_for_host, on_domain
 
 MENTION_RE = re.compile(r"@([a-zA-Z0-9_.-]*)@([a-zA-Z0-9_.-]*)\b")
 
@@ -53,30 +52,29 @@ def stored_user(address: str, home=None):
 
 def mentioned_users_found_by(post, find_user) -> list:
     """The users a post's body Mentions with @user@instance syntax, once each, leaving out its author. `find_user`
-    turns an address (and for a bare local name, the author's home domain) into a user or None; one that raises counts as None."""
+    turns a name on a hosted domain (`@name@host` for any domain this site hosts), or an address, into a user or None;
+    one that raises counts as None. A bare name means the author's home domain (`stored_user`'s `home`)."""
     user = post.author
     recipients = []
     if post.body:
         matches = MENTION_RE.finditer(post.body)
         for match in matches:
             recipient = None
-            if match.group(2) == current_app.config['SERVER_NAME']:
-                user_name = match.group(1)
-                if user_name != user.user_name:
-                    try:
-                        recipient = find_user(user_name, user.home_domain())
-                    except:
-                        pass
-            else:
-                ap_id = f"{match.group(1)}@{match.group(2)}"
-                try:
-                    recipient = find_user(ap_id)
-                except:
-                    pass
+            domain = domain_for_host(match.group(2))
+            try:
+                if domain:   # a hosted domain: the name is that domain's account
+                    recipient = find_user(match.group(1), domain)
+                else:
+                    recipient = find_user(f"{match.group(1)}@{match.group(2)}")
+            except:
+                pass
+            if recipient and recipient.id == user.id:
+                recipient = None
             if recipient:
                 add_recipient = True
                 for existing_recipient in recipients:
-                    if ((not recipient.ap_id and recipient.user_name == existing_recipient.user_name) or
+                    if ((not recipient.ap_id and recipient.user_name == existing_recipient.user_name and
+                         recipient.site_domain_id == existing_recipient.site_domain_id) or
                         (recipient.ap_id and recipient.ap_id == existing_recipient.ap_id)):
                         add_recipient = False
                         break

@@ -190,7 +190,8 @@ def test_a_register_get_logs_nothing(app, db_session, caplog):
 
 def test_a_register_post_by_a_signed_in_user_still_logs(app, alice, ldap_off, caplog):
     client = app.test_client()
-    client.post('/auth/login', data={'user_name': 'alice@abc.onion', 'password': PASSWORD, **LOGIN}, environ_base=CLEARNET)
+    client.post('/auth/login', data={'user_name': 'alice@abc.onion', 'password': PASSWORD, **LOGIN},
+                environ_base=CLEARNET)
     assert client.get('/auth/register', environ_base=CLEARNET).status_code == 302   # signed in: sent away
     client.post('/auth/register', data={}, environ_base=CLEARNET)
     assert event_lines(caplog, 'auth: register attempt') == ['auth: register attempt ip=203.0.113.9']
