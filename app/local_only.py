@@ -28,3 +28,23 @@ def domain_has_owners(site_domain_id: int) -> bool:
     """True when the domain owns at least one local account or community."""
     with db.session.no_autoflush:
         return bool(db.session.execute(_OWNERS, {'id': site_domain_id}).scalar())
+
+
+def user_local_only(user) -> bool:
+    """True for a local account whose home domain does not federate. A remote account never is."""
+    return user.ap_id is None and not user.home_domain().federates
+
+
+def community_local_only(community) -> bool:
+    """True for a local community whose home domain does not federate. A remote community never is."""
+    return community.ap_id is None and not community.home_domain().federates
+
+
+def content_local_only(author, community, parent=None) -> bool:
+    """Whether what `author` makes in `community` (answering `parent`, a post or a reply) stays on this server.
+
+    Any of the three being local-only is enough; a remote author's content is never stamped.
+    """
+    if author.ap_id is not None:
+        return False
+    return user_local_only(author) or community_local_only(community) or bool(parent is not None and parent.local_only)
