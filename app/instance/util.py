@@ -5,6 +5,7 @@ from flask import current_app
 
 from app import celery
 from app.constants import SRC_API
+from app.local_only import refuses_remote_contact
 from app.models import User
 # The module, not the names: app.shared.user reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.user)
@@ -45,7 +46,8 @@ def bulk_follow(user_id, to_follow):
                 auth_token = f"Bearer {following_user.encode_jwt_token()}"
                 for tf in to_follow:
                     user = search_for_user(tf, retry=True)   # a Celery task: it may wait (D738)
-                    if user and following_user.is_following(user) == 'no':
+                    if user and following_user.is_following(user) == 'no' and \
+                            not refuses_remote_contact(following_user, user):   # follow_user refuses it
                         shared_user.follow_user(user.id, src=SRC_API, auth=auth_token)
         except Exception:
             session.rollback()

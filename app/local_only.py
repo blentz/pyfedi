@@ -8,6 +8,7 @@ import re
 from urllib.parse import unquote, urlsplit
 
 from flask import current_app
+from flask_babel import _
 from flask_login import current_user
 from sqlalchemy import and_, bindparam, not_, or_, text, true
 
@@ -50,6 +51,19 @@ def user_local_only(user) -> bool:
 def community_local_only(community) -> bool:
     """True for a local community whose home domain does not federate. A remote community never is."""
     return community.ap_id is None and not community.home_domain().federates
+
+
+def refuses_remote_contact(sender, other) -> bool:
+    """True when `sender` is local-only and `other` is a remote account: spec 3.4, it cannot follow or message one.
+    The outbound guard would refuse the Follow or the message, so it is refused before anything is stored."""
+    return not other.is_local() and user_local_only(sender)
+
+
+REMOTE_CONTACT_REFUSAL = 'local_only_remote_contact'   # the Exception a shared action raises for it
+
+
+def remote_contact_refusal_message() -> str:
+    return _('Your account is not visible to other servers, so it cannot follow or message people there.')
 
 
 def content_local_only(author, community, *parents) -> bool:
