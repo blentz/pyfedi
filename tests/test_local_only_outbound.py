@@ -17,6 +17,7 @@ from app import cli, db
 from app.activitypub.routes import announce_activity_to_followers
 from app.activitypub.signature import post_request, send_post_request
 from app.constants import SRC_API
+import app.local_only as local_only
 from app.local_only import federated_mentions, outbound_refusal
 from app.models import ActivityBatch, SendQueue, SiteDomain
 from app.shared.tasks.deletes import delete_object
@@ -144,7 +145,7 @@ def test_a_reply_vote_and_boost_on_local_only_content_send_nothing(env, wire):
     assert _sent(wire) == []
 
 
-def test_a_federating_communitys_announce_of_a_local_only_reply_is_not_sent(env, wire, monkeypatch):
+def test_a_federating_communitys_announce_of_a_local_only_reply_is_not_sent(env, wire, monkeypatch, app):
     post = _post(env.hell, env.ozzy, local_only=True)
     reply = _reply(post, env.remote)
     note = {'id': f'https://peer.example/comment/{reply.id}', 'type': 'Note', 'attributedTo': env.remote.public_url(),
@@ -157,7 +158,7 @@ def test_a_federating_communitys_announce_of_a_local_only_reply_is_not_sent(env,
     make_community_member(make_user(other, 'pf'), env.hell)
     announce_activity_to_followers(env.hell, env.remote, create, can_batch=True)   # the batch
     published = []
-    monkeypatch.setitem(announce_activity_to_followers.__globals__['current_app'].config, 'NOTIF_SERVER', 'x')
+    monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'x')
     monkeypatch.setattr('app.redis_client', SimpleNamespace(publish=lambda *a: published.append(a)))
     like = {'id': 'https://peer.example/activities/like/1', 'type': 'Like', 'actor': env.remote.public_url(),
             'object': post.ap_id}
@@ -277,5 +278,37 @@ def test_a_refusal_is_logged_at_debug_without_a_user_name(env, wire, caplog):
             'object': 'https://peer.example/c/away'}
     send_post_request(PEER_INBOX, body, env.ozzy.private_key, env.ozzy.public_url() + '#main-key')
     refusals = [record for record in caplog.records if 'not sent' in record.getMessage()]
-    assert _sent(wire) == [] and len(refusals) >= 1
+    assert _sent(wire) == [] and len(refusals) == 1
     assert all(record.levelname == 'DEBUG' and 'ozzy' not in record.getMessage() for record in refusals)
+
+
+def test_a_url_that_cannot_be_parsed_is_refused(env):
+    """Fail closed: a guarded URL urlsplit rejects names a host nobody can check."""
+    body = {'id': f'{SERVER}/activities/x', 'actor': env.hal.public_url(), 'object': 'http://[abc.onion]/u/x'}
+    assert outbound_refusal(body)
+
+
+def test_an_id_beyond_the_database_range_is_not_refused_on_that_basis(env):
+    body = {'id': f'{SERVER}/activities/x', 'actor': env.hal.public_url(), 'object': f'{SERVER}/post/2147483648',
+            'inReplyTo': f'{SERVER}/comment/99999999999999999999'}
+    assert outbound_refusal(body) is None
+
+
+def test_a_post_quoting_a_local_only_post_is_refused(env):
+    quoted = _post(env.hell, env.ozzy, local_only=True)
+    for key in ('quote', 'quoteUrl', 'quoteUri', '_misskey_quote', 'interactionTarget', 'interactingObject',
+                'instrument'):
+        body = {'id': f'{SERVER}/activities/create/1', 'type': 'Create', 'actor': env.hal.public_url(),
+                'object': {'id': f'{SERVER}/post/{quoted.id + 1}', 'type': 'Note', key: quoted.ap_id}}
+        assert outbound_refusal(body), key
+
+
+def test_each_delivery_is_checked_once(env, wire, monkeypatch):
+    """The send queue path (.delay) walks the body in post_request only, not again when it is queued."""
+    real, calls = local_only.outbound_refusal, []
+    monkeypatch.setattr('app.local_only.outbound_refusal', lambda body, session=None: calls.append(1) or
+                        real(body, session))
+    body = {'id': f'{SERVER}/activities/like/1', 'type': 'Like', 'actor': env.hal.public_url(),
+            'object': 'https://peer.example/post/3'}
+    send_post_request(PEER_INBOX, body, env.hal.private_key, env.hal.public_url() + '#main-key')
+    assert len(calls) == 1 and [url for url, _ in _sent(wire)] == [PEER_INBOX]

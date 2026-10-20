@@ -99,11 +99,10 @@ def parse_ld_date(value: str | None) -> datetime | None:
 def send_post_request(uri: str, body: dict | None, private_key: str, key_id: str,
                       content_type: str = "application/activity+json",
                       method: Literal["get", "post"] = "post", timeout: int = 10, retries: int = 0, new_task=True):
-    if current_app.debug or new_task is False:   # post_request refuses a local-only activity itself
+    # post_request refuses a local-only activity, once per delivery, on either path
+    if current_app.debug or new_task is False:
         return post_request(uri=uri, body=body, private_key=private_key, key_id=key_id, content_type=content_type,
                             method=method, timeout=timeout, retries=retries)
-    elif refused_outbound(body, uri):   # and one is never queued
-        return None
     else:
         post_request.delay(uri=uri, body=body, private_key=private_key, key_id=key_id, content_type=content_type,
                            method=method, timeout=timeout, retries=retries)
