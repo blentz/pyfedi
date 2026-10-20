@@ -1514,7 +1514,7 @@ def index_rss(feed_type=None):
     post_ids = get_deduped_post_ids('', community_ids, 'new',   # '': a feed is never paged, so no result to keep
                                     include_following=feed_type == 'subscribed' and current_user_is_authenticated,
                                     show_local_only=current_user_is_authenticated,   # the token's answer
-                                    private_memberships=False)   # a token is a bearer secret: see get_deduped_post_ids
+                                    public_only=True)   # a token is a bearer secret: see get_deduped_post_ids
     post_ids = paginate_post_ids(post_ids, 0, page_length=50)
     posts = post_ids_to_models(post_ids, 'new')
 

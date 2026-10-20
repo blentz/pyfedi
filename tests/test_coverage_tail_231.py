@@ -72,7 +72,7 @@ class TestAPrivateCommunityInTheSiteFeed:
     """`Community.private` is invite-only access control, not a content warning. No RSS feed
     lists a private community, whoever's token it carries: a token is a bearer secret that
     people paste into third-party readers. The site feed's queries say `c.private is false`,
-    and `get_deduped_post_ids(private_memberships=False)` does not widen it by memberships.
+    and `get_deduped_post_ids(public_only=True)` does not widen it by memberships.
     """
 
     @pytest.fixture
@@ -111,7 +111,7 @@ class TestAPrivateCommunityInTheSiteFeed:
 
     def test_a_member_with_a_token_is_not_shown_it_either(self, seeded):
         """A membership does not widen it either. `index_rss` reads as the token's account
-        (as_rss_reader), so `get_deduped_post_ids` sees a member; `private_memberships=False`
+        (as_rss_reader), so `get_deduped_post_ids` sees a member; `public_only=True`
         is what keeps the post out. `index_rss` used to widen its own `community_ids` query
         by the member's private communities, a path that only `get_deduped_post_ids`'s
         session-only check made inert; it is gone.

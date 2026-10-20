@@ -871,7 +871,7 @@ def show_feed_rss(feed_path):
                 feed_community_ids.append(item.community_id)
 
         post_ids = get_deduped_post_ids('', feed_community_ids, 'new', show_local_only=local_only_visible_rss(),
-                                        private_memberships=False)
+                                        public_only=True)
         post_ids = paginate_post_ids(post_ids, 0, page_length=100)
         posts = post_ids_to_models(post_ids, 'new')
 

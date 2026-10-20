@@ -21,14 +21,15 @@ from app import cache, db
 from app.nntp.nntpserver import NNTPArticleNotFound
 from app.nntp.server import CommunityArticleIndex, IndexArticleDict, PieFedNNTPServer, _make_message_id, _tl
 from app.constants import POST_TYPE_EVENT
-from app.models import Community, CommunityMember, Event, Feed, ModLog, Post, PostReply, Site, Tag, Topic, UserBlock, \
-    utcnow
+from app.models import Community, CommunityMember, Event, Feed, ModLog, Post, PostBoost, PostReply, ServerViewMember, \
+    Site, Tag, Topic, UserBlock, UserFollower, utcnow
 import app.post.util as post_util
 from app.post.util import convert_archived_replies_to_tree
-from app.utils import archive_post, as_rss_reader
+from app.utils import archive_post, as_rss_reader, get_deduped_post_ids
 from app.visibility import RestrictedReply, can_view, mark_restricted
 from tests.conftest import forget_login
-from tests.factories import bearer, make_community, make_domain, make_feed_item, make_local_feed
+from tests.factories import bearer, make_community, make_domain, make_feed_item, make_instance, make_local_feed, \
+    make_user
 from tests.test_community_lifecycle import login
 from tests.test_local_only_invisible import _post, _reply, world  # noqa: F401 -- world is a fixture
 
@@ -465,6 +466,58 @@ def test_a_members_token_lists_no_private_community_post(app, every_feed_reader,
     response = _client(app).get(path, query_string={'token': 'alice-rss-token'})
     assert response.status_code == 200, path
     assert 'PUBLICPOST' in _titles(response) and 'PRIVATEPOST' not in _titles(response), path
+
+
+@pytest.fixture
+def follow_sources(app, scene):
+    """alice follows a remote author and a remote booster and has joined the remote server's microblogs view. Each
+    source carries a public, a followers-only and an unlisted post, in communities alice is not a member of."""
+    world = scene.world
+    remote = make_instance('remote.example')
+    author, booster, stranger = (make_user(remote, name) for name in ('authorx', 'boosterx', 'strangerx'))
+    elsewhere = make_community('elsewhere', host=app.config['SERVER_NAME'])
+    microblogs = make_community('microblogs', host=app.config['SERVER_NAME'])
+    for followed in (author, booster):
+        db.session.add(UserFollower(local_user_id=world.alice.id, remote_user_id=followed.id, is_inward=False,
+                                    is_accepted=True))
+    world.alice.num_following = 2
+    db.session.add(ServerViewMember(user_id=world.alice.id, instance_id=remote.id))
+    for source, community, writer in (('AUTHOR', elsewhere, author), ('BOOST', elsewhere, stranger),
+                                      ('SERVER', microblogs, stranger)):
+        for visibility in ('public', 'followers', 'unlisted'):
+            post = _post(app, community, writer)
+            _content(post, f'{source}{visibility.upper()}POST')
+            post.visibility = visibility
+            post.instance_id = remote.id
+            if source == 'BOOST':
+                db.session.add(PostBoost(user_id=booster.id, post_id=post.id))
+    db.session.commit()
+    return scene
+
+
+FOLLOWED_PUBLIC = {'AUTHORPUBLICPOST', 'BOOSTPUBLICPOST', 'SERVERPUBLICPOST'}
+FOLLOWED_RESTRICTED = {f'{source}{visibility}POST' for source in ('AUTHOR', 'BOOST', 'SERVER')
+                       for visibility in ('FOLLOWERS', 'UNLISTED')}
+
+
+def test_a_subscribed_feed_by_token_lists_only_public_posts_from_follows_and_joined_servers(app, follow_sources):
+    """RSS lists only publicly listable content: a token is a bearer secret, and a followers-only or unlisted post
+    reaching it would reach whatever reader it was pasted into."""
+    titles = _titles(_client(app).get('/index/feed/subscribed', query_string={'token': 'alice-rss-token'}))
+    assert FOLLOWED_PUBLIC <= titles
+    assert not titles & FOLLOWED_RESTRICTED, titles & FOLLOWED_RESTRICTED
+
+
+def test_the_logged_in_home_feed_still_shows_a_follow_its_followers_only_and_unlisted_posts(app, follow_sources):
+    """The HTML path is unchanged: there the follow sources admit what the viewer may see (visible_to_sql)."""
+    with app.test_request_context('/'):
+        g._login_user = follow_sources.alice
+        post_ids = get_deduped_post_ids('', [follow_sources.world.clearnet.id], 'new', include_following=True)
+        forget_login()
+    titles = {post.title for post in Post.query.filter(Post.id.in_(post_ids))}
+    assert FOLLOWED_PUBLIC | {'AUTHORFOLLOWERSPOST', 'AUTHORUNLISTEDPOST', 'BOOSTUNLISTEDPOST'} <= titles
+    # a boosted followers-only post is for its own author's followers; a joined server gives only public posts
+    assert not titles & {'BOOSTFOLLOWERSPOST', 'SERVERFOLLOWERSPOST', 'SERVERUNLISTEDPOST'}
 
 
 def test_as_rss_reader_puts_the_session_user_back_afterwards(app, scene):

@@ -5762,19 +5762,24 @@ def paginate_post_ids(post_ids, page: int, page_length: int):
 # every ingested Mastodon post from the feed -- a boosted microblog SHOULD appear
 # when you follow the booster. The gate belongs on the community source instead;
 # see MICROBLOG_GATE below.
-FOLLOWED_AUTHOR_SQL = """(EXISTS (SELECT 1 FROM user_follower uf
+_FOLLOWED_AUTHOR = """(EXISTS (SELECT 1 FROM user_follower uf
                                   WHERE uf.local_user_id = :local_user_id
                                   AND uf.remote_user_id = p.user_id AND uf.is_inward is false
                                   AND uf.is_accepted is true)
-                                  AND """ + visible_to_sql('p') + ')'
-
-FOLLOWED_BOOSTER_SQL = """(EXISTS (SELECT 1 FROM post_boost pb
+                                  AND """
+_FOLLOWED_BOOSTER = """(EXISTS (SELECT 1 FROM post_boost pb
                                   INNER JOIN user_follower uf2 ON uf2.remote_user_id = pb.user_id
                                   WHERE pb.post_id = p.id
                                   AND uf2.local_user_id = :local_user_id
                                   AND uf2.is_inward is false
                                   AND uf2.is_accepted is true)
-                                  AND """ + visible_to_sql('p') + ')'
+                                  AND """
+FOLLOWED_AUTHOR_SQL = _FOLLOWED_AUTHOR + visible_to_sql('p') + ')'
+FOLLOWED_BOOSTER_SQL = _FOLLOWED_BOOSTER + visible_to_sql('p') + ')'
+# The RSS twins (get_deduped_post_ids(public_only=True)): only what anyone may list, never a followers-only or
+# unlisted post. A feed's ?token= is a bearer secret, and what it reads reaches whatever reader it was pasted into.
+FOLLOWED_AUTHOR_PUBLIC_SQL = _FOLLOWED_AUTHOR + listable_sql('p') + ')'
+FOLLOWED_BOOSTER_PUBLIC_SQL = _FOLLOWED_BOOSTER + listable_sql('p') + ')'
 
 # Applied to the COMMUNITY source only, never to the whole query and never to the
 # two disjuncts above. A microblog reaches an aggregate feed because you follow its
@@ -5793,7 +5798,9 @@ JOINED_SERVER_SQL = """(EXISTS (SELECT 1 FROM server_view_member svm
 
 
 def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, hashtag: str = '', include_following=False, community_sql: str = None, newer_than=None,
-                         show_local_only: bool | None = None, private_memberships: bool = True) -> List[int]:
+                         show_local_only: bool | None = None, public_only: bool = False) -> List[int]:
+    """`public_only` (the RSS views): only publicly listable content, whoever reads it. The follow sources keep only
+    public posts and no private community is listed, members included, since a feed's ?token= is a bearer secret."""
     joined_servers = include_following and current_user.is_authenticated and joined_server_views(current_user.id)
     if not community_sql and (community_ids is None or len(community_ids) == 0):
         if not joined_servers:
@@ -5828,10 +5835,12 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
     # not be able to bind looser than the AND.
     sources = [f'(({community_disjunct}) AND {MICROBLOG_GATE} AND {listable_sql("p")})']
     if current_user.is_authenticated and current_user.num_following and include_following:
-        sources.append(FOLLOWED_AUTHOR_SQL)
-        sources.append(FOLLOWED_BOOSTER_SQL)
+        if public_only:
+            sources.extend((FOLLOWED_AUTHOR_PUBLIC_SQL, FOLLOWED_BOOSTER_PUBLIC_SQL))
+        else:
+            sources.extend((FOLLOWED_AUTHOR_SQL, FOLLOWED_BOOSTER_SQL))
+            params['visibility_viewer_id'] = current_user.id
         params['local_user_id'] = current_user.id
-        params['visibility_viewer_id'] = current_user.id
     if joined_servers:
         sources.append(JOINED_SERVER_SQL)
         params['local_user_id'] = current_user.id
@@ -5868,9 +5877,9 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
     # nothing": it means this viewer has no exceptions, so the restriction must
     # still be appended. Kept as one unconditional site above the
     # anonymous/authenticated split so no branch can be added that lacks it.
-    # `private_memberships` False (the RSS views) leaves the restriction unwidened for members too: a feed's ?token= is
-    # a bearer secret that people paste into third-party readers, so no feed lists a private community.
-    if private_memberships and current_user.is_authenticated and \
+    # `public_only` (the RSS views) leaves the restriction unwidened for members too: a feed's ?token= is a bearer
+    # secret that people paste into third-party readers, so no feed lists a private community.
+    if not public_only and current_user.is_authenticated and \
             (private_community_ids := community_membership_private(current_user.id)):
         post_id_where.append('(c.private is false OR c.id IN :private_community_ids) ')
         params['private_community_ids'] = tuple(private_community_ids)
