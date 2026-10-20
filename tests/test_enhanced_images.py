@@ -1,11 +1,11 @@
 import re
-import time
 import unittest
 
 import markdown2
 from bs4 import BeautifulSoup
 from app import markdown_extras
 from app.markdown_extras import EnhancedImages, apply_enhanced_image_attributes
+from tests.linear_time import grows_linearly
 from tests.test_markdown_to_html import corpus_texts, random_texts
 
 
@@ -200,13 +200,14 @@ Some text here.
     def test_unclosed_images_are_read_in_linear_time(self):
         """The extra alone: markdown2's own link and image regexes are quadratic on the last two shapes too, which
         is markdown2's to fix, not this module's."""
-        size = 64 * 1024
-        for text in ('![' + '::' * (size // 2), '![' * (size // 2) + '::', '![a::b](' * (size // 8)):
+        def run(text):
             md = markdown2.Markdown(extras={'enhanced-images': True})
             md.reset()
-            started = time.perf_counter()
             EnhancedImages(md, None).run(text)
-            self.assertLess(time.perf_counter() - started, 0.5)
+
+        for make in (lambda size: '![' + '::' * (size // 2), lambda size: '![' * (size // 2) + '::',
+                     lambda size: '![a::b](' * (size // 8)):
+            self.assertTrue(grows_linearly(run, make, small=16 * 1024))
 
     def test_finds_the_tags_the_old_pattern_found(self):
         """apply_enhanced_image_attributes' tag pattern backtracked over the spaces after '<img' and over every
@@ -222,11 +223,9 @@ Some text here.
     def test_unclosed_img_tags_are_read_in_linear_time(self):
         md = markdown2.Markdown(extras={'enhanced-images': True})
         md.convert('![a :: width=1](u)')
-        size = 64 * 1024
-        for html in ('<img ' * (size // 5), '<img' + ' ' * size, '<img data-enhanced-img=' * (size // 23)):
-            started = time.perf_counter()
-            apply_enhanced_image_attributes(html, md)
-            self.assertLess(time.perf_counter() - started, 0.5)
+        for make in (lambda size: '<img ' * (size // 5), lambda size: '<img' + ' ' * size,
+                     lambda size: '<img data-enhanced-img=' * (size // 23)):
+            self.assertTrue(grows_linearly(lambda html: apply_enhanced_image_attributes(html, md), make, small=16 * 1024))
 
     def test_a_quote_in_a_value_cannot_add_an_attribute(self):
         """Every value from the markdown was put between double quotes as it was, so a '"' in the alt text, a

@@ -4,7 +4,6 @@ With `S3_PUBLIC_URL` set, uploaded media is served from that clearnet host, whic
 On an onion storefront the response rewrite replaces whatever points at that host with a placeholder, so the onion
 never makes a request to it. Clearnet is unchanged, and with S3 unset nothing is parsed or changed.
 """
-import time
 from unittest.mock import patch
 
 import pytest
@@ -17,6 +16,7 @@ from app.models import SiteDomain
 from app.onion_media import proxy_url
 from app.storefront import clear_domain_cache, rewrite_response_for_storefront, storefront_html
 from app.utils import feed_entry_body
+from tests.linear_time import grows_linearly
 from tests.test_storefront_links import in_onion_request
 from tests.test_storefront_presentation import CANONICAL, ONION, onion  # noqa: F401  (onion is a fixture)
 
@@ -331,34 +331,15 @@ def test_another_address_is_not_the_s3_host(app, onion, monkeypatch, src):
     assert hide(f'<img src="{src}"/>') == f'<img src="{shown}"/>'
 
 
-def timed(call):
-    started = time.perf_counter()
-    call()
-    return time.perf_counter() - started
+STYLES = [lambda n: 'url(' + ' ' * n, lambda n: 'url(' * (n // 4), lambda n: 'url(' + 'x' * n, lambda n: '"' * n,
+          lambda n: "'a\"" * (n // 3), lambda n: "\\" * n, lambda n: 'url(' + ' ) ' * (n // 3),
+          lambda n: 'a' * n + '(', lambda n: 'xurl(' * (n // 5), lambda n: '@' * n, lambda n: '\\75 ' * (n // 4),
+          lambda n: 'u\\72l(' * (n // 6), lambda n: "\\\n" * (n // 2)]
 
 
-@pytest.mark.parametrize('style', ['url(' + ' ' * 100_000, 'url(' * 25_000, 'url(' + 'x' * 100_000, '"' * 100_000,
-                                   "'a\"" * 30_000, "\\" * 50_000, 'url(' + ' ) ' * 30_000,
-                                   'a' * 100_000 + '(', 'xurl(' * 20_000, '@' * 100_000, '\\75 ' * 25_000,
-                                   'u\\72l(' * 15_000, "\\\n" * 50_000])
-def test_a_style_value_is_scanned_in_linear_time(style):
-    assert timed(lambda: storefront._css_urls(style)) < 0.1
-
-
-def best_of(call, repeats=5):
-    return min(timed(call) for _ in range(repeats))
-
-
-def grows_linearly(scan, make, small=20_000, factor=4):
-    """True if `factor` times the input costs well under `factor` squared times the work.
-
-    A wall-clock budget flakes under load and coverage tracing; the ratio between two sizes does not,
-    because both runs slow down together. Linear gives about `factor`, quadratic `factor` squared;
-    the bound sits between them. The best of several repeats drops scheduler spikes.
-    """
-    little, big = make(small), make(small * factor)
-    scan(little)   # warm caches and lazy imports before timing
-    return best_of(lambda: scan(big)) < best_of(lambda: scan(little)) * factor * 2
+@pytest.mark.parametrize('make', STYLES)
+def test_a_style_value_is_scanned_in_linear_time(make):
+    assert grows_linearly(storefront._css_urls, make)
 
 
 SRCSETS = [lambda n: 'a' + ',' * n + 'b', lambda n: 'a' + ',' * n + 'b 1x', lambda n: 'a' + ',' * n, lambda n: ',' * n,
@@ -373,7 +354,7 @@ def test_a_srcset_is_scanned_in_linear_time(make):
 
 
 def test_a_srcset_of_many_candidates_is_split_in_linear_time():
-    assert timed(lambda: storefront._srcset_urls('a b,' * 5_000)) < 0.1
+    assert grows_linearly(storefront._srcset_urls, lambda n: 'a b,' * (n // 4))
 
 
 @pytest.mark.parametrize('srcset, urls', [
@@ -529,11 +510,15 @@ def test_an_error_in_the_s3_check_hides_the_element_and_is_logged(app, onion, s3
     assert 'the S3 media check failed' in caplog.text and 'boom' in caplog.text
 
 
-@pytest.mark.parametrize('style', ['%25' * 30_000, '%25' * 4 + '63' + 'x' * 100_000, '%' + '25' * 50_000 + '63', '\u00ad' * 100_000, 'e\u0301' * 50_000,
-                                   '1.1 ' * 25_000, '[1]' * 30_000, '\\9 ' * 30_000, 'a(' * 50_000])
-def test_the_backstop_is_linear(style):
-    assert timed(lambda: storefront._names_host(style, S3)) < 0.1
-    assert timed(lambda: storefront._names_host(style, '203.0.113.5')) < 0.1
+BACKSTOPS = [lambda n: '%25' * (n // 3), lambda n: '%25' * 4 + '63' + 'x' * n, lambda n: '%' + '25' * (n // 2) + '63',
+             lambda n: '\u00ad' * n, lambda n: 'e\u0301' * (n // 2), lambda n: '1.1 ' * (n // 4), lambda n: '[1]' * (n // 3),
+             lambda n: '\\9 ' * (n // 3), lambda n: 'a(' * (n // 2)]
+
+
+@pytest.mark.parametrize('make', BACKSTOPS)
+def test_the_backstop_is_linear(make):
+    assert grows_linearly(lambda style: storefront._names_host(style, S3), make)
+    assert grows_linearly(lambda style: storefront._names_host(style, '203.0.113.5'), make)
 
 
 def test_the_uts46_table_stops_growing():

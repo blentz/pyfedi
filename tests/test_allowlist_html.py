@@ -1,6 +1,5 @@
 import html as html_module
 import re
-import time
 import unittest
 
 import pytest
@@ -9,6 +8,7 @@ from bs4 import BeautifulSoup
 from app import utils
 from app.utils import (allowlist_html, community_link_to_href, feed_link_to_href, markdown_to_html,
                        person_link_to_href, sub_skipping, url_host)
+from tests.linear_time import grows_linearly
 from tests.test_markdown_to_html import corpus_texts, random_texts
 
 
@@ -832,18 +832,25 @@ class TestUrlHost:
 
 
 
-def assert_linear(test, texts, function, seconds=1.0):
-    """Each text, 64 KiB of a pump shape, goes through `function` inside `seconds`: hours on the regexes these
-    tests replaced."""
+class Pump(str):
+    """A pump shape, 64 KiB of it, that remembers how to be built at another size."""
+
+    def __new__(cls, unit, size, suffix):
+        text = super().__new__(cls, (unit * (size // len(unit) + 1))[:size - len(suffix)] + suffix)
+        text.unit, text.suffix = unit, suffix
+        return text
+
+
+def assert_linear(test, texts, function):
+    """Each text, a pump shape, goes through `function` at 16 KiB and at 64 KiB, and the time grows about 4 times,
+    not 16: hours on the regexes these tests replaced. Sizes are compared, not a clock, so load cannot fail it."""
     for text in texts:
-        started = time.perf_counter()
-        function(text)
-        elapsed = time.perf_counter() - started
-        assert elapsed < seconds, f'{elapsed:.2f} s on {text[:40]!r}...'
+        assert grows_linearly(function, lambda size: pump(text.unit, size, text.suffix), small=16 * 1024), \
+            f'{text[:40]!r}... grows faster than its size'
 
 
 def pump(unit: str, size: int = 64 * 1024, suffix: str = '') -> str:
-    return (unit * (size // len(unit) + 1))[:size - len(suffix)] + suffix
+    return Pump(unit, size, suffix)
 
 
 class TestAllowlistRegexesAreLinear:

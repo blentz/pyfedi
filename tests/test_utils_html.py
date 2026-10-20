@@ -7,6 +7,7 @@ from app.utils import (allowlist_html, community_link_to_href, escape_img, feed_
                        piefed_markdown_to_lemmy_markdown, pop_code, pop_link, remove_images, sub_skipping, stash_code_html, stash_code_md,
                        stash_link_html, escape_non_html_angle_brackets, handle_bold_em, handle_reddit_spoilers,
                        handle_video_embeds)
+from tests.linear_time import grows_linearly
 from tests.test_allowlist_html import assert_linear, pump
 from tests.test_markdown_to_html import corpus_texts, random_texts
 
@@ -65,7 +66,7 @@ class TestEscapeImg:
         assert escape_img('a <img\nsrc="x.png"> b') == 'a <code><image placeholder></code> b'
 
     def test_an_unclosed_line_is_read_in_linear_time(self):
-        assert_linear(self, [pump('<img')], escape_img, seconds=0.5)
+        assert_linear(self, [pump('<img')], escape_img)
 
 
 class TestPiefedMarkdownToLemmyMarkdown:
@@ -246,7 +247,7 @@ class TestActorLinksLeaveTagsAlone:
 
     def test_open_tags_are_read_in_linear_time(self):
         assert_linear(self, [pump('<'), pump('<img alt="@u@h '), pump('< @u@h.example ')],
-                      lambda text: person_link_to_href(text, server_name_override='s.example'), seconds=0.5)
+                      lambda text: person_link_to_href(text, server_name_override='s.example'))
 
 
 class TestActorLinksNeverNestALink:
@@ -288,7 +289,7 @@ class TestActorLinksNeverNestALink:
 
     def test_an_unclosed_anchor_or_code_is_read_in_linear_time(self):
         assert_linear(self, [pump('<a '), pump('<a>'), pump('<code '), pump('<code>')],
-                      lambda text: person_link_to_href(text, server_name_override='s.example'), seconds=0.5)
+                      lambda text: person_link_to_href(text, server_name_override='s.example'))
 
 
 class TestHandleLemmyAutocomplete:
@@ -318,7 +319,7 @@ class TestLemmyAutocompleteIsLinear:
                 lambda m: m.group(0) if m.lastindex is None else '<' + m.group(1) + '>', text) == expected, text
 
     def test_an_unclosed_line_is_read_in_linear_time(self):
-        assert_linear(self, [pump('[!'), pump('[!a](')], handle_lemmy_autocomplete, seconds=0.5)
+        assert_linear(self, [pump('[!'), pump('[!a](')], handle_lemmy_autocomplete)
 
 
 class TestRedditSpoilersAreLinear:
@@ -335,7 +336,7 @@ class TestRedditSpoilersAreLinear:
         assert handle_reddit_spoilers('x >!y >!\nz!<') == 'x >!y <tg-spoiler>z</tg-spoiler>'
 
     def test_an_unclosed_line_is_read_in_linear_time(self):
-        assert_linear(self, [pump('>!'), pump('>! a')], handle_reddit_spoilers, seconds=0.5)
+        assert_linear(self, [pump('>!'), pump('>! a')], handle_reddit_spoilers)
 
 
 class TestVideoEmbedsAreLinear:
@@ -356,7 +357,7 @@ class TestVideoEmbedsAreLinear:
         assert '![pic](https://x.example/b.png)' in result
 
     def test_unclosed_images_are_read_in_linear_time(self):
-        assert_linear(self, [pump('![]('), pump('!['), pump('![a](b ')], handle_video_embeds, seconds=0.5)
+        assert_linear(self, [pump('![]('), pump('!['), pump('![a](b ')], handle_video_embeds)
 
 
 class TestBoldAndEmphasisAreLinear:
@@ -373,7 +374,7 @@ class TestBoldAndEmphasisAreLinear:
             assert utils._wrap_emphasis(text, 2, '<B>', '</B>') == self.OLD_BOLD.sub(r'<B>\2</B>', text), repr(text)
 
     def test_unclosed_runs_are_read_in_linear_time(self):
-        assert_linear(self, [pump('**x '), pump('***x '), pump('__x **y ')], handle_bold_em, seconds=0.5)
+        assert_linear(self, [pump('**x '), pump('***x '), pump('__x **y ')], handle_bold_em)
 
 
 class TestAllowlistHtmlResidue:
@@ -424,7 +425,7 @@ class TestCodeAndLinkStashesAreLinear:
             assert stash_code_html(text, 'PH') == old_stash(r'<code>[\s\S]*?<\/code>', text, 'PH'), text
 
     def test_unclosed_code_is_stashed_in_linear_time(self):
-        assert_linear(self, [pump('<code>')], lambda text: stash_code_html(text, 'PH'), seconds=0.5)
+        assert_linear(self, [pump('<code>')], lambda text: stash_code_html(text, 'PH'))
 
     def test_the_link_stash_stashes_what_it_stashed(self):
         fragments = ['<a href=', '</a>', '<a href=x>y</a>', 'a', ' ', '\n', '<', '>']
@@ -432,7 +433,7 @@ class TestCodeAndLinkStashesAreLinear:
             assert stash_link_html(text, 'PH') == old_stash(r'<a href=[\s\S]*?<\/a>', text, 'PH'), text
 
     def test_unclosed_links_are_stashed_in_linear_time(self):
-        assert_linear(self, [pump('<a href=')], lambda text: stash_link_html(text, 'PH'), seconds=0.5)
+        assert_linear(self, [pump('<a href=')], lambda text: stash_link_html(text, 'PH'))
 
 
 class TestCodeStashRoundTrip:
@@ -453,10 +454,11 @@ class TestCodeStashRoundTrip:
     def test_thousands_of_snippets_are_restored_in_linear_time(self):
         """One str.replace over the whole text per snippet: 2 s for one preprocessor over 64 KiB of `a` spans
         (fuzz: markdown_preprocessors/many_code_spans, many_html_code_spans, markdown_code_stash/fence_pump)."""
-        assert_linear(self, [pump('`a` ')], handle_bold_em, seconds=0.5)
+        assert_linear(self, [pump('`a` ')], handle_bold_em)
+        assert grows_linearly(lambda stash: pop_link(*stash, 'PH'),
+                              lambda size: stash_link_html(pump('<a href=x>y</a> ', size), 'PH'), small=16 * 1024)
         text = pump('<a href=x>y</a> ')
         snippets, stashed = stash_link_html(text, 'PH')
-        assert_linear(self, [stashed], lambda stashed: pop_link(snippets, stashed, 'PH'), seconds=0.5)
         assert pop_link(snippets, stashed, 'PH') == text
 
     def test_an_index_no_snippet_has_is_left_as_it_is(self):

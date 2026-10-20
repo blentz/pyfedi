@@ -1,13 +1,13 @@
 import pathlib
 import random
 import re
-import time
 import unittest
 from unittest import mock
 
 from app.utils import (LINK_PATTERN, MARKDOWN_IN_HTML_LINE_LIMIT, MARKDOWN_MAX_BACKTICK_RUN, MARKDOWN_MAX_QUOTE_DEPTH,
                        MARKDOWN_MAX_SPACE_RUN, MARKDOWN_RENDER_CAP, limit_quote_depth, markdown_to_html,
                        neutralise_quadratic_markdown)
+from tests.linear_time import grows_linearly
 
 CORPUS = pathlib.Path(__file__).parent / 'fuzz' / 'corpus'
 
@@ -615,13 +615,13 @@ class TestLinkPattern(unittest.TestCase):
             self.assert_same_links(text)
 
     def test_a_run_with_nowhere_to_end_is_read_in_linear_time(self):
-        size = 64 * 1024
-        for text in ('https://' + 'a' * size + '"', 'www.' * (size // 4) + '"', 'https://' + 'a.' * (size // 2) + '"',
-                     'https://' * (size // 8) + '"'):
-            started = time.perf_counter()
+        def read(text):
             self.assertEqual(list(LINK_PATTERN.finditer(text)), [])
             self.assertIsNone(LINK_PATTERN.match(text))
-            self.assertLess(time.perf_counter() - started, 1.0)
+
+        for make in (lambda size: 'https://' + 'a' * size + '"', lambda size: 'www.' * (size // 4) + '"',
+                     lambda size: 'https://' + 'a.' * (size // 2) + '"', lambda size: 'https://' * (size // 8) + '"'):
+            self.assertTrue(grows_linearly(read, make, small=16 * 1024))
 
     def test_markdown_still_autolinks(self):
         result = markdown_to_html('see https://pizza.com. and www.x.example/a_(b) ok', test_env={'fn_string': 'fn-test'})
