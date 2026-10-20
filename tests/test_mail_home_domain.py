@@ -124,6 +124,23 @@ def test_the_requests_own_storefront_comes_back_after_the_mail(app, accounts):
         context.pop()
 
 
+@pytest.mark.parametrize('fails', ['binding', 'the block'])
+def test_the_requests_own_storefront_comes_back_after_a_failure(app, accounts, monkeypatch, fails):
+    """F12: the pin is undone whatever fails, the URL binding itself included."""
+    onion_user, clear_user = accounts
+    context = on_request(app, ONION)
+    try:
+        if fails == 'binding':
+            monkeypatch.setattr('app.storefront._bind', lambda storefront: (_ for _ in ()).throw(RuntimeError(fails)))
+        with pytest.raises(RuntimeError):
+            with home_storefront(clear_user):
+                raise RuntimeError(fails)
+        assert g.storefront.domain == ONION
+        assert storefront_url() == f'http://{ONION}'
+    finally:
+        context.pop()
+
+
 def test_a_newsletter_is_rendered_for_each_recipient(app, accounts):
     onion_user, clear_user = accounts
     form = type('Form', (), {})()
