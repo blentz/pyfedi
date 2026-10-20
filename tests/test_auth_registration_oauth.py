@@ -99,6 +99,28 @@ def test_registering(app, env, no_captcha):
     assert User.query.filter_by(user_name='newperson').first() is not None
 
 
+def test_a_closed_site_refuses_a_registration_post(app, env, no_captcha):
+    """Only the template hid the form on a Closed site; a direct POST of valid
+    data still made the account. Open and RequireApplication are covered by
+    `test_registering` and `test_a_registration_that_needs_approval_waits`
+    (tests/test_auth_util.py)."""
+    anon, person = env
+    db.session.get(Site, 1).registration_mode = 'Closed'
+    db.session.commit()
+    before = User.query.count()
+
+    with patch('app.auth.util.send_email_verification'):
+        with patch('app.auth.util.sync_user_with_ldap'):
+            posted = register(anon, question='because I would like to')
+    got = anon.get('/auth/register')
+
+    assert User.query.count() == before
+    assert User.query.filter_by(user_name='newperson').first() is None
+    for page in (posted, got):
+        assert page.status_code == 200
+        assert 'Registration is closed. Only admins can create accounts.' in page.get_data(as_text=True)
+
+
 @pytest.mark.parametrize('honeypot, refusal', [
     ('', 'cannot use that user name'),
     ('i-am-a-bot@example.com', 'could not register you'),
