@@ -13,8 +13,9 @@ from types import SimpleNamespace
 
 import pytest
 from cachelib import SimpleCache
-from flask import g
+from flask import abort, g
 from flask_login import current_user
+from werkzeug.exceptions import NotFound
 
 import app.local_only as local_only
 from app import cache, db
@@ -534,6 +535,28 @@ def test_as_rss_reader_puts_the_session_user_back_afterwards(app, scene):
         view()
     forget_login()
     assert seen == [(True, scene.alice.id), (True, scene.alice.id), (False, None)]
+
+
+def _refuse():
+    abort(404)
+
+
+def _fail():
+    raise RuntimeError('the view failed')
+
+
+@pytest.mark.parametrize('body, raised', [(_refuse, NotFound), (_fail, RuntimeError)])
+def test_as_rss_reader_puts_the_session_user_back_when_the_view_raises(app, scene, body, raised):
+    """An abort or an error reaches Flask's handlers after the decorator: the error page is the session user's."""
+    seen = []
+    view = as_rss_reader(lambda: (seen.append(current_user.get_id()), body()))
+    with app.test_request_context('/?token=alice-rss-token'):
+        g._login_user = scene.world.bob
+        with pytest.raises(raised):
+            view()
+        assert g._login_user is scene.world.bob
+    forget_login()
+    assert seen == [scene.alice.id]
 
 
 def test_the_ical_feed_omits_a_local_only_event(app, scene):
