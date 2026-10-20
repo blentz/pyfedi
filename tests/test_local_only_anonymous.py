@@ -15,6 +15,7 @@ import pytest
 from cachelib import SimpleCache
 from flask import abort, g
 from flask_login import current_user
+from sqlalchemy import event
 from werkzeug.exceptions import NotFound
 
 import app.local_only as local_only
@@ -26,7 +27,7 @@ from app.models import Community, CommunityMember, Event, Feed, ModLog, Post, Po
     Site, Tag, Topic, UserBlock, UserFollower, utcnow
 import app.post.util as post_util
 from app.post.util import convert_archived_replies_to_tree
-from app.utils import archive_post, as_rss_reader, get_deduped_post_ids
+from app.utils import archive_post, as_rss_reader, get_deduped_post_ids, rss_token_user
 from app.visibility import RestrictedReply, can_view, mark_restricted
 from tests.conftest import forget_login
 from tests.factories import bearer, make_community, make_domain, make_feed_item, make_instance, make_local_feed, \
@@ -535,6 +536,34 @@ def test_as_rss_reader_puts_the_session_user_back_afterwards(app, scene):
         view()
     forget_login()
     assert seen == [(True, scene.alice.id), (True, scene.alice.id), (False, None)]
+
+
+@pytest.mark.parametrize('path', list(TOKEN_VIEWS) + ['/community/clearnet/feed', '/u/alice/feed',
+                                                     '/topic/things.rss'])
+def test_an_rss_request_looks_its_token_up_once(app, every_feed_reader, path):
+    """refuse_if_private_instance, as_rss_reader and local_only_visible_rss each ask who the token names; the
+    answer is kept for the request, so the account is queried once."""
+    path = path.format(domain=every_feed_reader.domain.id)
+    lookups = []
+
+    def count(conn, cursor, statement, parameters, context, executemany):
+        if '"user".rss_token = ' in statement:
+            lookups.append(statement)
+    event.listen(db.engine, 'before_cursor_execute', count)
+    try:
+        assert _client(app).get(path, query_string={'token': 'alice-rss-token'}).status_code == 200, path
+    finally:
+        event.remove(db.engine, 'before_cursor_execute', count)
+    assert len(lookups) == 1, path
+
+
+def test_a_kept_token_answer_is_not_carried_into_the_next_request(app, scene):
+    """g outlives a request where an app context is kept open (as in these tests): the answer belongs to one
+    request object."""
+    with app.test_request_context('/?token=alice-rss-token'):
+        assert rss_token_user() is scene.alice
+    with app.test_request_context('/'):
+        assert rss_token_user() is None
 
 
 def _refuse():

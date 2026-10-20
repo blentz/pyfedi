@@ -3203,10 +3203,17 @@ def rss_token_user():
     rss_token = request.args.get('token')
     if not rss_token:
         return None
-    return User.query.filter(User.rss_token == rss_token.strip(),
-                             User.ap_id == None,  # noqa: E711 -- a local account
-                             User.banned == False,  # noqa: E712
-                             User.deleted == False).first()  # noqa: E712
+    # Asked up to three times per RSS request (refuse_if_private_instance, as_rss_reader, local_only_visible_rss), so
+    # the answer is kept on g for this request object: g can outlive one request where an app context stays open
+    request_now = request._get_current_object()
+    kept = g.get('_rss_token_user')
+    if kept is None or kept[0] is not request_now:
+        kept = g._rss_token_user = (request_now, User.query.filter(
+            User.rss_token == rss_token.strip(),
+            User.ap_id == None,  # noqa: E711 -- a local account
+            User.banned == False,  # noqa: E712
+            User.deleted == False).first())  # noqa: E712
+    return kept[1]
 
 
 def as_rss_reader(func):
