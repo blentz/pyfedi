@@ -21,7 +21,7 @@ from app.utils import render_template, permission_required, user_filters_posts, 
     recently_upvoted_posts, recently_downvoted_posts, request_etag_matches, feed_entry_body, \
     return_304, joined_or_modding_communities, login_required_if_private_instance, reported_posts, \
     moderating_communities_ids, block_honey_pot, user_pronouns, community_membership_private, check_anoobis, \
-    calculate_rss_cache_timeout, refuse_if_private_instance
+    calculate_rss_cache_timeout, refuse_if_private_instance, as_rss_reader
 from app.rss_extras import RSSFeed
 
 
@@ -119,6 +119,7 @@ def show_domain(domain_id):
 
 @bp.route('/d/<domain_id>/feed', methods=['GET'])
 @refuse_if_private_instance
+@as_rss_reader
 def show_domain_rss(domain_id):
     with limiter.limit('60/minute'):
         if '.' in domain_id:

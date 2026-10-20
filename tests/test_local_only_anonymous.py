@@ -397,6 +397,60 @@ def test_a_cached_feed_read_with_a_token_is_built_for_the_token_user(app, filter
     assert _titles(_client(app).get('/topic/things.rss')) == {'PUBLICPOST', 'BOBPOST'}
 
 
+@pytest.fixture
+def every_feed_reader(app, filtering_reader):
+    """filtering_reader, plus a bot's post (alice does not ignore bots), every clearnet post on the tag and the link
+    domain the uncached feeds list by, and a private feed of alice's."""
+    world = filtering_reader.world
+    bot = _post(app, world.clearnet, world.alice)
+    _content(bot, 'BOTPOST')
+    bot.from_bot = True
+    db.session.commit()
+    tag = Tag.query.filter_by(name='lotag').one()
+    for post in Post.query.filter(Post.community_id == world.clearnet.id, Post.title.in_(
+            ('BOBPOST', 'NSFWPOST', 'BOTPOST'))):
+        post.tags.append(tag)
+        post.url = f'https://example.com/{post.title.lower()}'
+        post.domain_id = filtering_reader.domain.id
+    private_feed = make_local_feed('privfeed', public=False)
+    private_feed.user_id = world.alice.id
+    make_feed_item(private_feed, world.clearnet)
+    db.session.commit()
+    return filtering_reader
+
+
+# Every RSS view, cached or not, and what alice's ?token= changes in it: (listed, left out). 404 for an unreadable feed.
+TOKEN_VIEWS = {
+    '/index/feed/all': ({'PUBLICPOST', 'HIDDENPOST', 'NSFWPOST', 'BOTPOST'}, {'BOBPOST'}),
+    '/f/lofeed.rss': ({'PUBLICPOST', 'HIDDENPOST', 'NSFWPOST', 'BOTPOST'}, {'BOBPOST'}),
+    '/tag/lotag/feed': ({'HIDDENPOST', 'BOTPOST'}, set()),
+    '/d/{domain}/feed': ({'HIDDENPOST'}, {'BOTPOST'}),
+    '/f/privfeed.rss': ({'PUBLICPOST', 'HIDDENPOST', 'NSFWPOST', 'BOTPOST'}, {'BOBPOST'}),
+}
+
+
+@pytest.mark.parametrize('path', list(TOKEN_VIEWS) + ['/community/clearnet/feed', '/u/alice/feed',
+                                                     '/topic/things.rss'])
+def test_every_rss_view_reads_a_session_with_no_token_as_an_anonymous_reader(app, every_feed_reader, path):
+    """No session block, NSFW or bot setting, private feed or local-only post shapes an RSS body: feed URLs are
+    handed to readers that present no session, and a shared cache keeps what one reader was given."""
+    path = path.format(domain=every_feed_reader.domain.id)
+    session = _member(app, every_feed_reader.alice, path)
+    anonymous = _client(app).get(path)
+    assert (session.status_code, _titles(session)) == (anonymous.status_code, _titles(anonymous)), path
+    assert 'HIDDENPOST' not in _titles(session), path
+
+
+@pytest.mark.parametrize('path', TOKEN_VIEWS)
+def test_every_rss_view_reads_a_token_as_its_user(app, every_feed_reader, path):
+    listed, left_out = TOKEN_VIEWS[path]
+    path = path.format(domain=every_feed_reader.domain.id)
+    response = _client(app).get(path, query_string={'token': 'alice-rss-token'})
+    assert response.status_code == 200, path
+    assert listed <= _titles(response) and not left_out & _titles(response), (path, _titles(response))
+    assert _client(app).get('/f/privfeed.rss').status_code == 404
+
+
 def test_as_rss_reader_puts_the_session_user_back_afterwards(app, scene):
     seen = []
     view = as_rss_reader(lambda: seen.append((current_user.is_authenticated, current_user.get_id())))

@@ -394,11 +394,17 @@ class TestTheRssTwin:
         assert client.get('/f/secretfeed.rss').status_code == 404
 
     def test_the_owner_is_served(self, app, env):
-        client = app.test_client()
-        login(client, env.owner)
-        response = client.get('/f/secretfeed.rss')
+        """By the owner's RSS token: an RSS view reads the token's account, never the session (as_rss_reader)."""
+        env.owner.rss_token = 'owner-rss-token'
+        db.session.commit()
+        response = app.test_client().get('/f/secretfeed.rss?token=owner-rss-token')
         assert response.status_code == 200
         assert response.headers['Content-Type'].startswith('application/rss+xml')
+
+    def test_the_owners_session_is_not_enough(self, app, env):
+        client = app.test_client()
+        login(client, env.owner)
+        assert client.get('/f/secretfeed.rss').status_code == 404
 
     def test_a_public_feed_is_served_anonymously(self, app, env):
         response = app.test_client().get('/f/openfeed.rss')

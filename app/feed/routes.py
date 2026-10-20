@@ -40,7 +40,7 @@ from app.utils import etag_stamp, back, show_ban_message, piefed_markdown_to_lem
     recently_downvoted_posts, joined_or_modding_communities, login_required_if_private_instance, \
     communities_banned_from, reported_posts, user_notes, login_required, moderating_communities_ids, approval_required, \
     blocked_or_banned_instances, blocked_communities, block_honey_pot, user_pronouns, \
-    community_membership_private, check_anoobis, calculate_rss_cache_timeout, feed_readable_by, refuse_if_private_instance, feed_entry_body
+    community_membership_private, check_anoobis, calculate_rss_cache_timeout, feed_readable_by, refuse_if_private_instance, feed_entry_body, as_rss_reader
 from app.utils import ap_alternate_url
 from app.rss_extras import RSSFeed
 import app.community.routes as community_routes
@@ -843,6 +843,7 @@ def lookup(feedname, domain):
 
 @bp.route('/f/<path:feed_path>.rss', methods=['GET'])
 @refuse_if_private_instance
+@as_rss_reader
 def show_feed_rss(feed_path):
     feed_url_parts = feed_path.split('/')
     last_feed_machine_name = feed_url_parts[-1]
