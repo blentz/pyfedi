@@ -132,6 +132,19 @@ mail = Mail()
 bootstrap = Bootstrap5()
 babel = Babel(locale_selector=get_locale)
 cache = Cache()
+
+
+# The shape of the classes memos pickle (DomainInfo, Post, PostReply, User, Community). Bump it when one of them
+# gains or loses a field: every memo whose value holds one passes `make_name=shaped_memo_name`, so new code never unpickles an entry the
+# old code left in redis, and a rollback never reads one the new code wrote. v2: per-domain identity (site_domain_id,
+# local_only, DomainInfo.id).
+MEMO_SHAPE = 'v2'
+
+
+def shaped_memo_name(fname: str) -> str:
+    return f'{fname}:{MEMO_SHAPE}'
+
+
 compress = Compress()
 limiter = Limiter(rate_limit_key, storage_uri='redis+'+Config.CACHE_REDIS_URL if Config.CACHE_REDIS_URL.startswith("unix://") else Config.CACHE_REDIS_URL)
 celery = Celery(__name__, broker=Config.CELERY_BROKER_URL)

@@ -24,7 +24,7 @@ from flask_babel import _
 from sqlalchemy import or_
 from sqlalchemy.exc import SQLAlchemyError
 
-from app import cache, db
+from app import cache, db, shaped_memo_name
 from app.onion import onion_proxy_address
 from app.onion_media import MEDIA_SUFFIXES, proxy_url
 # The module, not the name: app.models imports this module for File's media URLs, so whichever of the two is
@@ -100,7 +100,7 @@ def _synthesised_default() -> DomainInfo:
     return DomainInfo(domain, scheme, True, 'anyone', True, domain.endswith('.onion'), None)
 
 
-@cache.memoize(timeout=300)
+@cache.memoize(timeout=300, make_name=shaped_memo_name)
 def domain_rows() -> tuple[DomainInfo, ...]:
     rows = db.session.query(models.SiteDomain).order_by(models.SiteDomain.id).all()
     if not rows:
