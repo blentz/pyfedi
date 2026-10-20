@@ -21,6 +21,7 @@ from app.auth.forms import LoginForm
 from app.constants import NOTIF_REGISTRATION
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
+from app.storefront import current_storefront, default_domain
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role, dummy_password_hash, \
     verify_password_hash
 from app.onion import audit_field, is_onion_request
@@ -340,6 +341,7 @@ def create_new_user(form, ip, country, verification_token):
         verification_token=verification_token,
         verified=not get_setting("email_verification", True),
         instance_id=1,
+        site_domain_id=current_storefront().id,
         ip_address=audit_field(ip),
         banned=user_ip_banned() or user_cookie_banned(),
         email_unread_sent=False,
@@ -368,6 +370,7 @@ def create_new_user_from_ldap(user_name, email, password, ip):
         email=email,
         verified=True,
         instance_id=1,
+        site_domain_id=default_domain().id,
         ip_address=audit_field(ip),
         banned=False,
         email_unread_sent=False,
