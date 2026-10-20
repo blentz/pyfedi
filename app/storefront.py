@@ -1003,9 +1003,9 @@ def _pinned(storefront):
     function called in the block keys its entry by the pinned domain."""
     had_storefront, before = 'storefront' in g, g.get('storefront')
     adapter = request_ctx.url_adapter
-    g.storefront = storefront
-    _bind(storefront)
-    try:
+    try:   # the pin itself inside: a binding that fails is undone too
+        g.storefront = storefront
+        _bind(storefront)
         yield
     finally:
         request_ctx.url_adapter = adapter
