@@ -182,6 +182,8 @@ def test_other_feeds_link_to_the_storefront(app, world, path):
     domain = make_domain('pics.example')
     tag = Tag(name='pics', display_as='Pics')
     db.session.add(tag)
+    if path == '/index/feed':   # Local lists the visited domain's own communities, so the onion's holds this one
+        community.site_domain_id = SiteDomain.query.filter_by(domain=ONION).one().id
     post.domain_id = domain.id
     post.tags.append(tag)
     db.session.commit()

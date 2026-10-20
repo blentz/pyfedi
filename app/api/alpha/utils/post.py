@@ -12,6 +12,7 @@ from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
 # app.activitypub before get_all_child_feed_ids is defined (import cycle: feed.routes)
 import app.feed.routes as feed_routes
+from app.storefront import current_storefront, on_domain, on_domain_sql
 from app.models import Post, Community, CommunityMember, utcnow, User, Feed, FeedItem, Topic, PostReply, PostVote, \
     CommunityFlair, read_posts, Poll, Report
 # The module, not the names: app.shared.post reaches this file through a blueprint
@@ -222,8 +223,9 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
                                   Post.user_id.not_in(blocked_person_ids),
                                   or_(Post.domain_id == None, Post.domain_id.not_in(blocked_domain_ids)),
                                   Post.community_id.not_in(blocked_community_ids)).\
-            join(Community, Community.id == Post.community_id).filter_by(ap_id=None)
-        post_query_criteria.append('c.ap_id is null')
+            join(Community, Community.id == Post.community_id).filter_by(ap_id=None).\
+            filter(on_domain(current_storefront(), Community))
+        post_query_criteria.append(f'c.ap_id is null AND {on_domain_sql(current_storefront())}')
     elif type == "Popular":
         posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
                                   Post.user_id.not_in(blocked_person_ids),
@@ -925,7 +927,8 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
                                   Post.user_id.not_in(blocked_person_ids),
                                   or_(Post.domain_id == None, Post.domain_id.not_in(blocked_domain_ids)),
                                   Post.community_id.not_in(blocked_community_ids)). \
-            join(Community, Community.id == Post.community_id).filter_by(ap_id=None)
+            join(Community, Community.id == Post.community_id).filter_by(ap_id=None).\
+            filter(on_domain(current_storefront(), Community))
     elif type == "Popular":
         posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
                                   Post.user_id.not_in(blocked_person_ids),

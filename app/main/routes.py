@@ -43,7 +43,8 @@ from app.main.util import sidebar_active_communities, sidebar_new_instances, sid
 from app.translation import LibreTranslateAPI
 from app.local_only import local_only_visible, local_only_visible_rss, without_local_only
 from app.visibility import listable_clause, modlog_local_only_clause, modlog_open_clause, visible_to_clause
-from app.storefront import storefront_cache_key, storefront_link, storefront_url
+from app.storefront import current_storefront, on_domain, on_domain_sql, storefront_cache_key, storefront_link, \
+    storefront_url
 from app.utils import etag_stamp
 from app.utils import render_template, ensure_rss_token, get_setting, request_etag_matches, return_304, blocked_domains, \
     ap_datetime, shorten_string, user_filters_home, \
@@ -167,10 +168,13 @@ def home_feed_source(view_filter: str):
                                            {'user_id': current_user.id}).scalars()
     elif view_filter == 'local':
         microblog_community = find_microblogging_community()
+        # Local is this domain's own communities: the local test (instance 1) and the domain test both hold, because
+        # a remote community has no domain either and on_domain_sql's default arm would take it
+        on_this_domain = on_domain_sql(current_storefront())
         if current_user.is_anonymous:
-            community_sql = f'c.private is false and c.instance_id = 1 and c.id != {microblog_community.id} {low_quality_filter}'
+            community_sql = f'c.private is false and c.instance_id = 1 AND {on_this_domain} and c.id != {microblog_community.id} {low_quality_filter}'
         else:
-            community_sql = f'(c.private is false OR c.id IN {private_communities}) and c.id != {microblog_community.id} AND c.instance_id = 1 {low_quality_filter}'
+            community_sql = f'(c.private is false OR c.id IN {private_communities}) and c.id != {microblog_community.id} AND c.instance_id = 1 AND {on_this_domain} {low_quality_filter}'
         community_ids = [0]
     elif view_filter == 'popular':
         if current_user.is_anonymous:
@@ -435,7 +439,7 @@ def list_communities():
         communities = communities.join(community_language).filter(community_language.c.language_id == language_id)
     
     if home_select == "local":
-        communities = communities.filter(Community.ap_id == None)
+        communities = communities.filter(Community.ap_id == None, on_domain(current_storefront(), Community))
     elif home_select == "remote":
         communities = communities.filter(Community.ap_id != None)
     
@@ -1507,7 +1511,7 @@ def index_rss(feed_type=None):
         community_ids = [-1]  # Special value to indicate 'All'
     elif feed_type == 'local' or feed_type == 'subscribed':
         community_ids = db.session.execute(
-            text(f'SELECT id FROM community as c WHERE c.private is false and c.instance_id = 1 {low_quality_filter}')).scalars()
+            text(f'SELECT id FROM community as c WHERE c.private is false and c.instance_id = 1 AND {on_domain_sql(current_storefront())} {low_quality_filter}')).scalars()
 
     community_ids = list(community_ids)
 
