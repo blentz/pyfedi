@@ -20,7 +20,7 @@ from furl import furl
 from app import db, celery, cache
 from app.discovery import sync as discovery_sync
 from app.visibility import visible_to_clause
-from app.local_only import domain_has_owners
+from app.local_only import domain_has_owners, user_local_only
 from app.activitypub.routes import process_inbox_request, process_delete_request, replay_inbox_request, \
     SIGNATURE_FAILURE_MESSAGES, UNVERIFIED_LOG_MESSAGES
 from app.activitypub.signature import post_request, default_context, RsaKeys
@@ -2667,7 +2667,12 @@ def admin_community_move(community_id, new_owner):
 
     form.new_owner.label.text = _('Set community owner to %(user_name)s', user_name=new_owner_user.link())
 
-    if form.validate_on_submit():
+    # Spec 3.4, as add_mod_to_community: the moved community federates, and a local-only account cannot own one
+    owner_refused = form.is_submitted() and form.new_owner.data and user_local_only(new_owner_user)
+    if owner_refused:
+        flash(_('That account is not visible to other servers, so it cannot own a community they follow.'), 'error')
+
+    if not owner_refused and form.validate_on_submit():
         form.new_url.data = slugify(form.new_url.data, separator='_').lower()
         old_name = community.link()
         community.ap_id = None

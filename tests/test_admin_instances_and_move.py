@@ -32,7 +32,8 @@ from sqlalchemy.exc import IntegrityError
 
 from app import cache, db
 from app.models import (BannedInstances, Community, CommunityMember, Instance,
-                        Site, User, utcnow)
+                        Site, SiteDomain, User, utcnow)
+from app.storefront import clear_domain_cache
 from tests.conftest import forget_login
 from tests.factories import (grant_permission, make_community,
                              make_community_member, make_instance, make_user)
@@ -484,6 +485,29 @@ class TestMovingACommunityHere:
         assert CommunityMember.query.filter_by(
             user_id=incoming.owner.id,
             community_id=incoming.community.id).count() == 0
+
+    def test_a_local_only_account_is_not_made_its_owner(self, env, incoming):
+        """F5 (spec 3.4): the moved community is the default domain's and federates, and a local-only account cannot
+        own or moderate one. Nothing is moved."""
+        onion = SiteDomain(domain='abc.onion', scheme='http', federates=False)
+        db.session.add(onion)
+        db.session.commit()
+        incoming.owner.site_domain_id = onion.id
+        db.session.commit()
+        clear_domain_cache()
+        try:
+            client = client_for(env, 'change instance settings')
+            response = self.move(env, client, incoming)
+            assert response.status_code == 200
+            assert 'cannot own a community' in response.get_data(as_text=True)
+            db.session.expire_all()
+            community = db.session.get(Community, incoming.community.id)
+            assert community.ap_id == 'incoming@remote.test'
+            assert community.user_id != incoming.owner.id
+            assert CommunityMember.query.filter_by(user_id=incoming.owner.id,
+                                                   community_id=community.id).count() == 0
+        finally:
+            clear_domain_cache()
 
     def test_a_url_that_is_taken_is_refused(self, env, incoming):
         make_community('taken')
