@@ -523,7 +523,8 @@ class SiteDomainForm(FlaskForm):
     domain = StringField(_l('Domain'), validators=[DataRequired(), Length(max=255)],
                          description=_l('A host name only: no scheme, no port.'))
     scheme = SelectField(_l('Scheme'), choices=[('https', 'https'), ('http', 'http')], default='https')
-    federates = BooleanField(_l('Federates'), default=True,
+    # Until per-domain federation ships (plan C) only the main domain federates: admin_domains refuses it here
+    federates = BooleanField(_l('Federates'), default=False,
                              description=_l('Fixed once the domain has accounts or communities.'))
     registration = SelectField(_l('Who may register'),
                                choices=[('anyone', _l('Anyone')), ('staff', _l('Staff only')),
