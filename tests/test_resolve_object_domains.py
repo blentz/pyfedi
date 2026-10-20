@@ -9,16 +9,11 @@ import app.activitypub.util as ap_util
 import app.community.util as community_util
 import app.feed.util as feed_util
 import app.user.utils as user_utils
-from app import db
 from app.api.alpha.utils.misc import get_resolve_object
-from app.models import SiteDomain, User
-from app.storefront import clear_domain_cache
-from tests.factories import make_instance, make_user
+from tests.factories import make_user
+from tests.two_domains import HELL, ONION, two_domains  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
-
-HELL = 'test.piefed.local'
-ONION = 'abc.onion'
 
 
 @pytest.fixture
@@ -35,27 +30,11 @@ def requests(monkeypatch):
 
 
 @pytest.fixture
-def two_bobs(app, db_session):
+def two_bobs(app, two_domains):
     """A `bob` on each domain. The onion's row goes straight in: creation refuses a name another domain holds."""
-    local = make_instance(HELL, software='piefed')
-    caller = make_user(local, 'caller', local=True)
-    hell = db.session.query(SiteDomain).filter_by(is_default=True).first()
-    if hell is None:
-        hell = SiteDomain(domain=HELL, scheme='https', is_default=True)
-        db.session.add(hell)
-    onion = SiteDomain(domain=ONION, scheme='http', federates=False)
-    db.session.add(onion)
-    db.session.commit()
-    clear_domain_cache()
-    hell_bob = make_user(local, 'bob', local=True)
-    hell_bob.site_domain_id = hell.id
-    hell_bob.ap_profile_id = f'https://{HELL}/u/bob'
-    onion_bob = User(user_name='bob', email='bob-onion@example.com', instance_id=local.id, verified=True,
-                     banned=False, site_domain_id=onion.id, ap_profile_id=f'http://{ONION}/u/bob')
-    db.session.add(onion_bob)
-    db.session.commit()
-    yield caller, hell_bob, onion_bob
-    clear_domain_cache()
+    hell, onion = two_domains.domains
+    caller = make_user(two_domains.instance, 'caller', local=True)
+    return caller, two_domains.local_user('bob', hell), two_domains.local_user('bob', onion)
 
 
 def _resolved(caller, query):
