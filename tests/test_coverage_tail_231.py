@@ -69,10 +69,10 @@ def a_post_in(community, author, title, **kwargs):
 
 
 class TestAPrivateCommunityInTheSiteFeed:
-    """`Community.private` is invite-only access control, not a content warning. The local
-    and popular feeds both express it as `c.private is false OR c.id IN (...)`, where the
-    list is the token holder's own memberships -- so these rows are about the OR, from both
-    sides.
+    """`Community.private` is invite-only access control, not a content warning. No RSS feed
+    lists a private community, whoever's token it carries: a token is a bearer secret that
+    people paste into third-party readers. The site feed's queries say `c.private is false`,
+    and `get_deduped_post_ids(private_memberships=False)` does not widen it by memberships.
     """
 
     @pytest.fixture
@@ -102,22 +102,19 @@ class TestAPrivateCommunityInTheSiteFeed:
 
     def test_a_token_holder_who_is_not_a_member_is_not_shown_it_either(self, seeded):
         """The authenticated arm with an EMPTY membership list. Holding a token widens
-        nothing by itself, which is the whole point of the `OR` being driven by
-        `community_membership_private` rather than by authentication."""
+        nothing by itself."""
         response = seeded.client.get(f'/index/feed/local?token={seeded.token}')
 
         assert response.status_code == 200
         assert 'anyone-may-read-this' in response.text
         assert 'members-only-secret' not in response.text
 
-    def test_a_member_with_a_token_is_shown_it(self, seeded):
-        """`:1390` and `:1415`: a non-empty `pc` takes the `tuple(pc + [0])` branch and the
-        widened SQL runs, and the post appears.
-
-        `index_rss` widens its own `community_ids` query by the token holder's private
-        memberships, and since as_rss_reader the posts come from `get_deduped_post_ids` read
-        as the token's account too, so the two agree. (Before, `get_deduped_post_ids` read the
-        session, anonymous for a reader, and its `c.private is false` made the widening inert.)
+    def test_a_member_with_a_token_is_not_shown_it_either(self, seeded):
+        """A membership does not widen it either. `index_rss` reads as the token's account
+        (as_rss_reader), so `get_deduped_post_ids` sees a member; `private_memberships=False`
+        is what keeps the post out. `index_rss` used to widen its own `community_ids` query
+        by the member's private communities, a path that only `get_deduped_post_ids`'s
+        session-only check made inert; it is gone.
         """
         make_community_member(seeded.reader, seeded.private)
         db.session.commit()
@@ -126,7 +123,7 @@ class TestAPrivateCommunityInTheSiteFeed:
 
         assert response.status_code == 200
         assert 'anyone-may-read-this' in response.text
-        assert 'members-only-secret' in response.text
+        assert 'members-only-secret' not in response.text
 
     def test_a_banned_member_is_not_shown_it(self, seeded):
         """`community_membership_private` requires `cm.is_banned is false`, so a
@@ -141,9 +138,10 @@ class TestAPrivateCommunityInTheSiteFeed:
         assert response.status_code == 200
         assert 'members-only-secret' not in response.text
 
-    def test_the_popular_feed_shows_it_to_the_member_only(self, seeded):
-        """The same rule, in the other feed type. Two spellings of one rule is two places to
-        get it wrong, so each is asserted rather than assumed to follow from the other."""
+    def test_the_popular_feed_withholds_it_from_both(self, seeded):
+        """The same pair of restrictions, in the other feed type. Two spellings of one rule
+        is two places to get it wrong, so each is asserted rather than assumed to follow
+        from the other."""
         seeded.private.show_popular = True
         seeded.public.show_popular = True
         db.session.commit()
@@ -154,21 +152,19 @@ class TestAPrivateCommunityInTheSiteFeed:
         member = seeded.client.get(f'/index/feed/popular?token={seeded.token}')
 
         assert 'members-only-secret' not in anonymous.text
-        assert 'members-only-secret' in member.text
+        assert 'members-only-secret' not in member.text
 
 
 class TestTheTuplePadding:
-    """`private_communities` is interpolated into the SQL as a Python tuple. A one-element
-    tuple is `(5,)`, which PostgreSQL rejects, so every arm pads with a `0` that matches no
-    community. These rows exist because the symptom of a missing pad is a 500 on the feed
-    of exactly the accounts the padding is for -- one private community is the common case,
-    not an edge one.
+    """`index_rss` used to interpolate the member's private communities into its SQL as a
+    padded Python tuple (a one-element `(5,)` is a PostgreSQL syntax error). That path is
+    gone; these rows keep the accounts it was for -- members of one or two private
+    communities -- getting a well-formed feed without the private posts.
     """
 
     def test_a_member_of_exactly_one_private_community_gets_a_feed(self, env):
-        """One membership is the case that needs the pad: without it the SQL reads
-        `c.id IN (5,)` and PostgreSQL refuses to parse it. The assertion is a 200, a
-        well-formed feed and the private post the member may read."""
+        """One membership: the case the padding was for. A 200, a well-formed feed, and not
+        the private post."""
         author = make_user(env.baseline.instance_local, 'padauthor', local=True)
         public = make_community('openhouse')
         public.instance_id = 1
@@ -183,12 +179,10 @@ class TestTheTuplePadding:
 
         assert response.status_code == 200
         assert 'ordinary-post' in response.text
-        assert 'padded-correctly' in response.text
+        assert 'padded-correctly' not in response.text
 
     def test_a_member_of_two_private_communities_also_gets_a_feed(self, env):
-        """The case that needs no padding, kept beside the one that does: a two-element
-        tuple renders legally on its own, so this row is what shows the pad is not what
-        makes the query work."""
+        """Two memberships, and neither private post listed."""
         author = make_user(env.baseline.instance_local, 'padauthor', local=True)
         public = make_community('openhouse')
         public.instance_id = 1
@@ -206,6 +200,7 @@ class TestTheTuplePadding:
 
         assert response.status_code == 200
         assert 'ordinary-post' in response.text
+        assert 'first-secret' not in response.text and 'second-secret' not in response.text
 
 
 # --------------------------------------------------------------------------

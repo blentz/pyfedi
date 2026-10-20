@@ -21,7 +21,8 @@ from app import cache, db
 from app.nntp.nntpserver import NNTPArticleNotFound
 from app.nntp.server import CommunityArticleIndex, IndexArticleDict, PieFedNNTPServer, _make_message_id, _tl
 from app.constants import POST_TYPE_EVENT
-from app.models import CommunityMember, Event, ModLog, Post, PostReply, Site, Tag, Topic, UserBlock, utcnow
+from app.models import Community, CommunityMember, Event, Feed, ModLog, Post, PostReply, Site, Tag, Topic, UserBlock, \
+    utcnow
 import app.post.util as post_util
 from app.post.util import convert_archived_replies_to_tree
 from app.utils import archive_post, as_rss_reader
@@ -449,6 +450,21 @@ def test_every_rss_view_reads_a_token_as_its_user(app, every_feed_reader, path):
     assert response.status_code == 200, path
     assert listed <= _titles(response) and not left_out & _titles(response), (path, _titles(response))
     assert _client(app).get('/f/privfeed.rss').status_code == 404
+
+
+@pytest.mark.parametrize('path', ['/index/feed/local', '/index/feed/popular', '/index/feed/all',
+                                  '/index/feed/subscribed', '/f/lofeed.rss'])
+def test_a_members_token_lists_no_private_community_post(app, every_feed_reader, path):
+    """A token is a bearer secret, pasted into third-party readers: no RSS feed lists a private community, whoever's
+    token it carries. alice is a member of `privy`, which every one of these feeds would otherwise reach."""
+    privy = Community.query.filter_by(name='privy').one()
+    privy.show_popular = privy.show_all = True
+    privy.instance_id = every_feed_reader.world.clearnet.instance_id
+    make_feed_item(Feed.query.filter_by(machine_name='lofeed').one(), privy)
+    db.session.commit()
+    response = _client(app).get(path, query_string={'token': 'alice-rss-token'})
+    assert response.status_code == 200, path
+    assert 'PUBLICPOST' in _titles(response) and 'PRIVATEPOST' not in _titles(response), path
 
 
 def test_as_rss_reader_puts_the_session_user_back_afterwards(app, scene):
