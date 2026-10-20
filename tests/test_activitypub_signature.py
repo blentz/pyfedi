@@ -710,14 +710,17 @@ def test_a_document_signed_with_an_unknown_type_is_a_format_error(app):
         LDSignature.verify_signature(document, 'key')
 
 
-def test_the_default_context_grows_when_the_site_asks_for_the_full_one(app):
+def test_the_default_context_grows_when_the_site_asks_for_the_full_one(app, monkeypatch):
+    """The flag is set through monkeypatch so it is restored afterwards. The `app` fixture is session-scoped, so a
+    plain assignment left FULL_AP_CONTEXT on for every later module on the same worker, and the byte snapshots of
+    test_local_only_invisible.py failed whenever xdist scheduled that module after this one."""
     from app.activitypub.signature import default_context
 
-    app.config['FULL_AP_CONTEXT'] = False
+    monkeypatch.setitem(app.config, 'FULL_AP_CONTEXT', False)
     assert default_context() == ['https://www.w3.org/ns/activitystreams',
                                  'https://w3id.org/security/v1']
 
-    app.config['FULL_AP_CONTEXT'] = True
+    monkeypatch.setitem(app.config, 'FULL_AP_CONTEXT', True)
     full = default_context()
     assert full[:2] == ['https://www.w3.org/ns/activitystreams',
                         'https://w3id.org/security/v1']
