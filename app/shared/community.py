@@ -301,12 +301,14 @@ def make_community(input, src, auth=None, uploaded_icon_file=None, uploaded_bann
     home = user.home_domain()
     base_url = domain_base_url(home)
     ap_profile_id = base_url + '/u/' + name.lower()
-    existing_user = User.query.filter_by(ap_profile_id=ap_profile_id).first()
+    existing_user = User.query.filter_by(ap_profile_id=ap_profile_id).first() or \
+        User.query.filter(func.lower(User.user_name) == name.lower(), User.ap_id.is_(None)).first()   # on any domain
     if existing_user:
         raise Exception('A User with that name already exists, so it cannot be used for a Community')
     # test community with this name doesn't already exist (it'll be reinforced by the DB, but check first anyway)
     ap_profile_id = base_url + '/c/' + name.lower()
-    existing_community = db.session.query(Community).filter_by(ap_profile_id=ap_profile_id).first()
+    existing_community = db.session.query(Community).filter_by(ap_profile_id=ap_profile_id).first() or \
+        db.session.query(Community).filter(func.lower(Community.name) == name.lower(), Community.ap_id.is_(None)).first()
     if existing_community:
         raise Exception('community with that name already exists')
 

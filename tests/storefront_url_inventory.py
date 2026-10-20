@@ -31,7 +31,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'community_following': 1,
         'community_moderators_route': 1,
         'community_outbox': 1,
-        'community_profile': 2,
+        'community_profile': 1,
         'feed_followers': 1,
         'feed_moderators_route': 1,
         'feed_profile': 5,

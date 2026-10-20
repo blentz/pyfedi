@@ -2390,6 +2390,9 @@ def test_make_community_genuine_duplicate_raises_capital_c_message_and_rolls_bac
                     return None
             return _Result()
 
+        def filter(self, *criteria):   # the by-name check, which looks across every domain
+            return self.filter_by()
+
     def _query_stub(*args, **kwargs):
         if args and args[0] is Community:
             return _AlwaysEmptyCommunityFilter()
