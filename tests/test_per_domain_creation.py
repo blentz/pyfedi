@@ -302,17 +302,26 @@ def test_an_admin_added_user_cannot_take_a_community_name(app, db_session, domai
 AP = {'Accept': 'application/activity+json'}
 
 
-def test_an_onion_home_community_and_user_resolve_by_name(app, creators, domains):
+def test_a_storefront_home_community_and_user_resolve_by_name(app, creators, domains):
+    """A community and an account owned by a domain other than the default resolve by their local name. On a
+    federating storefront, because the onion's are local-only and answer an ActivityPub request 404 (plan B task 8,
+    tests/test_local_only_invisible.py)."""
     founder, other = creators
-    _create(app, other, 'abc.onion', url='hidden')
-    other.ap_profile_id = 'http://abc.onion/u/onionite'
+    shop = SiteDomain(domain='shop.example', federates=True)
+    db.session.add(shop)
+    db.session.commit()
+    clear_domain_cache()
+    other.site_domain_id = shop.id
+    db.session.commit()
+    assert _create(app, other, 'shop.example', url='hidden').site_domain_id == shop.id
+    other.ap_profile_id = 'https://shop.example/u/onionite'
     db.session.commit()
     client = app.test_client()
-    response = client.get('/c/hidden', headers={**AP, 'Host': 'abc.onion'})
+    response = client.get('/c/hidden', headers={**AP, 'Host': 'shop.example'})
     assert response.status_code == 200
     assert response.json['preferredUsername'] == 'hidden'
-    assert client.get('/c/Hidden', headers={**AP, 'Host': 'abc.onion'}).status_code == 200
-    assert client.get('/u/onionite', headers={**AP, 'Host': 'abc.onion'}).status_code == 200
+    assert client.get('/c/Hidden', headers={**AP, 'Host': 'shop.example'}).status_code == 200
+    assert client.get('/u/onionite', headers={**AP, 'Host': 'shop.example'}).status_code == 200
 
 
 def test_a_default_domain_community_document_is_unchanged(app, creators, domains):
