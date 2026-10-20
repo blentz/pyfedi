@@ -234,7 +234,8 @@ def show_topic_rss(topic_path):
         community_ids = db.session.execute(
             text('SELECT id FROM community WHERE banned is false AND private is false AND topic_id IN :topic_ids'),
             {'topic_ids': tuple(topic_ids)}).scalars()
-        post_ids = get_deduped_post_ids('', list(community_ids), 'new', show_local_only=local_only_visible_rss())
+        post_ids = get_deduped_post_ids('', list(community_ids), 'new', show_local_only=local_only_visible_rss(),
+                                        private_memberships=False)
         post_ids = paginate_post_ids(post_ids, 0, page_length=100)
         posts = post_ids_to_models(post_ids, 'new')
 

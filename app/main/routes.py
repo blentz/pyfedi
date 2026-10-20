@@ -1478,16 +1478,6 @@ def index_rss(feed_type=None):
 
     community_ids = [-1]
     low_quality_filter = 'AND c.low_quality is false' if current_user_is_authenticated and user.hide_low_quality else ''
-    if current_user_is_authenticated:
-        pc = community_membership_private(user.id)
-        if len(pc) == 0:  # tuples must have at least 2 elements, I think?
-            private_communities = tuple([0, 0])
-        else:
-            private_communities = tuple(pc + [0])
-    else:
-        private_communities = ()
-    if len(private_communities) == 0:
-        private_communities = tuple([0, 0])
 
     if feed_type is None:
         feed_type = 'local'
@@ -1512,22 +1502,19 @@ def index_rss(feed_type=None):
                 text('SELECT id FROM community as c WHERE c.show_popular is true and c.private is false AND c.low_quality is false')).scalars()
         else:
             community_ids = db.session.execute(
-                text(f'SELECT id FROM community as c WHERE (c.private is false OR c.id IN {private_communities}) AND c.show_popular is true {low_quality_filter}')).scalars()
+                text(f'SELECT id FROM community as c WHERE c.private is false AND c.show_popular is true {low_quality_filter}')).scalars()
     elif feed_type == 'all':
         community_ids = [-1]  # Special value to indicate 'All'
     elif feed_type == 'local' or feed_type == 'subscribed':
-        if not current_user_is_authenticated:
-            community_ids = db.session.execute(
-                text(f'SELECT id FROM community as c WHERE c.private is false and c.instance_id = 1 {low_quality_filter}')).scalars()
-        else:
-            community_ids = db.session.execute(
-                text(f'SELECT id FROM community as c WHERE (c.private is false OR c.id IN {private_communities}) AND c.instance_id = 1 {low_quality_filter}')).scalars()
+        community_ids = db.session.execute(
+            text(f'SELECT id FROM community as c WHERE c.private is false and c.instance_id = 1 {low_quality_filter}')).scalars()
 
     community_ids = list(community_ids)
 
     post_ids = get_deduped_post_ids('', community_ids, 'new',   # '': a feed is never paged, so no result to keep
                                     include_following=feed_type == 'subscribed' and current_user_is_authenticated,
-                                    show_local_only=current_user_is_authenticated)   # the token's answer
+                                    show_local_only=current_user_is_authenticated,   # the token's answer
+                                    private_memberships=False)   # a token is a bearer secret: see get_deduped_post_ids
     post_ids = paginate_post_ids(post_ids, 0, page_length=50)
     posts = post_ids_to_models(post_ids, 'new')
 

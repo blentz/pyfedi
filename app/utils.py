@@ -5793,7 +5793,7 @@ JOINED_SERVER_SQL = """(EXISTS (SELECT 1 FROM server_view_member svm
 
 
 def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, hashtag: str = '', include_following=False, community_sql: str = None, newer_than=None,
-                         show_local_only: bool | None = None) -> List[int]:
+                         show_local_only: bool | None = None, private_memberships: bool = True) -> List[int]:
     joined_servers = include_following and current_user.is_authenticated and joined_server_views(current_user.id)
     if not community_sql and (community_ids is None or len(community_ids) == 0):
         if not joined_servers:
@@ -5868,7 +5868,10 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
     # nothing": it means this viewer has no exceptions, so the restriction must
     # still be appended. Kept as one unconditional site above the
     # anonymous/authenticated split so no branch can be added that lacks it.
-    if current_user.is_authenticated and (private_community_ids := community_membership_private(current_user.id)):
+    # `private_memberships` False (the RSS views) leaves the restriction unwidened for members too: a feed's ?token= is
+    # a bearer secret that people paste into third-party readers, so no feed lists a private community.
+    if private_memberships and current_user.is_authenticated and \
+            (private_community_ids := community_membership_private(current_user.id)):
         post_id_where.append('(c.private is false OR c.id IN :private_community_ids) ')
         params['private_community_ids'] = tuple(private_community_ids)
     else:
