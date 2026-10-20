@@ -119,7 +119,7 @@ def test_a_hashtag_narrows_a_listing_to_posts_carrying_it(app, db_session, redis
 DEFED_DOMAIN = 'faraway.test'
 
 
-def test_a_defederation_answer_that_is_json_but_not_an_object_is_a_failed_fetch(app, http_mock):
+def test_a_defederation_answer_that_is_json_but_not_an_object_is_a_failed_fetch(db_session, http_mock):
     """A peer answering `[]` where an object is expected is an answer this cannot read; None keeps the
     subscription's existing bans rather than clearing them."""
     from app.utils import instance_software

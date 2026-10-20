@@ -48,6 +48,9 @@ import time
 
 import pytest
 
+from app import db
+from tests.conftest import _row_counts
+
 from tests.fuzz.targets import REGISTRY, Target
 from tests.fuzz.targets._target import REFERENCE_WORK_MS, hold_to_budget, machine_slowdown, reference_work
 
@@ -138,7 +141,13 @@ def test_corpus_input_still_satisfies_its_property(target, path, request):
         # session, so requesting it is all a needs_app case has to do. It is
         # requested only here, so the sanitizer cases do not need a database.
         request.getfixturevalue('app')
+        rows_before = _row_counts(db)
     run_case(target, path.read_bytes())
+    if target.needs_app:   # the suite-wide gate cannot see a fixture requested here, so the case checks itself
+        db.session.rollback()
+        rows_after = _row_counts(db)
+        assert rows_after == rows_before, {name: count - rows_before.get(name, 0)
+                                           for name, count in rows_after.items() if count != rows_before.get(name, 0)}
 
 
 @pytest.mark.parametrize('case_id', sorted(KNOWN_UNFIXED))

@@ -26,7 +26,7 @@ def _two_keypairs():
 
 
 @pytest.fixture
-def signing_site(app):
+def signing_site(db_session):
     site = db.session.get(Site, 1) or make_site()
     site.private_key, _ = a_keypair()
     db.session.commit()
@@ -195,7 +195,7 @@ class TestFetchActorKey:
         http_mock.get(OWNER).mock(side_effect=httpx.ConnectError('down'))
         assert _fetch_actor_key(OWNER) is None
 
-    def test_no_site_key_is_none(self, app):
+    def test_no_site_key_is_none(self, db_session):
         site = db.session.get(Site, 1) or make_site()
         site.private_key = None
         db.session.commit()
@@ -231,7 +231,7 @@ class TestThroughTheInbox:
         db.session.refresh(signing_peer)
         assert signing_peer.public_key == public_key
 
-    def test_a_local_actor_is_never_refetched(self, app):
+    def test_a_local_actor_is_never_refetched(self, app, db_session):
         """verify_with_key_refresh passes owner_url=None for a local actor."""
         (private_key, _), (_, other) = _two_keypairs()
         local = make_user(make_instance(app.config['SERVER_NAME'], software='piefed'), 'bob', local=True)

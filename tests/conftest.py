@@ -429,6 +429,47 @@ def db_session(app):
     db.session.close()
 
 
+def _row_counts(db) -> dict:
+    """Committed rows per table, read on a connection of its own so the test's open session does not count."""
+    tables = [table.name for table in db.metadata.sorted_tables]
+    sql = ' UNION ALL '.join(f'SELECT \'{name}\', count(*) FROM "{name}"' for name in tables)
+    with db.engine.connect() as connection:
+        return {name: count for name, count in connection.exec_driver_sql(sql)}
+
+
+@pytest.fixture(autouse=True)
+def _app_tests_leave_no_trace(request):
+    """A test that uses the session `app` without `db_session` leaves no rows and no app.config change behind.
+
+    Nothing else cleans up after such a test: db_session's teardown is what deletes rows, and the `app` fixture
+    lives for the whole session, so a row (a site_domain, an instance) or a config value it leaves is read by
+    whichever test runs next on that worker. Change config with monkeypatch.setitem, and add rows only under
+    db_session. A test that requests `app` only through getfixturevalue is not checked here."""
+    if 'app' not in request.fixturenames or 'db_session' in request.fixturenames:
+        yield
+        return
+    from app import db
+    application = request.getfixturevalue('app')
+    config_before = dict(application.config)
+    rows_before = _row_counts(db)
+    yield
+    changed = sorted(key for key in config_before.keys() | application.config.keys()
+                     if config_before.get(key, _ABSENT) != application.config.get(key, _ABSENT))
+    db.session.rollback()
+    left = {name: count - rows_before.get(name, 0) for name, count in _row_counts(db).items()
+            if count != rows_before.get(name, 0)}
+    problems = []
+    if changed:
+        problems.append(f'changed app.config {changed} (use monkeypatch.setitem)')
+    if left:
+        problems.append(f'left rows behind {left} (use db_session)')
+    if problems:
+        pytest.fail(f'{request.node.nodeid} ' + '; '.join(problems), pytrace=False)
+
+
+_ABSENT = object()
+
+
 @pytest.fixture
 def site(db_session):
     """The Site row (id 1) that before_request (registered by the app factory)
