@@ -19,7 +19,7 @@ from app.tag import bp
 # The module, not the name: app.topic.routes reaches this file through
 # app.activitypub before get_all_child_topic_ids is defined (import cycle: topic.routes)
 import app.topic.routes as topic_routes
-from app.local_only import without_local_only
+from app.local_only import local_only_visible_rss, without_local_only
 from app.visibility import listable_clause
 from app.utils import render_template, permission_required, user_filters_posts, blocked_or_banned_instances, \
     blocked_users, \
@@ -144,7 +144,7 @@ def show_tag_rss(tag):
             join(post_tag, post_tag.c.post_id == Post.id).filter(post_tag.c.tag_id == tag.id). \
             filter(Community.banned == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
                    Post.private == False, listable_clause(Post))
-        posts = without_local_only(posts, Post)
+        posts = without_local_only(posts, Post, visible=local_only_visible_rss())
 
         if current_user.is_anonymous or current_user.ignore_bots == 1:
             posts = posts.filter(Post.from_bot == False)
@@ -329,9 +329,9 @@ def tag_cloud(type, category_id: int):
         filter(Post.community_id.in_(community_ids), Post.deleted == False,
                Post.status > POST_STATUS_REVIEWING, Post.private == False,
                listable_clause(Post), Community.banned == False). \
-        filter(readable_communities). \
-        group_by(Tag.id)
-
+        filter(readable_communities)
+    tags_query = without_local_only(tags_query, Post).group_by(Tag.id)   # names and counts alike (spec §3.4)
+    
     tag_list_results = tags_query.paginate(page=page, per_page=50, error_out=False)
     next_url = url_for('tag.tag_cloud', type=type, category_id=category_id, view='list',
                         page=tag_list_results.next_num) if tag_list_results.has_next else None
@@ -370,8 +370,9 @@ def tag_cloud(type, category_id: int):
                 listable_clause(Post),
                 Community.banned == False,
                 readable_communities
-            ).subquery()
-
+            )
+            posts_with_tag1 = without_local_only(posts_with_tag1, Post).subquery()
+            
             # Find other tags that appear in the same posts
             cooccurrence_counts = db.session.query(
                 post_tag.c.tag_id.label('tag2_id'),

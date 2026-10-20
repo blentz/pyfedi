@@ -5,7 +5,10 @@ API. Each leaves local-only posts and comments out: one asked for by its own URL
 list omits it. A logged-in user sees it everywhere, and an RSS reader with a member's `?token=` sees it in feeds.
 """
 import glob
+import json
 import os
+import re
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -17,9 +20,11 @@ from app import cache, db
 from app.nntp.nntpserver import NNTPArticleNotFound
 from app.nntp.server import CommunityArticleIndex, IndexArticleDict, PieFedNNTPServer, _make_message_id, _tl
 from app.constants import POST_TYPE_EVENT
-from app.models import Event, ModLog, Post, PostReply, Site, Tag, Topic
+from app.models import Event, ModLog, Post, PostReply, Site, Tag, Topic, utcnow
+from app.post.util import convert_archived_replies_to_tree
 from app.utils import archive_post
-from app.visibility import can_view
+from app.visibility import RestrictedReply, can_view, mark_restricted
+from tests.conftest import forget_login
 from tests.factories import bearer, make_domain, make_feed_item, make_local_feed
 from tests.test_community_lifecycle import login
 from tests.test_local_only_invisible import _post, _reply, world  # noqa: F401 -- world is a fixture
@@ -49,7 +54,9 @@ def scene(app, world, monkeypatch):
     topic = Topic(name='Things', machine_name='things')
     db.session.add(topic)
     tag = Tag(name='lotag', display_as='lotag')
-    db.session.add(tag)
+    shared_tag = Tag(name='xtag', display_as='xtag')
+    hidden_tag = Tag(name='hiddentag', display_as='hiddentag')
+    db.session.add_all([tag, shared_tag, hidden_tag])
     domain = make_domain('example.com')
     db.session.commit()
     world.clearnet.topic_id = topic.id
@@ -65,8 +72,9 @@ def scene(app, world, monkeypatch):
         _content(post, text)
         post.url = f'https://example.com/{text.lower()}'
         post.domain_id = domain.id
-        post.tags.append(tag)
+        post.tags.extend([tag, shared_tag])
         post.indexable = True
+    hidden.tags.append(hidden_tag)
     ordinary = _reply(app, public, world.alice)
     hidden_reply = _reply(app, public, world.alice, local_only=True)
     _content(ordinary, 'PUBLICREPLY')
@@ -81,9 +89,7 @@ def scene(app, world, monkeypatch):
 
 
 def _client(app):
-    """A client whose first request finds its own user: the session-scoped app context keeps flask-login's
-    `g._login_user` from the request before (tests/test_admin_instances_and_move.py)."""
-    g.pop('_login_user', None)
+    forget_login()
     return app.test_client()
 
 
@@ -111,7 +117,7 @@ def test_an_anonymous_visitor_gets_404_for_a_local_only_post_page(app, scene):
     assert _anon(app, f'/post/{scene.public.id}').status_code == 200
 
 
-@pytest.mark.parametrize('suffix', ['embed', 'embed_code', 'oembed', 'cross_posts', 'options_menu',
+@pytest.mark.parametrize('suffix', ['embed', 'embed_code', 'oembed', 'cross_posts', 'options_menu', 'share_mastodon',
                                     'lazy_replies/abc'])
 def test_the_embeds_and_fragments_of_a_local_only_post_are_404(app, scene, suffix):
     scene.hidden.cross_posts = [scene.public.id]
@@ -193,6 +199,45 @@ def test_anonymous_listings_omit_local_only_content(app, scene, path):
         assert 'HIDDENPOST' not in _text(anonymous) and 'HIDDENPOST' in _text(member)
 
 
+@pytest.mark.parametrize('path', ['/home/new/all', '/c/clearnet', '/u/alice', '/tag/lotag',
+                                  '/search?q=body&search_for=posts'])
+def test_an_rss_token_does_not_unlock_an_html_list(app, scene, path):
+    response = _anon(app, f"{path}{'&' if '?' in path else '?'}token=alice-rss-token")
+    assert response.status_code == 200, path
+    assert 'HIDDENPOST' not in _text(response), path
+
+
+def _cloud(response):
+    page = _text(response)
+    tags = {tag['text']: tag for tag in json.loads(re.search(r'var tags = (.*?);\n', page).group(1))}
+    relationships = json.loads(re.search(r'var tagRelationships = (.*?);\n', page).group(1))
+    return tags, relationships
+
+
+def test_the_tag_cloud_leaves_local_only_posts_out_for_an_anonymous_visitor(app, scene):
+    path = f'/tags/cloud/community/{scene.world.clearnet.id}'
+    tags, relationships = _cloud(_anon(app, path))
+    assert 'hiddentag' not in tags
+    assert tags['lotag']['numPosts'] == 1
+    assert relationships[str(tags['lotag']['id'])] == {str(tags['xtag']['id']): 1}
+    tags, relationships = _cloud(_member(app, scene.alice, path))
+    assert 'hiddentag' in tags and tags['lotag']['numPosts'] == 2
+    assert relationships[str(tags['lotag']['id'])][str(tags['xtag']['id'])] == 2
+
+
+@pytest.mark.parametrize('path', ['/home/new/all', '/c/clearnet'])
+def test_upcoming_events_name_no_local_only_event_to_an_anonymous_visitor(app, scene, path, monkeypatch):
+    monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())   # the home sidebar is memoized
+    soon = utcnow() + timedelta(days=1)
+    for post in (scene.public, scene.hidden):
+        post.type = POST_TYPE_EVENT
+        db.session.add(Event(post_id=post.id, start=soon, end=soon))
+    scene.hidden.title = 'HIDDENEVENT'   # the listing shows only HIDDENPOST's teaser, never this title
+    db.session.commit()
+    assert 'HIDDENEVENT' in _text(_member(app, scene.alice, path))
+    assert 'HIDDENEVENT' not in _text(_anon(app, path))
+
+
 def test_the_share_page_names_no_community_for_a_link_only_a_local_only_post_carries(app, scene):
     path = '/share?url=https://example.com/hiddenpost'
     assert 'already been shared' not in _text(_anon(app, path))
@@ -235,6 +280,33 @@ def test_the_modlog_names_no_local_only_post_to_an_anonymous_visitor(app, scene)
     assert 'HIDDENPOST' in member and 'HIDDENREPLY' in member
 
 
+def _ids(value, keys=('post_id', 'comment_id', 'id')):
+    if isinstance(value, dict):
+        return {item for key, inner in value.items()
+                for item in ([(key, inner)] if key in keys else []) + list(_ids(inner, keys))}
+    if isinstance(value, list):
+        return {item for inner in value for item in _ids(inner, keys)}
+    return set()
+
+
+def test_the_api_modlog_leaves_entries_about_local_only_content_out_for_an_anonymous_caller(app, scene):
+    db.session.add_all([ModLog(user_id=scene.alice.id, community_id=scene.world.clearnet.id, type='mod',
+                               action='lock_post', post_id=post.id, link_text=post.title, public=True)
+                        for post in (scene.public, scene.hidden)])
+    db.session.add(ModLog(user_id=scene.alice.id, community_id=scene.world.clearnet.id, type='mod',
+                          action='delete_post_reply', reply_id=scene.hidden_reply.id, reason='HIDDENREASON',
+                          public=True))
+    db.session.commit()
+    anonymous = _api(app, 'modlog')
+    assert anonymous.status_code == 200
+    ids = _ids(anonymous.json)
+    assert ('post_id', scene.public.id) in ids
+    assert ('post_id', scene.hidden.id) not in ids and ('comment_id', scene.hidden_reply.id) not in ids
+    assert 'HIDDENREASON' not in anonymous.get_data(as_text=True)
+    member = _api(app, 'modlog', scene.alice)
+    assert {('post_id', scene.hidden.id), ('comment_id', scene.hidden_reply.id)} <= _ids(member.json)
+
+
 # RSS: anonymous readers never, a member's token always
 
 RSS_PATHS = ['/index/feed/all', '/community/clearnet/feed', '/u/alice/feed', '/tag/lotag/feed', '/d/{domain}/feed',
@@ -253,6 +325,22 @@ def test_rss_without_a_token_omits_local_only_posts_and_with_one_includes_them(a
     assert 'HIDDENPOST' in _text(with_token), path
     wrong_token = _client(app).get(path, query_string={'token': 'not-a-token'})
     assert 'HIDDENPOST' not in _text(wrong_token), path
+
+
+@pytest.mark.parametrize('path', RSS_PATHS)
+def test_a_logged_in_session_does_not_unlock_rss(app, scene, path):
+    path = path.format(domain=scene.domain.id)
+    response = _member(app, scene.alice, path)
+    assert response.status_code == 200, path
+    assert 'PUBLICPOST' in _text(response) and 'HIDDENPOST' not in _text(response), path
+
+
+@pytest.mark.parametrize('path', ['/community/clearnet/feed', '/u/alice/feed', '/topic/things.rss'])
+def test_a_cached_feed_read_by_a_logged_in_reader_is_not_replayed_to_an_anonymous_one(app, scene, path,
+                                                                                     monkeypatch):
+    monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
+    assert _member(app, scene.alice, path).status_code == 200
+    assert 'HIDDENPOST' not in _text(_client(app).get(path))
 
 
 @pytest.mark.parametrize('path', ['/community/clearnet/feed', '/u/alice/feed', '/topic/things.rss'])
@@ -412,25 +500,81 @@ def test_local_only_visible_and_without_local_only(app, scene):
         assert not local_only.local_only_visible()
         assert local_only.without_local_only(Post.query, Post).filter(Post.id == scene.hidden.id).first() is None
         assert local_only.without_local_only(Post.query, Post, visible=True).filter(Post.id == scene.hidden.id).first()
+        assert not local_only.local_only_visible_rss()
     with app.test_request_context('/?token=alice-rss-token'):
-        assert local_only.local_only_visible()
+        assert not local_only.local_only_visible()   # a token is for RSS views only
         assert local_only.without_local_only(PostReply.query, PostReply).filter(
-            PostReply.id == scene.hidden_reply.id).first()
+            PostReply.id == scene.hidden_reply.id).first() is None
+        assert local_only.local_only_visible_rss()
 
 
 ARCHIVED_DIR = 'app/static/media/archived'
 
 
-def test_an_archived_thread_keeps_a_local_only_reply_from_an_anonymous_reader(app, scene):
+@pytest.fixture
+def archive_dir():
+    """The archive files a test writes, removed afterwards."""
     written = set(glob.glob(f'{ARCHIVED_DIR}/*'))
-    try:
-        archive_post(scene.public.id, None)
-        db.session.expire_all()
-        assert db.session.get(Post, scene.public.id).archived
-        anonymous = _text(_anon(app, f'/post/{scene.public.id}'))
-        assert 'PUBLICREPLY' in anonymous and 'HIDDENREPLY' not in anonymous
-        assert 'HIDDENREPLY' in _text(_member(app, scene.alice, f'/post/{scene.public.id}'))
-    finally:
-        for path in set(glob.glob(f'{ARCHIVED_DIR}/*')) - written:
-            if os.path.isfile(path):
-                os.unlink(path)
+    yield lambda: set(glob.glob(f'{ARCHIVED_DIR}/*')) - written
+    for path in set(glob.glob(f'{ARCHIVED_DIR}/*')) - written:
+        if os.path.isfile(path):
+            os.unlink(path)
+
+
+def test_a_thread_holding_a_local_only_reply_is_not_archived(app, scene, archive_dir):
+    """An archive is a public file (S3_PUBLIC_URL or app/static/media/archived): it would publish the reply."""
+    archive_post(scene.public.id, None)
+    db.session.expire_all()
+    assert db.session.get(Post, scene.public.id).archived is None
+    assert archive_dir() == set()
+    assert db.session.get(PostReply, scene.hidden_reply.id).body == 'HIDDENREPLY body'
+    assert db.session.get(PostReply, scene.ordinary.id).body == 'PUBLICREPLY body'
+
+
+def test_a_local_only_post_is_not_archived(app, scene, archive_dir):
+    scene.hidden.body = 'HIDDENPOST ' * 30   # long enough to be archived
+    db.session.commit()
+    archive_post(scene.hidden.id, None)
+    db.session.expire_all()
+    assert db.session.get(Post, scene.hidden.id).archived is None
+    assert archive_dir() == set()
+    assert db.session.get(Post, scene.hidden.id).body.startswith('HIDDENPOST')
+
+
+def test_a_thread_with_no_local_only_content_is_still_archived(app, scene, archive_dir):
+    db.session.delete(scene.hidden_reply)
+    scene.public.reply_count = 1
+    db.session.commit()
+    archive_post(scene.public.id, None)
+    db.session.expire_all()
+    assert db.session.get(Post, scene.public.id).archived
+    assert archive_dir()
+    assert 'PUBLICREPLY' in _text(_anon(app, f'/post/{scene.public.id}'))
+
+
+def test_an_archive_from_before_local_only_content_works_out_which_replies_are(app, scene):
+    """An archive written before 923e66349 has no 'local_only' key. Each reply is worked out as PostReply.new would,
+    and one that cannot be is treated as local-only."""
+    def entry(reply_id, author, replies=(), **extra):
+        return {'id': reply_id, 'body': f'body {reply_id}', 'author_id': author, 'replies': list(replies), **extra}
+    world = scene.world
+    archived = [
+        entry(901, world.alice.id, [entry(902, world.alice.id)]),           # hell.cloud: open
+        entry(903, world.onionite.id, [entry(904, world.alice.id)]),        # local-only author; a reply under it
+        entry(905, 999_999),                                                 # no such author
+        entry(906, None),                                                    # no author at all
+        entry(907, world.alice.id, [entry(908, world.alice.id)], visibility='followers'),   # a stub's child
+        entry(909, world.onionite.id, local_only=False),                     # the key, when present, is the answer
+    ]
+    tree = mark_restricted(convert_archived_replies_to_tree(archived, scene.public), None)
+
+    def shown(entries):
+        found = {}
+        for item in entries:
+            found[item['comment'].id] = not isinstance(item['comment'], RestrictedReply)
+            found.update(shown(item['replies']))
+        return found
+    assert shown(tree) == {901: True, 902: True, 903: False, 904: False, 905: False, 906: False, 907: False,
+                           908: False, 909: True}
+    member = mark_restricted(convert_archived_replies_to_tree(archived, scene.public), scene.alice.id)
+    assert shown(member)[903] and shown(member)[904]
