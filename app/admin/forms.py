@@ -524,7 +524,7 @@ class SiteDomainForm(FlaskForm):
                          description=_l('A host name only: no scheme, no port.'))
     scheme = SelectField(_l('Scheme'), choices=[('https', 'https'), ('http', 'http')], default='https')
     federates = BooleanField(_l('Federates'), default=True,
-                             description=_l('Federation per domain takes effect in a later release.'))
+                             description=_l('Fixed once the domain has accounts or communities.'))
     registration = SelectField(_l('Who may register'),
                                choices=[('anyone', _l('Anyone')), ('staff', _l('Staff only')),
                                         ('admin', _l('Admins only'))], default='anyone',

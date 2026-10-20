@@ -45,6 +45,7 @@ from app.constants import SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPT
 import app as app_pkg
 # The module, not the name: app.storefront reads SiteDomain from this module (import cycle: storefront)
 import app.storefront as storefront
+import app.local_only as local_only
 from app.relays import current_relay_id
 
 
@@ -5518,6 +5519,15 @@ class SiteDomain(db.Model):
     def _set_is_onion(self, key, domain):
         self.is_onion = domain.endswith('.onion')
         return domain
+
+    @validates('federates')
+    def _lock_federates(self, key, federates):
+        # Set on a new row (no id) or while loading: free. Once the domain owns accounts or communities the
+        # setting is fixed, because local-only content must never have federated and federated content must stay so.
+        if self.id is not None and self.federates is not None and federates != self.federates \
+                and local_only.domain_has_owners(self.id):
+            raise ValueError('A domain with accounts or communities cannot change whether it federates.')
+        return federates
 
 
 # --- Feeds Models ---

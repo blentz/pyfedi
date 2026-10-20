@@ -20,6 +20,7 @@ from furl import furl
 from app import db, celery, cache
 from app.discovery import sync as discovery_sync
 from app.visibility import visible_to_clause
+from app.local_only import domain_has_owners
 from app.activitypub.routes import process_inbox_request, process_delete_request, replay_inbox_request, \
     SIGNATURE_FAILURE_MESSAGES, UNVERIFIED_LOG_MESSAGES
 from app.activitypub.signature import post_request, default_context, RsaKeys
@@ -357,6 +358,8 @@ def admin_domains_delete(domain_id):
     row = db.session.get(SiteDomain, domain_id) or abort(404)
     if row.is_default:
         flash(_('The default domain cannot be deleted.'), 'error')
+    elif domain_has_owners(row.id):
+        flash(_('A domain with accounts or communities cannot be deleted.'), 'error')
     else:
         db.session.delete(row)
         db.session.commit()

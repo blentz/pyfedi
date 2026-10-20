@@ -156,6 +156,6 @@ def test_page_says_later_release_and_dns(app):
     client = app.test_client()
     login(client, _admin())
     html = client.get('/admin/domains').get_data(as_text=True)
-    assert html.count('takes effect in a later release') >= 2
+    assert html.count('takes effect in a later release') >= 1
     assert 'deploy/DEPLOY_GUIDE.md' in html
     assert 'DNS' in html and 'TLS' in html and 'Tor' in html
