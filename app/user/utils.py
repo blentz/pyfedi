@@ -88,10 +88,10 @@ def unsubscribe_from_community(community, user):
     send_post_request(community.ap_inbox_url, undo, user.private_key, user.public_url() + '#main-key')
 
 
-def search_for_user(address: str, allow_fetch: bool = True, retry: bool = False):
+def search_for_user(address: str, allow_fetch: bool = True, retry: bool = False, home=None):
     """The user `address` names, fetched through WebFinger when it is not known yet. Only a Celery caller passes
     retry: a request path makes one attempt at each URL and never sleeps (D738/D775)."""
-    already_exists = stored_user(address)   # raises for a banned server
+    already_exists = stored_user(address, home)   # raises for a banned server
     if already_exists:
         return already_exists
     elif not allow_fetch:

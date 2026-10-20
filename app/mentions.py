@@ -10,6 +10,7 @@ from flask import current_app
 
 from app import db
 from app.models import BannedInstances, User
+from app.storefront import on_domain
 
 MENTION_RE = re.compile(r"@([a-zA-Z0-9_.-]*)@([a-zA-Z0-9_.-]*)\b")
 
@@ -29,9 +30,10 @@ def user_address_parts(address: str):
     return parts[0], parts[1]
 
 
-def stored_user(address: str):
+def stored_user(address: str, home=None):
     """The user `address` names among those already stored, as search_for_user(address, allow_fetch=False) finds it.
-    Raises when the address's server is banned here."""
+    A bare name is a local user on `home`, a hosted domain (any domain when None). Raises when the address's server
+    is banned here."""
     parts = user_address_parts(address)
     if parts is None:
         return None
@@ -45,12 +47,13 @@ def stored_user(address: str):
         # this lookup was case-sensitive and a handle typed with any capital
         # letter in it found nobody.
         return db.session.query(User).filter_by(ap_id=f'{name}@{server}').first()
-    return db.session.query(User).filter_by(user_name=name, ap_id=None).first()
+    local = db.session.query(User).filter_by(user_name=name, ap_id=None)
+    return (local if home is None else local.filter(on_domain(home))).first()
 
 
 def mentioned_users_found_by(post, find_user) -> list:
     """The users a post's body Mentions with @user@instance syntax, once each, leaving out its author. `find_user`
-    turns an address into a user or None; one that raises counts as None."""
+    turns an address (and for a bare local name, the author's home domain) into a user or None; one that raises counts as None."""
     user = post.author
     recipients = []
     if post.body:
@@ -61,7 +64,7 @@ def mentioned_users_found_by(post, find_user) -> list:
                 user_name = match.group(1)
                 if user_name != user.user_name:
                     try:
-                        recipient = find_user(user_name)
+                        recipient = find_user(user_name, user.home_domain())
                     except:
                         pass
             else:

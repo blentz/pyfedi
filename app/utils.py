@@ -6618,8 +6618,10 @@ def validate_user_name_charset(user_name):
 RESERVED_USER_NAMES = ('admin',)
 
 
-def user_name_is_taken(user_name: str) -> bool:
-    """True when a LOCAL user, community or feed already answers to this name.
+def user_name_is_taken(user_name: str, site_domain_id: int | None = None) -> bool:
+    """True when a LOCAL user, community or feed already answers to this name. With `site_domain_id`, only the users
+    and communities of that domain count; without, a name held on any domain is taken (local names stay unique across
+    domains until plan C).
 
     `RegistrationForm.validate_user_name` asks this question one query at a
     time. The OAuth signup path asked a narrower, CASE-SENSITIVE version of
@@ -6628,11 +6630,14 @@ def user_name_is_taken(user_name: str) -> bool:
     (D1140). One function, so the two ends cannot drift apart again.
     """
     name = user_name.strip()
-    if User.query.filter(func.lower(User.user_name) == func.lower(name),
-                         User.ap_id == None).first() is not None:
+    users = User.query.filter(func.lower(User.user_name) == func.lower(name), User.ap_id == None)
+    communities = Community.query.filter(func.lower(Community.name) == func.lower(name), Community.ap_id == None)
+    if site_domain_id is not None:
+        users = users.filter(User.site_domain_id == site_domain_id)
+        communities = communities.filter(Community.site_domain_id == site_domain_id)
+    if users.first() is not None:
         return True
-    if Community.query.filter(func.lower(Community.name) == func.lower(name),
-                              Community.ap_id == None).first() is not None:
+    if communities.first() is not None:
         return True
     return Feed.query.filter(func.lower(Feed.name) == func.lower(name),
                              Feed.ap_id == None).first() is not None

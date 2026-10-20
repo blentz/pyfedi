@@ -271,7 +271,7 @@ def test_mentioned_users_asks_for_the_retry(env):
     post = Mock(body=f'hello @someone@{SERVER}', author=Mock(user_name='author'))
     with patch('app.shared.tasks.pages.search_for_user', return_value=None) as search:
         assert mentioned_users(post) == []
-    search.assert_called_once_with(f'someone@{SERVER}', allow_fetch=True, retry=True)
+    search.assert_called_once_with(f'someone@{SERVER}', allow_fetch=True, retry=True, home=None)
 
 
 # --- fix round 2: a GET retries only when a housekeeping task asks --------------

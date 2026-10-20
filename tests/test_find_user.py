@@ -43,7 +43,8 @@ def queries(app, typed):
     seen = []
 
     def record(conn, cursor, statement, parameters, context, executemany):
-        seen.append(statement)
+        if 'FROM site_domain' not in statement:   # the domain list is cached in production, and not what is counted
+            seen.append(statement)
 
     event.listen(db.engine, 'before_cursor_execute', record)
     try:

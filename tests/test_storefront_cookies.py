@@ -140,14 +140,14 @@ def person(app, storefronts):
     return user
 
 
-def _login(app, base_url):
+def _login(app, base_url, user_name='person'):
     return app.test_client().post('/auth/login', base_url=base_url, follow_redirects=False,
-                                  data={'user_name': 'person', 'password': 'a-good-password', 'timezone': 'UTC',
+                                  data={'user_name': user_name, 'password': 'a-good-password', 'timezone': 'UTC',
                                         'submit': 'Log In', 'remember': 'y'})
 
 
 def test_login_cookies_end_to_end(app, person, secure_config):
-    onion = _login(app, 'http://abc.onion').headers.getlist('Set-Cookie')
+    onion = _login(app, 'http://abc.onion', 'person@test.piefed.local').headers.getlist('Set-Cookie')
     g.pop('_login_user', None)   # the suite-wide app context keeps the first login's user in g
     https = _login(app, 'https://test.piefed.local').headers.getlist('Set-Cookie')
     names = lambda headers: {h.split('=')[0] for h in headers}

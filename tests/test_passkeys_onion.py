@@ -31,7 +31,8 @@ def test_login_on_the_onion_expects_the_onion_origin(app, db_session, onion):
     with patch('app.auth.passkeys.parse_authentication_credential_json', return_value='CRED'):
         with patch('app.auth.passkeys.verify_authentication_response', return_value=authenticated()) as verify:
             app.test_client().post('/auth/passkeys/login_verification',
-                                   json={'username': 'alice', 'redirect': '/', 'response': {}}, base_url=ONION_URL)
+                                   json={'username': f'alice@{CANONICAL}', 'redirect': '/', 'response': {}},
+                                   base_url=ONION_URL)
     assert verify.call_args.kwargs['expected_rp_id'] == ONION
     assert verify.call_args.kwargs['expected_origin'] == ONION_URL
 
@@ -43,7 +44,7 @@ def test_the_origin_is_not_taken_from_the_host_header(app, db_session, onion):
     with patch('app.auth.passkeys.parse_authentication_credential_json', return_value='CRED'):
         with patch('app.auth.passkeys.verify_authentication_response', return_value=authenticated()) as verify:
             app.test_client().post('/auth/passkeys/login_verification',
-                                   json={'username': 'alice', 'redirect': '/', 'response': {}},
+                                   json={'username': f'alice@{CANONICAL}', 'redirect': '/', 'response': {}},
                                    base_url=f'{ONION_URL}:8999')
     assert verify.call_args.kwargs['expected_origin'] == ONION_URL
 

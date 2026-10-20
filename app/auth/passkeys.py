@@ -4,6 +4,7 @@ import hmac
 
 from flask import request, make_response, abort, jsonify, current_app
 from flask_login import login_user
+from sqlalchemy import false
 from webauthn import generate_authentication_options, options_to_json, verify_authentication_response
 from webauthn.helpers import parse_authentication_credential_json
 from webauthn.helpers.exceptions import InvalidAuthenticationResponse
@@ -11,9 +12,21 @@ from webauthn.helpers.structs import UserVerificationRequirement, PublicKeyCrede
 
 from app import db, cache
 from app.auth import bp
+from app.auth.util import split_handle
 from app.models import User, utcnow
-from app.storefront import current_storefront, storefront_url
+from app.storefront import current_storefront, on_domain, storefront_url
 from app.utils import safe_redirect_target
+
+
+# ----------------------------------------------------------------------
+def passkey_user(username):
+    """The local, unbanned account a typed name or email means: the name on this storefront's domain (or the domain a
+    full handle names), the email anywhere on the site. None for anything else, a non-string included."""
+    if not isinstance(username, str):
+        return None
+    name, domain = split_handle(username, current_storefront())
+    named = (User.user_name == name) & on_domain(domain) if domain else false()
+    return User.query.filter(named | (User.email == username), User.ap_id == None, User.banned == False).first()
 
 
 # ----------------------------------------------------------------------
@@ -24,11 +37,7 @@ def passkey_options():
     if not isinstance(request_json, dict):
         abort(400)
     username = request_json.get('username')
-    user = User.query.filter(
-        (User.user_name == username) | (User.email == username),
-        User.ap_id == None,
-        User.banned == False,
-    ).first()
+    user = passkey_user(username)
     # D888: an unknown (or banned, or remote) name, or an account with no passkey,
     # gets options of the same shape as an account with one, offering a decoy
     # credential, so this endpoint cannot be used to test whether an account
@@ -78,11 +87,7 @@ def passkey_verification():
     error_message = ''
 
     auth_credential = parse_authentication_credential_json(request_json.get('response'))
-    user = User.query.filter(
-        (User.user_name == username) | (User.email == username),
-        User.ap_id == None,
-        User.banned == False,
-    ).first()
+    user = passkey_user(username)
     if user:
         # .count(), not truthiness: User.passkeys is lazy='dynamic', so the
         # attribute is an AppenderQuery and `not user.passkeys` was always

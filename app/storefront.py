@@ -21,6 +21,7 @@ from bs4.formatter import HTMLFormatter
 from flask import Response, current_app, g, has_app_context, has_request_context, request
 from flask.globals import request_ctx
 from flask_babel import _
+from sqlalchemy import or_
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import cache, db
@@ -122,6 +123,13 @@ def default_domain() -> DomainInfo:
 def domain_by_id(site_domain_id: int | None) -> DomainInfo:
     """The row with this id; the default domain for None or an id no row has (a row since removed)."""
     return next((row for row in domain_rows() if row.id == site_domain_id), None) or default_domain()
+
+
+def on_domain(domain: DomainInfo):
+    """A filter for the local users of `domain`: its own, and on the default domain the ones no domain was stamped on."""
+    if domain.is_default:
+        return or_(models.User.site_domain_id == domain.id, models.User.site_domain_id.is_(None))
+    return models.User.site_domain_id == domain.id
 
 
 def domain_base_url(info: DomainInfo) -> str:
