@@ -27,7 +27,7 @@ from app.utils import render_template, permission_required, user_filters_posts, 
     blocked_domains, mimetype_from_url, feed_entry_body, \
     blocked_communities, login_required, moderating_communities_ids, community_membership_private, \
     login_required_if_private_instance, feed_readable_by, \
-    refuse_if_private_instance
+    refuse_if_private_instance, as_rss_reader
 
 
 @bp.route('/tag/<tag>', methods=['GET'])
@@ -136,6 +136,7 @@ def show_tag(tag):
 
 @bp.route('/tag/<tag>/feed', methods=['GET'])
 @refuse_if_private_instance
+@as_rss_reader
 def show_tag_rss(tag):
     tag = Tag.query.filter(Tag.name == tag.lower()).first()
     if tag:

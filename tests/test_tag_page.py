@@ -765,11 +765,12 @@ def test_the_feed_leaves_out_bots_banned_communities_and_deleted_posts(app, db_s
 
 
 def test_a_reader_who_reads_bots_is_served_them_in_the_feed(app, db_session):
-    """The feed has no login gate, but it reads current_user all the same, so a
-    logged-in subscriber's ignore_bots setting reaches it.
+    """The feed reads its ?token= account's ignore_bots setting. A logged-in session is not that account: an RSS
+    view reads as the token's user or as an anonymous reader (as_rss_reader), who is not served bots.
     """
     instance, alice, bob = _seed()
     alice.ignore_bots = 0
+    alice.rss_token = 'alice-rss-token'
     db.session.commit()
     tag = _tag()
     community = make_community('microblogs')
@@ -777,9 +778,8 @@ def test_a_reader_who_reads_bots_is_served_them_in_the_feed(app, db_session):
     client = app.test_client()
     login(client, alice)
 
-    response = client.get('/tag/solarstorm/feed')
-
-    assert b'<title>bot post</title>' in response.data
+    assert b'<title>bot post</title>' in client.get('/tag/solarstorm/feed?token=alice-rss-token').data
+    assert b'<title>bot post</title>' not in client.get('/tag/solarstorm/feed').data
 
 
 @pytest.mark.parametrize('slug, expected', [

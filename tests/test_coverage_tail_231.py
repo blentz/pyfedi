@@ -110,21 +110,14 @@ class TestAPrivateCommunityInTheSiteFeed:
         assert 'anyone-may-read-this' in response.text
         assert 'members-only-secret' not in response.text
 
-    def test_a_member_with_a_token_is_not_shown_it_either(self, seeded):
+    def test_a_member_with_a_token_is_shown_it(self, seeded):
         """`:1390` and `:1415`: a non-empty `pc` takes the `tuple(pc + [0])` branch and the
-        widened SQL runs -- and the post STILL does not appear.
+        widened SQL runs, and the post appears.
 
         `index_rss` widens its own `community_ids` query by the token holder's private
-        memberships, but the posts themselves come from `get_deduped_post_ids`, which reads
-        `current_user` -- and a token request is not a logged-in session, so `current_user`
-        is anonymous there and its unconditional `c.private is false` applies. The widening
-        in `index_rss` is therefore inert: two independent restrictions, the stricter one
-        winning, which is the direction that fails safe.
-
-        Asserted rather than described, because the comment at the top of this route
-        (D1356) says the token 'went on delivering posts from the PRIVATE communities that
-        account belonged to' -- true of the token check it was fixing, but no longer true
-        of the feed as a whole.
+        memberships, and since as_rss_reader the posts come from `get_deduped_post_ids` read
+        as the token's account too, so the two agree. (Before, `get_deduped_post_ids` read the
+        session, anonymous for a reader, and its `c.private is false` made the widening inert.)
         """
         make_community_member(seeded.reader, seeded.private)
         db.session.commit()
@@ -133,7 +126,7 @@ class TestAPrivateCommunityInTheSiteFeed:
 
         assert response.status_code == 200
         assert 'anyone-may-read-this' in response.text
-        assert 'members-only-secret' not in response.text
+        assert 'members-only-secret' in response.text
 
     def test_a_banned_member_is_not_shown_it(self, seeded):
         """`community_membership_private` requires `cm.is_banned is false`, so a
@@ -148,10 +141,9 @@ class TestAPrivateCommunityInTheSiteFeed:
         assert response.status_code == 200
         assert 'members-only-secret' not in response.text
 
-    def test_the_popular_feed_withholds_it_from_both(self, seeded):
-        """The same pair of restrictions, in the other feed type. Two spellings of one rule
-        is two places to get it wrong, so each is asserted rather than assumed to follow
-        from the other."""
+    def test_the_popular_feed_shows_it_to_the_member_only(self, seeded):
+        """The same rule, in the other feed type. Two spellings of one rule is two places to
+        get it wrong, so each is asserted rather than assumed to follow from the other."""
         seeded.private.show_popular = True
         seeded.public.show_popular = True
         db.session.commit()
@@ -162,7 +154,7 @@ class TestAPrivateCommunityInTheSiteFeed:
         member = seeded.client.get(f'/index/feed/popular?token={seeded.token}')
 
         assert 'members-only-secret' not in anonymous.text
-        assert 'members-only-secret' not in member.text
+        assert 'members-only-secret' in member.text
 
 
 class TestTheTuplePadding:
@@ -175,9 +167,8 @@ class TestTheTuplePadding:
 
     def test_a_member_of_exactly_one_private_community_gets_a_feed(self, env):
         """One membership is the case that needs the pad: without it the SQL reads
-        `c.id IN (5,)` and PostgreSQL refuses to parse it. The assertion is a 200 and a
-        well-formed feed, not the private post -- which `get_deduped_post_ids` withholds
-        from a token request regardless."""
+        `c.id IN (5,)` and PostgreSQL refuses to parse it. The assertion is a 200, a
+        well-formed feed and the private post the member may read."""
         author = make_user(env.baseline.instance_local, 'padauthor', local=True)
         public = make_community('openhouse')
         public.instance_id = 1
@@ -192,7 +183,7 @@ class TestTheTuplePadding:
 
         assert response.status_code == 200
         assert 'ordinary-post' in response.text
-        assert 'padded-correctly' not in response.text
+        assert 'padded-correctly' in response.text
 
     def test_a_member_of_two_private_communities_also_gets_a_feed(self, env):
         """The case that needs no padding, kept beside the one that does: a two-element

@@ -45,7 +45,7 @@ from app.local_only import local_only_visible, local_only_visible_rss, without_l
 from app.visibility import listable_clause, modlog_local_only_clause, modlog_open_clause, visible_to_clause
 from app.storefront import storefront_cache_key, storefront_link, storefront_url
 from app.utils import etag_stamp
-from app.utils import render_template, ensure_rss_token, get_setting, request_etag_matches, return_304, blocked_domains, rss_token_user, \
+from app.utils import render_template, ensure_rss_token, get_setting, request_etag_matches, return_304, blocked_domains, \
     ap_datetime, shorten_string, user_filters_home, \
     joined_communities, moderating_communities, markdown_to_html, \
     blocked_or_banned_instances, communities_banned_from, topic_tree, recently_upvoted_posts, recently_downvoted_posts, \
@@ -57,7 +57,7 @@ from app.utils import render_template, ensure_rss_token, get_setting, request_et
     moderating_communities_ids, user_notes, login_required, safe_order_by, filtered_out_communities, \
     num_topics, referrer, block_honey_pot, user_pronouns, get_instance_stickies, \
     community_membership_private, favorite_communities, mimetype_from_url, feed_entry_body, check_anoobis, \
-    is_safe_redirect_target, feed_readable_by, refuse_if_private_instance
+    is_safe_redirect_target, feed_readable_by, refuse_if_private_instance, as_rss_reader
 from app.models import Community, CommunityMember, Post, Site, User, utcnow, Topic, Instance, \
     Notification, Language, community_language, ModLog, Feed, FeedItem, CmsPage, BannedInstances, BotChallenge
 from app.ldap_utils import test_ldap_connection, sync_user_to_ldap, login_with_ldap
@@ -1450,6 +1450,7 @@ def explore():
 @bp.route('/index/feed', methods=['GET'])
 @bp.route('/index/feed/<feed_type>', methods=['GET'])
 #@cache.cached(timeout=600, query_string=True)
+@as_rss_reader
 def index_rss(feed_type=None):
 
     # Refuse first, then answer conditionally. The 304 used to be computed
@@ -1458,8 +1459,9 @@ def index_rss(feed_type=None):
     # -- got `304 Not Modified` where a fresh request got 404. That is an
     # access check a conditional request walks past, and it is the same defect
     # this campaign fixed in app/community/routes.py's community feed.
-    # R219: on a private instance a member's RSS token opens the feed; anyone else still gets 404
-    user = rss_token_user()
+    # R219: on a private instance a member's RSS token opens the feed; anyone else still gets 404. as_rss_reader has
+    # made the token's account (rss_token_user) the current user, or the anonymous one: never the session's
+    user = current_user if current_user.is_authenticated else None
     if g.site.private_instance and user is None:
         abort(404)
 
@@ -1523,7 +1525,7 @@ def index_rss(feed_type=None):
 
     community_ids = list(community_ids)
 
-    post_ids = get_deduped_post_ids(gibberish(15), community_ids, 'new',
+    post_ids = get_deduped_post_ids('', community_ids, 'new',   # '': a feed is never paged, so no result to keep
                                     include_following=feed_type == 'subscribed' and current_user_is_authenticated,
                                     show_local_only=current_user_is_authenticated)   # the token's answer
     post_ids = paginate_post_ids(post_ids, 0, page_length=50)
