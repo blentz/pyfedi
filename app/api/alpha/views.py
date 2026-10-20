@@ -27,7 +27,7 @@ import app.shared.community as shared_community
 # The module, not the names: app.shared.post reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.post)
 import app.shared.post as shared_post
-from app.storefront import storefront_link, storefront_memo_name, storefront_url
+from app.storefront import current_storefront, public_registration_open, storefront_link, storefront_memo_name, storefront_url
 from app.visibility import can_view, visible_to_sql
 
 
@@ -1396,13 +1396,18 @@ def topic_view(topic: Topic | int, variant: int, communities_moderating, banned_
         return v1
 
 
+def advertised_registration_mode() -> str:
+    """The site's registration mode as this storefront offers it: Closed where public sign-up is not open."""
+    return g.site.registration_mode if public_registration_open(current_storefront()) else 'Closed'
+
+
 def site_view(user) -> dict:
     logo = g.site.logo if g.site.logo else '/static/images/piefed_logo_icon_t_75.png'
 
     site = {
         "enable_downvotes": g.site.enable_downvotes,
         "icon": f"{storefront_url()}{logo}",
-        "registration_mode": g.site.registration_mode,
+        "registration_mode": advertised_registration_mode(),
         "name": g.site.name,
         "actor_id": f"{current_app.config['SERVER_URL']}/",
         "user_count": users_total(),
@@ -1503,7 +1508,7 @@ def site_instance_chooser_view():
         'defederation': list(set([instance.domain for instance in defed_list])),
         'trusts': list(set([instance.domain for instance in trusted_list])),
         'tos_url': g.site.tos_url or '',
-        'registration_mode': g.site.registration_mode,
+        'registration_mode': advertised_registration_mode(),
         'software': 'piefed'
     }
     return result
