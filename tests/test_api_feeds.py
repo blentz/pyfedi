@@ -566,3 +566,109 @@ def test_editing_replaces_the_communities_that_were_sent(app, env):
                                     community_id=was_in.id).first() is None
     assert FeedItem.query.filter_by(feed_id=public.id,
                                     community_id=now_in.id).first() is not None
+
+
+# --------------------------------------------------------------------------
+# A parent feed must be one the caller owns (the web form's rule)
+# --------------------------------------------------------------------------
+
+
+def test_creating_a_feed_under_somebody_elses_feed_is_refused(app, env):
+    from app.api.alpha.utils.feed import post_feed
+
+    owner, stranger, public, private = env
+
+    with pytest.raises(Exception, match='parent_feed_not_allowed'):
+        post_feed(token(stranger), {'name': 'Sneaky', 'title': 'Sneaky',
+                                    'parent_feed_id': public.id})
+
+    assert Feed.query.filter_by(name='sneaky').first() is None
+    assert Feed.query.filter_by(parent_feed_id=public.id).count() == 0
+
+
+def test_creating_a_feed_under_a_feed_that_does_not_exist_is_refused(app, env):
+    from app.api.alpha.utils.feed import post_feed
+
+    owner, stranger, public, private = env
+
+    with pytest.raises(Exception, match='parent_feed_not_allowed'):
+        post_feed(token(stranger), {'name': 'Nowhere', 'title': 'Nowhere',
+                                    'parent_feed_id': 987654})
+
+    assert Feed.query.filter_by(name='nowhere').first() is None
+
+
+def test_creating_a_feed_under_ones_own_feed_is_allowed(app, env):
+    from app.api.alpha.utils.feed import post_feed
+
+    owner, stranger, public, private = env
+
+    post_feed(token(owner), {'name': 'Child', 'title': 'Child',
+                             'parent_feed_id': public.id})
+
+    assert Feed.query.filter_by(name='child').first().parent_feed_id == \
+        public.id
+
+
+def test_creating_a_feed_with_no_parent_is_allowed(app, env):
+    from app.api.alpha.utils.feed import post_feed
+
+    owner, stranger, public, private = env
+
+    post_feed(token(owner), {'name': 'Top', 'title': 'Top',
+                             'parent_feed_id': None})
+
+    assert Feed.query.filter_by(name='top').first().parent_feed_id is None
+
+
+def test_editing_a_feed_under_somebody_elses_feed_is_refused(app, env):
+    from app.api.alpha.utils.feed import put_feed
+
+    owner, stranger, public, private = env
+    mine = a_feed(stranger, 'strangers')
+
+    with pytest.raises(Exception, match='parent_feed_not_allowed'):
+        put_feed(token(stranger), {'feed_id': mine.id,
+                                   'parent_feed_id': public.id})
+
+    db.session.expire_all()
+    assert db.session.get(Feed, mine.id).parent_feed_id is None
+    assert Feed.query.filter_by(parent_feed_id=public.id).count() == 0
+
+
+def test_a_feed_may_not_be_its_own_parent(app, env):
+    from app.api.alpha.utils.feed import put_feed
+
+    owner, stranger, public, private = env
+
+    with pytest.raises(Exception, match='parent_feed_not_allowed'):
+        put_feed(token(owner), {'feed_id': public.id,
+                                'parent_feed_id': public.id})
+
+    db.session.expire_all()
+    assert db.session.get(Feed, public.id).parent_feed_id is None
+
+
+def test_editing_a_feed_under_ones_own_feed_is_allowed(app, env):
+    from app.api.alpha.utils.feed import put_feed
+
+    owner, stranger, public, private = env
+    mine = a_feed(owner, 'ownchild')
+
+    put_feed(token(owner), {'feed_id': mine.id,
+                            'parent_feed_id': public.id})
+
+    db.session.expire_all()
+    assert db.session.get(Feed, mine.id).parent_feed_id == public.id
+
+
+def test_editing_a_feed_to_no_parent_is_allowed(app, env):
+    from app.api.alpha.utils.feed import put_feed
+
+    owner, stranger, public, private = env
+    mine = a_feed(owner, 'ownchild', parent_feed_id=public.id)
+
+    put_feed(token(owner), {'feed_id': mine.id, 'parent_feed_id': None})
+
+    db.session.expire_all()
+    assert db.session.get(Feed, mine.id).parent_feed_id is None
