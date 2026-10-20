@@ -172,6 +172,9 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'feed_communities_for_edit': 1,
         'search_for_feed': 1,
     },
+    'app/local_only.py': {
+        'outbound_refusal': 1,   # the canonical host is ours in the "names our post or comment" test (plan B task 7)
+    },
     'app/main/routes.py': {
         'activitypub_application': 6,
         'instance_actor': 9,

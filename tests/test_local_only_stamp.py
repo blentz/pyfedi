@@ -113,3 +113,13 @@ def test_the_stamp_is_not_recomputed(env):
     db.session.commit()
     db.session.refresh(post)
     assert post.local_only is False
+
+
+def test_a_reply_to_an_ordinary_reply_under_a_local_only_post_is_local_only(env):
+    """Controller ruling: the thread's post decides as well as the direct parent."""
+    post = make_post(env.community, env.author, 'https://local.example/p/9')
+    parent = _reply(env, env.author, post)
+    post.local_only = True
+    db.session.commit()
+    assert parent.local_only is False
+    assert _reply(env, env.author, post, parent).local_only is True

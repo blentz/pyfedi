@@ -3,9 +3,19 @@
 They never leave this server (spec docs/superpowers/specs/2026-10-19-per-domain-identity-design.md §3.4).
 Because that is decided per domain, a domain's `federates` setting is locked once it owns accounts or communities.
 """
-from sqlalchemy import text
+import logging
+import re
+from urllib.parse import unquote, urlsplit
+
+from flask import current_app
+from sqlalchemy import bindparam, text
 
 from app import db
+# The module, not the names: app.models imports this module, and app.storefront imports app.models, so whichever is
+# imported first finds the other mid-import (import cycle: models)
+import app.storefront as storefront
+
+logger = logging.getLogger(__name__)
 
 # A domain owns the local rows stamped with its id. The default domain also owns the local rows no domain was
 # stamped on (legacy rows); remote rows carry an ap_id and never count.
@@ -40,11 +50,89 @@ def community_local_only(community) -> bool:
     return community.ap_id is None and not community.home_domain().federates
 
 
-def content_local_only(author, community, parent=None) -> bool:
-    """Whether what `author` makes in `community` (answering `parent`, a post or a reply) stays on this server.
+def content_local_only(author, community, *parents) -> bool:
+    """Whether what `author` makes in `community` (answering `parents`: a reply's direct parent and the thread's
+    post, None where there is none) stays on this server.
 
-    Any of the three being local-only is enough; a remote author's content is never stamped.
+    The author, the community or any of the parents being local-only is enough; a remote author's content is never
+    stamped.
     """
     if author.ap_id is not None:
         return False
-    return user_local_only(author) or community_local_only(community) or bool(parent is not None and parent.local_only)
+    return (user_local_only(author) or community_local_only(community) or
+            any(parent is not None and parent.local_only for parent in parents))
+
+
+def federated_mentions(users: list) -> list:
+    """`users` without the local-only ones. A Mention of a local-only account goes out as the plain text it was typed
+    as: no Mention tag, no addressee and no delivery, so the activity naming them is still sent."""
+    return [user for user in users if not user_local_only(user)]
+
+
+# The fields of an activity, or of any object inside it, that name actors and objects
+_GUARDED_KEYS = frozenset(('id', 'actor', 'object', 'target', 'inReplyTo', 'audience', 'to', 'cc', 'attributedTo'))
+# Our own URLs of a post or a comment: /post/<id>[/...], /post/<id>/comment/<id>[/...], /comment/<id>[/...] and the
+# nice URL /c/<community>/p/<id>/<slug>
+_OBJECT_PATH = re.compile(r'^/(?:post/(?P<post>\d+)(?:/comment/(?P<nested>\d+))?|comment/(?P<comment>\d+)|'
+                          r'c/[^/]+/p/(?P<nice>\d+))(?:/|$)')
+_LOCAL_ONLY_POSTS = text('SELECT 1 FROM "post" WHERE id IN :ids AND local_only LIMIT 1').bindparams(
+    bindparam('ids', expanding=True))
+_LOCAL_ONLY_REPLIES = text('SELECT 1 FROM "post_reply" WHERE id IN :ids AND local_only LIMIT 1').bindparams(
+    bindparam('ids', expanding=True))
+_PG_INT_MAX = 2 ** 31 - 1
+
+
+def _guarded_urls(value, guarded: bool):
+    """Every string under a guarded key, anywhere in `value` (dicts and lists walked once)."""
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            yield from _guarded_urls(inner, key in _GUARDED_KEYS)
+    elif isinstance(value, list):
+        for inner in value:
+            yield from _guarded_urls(inner, guarded)
+    elif guarded and isinstance(value, str):
+        yield value
+
+
+def outbound_refusal(body: dict, session=None) -> str | None:
+    """Why the activity `body` must not leave this server, or None when it may.
+
+    It may not when a URL in a guarded field (_GUARDED_KEYS, at any depth) is on a hosted domain that does not
+    federate, or is one of our own post or comment URLs whose row is stamped local-only. Domains come from the cached
+    domain_rows(), so a body naming nothing of ours costs no query; the post and comment ids it names cost one query
+    per table, read through `session` (db.session when None).
+    """
+    federates = {storefront.normalise_host(row.domain): row.federates for row in storefront.domain_rows()}
+    federates.setdefault(storefront.normalise_host(current_app.config['SERVER_NAME']), True)
+    post_ids, reply_ids = set(), set()
+    for url in _guarded_urls(body, False):
+        try:
+            parts = urlsplit(url)
+            host = storefront.normalise_host(parts.hostname or '')
+        except ValueError:
+            continue
+        if host not in federates:
+            continue
+        if not federates[host]:
+            return 'it names a domain that does not federate'
+        found = _OBJECT_PATH.match(unquote(parts.path))   # as the router reads it
+        if found:
+            for name, ids in (('post', post_ids), ('nice', post_ids), ('nested', reply_ids), ('comment', reply_ids)):
+                if found.group(name) and int(found.group(name)) <= _PG_INT_MAX:
+                    ids.add(int(found.group(name)))
+    session = session or db.session
+    with session.no_autoflush:
+        if post_ids and session.execute(_LOCAL_ONLY_POSTS, {'ids': list(post_ids)}).first():
+            return 'it names a local-only post'
+        if reply_ids and session.execute(_LOCAL_ONLY_REPLIES, {'ids': list(reply_ids)}).first():
+            return 'it names a local-only comment'
+    return None
+
+
+def refused_outbound(body, uri, session=None) -> bool:
+    """True, after one DEBUG line naming no account, when `body` must not be sent to `uri` (outbound_refusal)."""
+    reason = outbound_refusal(body, session) if isinstance(body, dict) else None
+    if reason:
+        logger.debug('local-only activity not sent to %s: %s', storefront.normalise_host(
+            urlsplit(uri or '').hostname or ''), reason)
+    return bool(reason)

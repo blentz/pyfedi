@@ -2,6 +2,7 @@ import json
 from app import cache, celery, db
 from app.activitypub.signature import default_context, post_request, send_post_request
 from app.constants import NOTIF_MENTION
+from app.local_only import federated_mentions
 from app.models import Community, CommunityJoinRequest, CommunityMember, Notification, Post, \
     PostReply, utcnow, User
 from app.shared.tasks.pages import can_deliver_to, reply_recipients
@@ -112,6 +113,7 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
                     recipient.unread_notifications += 1
                     session.add(notification)
                     session.commit()
+    recipients = federated_mentions(recipients)   # a local-only account is Mentioned as plain text only
 
     if community.local_only or community.private or community.is_gone():   # interop C1 item 10: nothing goes to a gone Group
         return
