@@ -672,3 +672,30 @@ def test_editing_a_feed_to_no_parent_is_allowed(app, env):
 
     db.session.expire_all()
     assert db.session.get(Feed, mine.id).parent_feed_id is None
+
+
+def test_an_admin_editing_somebody_elses_feed_may_put_it_under_the_owners_feed(app, env):
+    """F10: the parent must be one of the FEED OWNER's feeds, as the web edit form offers (feed/routes.py,
+    feeds_for_form(feed_id, feed_to_edit.user_id)), not one of the editing admin's."""
+    from app.api.alpha.utils.feed import put_feed
+
+    owner, stranger, public, private = env
+    admin = db.session.get(User, 1)
+    assert admin.is_admin()
+    mine = a_feed(owner, 'ownchild')
+    put_feed(token(admin), {'feed_id': mine.id, 'parent_feed_id': public.id})
+    db.session.expire_all()
+    assert db.session.get(Feed, mine.id).parent_feed_id == public.id
+
+
+def test_an_admin_may_not_put_somebody_elses_feed_under_the_admins_own(app, env):
+    from app.api.alpha.utils.feed import put_feed
+
+    owner, stranger, public, private = env
+    admin = db.session.get(User, 1)
+    admins = a_feed(admin, 'adminsfeed')
+    mine = a_feed(owner, 'ownchild')
+    with pytest.raises(Exception, match='parent_feed_not_allowed'):
+        put_feed(token(admin), {'feed_id': mine.id, 'parent_feed_id': admins.id})
+    db.session.expire_all()
+    assert db.session.get(Feed, mine.id).parent_feed_id is None

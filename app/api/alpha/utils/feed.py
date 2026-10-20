@@ -168,8 +168,9 @@ def post_feed_follow(auth, data):
 
 
 def _require_own_parent_feed(parent_feed_id, current_feed_id, user_id):
-    # The web form offers only the caller's own feeds (feeds_for_form), and for an
+    # The web form offers only the feed owner's own feeds (feeds_for_form), and for an
     # edit not the feed itself; the API holds to the same list. None/0 means no parent.
+    # `user_id` is the owner: the caller creating a feed, the feed's owner when an admin edits it.
     if not parent_feed_id:
         return
     try:
@@ -235,7 +236,7 @@ def put_feed(auth, data):
     show_child_posts = data['show_child_posts'] if 'show_child_posts' in data else feed.show_posts_in_children
     parent_feed_id = data['parent_feed_id'] if 'parent_feed_id' in data else feed.parent_feed_id
     if 'parent_feed_id' in data:
-        _require_own_parent_feed(parent_feed_id, feed.id, authorise_api_user(auth))
+        _require_own_parent_feed(parent_feed_id, feed.id, feed.user_id)   # as the web edit form: the owner's feeds
     if 'communities' in data:
         communities = data['communities']
     else:
