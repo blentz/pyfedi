@@ -725,7 +725,10 @@ def configure_bandwidth_cookies(response, low_bandwidth_mode):
 
 
 def render_login_form(form):
-    return render_template("auth/login.html", title=_("Login"), form=form,
+    # A bare name means this storefront's own account, so off the default domain say how one from there logs in
+    login_hint = None if current_storefront().is_default else \
+        _('Account from another of our sites? Log in as name@%(domain)s.', domain=default_domain().domain)
+    return render_template("auth/login.html", title=_("Login"), form=form, login_hint=login_hint,
                            onion_proof=prepare_onion_proof(form, 'login'),
                            google_oauth=oauth_client_id("google"),
                            mastodon_oauth=oauth_client_id("mastodon"),

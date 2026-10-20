@@ -16,6 +16,9 @@
                     <form method="post">
                         {{ form.csrf_token() }}
                         {{ render_field(form.user_name) }}
+                        {% if login_hint -%}
+                        <p class="form-text mt-n2" id="user_name_hint">{{ login_hint }}</p>
+                        {% endif -%}
                         <div class="password-container">
                             {{ render_field(form.password) }}
                             <a href="#" class="hidePassword" title="{{ _('Show password') }}"><img src="/static/images/eye-password-show.svg" alt="{{ _('Show password') }}"></a>
