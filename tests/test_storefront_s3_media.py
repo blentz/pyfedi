@@ -345,12 +345,31 @@ def test_a_style_value_is_scanned_in_linear_time(style):
     assert timed(lambda: storefront._css_urls(style)) < 0.1
 
 
-@pytest.mark.parametrize('srcset', ['a' + ',' * 100_000 + 'b', 'a' + ',' * 20_000 + 'b 1x', 'a' + ',' * 100_000, ',' * 100_000, ' ' * 100_000 + 'a', 'a' * 100_000, 'a,' * 2_000,
-                                    'a b,' * 2_000])
-def test_a_srcset_is_scanned_in_linear_time(srcset):
-    assert timed(lambda: storefront._rebase_srcset(srcset, 'http://x', frozenset({'abc.onion'}))) < 0.1
+def best_of(call, repeats=5):
+    return min(timed(call) for _ in range(repeats))
+
+
+def grows_linearly(scan, make, small=20_000, factor=4):
+    """True if `factor` times the input costs well under `factor` squared times the work.
+
+    A wall-clock budget flakes under load and coverage tracing; the ratio between two sizes does not,
+    because both runs slow down together. Linear gives about `factor`, quadratic `factor` squared;
+    the bound sits between them. The best of several repeats drops scheduler spikes.
+    """
+    little, big = make(small), make(small * factor)
+    scan(little)   # warm caches and lazy imports before timing
+    return best_of(lambda: scan(big)) < best_of(lambda: scan(little)) * factor * 2
+
+
+SRCSETS = [lambda n: 'a' + ',' * n + 'b', lambda n: 'a' + ',' * n + 'b 1x', lambda n: 'a' + ',' * n, lambda n: ',' * n,
+           lambda n: ' ' * n + 'a', lambda n: 'a' * n, lambda n: 'a,' * (n // 5), lambda n: 'a b,' * (n // 5)]
+
+
+@pytest.mark.parametrize('make', SRCSETS)
+def test_a_srcset_is_scanned_in_linear_time(make):
+    assert grows_linearly(lambda srcset: storefront._rebase_srcset(srcset, 'http://x', frozenset({'abc.onion'})), make)
     tag = BeautifulSoup('<img/>', 'html.parser').img
-    assert timed(lambda: storefront._points_at(tag, 'srcset', srcset, S3)) < 0.1
+    assert grows_linearly(lambda srcset: storefront._points_at(tag, 'srcset', srcset, S3), make)
 
 
 def test_a_srcset_of_many_candidates_is_split_in_linear_time():
