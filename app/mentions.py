@@ -6,6 +6,7 @@ from there closes an import cycle (app.user's package runs app.user.routes, whic
 """
 import re
 
+from sqlalchemy import func
 
 from app import db
 from app.models import BannedInstances, User
@@ -31,8 +32,8 @@ def user_address_parts(address: str):
 
 def stored_user(address: str, home=None):
     """The user `address` names among those already stored, as search_for_user(address, allow_fetch=False) finds it.
-    A bare name is a local user on `home`, a hosted domain (any domain when None). Raises when the address's server
-    is banned here."""
+    A bare name is a local user on `home`, a hosted domain (any domain when None); `name@host` for a host this site
+    hosts is that domain's local user. Raises when the address's server is banned here."""
     parts = user_address_parts(address)
     if parts is None:
         return None
@@ -42,6 +43,10 @@ def stored_user(address: str, home=None):
         if banned:
             reason = f" Reason: {banned.reason}" if banned.reason is not None else ''
             raise Exception(f"{server} is blocked.{reason}")
+        hosted = domain_for_host(server)
+        if hosted:   # one of ours: that domain's own account, or nobody. Never fetched (it would be a self-request)
+            return db.session.query(User).filter(func.lower(User.user_name) == name, User.ap_id.is_(None),
+                                                 on_domain(hosted)).first()
         # `name` and `server` were lowercased above; `address` was not, so
         # this lookup was case-sensitive and a handle typed with any capital
         # letter in it found nobody.
