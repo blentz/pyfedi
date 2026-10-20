@@ -444,7 +444,17 @@ def _app_tests_leave_no_trace(request):
     Nothing else cleans up after such a test: db_session's teardown is what deletes rows, and the `app` fixture
     lives for the whole session, so a row (a site_domain, an instance) or a config value it leaves is read by
     whichever test runs next on that worker. Change config with monkeypatch.setitem, and add rows only under
-    db_session. A test that requests `app` only through getfixturevalue is not checked here."""
+    db_session.
+
+    What it does not see:
+    - Changed contents. It counts rows per table, so an UPDATE to a shared row (Site settings, a seeded row), or a
+      DELETE matched by an INSERT, passes.
+    - A change inside a mutable config value. The snapshot is a shallow `dict(app.config)`, compared by value at
+      the top level only.
+    - A change a module-, class- or session-scoped fixture makes. That fixture sets up before this one, so the
+      change is already in the "before" snapshot and is never reported.
+    - A test that requests `app` only through getfixturevalue: it is not in `request.fixturenames` when this runs
+      (test_utils_fuzz_corpus checks its needs_app cases itself)."""
     if 'app' not in request.fixturenames or 'db_session' in request.fixturenames:
         yield
         return
