@@ -58,3 +58,11 @@ def test_an_actor_on_a_hosted_domain_is_found_locally_and_never_fetched(app, sto
 def test_the_onions_handle_is_not_hell_clouds_account(app, stored, requests):
     assert find_actor_or_create('alice@abc.onion') is None
     assert requests == []
+
+
+@pytest.mark.parametrize('actor, hosted', [('http://[abc.onion/u/x', None), ('https://abc.onion/u/x', 'abc.onion'),
+                                           ('@x@abc.onion', 'abc.onion'), ('x@remote.test', None), ('bare', None)])
+def test_hosted_domain_of(app, stored, actor, hosted):
+    """A URL urlsplit refuses (an unbalanced IPv6 bracket) names no host of ours."""
+    found = actor_module.hosted_domain_of(actor)
+    assert (found.domain if found else None) == hosted
