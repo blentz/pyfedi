@@ -1456,6 +1456,8 @@ def explore():
 #@cache.cached(timeout=600, query_string=True)
 @as_rss_reader
 def index_rss(feed_type=None):
+    if feed_type not in (None, 'local', 'popular', 'all', 'subscribed'):
+        abort(404)   # not a feed this site has; it also keeps the segment out of the ETag header
 
     # Refuse first, then answer conditionally. The 304 used to be computed
     # ABOVE this check, so a caller holding an ETag from before the instance

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from flask import current_app, g
 from flask_login import login_user
+from sqlalchemy import event
 
 import app.storefront as storefront
 from app import db
@@ -247,3 +248,26 @@ def test_the_etags_name_the_domain(app, scene):
     assert storefront.current_storefront().domain in home or app.config['SERVER_NAME'] in home
     assert _visit(app, '/home/new/local', headers={'If-None-Match': home}).status_code == 304
     assert _visit(app, '/home/new/local', onion=True, headers={'If-None-Match': home}).status_code != 304
+
+
+# Round 2
+
+@pytest.mark.parametrize('segment', ['%0A', 'nonsense', 'FOO', '%3Cb%3E'])
+def test_an_unknown_feed_type_is_a_404_not_a_500(app, scene, segment):
+    assert _visit(app, f'/index/feed/{segment}').status_code == 404
+    assert _visit(app, f'/index/feed/{segment}?token=alice-rss-token', onion=False).status_code == 404
+
+
+def test_the_local_comment_authors_are_local_users_only(app, scene):
+    statements = []
+
+    def record(conn, cursor, statement, *rest):
+        statements.append(' '.join(statement.split()))
+    event.listen(db.engine, 'before_cursor_execute', record)
+    try:
+        response = _api(app, 'comment/list', scene.world.alice, type_='Local')
+    finally:
+        event.remove(db.engine, 'before_cursor_execute', record)
+    assert {item['comment']['id'] for item in response.json['comments']} == {scene.replies.clear.id}
+    author_filters = [s for s in statements if 'post_reply' in s and '"user".id FROM "user"' in s]
+    assert author_filters and all('"user".ap_id IS NULL' in s for s in author_filters)

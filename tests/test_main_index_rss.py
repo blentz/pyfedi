@@ -66,15 +66,9 @@ class TestTheFeedAnyoneCanRead:
         assert response.status_code == 200
         assert f'<title>Test Site - {shown}</title>' in response.text
 
-    def test_an_unknown_feed_type_is_answered_as_all(self, env):
-        """It falls off the end of the if/elif chain with `community_ids` still at
-        its initial `[-1]`, which is the 'All' sentinel. Asserted rather than
-        assumed: a reader guessing a feed name gets the public All feed, not an
-        error and not somebody's private one."""
-        response = env.client.get('/index/feed/FOO')
-
-        assert response.status_code == 200
-        assert '<title>Test Site - Foo</title>' in response.text
+    def test_an_unknown_feed_type_is_a_404(self, env):
+        """A guessed feed name is no feed this site has (it was answered as All once)."""
+        assert env.client.get('/index/feed/FOO').status_code == 404
 
     def test_a_feed_type_that_looks_like_markup_is_escaped(self, env):
         """`feed_type` comes from the URL path and reaches the channel title."""

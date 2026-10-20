@@ -390,15 +390,10 @@ class TestEachFeedTypeAnswersWithItsOwnCommunities:
         assert 'local-only-post' in response.text
         assert 'remote-only-post' not in response.text
 
-    def test_an_unknown_feed_type_is_answered_as_all_for_either_viewer(self, seeded):
-        """`tests/test_main_index_rss.py` says a guessed feed name falls off the chain and
-        is answered as All. That was true of a token holder and NOT of an anonymous reader,
-        who took the catch-all `local` arm; the title it asserts is the same either way. It
-        is true of both now."""
+    def test_an_unknown_feed_type_is_a_404_for_either_viewer(self, seeded):
+        """A guessed feed name used to fall off the chain and be answered as All; it is no
+        feed this site has, so it is a 404 for a token holder and an anonymous reader alike."""
         anonymous = seeded.client.get('/index/feed/FOO')
         with_token = seeded.client.get(f'/index/feed/FOO?token={seeded.token}')
 
-        for response in (anonymous, with_token):
-            assert response.status_code == 200
-            assert 'local-only-post' in response.text
-            assert 'remote-only-post' in response.text
+        assert anonymous.status_code == with_token.status_code == 404

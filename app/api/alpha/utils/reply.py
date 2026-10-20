@@ -136,7 +136,7 @@ def get_reply_list(auth, data, user_details=None):
             replies = replies.filter(or_(PostReply.ap_id == None, PostReply.ap_id.startswith('https://' + current_app.config['SERVER_NAME'])))
             # and its author belongs to this domain, wherever it was posted
             replies = replies.filter(PostReply.user_id.in_(
-                db.session.query(User.id).filter(on_domain(current_storefront()))))
+                db.session.query(User.id).filter(User.ap_id == None, on_domain(current_storefront()))))
         elif type == 'Moderating' or type == 'ModeratorView':
             if user_id:
                 replies = replies.filter(PostReply.community_id.in_(moderating_communities_ids(user_id=user_id)))
