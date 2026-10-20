@@ -223,6 +223,11 @@ def put_feed(auth, data):
     feed = db.session.get(Feed, feed_id)
     if not feed:
         raise Exception('not_found')
+    # edit_feed's own refusal, made before the parent is checked: checked first, the parent's answer told a stranger
+    # which feed ids are the owner's
+    user = authorise_api_user(auth, return_type='model')
+    if not (feed.user_id == user.id or user.is_admin()):
+        raise Exception('incorrect_login')
 
     url = data['url'] if 'url' in data else feed.name
     title = data['title'] if 'title' in data else feed.title
