@@ -195,8 +195,10 @@ def test_other_feeds_link_to_the_storefront(app, world, path):
     assert f'"https://{CANONICAL}/static' not in text
 
 
-def test_reset_email_uses_storefront(app, world):
+def test_reset_email_uses_the_accounts_home_domain(app, world):
     founder = world[0]
+    founder.site_domain_id = SiteDomain.query.filter_by(domain=ONION).one().id   # an onion account (spec §3.2)
+    db.session.commit()
     with patch('app.email.send_email') as send:
         response = on_onion(app).post('/auth/reset_password_request', data={'email': founder.email},
                                       headers={'Host': ONION})

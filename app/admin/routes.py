@@ -46,7 +46,7 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, RolePermission, Domain, \
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, SiteDomain
-from app.storefront import canonicalise_text, clear_domain_cache, default_domain, default_storefront, domain_by_id, storefront_url
+from app.storefront import canonicalise_text, clear_domain_cache, default_domain, domain_by_id, storefront_url
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
@@ -2141,8 +2141,7 @@ def admin_approve_registrations_approve(user_id):
         db.session.commit()
         if user.verified:
             finalize_user_setup(user)
-            with default_storefront():   # mail to the applicant, not to the admin approving (onion spec §3.4)
-                send_registration_approved_email(user)
+            send_registration_approved_email(user)   # renders under the applicant's home domain
 
         flash(_('Registration approved.'))
 
@@ -2286,8 +2285,7 @@ def admin_user_resend_email(user_id):
         db.session.commit()
 
     try:
-        with default_storefront():   # mail to the user, not to the admin re-sending it (onion spec §3.4)
-            send_email_verification(user)
+        send_email_verification(user)   # renders under the user's home domain
         message = _("Verification email sent!")
     except Exception:
         # The exception text is LOGGED, not returned. str(e) on a mail failure

@@ -6,7 +6,6 @@ from app.utils import authorise_api_user, user_access, finalize_user_setup, \
     decrement_unread_counts
 from app.email import send_registration_approved_email
 from app.models import utcnow, UserRegistration, User, Notification
-from app.storefront import default_storefront
 
 
 def get_registration_list(auth, data):
@@ -61,8 +60,7 @@ def put_registration_approve(auth, data):
         db.session.commit()
         if new_user.verified:
             finalize_user_setup(new_user)
-            with default_storefront():   # mail to the applicant, not to the admin approving (onion spec §3.4)
-                send_registration_approved_email(new_user)
+            send_registration_approved_email(new_user)   # renders under the applicant's home domain
     else:
         # Registration denied
         # remove the registration attempt

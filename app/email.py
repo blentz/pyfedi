@@ -1,3 +1,4 @@
+import html
 import smtplib
 import uuid
 from email.mime.multipart import MIMEMultipart
@@ -11,7 +12,7 @@ from flask import current_app, render_template, g, url_for, flash
 from flask_babel import _  # todo: set the locale based on account_id so that _() works
 
 from app import celery
-from app.storefront import default_storefront, storefront_url
+from app.storefront import default_storefront, home_storefront, storefront_url
 from app.utils import get_setting, markdown_to_html, html_to_text
 
 CHARSET = "UTF-8"
@@ -19,33 +20,41 @@ CHARSET = "UTF-8"
 
 def send_password_reset_email(user):
     token = user.get_reset_password_token()
-    if current_app.debug:
-        flash(_('Check the console for a link.'), 'warning')
-        print(url_for('auth.reset_password', token=token, _external=True))
+    with home_storefront(user):   # the link lands on the domain the account logs in on (spec §3.2)
+        if current_app.debug:
+            flash(_('Check the console for a link.'), 'warning')
+            print(url_for('auth.reset_password', token=token, _external=True))
+        text_body = render_template('email/reset_password.txt', user=user, token=token)
+        html_body = render_template('email/reset_password.html', user=user, token=token)
     send_email(_('[PieFed] Reset Your Password'),
                sender=f'{g.site.name} <{current_app.config["MAIL_FROM"]}>',
                recipients=[user.email],
-               text_body=render_template('email/reset_password.txt',
-                                         user=user, token=token),
-               html_body=render_template('email/reset_password.html',
-                                         user=user, token=token))
+               text_body=text_body,
+               html_body=html_body)
 
 
 def send_verification_email(user):
+    with home_storefront(user):
+        text_body = render_template('email/verification.txt', user=user)
+        html_body = render_template('email/verification.html', user=user)
     send_email(_('[PieFed] Please verify your email address'),
                sender=f'{g.site.name} <{current_app.config["MAIL_FROM"]}>',
                recipients=[user.email],
-               text_body=render_template('email/verification.txt', user=user),
-               html_body=render_template('email/verification.html', user=user))
+               text_body=text_body,
+               html_body=html_body)
 
 
 def send_registration_approved_email(user):
     subject = _('Your application has been approved - welcome to PieFed')
     body = get_setting('registration_approved_email', '')
-    if body:
-        body = render_template('email/welcome.html', user=user, email_body=markdown_to_html(body))
-    else:
-        body = render_template('email/welcome.html', user=user, email_body=markdown_to_html(f'\n\nYour account at {storefront_url()} has been approved. Welcome!\n\n'))
+    with home_storefront(user):
+        if body:
+            body = render_template('email/welcome.html', user=user, email_body=markdown_to_html(body))
+        else:
+            # built as HTML, not Markdown: markdown_to_html moves our hosts onto the canonical one, for stored text
+            url = html.escape(storefront_url())
+            body = render_template('email/welcome.html', user=user,
+                                   email_body=f'<p>Your account at <a href="{url}">{url}</a> has been approved. Welcome!</p>')
     mail_from = current_app.config["MAIL_FROM"] if current_app.config["MAIL_FROM"] else g.site.contact_email
     send_email(subject,
                sender=f'{g.site.name} <{mail_from}>',
@@ -55,7 +64,7 @@ def send_registration_approved_email(user):
 
 
 def send_topic_suggestion(communities_for_topic, user, recipients, subject, topic_name):
-    with default_storefront():   # mail to the admins, not to the member suggesting (onion spec §3.4)
+    with default_storefront():   # one message to several admins, not to the member suggesting (onion spec §3.4)
         text_body = render_template('email/suggested_topic.txt', site_name=g.site.name,
                                     current_user_name=user.user_name, topic_name=topic_name,
                                     communities_for_topic=communities_for_topic)

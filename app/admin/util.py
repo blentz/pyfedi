@@ -14,7 +14,7 @@ from app.activitypub.signature import default_context, send_post_request
 from app.community.routes import do_subscribe
 from app.community.util import search_for_community
 from app.constants import POST_TYPE_IMAGE
-from app.storefront import default_storefront
+from app.storefront import home_storefront
 from app.models import User, Community, Instance, CommunityMember, Post, Topic
 from app.utils import gibberish, topic_tree, get_request, store_files_in_s3, ensure_directory_exists, guess_mime_type, get_task_session, patch_db_session, sanitize_svg_bytes, \
     remote_instance_software, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, PAGE_MAX_BYTES, canonical_host
@@ -106,13 +106,10 @@ def send_newsletter(form):
         flash(_('No recipients'), 'error')
 
     for recipient in recipients:
-        with default_storefront():   # its readers may not use the sender's storefront (onion spec §3.4)
-            body_text = render_template('email/newsletter.txt',
-                                        recipient=recipient if not form.test.data else current_user,
-                                        content=form.body_text.data)
-            body_html = render_template('email/newsletter.html',
-                                        recipient=recipient if not form.test.data else current_user,
-                                        content=form.body_html.data)
+        reader = recipient if not form.test.data else current_user
+        with home_storefront(reader):   # each reader's links name their own domain (spec §3.2)
+            body_text = render_template('email/newsletter.txt', recipient=reader, content=form.body_text.data)
+            body_html = render_template('email/newsletter.html', recipient=reader, content=form.body_html.data)
         if form.test.data:
             to = current_user.email
         else:

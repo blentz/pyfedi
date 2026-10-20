@@ -63,7 +63,7 @@ from app.shared.tasks.maintenance import (
     archive_old_posts, archive_old_users, cleanup_old_read_posts, refresh_instance_chooser, clean_up_tmp
 )
 from app.utils import move_file_to_s3
-from app.storefront import default_domain
+from app.storefront import default_domain, home_storefront
 from app.discovery.cli import register_discovery_commands
 from app.relays.cli import register_relay_commands
 import app as app_pkg
@@ -1641,15 +1641,18 @@ def register(app):
                             posts = posts.filter(Post.posted_at > user.last_seen).order_by(desc(Post.score))
                             posts = posts.limit(20).all()
 
-                            # Send email!
+                            # Send email! Its links name the domain the user logs in on
+                            with home_storefront(user):
+                                text_body = flask.render_template('email/unread_notifications.txt', user=user,
+                                                                  notifications=notifications, site=site)
+                                html_body = flask.render_template('email/unread_notifications.html', user=user,
+                                                                  notifications=notifications,
+                                                                  posts=posts, site=site)
                             send_email(_('[PieFed] You have unread notifications'),
                                        sender=f'{site.name} <{current_app.config["MAIL_FROM"]}>',
                                        recipients=[user.email],
-                                       text_body=flask.render_template('email/unread_notifications.txt', user=user,
-                                                                       notifications=notifications, site=site),
-                                       html_body=flask.render_template('email/unread_notifications.html', user=user,
-                                                                       notifications=notifications,
-                                                                       posts=posts, site=site))
+                                       text_body=text_body,
+                                       html_body=html_body)
                             user.email_unread_sent = True
 
 

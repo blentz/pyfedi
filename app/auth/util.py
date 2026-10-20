@@ -21,8 +21,8 @@ from app.auth.forms import LoginForm
 from app.constants import NOTIF_REGISTRATION
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
-from app.storefront import (DomainInfo, current_storefront, default_domain, domain_base_url, domain_for_host, on_domain,
-                            public_registration_open)
+from app.storefront import (DomainInfo, current_storefront, default_domain, domain_base_url, domain_for_host, home_storefront,
+                            on_domain, public_registration_open)
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role, dummy_password_hash, \
     verify_password_hash
 from app.onion import audit_field, is_onion_request
@@ -407,8 +407,9 @@ def requires_email_verification(user):
 def send_email_verification(user):
     send_verification_email(user)
     if current_app.debug:
-        current_app.logger.info("Verify account:" +
-                                url_for("auth.verify_email", token=user.verification_token, _external=True))
+        with home_storefront(user):
+            current_app.logger.info("Verify account:" +
+                                    url_for("auth.verify_email", token=user.verification_token, _external=True))
 
 
 def requires_approval(user):
