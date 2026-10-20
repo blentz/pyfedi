@@ -5,6 +5,7 @@ import markdown2
 from bs4 import BeautifulSoup
 from app import markdown_extras
 from app.markdown_extras import EnhancedImages, apply_enhanced_image_attributes
+from app.utils import markdown_to_html
 from tests.linear_time import grows_linearly
 from tests.test_markdown_to_html import corpus_texts, random_texts
 
@@ -249,25 +250,29 @@ Some text here.
         self.assertEqual((img['src'], img['alt'], img['width'], img['align']), ('x>y.jpg', 'a>b', '200px', 'left'))
         self.assertNotIn('data-enhanced-img', img.attrs)
 
-    def test_integration_with_markdown_to_html(self):
-        """Test integration with markdown_to_html function (full extras suite)"""
-        from app.utils import markdown_to_html
-        markdown = 'Testing!\n\n![an image :: width=50](https://piefed.social/static/media/logo_8p7en.svg)\n\nthere we go'
-        result = markdown_to_html(markdown)
-        print(f"Result: {result}")
-        # Should have proper width attribute
-        self.assertIn('width="50"', result)
-        # Should have proper src (without extra quotes)
-        self.assertIn('src=', result)
-        self.assertIn('https://piefed.social/static/media/logo_8p7en.svg', result)
-        # Should have proper alt text
-        self.assertIn('alt=', result)
-        self.assertIn('an image', result)
-        # Should NOT have data-enhanced-img in final output
-        self.assertNotIn('data-enhanced-img', result)
-        # Should NOT have broken quotes like src="'url'"
-        self.assertNotIn("src=\"'", result)
-        self.assertNotIn("alt=\"'", result)
+
+def test_integration_with_markdown_to_html(app):
+    """Test integration with markdown_to_html function (full extras suite).
+
+    A pytest function with the app, not a TestCase method: markdown_to_html looks the custom emoji up through the
+    memoized get_emoji_replacements, which needs an app context and the database. As a TestCase method it ran
+    without one, and passed only when an earlier test on the same worker had left the session's app context open
+    ('Cache' object has no attribute 'app' otherwise)."""
+    markdown = 'Testing!\n\n![an image :: width=50](https://piefed.social/static/media/logo_8p7en.svg)\n\nthere we go'
+    result = markdown_to_html(markdown)
+    # Should have proper width attribute
+    assert 'width="50"' in result
+    # Should have proper src (without extra quotes)
+    assert 'src=' in result
+    assert 'https://piefed.social/static/media/logo_8p7en.svg' in result
+    # Should have proper alt text
+    assert 'alt=' in result
+    assert 'an image' in result
+    # Should NOT have data-enhanced-img in final output
+    assert 'data-enhanced-img' not in result
+    # Should NOT have broken quotes like src="'url'"
+    assert "src=\"'" not in result
+    assert "alt=\"'" not in result
 
 
 if __name__ == '__main__':
