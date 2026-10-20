@@ -8,8 +8,10 @@ import re
 from urllib.parse import unquote, urlsplit
 
 from flask import current_app
+from flask_login import current_user
 from sqlalchemy import and_, bindparam, not_, or_, text, true
 
+import app as app_pkg
 from app import db
 # The module, not the names: app.models imports this module, and app.storefront imports app.models, so whichever is
 # imported first finds the other mid-import (import cycle: models)
@@ -61,6 +63,21 @@ def content_local_only(author, community, *parents) -> bool:
         return False
     return (user_local_only(author) or community_local_only(community) or
             any(parent is not None and parent.local_only for parent in parents))
+
+
+def local_only_visible() -> bool:
+    """True when this request's reader may see local-only content: a logged-in user, or the account an RSS reader's
+    `?token=` names (an RSS reader presents no session). Anonymous visitors, crawlers and link previews may not."""
+    # app.utils at call time: it imports app.models, which imports this module (import cycle: models)
+    return current_user.is_authenticated or app_pkg.utils.rss_token_user() is not None
+
+
+def without_local_only(query, model, visible: bool | None = None):
+    """`query` over `model` (Post or PostReply) without the local-only rows, unless the reader may see them.
+    `visible` is that answer when the caller has it (an API call's token user), else local_only_visible()."""
+    if visible is None:
+        visible = local_only_visible()
+    return query if visible else query.filter(model.local_only.is_(False))
 
 
 def _closed_domains() -> tuple[list[int], bool]:

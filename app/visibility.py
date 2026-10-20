@@ -56,7 +56,13 @@ def can_view(obj, viewer_id: Optional[int]) -> bool:
     """A followers-only object is visible to its author, the author's accepted followers and, as Mastodon does, the
     users it was pushed to (R-REPLYVIEW): the author a reply answers, and locally Mentioned users. visible_to_clause
     and visible_to_sql agree on all of it except Mentions, which they cannot resolve: a Mentioned user can open the
-    object and is notified of it, but it is not listed for them."""
+    object and is notified of it, but it is not listed for them.
+
+    Local-only content is for logged-in readers only (spec §3.4), so with no viewer it is never visible. The two
+    clauses do not apply that rule, since admin pages pass them no viewer too: lists leave it out with
+    app.local_only.without_local_only."""
+    if obj.local_only and not viewer_id:
+        return False
     visibility = obj.visibility if obj.visibility is not None else VISIBILITY_PUBLIC
     if visibility in OPEN_VISIBILITIES:
         return True

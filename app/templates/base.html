@@ -104,7 +104,7 @@
         {% if noindex -%}
             <meta name="robots" content="noindex">
         {% endif -%}
-        {% if post and not post.deleted -%}
+        {% if post and not post.deleted and not post.local_only -%}{# a link preview is fetched anonymously: 404 #}
             <link rel="alternate" type="application/json+oembed" href="{{ url_for('post.post_oembed', post_id=post.id, _external=True) }}" title="{{ post.title }}" />
         {% endif -%}
       {% if preconnect and not low_bandwidth -%}

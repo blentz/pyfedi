@@ -60,6 +60,7 @@ import boto3
 from app import db, cache, httpx_client, celery, get_ip_address, plugins
 from app.onion import is_onion_request
 from app.pinned_http import fetch_deadline, is_refused_address
+from app.local_only import local_only_visible
 from app.visibility import OPEN_VISIBILITIES, listable_sql, visible_to_sql
 from app.constants import *
 import re
@@ -5855,6 +5856,10 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
     else:
         post_id_where.append('c.private is false ')
 
+    # Local-only posts are for logged-in readers and RSS token holders only (spec §3.4)
+    if not local_only_visible():
+        post_id_where.append('p.local_only is false ')
+
     # filter out nsfw and nsfl if desired
     if current_user.is_anonymous:
         if current_app.config['CONTENT_WARNING']:
@@ -6013,6 +6018,8 @@ def get_instance_stickies(community_ids: List[int], sort: str):
     # Check each post in turn and only return list of posts that should be displayed
     if current_user.is_anonymous:
         for post in posts:
+            if post.local_only:  # for logged-in readers only (spec §3.4)
+                continue
             # Only show NSFW/NSFL to anon users if content warning enabled
             if not current_app.config['CONTENT_WARNING']:
                 if post.nsfw or post.nsfl:
@@ -6978,6 +6985,7 @@ def archive_post(post_id: int, s3_connection):
                         serialized = {
                             'id': int(comment.id) if comment.id else None,
                             'visibility': comment.visibility,
+                            'local_only': bool(comment.local_only),
                             'body': str(comment.body) if comment.body else '',
                             'body_html': str(comment.body_html) if comment.body_html else '',
                             'posted_at': comment.posted_at.isoformat() if comment.posted_at else None,

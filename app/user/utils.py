@@ -15,6 +15,7 @@ from app.models import User, CommunityMember, Community, Site, BannedInstances, 
 from app.shared.tasks import task_selector
 from app.utils import gibberish, get_request, get_task_session, patch_db_session, \
     intlist_to_strlist, community_membership_private, paginate_post_ids, post_ids_to_models
+from app.local_only import local_only_visible, without_local_only
 from app.visibility import visible_to_clause, visible_to_sql
 
 import httpx
@@ -208,7 +209,8 @@ def _get_user_posts(user, post_page):
     """Get posts for a user based on current user's permissions."""
     # no role exempts the viewer from the audience of a post (D19)
     viewer_id = current_user.get_id()
-    base_query = Post.query.filter_by(user_id=user.id).filter(visible_to_clause(Post, viewer_id))
+    base_query = without_local_only(Post.query.filter_by(user_id=user.id).filter(visible_to_clause(Post, viewer_id)),
+                                    Post)
 
     if current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff()):
         # Admins see everything
@@ -247,7 +249,8 @@ def _get_user_post_replies(user, replies_page):
     """Get post replies for a user based on current user's permissions."""
     # no role exempts the viewer from the audience of a reply (D19)
     viewer_id = current_user.get_id()
-    base_query = PostReply.query.filter_by(user_id=user.id).filter(visible_to_clause(PostReply, viewer_id))
+    base_query = without_local_only(PostReply.query.filter_by(user_id=user.id).filter(
+        visible_to_clause(PostReply, viewer_id)), PostReply)
 
     if current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff()):
         # Admins see everything
@@ -318,6 +321,9 @@ def _get_user_posts_and_replies(user, page):
 
     post_select += f" AND {visible_to_sql('post')}"
     reply_select += f" AND {visible_to_sql('post_reply', reply=True)}"
+    if not local_only_visible():
+        post_select += " AND post.local_only IS FALSE"
+        reply_select += " AND post_reply.local_only IS FALSE"
 
     full_query = post_select + " UNION " + reply_select + f" ORDER BY posted_at DESC LIMIT {per_page + 1} OFFSET {offset_val};"
     query_result = db.session.execute(text(full_query), {'visibility_viewer_id': viewer_id})

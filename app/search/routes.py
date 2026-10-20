@@ -13,6 +13,7 @@ from app.discovery.media import media_post_clause
 from app.discovery.search import viewer_allows_nsfw
 from app.models import Post, Language, Community, Instance, PostReply
 from app.search import bp
+from app.local_only import without_local_only
 from app.visibility import listable_clause
 from app.utils import render_template, blocked_domains, blocked_or_banned_instances, \
     communities_banned_from, recently_upvoted_posts, recently_downvoted_posts, blocked_users, blocked_communities, \
@@ -71,8 +72,8 @@ def run_search():
         next_url = prev_url = None
         db.session.execute(text("SET work_mem = '100MB';"))
         if search_for == 'posts':
-            posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING, Post.private == False,
-                                      listable_clause(Post))
+            posts = without_local_only(Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
+                                                         Post.private == False, listable_clause(Post)), Post)
             if current_user.is_authenticated:
                 if current_user.ignore_bots == 1:
                     posts = posts.filter(Post.from_bot == False)
@@ -142,8 +143,8 @@ def run_search():
 
         replies = None
         if search_for == 'comments':
-            replies = PostReply.query.filter(PostReply.deleted == False,
-                                            listable_clause(PostReply))
+            replies = without_local_only(PostReply.query.filter(PostReply.deleted == False,
+                                                                listable_clause(PostReply)), PostReply)
             if current_user.is_authenticated:
                 if current_user.ignore_bots == 1:
                     replies = replies.filter(PostReply.from_bot == False)

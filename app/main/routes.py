@@ -10,7 +10,7 @@ from feedgen.feed import FeedGenerator
 from furl import furl
 from markupsafe import Markup, escape
 from pyld import jsonld
-from sqlalchemy import or_, and_, func
+from sqlalchemy import or_, and_, exists, func
 from sqlalchemy.orm import joinedload
 from ua_parser import parse as uaparse
 
@@ -41,6 +41,7 @@ from app.main.forms import ShareLinkForm
 from app.main.util import sidebar_active_communities, sidebar_new_instances, sidebar_upcoming_events, \
     sidebar_new_communities, _base_list_communities_context, reload_url
 from app.translation import LibreTranslateAPI
+from app.local_only import local_only_visible, without_local_only
 from app.visibility import listable_clause, modlog_open_clause, visible_to_clause
 from app.storefront import storefront_cache_key, storefront_link, storefront_url
 from app.utils import etag_stamp
@@ -57,7 +58,7 @@ from app.utils import render_template, ensure_rss_token, get_setting, request_et
     num_topics, referrer, block_honey_pot, user_pronouns, get_instance_stickies, \
     community_membership_private, favorite_communities, mimetype_from_url, feed_entry_body, check_anoobis, \
     is_safe_redirect_target, feed_readable_by, refuse_if_private_instance
-from app.models import Community, CommunityMember, Post, Site, User, utcnow, Topic, Instance, \
+from app.models import Community, CommunityMember, Post, PostReply, Site, User, utcnow, Topic, Instance, \
     Notification, Language, community_language, ModLog, Feed, FeedItem, CmsPage, BannedInstances, BotChallenge
 from app.ldap_utils import test_ldap_connection, sync_user_to_ldap, login_with_ldap
 import boto3
@@ -678,6 +679,9 @@ def modlog():
             modlog_entries = modlog_entries.filter(ModLog.public == True).order_by(desc(ModLog.created_at))
     else:
         modlog_entries = modlog_entries.filter(ModLog.public == True).order_by(desc(ModLog.created_at))
+    if not local_only_visible():  # an entry names its post or comment, and local-only ones are not named (§3.4)
+        modlog_entries = modlog_entries.filter(~exists().where(Post.id == ModLog.post_id, Post.local_only),
+                                               ~exists().where(PostReply.id == ModLog.reply_id, PostReply.local_only))
 
     # Pagination
     modlog_entries = modlog_entries.paginate(page=page, per_page=100 if not low_bandwidth else 50, error_out=False)
@@ -780,6 +784,7 @@ def sitemap():
         Post.from_bot == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
         Post.instance_id == 1, Post.indexable == True, Community.private == False, Community.local_only == False,
         listable_clause(Post))
+    posts = without_local_only(posts, Post, visible=False)   # even for a logged-in crawler: one cached copy for all
     posts = posts.order_by(desc(Post.posted_at)).limit(500)
 
     resp = make_response(render_template('sitemap.xml', posts=posts, current_app=current_app))
@@ -1081,11 +1086,13 @@ def share():
                                                                             Post.microblog == False,
                                                                             Post.from_bot == False,
                                                                             Community.name != 'microblogs',
-                                                                            visible_to_clause(Post, None)).all()
+                                                                            visible_to_clause(Post, None))
+    communities = without_local_only(communities, Post).all()   # and the posts below, so the two still agree
     posts_keyed_by_community = {}
     if len(communities):
         posts = Post.query.filter(Post.url == url, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
-                                  Post.microblog == False, Post.from_bot == False, visible_to_clause(Post, None)).all()
+                                  Post.microblog == False, Post.from_bot == False, visible_to_clause(Post, None))
+        posts = without_local_only(posts, Post).all()
         for post in posts:
             posts_keyed_by_community[post.community_id] = post
 

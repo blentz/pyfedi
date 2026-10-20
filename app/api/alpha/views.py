@@ -119,7 +119,9 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
                     v1['alt_text'] = post.image.alt_text
         if post.cross_posts:
             v1['cross_posts'] = []
-            cross_post_data = db.session.execute(text('SELECT p.id, reply_count, c.title FROM "post" as p INNER JOIN "community" as c ON p.community_id = c.id WHERE p.id IN :cross_posts AND ' + visible_to_sql('p')),
+            local_only_filter = '' if user_id else ' AND p.local_only IS FALSE'   # for a token user only (spec §3.4)
+            cross_post_data = db.session.execute(text('SELECT p.id, reply_count, c.title FROM "post" as p INNER JOIN "community" as c ON p.community_id = c.id WHERE p.id IN :cross_posts AND '
+                                                      + visible_to_sql('p') + local_only_filter),
                                                  {'cross_posts': tuple(post.cross_posts), 'visibility_viewer_id': user_id}).all()
             for cross_post in cross_post_data:
                 v1['cross_posts'].append({'post_id': cross_post[0], 'reply_count': cross_post[1], 'community_name': cross_post[2]})

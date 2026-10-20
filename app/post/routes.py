@@ -37,6 +37,7 @@ from app.models import Post, PostReply, PostReplyValidationError, \
     Topic, User, Instance, UserFollower, Poll, PollChoice, PollChoiceVote, PostBookmark, \
     PostReplyBookmark, CommunityBlock, File, CommunityFlair, UserFlair, BlockedImage, CommunityBan, Language, Event, \
     Reminder, Emoji
+from app.local_only import without_local_only
 from app.post import bp
 from app.visibility import can_view, is_open, post_title_for, visible_to_clause
 from app.post.forms import NewReplyForm, ReportPostForm, MeaCulpaForm, CrossPostForm, ConfirmationForm, \
@@ -112,6 +113,13 @@ def refuse_invisible(obj):
     """Interop D7: followers-only content is 404 to anyone but the author's accepted local followers.
     404, not 403, so the response does not confirm that the object exists."""
     if not can_view(obj, current_user.get_id()):
+        abort(404)
+
+
+def refuse_local_only_comment(comment):
+    """§3.4: a local-only comment is 404 to a reader who is not logged in, as if it did not exist. refuse_invisible
+    would only render it as a placeholder, which still tells that reader it is there."""
+    if comment.local_only and current_user.is_anonymous:
         abort(404)
 
 
@@ -269,8 +277,9 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
                     bc = blocked_communities(current_user.get_id())
                     bi = blocked_or_banned_instances(current_user.get_id())
                     viewer_id = current_user.id if current_user.is_authenticated else None
-                    for cross_posted_post in Post.query.filter(Post.id.in_(post.cross_posts),
-                                                               visible_to_clause(Post, viewer_id)):
+                    for cross_posted_post in without_local_only(Post.query.filter(Post.id.in_(post.cross_posts),
+                                                                                  visible_to_clause(Post, viewer_id)),
+                                                                Post):
                         if cross_posted_post.community_id not in cbf \
                                 and cross_posted_post.community_id not in bc \
                                 and cross_posted_post.community.instance_id not in bi:
@@ -434,7 +443,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
         else:
             is_dead = False
 
-        ap_alternate = clean_ap_url(post.profile_id())
+        ap_alternate = None if post.local_only else clean_ap_url(post.profile_id())   # 404 to every other server
         response = render_template('post/post.html', title=page_title, post=post, is_moderator=is_moderator,
                                    is_owner=community.is_owner(), is_dead=is_dead,
                                    community=post.community, community_flair=shared_community.get_comm_flair_list(community),
@@ -538,8 +547,9 @@ def post_lazy_replies(post_id, nonce):
         cbf = communities_banned_from_list
         bc = blocked_communities(current_user.get_id())
         bi = blocked_or_banned_instances(current_user.get_id())
-        for cross_posted_post in Post.query.filter(Post.id.in_(post.cross_posts),
-                                                   visible_to_clause(Post, user.id if user else None)):
+        viewer_id = user.id if user else None
+        for cross_posted_post in without_local_only(Post.query.filter(Post.id.in_(post.cross_posts),
+                                                                      visible_to_clause(Post, viewer_id)), Post):
             if cross_posted_post.community_id not in cbf \
                     and cross_posted_post.community_id not in bc \
                     and cross_posted_post.community.instance_id not in bi:
@@ -871,6 +881,7 @@ def continue_discussion(post_id, comment_id):
 
     refuse_private_community(post)
     refuse_invisible(post)
+    refuse_local_only_comment(comment)
 
     if post.community.banned or post.deleted or comment.deleted:
         if current_user.is_anonymous or not (current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff())):
@@ -976,6 +987,7 @@ def continue_discussion_ajax(post_id, comment_id, nonce):
     # D1077's family: the same page, fetched by the front end.
     if comment.post_id != post.id:
         abort(404)
+    refuse_local_only_comment(comment)
 
     refuse_private_community(post)
 
@@ -2665,8 +2677,8 @@ def post_cross_posts(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     refuse_invisible(post)
     if post.cross_posts:
-        cross_posts = Post.query.filter(Post.id.in_(post.cross_posts),
-                                        visible_to_clause(Post, current_user.id if current_user.is_authenticated else None))
+        cross_posts = without_local_only(Post.query.filter(Post.id.in_(post.cross_posts), visible_to_clause(
+            Post, current_user.id if current_user.is_authenticated else None)), Post)
         return render_template('post/post_cross_posts.html', cross_posts=cross_posts)
     else:
         abort(404)

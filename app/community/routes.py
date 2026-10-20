@@ -53,6 +53,7 @@ from app.post.util import form_tags_string
 # The module, not the names: app.shared.community reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
+from app.local_only import without_local_only
 from app.visibility import is_open, listable_clause, visible_to_clause
 from app.utils import etag_stamp
 from app.utils import user_banned_from_community, back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
@@ -325,7 +326,7 @@ def community_post_query(community: Community, content_type: str, flair: str = '
     # for any titleless object), not a privacy flag -- non-public objects are
     # refused at ingest by create_post(). Filtering it here hid every microblog
     # from the community that carries them, e.g. /c/microblogs@piefed.social.
-    posts = Post.query.filter(Post.community_id == community.id, listable_clause(Post))
+    posts = without_local_only(Post.query.filter(Post.community_id == community.id, listable_clause(Post)), Post)
     if from_instance is not None:   # a server view: /c/microblogs@<host> (spec 2026-10-08)
         posts = posts.filter(Post.instance_id == from_instance.id)
 
@@ -583,8 +584,8 @@ def show_community(community: Community, from_instance=None):
         # Measured: `PROBE s1 replies shown: ['reply to a removed post']` and
         # `PROBE s2 replies shown for a post under review: [...]`. The two
         # filters are the ones the posts branch applies to Post itself.
-        comments = community.replies.join(Post, PostReply.post_id == Post.id).filter(
-            Post.deleted == False, Post.status > POST_STATUS_REVIEWING, listable_clause(PostReply))
+        comments = without_local_only(community.replies.join(Post, PostReply.post_id == Post.id).filter(
+            Post.deleted == False, Post.status > POST_STATUS_REVIEWING, listable_clause(PostReply)), PostReply)
 
         # filter out nsfw and nsfl if desired
         if current_user.is_anonymous:
@@ -871,6 +872,7 @@ def show_community_rss(actor):
         # No Post.private filter, for the same reason as show_community above.
         posts = Post.query.filter(Post.community_id == community.id).filter(Post.from_bot == False, Post.deleted == False,
                                   Post.status > POST_STATUS_REVIEWING, listable_clause(Post))
+        posts = without_local_only(posts, Post)   # the token is in the cache key
         if score:
             posts = posts.filter(Post.score >= score)
         if tag:
@@ -946,8 +948,8 @@ def show_community_ical(actor):
             abort(403)
         posts = Post.query.filter(Post.community_id == community.id, Post.type == POST_TYPE_EVENT).\
             filter(Post.from_bot == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
-                   listable_clause(Post)).\
-            order_by(desc(Post.created_at)).limit(50).all()
+                   listable_clause(Post))
+        posts = without_local_only(posts, Post).order_by(desc(Post.created_at)).limit(50).all()
         ical = Calendar(creator='PieFed')
         for post in posts:
             # D1014. `Post.event` is a relationship, and a POST_TYPE_EVENT post

@@ -94,6 +94,7 @@ def convert_archived_replies_to_tree(archived_replies: list, post: Post) -> List
         post_reply.path = reply_data.get('path', [])
         post_reply.answer = reply_data.get('answer', False)
         post_reply.visibility = reply_data.get('visibility', VISIBILITY_PUBLIC)
+        post_reply.local_only = reply_data.get('local_only', False)   # mark_restricted withholds it from anonymous
         post_reply.reports = 0
         
         # Post relationship
@@ -190,6 +191,8 @@ def post_replies(post: Post, sort_by: str, viewer: User, db_only=False) -> List[
         if instance_ids := silenced_instances():
             comments = comments.filter(or_(PostReply.instance_id.not_in(instance_ids), PostReply.instance_id == None))
         comments.filter(PostReply.score > -20)
+        if not db_only:  # no viewer: a local-only reply, and so all its replies, are left out (spec §3.4)
+            comments = comments.filter(PostReply.local_only.is_(False))
 
     if sort_by == 'hot':
         comments = comments.order_by(desc(PostReply.ranking))
@@ -258,6 +261,7 @@ def get_comment_branch(post: Post, comment_id: int, sort_by: str, viewer: User) 
                 or_(PostReply.language_id.in_(tuple(viewer.read_language_ids)), PostReply.language_id == None))
     else:
         comments.filter(PostReply.score > -20)
+        comments = comments.filter(PostReply.local_only.is_(False))  # no viewer: as post_replies
 
     if sort_by == 'hot':
         comments = comments.order_by(desc(PostReply.ranking))

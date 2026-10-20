@@ -19,6 +19,7 @@ from app.community.util import save_icon_file, save_banner_file, retrieve_mods_a
 from app.constants import *
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap
+from app.local_only import without_local_only
 from app.visibility import OPEN_VISIBILITIES, visible_to_clause
 from app.onion import is_onion_request
 from app.models import Post, Community, CommunityMember, User, PostReply, Notification, utcnow, File, Site, \
@@ -54,7 +55,7 @@ from app.utils import user_banned_from_community, back, render_template, markdow
 from app.rss_extras import RSSFeed
 import app.api.alpha.views as alpha_views
 from app.utils import user_filters_languages
-from app.storefront import is_local_host, storefront_cache_key, storefront_url
+from app.storefront import is_local_host, storefront_query_cache_key, storefront_url
 from app.utils import ap_alternate_url
 from app.utils import canonical_host
 import app as app_pkg
@@ -2481,7 +2482,7 @@ def user_feeds(actor):
 # RSS feed of the community
 @bp.route('/u/<actor>/feed', methods=['GET'])
 @refuse_if_private_instance
-@cache.cached(timeout=600, key_prefix=storefront_cache_key)
+@cache.cached(timeout=600, make_cache_key=storefront_query_cache_key)   # ?token= decides what is listed
 def show_profile_rss(actor):
     actor = actor.strip()
     if '@' in actor:
@@ -2513,7 +2514,8 @@ def show_profile_rss(actor):
         posts = user.posts.join(Community, Post.community_id == Community.id). \
             filter(Community.private == False, Community.banned == False). \
             filter(Post.from_bot == False, Post.deleted == False, Post.visibility.in_(OPEN_VISIBILITIES),
-                   Post.status > POST_STATUS_REVIEWING).order_by(desc(Post.created_at)).limit(limit).all()
+                   Post.status > POST_STATUS_REVIEWING)
+        posts = without_local_only(posts, Post).order_by(desc(Post.created_at)).limit(limit).all()
 
         server_url = storefront_url()
         description = shorten_string(user.about, 150) if user.about else ' '

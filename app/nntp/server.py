@@ -54,7 +54,8 @@ from app.utils import communities_banned_from, blocked_or_banned_instances, filt
     get_request, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, log_login_failure
 from sqlalchemy import func
 from app import db
-from app.visibility import can_view, visible_to_clause
+from app.local_only import without_local_only
+from app.visibility import is_open, visible_to_clause
 from flask import g
 from app.api.alpha.utils.reply import post_reply as _api_post_reply
 from app.api.alpha.utils.post import post_post as _api_post_post
@@ -67,6 +68,18 @@ GROUPS_CACHE_TTL = 60
 
 # Thread-local: each connection thread stores the current community_id here.
 _tl = threading.local()
+
+
+def _authenticated() -> bool:
+    """True once this connection's reader has authenticated. Local-only articles are for them alone (spec §3.4): an
+    anonymous reader is answered as for a missing article."""
+    return getattr(_tl, 'user_id', None) is not None
+
+
+def _readable(model, db_id: int):
+    """The undeleted, open Post or PostReply `db_id`, or None, local-only ones only for an authenticated reader."""
+    query = model.query.filter_by(id=db_id, deleted=False).filter(visible_to_clause(model, None))
+    return without_local_only(query, model, visible=_authenticated()).first()
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +172,7 @@ def _reply_to_info(reply, domain: str, seq_num: int) -> ArticleInfo:
         else _make_message_id('post', reply.post_id, domain)
     )
     subject = "(no subject)"
-    if reply.post and can_view(reply.post, None):  # NNTP is anonymous: a hidden parent's title stays unsaid
+    if reply.post and is_open(reply.post):  # the audience is anonymous: a hidden parent's title stays unsaid
         subject = f"Re: {reply.post.title or '(no subject)'}"
     elif reply.post:
         subject = "Re: (a followers-only post)"
@@ -201,6 +214,7 @@ class CommunityArticleIndex:
         self._seq_map: Dict[int, Tuple[str, int]] = {}   # seq_num → (kind, db_id)
         self._id_map: Dict[Tuple[str, int], int] = {}    # (kind, db_id) → seq_num
         self._info_cache: Dict[int, ArticleInfo] = {}
+        self._local_only: set = set()   # the seq_nums of local-only articles, for an authenticated reader only
         self._high: int = 0
         self._loaded_at: float = 0.0
 
@@ -218,32 +232,36 @@ class CommunityArticleIndex:
                 Post.query
                 .filter_by(community_id=self.community_id, deleted=False)
                 .filter(visible_to_clause(Post, None))
-                .options(load_only(Post.id, Post.posted_at, Post.created_at))
+                .options(load_only(Post.id, Post.posted_at, Post.created_at, Post.local_only))
                 .all()
             )
             replies = (
                 PostReply.query
                 .filter_by(community_id=self.community_id, deleted=False)
                 .filter(visible_to_clause(PostReply, None))
-                .options(load_only(PostReply.id, PostReply.posted_at, PostReply.created_at))
+                .options(load_only(PostReply.id, PostReply.posted_at, PostReply.created_at, PostReply.local_only))
                 .all()
             )
 
         items = []
         for p in posts:
-            items.append((_ensure_utc(p.posted_at or p.created_at), 'post', p.id))
+            items.append((_ensure_utc(p.posted_at or p.created_at), 'post', p.id, p.local_only))
         for r in replies:
-            items.append((_ensure_utc(r.posted_at or r.created_at), 'reply', r.id))
+            items.append((_ensure_utc(r.posted_at or r.created_at), 'reply', r.id, r.local_only))
         items.sort(key=lambda x: x[0])
 
         seq_map: Dict[int, Tuple[str, int]] = {}
         id_map: Dict[Tuple[str, int], int] = {}
-        for seq, (_, kind, db_id) in enumerate(items, start=1):
+        local_only = set()
+        for seq, (_, kind, db_id, is_local_only) in enumerate(items, start=1):
             seq_map[seq] = (kind, db_id)
             id_map[(kind, db_id)] = seq
+            if is_local_only:
+                local_only.add(seq)
 
         self._seq_map = seq_map
         self._id_map = id_map
+        self._local_only = local_only
         self._info_cache = {}
         self._high = len(seq_map)
         self._loaded_at = time.monotonic()
@@ -252,6 +270,8 @@ class CommunityArticleIndex:
 
     def get_info(self, number: int) -> ArticleInfo:
         self._ensure_loaded()
+        if number in self._local_only and not _authenticated():   # before the cache every reader shares
+            raise NNTPArticleNotFound(str(number))
         if number in self._info_cache:
             return self._info_cache[number]
         if number not in self._seq_map:
@@ -292,12 +312,12 @@ class CommunityArticleIndex:
     def _fetch_info(self, kind: str, db_id: int, seq_num: int) -> ArticleInfo:
         with self._app.app_context():
             if kind == 'post':
-                post = Post.query.filter_by(id=db_id, deleted=False).filter(visible_to_clause(Post, None)).first()
+                post = _readable(Post, db_id)
                 if not post:
                     raise NNTPArticleNotFound(f"post-{db_id}")
                 return _post_to_info(post, self._domain, seq_num)
             else:
-                reply = PostReply.query.filter_by(id=db_id, deleted=False).filter(visible_to_clause(PostReply, None)).first()
+                reply = _readable(PostReply, db_id)
                 if not reply:
                     raise NNTPArticleNotFound(f"reply-{db_id}")
                 return _reply_to_info(reply, self._domain, seq_num)
@@ -340,12 +360,12 @@ class IndexArticleDict:
             except ValueError:
                 raise NNTPArticleNotFound(message_id)
             if kind == 'post':
-                post = Post.query.filter_by(id=db_id, deleted=False).filter(visible_to_clause(Post, None)).first()
+                post = _readable(Post, db_id)
                 if not post:
                     raise NNTPArticleNotFound(message_id)
                 return _post_to_info(post, self._domain, post.id)
             else:
-                reply = PostReply.query.filter_by(id=db_id, deleted=False).filter(visible_to_clause(PostReply, None)).first()
+                reply = _readable(PostReply, db_id)
                 if not reply:
                     raise NNTPArticleNotFound(message_id)
                 return _reply_to_info(reply, self._domain, reply.id)
@@ -739,14 +759,14 @@ class PieFedNNTPServer(NNTPServer):
             except ValueError:
                 raise NNTPArticleNotFound(message_id)
             if kind == 'post':
-                post = Post.query.filter_by(id=db_id, deleted=False).filter(visible_to_clause(Post, None)).first()
+                post = _readable(Post, db_id)
                 if not post:
                     raise NNTPArticleNotFound(message_id)
                 if post.type == 3 and post.image:
                     return self._build_image_body(post)
                 return _post_body_text(post), {}
             else:
-                reply = PostReply.query.filter_by(id=db_id, deleted=False).filter(visible_to_clause(PostReply, None)).first()
+                reply = _readable(PostReply, db_id)
                 if not reply:
                     raise NNTPArticleNotFound(message_id)
                 return reply.body or '', {}

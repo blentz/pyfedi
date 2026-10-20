@@ -16,9 +16,10 @@ from app.constants import SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, POST_TYPE_
 from app.email import send_topic_suggestion
 from app.inoculation import inoculation
 from app.models import Topic, Community, NotificationSubscription, PostReply, utcnow
-from app.storefront import storefront_cache_key, storefront_link, storefront_url
+from app.storefront import storefront_link, storefront_query_cache_key, storefront_url
 from app.topic import bp
 from app.topic.forms import SuggestTopicsForm
+from app.local_only import without_local_only
 from app.visibility import listable_clause
 from app.utils import etag_stamp, render_template, user_filters_posts, validation_required, mimetype_from_url, feed_entry_body, login_required, \
     gibberish, get_deduped_post_ids, paginate_post_ids, post_ids_to_models, blocked_communities, \
@@ -112,7 +113,8 @@ def show_topic(topic_path):
             prev_url = url_for('topic.show_topic', topic_path=topic_path, result_id=result_id,
                                page=page - 1, sort=sort, layout=post_layout) if page > 0 else None
         elif content_type == 'comments':
-            comments = PostReply.query.filter(PostReply.community_id.in_(community_ids), listable_clause(PostReply))
+            comments = without_local_only(PostReply.query.filter(PostReply.community_id.in_(community_ids),
+                                                                 listable_clause(PostReply)), PostReply)
 
             # filter out nsfw and nsfl if desired
             if current_user.is_anonymous:
@@ -216,7 +218,7 @@ def show_topic(topic_path):
 
 @bp.route('/topic/<path:topic_path>.rss', methods=['GET'])
 @refuse_if_private_instance
-@cache.cached(timeout=600, key_prefix=storefront_cache_key)
+@cache.cached(timeout=600, make_cache_key=storefront_query_cache_key)   # ?token= decides what is listed
 def show_topic_rss(topic_path):
     topic_url_parts = topic_path.split('/')
     last_topic_machine_name = topic_url_parts[-1]

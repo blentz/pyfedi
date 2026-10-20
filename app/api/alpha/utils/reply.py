@@ -12,6 +12,7 @@ from app.shared.reply import vote_for_reply, bookmark_reply, remove_bookmark_rep
     edit_reply, \
     delete_reply, restore_reply, report_reply, mod_remove_reply, mod_restore_reply, lock_post_reply, choose_answer, \
     unchoose_answer
+from app.local_only import without_local_only
 from app.visibility import can_view, listable_clause, visible_to_clause
 from app.utils import authorise_api_user, blocked_users, blocked_or_banned_instances, site_language_id, \
     communities_banned_from, in_sorted_list, moderating_communities_ids, joined_communities, user_access, \
@@ -316,6 +317,9 @@ def get_reply_list(auth, data, user_details=None):
                 )
 
     if replies:
+        # A listing or a conversation alike: a local-only reply's own replies are local-only too, so leaving them out
+        # makes no gap in a thread (spec §3.4)
+        replies = without_local_only(replies, PostReply, visible=user_id is not None)
         # sort == 'Relevance' handled above when query.search was executed
         if sort == 'Hot' or sort == 'Scaled':
             replies = replies.order_by(desc(PostReply.ranking)).order_by(desc(PostReply.posted_at))

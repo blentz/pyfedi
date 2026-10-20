@@ -29,6 +29,7 @@ from app.utils import can_moderate, authorise_api_user, blocked_users, blocked_c
     community_membership_private, paginate_post_ids, post_ids_to_models, user_access, moderating_communities_ids, \
     user_filters_languages, feed_readable_by
 from app.shared.tasks import task_selector
+from app.local_only import without_local_only
 from app.visibility import can_view, listable_clause, listable_sql, visible_to_clause, visible_to_sql
 
 
@@ -433,6 +434,9 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
     else:
         posts = posts.filter(listable_clause(Post))
         post_query_criteria.append(listable_sql('p'))
+    if user_id is None:   # local-only posts are for a token user (spec §3.4)
+        posts = without_local_only(posts, Post, visible=False)
+        post_query_criteria.append('p.local_only is false')
     
     # for materialized view - private community filtering
     # ALWAYS append a private-community criterion, whether or not the reader is
@@ -1086,6 +1090,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
         posts = posts.filter(visible_to_clause(Post, user_id))
     else:
         posts = posts.filter(listable_clause(Post))
+    posts = without_local_only(posts, Post, visible=user_id is not None)   # spec §3.4
 
     # The reader's own languages. get_post_list has had this filter all along
     # and this listing had none, so an account that reads one language was
