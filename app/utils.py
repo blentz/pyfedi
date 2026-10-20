@@ -5670,6 +5670,8 @@ def dedupe_post_ids(post_ids: List[Tuple[int, Optional[List[int]], int, int]], l
     priority = set()     # Track post IDs that should be prioritized (kept over their cross-posts)
     lvp = low_value_reposters()  # Get set of bot user IDs
     visible_post_ids = {p[0] for p in post_ids}  # Set of all post IDs that are visible to the user
+    # Maps post_id -> (reply_count, is_bot), built once. A post id listed twice keeps its last row.
+    post_info = {p[0]: (p[3], p[2] in lvp) for p in post_ids}
 
     for post_id in post_ids:
         # If this post has cross-posts AND it's not already prioritized or seen
@@ -5683,15 +5685,8 @@ def dedupe_post_ids(post_ids: List[Tuple[int, Optional[List[int]], int, int]], l
 
             # Only proceed if we have posts to consider
             if all_related_posts:
-                # Find reply counts and author info for each related post
-                # Only include posts that actually exist in post_ids
-                related_post_info = {}  # Maps post_id -> (reply_count, is_bot)
-                for other_post in post_ids:
-                    if other_post[0] in all_related_posts:
-                        related_post_info[other_post[0]] = (other_post[3], other_post[2] in lvp)
-
-                # Filter all_related_posts to only include posts we found in post_ids
-                all_related_posts = [pid for pid in all_related_posts if pid in related_post_info]
+                # Only keep related posts that actually exist in post_ids
+                all_related_posts = [pid for pid in all_related_posts if pid in post_info]
 
                 # Only perform deduplication if we have at least 2 related posts
                 # (if we only have 1, it's just the current post with no actual alternatives)
@@ -5700,17 +5695,17 @@ def dedupe_post_ids(post_ids: List[Tuple[int, Optional[List[int]], int, int]], l
                     current_is_bot = post_id[2] in lvp
                     if current_is_bot:
                         # Separate into bot and non-bot posts
-                        non_bot_posts = [pid for pid in all_related_posts if not related_post_info[pid][1]]
+                        non_bot_posts = [pid for pid in all_related_posts if not post_info[pid][1]]
 
                         if non_bot_posts:
                             # Choose the non-bot post with the most replies
-                            best_post = max(non_bot_posts, key=lambda x: related_post_info[x][0])
+                            best_post = max(non_bot_posts, key=lambda x: post_info[x][0])
                         else:
                             # No non-bot alternatives, choose the bot post with the most replies
-                            best_post = max(all_related_posts, key=lambda x: related_post_info[x][0])
+                            best_post = max(all_related_posts, key=lambda x: post_info[x][0])
                     else:
                         # Current post is not from a bot, choose post with most replies (regardless of bot status)
-                        best_post = max(all_related_posts, key=lambda x: related_post_info[x][0])
+                        best_post = max(all_related_posts, key=lambda x: post_info[x][0])
 
                     priority.add(best_post)
 

@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from app.utils import dedupe_post_ids
+from tests.linear_time import grows_linearly
 
 
 class TestDudupePostIds(unittest.TestCase):
@@ -95,92 +96,50 @@ class TestDudupePostIds(unittest.TestCase):
         self.assertEqual(result, [2, 3])  # Both 2 and 3 should remain
 
     @patch('app.utils.low_value_reposters')
-    def test_performance_with_1000_posts(self, mock_low_value):
-        """Test performance with 1000 posts including cross-posts and low-value reposters"""
-        import time
-        
-        # Set up some low-value reposters
-        low_value_users = {user_id for user_id in range(900, 910)}  # 10 low-value users
-        mock_low_value.return_value = low_value_users
-        
-        # Generate 1000 posts with realistic cross-post references
-        params = []
-        for i in range(1, 1001):
-            post_id = i
-            user_id = 100 + (i % 50)  # 50 different users
-            reply_count = i % 100  # Reply counts 0-99
-            
-            # Create cross-posts that reference other posts in the same dataset
-            cross_posts = None
-            if i % 10 == 0 and i <= 900:  # Every 10th post has cross-posts, but only up to 900 to avoid out-of-range
-                # Create 2-3 cross-posts that reference posts within our 1000 post range
-                cross_posts = [i + 50, i + 100]  # Reference posts 50 and 100 positions ahead
-                if i % 20 == 0 and i <= 800:  # Some have 3 cross-posts
-                    cross_posts.append(i + 150)
-            
-            # Some users are low-value reposters
-            if user_id in low_value_users:
-                user_id = 900 + (i % 10)  # Map to low-value users
-            
-            params.append((post_id, cross_posts, user_id, reply_count))
-        
-        # Time the execution
-        start_time = time.time()
-        result = dedupe_post_ids(params, limit_to_visible=False)
-        end_time = time.time()
-        
-        execution_time = end_time - start_time
-        print(f"\\nPerformance test: {len(params)} posts processed in {execution_time:.4f} seconds")
-        print(f"Result: {len(result)} posts after deduplication")
-        print(f"Deduplication ratio: {len(result)/len(params):.2%}")
-        
-        # Should complete reasonably quickly (under 1 second for 1000 posts)
-        self.assertLess(execution_time, 1.0, "Function should complete within 1 second for 1000 posts")
-        self.assertGreater(len(result), 0, "Should return some posts")
-        self.assertLess(len(result), 1000, "Should deduplicate some posts")
+    def test_cross_posts_are_deduped_in_linear_time(self, mock_low_value):
+        """Pairs of cross-posts (every other pair from a bot) cost time proportional to the number of posts"""
+        mock_low_value.return_value = {100}
+
+        def make(size):
+            params = []
+            for i in range(0, size, 2):
+                params.append((i, [i + 1], 100 + i % 2, i % 7))
+                params.append((i + 1, [i], 101, i % 5))
+            return params
+
+        self.assertTrue(grows_linearly(lambda params: dedupe_post_ids(params, limit_to_visible=False), make, small=1000))
+        self.assertTrue(grows_linearly(lambda params: dedupe_post_ids(params, limit_to_visible=True), make, small=1000))
 
     @patch('app.utils.low_value_reposters')
-    def test_worst_case_performance(self, mock_low_value):
-        """Test worst-case performance: many low-value reposters with many cross-posts"""
-        import time
-        
-        # Make half the users low-value reposters to trigger more nested loops
-        low_value_users = {user_id for user_id in range(100, 150)}  # 50 low-value users
-        mock_low_value.return_value = low_value_users
-        
-        # Generate 1000 posts where many are from low-value reposters with cross-posts
-        params = []
-        for i in range(1, 1001):
-            post_id = i
-            user_id = 100 + (i % 100)  # 100 different users, half are low-value
-            reply_count = i % 100  # Reply counts 0-99
-            
-            # Give every low-value reposter cross-posts to trigger nested loop
-            cross_posts = None
-            if user_id in low_value_users and i <= 900:
-                # Each low-value post has 3-5 cross-posts that exist in our dataset
-                cross_posts = [i + 10, i + 20, i + 30]
-                if i <= 800:
-                    cross_posts.extend([i + 40, i + 50])
-            elif i % 5 == 0 and i <= 950:  # Regular users also have some cross-posts
-                cross_posts = [i + 25, i + 35]
-            
-            params.append((post_id, cross_posts, user_id, reply_count))
-        
-        # Time the execution
-        start_time = time.time()
-        result = dedupe_post_ids(params, limit_to_visible=False)
-        end_time = time.time()
-        
-        execution_time = end_time - start_time
-        print(f"\\nWorst-case test: {len(params)} posts processed in {execution_time:.4f} seconds")
-        print(f"Result: {len(result)} posts after deduplication")
-        print(f"Deduplication ratio: {len(result)/len(params):.2%}")
-        
-        # Even in worst case, should complete in reasonable time
-        self.assertLess(execution_time, 2.0, "Function should complete within 2 seconds even in worst case")
-        self.assertGreater(len(result), 0, "Should return some posts")
-        self.assertLess(len(result), 1000, "Should deduplicate some posts")
+    def test_reply_count_ties_keep_the_first_related_post(self, mock_low_value):
+        """On equal reply counts the current post, listed first among its related posts, wins"""
+        mock_low_value.return_value = set()
+        params = [(1, [2, 3], 100, 5), (2, [1, 3], 101, 5), (3, [1, 2], 102, 5)]
+        self.assertEqual(dedupe_post_ids(params, limit_to_visible=False), [1])
+
+    @patch('app.utils.low_value_reposters')
+    def test_repeated_post_id_uses_its_last_entry(self, mock_low_value):
+        """A post id listed twice is judged by its last row's replies and author, and is listed once per row"""
+        mock_low_value.return_value = {100}
+        params = [(1, [2], 101, 1), (2, [1], 102, 5), (1, [2], 100, 50)]
+        # Post 1's last row has 50 replies; row 1's author is no bot, so replies decide and 1 wins. Both rows stay.
+        self.assertEqual(dedupe_post_ids(params, limit_to_visible=False), [1, 1])
+        params = [(1, [2], 101, 1), (2, [1], 102, 5), (1, [2], 101, 2)]
+        self.assertEqual(dedupe_post_ids(params, limit_to_visible=False), [2])
+
+    @patch('app.utils.low_value_reposters')
+    def test_listed_cross_post_repeated_or_self_is_harmless(self, mock_low_value):
+        """Cross-post lists naming the post itself or the same post twice still pick one winner"""
+        mock_low_value.return_value = set()
+        params = [(1, [1, 2, 2], 100, 5), (2, [1], 101, 9), (3, None, 102, 1)]
+        self.assertEqual(dedupe_post_ids(params, limit_to_visible=True), [2, 3])
+
+    @patch('app.utils.low_value_reposters')
+    def test_prioritised_post_is_not_reconsidered(self, mock_low_value):
+        """A winner is not re-grouped when it comes up later with a different cross-post list"""
+        mock_low_value.return_value = set()
+        params = [(1, [2], 100, 1), (2, [3], 101, 9), (3, None, 102, 20)]
+        self.assertEqual(dedupe_post_ids(params, limit_to_visible=False), [2, 3])
 
     # Tests for is_all_view=False behavior
     @patch('app.utils.low_value_reposters')
