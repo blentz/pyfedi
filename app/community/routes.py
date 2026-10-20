@@ -1865,8 +1865,11 @@ def community_add_moderator(community_id: int, user_id: int):
         shared_community.add_mod_to_community(community_id, user_id, SRC_WEB)
     except NoResultFound:
         abort(404)
-    except Exception:
-        abort(401)
+    except Exception as e:
+        if str(e) != 'local_only_moderator':
+            abort(401)
+        flash(_('That account is not visible to other servers, so it cannot moderate a community they follow.'),
+              'error')
 
     return redirect(url_for('community.community_mod_list', community_id=community_id))
 

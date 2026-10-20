@@ -33,6 +33,7 @@ from sqlalchemy.orm import object_session as sa_object_session
 from app import db, cache, celery, plugins
 from app.activitypub.signature import signed_get_capped, signed_get_request, send_post_request, default_context, RsaKeys
 from app.constants import *
+from app.local_only import federating_clause, federating_sql
 from app.storefront import default_domain, domain_authority, domain_base_url
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
@@ -72,9 +73,12 @@ import app as app_pkg
 
 
 def community_members(community_id):
+    """How many members the community's followers collection counts. A local-only account is never one: it does not
+    exist to other servers."""
     sql = 'SELECT COUNT(*) as c FROM "user" as u '
     sql += 'INNER JOIN community_member cm on u.id = cm.user_id '
     sql += 'WHERE u.banned is false AND u.deleted is false AND cm.is_banned is false and cm.community_id = :community_id'
+    sql += f' AND {federating_sql("u")}'
     return db.session.execute(text(sql), {'community_id': community_id}).scalar()
 
 
@@ -83,10 +87,10 @@ def user_followers_count(user_id: int) -> int:
 
     A remote follower's row is inward (local_user_id is this user); a local follower's row is the follower's own
     outward follow (remote_user_id is this user). A pending or refused follow, a banned or deleted follower and a
-    follower this user has blocked (D182) do not count."""
+    follower this user has blocked (D182) and a local-only follower do not count."""
     sql = ('SELECT COUNT(*) FROM user_follower uf '
            'JOIN "user" u ON u.id = CASE WHEN uf.is_inward THEN uf.remote_user_id ELSE uf.local_user_id END '
-           'WHERE uf.is_accepted IS TRUE AND u.banned IS FALSE AND u.deleted IS FALSE '
+           f'WHERE uf.is_accepted IS TRUE AND u.banned IS FALSE AND u.deleted IS FALSE AND {federating_sql("u")} '
            'AND ((uf.is_inward IS TRUE AND uf.local_user_id = :user_id) '
            'OR (uf.is_inward IS FALSE AND uf.remote_user_id = :user_id)) '
            'AND NOT EXISTS (SELECT 1 FROM user_block ub WHERE ub.blocker_id = :user_id AND ub.blocked_id = u.id)')
@@ -97,27 +101,29 @@ def user_following_count(user_id: int) -> int:
     """How many accounts local user `user_id` follows (interop C1 item 6): accepted follows of users, plus
     communities joined -- a join is a Follow of a Group actor, so peers count it too. A followed account that is
     banned or deleted, a membership the user is banned from, a banned community and one deleted on its home server
-    (ap_deleted_at, interop C1 item 10) do not count."""
+    (ap_deleted_at, interop C1 item 10) do not count, nor a local-only account or community."""
     sql = ('SELECT (SELECT COUNT(*) FROM user_follower uf JOIN "user" u ON u.id = uf.remote_user_id '
            'WHERE uf.local_user_id = :user_id AND uf.is_inward IS FALSE AND uf.is_accepted IS TRUE '
-           'AND u.banned IS FALSE AND u.deleted IS FALSE) + '
+           f'AND u.banned IS FALSE AND u.deleted IS FALSE AND {federating_sql("u")}) + '
            '(SELECT COUNT(*) FROM community_member cm JOIN community c ON c.id = cm.community_id '
            'WHERE cm.user_id = :user_id AND cm.is_banned IS FALSE AND c.banned IS NOT TRUE '
-           'AND c.ap_deleted_at IS NULL)')
+           f'AND c.ap_deleted_at IS NULL AND {federating_sql("c")})')
     return db.session.execute(text(sql), {'user_id': user_id}).scalar()
 
 
 def user_liked_count(user: User) -> int:
     """How many Likes local `user` has federated (interop C5, count-only): upvotes whose last federated
-    activity send_vote recorded as a Like (`federated_like`), on posts and comments that are not deleted, are open and sit outside
-    local-only and private communities. 0 for a user who votes privately (owner ruling)."""
+    activity send_vote recorded as a Like (`federated_like`), on posts and comments that are not deleted, are open,
+    are not local-only and sit outside local-only and private communities. 0 for a user who votes privately (owner
+    ruling). send_vote sets federated_like before the outbound guard refuses a vote on local-only content, so the
+    local_only stamp is what leaves those out."""
     if user.vote_privately:
         return 0
     posts = (db.session.query(func.count(PostVote.id))
              .join(Post, Post.id == PostVote.post_id)
              .join(Community, Community.id == Post.community_id)
              .filter(PostVote.user_id == user.id, PostVote.federated_like.is_(True), PostVote.effect > 0,
-                     Post.deleted.isnot(True),
+                     Post.deleted.isnot(True), Post.local_only.isnot(True),
                      Post.visibility.in_(OPEN_VISIBILITIES),
                      Community.local_only.isnot(True), Community.private.isnot(True))
              .scalar())
@@ -125,50 +131,65 @@ def user_liked_count(user: User) -> int:
                .join(PostReply, PostReply.id == PostReplyVote.post_reply_id)
                .join(Community, Community.id == PostReply.community_id)
                .filter(PostReplyVote.user_id == user.id, PostReplyVote.federated_like.is_(True),
-                       PostReplyVote.effect > 0, PostReply.deleted.isnot(True),
+                       PostReplyVote.effect > 0, PostReply.deleted.isnot(True), PostReply.local_only.isnot(True),
                        PostReply.visibility.in_(OPEN_VISIBILITIES),
                        Community.local_only.isnot(True), Community.private.isnot(True))
                .scalar())
     return posts + replies
 
 
-def users_total():
+# The counts below take federated=True where another server reads them (NodeInfo, /api/v1/instance, /api/v3/site):
+# local-only accounts, communities and content do not exist to other servers, so they are left out.
+
+def _federating_users(federated: bool) -> str:
+    return ' AND ' + federating_sql('"user"') if federated else ''
+
+
+def users_total(federated: bool = False):
     return db.session.execute(text(
-        'SELECT COUNT(*) as c FROM "user" WHERE ap_id is null AND verified is true AND banned is false AND deleted is false')).scalar()
+        'SELECT COUNT(*) as c FROM "user" WHERE ap_id is null AND verified is true AND banned is false AND deleted is false'
+        + _federating_users(federated))).scalar()
 
 
-def active_half_year():
+def active_half_year(federated: bool = False):
     return db.session.execute(text(
-        "SELECT COUNT(*) as c FROM \"user\" WHERE last_seen >= CURRENT_DATE - INTERVAL '6 months' AND ap_id is null AND verified is true AND banned is false AND deleted is false")).scalar()
+        "SELECT COUNT(*) as c FROM \"user\" WHERE last_seen >= CURRENT_DATE - INTERVAL '6 months' AND ap_id is null AND verified is true AND banned is false AND deleted is false"
+        + _federating_users(federated))).scalar()
 
 
-def active_month():
+def active_month(federated: bool = False):
     return db.session.execute(text(
-        "SELECT COUNT(*) as c FROM \"user\" WHERE last_seen >= CURRENT_DATE - INTERVAL '1 month' AND ap_id is null AND verified is true AND banned is false AND deleted is false")).scalar()
+        "SELECT COUNT(*) as c FROM \"user\" WHERE last_seen >= CURRENT_DATE - INTERVAL '1 month' AND ap_id is null AND verified is true AND banned is false AND deleted is false"
+        + _federating_users(federated))).scalar()
 
 
-def active_week():
+def active_week(federated: bool = False):
     return db.session.execute(text(
-        "SELECT COUNT(*) as c FROM \"user\" WHERE last_seen >= CURRENT_DATE - INTERVAL '1 week' AND ap_id is null AND verified is true AND banned is false AND deleted is false")).scalar()
+        "SELECT COUNT(*) as c FROM \"user\" WHERE last_seen >= CURRENT_DATE - INTERVAL '1 week' AND ap_id is null AND verified is true AND banned is false AND deleted is false"
+        + _federating_users(federated))).scalar()
 
 
-def active_day():
+def active_day(federated: bool = False):
     return db.session.execute(text(
-        "SELECT COUNT(*) as c FROM \"user\" WHERE last_seen >= CURRENT_DATE - INTERVAL '1 day' AND ap_id is null AND verified is true AND banned is false AND deleted is false")).scalar()
+        "SELECT COUNT(*) as c FROM \"user\" WHERE last_seen >= CURRENT_DATE - INTERVAL '1 day' AND ap_id is null AND verified is true AND banned is false AND deleted is false"
+        + _federating_users(federated))).scalar()
 
 
-def local_posts():
+def local_posts(federated: bool = False):
     return db.session.execute(
-        text('SELECT COUNT(*) as c FROM "post" WHERE instance_id = 1 AND deleted is false')).scalar()
+        text('SELECT COUNT(*) as c FROM "post" WHERE instance_id = 1 AND deleted is false'
+             + (' AND local_only IS NOT TRUE' if federated else ''))).scalar()
 
 
-def local_comments():
+def local_comments(federated: bool = False):
     return db.session.execute(
-        text('SELECT COUNT(*) as c FROM "post_reply" WHERE instance_id = 1 and deleted is false')).scalar()
+        text('SELECT COUNT(*) as c FROM "post_reply" WHERE instance_id = 1 and deleted is false'
+             + (' AND local_only IS NOT TRUE' if federated else ''))).scalar()
 
 
-def local_communities():
-    return db.session.execute(text('SELECT COUNT(*) as c FROM "community" WHERE instance_id = 1')).scalar()
+def local_communities(federated: bool = False):
+    return db.session.execute(text('SELECT COUNT(*) as c FROM "community" WHERE instance_id = 1'
+                                   + (f' AND {federating_sql("community")}' if federated else ''))).scalar()
 
 
 def stable_create_token(object_id: str) -> str:
@@ -352,8 +373,10 @@ def count_collection(collection_id: str, total: int) -> dict:
 
 
 def post_shares_count(post_id: int) -> int:
-    """How many boosts (Announces) `post_id` has received, from PostBoost."""
-    return db.session.query(func.count(PostBoost.id)).filter(PostBoost.post_id == post_id).scalar()
+    """How many boosts (Announces) `post_id` has received, from PostBoost. A local-only account's boost never left
+    this server, so it is not counted."""
+    return (db.session.query(func.count(PostBoost.id)).join(User, User.id == PostBoost.user_id)
+            .filter(PostBoost.post_id == post_id, federating_clause(User)).scalar())
 
 
 def post_count_collections(post: Post) -> dict:
@@ -510,7 +533,8 @@ def post_to_page(post: Post):
 
 
 def post_replies_for_ap(post_id: int) -> List[dict]:
-    replies = PostReply.query.filter_by(post_id=post_id, deleted=False).filter(PostReply.visibility.in_(OPEN_VISIBILITIES)) \
+    replies = PostReply.query.filter_by(post_id=post_id, deleted=False).filter(PostReply.visibility.in_(OPEN_VISIBILITIES),
+                                                                              PostReply.local_only.isnot(True)) \
         .order_by(PostReply.posted_at).limit(2000)
     return [comment_model_to_json(reply) for reply in replies]
 
@@ -6214,14 +6238,14 @@ def lemmy_site_data():
             "counts": {
                 "id": 1,
                 "site_id": 1,
-                "users": users_total(),
-                "posts": local_posts(),
-                "comments": local_comments(),
-                "communities": local_communities(),
-                "users_active_day": active_day(),
-                "users_active_week": active_week(),
-                "users_active_month": active_month(),
-                "users_active_half_year": active_half_year()
+                "users": users_total(federated=True),
+                "posts": local_posts(federated=True),
+                "comments": local_comments(federated=True),
+                "communities": local_communities(federated=True),
+                "users_active_day": active_day(federated=True),
+                "users_active_week": active_week(federated=True),
+                "users_active_month": active_month(federated=True),
+                "users_active_half_year": active_half_year(federated=True)
             }
         },
         "admins": [],

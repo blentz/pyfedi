@@ -50,7 +50,8 @@ from app.discovery import SYNC_ACCEPTED, SYNC_REJECTED
 from app.discovery.instance_answers import instance_actor_answer, record_answer
 from app.relays import current_relay_id
 from app.relays import inbound as relay_inbound
-from app.local_only import federated_mentions, refused_outbound
+from app.local_only import community_local_only, federated_mentions, federating_clause, refused_outbound, \
+    user_local_only
 from app.storefront import is_served_name
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
@@ -212,11 +213,13 @@ def process_webfinger_request(resource):
         # not alt_user_name: that is the private-voting pseudonym, and resolving it would name its owner (D166)
         object = User.query.filter(func.lower(User.user_name) == actor.strip().lower()).filter_by(deleted=False,
                                                                                                  banned=False,
-                                                                                                 ap_id=None).first()
+                                                                                                 ap_id=None).filter(
+            federating_clause(User)).first()   # a local-only account or community does not exist to other servers
         if object is None:
             profile_id = f"{current_app.config['SERVER_URL']}/c/{actor.strip().lower()}"
             object = Community.query.filter_by(ap_profile_id=profile_id, ap_id=None, local_only=False,
-                                               banned=False, ap_deleted_at=None).first()
+                                               banned=False, ap_deleted_at=None).filter(
+                federating_clause(Community)).first()
             type = 'Group'
             if object is None:
                 object = Feed.query.filter_by(name=actor.strip().lower(), ap_id=None, public=True,
@@ -314,12 +317,12 @@ def nodeinfo2():
         ],
         "usage": {
             "users": {
-                "total": users_total(),
-                "activeHalfyear": active_half_year(),
-                "activeMonth": active_month()
+                "total": users_total(federated=True),
+                "activeHalfyear": active_half_year(federated=True),
+                "activeMonth": active_month(federated=True)
             },
-            "localPosts": local_posts(),
-            "localComments": local_comments()
+            "localPosts": local_posts(federated=True),
+            "localComments": local_comments(federated=True)
         },
         "openRegistrations": g.site.registration_mode != 'Closed'
     }
@@ -343,12 +346,12 @@ def nodeinfo21():
         ],
         "usage": {
             "users": {
-                "total": users_total(),
-                "activeHalfyear": active_half_year(),
-                "activeMonth": active_month()
+                "total": users_total(federated=True),
+                "activeHalfyear": active_half_year(federated=True),
+                "activeMonth": active_month(federated=True)
             },
-            "localPosts": local_posts(),
-            "localComments": local_comments()
+            "localPosts": local_posts(federated=True),
+            "localComments": local_comments(federated=True)
         },
         "openRegistrations": g.site.registration_mode != 'Closed',
         "services": {
@@ -375,8 +378,8 @@ def api_v1_instance():
         'title': g.site.name,
         'uri': current_app.config['SERVER_NAME'],
         'stats': {
-            "user_count": users_total(),
-            "status_count": local_posts() + local_comments(),
+            "user_count": users_total(federated=True),
+            "status_count": local_posts(federated=True) + local_comments(federated=True),
             "domain_count": 1
         },
         'registrations': g.site.registration_mode != 'Closed',
@@ -497,13 +500,15 @@ def user_profile(actor):
             # stays a 404 -- it can be lifted. Account deletion sets both flags, so `deleted` decides.
             gone = User.query.filter(func.lower(User.user_name) == actor.lower(), User.ap_id.is_(None),
                                      User.deleted.is_(True)).first()
-            if gone is not None:
+            if gone is not None and not user_local_only(gone):
                 return tombstone_response(gone.public_url(), 'Service' if gone.bot else 'Person')
 
     if user is None:
         user = resolve_remote_handle(actor)
 
     if user is not None:
+        if user_local_only(user) and is_activitypub_request():
+            abort(404)   # a local-only account does not exist to other servers
         if request.method == 'HEAD':
             if is_activitypub_request():
                 resp = jsonify('')
@@ -618,16 +623,16 @@ def resolve_remote_handle(actor: str):
 
 def local_actor_user(actor: str) -> User:
     """The local user an actor collection (`/u/<actor>/...`) belongs to, else abort with what user_profile answers
-    an ActivityPub request: 410 for a deleted account (S3.2), 404 for a banned, unknown or remote one. The name is
-    matched case-insensitively, as user_profile matches it."""
+    an ActivityPub request: 410 for a deleted account (S3.2), 404 for a banned, unknown, remote or local-only one. The
+    name is matched case-insensitively, as user_profile matches it."""
     name = actor.strip().lower()
     user = User.query.filter(func.lower(User.user_name) == name, User.ap_id.is_(None),
                              User.deleted.is_(False), User.banned.is_(False)).first()
-    if user is not None:
+    if user is not None and not user_local_only(user):
         return user
     gone = User.query.filter(func.lower(User.user_name) == name, User.ap_id.is_(None),
-                             User.deleted.is_(True)).first()
-    abort(410 if gone is not None else 404)
+                             User.deleted.is_(True)).first() if user is None else None
+    abort(410 if gone is not None and not user_local_only(gone) else 404)
 
 
 def count_only_collection(collection_id: str, total: int):
@@ -648,21 +653,23 @@ def user_outbox_rows(user: User):
     Seen by no viewer (visible_to_clause), narrowed to public (listable_clause), because post_to_page and
     comment_model_to_json address everything to Public and an unlisted object must not be republished as public.
     Not deleted, not under review, and not in a private, local-only or banned community (show_post answers a
-    logged-out viewer 404 for a banned one). A comment's post must pass the same tests a logged-out viewer's
-    comment page puts it to: not deleted, published, and not followers-only. A community that deleted itself
+    logged-out viewer 404 for a banned one), and not local-only itself (plan B task 8). A comment's post must pass
+    the same tests a logged-out viewer's comment page puts it to: not deleted, published, not followers-only and not
+    local-only. A community that deleted itself
     (Community.is_gone) stays readable, so what was posted there stays listed. A private message is a ChatMessage,
     never one of these rows. The author is already known to be active: local_actor_user refused a banned or deleted
     one."""
     posts = (select(literal_column("'post'").label('kind'), Post.id.label('id'), Post.posted_at.label('posted_at'))
              .join(Community, Community.id == Post.community_id)
              .where(Post.user_id == user.id, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
-                    visible_to_clause(Post, None), listable_clause(Post),
+                    Post.local_only.isnot(True), visible_to_clause(Post, None), listable_clause(Post),
                     Community.private.isnot(True), Community.local_only.isnot(True), Community.banned.isnot(True)))
     replies = (select(literal_column("'reply'").label('kind'), PostReply.id.label('id'),
                       PostReply.posted_at.label('posted_at'))
                .join(Post, Post.id == PostReply.post_id)
                .join(Community, Community.id == Post.community_id)   # as the view routes judge it: post.community
                .where(PostReply.user_id == user.id, PostReply.deleted == False, Post.deleted == False,
+                      PostReply.local_only.isnot(True), Post.local_only.isnot(True),
                       Post.status > POST_STATUS_REVIEWING, visible_to_clause(Post, None),
                       visible_to_clause(PostReply, None), listable_clause(PostReply),
                       Community.private.isnot(True), Community.local_only.isnot(True), Community.banned.isnot(True)))
@@ -723,6 +730,8 @@ def community_profile(actor):
                                                       Community.banned.is_(False)).first()
     if community is not None:
         if is_activitypub_request():
+            if community_local_only(community):
+                abort(404)   # a local-only community does not exist to other servers
             if community.local_only or community.private:
                 abort(403)
             resp = jsonify(actor_document(community_actor_data(community)))
@@ -2534,10 +2543,13 @@ def community_outbox(actor):
         return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
     if community is not None:
+        if community_local_only(community):
+            abort(404)   # as community_profile: a local-only community does not exist to other servers
         if community.local_only or community.private:
             abort(403)   # S3.4: as the community actor document (community_profile); these never federate
         listed = Post.query.filter(Post.community_id == community.id, Post.deleted == False,
-                                   Post.status > POST_STATUS_REVIEWING, listable_clause(Post))
+                                   Post.status > POST_STATUS_REVIEWING, Post.local_only.isnot(True),
+                                   listable_clause(Post))
         # sticky posts first, newest first within each, as the one page this served before paging
         ordered = listed.order_by(desc(Post.sticky).nulls_last(), desc(Post.posted_at), desc(Post.id))
 
@@ -2563,10 +2575,12 @@ def community_featured(actor):
         return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
     if community is not None:
+        if community_local_only(community):
+            abort(404)   # as community_profile
         if community.local_only or community.private:
             abort(403)   # S3.4: as the community actor document; these never federate
         posts = Post.query.filter_by(community_id=community.id, sticky=True, deleted=False).filter(
-            Post.status >= POST_STATUS_PUBLISHED, listable_clause(Post)).all()
+            Post.status >= POST_STATUS_PUBLISHED, Post.local_only.isnot(True), listable_clause(Post)).all()
 
         community_data = {
             "@context": default_context(),
@@ -2596,10 +2610,14 @@ def community_moderators_route(actor):
         return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
     if community is not None:
+        if community_local_only(community):
+            abort(404)   # as community_profile
         if community.local_only or community.private:
             abort(403)   # S3.4: as the community actor document; these never federate
         moderator_ids = community_moderators(community.id)
-        moderators = db.session.query(User).filter(User.id.in_([mod.user_id for mod in moderator_ids])).all()
+        # a local-only moderator (one made before add_mod_to_community refused it) does not exist to other servers
+        moderators = db.session.query(User).filter(User.id.in_([mod.user_id for mod in moderator_ids]),
+                                                   federating_clause(User)).all()
         community_data = {
             "@context": default_context(),
             "type": "OrderedCollection",
@@ -2628,6 +2646,8 @@ def community_followers(actor):
         return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
     if community is not None:
+        if community_local_only(community):
+            abort(404)   # as community_profile
         if community.local_only or community.private:
             abort(403)   # S3.4: as the community actor document; these never federate
         result = {
@@ -2654,6 +2674,8 @@ def community_following(actor):
     if not is_activitypub_request():
         return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first() or abort(404)
+    if community_local_only(community):
+        abort(404)
     if community.local_only or community.private:
         abort(403)
     return count_only_collection(f'{current_app.config["SERVER_URL"]}/c/{actor}/following', 0)
@@ -2692,6 +2714,8 @@ def user_liked(actor):
 def comment_ap_refusal(reply: PostReply):
     """The response that refuses an ActivityPub fetch of local `reply` (or of its count collections), or None to
     serve it. comment_ap's checks, in their order, held here so the comment and its collections cannot diverge."""
+    if reply.local_only:
+        abort(404)   # a local-only comment does not exist to other servers
     if reply.community.local_only or reply.community.private:
         abort(403)
     if reply.visibility not in OPEN_VISIBILITIES and not followers_entitled(reply):
@@ -2708,6 +2732,8 @@ def comment_ap_refusal(reply: PostReply):
 def comment_ap(comment_id):
     reply = db.session.get(PostReply, comment_id) or abort(404)
     if is_activitypub_request():
+        if reply.local_only:
+            abort(404)   # before the redirect: a local-only comment's own URL is not given out either
         if not reply.is_local():
             return redirect(reply.ap_id, code=301)
         refusal = comment_ap_refusal(reply)
@@ -2868,6 +2894,8 @@ def post_ap_refusal(post: Post):
 
     Visibility is checked before deletion so a Tombstone never confirms that a post existed somewhere the caller
     may not see."""
+    if post.local_only:
+        abort(404)   # a local-only post does not exist to other servers
     if post.community.local_only or post.community.private or post.status < POST_STATUS_PUBLISHED:
         abort(403)
     if post.visibility not in OPEN_VISIBILITIES and not followers_entitled(post):
@@ -2889,6 +2917,8 @@ def post_ap2(post_id):
 def post_ap(post_id):
     if (request.method == 'GET' or request.method == 'HEAD') and is_activitypub_request():
         post: Post = db.session.get(Post, post_id) or abort(404)
+        if post.local_only:
+            abort(404)   # before the redirect: a local-only post's own URL is not given out either
         if post.is_local():
             refusal = post_ap_refusal(post)
             if refusal is not None:
@@ -2976,7 +3006,8 @@ def post_ap_context(post_id):
         refusal = post_ap_refusal(post)
         if refusal is not None:
             return refusal
-        replies = PostReply.query.filter_by(post_id=post_id, deleted=False).filter(PostReply.visibility.in_(OPEN_VISIBILITIES)) \
+        replies = PostReply.query.filter_by(post_id=post_id, deleted=False).filter(
+            PostReply.visibility.in_(OPEN_VISIBILITIES), PostReply.local_only.isnot(True)) \
             .order_by(PostReply.posted_at).limit(2000)
         urls = [reply.ap_id for reply in replies]
         urls = [post.ap_id] + urls
@@ -3805,7 +3836,8 @@ def feed_outbox(actor):
 
     # the feed's communities, newest item first, withholding local-only and private ones
     listed = db.session.query(Community).join(FeedItem, FeedItem.community_id == Community.id).filter(
-        FeedItem.feed_id == feed.id, Community.local_only.isnot(True), Community.private.isnot(True))
+        FeedItem.feed_id == feed.id, Community.local_only.isnot(True), Community.private.isnot(True),
+        federating_clause(Community))
     ordered = listed.order_by(desc(FeedItem.id))
     # D185 (owner ruling): an OrderedCollection, as community_outbox is; paged as it is (D173)
     result = paged_outbox(feed.ap_outbox_url, listed.count(),
@@ -3844,7 +3876,7 @@ def feed_following(actor):
     items = []
     for fi in feed_items:
         c = db.session.get(Community, fi.community_id)
-        if c.local_only or c.private:
+        if c.local_only or c.private or community_local_only(c):
             continue
         items.append(c.public_url())
     result = {

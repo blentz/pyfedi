@@ -8,7 +8,7 @@ import re
 from urllib.parse import unquote, urlsplit
 
 from flask import current_app
-from sqlalchemy import bindparam, text
+from sqlalchemy import and_, bindparam, not_, or_, text, true
 
 from app import db
 # The module, not the names: app.models imports this module, and app.storefront imports app.models, so whichever is
@@ -61,6 +61,38 @@ def content_local_only(author, community, *parents) -> bool:
         return False
     return (user_local_only(author) or community_local_only(community) or
             any(parent is not None and parent.local_only for parent in parents))
+
+
+def _closed_domains() -> tuple[list[int], bool]:
+    """The ids of the hosted domains that do not federate, and whether the default domain is one of them (it owns the
+    local rows no domain was stamped on). From the cached domain_rows(): no query."""
+    closed = [row.id for row in storefront.domain_rows() if not row.federates and row.id is not None]
+    return closed, not storefront.default_domain().federates
+
+
+def federating_clause(model):
+    """A filter that keeps the rows of `model` (User or Community) that are not local-only: remote ones, and local
+    ones whose home domain federates. A row that is not local-only is never dropped for a NULL."""
+    closed, default_closed = _closed_domains()
+    if not closed and not default_closed:
+        return true()
+    on_closed = and_(model.site_domain_id.isnot(None), model.site_domain_id.in_(closed))
+    if default_closed:
+        on_closed = or_(on_closed, model.site_domain_id.is_(None))
+    return or_(model.ap_id.isnot(None), not_(on_closed))
+
+
+def federating_sql(alias: str) -> str:
+    """federating_clause for a raw SQL query: a condition on the "user" or community row aliased `alias`. The ids
+    are integers read from the database, so they are written into the SQL."""
+    closed, default_closed = _closed_domains()
+    if not closed and not default_closed:
+        return 'true'
+    ids = ', '.join(str(int(id_)) for id_ in closed)
+    on_closed = f'({alias}.site_domain_id IS NOT NULL AND {alias}.site_domain_id IN ({ids}))' if closed else 'false'
+    if default_closed:
+        on_closed = f'({on_closed} OR {alias}.site_domain_id IS NULL)'
+    return f'({alias}.ap_id IS NOT NULL OR NOT {on_closed})'
 
 
 def federated_mentions(users: list) -> list:

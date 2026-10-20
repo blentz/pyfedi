@@ -20,6 +20,7 @@ from app.community.forms import EditCommunityForm
 from app.community.util import community_theme_list, save_banner_file, save_icon_file
 from app.constants import *
 from app.email import send_email
+from app.local_only import community_local_only, user_local_only
 from app.models import CommunityBlock, CommunityMember, Notification, NotificationSubscription, User, Conversation, \
     Community, Language, File, CommunityFlair, utcnow, CommunityInvitation, CommunityFavorite, \
     CommunityFlairBlock, Topic, Post, _as_url
@@ -762,6 +763,9 @@ def add_mod_to_community(community_id: int, person_id: int, src, auth=None):
     new_moderator = User.query.filter_by(id=person_id, banned=False).one()
     if not community.is_owner(user) and not user.is_admin_or_staff():
         raise Exception('no_permission')
+    # a local-only account does not exist to other servers, so it cannot moderate a community they follow
+    if user_local_only(new_moderator) and not community_local_only(community):
+        raise Exception('local_only_moderator')
 
     existing_member = db.session.query(CommunityMember).filter(CommunityMember.user_id == new_moderator.id,
                                                    CommunityMember.community_id == community_id).first()
