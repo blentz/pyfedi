@@ -5759,10 +5759,12 @@ def paginate_post_ids(post_ids, page: int, page_length: int):
 # fragments OR'd into get_deduped_post_ids' WHERE clause. Module level rather than
 # inline so tests exercise the production string itself: they used to hold a
 # hand-copied duplicate, which cannot notice a restructure and had already drifted
-# from the code it claimed to mirror. Both bind :local_user_id and
-# :visibility_viewer_id, so get_deduped_post_ids must add both whenever it appends
-# either of them. Each is ANDed with the viewer predicate on the POST's author, so
-# following a booster never grants the author's followers-only audience.
+# from the code it claimed to mirror. Both bind :local_user_id, and the session
+# twins (FOLLOWED_*_SQL) also bind :visibility_viewer_id, so get_deduped_post_ids
+# must add it whenever it appends either of those; the PUBLIC twins below bind
+# :local_user_id only. Each is ANDed with a predicate on the POST (the viewer's, or
+# publicly listable), so following a booster never grants the author's
+# followers-only audience.
 #
 # NEITHER carries a `p.private is false` gate, deliberately. p.private is the
 # microblog marker (Post.new(), app/models.py ~1796), and gating these excluded
