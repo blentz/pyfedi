@@ -19,7 +19,7 @@ from app.community.util import save_icon_file, save_banner_file, retrieve_mods_a
 from app.constants import *
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap
-from app.local_only import local_only_visible_rss, without_local_only
+from app.local_only import local_only_visible_rss, user_local_only, without_local_only
 from app.visibility import OPEN_VISIBILITIES, visible_to_clause
 from app.onion import is_onion_request
 from app.models import Post, Community, CommunityMember, User, PostReply, Notification, utcnow, File, Site, \
@@ -237,7 +237,7 @@ def show_profile(user):
     else:
         vote_quota_used = 0
 
-    ap_alternate = ap_alternate_url(user)
+    ap_alternate = None if user_local_only(user) else ap_alternate_url(user)   # 404 to every other server
     response = make_response(render_template('user/show_profile.html', user=user, posts=posts, post_replies=post_replies,
                            moderates=moderates, canonical=canonical, title=_('Posts by %(user_name)s',
                                                                              user_name=user.user_name),

@@ -53,7 +53,7 @@ from app.post.util import form_tags_string
 # The module, not the names: app.shared.community reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
-from app.local_only import local_only_visible, local_only_visible_rss, without_local_only
+from app.local_only import community_local_only, local_only_visible, local_only_visible_rss, without_local_only
 from app.visibility import is_open, listable_clause, visible_to_clause
 from app.utils import etag_stamp
 from app.utils import user_banned_from_community, back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
@@ -782,7 +782,7 @@ def show_community(community: Community, from_instance=None):
     else:
         is_dead = False
 
-    ap_alternate = ap_alternate_url(community)
+    ap_alternate = None if community_local_only(community) else ap_alternate_url(community)   # 404 elsewhere
     resp = make_response(render_template('community/community.html', community=community, title=view_actor or community.title,
                                          breadcrumbs=breadcrumbs, is_dead=is_dead,
                                          is_moderator=is_moderator, is_owner=is_owner, is_admin=is_admin, mods=mod_list, posts=posts,
