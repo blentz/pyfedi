@@ -51,7 +51,7 @@ from app.utils import render_template, markdown_to_html, user_access, markdown_t
     recently_downvoted_post_replies, reported_posts, user_notes, login_required, get_setting, filtered_out_communities, \
     moderating_communities_ids, blocked_or_banned_instances, blocked_domains, get_task_session, \
     patch_db_session, user_in_restricted_country, referrer, user_pronouns, \
-    permission_required, check_anoobis, sql_file, calculate_rss_cache_timeout, safe_redirect_target, show_ban_message, refuse_if_private_instance
+    permission_required, check_anoobis, sql_file, calculate_rss_cache_timeout, safe_redirect_target, show_ban_message, refuse_if_private_instance, as_rss_reader
 from app.rss_extras import RSSFeed
 import app.api.alpha.views as alpha_views
 from app.utils import user_filters_languages
@@ -2582,6 +2582,7 @@ def user_feeds(actor):
 @bp.route('/u/<actor>/feed', methods=['GET'])
 @refuse_if_private_instance
 @cache.cached(timeout=600, make_cache_key=storefront_query_cache_key)   # ?token= decides what is listed
+@as_rss_reader
 def show_profile_rss(actor):
     actor = actor.strip()
     if '@' in actor:

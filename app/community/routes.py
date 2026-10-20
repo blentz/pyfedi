@@ -69,7 +69,7 @@ from app.utils import user_banned_from_community, back, get_setting, render_temp
     approval_required, permission_required, aged_account_required, communities_banned_from_all_users, \
     moderating_communities_ids_all_users, block_honey_pot, user_pronouns, community_membership_private, \
     show_reason_why_no_federation, banned_instances, is_invalid_get_request_uri, user_ip_banned, \
-    check_anoobis, calculate_rss_cache_timeout, opengraph_parse, community_link_markup, sanitise_posting_warning, refuse_if_private_instance
+    check_anoobis, calculate_rss_cache_timeout, opengraph_parse, community_link_markup, sanitise_posting_warning, refuse_if_private_instance, as_rss_reader
 # The module, not the names: app.shared.post reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.post)
 import app.shared.post as shared_post
@@ -857,6 +857,7 @@ def show_community(community: Community, from_instance=None):
 @bp.route('/<actor>/feed', methods=['GET'])
 @refuse_if_private_instance
 @cache.cached(timeout=600, make_cache_key=storefront_query_cache_key)
+@as_rss_reader
 def show_community_rss(actor):
     actor = actor.strip()
     if '@' in actor:
