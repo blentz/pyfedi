@@ -3,7 +3,7 @@ it is on, find that domain's row, and spell a row's name for a path."""
 from sqlalchemy import and_, func
 
 from app.models import Community, User
-from app.storefront import DomainInfo, current_storefront, domain_for_host, on_domain
+from app.storefront import DomainInfo, current_storefront, domain_for_host, on_domain, path_name
 
 
 def split_local_name(raw: str) -> tuple[str, DomainInfo] | None:
@@ -31,5 +31,4 @@ def local_named(model, name: str, domain: DomainInfo):
 def local_path_name(obj) -> str:
     """How a local user or community is named in a path: bare on its own domain's storefront, else `name@domain`."""
     name = obj.user_name if isinstance(obj, User) else obj.name
-    domain = obj.home_domain()
-    return name if domain == current_storefront() else f'{name}@{domain.domain}'
+    return path_name(name, obj.site_domain_id)

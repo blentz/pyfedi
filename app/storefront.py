@@ -240,6 +240,21 @@ def current_storefront() -> DomainInfo:
     return g.storefront if has_request_context() and 'storefront' in g else default_domain()
 
 
+def path_name(name: str, site_domain_id: int | None) -> str:
+    """How the local `name` on the domain with this `site_domain_id` (None: the default's) is written in a path: bare
+    on the current storefront, else `name@domain`. The common case reads no domain row."""
+    current = current_storefront()
+    if site_domain_id == current.id or (site_domain_id is None and current.is_default):
+        return name
+    domain = domain_by_id(site_domain_id)
+    return name if domain == current else f'{name}@{domain.domain}'
+
+
+def link_host(domain: DomainInfo) -> str:
+    """`host[:port]` that names `domain` in a handle (`name@host`): SERVER_NAME for the default domain, else its host."""
+    return _authority(domain)
+
+
 def storefront_url() -> str:
     """Origin of the current storefront. Use for links a visitor follows, never for federation identity."""
     storefront = current_storefront()
@@ -347,16 +362,26 @@ def _origin(storefront) -> str:
     return f'{storefront.scheme}://{_authority(storefront)}'
 
 
+# `/u/name` or `/c/name` and nothing else but a query and a fragment: `name` holds no `@`, so it is on its own domain
+_PROFILE_PATH = re.compile(r'^/(u|c)/([^/@?#]+)(?=[?#]|$)')
+
+
 def _rebase(url, base: str, hosts: frozenset[str]):
     """`url` on origin `base` when it is an http(s) or scheme-relative URL whose host is in `hosts`. Everything after
-    the authority (path, query, fragment, a bare '?') is kept byte for byte. Any other value comes back unchanged."""
+    the authority (path, query, fragment, a bare '?') is kept byte for byte, except that the exact path `/u/<name>` or
+    `/c/<name>` of a host other than `base`'s names that host (`/u/<name>@<host>`): the account is not on `base`'s
+    domain. Any other value comes back unchanged."""
     if _link_host(url) not in hosts:
         return url
     parts = urlsplit(url)
     start = url.find(f'//{parts.netloc}')
     if parts.scheme not in ('', 'http', 'https') or start < 0:   # < 0: urlsplit dropped a tab or newline from it
         return url
-    return base + url[start + 2 + len(parts.netloc):]
+    rest = url[start + 2 + len(parts.netloc):]
+    source = _link_host(url)
+    if source != _link_host(base):
+        rest = _PROFILE_PATH.sub(lambda m: f'/{m[1]}/{m[2]}@{source}', rest, count=1)
+    return base + rest
 
 
 # srcset (and a URL list in general) splits on these five characters only, not on Unicode white space

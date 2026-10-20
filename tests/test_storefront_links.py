@@ -120,7 +120,7 @@ def test_rewrite_links_attributes(app, onion):
     assert f'<link rel="canonical" href="http://{ONION}/post/1"/>' in out
     assert f'<a href="http://{ONION}">home</a>' in out
     assert f'<a href="http://{ONION}/">home/</a>' in out
-    assert f'<a href="http://{ONION}/c/x?q=1#f">x</a>' in out
+    assert f'<a href="http://{ONION}/c/x@{CANONICAL}?q=1#f">x</a>' in out
     assert f'<a href="https://example.com/{CANONICAL}">foreign</a>' in out
     assert f'action="http://{ONION}/search"' in out
     assert f'src="http://{ONION}/i.png"' in out
@@ -187,7 +187,7 @@ def test_rewritten_page_keeps_doctype_and_scripts(app, world):
     # script text is byte-identical; a script tag's attributes are the same, though html.parser re-quotes them
     assert SCRIPTS.findall(text) and SCRIPTS.findall(text) == SCRIPTS.findall(original)
     assert script_attrs(text) == script_attrs(original)
-    assert f'href="http://{ONION}/c/general"' in text
+    assert f'href="http://{ONION}/c/general@{CANONICAL}"' in text
 
 
 def test_inline_script_text_is_byte_identical():
@@ -200,7 +200,7 @@ def test_inline_script_text_is_byte_identical():
 
 
 @pytest.mark.parametrize('location, expected', [
-    (f'https://{CANONICAL}/c/general?x=1&y=#top', f'http://{ONION}/c/general?x=1&y=#top'),
+    (f'https://{CANONICAL}/c/general?x=1&y=#top', f'http://{ONION}/c/general@{CANONICAL}?x=1&y=#top'),
     (f'https://{CANONICAL}', f'http://{ONION}'),
     (f'https://{CANONICAL}/?', f'http://{ONION}/?'),
     ('/c/general?x=1', '/c/general?x=1'),                          # relative: already on the storefront
@@ -234,7 +234,7 @@ def test_location_rewritten(app, world):
     # the view redirects to its ?redirect= target as given: an absolute URL on the canonical host
     response = post_on_onion(app, founder, f'/u/author/block_instance?redirect={target}')
     assert response.status_code == 302
-    assert response.headers['Location'] == f'http://{ONION}/c/general?x=1#top'
+    assert response.headers['Location'] == f'http://{ONION}/c/general@{CANONICAL}?x=1#top'
 
 
 def test_rewrite_keeps_status_and_headers(app, onion):
@@ -321,7 +321,7 @@ def test_feed_entry_body_on_storefront(app, onion):
     context = in_onion_request(app)
     try:
         assert current_storefront().domain == ONION
-        assert feed_entry_body(_Post()) == f'<p><a href="http://{ONION}/c/general">there</a></p>'
+        assert feed_entry_body(_Post()) == f'<p><a href="http://{ONION}/c/general@{CANONICAL}">there</a></p>'
     finally:
         context.pop()
     with app.test_request_context(base_url=f'https://{CANONICAL}'):
@@ -354,5 +354,5 @@ def test_feed_item_bodies_on_storefront(app, world, path):
     response = on_onion(app).get(path.format(domain=domain.id), headers={'Host': ONION})
     assert response.status_code == 200
     item = ET.fromstring(response.data).find('channel').find('item')
-    assert f'href="http://{ONION}/c/general"' in item.findtext('description')
+    assert f'href="http://{ONION}/c/general@{CANONICAL}"' in item.findtext('description')
     assert item.findtext('guid') == post.ap_id   # ids stay canonical

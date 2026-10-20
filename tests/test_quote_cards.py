@@ -12,6 +12,7 @@ from app import cache, db
 from app.constants import VISIBILITY_FOLLOWERS
 from app.models import BannedInstances, QuoteAuthorization
 from app.quotes import quote_state, quote_target, resolve_quotes
+from app.storefront import default_domain
 from tests.factories import (make_community, make_community_ban, make_community_block, make_community_member,
                              make_follow, make_instance, make_post, make_post_reply, make_user, make_user_block)
 
@@ -478,6 +479,7 @@ def test_a_page_of_cards_costs_a_constant_number_of_queries(world, app):
     statements = []
     listener = lambda *args: statements.append(args[2])
     with app.test_request_context('/'):
+        g.storefront = default_domain()   # a real request has its storefront from before_request, once
         login_user(world['viewer'])
         event.listen(db.engine, 'before_cursor_execute', listener)
         try:
