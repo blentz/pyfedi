@@ -50,6 +50,7 @@ from app.discovery import SYNC_ACCEPTED, SYNC_REJECTED
 from app.discovery.instance_answers import instance_actor_answer, record_answer
 from app.relays import current_relay_id
 from app.relays import inbound as relay_inbound
+from app.local_only import federated_mentions, refused_outbound
 from app.storefront import is_served_name
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
@@ -2484,6 +2485,9 @@ def announce_activity_to_followers(community: Community, creator: User, activity
         "type": "Announce",
         "id": f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
     }
+    # checked once, before any of the three ways out below: the batch, the notification server and the send queue
+    if refused_outbound(announce_activity, community.public_url()):
+        return
 
     if is_flag:
         instances = community.following_instances(include_dormant=True, mod_hosts_only=True)
@@ -2766,7 +2770,7 @@ def pushed_addressing(obj) -> dict:
         recipients = shared_pages.reply_recipients(obj, parent, allow_fetch=False)
     else:
         recipients = shared_pages.mentioned_users(obj, allow_fetch=False)
-    return followers_only_addressing(obj.author, recipients)
+    return followers_only_addressing(obj.author, federated_mentions(recipients))
 
 
 def pushed_addressees(obj) -> list[str]:

@@ -2,6 +2,7 @@ from app import celery, db
 from app.activitypub.serializers import peertube_video, uses_peertube_video
 from app.activitypub.signature import default_context, send_post_request
 from app.constants import NOTIF_REPORT, NOTIF_REPORT_ESCALATION
+from app.local_only import federated_mentions
 from app.models import Community, Instance, Post, PostReply, User, UserFollower, File, Notification, ChatMessage
 from app.utils import gibberish, instance_banned, get_task_session, patch_db_session
 from app.shared.tasks.pages import can_deliver_to, mentioned_users
@@ -168,7 +169,7 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
 
     delete_id = f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}"
     if followers_only:
-        recipients = mentioned_users(object, allow_fetch=False)
+        recipients = federated_mentions(mentioned_users(object, allow_fetch=False))   # as send_post addressed it
         to = [user.followers_url()]
         cc = [recipient.public_url() for recipient in recipients]
         if not is_post:     # S7.3: a reply also named the author it answers, as send_reply addressed it

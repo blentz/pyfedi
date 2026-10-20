@@ -59,6 +59,7 @@ from app.activitypub.signature_errors import KeyMismatchError, KeyRefetchable, U
     VerificationFormatError  # VerificationError and VerificationFormatError are re-exported
 from app.constants import AP_FETCH_ACCEPT, DATETIME_MS_FORMAT
 from app.discovery.instance_answers import record_delivery_refusal
+from app.local_only import refused_outbound
 from app.relays.refusals import record_relay_refusal
 from app.storefront import domain_for_host, domain_rows
 from app.models import utcnow, ActivityPubLog, Community, Instance, CommunityMember, Site, User, SendQueue, public_key_pem
@@ -98,9 +99,11 @@ def parse_ld_date(value: str | None) -> datetime | None:
 def send_post_request(uri: str, body: dict | None, private_key: str, key_id: str,
                       content_type: str = "application/activity+json",
                       method: Literal["get", "post"] = "post", timeout: int = 10, retries: int = 0, new_task=True):
-    if current_app.debug or new_task is False:
+    if current_app.debug or new_task is False:   # post_request refuses a local-only activity itself
         return post_request(uri=uri, body=body, private_key=private_key, key_id=key_id, content_type=content_type,
                             method=method, timeout=timeout, retries=retries)
+    elif refused_outbound(body, uri):   # and one is never queued
+        return None
     else:
         post_request.delay(uri=uri, body=body, private_key=private_key, key_id=key_id, content_type=content_type,
                            method=method, timeout=timeout, retries=retries)
@@ -113,6 +116,8 @@ def post_request(uri: str, body: dict | None, private_key: str, key_id: str,
                  method: Literal["get", "post"] = "post", timeout: int = 10, retries: int = 0):
     session = get_task_session()
     try:
+        if refused_outbound(body, uri, session):   # nothing local-only leaves, nor a queued retry of it
+            return
         if not isinstance(body, dict) or not body.get('id'):
             # Nothing a peer could accept: log it as a failure rather than raise with no log row (D768)
             session.add(ActivityPubLog(direction='out', activity_type='', result='failure',

@@ -8,6 +8,7 @@ from app.constants import POST_TYPE_LINK, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, PO
     POST_TYPE_POLL, MICROBLOG_APPS, NOTIF_MENTION, POST_TYPE_EVENT
 from app.models import Instance, Notification, Poll, PollChoice, Post, User, UserFollower, utcnow, Event, \
     Community, more_info_link
+from app.local_only import federated_mentions
 from app.mentions import mentioned_users_found_by
 from app.shared.media import media_of
 from app.user.utils import search_for_user
@@ -235,6 +236,7 @@ def send_post(post_id, edit=False, session=None):
                     recipient.unread_notifications += 1
                     session.add(notification)
                     session.commit()
+    recipients = federated_mentions(recipients)   # a local-only account is Mentioned as plain text only
 
     if not (community.instance_id and community.instance.online()):
         return

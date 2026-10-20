@@ -1,5 +1,6 @@
 from app import celery
 from app.activitypub.signature import default_context, send_post_request, HttpSignature
+from app.local_only import refused_outbound
 from app.models import Post, PostReply, User, ActivityBatch, Community, PollChoiceVote, PollChoice, PostVote, PostReplyVote, utcnow
 from app.shared.tasks import task_selector
 from app.utils import user_banned_from_community, gibberish, instance_banned, get_task_session, patch_db_session
@@ -146,6 +147,10 @@ def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
                 'to': to,
                 'cc': cc
             }
+
+            # checked once, before the batch, the notification server and the send queue below
+            if refused_outbound(announce, community.public_url(), session):
+                return
 
             send_async = []
 
