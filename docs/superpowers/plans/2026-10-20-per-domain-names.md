@@ -47,7 +47,7 @@ Each line's test is in the owning task (Tasks 2, 4, 3, 3, 2).
   - `split_local_name(raw: str) -> tuple[str, DomainInfo] | None`: strips white space and one leading `@` or `!`. A bare `name` gives `(name, current_storefront())`. `name@host` gives `(name, domain_for_host(host))` when the host is hosted. It gives None for an unhosted host, an empty name or more than one `@`.
   - `local_named(model, name: str, domain: DomainInfo)`: a SQLAlchemy clause for `model` in (`User`, `Community`): lower-case name equal (`User.user_name`, `Community.name`), `ap_id IS NULL`, `on_domain(domain, model)`.
   - `local_path_name(obj) -> str`: `obj.user_name` / `obj.name` when `obj.home_domain()` (both `User` and `Community` have it) is the current storefront's domain, else `f'{name}@{domain.domain}'`.
-  - The fixture `two_domains(app, db_session)` yields `(hell, onion)` as `DomainInfo` plus a factory `local_user(name, domain)` / `local_community(name, domain)` that inserts the row directly (creation refuses the duplicate until Task 6).
+  - The fixture `two_domains(app, db_session)` yields `(hell, onion)` as `DomainInfo` plus a factory `local_user(name, domain)` / `local_community(name, domain)` that inserts the row directly (creation refuses the duplicate until Task 5).
 
 - [ ] **Step 1: Write the failing tests**
 
