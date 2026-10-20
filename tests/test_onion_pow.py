@@ -82,6 +82,7 @@ def alice(onion):
     local = make_instance('test.piefed.local', software='piefed')
     make_user(local, 'founder', local=True)   # id 1 is exempt from every ban check
     user = make_user(local, 'alice', local=True)
+    user.site_domain_id = SiteDomain.query.filter_by(domain='abc.onion').first().id   # her login name is the onion's
     user.email = 'alice@example.com'
     user.verified = True
     user.set_password(PASSWORD)

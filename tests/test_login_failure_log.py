@@ -56,7 +56,7 @@ def clearnet_login(app, user_name, password):
 
 
 def test_failed_login_logs_ip_not_username(app, alice, ldap_off, caplog):
-    clearnet_login(app, 'alice', 'a wrong password')
+    clearnet_login(app, 'alice@abc.onion', 'a wrong password')
     only_failure(caplog, '203.0.113.9')
 
 
@@ -71,7 +71,7 @@ def test_an_email_typed_with_a_wrong_password_logs(app, alice, ldap_off, caplog)
 
 
 def test_a_correct_password_logs_nothing(app, alice, ldap_off, caplog):
-    response = clearnet_login(app, 'alice', PASSWORD)
+    response = clearnet_login(app, 'alice@abc.onion', PASSWORD)
     assert response.status_code == 302 and not response.headers['Location'].endswith('/auth/login')
     assert failures(caplog) == []
 
@@ -79,7 +79,7 @@ def test_a_correct_password_logs_nothing(app, alice, ldap_off, caplog):
 def test_a_correct_password_for_a_banned_account_logs_nothing(app, alice, ldap_off, caplog):
     alice.banned = True
     db.session.commit()
-    clearnet_login(app, 'alice', PASSWORD)
+    clearnet_login(app, 'alice@abc.onion', PASSWORD)
     assert failures(caplog) == []
 
 
@@ -91,7 +91,7 @@ def test_a_deleted_account_logs(app, alice, ldap_off, caplog):
 
 
 def test_a_failed_bind_and_a_wrong_local_password_log_once(app, alice, directory, caplog):
-    clearnet_login(app, 'alice', 'a wrong password')
+    clearnet_login(app, 'alice@abc.onion', 'a wrong password')
     assert directory.call_count == 1
     only_failure(caplog, '203.0.113.9')
 
@@ -102,7 +102,7 @@ def test_a_failed_bind_for_an_unknown_name_logs_once(app, alice, directory, capl
 
 
 def test_a_good_bind_logs_nothing(app, alice, directory, caplog):
-    clearnet_login(app, 'alice', PASSWORD)
+    clearnet_login(app, 'alice@abc.onion', PASSWORD)
     assert failures(caplog) == []
 
 
@@ -187,7 +187,7 @@ def test_api_login_logs_nothing_for_a_banned_account_with_the_right_password(app
     db.session.commit()
     with app.test_request_context('/', environ_base=CLEARNET):
         with pytest.raises(Exception, match='incorrect_login'):
-            api_log_user_in({'username': 'alice', 'password': PASSWORD})
+            api_log_user_in({'username': 'alice@abc.onion', 'password': PASSWORD})
     assert failures(caplog) == []
 
 

@@ -121,9 +121,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/auth/onboarding.py': {
         'send_community_follow': 1,
     },
-    'app/auth/util.py': {
-        'find_user_lookups': 1,
-    },
     'app/chat/util.py': {
         'send_message': 2,
         'update_message': 1,

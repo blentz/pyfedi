@@ -89,12 +89,12 @@ def test_an_nntp_account_refused_with_the_right_password_logs_nothing(app, alice
     alice.verified = verified
     db.session.commit()
     with pytest.raises(NNTPAuthenticationError):
-        nntp_login(app, 'alice', PASSWORD)
+        nntp_login(app, 'alice@abc.onion', PASSWORD)
     assert failures(caplog) == []
 
 
 def test_an_accepted_nntp_login_logs_nothing(app, alice, peer, caplog):
-    assert nntp_login(app, 'alice', PASSWORD).startswith(b'Bearer ')
+    assert nntp_login(app, 'alice@abc.onion', PASSWORD).startswith(b'Bearer ')
     assert failures(caplog) == []
 
 
@@ -161,7 +161,7 @@ def test_an_oauth_refusal_after_the_provider_accepted_logs_nothing(app, oauth_si
 def test_a_banned_account_the_directory_accepted_logs_nothing(app, alice, directory, caplog):
     alice.banned = True
     db.session.commit()
-    assert clearnet_login(app, 'alice', PASSWORD).headers['Location'].endswith('/auth/login')
+    assert clearnet_login(app, 'alice@abc.onion', PASSWORD).headers['Location'].endswith('/auth/login')
     assert failures(caplog) == []
 
 
@@ -190,7 +190,7 @@ def test_a_register_get_logs_nothing(app, db_session, caplog):
 
 def test_a_register_post_by_a_signed_in_user_still_logs(app, alice, ldap_off, caplog):
     client = app.test_client()
-    client.post('/auth/login', data={'user_name': 'alice', 'password': PASSWORD, **LOGIN}, environ_base=CLEARNET)
+    client.post('/auth/login', data={'user_name': 'alice@abc.onion', 'password': PASSWORD, **LOGIN}, environ_base=CLEARNET)
     assert client.get('/auth/register', environ_base=CLEARNET).status_code == 302   # signed in: sent away
     client.post('/auth/register', data={}, environ_base=CLEARNET)
     assert event_lines(caplog, 'auth: register attempt') == ['auth: register attempt ip=203.0.113.9']

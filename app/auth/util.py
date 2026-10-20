@@ -12,7 +12,7 @@ from flask import current_app, flash, g, make_response, redirect, request, sessi
 from flask_babel import _
 from flask_login import current_user, login_user
 from markupsafe import Markup
-from sqlalchemy import and_, func
+from sqlalchemy import and_, false, func
 from wtforms import Label
 
 from app import cache, db, plugins
@@ -21,7 +21,7 @@ from app.auth.forms import LoginForm
 from app.constants import NOTIF_REGISTRATION
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
-from app.storefront import current_storefront, default_domain
+from app.storefront import DomainInfo, current_storefront, default_domain, domain_base_url, domain_for_host, on_domain
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role, dummy_password_hash, \
     verify_password_hash
 from app.onion import audit_field, is_onion_request
@@ -525,24 +525,39 @@ def process_login(form: LoginForm):
     return log_user_in(user, form, ip, country, ldap_sync=ldap_sync)
 
 
-def find_user_lookups(user_name):
+def split_handle(typed: str, storefront: DomainInfo) -> tuple[str, DomainInfo | None]:
+    """The user name and the hosted domain a typed login name means: a bare name is on `storefront`, `name@host` is on
+    the domain `host` (None when this site does not host it). A leading `@` is dropped."""
+    typed = typed.strip().removeprefix('@')
+    name, at, host = typed.rpartition('@')
+    if not at:
+        return typed, storefront
+    return name, domain_for_host(host)
+
+
+def find_user_lookups(user_name, storefront: DomainInfo | None = None):
     """The three queries `find_user` runs, in precedence order: user name, email, profile URL."""
-    username = user_name.strip()
+    typed = user_name.strip()
+    name, domain = split_handle(typed, storefront or current_storefront())
     local = and_(User.ap_id.is_(None), User.deleted.is_(False))
+    # A domain this site does not host has no accounts, but its lookups run all the same
+    by_name = and_(local, func.lower(User.user_name) == func.lower(name), on_domain(domain)) if domain else false()
     # Equality, not ILIKE: in a pattern the typed '%' and '_' were wildcards, so '%' found some account
-    ap_id = f"{current_app.config['SERVER_URL']}/u/{username}".lower()
-    return (User.query.filter(local, func.lower(User.user_name) == func.lower(username)),
-            User.query.filter(local, func.lower(User.email) == func.lower(username)),
-            User.query.filter(User.deleted.is_(False), func.lower(User.ap_profile_id) == ap_id))
+    by_profile = (User.deleted.is_(False) &
+                  (func.lower(User.ap_profile_id) == f"{domain_base_url(domain)}/u/{name}".lower())) if domain else false()
+    return (User.query.filter(by_name),
+            User.query.filter(local, func.lower(User.email) == func.lower(typed)),
+            User.query.filter(by_profile))
 
 
-def find_user(user_name):
-    """The account a typed login identifier names: a local user name, else a local email (both case-insensitive),
-    else this site's profile URL for it. All three lookups run every time, whatever matches, or the query count
+def find_user(user_name, storefront: DomainInfo | None = None):
+    """The account a typed login identifier names: a local user name on the storefront's domain (or the domain a full
+    handle names), else a local email anywhere on the site (both case-insensitive), else the profile URL for the
+    name on that domain. All three lookups run every time, whatever matches, or the query count
     would tell which names have accounts; each is a single equality on one lower() expression, which has its own
     expression index (idx_user_user_name_lower, idx_user_email_lower, idx_user_ap_profile_id_lower), unlike one OR
     across them."""
-    by_name, by_email, by_profile = (query.first() for query in find_user_lookups(user_name))
+    by_name, by_email, by_profile = (query.first() for query in find_user_lookups(user_name, storefront))
     return by_name or by_email or by_profile
 
 
@@ -603,7 +618,7 @@ def validate_user_ldap_login(user_name: str, password: str, ip: str, refuse: boo
         flash(_('Login failed'))
         return None
 
-    user = find_user(user_name)
+    user = find_user(user_name, default_domain())
     if user is None:
         if not can_be_a_local_user_name(user_name):  # D1149, D1150
             flash(_('Login failed'))

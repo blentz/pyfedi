@@ -99,7 +99,7 @@ def can_deliver_to(user, instance) -> bool:
 def mentioned_users(post, allow_fetch=True) -> list:
     """The users a post's body Mentions with @user@instance syntax, once each, leaving out its author."""
     return mentioned_users_found_by(
-        post, lambda address: search_for_user(address, allow_fetch=allow_fetch, retry=True))
+        post, lambda address, home=None: search_for_user(address, allow_fetch=allow_fetch, retry=True, home=home))
 
 
 def reply_recipients(reply, parent, allow_fetch=True) -> list:
