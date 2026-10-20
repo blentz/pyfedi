@@ -95,6 +95,23 @@ def test_mail_to_a_clearnet_account_from_an_onion_request_links_to_the_clearnet(
     assert ONION not in sent_bodies(send)
 
 
+def test_an_admin_written_approval_mail_links_to_the_onion_for_an_onion_account(app, accounts, monkeypatch):
+    """F11: the admin's Markdown goes through markdown_to_html, which moves our hosts onto the canonical one (for
+    stored text). In mail to one account they belong on that account's home domain."""
+    onion_user, clear_user = accounts
+    monkeypatch.setattr('app.email.get_setting', lambda name, default=None:
+                        f'Read [the rules](https://{CANONICAL}/c/rules) first.'
+                        if name == 'registration_approved_email' else default)
+    context = on_request(app, CANONICAL)   # a clearnet admin approved it
+    try:
+        with patch('app.email.send_email') as send:
+            send_registration_approved_email(onion_user)
+    finally:
+        context.pop()
+    assert f'http://{ONION}/c/rules' in sent_bodies(send)
+    assert f'https://{CANONICAL}' not in sent_bodies(send)
+
+
 def test_the_requests_own_storefront_comes_back_after_the_mail(app, accounts):
     onion_user, clear_user = accounts
     context = on_request(app, ONION)
