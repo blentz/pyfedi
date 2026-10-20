@@ -190,21 +190,20 @@ def test_find_actor_or_create(app, db_session, site, local_instance, remote_inst
     assert by_handle.id == remote_user.id
 
 
-def test_a_local_users_own_handle_does_not_resolve(app, db_session, site, local_instance):
-    """The half of the original whatever@server.tld assertion that does not hold.
+def test_a_local_users_own_handle_resolves(app, db_session, site, local_instance):
+    """The handle that names a local user finds it, as its actor URL does.
 
-    Recorded as behaviour rather than dropped: find_actor_by_url's '@' branch
-    filters on User.ap_id, which is NULL for every local user, so the local user
-    created two lines below is not found by the handle that names it. With
-    create_if_not_found refused there is nowhere else for the call to go. The
-    original test asked this question with create_if_not_found allowed, which
-    sent it to webfinger this instance's own domain over the network.
+    find_actor_by_url's '@' branch used to filter on User.ap_id alone, which is
+    NULL for every local user, so this was None -- and with create_if_not_found
+    allowed it sent WebFinger to this instance's own domain. R2: a handle on any
+    hosted domain is that domain's own account, looked up here, never fetched.
     """
     server_name = app.config['SERVER_NAME']
     local_user = make_local_actor('localadmin')
 
-    assert find_actor_or_create(f'localadmin@{server_name}', create_if_not_found=False) is None
-    # ... while the same user's actor URL finds it, so the row itself is fine.
+    assert find_actor_or_create(f'localadmin@{server_name}', create_if_not_found=False).id == local_user.id
+    assert find_actor_or_create(f'nobody@{server_name}') is None   # a miss is a miss, with creation allowed
+    # ... and the same user's actor URL finds it too.
     assert find_actor_or_create(f'https://{server_name}/u/localadmin',
                                 create_if_not_found=False).id == local_user.id
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from datetime import timedelta
 from random import randint
+from urllib.parse import urlsplit
 
 import httpx
 from flask import current_app
@@ -15,6 +16,7 @@ from app.activitypub.util import get_request, signed_get_request, actor_json_to_
     canonical_handle, webfinger_self_link_allowed
 from app.discovery.podcast import podcast_community_for
 from app.models import User, Community, Feed, Site
+from app.storefront import domain_for_host, on_domain
 from app.utils import utcnow, get_setting, actor_contains_blocked_words, actor_profile_contains_blocked_words, \
     instance_banned, low_value_reposters, instance_allowed
 
@@ -305,9 +307,22 @@ def fetch_actor_from_webfinger(address: str, server: str, retry=False):
     return None
 
 
+def hosted_domain_of(actor: str):
+    """The domain this site hosts that `actor` (a URL, or a name@host handle) is on, else None. Such an actor is
+    in the database or nowhere: fetching it would be a request to ourselves (spec 3.4)."""
+    if actor.startswith('https://') or actor.startswith('http://'):
+        try:
+            return domain_for_host(urlsplit(actor).netloc)
+        except ValueError:   # an authority urlsplit refuses names no host of ours
+            return None
+    return domain_for_host(actor.removeprefix('@').rpartition('@')[2]) if '@' in actor else None
+
+
 def create_actor_from_remote(actor_address: str, community_only=False,
                              feed_only=False, retry=False) -> User | Community | Feed | None:
-    """Create a new actor from remote data."""
+    """Create a new actor from remote data. None for an actor on a domain this site hosts, which is never fetched."""
+    if hosted_domain_of(actor_address):
+        return None
     if actor_address.startswith('https://') or actor_address.startswith('http://'):
         server, address = extract_domain_and_actor(actor_address)
         actor_json = fetch_remote_actor_data(actor_address, retry=retry)
@@ -345,7 +360,10 @@ def find_actor_by_url(actor_url, community_only=False, feed_only=False, allow_ba
     """Find an actor by URL without creating it."""
     """Warning: this function returns None if not found, False if found and banned/deleted"""
     actor_url = actor_url.strip().lower()
-    server_name = current_app.config['SERVER_NAME']
+    # Any domain this site hosts is local, not only SERVER_NAME: a URL on the onion is looked up here, never fetched
+    hosted = hosted_domain_of(actor_url)
+    netloc = urlsplit(actor_url).netloc if hosted and '://' in actor_url else ''
+    server_name = netloc or current_app.config['SERVER_NAME']
 
     # Check for local actors first
     if f"{server_name}/c/" in actor_url and "/p/" not in actor_url:
@@ -382,6 +400,10 @@ def find_actor_by_url(actor_url, community_only=False, feed_only=False, allow_ba
             return actor
 
     if '@' in actor_url:
+        if hosted:   # name@<a hosted domain>: that domain's own account, or nobody
+            name = actor_url.removeprefix('@').rpartition('@')[0]
+            local = User.query.filter(func.lower(User.user_name) == name, User.ap_id.is_(None), on_domain(hosted))
+            return (local if allow_banned else local.filter(User.banned.is_(False))).first()   # as find_local_user
         user: User = User.query.filter_by(ap_id=actor_url.lower()).first()
         return user
     else:
