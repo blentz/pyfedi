@@ -49,7 +49,7 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, RolePermission, Domain, \
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain
-from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id
+from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, live_registration
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
@@ -2330,7 +2330,7 @@ def admin_users_add():
     user = User()
     if form.validate_on_submit():
         # Staff reach this form for 'staff' domains; an 'admin' domain's accounts are made by an admin alone
-        if domain_by_id(form.site_domain.data).registration == 'admin' and not current_user.is_admin():
+        if live_registration(domain_by_id(form.site_domain.data), g.site) == 'admin' and not current_user.is_admin():
             abort(403)
         user.user_name = form.user_name.data
         user.title = form.user_name.data

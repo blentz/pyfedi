@@ -141,6 +141,22 @@ def test_adding_a_user_to_a_staff_row_allows_staff(app, onion):
     assert User.query.filter_by(user_name='newbie').one().site_domain_id == row.id
 
 
+@pytest.mark.parametrize('row, mode, staff_may', [('admin', 'Open', True), ('admin', 'RequireApplication', True),
+                                                  ('anyone', 'Closed', False)])
+def test_adding_a_default_domain_user_follows_the_site_mode_not_its_row(app, onion, row, mode, staff_may):
+    """F7: the default domain's own `registration` column is dead data; Site.registration_mode is its live rule,
+    and a Closed site's accounts are made by an admin alone, as its register page says."""
+    _, staff, admin = _staff_and_admin('anyone')
+    _mode(mode)
+    _default_row(row)
+    default = SiteDomain.query.filter_by(is_default=True).one()
+    assert (_add_user(app, staff, default.id).status_code != 403) is staff_may
+    assert User.query.filter_by(user_name='newbie').count() == (1 if staff_may else 0)
+    if not staff_may:
+        _add_user(app, admin, default.id)
+        assert User.query.filter_by(user_name='newbie').count() == 1
+
+
 def _default_row(registration):
     row = SiteDomain.query.filter_by(is_default=True).one()
     row.registration = registration
