@@ -5,6 +5,12 @@
     <small style="color: red;">[{{ name }}] {{ "%.3f"|format(now) }} s{% if delta > 0 %} (+{{ "%.3f"|format(delta) }} s){% endif %}</small>
 {% endmacro %}
 
+{# The "Local" badge: a post or comment that is not shared with other servers. `item` is a Post or a PostReply; the
+   badge follows its own local_only column, not the community's. #}
+{% macro local_only_badge(item) -%}
+{% if item.local_only %}<span class="badge text-bg-secondary" title="{{ _('Not shared with other servers') }}">{{ _('Local') }}</span>{% endif %}
+{%- endmacro %}
+
 {% macro render_username(user, add_domain=True, htmx_redirect_back_to=None, current_user=None, low_bandwidth=False, collapsed=False, admin_ids=None, user_notes=None, inline=False) -%}
 {% if not inline -%}
     <div class="render_username" xmlns="http://www.w3.org/1999/xhtml">

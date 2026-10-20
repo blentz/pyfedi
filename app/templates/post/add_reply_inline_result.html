@@ -1,3 +1,4 @@
+{% from "_macros.html" import local_only_badge %}
 {% from 'post/_quote_card.html' import render_quote %}
 {# This file is similar to _post_reply_teaser.html except it includes the render_username macro and removes
    a few things that aren't needed on brand new comments.
@@ -51,7 +52,7 @@
         <div class="row">
             <div class="col-auto comment_author">
                 <span class="visually-hidden">{{ _('by') }}</span>
-                {{ render_username(post_reply.author, htmx_redirect_back_to=request.path + '#comment_' + str(post_reply.id)) }}
+                {{ render_username(post_reply.author, htmx_redirect_back_to=request.path + '#comment_' + str(post_reply.id)) }} {{ local_only_badge(post_reply) }}
                 {% if post_reply.author.id == post_reply.post.author.id -%}
                     <span title="{{ _('Submitter of original post') }}" aria-label="{{ _('Post creator') }}" class="user_flair original_poster">{{ _('OP') }}</span>
                 {% endif -%}
