@@ -11,6 +11,7 @@ import app.chat.util as chat_util
 from app.models import ChatMessage, Conversation, User, Notification, Report, Site
 from app.storefront import canonicalise_text
 from app.utils import authorise_api_user, markdown_to_html, user_access
+from app.local_only import REMOTE_CONTACT_REFUSAL, refuses_remote_contact
 from app.shared.tasks import task_selector
 
 
@@ -152,6 +153,8 @@ def post_private_message(auth, data):
     sender = authorise_api_user(auth, return_type='model')
     recipient = User.query.filter_by(id=data['recipient_id']).one()
 
+    if refuses_remote_contact(sender, recipient):   # spec 3.4
+        raise Exception(REMOTE_CONTACT_REFUSAL)
     if not sender.can_send_pm_to(recipient):
         raise Exception(
             "You are not permitted to send a private message at this time to this recipient, likely because your "

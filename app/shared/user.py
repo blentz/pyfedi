@@ -5,6 +5,7 @@ from sqlalchemy import text
 
 from app import db, cache, plugins
 from app.constants import *
+from app.local_only import REMOTE_CONTACT_REFUSAL, refuses_remote_contact
 from app.models import UserBlock, NotificationSubscription, User, IpBan, UserFollower, Notification, BotChallenge, \
     Conversation
 from app.shared.tasks import task_selector
@@ -238,6 +239,8 @@ def follow_user(follow_id: int, src, auth=None):
         user = current_user
 
     to_follow: User = db.session.get(User, follow_id)
+    if refuses_remote_contact(user, to_follow):
+        raise Exception(REMOTE_CONTACT_REFUSAL)
 
     # Following someone already followed, or already asked, changes nothing (repeated actions are idempotent)
     already = db.session.query(UserFollower).filter(UserFollower.local_user_id == user.id,

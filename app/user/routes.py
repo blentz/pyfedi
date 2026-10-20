@@ -7,6 +7,7 @@ from io import BytesIO
 from flask import redirect, url_for, flash, request, make_response, session, current_app, abort, json, g, send_file
 from flask_babel import _, lazy_gettext as _l
 from flask_login import logout_user, current_user
+from markupsafe import Markup
 from sqlalchemy import desc, or_, text, asc
 
 from app import db, cache, celery
@@ -19,7 +20,8 @@ from app.community.util import save_icon_file, save_banner_file, retrieve_mods_a
 from app.constants import *
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap
-from app.local_only import local_only_visible_rss, user_local_only, without_local_only
+from app.local_only import local_only_visible_rss, refuses_remote_contact, remote_contact_refusal_message, \
+    user_local_only, without_local_only
 from app.visibility import OPEN_VISIBILITIES, visible_to_clause
 from app.onion import is_onion_request
 from app.models import Post, Community, CommunityMember, User, PostReply, Notification, utcnow, File, Site, \
@@ -2343,6 +2345,11 @@ def user_follow(actor):
         user: User = User.query.filter_by(user_name=actor, deleted=False, ap_id=None).first()
     if user is None:
         abort(404)
+    if refuses_remote_contact(current_user, user):   # spec 3.4: said here, not left pending forever
+        if request.headers.get('HX-Request') == 'true':
+            return Markup('<div class="ms-auto">{}</div>').format(remote_contact_refusal_message())
+        flash(remote_contact_refusal_message(), 'error')
+        return redirect(return_to)
 
     shared_user.follow_user(user.id, src=SRC_WEB)
 

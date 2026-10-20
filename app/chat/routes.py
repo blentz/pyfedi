@@ -8,6 +8,7 @@ from app.chat import bp
 from app.chat.forms import AddReply, ReportConversationForm
 from app.chat.util import send_message
 from app.constants import NOTIF_REPORT, SRC_WEB, REPORT_TYPE_MESSAGE
+from app.local_only import refuses_remote_contact, remote_contact_refusal_message
 from app.models import Site, User, Report, ChatMessage, Notification, Conversation, conversation_member, \
     Community, CommunityBan, ModLog
 from app.shared.site import block_remote_instance
@@ -32,6 +33,9 @@ def chat_home(conversation_id=None):
             # unlike the GET path below, an admin may not write into a conversation
             # they are not part of
             abort(400)
+        if any(refuses_remote_contact(current_user, member) for member in conversation.members):   # spec 3.4
+            flash(remote_contact_refusal_message(), 'error')
+            return redirect(url_for('chat.chat_home', conversation_id=conversation_id))
         send_message(form.message.data, conversation_id)
         return redirect(url_for('chat.chat_home', conversation_id=conversation_id, _anchor='message'))
     else:
@@ -84,6 +88,9 @@ def chat_home(conversation_id=None):
 def new_message(to):
     recipient = db.session.get(User, to) or abort(404)
 
+    if refuses_remote_contact(current_user, recipient):   # spec 3.4: said here, not sent into the void
+        flash(remote_contact_refusal_message(), 'error')
+        return redirect(url_for('activitypub.user_profile', actor=recipient.link()))
     if not current_user.can_send_pm_to(recipient):
         return redirect(url_for('chat.denied'))
     
