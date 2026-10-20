@@ -699,3 +699,17 @@ def test_an_admin_may_not_put_somebody_elses_feed_under_the_admins_own(app, env)
         put_feed(token(admin), {'feed_id': mine.id, 'parent_feed_id': admins.id})
     db.session.expire_all()
     assert db.session.get(Feed, mine.id).parent_feed_id is None
+
+
+def test_a_stranger_naming_the_owners_feed_as_parent_is_refused_as_a_stranger(app, env):
+    """F10b: the caller is authorised before the parent is checked. Checked first against the owner's feeds, the
+    parent's answer (parent_feed_not_allowed or not) told a stranger which feed ids are the owner's."""
+    from app.api.alpha.utils.feed import put_feed
+
+    owner, stranger, public, private = env
+    mine = a_feed(owner, 'ownchild')
+    for parent in (public.id, 987654):   # the owner's feed, and one nobody has: the same answer
+        with pytest.raises(Exception, match='incorrect_login'):
+            put_feed(token(stranger), {'feed_id': mine.id, 'parent_feed_id': parent})
+    db.session.expire_all()
+    assert db.session.get(Feed, mine.id).parent_feed_id is None
