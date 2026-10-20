@@ -30,7 +30,7 @@ def _default_row():
 
 
 def _form(token, **overrides):
-    data = {'domain': 'abc.onion', 'scheme': 'http', 'federates': 'y', 'registration': 'staff',
+    data = {'domain': 'abc.onion', 'scheme': 'http', 'federates': '', 'registration': 'staff',
             'csrf_token': token, 'submit': 'Add'}
     data.update(overrides)
     return data
@@ -60,8 +60,28 @@ def test_add_domain(app):
     assert response.status_code == 302
     row = db.session.query(SiteDomain).filter_by(domain='abc.onion').one()
     assert (row.is_onion, row.is_default, row.scheme, row.federates, row.registration) == \
-           (True, False, 'http', True, 'staff')
+           (True, False, 'http', False, 'staff')
     assert domain_for_host('abc.onion') is not None
+
+
+def test_a_second_domain_that_federates_is_refused(app):
+    """F8: until per-domain federation ships (plan C) only the main domain federates. A second domain added with
+    federation on would hand out actor ids nothing serves, and the federation lock would then freeze it."""
+    _default_row()
+    client = app.test_client()
+    login(client, _admin())
+    response = client.post('/admin/domains', data=_form(csrf(app, client), federates='y'))
+    assert response.status_code == 200
+    assert 'Only the main domain can federate until per-domain federation ships.' in response.get_data(as_text=True)
+    assert _domains() == {current_app.config['SERVER_NAME']}
+
+
+def test_the_federates_box_starts_unticked(app):
+    client = app.test_client()
+    login(client, _admin())
+    page = client.get('/admin/domains').get_data(as_text=True)
+    box = page[page.index('id="federates"') - 200:page.index('id="federates"') + 200]
+    assert 'checked' not in box
 
 
 def test_add_seeds_default_when_table_empty(app):
