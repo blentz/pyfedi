@@ -100,7 +100,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'get_community': 1,
     },
     'app/api/alpha/utils/misc.py': {
-        'get_resolve_object': 5,
+        'get_resolve_object': 2,
     },
     'app/api/alpha/utils/post.py': {
         'get_post_list': 2,
