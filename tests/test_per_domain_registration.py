@@ -1,0 +1,155 @@
+"""Each hosted domain's `registration` setting decides who may create its accounts (plan B task 4)."""
+from unittest.mock import patch
+
+import pytest
+from flask import g
+
+from app import db
+from app.api.alpha.views import site_view
+from app.storefront import public_registration_open
+from app.models import Instance, Role, RolePermission, Site, SiteDomain, User, user_role
+from app.storefront import clear_domain_cache, current_storefront, domain_for_host
+from tests.factories import make_instance, make_user
+from tests.test_admin_user_administration import _add_payload
+from tests.test_community_lifecycle import csrf, login
+from tests.test_onion_guard_limits import FROM_CADDY, MARKER, ONION_URL, a_session, onion, onion_get, onion_post  # noqa: F401
+
+pytestmark = pytest.mark.usefixtures('site')
+
+CLOSED_TEXT = 'Registration is closed. Only admins can create accounts.'
+FORM_TEXT = 'Create new account'
+
+
+def _mode(mode):
+    db.session.get(Site, 1).registration_mode = mode
+    db.session.commit()
+
+
+def _onion_row(registration):
+    row = SiteDomain.query.filter_by(domain='abc.onion').one()
+    row.registration = registration
+    db.session.commit()
+    clear_domain_cache()
+    return row
+
+
+def _register_payload(**overrides):
+    data = {'user_name': 'newcomer', 'real_email': 'newcomer@example.com', 'password': 'password123',
+            'password2': 'password123', 'timezone': 'UTC', 'submit': 'Register'}
+    data.update(overrides)
+    return data
+
+
+def test_the_onion_register_page_refuses(app, onion):
+    _mode('Open')
+    _onion_row('admin')
+    client = app.test_client()
+    a_session(client)
+    page = onion_get(client, '/auth/register')
+    assert CLOSED_TEXT in page.get_data(as_text=True)
+    assert FORM_TEXT not in page.get_data(as_text=True)
+    posted = onion_post(client, '/auth/register', data=_register_payload())
+    assert CLOSED_TEXT in posted.get_data(as_text=True)
+    assert User.query.filter_by(user_name='newcomer').count() == 0
+
+
+def test_a_staff_row_refuses_public_sign_up(app, onion):
+    _mode('Open')
+    _onion_row('staff')
+    client = app.test_client()
+    a_session(client)
+    assert CLOSED_TEXT in onion_get(client, '/auth/register').get_data(as_text=True)
+    onion_post(client, '/auth/register', data=_register_payload())
+    assert User.query.filter_by(user_name='newcomer').count() == 0
+
+
+@pytest.mark.parametrize('mode,closed', [('Open', False), ('RequireApplication', False), ('Closed', True)])
+def test_an_anyone_row_follows_the_site_registration_mode(app, onion, mode, closed, monkeypatch):
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the open form renders a csrf_token field
+    monkeypatch.setattr('app.auth.routes.handle_abandoned_open_instance', lambda: None)   # no admin has logged in here
+    _mode(mode)
+    _onion_row('anyone')
+    client = app.test_client()
+    a_session(client)
+    text = onion_get(client, '/auth/register').get_data(as_text=True)
+    assert (CLOSED_TEXT in text) is closed
+    assert (FORM_TEXT in text) is not closed
+
+
+def test_public_registration_open_is_true_only_for_anyone(app, onion):
+    for registration, expected in (('anyone', True), ('staff', False), ('admin', False)):
+        _onion_row(registration)
+        assert public_registration_open(domain_for_host('abc.onion')) is expected
+
+
+def test_api_registration_follows_the_storefront(app, onion):
+    """The API has no register endpoint yet (D1181); what it can do is advertise the mode, and a refused domain
+    advertises Closed."""
+    _mode('Open')
+    for registration, advertised in (('anyone', 'Open'), ('admin', 'Closed'), ('staff', 'Closed')):
+        _onion_row(registration)
+        with app.test_request_context():
+            g.site = db.session.get(Site, 1)
+            g.storefront = domain_for_host('abc.onion')
+            assert site_view(None)['site']['registration_mode'] == advertised
+
+
+def _staff_and_admin(onion_row_registration):
+    instance = db.session.get(Instance, 1) or make_instance('test.piefed.local')
+    make_user(instance, 'founder', local=True)
+    staff = make_user(instance, 'staffer', local=True)
+    staff.verified = True
+    admin = make_user(instance, 'useradmin', local=True)
+    admin.verified = True
+    db.session.commit()
+    staff_role = Role(name='Staff', weight=2)
+    admin_role = Role(name='Admin', weight=3)
+    db.session.add_all([Role(name='Anonymous user', weight=0), Role(name='Authenticated user', weight=1),
+                        staff_role, admin_role])
+    db.session.commit()
+    for role in (staff_role, admin_role):
+        db.session.add(RolePermission(role_id=role.id, permission='administer all users'))
+        db.session.add(RolePermission(role_id=role.id, permission='change user roles'))
+    db.session.execute(user_role.insert().values(user_id=staff.id, role_id=staff_role.id))
+    db.session.execute(user_role.insert().values(user_id=admin.id, role_id=admin_role.id))
+    db.session.commit()
+    return _onion_row(onion_row_registration), staff, admin
+
+
+def _add_user(app, who, domain_id):
+    client = app.test_client()
+    g.pop('_login_user', None)   # g outlives a request here, and holds the previous request's user
+    g.pop('csrf_token', None)    # generate_csrf caches in g
+    login(client, who)
+    token = csrf(app, client)
+    with patch('app.admin.routes.render_template', return_value='rendered'):
+        with patch('app.admin.routes.finalize_user_setup'):
+            return client.post('/admin/users/add', data=_add_payload(token, site_domain=str(domain_id)),
+                               content_type='multipart/form-data')
+
+
+def test_adding_a_user_to_an_admin_row_needs_an_admin(app, onion):
+    row, staff, admin = _staff_and_admin('admin')
+    assert _add_user(app, staff, row.id).status_code == 403
+    assert User.query.filter_by(user_name='newbie').count() == 0
+    _add_user(app, admin, row.id)
+    assert User.query.filter_by(user_name='newbie').one().site_domain_id == row.id
+
+
+def test_adding_a_user_to_a_staff_row_allows_staff(app, onion):
+    row, staff, admin = _staff_and_admin('staff')
+    _add_user(app, staff, row.id)
+    assert User.query.filter_by(user_name='newbie').one().site_domain_id == row.id
+
+
+def test_oauth_sign_up_follows_the_storefront(app, onion):
+    from app.auth.oauth_util import can_user_register
+    _mode('Open')
+    for registration, open_ in (('anyone', True), ('admin', False)):
+        _onion_row(registration)
+        with app.test_request_context():
+            g.site = db.session.get(Site, 1)
+            g.storefront = domain_for_host('abc.onion')
+            with patch('app.auth.oauth_util.get_country', return_value=None):
+                refused = can_user_register()
+            assert (refused is True) is open_

@@ -16,11 +16,13 @@ from app.auth.oauth_util import (
     initialize_new_user,
     refuse_banned_visitor,
 )
+from app.storefront import current_storefront
 from app.auth.util import (
     handle_abandoned_open_instance,
     notify_admins_of_registration,
     process_login,
     process_registration_form,
+    public_registration_open,
     redirect_next_page,
     render_login_form,
     render_registration_form,
@@ -75,6 +77,8 @@ def register():
     handle_abandoned_open_instance()
 
     form = RegistrationForm()
+    if not public_registration_open(current_storefront()):
+        return render_registration_form(form)   # this domain's accounts are made by staff, not by sign-up
     if g.site.tos_url is None or not g.site.tos_url.strip():
         del form.terms
     if g.site.registration_mode == 'Open':

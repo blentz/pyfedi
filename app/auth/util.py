@@ -21,7 +21,8 @@ from app.auth.forms import LoginForm
 from app.constants import NOTIF_REGISTRATION
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
-from app.storefront import DomainInfo, current_storefront, default_domain, domain_base_url, domain_for_host, on_domain
+from app.storefront import (DomainInfo, current_storefront, default_domain, domain_base_url, domain_for_host, on_domain,
+                            public_registration_open)
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role, dummy_password_hash, \
     verify_password_hash
 from app.onion import audit_field, is_onion_request
@@ -450,12 +451,14 @@ def oauth_client_id(provider):
 
 
 def render_registration_form(form):
+    registration_open = public_registration_open(current_storefront())
     if g.site.registration_mode == "RequireApplication" and g.site.application_question:
         form.question.label = Label("question", markdown_to_html(g.site.application_question))
     if g.site.tos_url is None or not g.site.tos_url.strip():
         del form.terms
 
     return render_template("auth/register.html", title=_("Register"), form=form, site=g.site,
+                           registration_open=registration_open,
                            onion_proof=prepare_onion_proof(form, 'register'),
                            instance_chooser_enabled=get_setting('enable_instance_chooser', False),
                            #google_oauth=current_app.config["GOOGLE_OAUTH_CLIENT_ID"],

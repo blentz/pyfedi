@@ -11,7 +11,7 @@
             <div class="col col-login mx-auto">
                 <div class="card mt-5">
                     <div class="card-body p-6" id="registration_form">
-                        {% if site.registration_mode != 'Closed' %}
+                        {% if registration_open and site.registration_mode != 'Closed' %}
                             <h1 class="card-title text-center">{{ _('Create new account') }}</h1>
                             {% if google_oauth -%}
                             <p align="center">
