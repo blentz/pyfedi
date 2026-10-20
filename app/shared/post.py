@@ -26,6 +26,7 @@ from app.models import File, Notification, NotificationSubscription, Poll, PollC
     ap_parse_datetime, PollChoiceVote, adjust_domain_post_count, served_path, _as_url
 from app.shared.media import MediaRefused, can_upload_media, media_kind_for, media_of, queue_probe, \
     store_uploaded_media, episode_form_wanted, with_episode
+from app.local_only import content_local_only
 from app.onion import audit_field
 from app.storefront import canonical_link
 from app.shared.tasks import task_selector
@@ -320,7 +321,8 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None, upload
 
     post = Post(user_id=user.id, community_id=community.id, instance_id=user.instance_id,
                 from_bot=user.bot or user.bot_override, from_reposter=user.reposter or user.reposter_override,
-                posted_at=utcnow(), ap_id=gibberish(), title=title, language_id=language_id, visibility=visibility)
+                posted_at=utcnow(), ap_id=gibberish(), title=title, language_id=language_id, visibility=visibility,
+                local_only=content_local_only(user, community))
     if user.ban_posts:
         post.status = POST_STATUS_REVIEWING
     if media_upload:   # A13.1: committed below, before the file is copied: never listed, not even for that while

@@ -2905,6 +2905,7 @@ class Post(db.Model):
                     instance_id=user.instance_id,
                     indexable=user.indexable,
                     microblog=microblog,
+                    local_only=local_only.content_local_only(user, community),
                     posted_at=ap_parse_datetime(request_json['object']['published']) if 'published' in request_json['object'] else utcnow()
                     )
         if 'type' in request_json and request_json['type'] == 'Update':
@@ -4365,7 +4366,8 @@ class PostReply(db.Model):
                           if request_json else None,
                           ap_create_id=request_json['id'] if request_json else None,
                           ap_announce_id=announce_id,
-                          posted_at=ap_parse_datetime(request_json['object']['published']) if request_json and 'published' in request_json['object'] else utcnow())
+                          posted_at=ap_parse_datetime(request_json['object']['published']) if request_json and 'published' in request_json['object'] else utcnow(),
+                          local_only=local_only.content_local_only(user, post.community, in_reply_to or post))
         # 'type' in request_json, not just request_json -- Post.new's equivalent
         # read one class up has always been guarded this way, and this one was
         # not. The resolvers in app/activitypub/util.py synthesise their
