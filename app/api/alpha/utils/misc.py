@@ -18,7 +18,7 @@ from app.discovery.podcast import PODCAST_DROP, podcast_route_for, podcast_twin_
 from app.models import Post, PostReply, User, Community, BannedInstances, Feed, ModLog
 from app.storefront import is_local_host
 from app.user.utils import search_for_user
-from app.visibility import can_view, modlog_open_clause
+from app.visibility import can_view, is_open, modlog_open_clause
 from app.feed.util import search_for_feed
 from app.utils import authorise_api_user, gibberish, subscribed_feeds, communities_banned_from, \
     moderating_communities_ids, joined_or_modding_communities, blocked_communities, blocked_or_banned_instances
@@ -593,7 +593,7 @@ def get_modlog(auth, data):
     viewer_id = user.id if user else None
 
     def names_hidden_content(entry):
-        return any(obj is not None and not can_view(obj, None)
+        return any(obj is not None and not is_open(obj)
                    for obj in (entry.post, entry.reply, entry.reply.post if entry.reply else None))
 
     def build_removed_posts(entries):
