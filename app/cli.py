@@ -63,6 +63,7 @@ from app.shared.tasks.maintenance import (
     archive_old_posts, archive_old_users, cleanup_old_read_posts, refresh_instance_chooser, clean_up_tmp
 )
 from app.utils import move_file_to_s3
+from app.storefront import default_domain
 from app.discovery.cli import register_discovery_commands
 from app.relays.cli import register_relay_commands
 import app as app_pkg
@@ -286,7 +287,7 @@ def register(app):
                 private_key, public_key = RsaKeys.generate_keypair()
                 admin_user = User(user_name=user_name, title=user_name,
                                   email=email, verification_token=verification_token,
-                                  instance_id=1, email_unread_sent=False,
+                                  instance_id=1, site_domain_id=default_domain().id, email_unread_sent=False,
                                   private_key=private_key, public_key=public_key,
                                   alt_user_name=gibberish(randint(8, 20)))
                 admin_user.set_password(password)
@@ -425,6 +426,7 @@ def register(app):
                             matrix_user_id=row.matrix_user_id,
                             bot=row.bot_account if row.bot_account else False,
                             instance_id=row.instance_id,
+                            site_domain_id=default_domain().id if row.instance_id == 1 else None,
                             ap_id=None if row.instance_id == 1 else actor_id_to_ap_id(row.actor_id),
                             ap_profile_id=row.actor_id,
                             ap_public_url=row.actor_id,
@@ -493,6 +495,7 @@ def register(app):
                             title=row.title or row.name,
                             description=row.description or "",
                             instance_id=row.instance_id,
+                            site_domain_id=default_domain().id if row.instance_id == 1 else None,
                             user_id=creator_id,
                             created_at=row.published if row.published else utcnow(),
                             last_active=row.updated if row.updated else utcnow(),
@@ -1247,6 +1250,7 @@ def register(app):
                 private_key=private_key,
                 public_key=public_key,
                 instance_id=1,
+                site_domain_id=default_domain().id,
                 bot=True,
                 verified=True,
                 email_unread_sent=False,

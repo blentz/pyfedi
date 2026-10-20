@@ -124,6 +124,19 @@ def domain_by_id(site_domain_id: int | None) -> DomainInfo:
     return next((row for row in domain_rows() if row.id == site_domain_id), None) or default_domain()
 
 
+def domain_base_url(info: DomainInfo) -> str:
+    """The origin that identifies accounts and communities owned by `info`, for ActivityPub URLs stored at creation.
+    The default domain is SERVER_URL itself, so its identity stays byte-for-byte what it was before storefronts."""
+    if info.is_default:
+        return current_app.config['SERVER_URL']
+    return f'{info.scheme}://{_authority(info)}'
+
+
+def domain_authority(info: DomainInfo) -> str:
+    """`host[:port]` that names `info`'s owned rows as `ap_domain`; SERVER_NAME verbatim for the default domain."""
+    return current_app.config['SERVER_NAME'] if info.is_default else _authority(info)
+
+
 def is_registered_host(host: str) -> bool:
     return domain_for_host(host) is not None
 

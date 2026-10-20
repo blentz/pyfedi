@@ -9,6 +9,7 @@ from sqlalchemy import func
 from app import db, oauth
 from app.auth.util import create_registration_application, get_country, handle_banned_user
 from app.models import User, utcnow
+from app.storefront import default_domain
 from app.onion import audit_field
 from app.shared.tasks import task_selector
 from app.utils import RESERVED_USER_NAMES, actor_contains_blocked_words, finalize_user_setup, get_setting, gibberish, \
@@ -120,6 +121,7 @@ def initialize_new_user(email, username, oauth_id_key, user_info, ip, country):
         verified=True,
         verification_token='',
         instance_id=1,
+        site_domain_id=default_domain().id,
         ip_address=audit_field(ip),
         ip_address_country=audit_field(country),
         banned=user_ip_banned() or user_cookie_banned(),

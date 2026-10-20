@@ -84,7 +84,8 @@ from app.shared.tasks import task_selector
 import app.shared.feed as shared_feed
 from app.utils import is_valid_xml_utf8, get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url, joined_server_views
 from app.activitypub.serializers.podcast import uses_podcast_episode
-from app.storefront import (canonicalise_text, default_storefront, delete_memoized_everywhere, is_local_host, storefront_host,
+from app.storefront import (canonicalise_text, default_storefront, delete_memoized_everywhere, domain_authority, domain_base_url,
+                            is_local_host, storefront_host,
                             storefront_link, storefront_query_cache_key, storefront_url)
 from app.rss_extras import RSSFeed, PodcastChannel, itunes_image_ok
 from datetime import timezone, timedelta
@@ -147,6 +148,8 @@ def add_local():
         else:
             private_key, public_key = RsaKeys.generate_keypair()
             form.invitations.data = 0
+        home = current_user.home_domain()
+        base_url = domain_base_url(home)
         community = Community(title=form.community_name.data, name=form.url.data,
                               description=piefed_markdown_to_lemmy_markdown(form.description.data),
                               theme=form.theme.data,
@@ -156,11 +159,11 @@ def add_local():
                               local_only=form.local_only.data, posting_warning=sanitise_posting_warning(form.posting_warning.data),
                               private=private, invitations=form.invitations.data,
                               show_popular=show_popular, show_all=show_all,
-                              ap_profile_id='https://' + current_app.config['SERVER_NAME'] + '/c/' + form.url.data.lower(),
-                              ap_public_url='https://' + current_app.config['SERVER_NAME'] + '/c/' + form.url.data,
-                              ap_followers_url='https://' + current_app.config['SERVER_NAME'] + '/c/' + form.url.data + '/followers',
-                              ap_moderators_url='https://' + current_app.config['SERVER_NAME'] + '/c/' + form.url.data + '/moderators',
-                              ap_domain=current_app.config['SERVER_NAME'],
+                              ap_profile_id=base_url + '/c/' + form.url.data.lower(),
+                              ap_public_url=base_url + '/c/' + form.url.data,
+                              ap_followers_url=base_url + '/c/' + form.url.data + '/followers',
+                              ap_moderators_url=base_url + '/c/' + form.url.data + '/moderators',
+                              ap_domain=domain_authority(home), site_domain_id=home.id,
                               subscriptions_count=1, instance_id=1, ai_generated=form.ai_generated.data,
                               low_quality=('memes' in form.url.data or 'shitpost' in form.url.data) and
                                            get_setting('meme_comms_low_quality', False),

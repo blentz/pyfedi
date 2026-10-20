@@ -33,6 +33,7 @@ from sqlalchemy.orm import object_session as sa_object_session
 from app import db, cache, celery, plugins
 from app.activitypub.signature import signed_get_capped, signed_get_request, send_post_request, default_context, RsaKeys
 from app.constants import *
+from app.storefront import default_domain, domain_authority, domain_base_url
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
@@ -7263,16 +7264,18 @@ def find_microblogging_community():
     community = db.session.query(Community).filter(Community.instance_id == 1, Community.user_id == 1, Community.name == 'microblogs').first()
     if community is None:
         private_key, public_key = RsaKeys.generate_keypair()
+        home = default_domain()
+        base_url = domain_base_url(home)
         community = Community(title=_('Microblogs'), name='microblogs',
                               description=_('Microblog posts from around the fediverse.'),
                               nsfw=False, private_key=private_key,
                               public_key=public_key, description_html=markdown_to_html(_('Microblog posts from around the fediverse.')),
                               local_only=False, show_popular=False, show_all=False,
-                              ap_profile_id='https://' + current_app.config['SERVER_NAME'] + '/c/microblogs',
-                              ap_public_url='https://' + current_app.config['SERVER_NAME'] + '/c/microblogs',
-                              ap_followers_url='https://' + current_app.config['SERVER_NAME'] + '/c/microblogs/followers',
-                              ap_moderators_url='https://' + current_app.config['SERVER_NAME'] + '/c/microblogs/moderators',
-                              ap_domain=current_app.config['SERVER_NAME'],
+                              ap_profile_id=base_url + '/c/microblogs',
+                              ap_public_url=base_url + '/c/microblogs',
+                              ap_followers_url=base_url + '/c/microblogs/followers',
+                              ap_moderators_url=base_url + '/c/microblogs/moderators',
+                              ap_domain=domain_authority(home), site_domain_id=home.id,
                               subscriptions_count=0, instance_id=1, user_id=1, ai_generated=False,
                               first_federated_at=utcnow(), kind=COMMUNITY_KIND_MICROBLOGS)
         db.session.add(community)

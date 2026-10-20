@@ -70,7 +70,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'create_activity_of': 1,
         'create_post_reply': 2,
         'fetch_object_capped': 1,
-        'find_microblogging_community': 5,
         'lemmy_site_data': 4,
         'post_count_collections': 1,
         'post_to_activity': 1,
@@ -139,7 +138,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'register.send_batched_activities': 1,
     },
     'app/community/routes.py': {
-        'add_local': 5,
         'community_invite': 1,
         'community_move': 1,   # the community handle shown on the move page names the federation domain
         'do_subscribe': 1,
@@ -247,7 +245,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'add_mod_to_community': 1,
         'invite_with_chat': 9,
         'invite_with_email': 1,
-        'make_community': 5,
     },
     'app/shared/feed.py': {
         '_feed_remove_community': 3,
@@ -333,6 +330,8 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'canonicalise_links': 1,   # as canonicalise_text: the embedded URLs of SERVER_NAME's host stay as written
         'canonicalise_text': 1,   # SERVER_NAME's host is left as written in text: only the other hosts move
         'check_default_domain': 2,
+        'domain_authority': 1,   # an owned row's ap_domain on the default domain is SERVER_NAME verbatim
+        'domain_base_url': 1,   # the default domain's identity origin is SERVER_URL itself
         'is_local_host': 1,
         'is_served_name': 1,   # SERVER_NAME as configured is a name this site answers on: it names no URL
     },
@@ -364,7 +363,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'unsubscribe_from_community': 2,
     },
     'app/utils.py': {
-        'finalize_user_setup': 3,
         'get_request': 2,
         'get_request_capped': 1,
     },

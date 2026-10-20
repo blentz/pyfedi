@@ -75,8 +75,8 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     PostReply, PostReplyBookmark, AllowedInstances, InstanceBan, Tag, Emoji, UserExtraField, ArchivedPostReply, \
     RevokedToken, CommunityFavorite, UserFollower, CommunityFlairBlock, s3_key_from_url, Role, RolePermission, \
     ServerViewMember
-from app.storefront import URL_STRIPPED_BY_BROWSERS, canonicalise_links, canonicalise_text, is_local_host, is_local_link, \
-    storefront_host, storefront_html, storefront_url
+from app.storefront import URL_STRIPPED_BY_BROWSERS, canonicalise_links, canonicalise_text, domain_base_url, is_local_host, \
+    is_local_link, storefront_host, storefront_html, storefront_url
 from collections import Counter
 from flask import has_request_context
 import app as app_pkg
@@ -4348,9 +4348,10 @@ def finalize_user_setup(user):
 
     # Only set AP profile IDs if they haven't been set already
     if user.ap_profile_id is None:
-        user.ap_profile_id = f"{current_app.config['SERVER_URL']}/u/{user.user_name}".lower()
-        user.ap_public_url = f"{current_app.config['SERVER_URL']}/u/{user.user_name}"
-        user.ap_inbox_url = f"{current_app.config['SERVER_URL']}/u/{user.user_name.lower()}/inbox"
+        base_url = domain_base_url(user.home_domain())
+        user.ap_profile_id = f"{base_url}/u/{user.user_name}".lower()
+        user.ap_public_url = f"{base_url}/u/{user.user_name}"
+        user.ap_inbox_url = f"{base_url}/u/{user.user_name.lower()}/inbox"
 
     # find all notifications from this registration and mark them as read
     #

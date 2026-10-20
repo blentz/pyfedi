@@ -15,6 +15,7 @@ from app import db
 from app.constants import DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
     DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE
 from app.models import Community, User, CmsPage, Instance, SiteDomain
+from app.storefront import default_domain, domain_rows
 from app.onion_guard import MAX_POW_DIFFICULTY
 from app.utils import REDIRECT_POLICY_ALL_REFERRERS, REDIRECT_POLICY_FEDERATED_SERVERS, \
     REDIRECT_POLICY_SAME_ORIGIN, REDIRECT_POLICY_TRUSTED_SERVERS, validate_user_name_charset
@@ -362,7 +363,16 @@ class AddUserForm(FlaskForm):
                (4, _l('Admin')),
                ]
     role = SelectField(_l('Role'), choices=role_options, default=2, coerce=int, render_kw={'class': 'form-select'})
+    site_domain = SelectField(_l('Domain'), choices=[], coerce=int, render_kw={'class': 'form-select'})
     submit = SubmitField(_l('Save'))
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        rows = [row for row in domain_rows() if row.id is not None]
+        # 0 stands for the synthesised default of an install whose site_domain table is empty
+        self.site_domain.choices = [(row.id, row.domain) for row in rows] or [(0, default_domain().domain)]
+        if self.site_domain.data is None:
+            self.site_domain.data = default_domain().id or 0
 
     def validate_email(self, email):
         user = User.query.filter(func.lower(User.email) == func.lower(email.data.strip())).first()

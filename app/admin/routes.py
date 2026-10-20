@@ -2349,6 +2349,7 @@ def admin_users_add():
         user.verified = form.verified.data
 
         user.instance_id = 1
+        user.site_domain_id = form.site_domain.data or None
         user.roles.append(db.session.get(Role, form.role.data))
         db.session.add(user)
         db.session.commit()
@@ -2677,6 +2678,7 @@ def admin_community_move(community_id, new_owner):
         community.ap_moderators_url = 'https://' + current_app.config['SERVER_NAME'] + '/c/' + form.new_url.data + '/moderators'
         community.ap_domain = current_app.config['SERVER_NAME']
         community.instance_id = 1
+        community.site_domain_id = default_domain().id
 
         if form.new_owner.data:
             community.user_id = new_owner_user.id
