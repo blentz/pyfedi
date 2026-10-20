@@ -991,20 +991,14 @@ def _bind(storefront) -> None:
 
 
 @contextmanager
-def default_storefront():
-    """Render under the default storefront for the duration of the block, whatever the request's Host was.
-
-    For mail to someone other than the requester (a newsletter, an approval, an invite, a message to the admins):
-    its recipient may not use Tor, and links on the sender's storefront would tell them which one the sender uses.
-    Mail to the requester themself (their password reset, their own verification) follows their storefront.
-    Outside a request the default storefront is already in effect."""
-    if not has_request_context():
-        yield
-        return
+def _pinned(storefront):
+    """Render under `storefront` for the duration of the block, whatever the request's Host was; the request's own
+    storefront and URL adapter come back afterwards. `storefront_memo_name` reads `g.storefront`, so a memoized
+    function called in the block keys its entry by the pinned domain."""
     had_storefront, before = 'storefront' in g, g.get('storefront')
     adapter = request_ctx.url_adapter
-    g.storefront = default_domain()
-    _bind(g.storefront)
+    g.storefront = storefront
+    _bind(storefront)
     try:
         yield
     finally:
@@ -1013,6 +1007,36 @@ def default_storefront():
             g.storefront = before
         else:
             del g.storefront
+
+
+@contextmanager
+def default_storefront():
+    """Render under the default storefront for the duration of the block, whatever the request's Host was.
+
+    For mail with no single recipient account: one message to several admins, or to an address that has no account
+    (an invite, an applicant's contact address). Mail to one account uses `home_storefront`. Ruling I1 of the
+    storefront ledger, that third-party mail always names the default domain, is replaced by recipient home
+    domains (per-domain identity spec §3.2). Outside a request the default storefront is already in effect."""
+    if not has_request_context():
+        yield
+        return
+    with _pinned(default_domain()):
+        yield
+
+
+@contextmanager
+def home_storefront(user):
+    """Render under `user`'s home domain for the duration of the block, for mail or any message sent to that one
+    account: an onion account's links name the onion, a clearnet account's its own domain even when an onion
+    request triggered the send. Outside a request (a cron job) a request context for the domain is pushed, so
+    `url_for(_external=True)` names it there too."""
+    domain = user.home_domain()
+    if has_request_context():
+        with _pinned(domain):
+            yield
+        return
+    with current_app.test_request_context(base_url=_origin(domain)), _pinned(domain):
+        yield
 
 
 def resolve_storefront() -> Response | None:
@@ -1030,4 +1054,5 @@ def resolve_storefront() -> Response | None:
     g.storefront = storefront
     _bind(storefront)
     return None
+
 
