@@ -14,10 +14,13 @@ longer contained while still passing. app/utils.py now exposes FOLLOWED_BOOSTER_
 left to diverge: these tests run the production string.
 """
 
+import re
+
 import pytest
 from sqlalchemy import text
 
 from app import db
+import app.utils as app_utils
 from app.activitypub.util import record_boost
 from app.utils import FOLLOWED_AUTHOR_SQL, FOLLOWED_BOOSTER_SQL, MICROBLOG_GATE
 from tests.factories import make_community, make_follow, make_instance, make_post, make_user
@@ -159,3 +162,15 @@ def test_a_pending_follow_of_the_booster_does_not_surface_the_boost(db_session):
     ids = [row[0] for row in db.session.execute(text(BOOST_CLAUSE), {'local_user_id': local.id, 'visibility_viewer_id': local.id})]
 
     assert post.id not in ids
+
+
+@pytest.mark.parametrize('sql, binds', [
+    ('FOLLOWED_AUTHOR_SQL', {'local_user_id', 'visibility_viewer_id'}),
+    ('FOLLOWED_BOOSTER_SQL', {'local_user_id', 'visibility_viewer_id'}),
+    ('FOLLOWED_AUTHOR_PUBLIC_SQL', {'local_user_id'}),
+    ('FOLLOWED_BOOSTER_PUBLIC_SQL', {'local_user_id'}),
+])
+def test_each_follow_source_binds_what_get_deduped_post_ids_supplies(sql, binds):
+    """F9: the comment over these said every twin binds both; the PUBLIC (RSS) twins bind :local_user_id only, and
+    get_deduped_post_ids supplies :visibility_viewer_id only with the session twins."""
+    assert set(re.findall(r':(\w+)', getattr(app_utils, sql))) == binds
