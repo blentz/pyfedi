@@ -1320,6 +1320,25 @@ class TestArchiveOldPosts:
 
         assert recorder.calls == []
 
+    @pytest.mark.parametrize('local_only_on', ['post', 'reply'])
+    def test_local_only_content_is_not_selected(self, db_session, monkeypatch, app, local_only_on):
+        """archive_post skips a local-only post, or one with a local-only reply, and leaves `archived` NULL: an
+        archive is a public file. Selecting it anyway handed it over again on every run."""
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
+        instance, user, community, post = _seed()
+        old = self._past_the_recency_window(community, user)
+        if local_only_on == 'post':
+            old.local_only = True
+        else:
+            make_post_reply(old, user).local_only = True
+        db.session.commit()
+        monkeypatch.setitem(app.config, 'ARCHIVE_POSTS', 6)
+
+        archive_old_posts()
+
+        assert recorder.calls == []
+
     def test_a_post_in_an_unarchivable_community_is_skipped(self, db_session, monkeypatch, app):
         """`:899`'s `c.can_be_archived = true` (app/models.py:588)."""
         recorder = _Recorder()

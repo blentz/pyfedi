@@ -961,6 +961,10 @@ def archive_old_posts():
                   AND p.sticky = false
                   AND c.can_be_archived = true
                   AND c.private = false
+                  -- archive_post keeps local-only threads in the database and leaves them unarchived (spec §3.4),
+                  -- so selecting them would hand them over again on every run
+                  AND p.local_only = false
+                  AND NOT EXISTS (SELECT 1 FROM "post_reply" pr WHERE pr.post_id = p.id AND pr.local_only)
                   AND p.id NOT IN (
                       SELECT p2.id 
                       FROM "post" p2 
