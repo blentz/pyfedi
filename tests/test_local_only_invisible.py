@@ -331,6 +331,15 @@ def test_a_feed_owned_by_a_local_only_account_is_404_too(app, world):
     assert _webfinger(app, f'acct:~news@{server}').status_code == 200
 
 
+def test_a_federated_feeds_child_feeds_leave_local_only_feeds_out(app, world):
+    secret, mine, news = _onion_feeds(world)
+    child = make_local_feed('sports', public=True)
+    child.user_id = world.bob.id
+    secret.parent_feed_id = child.parent_feed_id = news.id
+    db.session.commit()
+    assert _get(app, '/f/news').json['childFeeds'] == [child.ap_profile_id]
+
+
 def test_a_federated_feeds_followers_leave_local_only_members_out(app, world):
     news = _onion_feeds(world)[2]
     for user in (world.alice, world.bob, world.onionite):
