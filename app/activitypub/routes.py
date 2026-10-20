@@ -717,8 +717,9 @@ def community_profile(actor):
         community: Community = Community.query.filter_by(ap_id=actor.lower(), banned=False).first()
     else:
         actor = actor.lower()  # the canonical name, so the document's id is the stored one whatever the caller's casing
-        profile_id = f"https://{current_app.config['SERVER_NAME']}/c/{actor}"
-        community: Community = Community.query.filter_by(ap_profile_id=profile_id, ap_id=None, banned=False).first()
+        # by name, not by a URL built from SERVER_NAME: a community owned by another domain has that domain's URL
+        community: Community = Community.query.filter(func.lower(Community.name) == actor, Community.ap_id.is_(None),
+                                                      Community.banned.is_(False)).first()
     if community is not None:
         if is_activitypub_request():
             if community.local_only or community.private:

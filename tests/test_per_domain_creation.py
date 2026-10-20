@@ -5,6 +5,8 @@ from unittest.mock import patch
 
 import pytest
 from flask import g
+from flask import session as flask_session
+from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.auth.oauth_util import initialize_new_user
@@ -13,7 +15,10 @@ from app.activitypub.util import find_microblogging_community
 from app.models import Community, Instance, Language, Role, RolePermission, Site, SiteDomain, User, user_role
 from app.storefront import clear_domain_cache, default_domain, domain_base_url, domain_by_id
 from app.utils import finalize_user_setup
-from tests.factories import make_instance, make_user
+from app.constants import SRC_API
+from app.shared.community import make_community
+from tests.factories import bearer, make_community as make_community_row, make_instance, make_user
+from tests.test_shared_community_lifecycle import _api_input, _seed_und_language
 from tests.test_admin_user_administration import _add_payload, _roles
 from tests.test_community_lifecycle import _add_payload as _community_payload
 from tests.test_community_lifecycle import able_to_create, csrf, login, url
@@ -178,8 +183,6 @@ def creators(app, db_session, domains):
 
 def _create(app, user, host, **overrides):
     """Create a community as `user`, over a request addressed to `host`."""
-    from flask import session as flask_session
-    from flask_wtf.csrf import generate_csrf
     base_url = f'http://{host}'
     client = app.test_client()
     g.pop('_login_user', None)   # g outlives a request here, and holds the previous request's user
@@ -195,7 +198,7 @@ def _create(app, user, host, **overrides):
         with patch('app.community.routes.task_selector'):
             client.post(url(app, 'community.add_local'), data=_community_payload(token, **overrides),
                         content_type='multipart/form-data', base_url=base_url)
-    return Community.query.filter_by(name=overrides['url']).one()
+    return Community.query.filter(db.func.lower(Community.name) == overrides['url'].lower()).first()
 
 
 def test_a_community_belongs_to_its_creators_home_domain(app, creators, domains):
@@ -216,3 +219,105 @@ def test_a_community_belongs_to_its_creators_home_domain(app, creators, domains)
     assert made.ap_public_url == 'http://abc.onion/c/hidden'
     assert made.ap_moderators_url == 'http://abc.onion/c/hidden/moderators'
     assert made.ap_domain == 'abc.onion'
+
+
+def _api_creator(name, domain):
+    user = make_user(db.session.get(Instance, 1), name, local=True, with_keys=True)
+    user.site_domain_id = domain.id
+    db.session.commit()
+    return user
+
+
+def test_the_api_make_community_builds_an_onion_creators_urls(app, db_session, domains):
+    default, onion = domains
+    make_user(db.session.get(Instance, 1), 'founder', local=True)
+    _seed_und_language()
+    user = _api_creator('onionite', onion)
+    make_community(_api_input(name='hidden'), SRC_API, bearer(user))
+    community = Community.query.filter_by(name='hidden').one()
+    assert community.site_domain_id == onion.id
+    assert community.ap_profile_id == 'http://abc.onion/c/hidden'
+    assert community.ap_public_url == 'http://abc.onion/c/hidden'
+    assert community.ap_followers_url == 'http://abc.onion/c/hidden/followers'
+    assert community.ap_domain == 'abc.onion'
+
+
+def test_a_community_name_is_taken_across_domains(app, db_session, domains):
+    default, onion = domains
+    make_user(db.session.get(Instance, 1), 'founder', local=True)
+    _seed_und_language()
+    clearnet = _api_creator('clearnetter', default)
+    onionite = _api_creator('onionite', onion)
+    make_community(_api_input(name='pets'), SRC_API, bearer(clearnet))
+    with pytest.raises(Exception, match='already exists'):
+        make_community(_api_input(name='Pets'), SRC_API, bearer(onionite))
+    make_community(_api_input(name='toys'), SRC_API, bearer(onionite))
+    with pytest.raises(Exception, match='already exists'):
+        make_community(_api_input(name='toys'), SRC_API, bearer(clearnet))
+    assert Community.query.filter(Community.name.in_(['pets', 'toys'])).count() == 2
+
+
+def test_a_community_name_is_taken_by_a_user_of_another_domain(app, db_session, domains):
+    default, onion = domains
+    make_user(db.session.get(Instance, 1), 'founder', local=True)
+    _seed_und_language()
+    clearnet = _api_creator('clearnetter', default)
+    onionite = _api_creator('onionite', onion)
+    with pytest.raises(Exception, match='User with that name'):
+        make_community(_api_input(name='ONIONITE'), SRC_API, bearer(clearnet))
+    assert Community.query.filter_by(name='onionite').count() == 0
+
+
+def test_add_local_refuses_a_name_another_domain_has(app, creators, domains):
+    founder, other = creators
+    first = _create(app, founder, 'abc.onion', url='shared_name')
+    assert _create(app, other, 'abc.onion', url='Shared_Name') == first
+    assert Community.query.filter(db.func.lower(Community.name) == 'shared_name').count() == 1
+    second = _create(app, other, 'abc.onion', url='onion_name')
+    assert _create(app, founder, 'abc.onion', url='onion_name') == second
+    assert Community.query.filter_by(name='onion_name').count() == 1
+
+
+def test_an_admin_added_user_cannot_take_a_community_name(app, db_session, domains):
+    default, onion = domains
+    instance = db.session.get(Instance, 1)
+    make_user(instance, 'founder', local=True)
+    admin = make_user(instance, 'useradmin', local=True)
+    admin.verified = True
+    make_community_row('pets')
+    db.session.commit()
+    roles = _roles()
+    db.session.add(RolePermission(role_id=roles['Admin'].id, permission='administer all users'))
+    db.session.execute(user_role.insert().values(user_id=admin.id, role_id=roles['Admin'].id))
+    db.session.commit()
+    client = app.test_client()
+    login(client, admin)
+    token = csrf(app, client)
+    with patch('app.admin.routes.render_template', return_value='rendered'):
+        client.post('/admin/users/add', data=_add_payload(token, user_name='Pets', site_domain=str(onion.id)),
+                    content_type='multipart/form-data')
+    assert User.query.filter_by(user_name='Pets').count() == 0
+
+
+AP = {'Accept': 'application/activity+json'}
+
+
+def test_an_onion_home_community_and_user_resolve_by_name(app, creators, domains):
+    founder, other = creators
+    _create(app, other, 'abc.onion', url='hidden')
+    other.ap_profile_id = 'http://abc.onion/u/onionite'
+    db.session.commit()
+    client = app.test_client()
+    response = client.get('/c/hidden', headers={**AP, 'Host': 'abc.onion'})
+    assert response.status_code == 200
+    assert response.json['preferredUsername'] == 'hidden'
+    assert client.get('/c/Hidden', headers={**AP, 'Host': 'abc.onion'}).status_code == 200
+    assert client.get('/u/onionite', headers={**AP, 'Host': 'abc.onion'}).status_code == 200
+
+
+def test_a_default_domain_community_document_is_unchanged(app, creators, domains):
+    founder, other = creators
+    made = _create(app, founder, 'abc.onion', url='clearnet')
+    response = app.test_client().get('/c/clearnet', headers={**AP, 'Host': 'abc.onion'})
+    assert response.status_code == 200
+    assert response.json['id'] == f"{app.config['SERVER_URL']}/c/clearnet" == made.ap_profile_id
