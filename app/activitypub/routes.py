@@ -15,7 +15,7 @@ from furl import furl
 # the whole inbox request down with a 500 instead of logging the membership as
 # already existing.
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import desc, or_, text, func, select, union_all, literal_column
+from sqlalchemy import desc, exists, not_, or_, text, true, func, select, union_all, literal_column
 
 from app import db, cache, celery, limiter
 from app.activitypub import bp
@@ -50,8 +50,8 @@ from app.discovery import SYNC_ACCEPTED, SYNC_REJECTED
 from app.discovery.instance_answers import instance_actor_answer, record_answer
 from app.relays import current_relay_id
 from app.relays import inbound as relay_inbound
-from app.local_only import community_local_only, federated_mentions, federating_clause, refused_outbound, \
-    user_local_only
+from app.local_only import any_domain_closed, community_local_only, federated_mentions, federating_clause, \
+    refused_outbound, user_local_only
 from app.storefront import is_served_name
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
@@ -223,11 +223,11 @@ def process_webfinger_request(resource):
             type = 'Group'
             if object is None:
                 object = Feed.query.filter_by(name=actor.strip().lower(), ap_id=None, public=True,
-                                              banned=False, ap_deleted_at=None).first()
+                                              banned=False, ap_deleted_at=None).filter(federating_feed_clause()).first()
                 type = 'Feed'
     else:
         object = Feed.query.filter_by(name=actor.strip().lower(), ap_id=None, public=True,
-                                      banned=False, ap_deleted_at=None).first()
+                                      banned=False, ap_deleted_at=None).filter(federating_feed_clause()).first()
         type = 'Feed'
 
     if object is None:
@@ -3714,6 +3714,22 @@ def process_chat(user, store_ap_json, core_activity, session):
 
 # ---- Feeds ----
 
+def feed_local_only(feed: Feed) -> bool:
+    """True for a local feed owned by a local-only account: like its owner, it does not exist to other servers."""
+    if feed.ap_id is not None or feed.user_id is None:
+        return False
+    owner = db.session.get(User, feed.user_id)
+    return owner is not None and user_local_only(owner)
+
+
+def federating_feed_clause():
+    """feed_local_only as a filter on Feed: keeps the feeds no local-only account owns. A plain true, with no
+    subquery, while every domain federates."""
+    if not any_domain_closed():
+        return true()
+    return ~exists().where(User.id == Feed.user_id, not_(federating_clause(User)))
+
+
 @bp.route('/f/<actor>')
 @bp.route('/f/<actor>/<feed_owner>', methods=['GET'])
 def feed_profile(actor, feed_owner=None):
@@ -3733,6 +3749,8 @@ def feed_profile(actor, feed_owner=None):
         feed: Feed = db.session.query(Feed).filter_by(name=actor, ap_id=None, banned=False).first()
     if feed is not None:
         if is_activitypub_request():
+            if feed_local_only(feed):
+                abort(404)   # a local-only account's feed does not exist to other servers
             # check if feed is public, if not abort
             # with 403 (forbidden)
             if not feed.public:
@@ -3825,8 +3843,8 @@ def feed_outbox(actor):
     else:
         feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None, banned=False).first()
 
-    # unknown feed - 404 rather than crashing on feed.public below
-    if feed is None:
+    # unknown feed - 404 rather than crashing on feed.public below; a local-only account's feed is unknown there too
+    if feed is None or feed_local_only(feed):
         abort(404)
 
     # check if feed is public, if not abort
@@ -3861,8 +3879,8 @@ def feed_following(actor):
     else:
         feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None, banned=False).first()
 
-    # unknown feed - 404 rather than crashing on feed.public below
-    if feed is None:
+    # unknown feed - 404 rather than crashing on feed.public below; a local-only account's feed is unknown there too
+    if feed is None or feed_local_only(feed):
         abort(404)
 
     # check if feed is public, if not abort
@@ -3908,6 +3926,8 @@ def feed_moderators_route(actor):
     # `feed_profile`, `/outbox` and `/following` all answer 403 for a private
     # feed; this one named its owner and `/followers` counted its members. Same
     # 403, so a private feed is private at all five.
+    if feed is not None and feed_local_only(feed):
+        abort(404)   # as feed_profile
     if feed is not None and not feed.public:
         abort(403)
     if feed is not None:
@@ -3947,6 +3967,8 @@ def feed_followers(actor):
         abort(400)
     else:
         feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None, banned=False).first()
+        if feed is not None and feed_local_only(feed):
+            abort(404)   # as feed_profile
         # D1394, as feed_moderators_route above.
         if feed is not None and not feed.public:
             abort(403)
@@ -3955,7 +3977,9 @@ def feed_followers(actor):
                 "@context": default_context(),
                 "id": f'{current_app.config["SERVER_URL"]}/f/{actor.lower()}/followers',  # D184, as feed_moderators_route
                 "type": "Collection",
-                "totalItems": db.session.query(FeedMember).filter_by(feed_id=feed.id).count(),
+                # a local-only member does not exist to other servers
+                "totalItems": db.session.query(FeedMember).join(User, User.id == FeedMember.user_id).filter(
+                    FeedMember.feed_id == feed.id, federating_clause(User)).count(),
                 "items": []  # D175: intended (owner ruling) - a real count, but the member list is private
             }
             resp = jsonify(result)

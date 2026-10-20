@@ -70,6 +70,12 @@ def _closed_domains() -> tuple[list[int], bool]:
     return closed, not storefront.default_domain().federates
 
 
+def any_domain_closed() -> bool:
+    """True when some hosted domain does not federate, so there can be local-only rows at all."""
+    closed, default_closed = _closed_domains()
+    return bool(closed) or default_closed
+
+
 def federating_clause(model):
     """A filter that keeps the rows of `model` (User or Community) that are not local-only: remote ones, and local
     ones whose home domain federates. A row that is not local-only is never dropped for a NULL."""

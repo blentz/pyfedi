@@ -8,13 +8,15 @@ from types import SimpleNamespace
 
 import pytest
 
+from sqlalchemy import update
+
 from app import db
 from app.constants import SRC_API
 from app.models import CommunityMember, PostBoost, PostReplyVote, PostVote, SiteDomain, UserFollower, utcnow
 from app.shared import community as shared_community
 from app.storefront import clear_domain_cache
-from tests.factories import make_community, make_feed_item, make_instance, make_local_feed, make_post, make_post_reply, \
-    make_user
+from tests.factories import make_community, make_feed_item, make_feed_member, make_instance, make_local_feed, \
+    make_post, make_post_reply, make_user
 from tests.test_community_lifecycle import csrf, login, url
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -249,6 +251,104 @@ def test_a_public_feed_leaves_local_only_communities_out(app, world):
     assert (following['totalItems'], following['items']) == (1, [world.clearnet.public_url()])
 
 
+def test_a_deleted_local_only_account_is_404_not_gone(app, world):
+    """A deleted federated account is a Tombstone (410) so peers purge it; a local-only one never reached them."""
+    for user in (world.onionite, world.bob):
+        user.deleted = True
+    db.session.commit()
+    assert _get(app, '/u/onionite').status_code == 404
+    assert _get(app, '/u/onionite/outbox').status_code == 404
+    assert _get(app, '/u/bob').status_code == 410
+    assert _get(app, '/u/bob/outbox').status_code == 410
+
+
+def test_when_the_default_domain_does_not_federate_its_unstamped_accounts_are_local_only(app, world):
+    """bob has no site_domain_id: he belongs to the default domain, so its federates setting decides. The lock on
+    federates is bypassed here; this is the state the filters must still read right."""
+    db.session.execute(update(SiteDomain).where(SiteDomain.id == world.default.id).values(federates=False))
+    db.session.commit()
+    clear_domain_cache()
+    assert world.bob.site_domain_id is None
+    server = app.config['SERVER_NAME']
+    assert _webfinger(app, f'acct:bob@{server}').status_code == 404
+    assert _webfinger(app, f'acct:clearnet@{server}').status_code == 404
+    usage = _get(app, '/nodeinfo/2.0').json['usage']
+    assert usage['users']['total'] == 0
+    assert _get(app, '/api/v3/site').json['site_view']['counts']['communities'] == 0
+
+
+def test_when_every_domain_federates_nothing_is_left_out(app, world):
+    """With no domain closed the filters are a plain true: the onion's account counts and resolves as any other."""
+    db.session.execute(update(SiteDomain).where(SiteDomain.id == world.onion.id).values(federates=True))
+    db.session.commit()
+    clear_domain_cache()
+    assert _webfinger(app, 'acct:onionite@abc.onion').status_code == 200
+    assert _webfinger(app, f"acct:~nofeed@{app.config['SERVER_NAME']}").status_code == 404   # the feed lookup runs
+    assert _get(app, '/nodeinfo/2.0').json['usage']['users']['total'] == 3
+    assert _get(app, '/api/v3/site').json['site_view']['counts']['communities'] == 2
+
+
+def test_federated_objects_pass_the_new_checks(app, world):
+    """The other side of each local-only check: an ordinary comment, a federating community's following and a feed
+    with no local owner are served."""
+    post = _post(app, world.clearnet, world.alice)
+    reply = _reply(app, post, world.alice)
+    assert _get(app, f'/comment/{reply.id}').status_code == 200
+    assert _get(app, f'/comment/{reply.id}/likes').status_code == 200
+    assert _get(app, '/c/clearnet/following').status_code == 200
+    make_local_feed('orphan', public=True)   # user_id None
+    assert _get(app, '/f/orphan').status_code == 200
+
+
+def test_a_non_owner_still_gets_401_adding_a_moderator(app, world):
+    client = app.test_client()
+    login(client, world.bob)
+    token = csrf(app, client)
+    response = client.post(url(app, 'community.community_add_moderator', community_id=world.clearnet.id,
+                               user_id=world.onionite.id), data={'csrf_token': token})
+    assert response.status_code == 401
+
+
+def _onion_feeds(world):
+    secret = make_local_feed('secret', public=True)
+    mine = make_local_feed('mine/onionite', public=True)
+    news = make_local_feed('news', public=True)
+    secret.user_id = mine.user_id = world.onionite.id
+    news.user_id = world.alice.id
+    db.session.commit()
+    return secret, mine, news
+
+
+def test_a_feed_owned_by_a_local_only_account_is_404_too(app, world):
+    _onion_feeds(world)
+    for path in ('/f/secret', '/f/secret/outbox', '/f/secret/following', '/f/secret/moderators',
+                 '/f/secret/followers', '/f/mine/onionite'):
+        assert _get(app, path).status_code == 404, path
+    server = app.config['SERVER_NAME']
+    assert _webfinger(app, f'acct:~secret@{server}').status_code == 404
+    assert _webfinger(app, f'acct:secret@{server}').status_code == 404
+    assert _get(app, '/f/news').status_code == 200
+    assert _webfinger(app, f'acct:~news@{server}').status_code == 200
+
+
+def test_a_federated_feeds_followers_leave_local_only_members_out(app, world):
+    news = _onion_feeds(world)[2]
+    for user in (world.alice, world.bob, world.onionite):
+        make_feed_member(user, news)
+    assert _get(app, '/f/news/followers').json['totalItems'] == 2
+
+
+def test_a_logged_in_browser_still_sees_local_only_pages(app, world, monkeypatch):
+    """Only the ActivityPub answer is refused: what a local viewer's browser is shown is plan B task 9's business."""
+    # the post page renders form.csrf_token(), which does not exist while CSRF is off
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
+    post = _post(app, world.hidden, world.onionite, local_only=True)
+    client = app.test_client()
+    login(client, world.alice)
+    for path in ('/u/onionite', '/c/hidden', f'/post/{post.id}'):
+        assert client.get(path, headers={'Accept': 'text/html'}).status_code == 200, path
+
+
 def _snapshot_world(app, world):
     world.alice.public_key = 'ALICE-PUBLIC-KEY'
     world.alice.created = datetime(2026, 1, 2, 3, 4, 5)
@@ -256,6 +356,11 @@ def _snapshot_world(app, world):
     world.clearnet.public_key = 'CLEARNET-PUBLIC-KEY'
     world.clearnet.created_at = datetime(2026, 1, 2, 3, 4, 5)
     world.clearnet.last_active = datetime(2026, 2, 3, 4, 5, 6)
+    news = make_local_feed('news', public=True)
+    news.user_id = world.alice.id
+    news.public_key = 'NEWS-PUBLIC-KEY'
+    news.created_at = datetime(2026, 1, 2, 3, 4, 5)
+    news.last_edit = datetime(2026, 2, 3, 4, 5, 6)
     db.session.commit()
 
 
@@ -289,6 +394,22 @@ CLEARNET_WEBFINGER = (b'{"aliases":["https://test.piefed.local/c/clearnet"],"lin
     b'+json"},{"rel":"https://w3id.org/fep/3b86/Follow","template":"{object}/subscribe"}],"subject":"acct:clearnet@t'
     b'est.piefed.local"}\n')
 
+NEWS_ACTOR = (b'{"@context":["https://www.w3.org/ns/activitystreams","https://w3id.org/security/v1"],"attributedTo":"https://t'
+    b'est.piefed.local/f/news/moderators","childFeeds":[],"endpoints":{"sharedInbox":"https://test.piefed.local/inbo'
+    b'x"},"followers":"https://test.piefed.local/f/news/followers","following":"https://test.piefed.local/f/news/fol'
+    b'lowing","id":"https://test.piefed.local/f/news","inbox":"https://test.piefed.local/f/news/inbox","moderators":'
+    b'"https://test.piefed.local/f/news/moderators","name":"news","outbox":"https://test.piefed.local/f/news/outbox"'
+    b',"preferredUsername":"news","publicKey":{"id":"https://test.piefed.local/f/news#main-key","owner":"https://tes'
+    b't.piefed.local/f/news","publicKeyPem":"NEWS-PUBLIC-KEY"},"published":"2026-01-02T03:04:05+00:00","sensitive":f'
+    b'alse,"type":"Feed","updated":"2026-02-03T04:05:06+00:00","url":"https://test.piefed.local/f/news"}\n')
+NEWS_WEBFINGER = (b'{"aliases":["https://test.piefed.local/f/news"],"links":[{"href":"https://test.piefed.local/f/news","rel":"htt'
+    b'p://webfinger.net/rel/profile-page","type":"text/html"},{"href":"https://test.piefed.local/f/news","properties'
+    b'":{"https://www.w3.org/ns/activitystreams#type":"Feed"},"rel":"self","type":"application/activity+json"}],"sub'
+    b'ject":"acct:news@test.piefed.local"}\n')
+NEWS_MODERATORS = (b'{"@context":["https://www.w3.org/ns/activitystreams","https://w3id.org/security/v1"],"id":"https://test.piefed'
+    b'.local/f/news/moderators","orderedItems":["https://test.piefed.local/u/alice"],"totalItems":1,"type":"OrderedC'
+    b'ollection"}\n')
+
 
 def test_hell_cloud_actor_and_webfinger_are_byte_identical(app, world):
     """A snapshot of the documents taken on the code before this task: an account and a community of hell.cloud
@@ -299,3 +420,6 @@ def test_hell_cloud_actor_and_webfinger_are_byte_identical(app, world):
     assert _webfinger(app, f'acct:alice@{server}').data == ALICE_WEBFINGER
     assert _get(app, '/c/clearnet').data == CLEARNET_ACTOR
     assert _webfinger(app, f'acct:clearnet@{server}').data == CLEARNET_WEBFINGER
+    assert _get(app, '/f/news').data == NEWS_ACTOR
+    assert _webfinger(app, f'acct:~news@{server}').data == NEWS_WEBFINGER
+    assert _get(app, '/f/news/moderators').data == NEWS_MODERATORS
