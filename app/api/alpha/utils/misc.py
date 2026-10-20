@@ -18,7 +18,7 @@ from app.discovery.podcast import PODCAST_DROP, podcast_route_for, podcast_twin_
 from app.models import Post, PostReply, User, Community, BannedInstances, Feed, ModLog
 from app.storefront import is_local_host
 from app.user.utils import search_for_user
-from app.visibility import can_view, is_open, modlog_open_clause
+from app.visibility import can_view, is_open, modlog_local_only_clause, modlog_open_clause
 from app.feed.util import search_for_feed
 from app.utils import authorise_api_user, gibberish, subscribed_feeds, communities_banned_from, \
     moderating_communities_ids, joined_or_modding_communities, blocked_communities, blocked_or_banned_instances
@@ -542,6 +542,8 @@ def get_modlog(auth, data):
     base_q = ModLog.query
     if not is_admin:
         base_q = base_q.filter(ModLog.public == True)
+    if user is None:   # as the web modlog: an entry about local-only content is not listed (spec §3.4)
+        base_q = base_q.filter(modlog_local_only_clause())
     if mod_person_id:
         base_q = base_q.filter(ModLog.user_id == mod_person_id)
     if community_id:

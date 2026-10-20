@@ -53,7 +53,7 @@ from app.post.util import form_tags_string
 # The module, not the names: app.shared.community reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
-from app.local_only import without_local_only
+from app.local_only import local_only_visible, local_only_visible_rss, without_local_only
 from app.visibility import is_open, listable_clause, visible_to_clause
 from app.utils import etag_stamp
 from app.utils import user_banned_from_community, back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
@@ -642,10 +642,11 @@ def show_community(community: Community, from_instance=None):
     show_reason_why_no_federation(community.instance_id)
 
     # Upcoming events
-    upcoming_events = db.session.execute(text("""SELECT e.start, p.title, p.id FROM "event" e
+    local_only = '' if local_only_visible() else 'AND p.local_only is false'   # spec §3.4
+    upcoming_events = db.session.execute(text(f"""SELECT e.start, p.title, p.id FROM "event" e
                                                  INNER JOIN post p on e.post_id = p.id
                                                  WHERE e.start > now() AND p.deleted is false 
-                                                 AND p.community_id = :community_id AND p.status > :reviewing
+                                                 AND p.community_id = :community_id AND p.status > :reviewing {local_only}
                                                  ORDER BY e.start LIMIT 5"""),
                                          {'community_id': community.id, 'reviewing': POST_STATUS_REVIEWING}).all()
 
@@ -872,7 +873,7 @@ def show_community_rss(actor):
         # No Post.private filter, for the same reason as show_community above.
         posts = Post.query.filter(Post.community_id == community.id).filter(Post.from_bot == False, Post.deleted == False,
                                   Post.status > POST_STATUS_REVIEWING, listable_clause(Post))
-        posts = without_local_only(posts, Post)   # the token is in the cache key
+        posts = without_local_only(posts, Post, visible=local_only_visible_rss())   # the token is in the cache key
         if score:
             posts = posts.filter(Post.score >= score)
         if tag:

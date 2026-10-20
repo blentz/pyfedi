@@ -1037,6 +1037,17 @@ def no_network_ld_signing(monkeypatch):
 
 
 
+def forget_login():
+    """Make the next request look its user up again.
+
+    flask-login caches `current_user` as `g._login_user`, and the session-scoped `app` fixture keeps one app context
+    open across every request a test makes. So without this, a test's second client is answered as whoever the first
+    request was, anonymous included (fact 666). Call it whenever a test changes caller.
+    """
+    from flask import g
+    g.pop('_login_user', None)
+
+
 def unsigned_but_precheck_clean_headers(body_bytes: bytes) -> dict:
     """Digest and Date headers for a hand-built request carrying NO Signature
     header, which still clears `HttpSignature.precheck`.

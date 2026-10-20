@@ -33,6 +33,7 @@ from sqlalchemy.exc import IntegrityError
 from app import cache, db
 from app.models import (BannedInstances, Community, CommunityMember, Instance,
                         Site, User, utcnow)
+from tests.conftest import forget_login
 from tests.factories import (grant_permission, make_community,
                              make_community_member, make_instance, make_user)
 
@@ -66,17 +67,17 @@ def client_for(env, permission, name='anadmin'):
         session['_user_id'] = str(user.id)
         session['_fresh'] = True
         session['csrf_token'] = env.raw
-    g.pop('_login_user', None)
+    forget_login()
     return client
 
 
 def get(client, path):
-    g.pop('_login_user', None)
+    forget_login()
     return client.get(path)
 
 
 def post(client, path, **data):
-    g.pop('_login_user', None)
+    forget_login()
     return client.post(path, data=data)
 
 

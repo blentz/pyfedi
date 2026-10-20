@@ -33,6 +33,7 @@ import app.shared.community as shared_community
 import app.shared.feed as shared_feed
 from app.storefront import is_local_host, storefront_link, storefront_url
 from app.shared.upload import is_refused_upload
+from app.local_only import local_only_visible_rss
 from app.utils import etag_stamp, back, show_ban_message, piefed_markdown_to_lemmy_markdown, markdown_to_html, render_template, \
     user_filters_posts, joined_communities, menu_instance_feeds, validation_required, feed_membership, \
     gibberish, get_task_session, instance_banned, menu_subscribed_feeds, referrer, community_membership, \
@@ -868,7 +869,7 @@ def show_feed_rss(feed_path):
             for item in FeedItem.query.filter_by(feed_id=fid).all():
                 feed_community_ids.append(item.community_id)
 
-        post_ids = get_deduped_post_ids('', feed_community_ids, 'new')
+        post_ids = get_deduped_post_ids('', feed_community_ids, 'new', show_local_only=local_only_visible_rss())
         post_ids = paginate_post_ids(post_ids, 0, page_length=100)
         posts = post_ids_to_models(post_ids, 'new')
 

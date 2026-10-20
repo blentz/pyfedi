@@ -15,7 +15,7 @@ from app.inoculation import inoculation
 from app.models import Post, Domain, Community, DomainBlock, read_posts
 from app.shared.domain import block_domain, unblock_domain
 from app.storefront import is_local_host, storefront_link, storefront_url
-from app.local_only import without_local_only
+from app.local_only import local_only_visible_rss, without_local_only
 from app.visibility import listable_clause
 from app.utils import render_template, permission_required, user_filters_posts, blocked_domains, \
     blocked_or_banned_instances, \
@@ -137,7 +137,8 @@ def show_domain_rss(domain_id):
                 filter(Post.from_bot == False, Post.domain_id == domain.id, Community.banned == False,
                        Post.deleted == False, Post.status > POST_STATUS_REVIEWING, Community.private == False,
                        Post.private == False, listable_clause(Post))
-            posts = without_local_only(posts, Post).order_by(desc(Post.posted_at)).limit(20)
+            posts = without_local_only(posts, Post, visible=local_only_visible_rss()).order_by(
+                desc(Post.posted_at)).limit(20)
 
             fg = FeedGenerator()
             fg.id(f"{storefront_url()}/d/{domain_id}")

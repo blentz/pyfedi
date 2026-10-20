@@ -10,7 +10,7 @@ from feedgen.feed import FeedGenerator
 from furl import furl
 from markupsafe import Markup, escape
 from pyld import jsonld
-from sqlalchemy import or_, and_, exists, func
+from sqlalchemy import or_, and_, func
 from sqlalchemy.orm import joinedload
 from ua_parser import parse as uaparse
 
@@ -41,8 +41,8 @@ from app.main.forms import ShareLinkForm
 from app.main.util import sidebar_active_communities, sidebar_new_instances, sidebar_upcoming_events, \
     sidebar_new_communities, _base_list_communities_context, reload_url
 from app.translation import LibreTranslateAPI
-from app.local_only import local_only_visible, without_local_only
-from app.visibility import listable_clause, modlog_open_clause, visible_to_clause
+from app.local_only import local_only_visible, local_only_visible_rss, without_local_only
+from app.visibility import listable_clause, modlog_local_only_clause, modlog_open_clause, visible_to_clause
 from app.storefront import storefront_cache_key, storefront_link, storefront_url
 from app.utils import etag_stamp
 from app.utils import render_template, ensure_rss_token, get_setting, request_etag_matches, return_304, blocked_domains, rss_token_user, \
@@ -58,7 +58,7 @@ from app.utils import render_template, ensure_rss_token, get_setting, request_et
     num_topics, referrer, block_honey_pot, user_pronouns, get_instance_stickies, \
     community_membership_private, favorite_communities, mimetype_from_url, feed_entry_body, check_anoobis, \
     is_safe_redirect_target, feed_readable_by, refuse_if_private_instance
-from app.models import Community, CommunityMember, Post, PostReply, Site, User, utcnow, Topic, Instance, \
+from app.models import Community, CommunityMember, Post, Site, User, utcnow, Topic, Instance, \
     Notification, Language, community_language, ModLog, Feed, FeedItem, CmsPage, BannedInstances, BotChallenge
 from app.ldap_utils import test_ldap_connection, sync_user_to_ldap, login_with_ldap
 import boto3
@@ -241,7 +241,7 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag, live=False
     active_communities = sidebar_active_communities(current_user.get_id())
     new_communities = sidebar_new_communities(current_user.get_id())
     instances = sidebar_new_instances()
-    upcoming_events = sidebar_upcoming_events()
+    upcoming_events = sidebar_upcoming_events(local_only_visible())
 
     # Voting history and ban status
     if current_user.is_authenticated:
@@ -680,8 +680,7 @@ def modlog():
     else:
         modlog_entries = modlog_entries.filter(ModLog.public == True).order_by(desc(ModLog.created_at))
     if not local_only_visible():  # an entry names its post or comment, and local-only ones are not named (§3.4)
-        modlog_entries = modlog_entries.filter(~exists().where(Post.id == ModLog.post_id, Post.local_only),
-                                               ~exists().where(PostReply.id == ModLog.reply_id, PostReply.local_only))
+        modlog_entries = modlog_entries.filter(modlog_local_only_clause())
 
     # Pagination
     modlog_entries = modlog_entries.paginate(page=page, per_page=100 if not low_bandwidth else 50, error_out=False)
@@ -1525,7 +1524,8 @@ def index_rss(feed_type=None):
     community_ids = list(community_ids)
 
     post_ids = get_deduped_post_ids(gibberish(15), community_ids, 'new',
-                                    include_following=feed_type == 'subscribed' and current_user_is_authenticated)
+                                    include_following=feed_type == 'subscribed' and current_user_is_authenticated,
+                                    show_local_only=current_user_is_authenticated)   # the token's answer
     post_ids = paginate_post_ids(post_ids, 0, page_length=50)
     posts = post_ids_to_models(post_ids, 'new')
 

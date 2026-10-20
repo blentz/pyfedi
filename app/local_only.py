@@ -66,15 +66,22 @@ def content_local_only(author, community, *parents) -> bool:
 
 
 def local_only_visible() -> bool:
-    """True when this request's reader may see local-only content: a logged-in user, or the account an RSS reader's
-    `?token=` names (an RSS reader presents no session). Anonymous visitors, crawlers and link previews may not."""
+    """True when this request's reader may see local-only content on a web page: a logged-in user. An RSS token does
+    not count here, since feed URLs that carry one are easily passed on; RSS views ask local_only_visible_rss()."""
+    return current_user.is_authenticated
+
+
+def local_only_visible_rss() -> bool:
+    """local_only_visible for an RSS view: the account the reader's `?token=` names. The session is ignored, so a
+    cached feed depends only on its key, which holds the token."""
     # app.utils at call time: it imports app.models, which imports this module (import cycle: models)
-    return current_user.is_authenticated or app_pkg.utils.rss_token_user() is not None
+    return app_pkg.utils.rss_token_user() is not None
 
 
 def without_local_only(query, model, visible: bool | None = None):
     """`query` over `model` (Post or PostReply) without the local-only rows, unless the reader may see them.
-    `visible` is that answer when the caller has it (an API call's token user), else local_only_visible()."""
+    `visible` is that answer when the caller has it (an RSS view's token, an API call's token user), else
+    local_only_visible()."""
     if visible is None:
         visible = local_only_visible()
     return query if visible else query.filter(model.local_only.is_(False))

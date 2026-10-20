@@ -58,11 +58,13 @@ def sidebar_new_instances() -> List:
 
 
 @cache.memoize(timeout=60)
-def sidebar_upcoming_events() -> List:
-    return db.session.execute(text("""SELECT e.start, p.title, p.id FROM "event" e
+def sidebar_upcoming_events(show_local_only: bool) -> List:
+    """`show_local_only` is an argument so that the memo keeps one entry per answer (spec §3.4)."""
+    local_only = '' if show_local_only else 'AND p.local_only is false'
+    return db.session.execute(text(f"""SELECT e.start, p.title, p.id FROM "event" e
                                      INNER JOIN post p on e.post_id = p.id
                                      WHERE e.start > now() AND p.deleted is false
-                                     AND p.status > :reviewing
+                                     AND p.status > :reviewing {local_only}
                                      ORDER BY e.start LIMIT 5"""),
                               {'reviewing': POST_STATUS_REVIEWING}).all()
 

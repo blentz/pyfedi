@@ -12,6 +12,7 @@ from app import db, cache
 from app.constants import VISIBILITY_PUBLIC, POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_VIDEO, POST_TYPE_POLL
 from app.models import PostReply, Post, Community, User, Language, utcnow
 from app.activitypub.serializers.microblog import link_hashtags
+from app.local_only import content_local_only
 from app.visibility import OPEN_VISIBILITIES, RestrictedReply, mark_restricted
 from app.utils import blocked_or_banned_instances, blocked_users, is_video_hosting_site, get_request, silenced_instances, \
     MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, is_local_microblogs
@@ -48,15 +49,30 @@ def retrieve_archived_post(archived_url: str) -> dict:
     return None
 
 
+UNKNOWN_PARENT = object()   # a stub's children: what their parent was is not in the archive
+
+
 def convert_archived_replies_to_tree(archived_replies: list, post: Post) -> List[dict]:
     """Convert archived reply data back to the expected tree format using PostReply models"""
     if not archived_replies:
         return []
     
-    def children_of(reply_data):
-        return [child for child in (create_real_reply(data) for data in reply_data.get('replies', [])) if child]
+    def children_of(reply_data, parent=None):
+        return [child for child in (create_real_reply(data, parent) for data in reply_data.get('replies', []))
+                if child]
 
-    def create_real_reply(reply_data):
+    def archived_local_only(reply_data, parent) -> bool:
+        """Whether the archived reply is local-only. An archive written before local-only content existed has no
+        such key: it is worked out as PostReply.new would, and where that cannot be done (no author row, or a parent
+        that only a stub was kept of) the reply is taken to be local-only, so it is not shown to anonymous readers."""
+        if 'local_only' in reply_data:
+            return bool(reply_data['local_only'])
+        author = db.session.get(User, reply_data['author_id']) if reply_data.get('author_id') else None
+        if author is None or parent is UNKNOWN_PARENT:
+            return True
+        return content_local_only(author, post.community, parent, post)
+
+    def create_real_reply(reply_data, parent):
         if reply_data.get('visibility', VISIBILITY_PUBLIC) not in OPEN_VISIBILITIES:
             if reply_data.get('id') is None:  # a malformed stub has no place in the tree: skipped, with its subtree
                 return None
@@ -64,7 +80,7 @@ def convert_archived_replies_to_tree(archived_replies: list, post: Post) -> List
                 'comment': RestrictedReply(reply_data['id'], reply_data.get('depth', 0), reply_data.get('parent_id'),
                                            reply_data.get('post_id', post.id), tuple(reply_data.get('path', []))),
                 'restricted': True,
-                'replies': children_of(reply_data)
+                'replies': children_of(reply_data, UNKNOWN_PARENT)
             }
         # Create a PostReply instance (not persisted to DB)
         post_reply = PostReply()
@@ -94,7 +110,7 @@ def convert_archived_replies_to_tree(archived_replies: list, post: Post) -> List
         post_reply.path = reply_data.get('path', [])
         post_reply.answer = reply_data.get('answer', False)
         post_reply.visibility = reply_data.get('visibility', VISIBILITY_PUBLIC)
-        post_reply.local_only = reply_data.get('local_only', False)   # mark_restricted withholds it from anonymous
+        post_reply.local_only = archived_local_only(reply_data, parent)   # mark_restricted withholds it from anonymous
         post_reply.reports = 0
         
         # Post relationship
@@ -134,7 +150,7 @@ def convert_archived_replies_to_tree(archived_replies: list, post: Post) -> List
         
         return {
             'comment': post_reply,
-            'replies': children_of(reply_data)
+            'replies': children_of(reply_data, post_reply)
         }
     
     return children_of({'replies': archived_replies})

@@ -406,7 +406,7 @@ def test_upcoming_events_are_future_undeleted_and_published(app, db_session):
                            {'p': post.id, 's': start})
     db.session.commit()
 
-    result = sidebar_upcoming_events()
+    result = sidebar_upcoming_events(True)
 
     assert [row[1] for row in result] == ['soon']
 

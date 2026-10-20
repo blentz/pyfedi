@@ -434,8 +434,8 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
     else:
         posts = posts.filter(listable_clause(Post))
         post_query_criteria.append(listable_sql('p'))
-    if user_id is None:   # local-only posts are for a token user (spec §3.4)
-        posts = without_local_only(posts, Post, visible=False)
+    posts = without_local_only(posts, Post, visible=user_id is not None)   # spec §3.4
+    if user_id is None:   # and the raw SQL below says the same
         post_query_criteria.append('p.local_only is false')
     
     # for materialized view - private community filtering

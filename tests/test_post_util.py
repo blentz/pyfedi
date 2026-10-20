@@ -81,7 +81,10 @@ def bodies(tree):
 
 ARCHIVED = {'replies': [{'id': 900, 'body': 'an archived reply',
                          'body_html': '<p>an archived reply</p>',
-                         'author_name': 'Somebody', 'replies': []}]}
+                         'author_name': 'Somebody', 'replies': [],
+                         # as archive_post now writes it: with no key and no author, the reply would be taken as
+                         # local-only and shown to no anonymous reader (spec §3.4)
+                         'local_only': False}]}
 
 
 class TestReadingAnArchive:

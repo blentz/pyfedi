@@ -164,6 +164,13 @@ def modlog_open_clause():
     return and_(~hidden_post, ~hidden_reply)
 
 
+def modlog_local_only_clause():
+    """ModLog entries that name no local-only post or comment: what a reader who is not logged in is shown (spec
+    §3.4), on the web modlog and the API's alike."""
+    return and_(~exists().where(Post.id == ModLog.post_id, Post.local_only.is_(True)),
+                ~exists().where(PostReply.id == ModLog.reply_id, PostReply.local_only.is_(True)))
+
+
 def listable_clause(model):
     return model.visibility == VISIBILITY_PUBLIC
 

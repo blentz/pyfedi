@@ -5775,7 +5775,8 @@ JOINED_SERVER_SQL = """(EXISTS (SELECT 1 FROM server_view_member svm
                                 AND c.instance_id = 1 AND c.user_id = 1 AND c.name = 'microblogs' AND """ + listable_sql('p') + ')'
 
 
-def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, hashtag: str = '', include_following=False, community_sql: str = None, newer_than=None) -> List[int]:
+def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, hashtag: str = '', include_following=False, community_sql: str = None, newer_than=None,
+                         show_local_only: bool | None = None) -> List[int]:
     joined_servers = include_following and current_user.is_authenticated and joined_server_views(current_user.id)
     if not community_sql and (community_ids is None or len(community_ids) == 0):
         if not joined_servers:
@@ -5856,8 +5857,8 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
     else:
         post_id_where.append('c.private is false ')
 
-    # Local-only posts are for logged-in readers and RSS token holders only (spec §3.4)
-    if not local_only_visible():
+    # Local-only posts are for logged-in readers only (spec §3.4); an RSS view passes its token's answer instead
+    if not (local_only_visible() if show_local_only is None else show_local_only):
         post_id_where.append('p.local_only is false ')
 
     # filter out nsfw and nsfl if desired
@@ -6894,6 +6895,12 @@ def archive_post(post_id: int, s3_connection):
             # reaches here twice today. That is the caller's care, not this
             # function's, and the cost of being wrong about it is unrecoverable.
             if post.archived:
+                return
+
+            # Spec §3.4: an archive is a public file (under S3_PUBLIC_URL or app/static/media/archived), so a
+            # local-only post, or a thread holding a local-only reply, stays in the database instead
+            if post.local_only or session.query(PostReply.id).filter(PostReply.post_id == post.id,
+                                                                     PostReply.local_only.is_(True)).first():
                 return
 
             # Delete thumbnail and medium sized versions if post has an image

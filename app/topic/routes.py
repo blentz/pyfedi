@@ -19,7 +19,7 @@ from app.models import Topic, Community, NotificationSubscription, PostReply, ut
 from app.storefront import storefront_link, storefront_query_cache_key, storefront_url
 from app.topic import bp
 from app.topic.forms import SuggestTopicsForm
-from app.local_only import without_local_only
+from app.local_only import local_only_visible_rss, without_local_only
 from app.visibility import listable_clause
 from app.utils import etag_stamp, render_template, user_filters_posts, validation_required, mimetype_from_url, feed_entry_body, login_required, \
     gibberish, get_deduped_post_ids, paginate_post_ids, post_ids_to_models, blocked_communities, \
@@ -233,7 +233,7 @@ def show_topic_rss(topic_path):
         community_ids = db.session.execute(
             text('SELECT id FROM community WHERE banned is false AND private is false AND topic_id IN :topic_ids'),
             {'topic_ids': tuple(topic_ids)}).scalars()
-        post_ids = get_deduped_post_ids('', list(community_ids), 'new')
+        post_ids = get_deduped_post_ids('', list(community_ids), 'new', show_local_only=local_only_visible_rss())
         post_ids = paginate_post_ids(post_ids, 0, page_length=100)
         posts = post_ids_to_models(post_ids, 'new')
 
