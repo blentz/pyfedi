@@ -696,7 +696,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         posts = post_ids_to_models(post_ids, sort.lower()).all()
     else:
         if boosted:
-            posts = boosted_posts(posts, *boosted, page * limit, rank_at=len(sticky_columns))
+            posts = boosted_posts(posts, *boosted, page * limit)
         posts = posts.paginate(page=page, per_page=limit, error_out=False)
 
     if user_id:
@@ -1182,14 +1182,14 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
         # request cannot answer differently depending on which one served it.
         posts = posts.filter(Post.score >= minimum_upvotes)
     
-    sticky_ordered = 0      # how many columns the stickies are ordered by, ahead of the sort
+    sticky_ordered = ()     # the columns the stickies are ordered by, ahead of the sort
     if search_by_community and not ignore_sticky:
         posts = posts.order_by(desc(Post.sticky))
-        sticky_ordered += 1
+        sticky_ordered += (Post.sticky,)
     
     if segregate_instance_stickies and not ignore_sticky:
         posts = posts.order_by(desc(Post.instance_sticky))
-        sticky_ordered += 1
+        sticky_ordered += (Post.instance_sticky,)
 
     if sort == "Hot":
         pass    # ordered, with the boost, below
@@ -1280,6 +1280,8 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
             posts = posts.filter(Post.community_id.not_in(filtered_out_community_ids))
 
     if sort == "Hot":
+        # A cursor of these two sorts carries the boosted value, which is the storefront's: replayed on another domain
+        # it can skip or repeat rows (the filters above still apply, so nothing is shown that was not already)
         posts = boosted_posts(posts, Post.ranking, (Post.posted_at,), limit, bookmark, sticky_ordered)
     # `desc(a), desc(b)` -- TWO arguments to order_by -- not
     # `desc(a, desc(b))`, which is one call to desc() with two arguments and

@@ -21,8 +21,7 @@ from bs4.formatter import HTMLFormatter
 from flask import Response, current_app, g, has_app_context, has_request_context, request
 from flask.globals import request_ctx
 from flask_babel import _
-from sqlalchemy import case, desc, or_
-from sqlakeyset import get_page
+from sqlalchemy import case, desc, or_, tuple_
 from sqlakeyset.results import unserialize_bookmark
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -223,29 +222,30 @@ def boosted_top_sql(columns: str, outer_columns: str, from_where: str, rank: str
     arms = [f'({select} {from_where}{condition} ORDER BY {order} LIMIT :tier_limit)' for condition in conditions]
     outer_order = ', '.join([*(f't.tier_{c} DESC' for c in lead), f't.tier_{rank} + {boost} DESC',
                              *(f't.tier_{c} DESC' for c in tail)])
-    sql = f'SELECT {outer_columns} FROM ({" UNION ".join(arms)}) AS t ORDER BY {outer_order} LIMIT :tier_limit'
+    sql = f'SELECT {outer_columns} FROM ({" UNION ALL ".join(arms)}) AS t ORDER BY {outer_order} LIMIT :tier_limit'
     return sql, params
 
 
-def tiered_post_ids(posts, rank, tail: tuple, limit: int, place: tuple | None = None, rank_at: int = 0) -> list[int]:
+def tiered_post_ids(posts, rank, tail: tuple, limit: int, place: tuple | None = None, lead: tuple = ()) -> list[int]:
     """The ids `boosted_top_sql` selects, for a ORM query: the first `limit` rows of `posts` (filtered, and ordered by
-    any sticky columns already) in the order `rank + boost, tail, id`, found tier by tier by plain `rank`. `place` is a
-    keyset cursor's forward place (sqlakeyset's, the value of every order column of the page's query) and `rank_at`
-    the index in it of the boosted value: each tier reads on from the cursor translated by its own boost, widened a
-    hair so that a float's rounding cannot drop a row; the caller's own keyset page does the exact cut. The argument
-    for why this is the naive order's first `limit` is `boosted_top_sql`'s."""
+    any sticky columns already) in the order `lead, rank + boost, tail, id`, found tier by tier by plain `rank`.
+    `place` is a keyset cursor's forward place (sqlakeyset's: the value of every order column of the page's query, in
+    that order) and `lead` the columns that come before the boosted value in it. Each tier reads on from the cursor
+    in two cuts. The index range is `rank <= cursor - boost`, widened a hair so that a float's rounding cannot drop a
+    row. The exact cut is `(lead, rank + boost, tail, id) < place`, which is what keeps the rows that tie the cursor
+    on its rank apart, by the keys after it. The argument for why this is the naive order's first `limit` is
+    `boosted_top_sql`'s."""
     ids = set()
     for boost, instance_ids in domain_tiers():
         arm = posts.filter(or_(models.Post.instance_id.is_(None), models.Post.instance_id.not_in(hosted_instance_ids()))) \
             if instance_ids is None else posts.filter(models.Post.instance_id.in_(instance_ids))
+        if place is not None:
+            if len(place) != len(lead) + len(tail) + 2:
+                raise ValueError('a cursor of another shape')
+            arm = arm.filter(rank <= place[len(lead)] - boost + KEYSET_SLACK,
+                             tuple_(*lead, rank + boost, *tail, models.Post.id) < tuple_(*place))
         arm = arm.order_by(desc(rank), *(desc(c) for c in tail), desc(models.Post.id))
-        if place is None:
-            rows = arm.limit(limit).all()
-        else:
-            moved = list(place)
-            moved[rank_at] = moved[rank_at] - boost + KEYSET_SLACK
-            rows = get_page(arm, per_page=limit + 1, page=(tuple(moved), False))
-        ids.update(row.id for row in rows)
+        ids.update(row.id for row in arm.limit(limit).all())
     return list(ids)
 
 
@@ -256,7 +256,7 @@ def boosted_order_by(rank, tail: tuple, by_id: bool = True) -> list:
             *([desc(models.Post.id)] if by_id else [])]
 
 
-def boosted_posts(posts, rank, tail: tuple, limit: int, bookmark=None, rank_at: int = 0):
+def boosted_posts(posts, rank, tail: tuple, limit: int, bookmark=None, lead: tuple = ()):
     """`posts` (a Post query, filtered and ordered by any sticky columns already) in the order of `boosted_order_by`,
     and cut to the rows `tiered_post_ids` finds: `limit` is how many rows the caller will show, one more than which
     is read to tell whether there is a next page. `bookmark` is the keyset cursor the caller will page by; a bookmark
@@ -270,7 +270,7 @@ def boosted_posts(posts, rank, tail: tuple, limit: int, bookmark=None, rank_at: 
         if backwards:
             return posts.order_by(*boosted_order_by(rank, tail))
     try:
-        ids = tiered_post_ids(posts, rank, tail, limit + 1, place, rank_at)
+        ids = tiered_post_ids(posts, rank, tail, limit + 1, place, lead)
     except (IndexError, TypeError, ValueError):   # a cursor this server never handed out
         return posts.order_by(*boosted_order_by(rank, tail))
     return posts.filter(models.Post.id.in_(ids)).order_by(*boosted_order_by(rank, tail))
