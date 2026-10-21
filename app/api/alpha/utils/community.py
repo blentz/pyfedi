@@ -9,6 +9,7 @@ from app import db, cache
 from app.api.alpha.views import community_view, user_view, post_view, cached_modlist_for_community, flair_view
 from app.community.util import search_for_community
 from app.constants import *
+from app.local_only import without_local_only_actors
 from app.storefront import current_storefront, on_domain
 from app.models import Community, CommunityMember, User, CommunityBan, Notification, CommunityJoinRequest, \
     NotificationSubscription, Post, CommunityFlair, Feed, utcnow
@@ -146,6 +147,7 @@ def get_community_list(auth, data):
     else:
         # for anonymous users, only show non-private communities
         communities = communities.filter(Community.private == False)
+    communities = without_local_only_actors(communities, Community, visible=user_id is not None)   # spec §3.4
 
     if user_id:
         banned_from = communities_banned_from(user_id)

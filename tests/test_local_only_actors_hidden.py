@@ -206,3 +206,59 @@ def test_logged_out_share_lists_no_local_only_community(app, shared):
 
 def test_logged_in_share_still_lists_them(app, shared):
     assert 'Onion art' in visit(app, f'/share?url={SHARED}', True, shared).get_data(as_text=True)
+
+
+# --- the alpha API (fix round 2) ----------------------------------------------------------------------------------
+
+API_LISTS = ['/api/alpha/community/list', '/api/alpha/search?q=art&type_=Communities',
+             '/api/alpha/search?q=bob&type_=Users', '/api/alpha/suggest_completion?q=!art',
+             '/api/alpha/suggest_completion?q=@bob', '/api/alpha/site']
+API_GROUPED = ['/api/alpha/topic/list', f'/api/alpha/feed?name=artfeed@{HELL}']
+API_ONE = [f'/api/alpha/community?name={ONION_ART}', f'/api/alpha/user?username={ONION_BOB}']
+
+
+def api_get(app, path, world, signed_in):
+    forget_login()
+    headers = {'Authorization': f'Bearer {world.hell_bob.encode_jwt_token()}'} if signed_in else {}
+    return app.test_client().get(path, base_url=HOSTS[HELL], headers=headers)
+
+
+@pytest.fixture
+def api(app, world, monkeypatch):
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    world.onion_bob.roles.append(Role.query.filter_by(name=ROLE_ADMIN_NAME).first() or Role(name=ROLE_ADMIN_NAME))
+    db.session.commit()   # an onion admin, for the site view's admin list
+    return world
+
+
+@pytest.mark.parametrize('path', API_LISTS)
+def test_the_alpha_apis_lists_name_no_local_only_row_to_a_logged_out_caller(app, api, path):
+    response = api_get(app, path, api, False)
+    assert response.status_code == 200
+    assert ONION not in response.get_data(as_text=True)
+
+
+@pytest.mark.parametrize('path', API_LISTS)
+def test_the_alpha_apis_lists_still_name_them_to_a_logged_in_caller(app, api, path):
+    response = api_get(app, path, api, True)
+    assert response.status_code == 200
+    assert ONION in response.get_data(as_text=True)
+
+
+@pytest.mark.parametrize('signed_in', [False, True])
+@pytest.mark.parametrize('path', API_GROUPED)
+def test_the_alpha_apis_topic_and_feed_views_list_a_local_only_community_only_to_a_logged_in_caller(
+        app, api, grouped, path, signed_in):
+    response = api_get(app, path, api, signed_in)
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert f'https://{HELL}/c/art' in body
+    assert (ONION in body) == signed_in
+
+
+@pytest.mark.parametrize('path', API_ONE)
+def test_the_alpha_apis_single_views_refuse_a_local_only_row_to_a_logged_out_caller(app, api, path):
+    response = api_get(app, path, api, False)
+    assert response.status_code == 400
+    assert ONION not in response.get_data(as_text=True)
+    assert api_get(app, path, api, True).status_code == 200
