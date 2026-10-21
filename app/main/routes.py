@@ -41,7 +41,7 @@ from app.main.forms import ShareLinkForm
 from app.main.util import sidebar_active_communities, sidebar_new_instances, sidebar_upcoming_events, \
     sidebar_new_communities, _base_list_communities_context, reload_url
 from app.translation import LibreTranslateAPI
-from app.local_only import local_only_visible, local_only_visible_rss, without_local_only
+from app.local_only import local_only_visible, local_only_visible_rss, without_local_only, without_local_only_actors
 from app.local_names import local_named, split_local_name
 from app.visibility import listable_clause, modlog_local_only_clause, modlog_open_clause, visible_to_clause
 from app.storefront import ON_DOMAIN_PARAM, current_instance_id, current_storefront, hidden_instance_ids, \
@@ -705,7 +705,8 @@ def modlog():
     prev_url = url_for('main.modlog', page=modlog_entries.prev_num, **arg_dict) if modlog_entries.has_prev and page != 1 else None
 
     instances = {instance.id: instance.domain for instance in Instance.query.filter(Instance.id.not_in(hidden_instance_ids()))}
-    communities = {community.id: community.display_name() for community in Community.query.filter(Community.banned == False).all()}
+    communities = {community.id: community.display_name()
+                   for community in without_local_only_actors(Community.query.filter(Community.banned == False), Community)}
     community_trusted = db.session.execute(text('SELECT c.id FROM "community" as c INNER JOIN "instance" as i on c.instance_id = i.id WHERE i.trusted is true or i.id IN :hosted'),
                                            {'hosted': tuple(sorted(hosted_instance_ids()))}).scalars()
 
@@ -731,10 +732,9 @@ def modlog_search_suggestions():
     q = request.form.get("suspect_user_name", "").lower()
     if q == '':
         q = request.form.get("user_name", "").lower()
-    results = User.query.filter(or_(User.ap_id.ilike(f"%{q}%"),
-                                    User.user_name.ilike(f"%{q}%"),
-                                    User.ap_profile_id.ilike(f"%{q}%"))
-                                ).limit(5).all()
+    results = without_local_only_actors(User.query.filter(or_(User.ap_id.ilike(f"%{q}%"),
+                                                              User.user_name.ilike(f"%{q}%"),
+                                                              User.ap_profile_id.ilike(f"%{q}%"))), User).limit(5).all()
     # D1375. `f"<option value='{m.ap_id or m.user_name}'>"`. A user name is not a safe
     # HTML attribute value: nothing restricts the characters in a REMOTE actor's name
     # -- `actor_name_from_ap` strips it and cuts it to the column and does not filter
