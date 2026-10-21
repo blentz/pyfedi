@@ -374,11 +374,12 @@ def _origin(storefront) -> str:
 _PROFILE_PATH = re.compile(r'^/(u|c)/([^/@?#]+)(?=[?#]|$)')
 
 
-def _rebase(url, base: str, hosts: frozenset[str]):
+def _rebase(url, base: str, hosts: frozenset[str], qualify: bool = True):
     """`url` on origin `base` when it is an http(s) or scheme-relative URL whose host is in `hosts`. Everything after
-    the authority (path, query, fragment, a bare '?') is kept byte for byte, except that the exact path `/u/<name>` or
-    `/c/<name>` of a host other than `base`'s names that host (`/u/<name>@<host>`): the account is not on `base`'s
-    domain. Any other value comes back unchanged."""
+    the authority (path, query, fragment, a bare '?') is kept byte for byte, except that, with `qualify` (a page being
+    rendered, a redirect), the exact path `/u/<name>` or `/c/<name>` of a host other than `base`'s names that host
+    (`/u/<name>@<host>`): the account is not on `base`'s domain. Content being stored is never qualified (owner
+    ruling 2026-10-20): it would write the onion host into what federates. Any other value comes back unchanged."""
     if _link_host(url) not in hosts:
         return url
     parts = urlsplit(url)
@@ -387,7 +388,7 @@ def _rebase(url, base: str, hosts: frozenset[str]):
         return url
     rest = url[start + 2 + len(parts.netloc):]
     source = _link_host(url)
-    if source != _link_host(base):
+    if qualify and source != _link_host(base):
         rest = _PROFILE_PATH.sub(lambda m: f'/{m[1]}/{m[2]}@{source}', rest, count=1)
     return base + rest
 
@@ -416,10 +417,10 @@ def _srcset_urls(srcset: str) -> list[tuple[int, int]]:
         i = comma + 1
 
 
-def _rebase_srcset(srcset: str, base: str, hosts: frozenset[str]) -> str:
+def _rebase_srcset(srcset: str, base: str, hosts: frozenset[str], qualify: bool = True) -> str:
     out, last = [], 0
     for start, end in _srcset_urls(srcset):
-        out += [srcset[last:start], _rebase(srcset[start:end], base, hosts)]
+        out += [srcset[last:start], _rebase(srcset[start:end], base, hosts, qualify)]
         last = end
     return ''.join(out) + srcset[last:]
 
@@ -461,7 +462,8 @@ def _rebase_links(html: str, base: str, hosts: frozenset[str], render: bool, emb
         for name, value in tag.attrs.items():
             if not _is_link_attr(tag, name, render):
                 continue
-            moved = _rebase_srcset(value, base, hosts) if name == 'srcset' else _rebase(value, base, hosts)
+            moved = (_rebase_srcset(value, base, hosts, render) if name == 'srcset'
+                     else _rebase(value, base, hosts, qualify=render))   # stored content moves its host alone
             if embedded:
                 moved = _rebase_text(moved, base, embedded)
             if moved != value:
@@ -475,7 +477,9 @@ def canonicalise_links(html: str) -> str:
     content about to be stored or federated. The end of `allowlist_html`. A link of ours is also moved where it sits
     inside another URL (`https://ex.com/?u=http://abc.onion/x`, `https://web.archive.org/web/1/http://abc.onion/p`)
     when it appears literally, as `canonicalise_text` moves it in text: leaving it would store the onion host, and
-    the privacy invariant outranks fidelity to what the author typed. A percent-encoded copy stays as written. With
+    the privacy invariant outranks fidelity to what the author typed. Only the host moves, never the path: an
+    onion-typed `/u/<name>` is stored as the canonical `/u/<name>`, as Markdown stores it, and is qualified only when
+    a page renders it. A percent-encoded copy stays as written. With
     no app context (a fuzz campaign) there is no registry of hosts, so `html` comes back as it is."""
     if not has_app_context():
         return html
@@ -502,7 +506,7 @@ def _rebase_text(text: str, base: str, hosts: frozenset[str]) -> str:
 
     def move(match):
         authority = match[0].rstrip(_TRAILING_PUNCTUATION)
-        return _rebase(authority, base, hosts) + match[0][len(authority):]
+        return _rebase(authority, base, hosts, qualify=False) + match[0][len(authority):]
 
     moved = _TEXT_URL_AUTHORITY.sub(move, text)
     return text if moved == text else moved

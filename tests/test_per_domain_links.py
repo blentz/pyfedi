@@ -1,6 +1,9 @@
 """A link to a local account or community names its domain when that is not the storefront's (spec 2026-10-19 §3.2)."""
+import pytest
+
 from app.models import User
-from app.storefront import canonicalise_links, home_storefront, storefront_html
+from app.storefront import canonicalise_links, canonicalise_text, home_storefront, storefront_html
+from app.utils import allowlist_html, markdown_to_html
 from tests.two_domains import HELL, ONION, default_request, onion_request, two_domains  # noqa: F401
 
 
@@ -59,11 +62,25 @@ def test_only_an_exact_profile_path_is_qualified(app, two_domains):
         assert f'href="http://{ONION}{path}"' in out
 
 
-def test_stored_links_qualify_another_domain_and_leave_the_canonical_one(app, two_domains):
+def test_a_stored_link_moves_only_its_host_and_is_qualified_on_render(app, two_domains):
+    """Important 4 (ruling 2026-10-20): canonicalising never writes `name@<onion>` into stored content, which
+    federates; it moves the host alone. A bare path names the default domain's account wherever it was typed."""
     with default_request(app):
         out = canonicalise_links(f'<a href="http://{ONION}/u/bob">b</a><a href="https://{HELL}/u/bob">b</a>')
-    assert f'href="https://{HELL}/u/bob@{ONION}"' in out
-    assert f'href="https://{HELL}/u/bob"' in out
+    assert out == f'<a href="https://{HELL}/u/bob">b</a><a href="https://{HELL}/u/bob">b</a>'
+
+
+@pytest.mark.parametrize('typed', [f'http://{ONION}/u/bob', f'http://{ONION}/c/art?x=1#y'])
+def test_html_and_markdown_typed_on_the_onion_store_the_same_link_and_no_onion_host(app, two_domains, typed):
+    canonical = typed.replace(f'http://{ONION}', f'https://{HELL}')
+    with onion_request(app):
+        html = allowlist_html(f'<p><a href="{typed}">x</a></p>')
+        markdown = markdown_to_html(f'[x]({typed})')
+        source = canonicalise_text(f'[x]({typed})')
+    for stored in (html, markdown, source):
+        assert ONION not in stored, stored
+    assert f'href="{canonical}"' in html and f'href="{canonical}"' in markdown
+    assert source == f'[x]({canonical})'
 
 
 def test_an_onion_recipients_email_links_by_their_domain(app, two_domains):
