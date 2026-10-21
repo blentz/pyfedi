@@ -35,7 +35,7 @@ from app.activitypub.signature import signed_get_capped, signed_get_request, sen
 from app.constants import *
 from app.local_only import federating_clause, federating_sql
 from app.local_names import local_named
-from app.storefront import default_domain, domain_authority, domain_base_url, hosted_instance_ids
+from app.storefront import default_domain, domain_authority, domain_base_url, hosted_instance_ids, instance_id_of
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
@@ -7302,7 +7302,7 @@ def find_microblogging_community():
                               ap_followers_url=base_url + '/c/microblogs/followers',
                               ap_moderators_url=base_url + '/c/microblogs/moderators',
                               ap_domain=domain_authority(home), site_domain_id=home.id,
-                              subscriptions_count=0, instance_id=1, user_id=1, ai_generated=False,
+                              subscriptions_count=0, instance_id=instance_id_of(home), user_id=1, ai_generated=False,
                               first_federated_at=utcnow(), kind=COMMUNITY_KIND_MICROBLOGS)
         db.session.add(community)
         db.session.commit()

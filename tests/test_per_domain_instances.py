@@ -14,10 +14,25 @@ from sqlalchemy import inspect, text
 
 from app import cache, db
 from app.activitypub.util import new_instance_profile_task
-from app.models import Instance, InstanceInUse, SiteDomain
+from unittest.mock import patch
+
+from app.auth.oauth_util import initialize_new_user
+from app.auth.util import create_new_user, create_new_user_from_ldap
+from app.activitypub.util import find_microblogging_community
+from app.constants import POST_TYPE_ARTICLE, SRC_API
+from app.models import (Community, Instance, InstanceInUse, Language, RolePermission, Site, SiteDomain, User,
+                        user_role)
+from app.shared.community import make_community as make_community_api
+from app.shared.post import make_post as make_post_through
+from app.shared.reply import make_reply
 from app.storefront import (clear_domain_cache, current_instance_id, default_domain, domain_for_host,
                             hosted_instance_ids, instance_id_of)
-from tests.factories import make_community, make_instance, make_post, make_post_reply, make_user
+from tests.factories import bearer, make_community, make_instance, make_post, make_post_reply, make_user
+from tests.test_admin_user_administration import _add_payload, _roles
+from tests.test_community_lifecycle import able_to_create
+from tests.test_per_domain_creation import _create, _form as _register_form, creators, domains   # noqa: F401
+from tests.test_shared_community_lifecycle import _api_input, _seed_und_language
+from tests.test_shared_post_edit import _api_input as _api_input_post
 from tests.test_admin_domains import _admin, _form
 from tests.test_admin_site_profile import csrf, login
 from tests.two_domains import HELL, ONION, default_request, onion_request, two_domains  # noqa: F401
@@ -463,3 +478,101 @@ def test_the_interop_harness_probes_a_table_only_init_db_fills():
     versions = (Path(__file__).resolve().parent.parent / 'migrations' / 'versions').glob('*.py')
     writes = re.compile(r'insert\s+into\s+"?site"?[\s(]|(?<!\w)table\(\s*[\'"]site[\'"]', re.IGNORECASE)
     assert [path.name for path in versions if writes.search(path.read_text())] == []
+
+
+# --- a new row takes its domain's instance (plan C2 task 2) ---
+
+def _admin_adding(app):
+    """A client logged in as an administrator who may add users, and its CSRF token."""
+    make_user(db.session.get(Instance, 1), 'founder', local=True)
+    admin = make_user(db.session.get(Instance, 1), 'useradmin', local=True)
+    admin.verified = True
+    db.session.commit()
+    roles = _roles()
+    db.session.add(RolePermission(role_id=roles['Admin'].id, permission='administer all users'))
+    db.session.add(RolePermission(role_id=roles['Admin'].id, permission='change user roles'))
+    db.session.execute(user_role.insert().values(user_id=admin.id, role_id=roles['Admin'].id))
+    db.session.commit()
+    client = app.test_client()
+    login(client, admin)
+    return client, csrf(app, client)
+
+
+def _admin_add_user(app, client, token, name, domain):
+    with patch('app.admin.routes.render_template', return_value='rendered'):
+        client.post('/admin/users/add', data=_add_payload(token, user_name=name, email=f'{name}@example.com',
+                                             site_domain=str(domain.id)),
+                    content_type='multipart/form-data')
+    return User.query.filter_by(user_name=name).one()
+
+
+def test_an_admin_added_user_takes_its_domains_instance(app, db_session, site, domains):
+    default, onion = domains
+    client, token = _admin_adding(app)
+    assert _admin_add_user(app, client, token, 'torfan', onion).instance_id == onion.instance_id
+    assert _admin_add_user(app, client, token, 'clearfan', default).instance_id == 1
+    assert onion.instance_id != 1
+
+
+def test_registering_on_the_onion_storefront_takes_its_instance(app, db_session, site, domains):
+    default, onion = domains
+    with app.test_request_context(base_url='http://abc.onion'):
+        app.preprocess_request()
+        on_onion = create_new_user(_register_form('wakko'), '127.0.0.1', 'GB', 'token')
+    with app.test_request_context(base_url=f'https://{default.domain}'):
+        app.preprocess_request()
+        on_default = create_new_user(_register_form('yakko'), '127.0.0.1', 'GB', 'token')
+    assert (on_onion.instance_id, on_default.instance_id) == (onion.instance_id, 1)
+
+
+def test_ldap_and_oauth_users_are_on_the_default_instance(app, db_session, site, domains):
+    default, onion = domains
+    with app.test_request_context(base_url='http://abc.onion'):
+        app.preprocess_request()
+        ldap_user = create_new_user_from_ldap('ldapper', 'ldapper@example.com', 'password123', '127.0.0.1')
+        with patch('app.auth.oauth_util.finalize_user_setup'):
+            oauth_user = initialize_new_user('newcomer@example.com', 'New', 'google_oauth_id', {'id': 'r1'},
+                                             '127.0.0.1', 'GB')
+    assert (ldap_user.instance_id, oauth_user.instance_id) == (1, 1)
+
+
+def test_an_onion_users_community_post_and_reply_carry_the_onion_instance(app, db_session, site, domains):
+    default, onion = domains
+    client, token = _admin_adding(app)
+    torfan = _admin_add_user(app, client, token, 'torfan', onion)
+    able_to_create(torfan)
+    torfan.private_key = 'test-key-not-a-real-pem'
+    db.session.add(Language(code='und', name='Undetermined'))
+    db.session.add(Language(code='en', name='English'))
+    db.session.get(Site, 1).community_creation_admin_only = False
+    db.session.commit()
+    community = _create(app, torfan, 'abc.onion', url='hidden')
+    assert community.instance_id == onion.instance_id
+
+    user_id, post = make_post_through(_api_input_post(), community, POST_TYPE_ARTICLE, SRC_API, auth=bearer(torfan))
+    assert post.instance_id == onion.instance_id
+    _, reply = make_reply({'body': 'hi', 'notify_author': False, 'language_id': None}, post, None, SRC_API,
+                          auth=bearer(torfan))
+    assert reply.instance_id == onion.instance_id
+
+
+def test_a_clearnet_community_belongs_to_the_default_instance(app, db_session, site, creators, domains):
+    default, onion = domains
+    founder, other = creators
+    assert _create(app, founder, 'abc.onion', url='clearnet').instance_id == 1
+
+
+def test_the_api_makes_an_onion_creators_community_on_the_onion_instance(app, db_session, site, domains):
+    default, onion = domains
+    make_user(db.session.get(Instance, 1), 'founder', local=True)
+    _seed_und_language()
+    user = make_user(db.session.get(Instance, 1), 'onionite', local=True, with_keys=True)
+    user.site_domain_id = onion.id
+    db.session.commit()
+    make_community_api(_api_input(name='hidden'), SRC_API, bearer(user))
+    assert Community.query.filter_by(name='hidden').one().instance_id == onion.instance_id
+
+
+def test_the_microblogs_community_stays_on_the_default_instance(app, db_session, site, domains):
+    make_user(db.session.get(Instance, 1), 'founder', local=True)
+    assert find_microblogging_community().instance_id == 1

@@ -23,7 +23,7 @@ from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
 from app.local_names import local_named
 from app.storefront import (DomainInfo, current_storefront, default_domain, domain_base_url, domain_for_host, home_storefront,
-                            public_registration_open)
+                            instance_id_of, public_registration_open)
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role, dummy_password_hash, \
     verify_password_hash
 from app.onion import audit_field, is_onion_request
@@ -336,14 +336,15 @@ def normalize_username(form):
 
 
 def create_new_user(form, ip, country, verification_token):
+    storefront = current_storefront()
     user = User(
         user_name=form.user_name.data,
         title=form.user_name.data,
         email=form.real_email.data,
         verification_token=verification_token,
         verified=not get_setting("email_verification", True),
-        instance_id=1,
-        site_domain_id=current_storefront().id,
+        instance_id=instance_id_of(storefront),
+        site_domain_id=storefront.id,
         ip_address=audit_field(ip),
         banned=user_ip_banned() or user_cookie_banned(),
         email_unread_sent=False,
@@ -371,7 +372,7 @@ def create_new_user_from_ldap(user_name, email, password, ip):
         title=user_name,
         email=email,
         verified=True,
-        instance_id=1,
+        instance_id=instance_id_of(default_domain()),
         site_domain_id=default_domain().id,
         ip_address=audit_field(ip),
         banned=False,

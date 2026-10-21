@@ -64,7 +64,7 @@ from app.shared.tasks.maintenance import (
 )
 from app.utils import move_file_to_s3
 from app.local_names import local_named
-from app.storefront import default_domain, home_storefront
+from app.storefront import default_domain, home_storefront, instance_id_of
 from app.discovery.cli import register_discovery_commands
 from app.relays.cli import register_relay_commands
 import app as app_pkg
@@ -288,7 +288,7 @@ def register(app):
                 private_key, public_key = RsaKeys.generate_keypair()
                 admin_user = User(user_name=user_name, title=user_name,
                                   email=email, verification_token=verification_token,
-                                  instance_id=1, site_domain_id=default_domain().id, email_unread_sent=False,
+                                  instance_id=instance_id_of(default_domain()), site_domain_id=default_domain().id, email_unread_sent=False,
                                   private_key=private_key, public_key=public_key,
                                   alt_user_name=gibberish(randint(8, 20)))
                 admin_user.set_password(password)
@@ -1250,7 +1250,7 @@ def register(app):
                 verification_token=random_token(16),
                 private_key=private_key,
                 public_key=public_key,
-                instance_id=1,
+                instance_id=instance_id_of(default_domain()),
                 site_domain_id=default_domain().id,
                 bot=True,
                 verified=True,

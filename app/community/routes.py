@@ -86,7 +86,7 @@ import app.shared.feed as shared_feed
 from app.utils import is_valid_xml_utf8, get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url, joined_server_views
 from app.activitypub.serializers.podcast import uses_podcast_episode
 from app.storefront import (canonicalise_text, default_storefront, delete_memoized_everywhere, domain_authority, domain_base_url,
-                            domain_for_host, path_name, storefront_host,
+                            domain_for_host, instance_id_of, path_name, storefront_host,
                             storefront_link, storefront_query_cache_key, storefront_url)
 from app.local_names import local_named, split_local_name
 from app.rss_extras import RSSFeed, PodcastChannel, itunes_image_ok
@@ -166,7 +166,7 @@ def add_local():
                               ap_followers_url=base_url + '/c/' + form.url.data + '/followers',
                               ap_moderators_url=base_url + '/c/' + form.url.data + '/moderators',
                               ap_domain=domain_authority(home), site_domain_id=home.id,
-                              subscriptions_count=1, instance_id=1, ai_generated=form.ai_generated.data,
+                              subscriptions_count=1, instance_id=instance_id_of(home), ai_generated=form.ai_generated.data,
                               low_quality=('memes' in form.url.data or 'shitpost' in form.url.data) and
                                            get_setting('meme_comms_low_quality', False),
                               question_answer=form.question_answer.data, first_federated_at=utcnow(),
