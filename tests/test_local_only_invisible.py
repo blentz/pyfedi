@@ -286,7 +286,7 @@ def test_when_every_domain_federates_nothing_is_left_out(app, world):
     db.session.execute(update(SiteDomain).where(SiteDomain.id == world.onion.id).values(federates=True))
     db.session.commit()
     clear_domain_cache()
-    assert _webfinger(app, 'acct:onionite@abc.onion').status_code == 200
+    assert _webfinger(app, 'acct:onionite@abc.onion').status_code == 404   # WebFinger answers only for the default domain until C3
     assert _webfinger(app, f"acct:~nofeed@{app.config['SERVER_NAME']}").status_code == 404   # the feed lookup runs
     assert _get(app, '/nodeinfo/2.0').json['usage']['users']['total'] == 3
     assert _get(app, '/api/v3/site').json['site_view']['counts']['communities'] == 2
