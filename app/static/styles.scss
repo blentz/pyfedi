@@ -1252,6 +1252,12 @@ time {
   }
 }
 
+// the images beside a link post sit outside .post_image, and are blurred and revealed the same way
+.post_link_gallery img.blur {
+  filter: blur(var(--spacing-24));
+  cursor: pointer;
+}
+
 details {
   margin-bottom: var(--spacing-16);
 }

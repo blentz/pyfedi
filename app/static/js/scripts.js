@@ -1615,7 +1615,7 @@ function setupPopupCommunitySidebar() {
 // A blurred image on the post page is shown by the first activation of its link -- a click, or Enter on the
 // focused link, which a listener on the img would miss; the next activation opens it as usual
 function setupBlurredPostImages() {
-    document.querySelectorAll('.post_image a').forEach(function(link) {
+    document.querySelectorAll('.post_image a, .post_link_gallery a').forEach(function(link) {
         const img = link.querySelector('img.blur');
         if (!img || link.dataset.blurSetup) return;
         link.dataset.blurSetup = '1';
