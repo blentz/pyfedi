@@ -19,6 +19,7 @@ from app.shared.tasks import task_selector
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
 from app.shared.upload import process_upload
+from app.local_names import actor_handle
 from app.storefront import canonical_link
 from app.utils import authorise_api_user, feed_membership, get_request, menu_subscribed_feeds, joined_communities, \
     community_membership, gibberish, get_task_session, instance_banned, menu_instance_feeds, \
@@ -57,7 +58,7 @@ def join_feed(actor, user_id, src=SRC_WEB):
                     feed_items = FeedItem.query.filter_by(feed_id=feed.id).all()
                     for fi in feed_items:
                         community = db.session.get(Community, fi.community_id)
-                        actor = community.ap_id if community.ap_id else community.name
+                        actor = actor_handle(community)   # its own domain: a worker has no storefront
                         if current_app.debug:
                             community_routes.do_subscribe(actor, user.id, joined_via_feed=True)
                         else:
@@ -95,7 +96,7 @@ def join_feed(actor, user_id, src=SRC_WEB):
                             community_ap_id = fci
                             community = find_actor_or_create(community_ap_id, community_only=True)
                             if community and isinstance(community, Community):
-                                actor = community.ap_id if community.ap_id else community.name
+                                actor = actor_handle(community)   # its own domain: a worker has no storefront
                                 if user.feed_auto_follow:
                                     if current_app.debug:
                                         community_routes.do_subscribe(actor, user.id, joined_via_feed=True)
@@ -667,7 +668,7 @@ def _feed_add_community(community_id: int, current_feed_id: int, feed_id: int, u
     if current_membership is None and acting_user.feed_auto_follow:
         # import do_subscribe here, otherwise we get import errors from circular import problems
         community = db.session.get(Community, community_id)
-        actor = community.ap_id if community.ap_id else community.name
+        actor = actor_handle(community)   # its own domain: a worker has no storefront
         community_routes.do_subscribe(actor, user_id, joined_via_feed=True)
 
 
@@ -786,7 +787,7 @@ def announce_feed_add_remove_to_subscribers(action: str, feed_id: int, community
             if fm_user.is_local():
                 # user is local so lets auto-subscribe them to the community, if they opted in
                 if fm_user.feed_auto_follow:
-                    actor = community.ap_id if community.ap_id else community.name
+                    actor = actor_handle(community)   # its own domain: a worker has no storefront
                     community_routes.do_subscribe(actor, fm_user.id, joined_via_feed=True)
                 continue
 

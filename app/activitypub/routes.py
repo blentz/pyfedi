@@ -52,7 +52,7 @@ from app.relays import current_relay_id
 from app.relays import inbound as relay_inbound
 from app.local_only import any_domain_closed, community_local_only, federated_mentions, federating_clause, \
     refused_outbound, user_local_only
-from app.local_names import local_clause, split_local_name
+from app.local_names import actor_handle, local_clause, split_local_name
 from app.storefront import current_storefront, domain_for_host, is_served_name
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
@@ -3409,7 +3409,7 @@ def process_add(core_activity, user, community, feed, announced, id, saved_json,
                     continue
                 if fm_user.is_local() and fm_user.feed_auto_follow:
                     # user is local so lets auto-subscribe them to the community
-                    actor = community_to_add.ap_id if community_to_add.ap_id else community_to_add.name
+                    actor = actor_handle(community_to_add)   # its own domain: a worker has no storefront
                     community_routes.do_subscribe(actor, fm_user.id, joined_via_feed=True)
             log_incoming_ap(id, APLOG_ADD, APLOG_SUCCESS, saved_json)
         else:

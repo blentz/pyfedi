@@ -12,7 +12,7 @@ from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
 # app.activitypub before get_all_child_feed_ids is defined (import cycle: feed.routes)
 import app.feed.routes as feed_routes
-from app.storefront import ON_DOMAIN_PARAM, current_storefront, on_domain, on_domain_sql
+from app.storefront import ON_DOMAIN_PARAM, current_storefront, domain_authority, on_domain, on_domain_sql
 from app.models import Post, Community, CommunityMember, utcnow, User, Feed, FeedItem, Topic, PostReply, PostVote, \
     CommunityFlair, read_posts, Poll, Report
 # The module, not the names: app.shared.post reaches this file through a blueprint
@@ -143,7 +143,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         else:
             # parse community_name to get the community
             if '@' not in community_name:
-                community_name_lookup = f"{community_name}@{current_app.config['SERVER_NAME']}"
+                community_name_lookup = f"{community_name}@{domain_authority(current_storefront())}"   # the storefront's
             else:
                 community_name_lookup = community_name
             name, ap_domain = normalise_actor_string(community_name_lookup)
@@ -272,7 +272,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
             use_faster_query = False
             segregate_instance_stickies = False
             if not '@' in community_name:
-                community_name = f"{community_name}@{current_app.config['SERVER_NAME']}"
+                community_name = f"{community_name}@{domain_authority(current_storefront())}"   # the storefront's
             name, ap_domain = normalise_actor_string(community_name)
             # No guard here: the block above refuses a malformed
             # `community_name` before this one is reached, and ('', '') simply
@@ -877,7 +877,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
         else:
             # parse community_name to get the community
             if '@' not in community_name:
-                community_name_lookup = f"{community_name}@{current_app.config['SERVER_NAME']}"
+                community_name_lookup = f"{community_name}@{domain_authority(current_storefront())}"   # the storefront's
             else:
                 community_name_lookup = community_name
             name, ap_domain = normalise_actor_string(community_name_lookup)
@@ -962,7 +962,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
         if community_name:
             segregate_instance_stickies = False
             if not '@' in community_name:
-                community_name = f"{community_name}@{current_app.config['SERVER_NAME']}"
+                community_name = f"{community_name}@{domain_authority(current_storefront())}"   # the storefront's
             name, ap_domain = normalise_actor_string(community_name)
             # No guard here: the block above refuses a malformed
             # `community_name` before this one is reached, and ('', '') simply

@@ -33,10 +33,11 @@ ALLOWED = {
     ('app/shared/community.py', 'get_comm_flair_list'): 'scoped by ap_domain: a community named with its instance',
     ('app/api/alpha/utils/user.py', 'get_user'): 'scoped by ap_domain: the remote arm; a local name goes through '
                                                  'local_named',
-    ('app/user/routes.py', 'edit_user_note'): 'remote-row lookup: "apply to all" notes every account of that name, '
-                                              'on every instance',
-    ('app/models.py', 'UserRegistration.search_similar_names'): 'remote-row lookup: look-alike accounts on every '
-                                                                'instance and domain, for the admin approving a sign-up',
+    ('app/user/routes.py', 'edit_user_note'): 'deliberately every domain and instance: "apply to all" notes every '
+                                              'namesake, local or remote; a namesake search, not an identity lookup',
+    ('app/models.py', 'UserRegistration.search_similar_names'): 'deliberately every domain and instance: look-alike '
+                                                                'accounts, local or remote, for the admin approving a '
+                                                                'sign-up; a namesake search, not an identity lookup',
 }
 
 USER_COLUMNS = {('User', 'user_name'), ('Community', 'name')}
@@ -45,6 +46,22 @@ USER_COLUMNS = {('User', 'user_name'), ('Community', 'name')}
 def _is_name_column(node) -> bool:
     return isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and \
         (node.value.id, node.attr) in USER_COLUMNS
+
+
+def _is_feed_query(receiver) -> bool:
+    """Whether a `filter_by` receiver is a query of the Feed model itself: `Feed.query...` or `....query(Feed)...`.
+    A join to Feed, or FeedItem and FeedMember, is not."""
+    node = receiver
+    while True:
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute) and node.func.attr == 'query' and node.args and \
+                    isinstance(node.args[0], ast.Name) and node.args[0].id == 'Feed':
+                return True
+            node = node.func
+        elif isinstance(node, ast.Attribute):
+            node = node.value
+        else:
+            return isinstance(node, ast.Name) and node.id == 'Feed'
 
 
 def _finding(node) -> bool:
@@ -61,7 +78,7 @@ def _finding(node) -> bool:
         keywords = {keyword.arg: keyword.value for keyword in node.keywords}
         by_name = 'user_name' in keywords or 'name' in keywords
         local = isinstance(keywords.get('ap_id'), ast.Constant) and keywords['ap_id'].value is None
-        return by_name and local and 'Feed' not in ast.unparse(func.value)
+        return by_name and local and not _is_feed_query(func.value)
     return False
 
 
@@ -110,6 +127,9 @@ def lookups(x):
     Community.query.filter_by(name=x, ap_id=None)
     Feed.query.filter_by(name=x, ap_id=None)
     Community.query.filter_by(name=x)
+    db.session.query(Feed).filter_by(name=x, ap_id=None)
+    FeedItem.query.filter_by(name=x, ap_id=None)
+    Community.query.join(Feed).filter_by(name=x, ap_id=None)
 '''
     hits = [node.lineno for node in ast.walk(ast.parse(source)) if _finding(node)]
-    assert sorted(hits) == [3, 4, 5, 6, 7, 8]
+    assert sorted(hits) == [3, 4, 5, 6, 7, 8, 12, 13]

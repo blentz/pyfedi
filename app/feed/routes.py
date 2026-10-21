@@ -31,6 +31,7 @@ import app.shared.community as shared_community
 # The module, not the names: app.shared.feed reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.feed)
 import app.shared.feed as shared_feed
+from app.local_names import actor_handle
 from app.storefront import is_local_host, storefront_link, storefront_url
 from app.shared.upload import is_refused_upload
 from app.local_only import local_only_visible_rss
@@ -352,7 +353,7 @@ def feed_copy(feed_id: int):
         for item in old_feed_items:
             if item.community_id not in member_of_ids and current_user.feed_auto_follow:
                 community = db.session.get(Community, item.community_id)
-                actor = community.ap_id if community.ap_id else community.name
+                actor = actor_handle(community)   # its own domain: a worker has no storefront
                 if current_app.debug:  # D719: dispatch, as join_feed does
                     community_routes.do_subscribe(actor, current_user.id, joined_via_feed=True)
                 else:

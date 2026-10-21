@@ -971,7 +971,7 @@ def test_feed_add_community_subscribes_via_ap_id_when_the_community_has_one(app,
         second = subscribe.call_args.args[0]
 
     assert first == 'wiring@remote.example'
-    assert second == s.bystander_community.name
+    assert second == f'{s.bystander_community.name}@test.piefed.local'   # a local row's own domain (C1)
     assert first != second
 
 
@@ -1485,7 +1485,7 @@ def test_announce_add_remove_subscribes_a_local_member_through_the_right_actor(
             announce_feed_add_remove_to_subscribers('Add', s.feed.id, s.community.id)
 
     assert subscribe.call_count == 1
-    expected = 'wiring@far.piefed.local' if community_has_ap_id else s.community.name
+    expected = 'wiring@far.piefed.local' if community_has_ap_id else f'{s.community.name}@test.piefed.local'
     assert subscribe.call_args.args[0] == expected
 
 

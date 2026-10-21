@@ -98,10 +98,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/api/alpha/utils/misc.py': {
         'get_resolve_object': 2,
     },
-    'app/api/alpha/utils/post.py': {
-        'get_post_list': 2,
-        'get_post_list2': 2,
-    },
     'app/api/alpha/utils/reply.py': {
         'get_reply_list': 1,
     },
