@@ -19,7 +19,7 @@ from app.models import Topic, Community, NotificationSubscription, PostReply, ut
 from app.storefront import storefront_link, storefront_query_cache_key, storefront_url
 from app.topic import bp
 from app.topic.forms import SuggestTopicsForm
-from app.local_only import local_only_visible_rss, without_local_only
+from app.local_only import local_only_visible_rss, without_local_only, without_local_only_actors
 from app.visibility import listable_clause
 from app.utils import etag_stamp, render_template, user_filters_posts, validation_required, mimetype_from_url, feed_entry_body, login_required, \
     gibberish, get_deduped_post_ids, paginate_post_ids, post_ids_to_models, blocked_communities, \
@@ -99,6 +99,7 @@ def show_topic(topic_path):
             filter(Community.id.not_in(blocked_communities(current_user.get_id()))).\
             filter(or_(Community.private == False, Community.id.in_(community_membership_private(current_user.get_id())))).\
             order_by(desc(Community.total_subscriptions_count))
+        topic_communities = without_local_only_actors(topic_communities, Community)   # logged out: none local-only
 
         posts = None
         comments = None

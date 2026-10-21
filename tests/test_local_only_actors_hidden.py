@@ -7,8 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 from app import db
-from app.models import File, ModLog, utcnow
+from app.constants import ROLE_ADMIN_NAME
+from app.models import CommunityMember, CommunityWikiPage, File, ModLog, Role, Topic, utcnow
 from tests.conftest import forget_login
+from tests.factories import make_feed_item, make_local_feed, make_post
 from tests.test_instance_visible_here import HOSTS, get, scene  # noqa: F401 -- scene is a fixture
 from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
 from tests.two_domains import HELL, ONION, two_domains  # noqa: F401
@@ -144,3 +146,35 @@ def test_a_local_only_feed_answers_an_rss_token(app, world, path):
 @pytest.mark.parametrize('path', [p.replace(f'@{ONION}', '') for p in PAGES])
 def test_hells_own_community_and_profile_pages_are_unchanged_when_logged_out(app, world, path):
     assert visit(app, path, False, world).status_code == 200
+
+
+# --- topic and feed pages (fix round 2) ---------------------------------------------------------------------------
+
+@pytest.fixture
+def grouped(world):
+    """hell's and the onion's community, both in one topic and one public feed, each with a subscriber."""
+    topic = Topic(machine_name='arts', name='Arts')
+    db.session.add(topic)
+    db.session.flush()
+    feed = make_local_feed('artfeed', public=True)
+    feed.user_id = world.hell_bob.id
+    for community in (world.hell_art, world.onion_art):
+        community.topic_id = topic.id
+        community.total_subscriptions_count = 3
+        make_feed_item(feed, community)
+    db.session.commit()
+    return world
+
+
+@pytest.mark.parametrize('path', ['/topic/arts', '/f/artfeed'])
+def test_logged_out_topic_and_feed_pages_list_no_local_only_community(app, grouped, path):
+    response = visit(app, path, False, grouped)
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert 'Hell art' in body
+    assert ONION not in body and 'Onion art' not in body
+
+
+@pytest.mark.parametrize('path', ['/topic/arts', '/f/artfeed'])
+def test_logged_in_topic_and_feed_pages_still_list_them(app, grouped, path):
+    assert 'Onion art' in visit(app, path, True, grouped).get_data(as_text=True)

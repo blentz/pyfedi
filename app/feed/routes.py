@@ -34,7 +34,7 @@ import app.shared.feed as shared_feed
 from app.local_names import actor_handle
 from app.storefront import is_local_host, storefront_link, storefront_url
 from app.shared.upload import is_refused_upload
-from app.local_only import local_only_visible_rss
+from app.local_only import local_only_visible_rss, without_local_only_actors
 from app.utils import etag_stamp, back, show_ban_message, piefed_markdown_to_lemmy_markdown, markdown_to_html, render_template, \
     user_filters_posts, joined_communities, menu_instance_feeds, validation_required, feed_membership, \
     gibberish, get_task_session, instance_banned, menu_subscribed_feeds, referrer, community_membership, \
@@ -592,6 +592,7 @@ def show_feed(feed):
             filter(Community.id.not_in(blocked_communities(current_user.get_id()))). \
             filter(or_(Community.private == False, Community.id.in_(community_membership_private(current_user.get_id())))). \
             order_by(desc(Community.total_subscriptions_count))
+        feed_communities = without_local_only_actors(feed_communities, Community)   # logged out: none local-only
 
         next_url = url_for('activitypub.feed_profile', actor=feed.ap_id if feed.ap_id is not None else feed.name,
                            page=page + 1, sort=sort, layout=post_layout, result_id=result_id) if has_next_page else None
