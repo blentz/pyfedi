@@ -15,7 +15,7 @@ from app.local_names import actor_handle
 from app.shared.feed import _feed_add_community
 from app.models import Community, CommunityBlock, CommunityMember, ModLog, Site, UserBlock, UserFollower, UserNote
 from app.mentions import stored_user
-from tests.factories import make_local_feed, make_post
+from tests.factories import bearer, make_local_feed, make_post
 from tests.test_onion_guard_limits import cheap_hashes  # noqa: F401
 from tests.two_domains import HELL, ONION, default_request, no_http, onion_request, two_domains  # noqa: F401
 
@@ -237,8 +237,8 @@ def test_the_api_finds_a_person_on_the_storefronts_domain(app, world):
     for request_on, host in ((default_request, HELL), (onion_request, ONION)):
         for name, owner in (('bob', host), (f'bob@{other(host)}', other(host))):
             data = {'username': name}
-            with request_on(app):
-                get_user(None, data)
+            with request_on(app):   # signed in: a logged-out caller is not shown the onion's account at all
+                get_user(bearer(world.viewers[host]), data)
             assert data['person_id'] == world.bob[owner].id, (host, name)
 
 

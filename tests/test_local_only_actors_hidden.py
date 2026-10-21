@@ -319,3 +319,32 @@ def test_hells_community_page_names_a_local_only_moderator_or_related_community_
 def test_the_about_page_names_a_local_only_admin_only_to_a_logged_in_reader(app, api, signed_in):
     body = visit(app, '/about', signed_in, api).get_data(as_text=True)
     assert (ONION in body) == signed_in
+
+
+# --- moderator lists of hell's own rows (fix round 2) -------------------------------------------------------------
+
+@pytest.fixture
+def cross_moderated(api):
+    """The onion's bob moderates hell's community, and hell's bob the onion's: hell's own rows then name them."""
+    db.session.add(CommunityMember(user_id=api.onion_bob.id, community_id=api.hell_art.id, is_moderator=True))
+    db.session.add(CommunityMember(user_id=api.hell_bob.id, community_id=api.onion_art.id, is_moderator=True))
+    db.session.commit()
+    api.hell_post = make_post(api.hell_art, api.hell_bob, f'https://{HELL}/post/hellpost', title='a hell post')
+    return api
+
+
+@pytest.mark.parametrize('signed_in', [False, True])
+def test_hells_own_api_views_name_a_local_only_moderator_or_community_only_to_a_logged_in_caller(
+        app, cross_moderated, signed_in):
+    for path in ('/api/alpha/community?name=art', '/api/alpha/user?username=bob',
+                 f'/api/alpha/post?id={cross_moderated.hell_post.id}'):
+        response = api_get(app, path, cross_moderated, signed_in)
+        assert response.status_code == 200, path
+        assert (ONION in response.get_data(as_text=True)) == signed_in, path
+
+
+@pytest.mark.parametrize('signed_in', [False, True])
+def test_hells_own_profile_names_a_local_only_community_it_moderates_only_when_logged_in(app, cross_moderated,
+                                                                                         signed_in):
+    body = visit(app, '/u/bob', signed_in, cross_moderated).get_data(as_text=True)
+    assert (f'/c/{ONION_ART}' in body) == signed_in
