@@ -13,7 +13,7 @@ def block_remote_instance(instance_id, src, auth=None):
     user_id = user.id
 
     # The local instance is the viewer's home domain's: a sister domain's row is blockable like any other
-    if instance_id == user.instance_id:
+    if user.instance_id is None or instance_id == user.instance_id:
         msg = 'You cannot block the local instance.'
         if src == SRC_API:
             raise Exception(msg)
