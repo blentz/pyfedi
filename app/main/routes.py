@@ -169,13 +169,13 @@ def home_feed_source(view_filter: str):
                                            {'user_id': current_user.id}).scalars()
     elif view_filter == 'local':
         microblog_community = find_microblogging_community()
-        # Local is this domain's own communities: the local test (instance 1) and the domain test both hold, because
+        # Local is this domain's own communities: the local test (its instance row) and the domain test both hold, because
         # a remote community has no domain either and on_domain_sql's default arm would take it
         on_this_domain = on_domain_sql(current_storefront())   # bound by get_deduped_post_ids
         if current_user.is_anonymous:
-            community_sql = f'c.private is false and c.instance_id = 1 AND {on_this_domain} and c.id != {microblog_community.id} {low_quality_filter}'
+            community_sql = f'c.private is false and c.instance_id = {current_instance_id()} AND {on_this_domain} and c.id != {microblog_community.id} {low_quality_filter}'
         else:
-            community_sql = f'(c.private is false OR c.id IN {private_communities}) and c.id != {microblog_community.id} AND c.instance_id = 1 AND {on_this_domain} {low_quality_filter}'
+            community_sql = f'(c.private is false OR c.id IN {private_communities}) and c.id != {microblog_community.id} AND c.instance_id = {current_instance_id()} AND {on_this_domain} {low_quality_filter}'
         community_ids = [0]
     elif view_filter == 'popular':
         if current_user.is_anonymous:
@@ -751,13 +751,13 @@ def modlog_search_suggestions():
 def about_page():
     user_amount = users_total()
     MAU = active_month()
-    posts_amount = local_posts()
+    posts_amount = local_posts(instance_id=current_instance_id())
 
     admins = Site.admins()
     staff = Site.staff()
     domains_amount = db.session.execute(text('SELECT COUNT(*) as c FROM "domain" WHERE "banned" IS false')).scalar()
-    community_amount = local_communities()
-    instance = Instance.query.filter_by(id=1).first()
+    community_amount = local_communities(instance_id=current_instance_id())
+    instance = db.session.get(Instance, current_instance_id())
 
     cms_page = CmsPage.query.filter(CmsPage.url == '/about').first()
 
@@ -1527,7 +1527,7 @@ def index_rss(feed_type=None):
         community_ids = [-1]  # Special value to indicate 'All'
     elif feed_type == 'local' or feed_type == 'subscribed':
         community_ids = db.session.execute(
-            text(f'SELECT id FROM community as c WHERE c.private is false and c.instance_id = 1 AND {on_domain_sql(current_storefront())} {low_quality_filter}'),
+            text(f'SELECT id FROM community as c WHERE c.private is false and c.instance_id = {current_instance_id()} AND {on_domain_sql(current_storefront())} {low_quality_filter}'),
             {ON_DOMAIN_PARAM: current_storefront().id}).scalars()
 
     community_ids = list(community_ids)

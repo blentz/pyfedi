@@ -346,7 +346,8 @@ def test_feed_item_bodies_on_storefront(app, world, path):
     tag = Tag(name='pics', display_as='Pics')
     db.session.add(tag)
     if path == '/index/feed':   # Local lists the visited domain's own communities, so the onion's holds this one
-        community.site_domain_id = SiteDomain.query.filter_by(domain=ONION).one().id
+        onion = SiteDomain.query.filter_by(domain=ONION).one()
+        community.site_domain_id, community.instance_id = onion.id, domain_for_host(ONION).instance_id
     post.domain_id = domain.id
     post.tags.append(tag)
     post.body_html = f'<p><a href="https://{CANONICAL}/c/general">there</a></p>'

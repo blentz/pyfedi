@@ -16,7 +16,7 @@ from app.instance import bp
 from app.instance.util import is_fedi_handle, bulk_follow, mastodon_csv_handles
 from app.models import Instance, User, Post, read_posts, AllowedInstances, BannedInstances, utcnow
 from app.shared.site import block_remote_instance, unblock_remote_instance
-from app.storefront import hosted_instance_ids
+from app.storefront import current_instance_id, hosted_instance_ids
 from app.local_only import without_local_only
 from app.visibility import listable_clause
 from app.utils import render_template, blocked_domains, \
@@ -142,7 +142,7 @@ def instance_people(instance_domain):
     if instance_domain == 'all':
         ...
     elif instance_domain == 'local':
-        instance = db.session.get(Instance, 1)
+        instance = db.session.get(Instance, current_instance_id())
     else:
         instance = Instance.query.filter(Instance.domain == instance_domain).first()
         if instance is None:

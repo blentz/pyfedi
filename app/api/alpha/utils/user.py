@@ -26,7 +26,7 @@ import app.shared.user as shared_user
 from app.utils import authorise_api_user, in_sorted_list, user_in_restricted_country, user_access, user_notes
 from app.utils import markdown_to_html, log_login_failure
 from app.visibility import visible_to_clause
-from app.storefront import canonical_link, canonicalise_text, current_storefront, domain_for_host, on_domain, storefront_link
+from app.storefront import canonical_link, canonicalise_text, current_instance_id, current_storefront, domain_for_host, on_domain, storefront_link
 
 
 def get_user(auth, data):
@@ -103,7 +103,7 @@ def get_user_list(auth, data):
     user_id = authorise_api_user(auth) if auth else None
 
     if type == 'Local':
-        users = User.query.filter_by(instance_id=1, deleted=False, verified=True).filter(
+        users = User.query.filter_by(instance_id=current_instance_id(), deleted=False, verified=True).filter(
             on_domain(current_storefront()))
     else:
         users = User.query.filter(User.deleted == False)

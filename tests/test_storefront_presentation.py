@@ -24,7 +24,7 @@ from app.models import File, Notification, Site, SiteDomain, Tag, UserExtraField
 from app.request_hooks import OnUse
 from app.shared.community import invite_with_email
 import app.storefront as storefront
-from app.storefront import clear_domain_cache, is_local_host
+from app.storefront import clear_domain_cache, domain_for_host, is_local_host
 from app.utils import community_link_to_href, feed_link_to_href, person_link_to_href, utcnow
 from tests.factories import (grant_permission, make_community, make_community_member, make_domain, make_instance,
                              make_post, make_user, make_user_registration)
@@ -184,7 +184,8 @@ def test_other_feeds_link_to_the_storefront(app, world, path):
     tag = Tag(name='pics', display_as='Pics')
     db.session.add(tag)
     if path == '/index/feed':   # Local lists the visited domain's own communities, so the onion's holds this one
-        community.site_domain_id = SiteDomain.query.filter_by(domain=ONION).one().id
+        onion = SiteDomain.query.filter_by(domain=ONION).one()
+        community.site_domain_id, community.instance_id = onion.id, domain_for_host(ONION).instance_id
     post.domain_id = domain.id
     post.tags.append(tag)
     db.session.commit()

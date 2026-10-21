@@ -142,7 +142,7 @@ def live_feed_keys(post, community, backfill: bool) -> set:
     keys = {'any'}
     if is_live_community(community):
         keys.add(f'community:{community.id}')
-    if community.instance_id == 1 and community.name != LIVE_COMMUNITY:
+    if community.instance_id in hosted_instance_ids() and community.name != LIVE_COMMUNITY:
         keys.add('local')
     if community.show_popular:
         keys.add('popular')
