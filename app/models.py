@@ -866,8 +866,9 @@ class Conversation(db.Model):
 
     def instances(self):
         retval = []
+        hosted = storefront.hosted_instance_ids()
         for member in self.members:
-            if member.instance.id not in storefront.hosted_instance_ids() and member.instance not in retval:
+            if member.instance.id not in hosted and member.instance not in retval:
                 retval.append(member.instance)
         return retval
 
@@ -5199,8 +5200,10 @@ class Report(db.Model):
         else:
             return types[self.type]
 
-    def is_local(self):
-        return self.source_instance_id in storefront.hosted_instance_ids()
+    def is_local(self, hosted: frozenset[int] | None = None):
+        """Whether one of our users made the report. A page listing many reports passes `hosted_instance_ids()`
+        read once."""
+        return self.source_instance_id in (storefront.hosted_instance_ids() if hosted is None else hosted)
 
 
 class NotificationSubscription(db.Model):

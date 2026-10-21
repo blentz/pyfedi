@@ -1468,7 +1468,7 @@ def site_instance_chooser_view():
                                                   BannedInstances.domain == 'hilariouschaos.com',
                                                   BannedInstances.domain == 'gregtech.eu',
                                                   BannedInstances.domain == 'lemmy.ml')).order_by(BannedInstances.domain).all()
-    trusted_list = Instance.query.filter(Instance.trusted).all()
+    trusted_list = Instance.query.filter(Instance.trusted, Instance.id.not_in(hosted_instance_ids())).all()
     maturity = 0
     if get_setting('financial_stability', False):
         maturity += 1

@@ -9,6 +9,7 @@ from app import cache, db, shaped_memo_name
 from app.constants import POST_STATUS_REVIEWING, SUBSCRIPTION_PENDING, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, \
     SUBSCRIPTION_MODERATOR
 from app.models import Community, utcnow, BannedInstances, Instance
+from app.storefront import hosted_instance_ids
 from app.utils import blocked_communities, communities_banned_from, blocked_or_banned_instances, get_setting, \
     joined_or_modding_communities, pending_communities
 
@@ -53,7 +54,8 @@ def sidebar_new_instances() -> List:
     return db.session.query(Instance).\
         outerjoin(BannedInstances, BannedInstances.domain == Instance.domain).\
         filter(Instance.gone_forever == False, Instance.dormant == False,
-               BannedInstances.id == None, Instance.software == 'piefed').\
+               BannedInstances.id == None, Instance.software == 'piefed',
+               Instance.id.not_in(hosted_instance_ids())).\
         order_by(desc(Instance.created_at)).limit(5).all()
 
 

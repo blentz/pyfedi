@@ -11,8 +11,10 @@ AST) and in the templates (by pattern):
 - a comparison `x.instance_id == 1`, `x.instance_id != 1`, `Instance.id != 1`, `instance.id == 1`, `instance_id != 1`;
 - an assignment `x.instance_id = 1`, a keyword `instance_id=1` (a constructor or `filter_by`), a parameter default
   `admin_instance_id=1` and a dict entry `'source_instance_id': 1`;
-- `db.session.get(Instance, 1)` and `filter_by(id=1)` on an Instance query;
-- SQL text naming `instance_id = 1`, `instance_id != 1` or the instance alias `i.id = 1`;
+- membership of 1: `x.instance_id in (1,)`, `Instance.id.in_([1])`, `x.instance_id.not_in((1,))`;
+- `db.session.get(Instance, 1)`, `Instance.query.get(1)` and `filter_by(id=1)` on an Instance query;
+- SQL text naming `instance_id = 1`, `instance_id != 1`, `instance_id IN (1, ...)`, or the id of the instance table, by
+  name (`instance.id = 1`, `"instance".id <> 1`) or by the alias the text gives it (`JOIN "instance" as i` ... `i.id = 1`);
 - in a template, `instance_id == 1` and `instance_id != 1`.
 
 A site where row 1 is meant is in ALLOWED with the count of its findings and a one-line reason: `row 1 is the default
@@ -79,7 +81,18 @@ TEMPLATES_ALLOWED = {
     ('app/templates/post/post_reply_options.html', 126): TASK_5,
 }
 
-_SQL_LITERAL_ONE = re.compile(r'\b(?:\w*instance_id|i\.id)\s*(?:=|==|!=|<>)\s*1\b')
+_SQL_COMPARED = r'\s*(?:=|==|!=|<>)\s*1\b'
+_SQL_INSTANCE_ID_ONE = re.compile(r'\b\w*instance_id(?:' + _SQL_COMPARED + r'|\s+(?:NOT\s+)?IN\s*\((?:[^)]*,)?\s*1\s*(?:,[^)]*)?\))', re.I)
+_SQL_INSTANCE_ALIAS = re.compile(r'\b(?:FROM|JOIN)\s+"?instance"?\s+(?:AS\s+)?(?!ON\b|WHERE\b|JOIN\b)(\w+)', re.I)
+
+
+def _sql_findings(text: str) -> int:
+    """1 when SQL text compares an instance id with 1: an `instance_id` column, or the id of the instance table by
+    name or by an alias the text gives it."""
+    if _SQL_INSTANCE_ID_ONE.search(text):
+        return 1
+    tables = ['"?instance"?'] + [re.escape(alias) for alias in _SQL_INSTANCE_ALIAS.findall(text)]
+    return int(bool(re.search(r'(?<![\w.])(?:' + '|'.join(tables) + r')\.id' + _SQL_COMPARED, text, re.I)))
 
 
 def _is_one(node) -> bool:
@@ -107,6 +120,11 @@ def _is_instance_id(node) -> bool:
     owner = node.value
     owner_name = owner.id if isinstance(owner, ast.Name) else owner.attr if isinstance(owner, ast.Attribute) else ''
     return owner_name == 'Instance' or owner_name.lower().endswith('instance')
+
+
+def _holds_one(node) -> bool:
+    """A literal list, tuple or set with 1 in it: `[1]`, `(1,)`, `{1, 2}`."""
+    return isinstance(node, (ast.List, ast.Tuple, ast.Set)) and any(_is_one(element) for element in node.elts)
 
 
 def _is_instance_query(receiver) -> bool:
@@ -137,7 +155,8 @@ def _findings(node) -> int:
     """How many literal-1 instance ids `node` itself holds (not counting its children)."""
     if isinstance(node, ast.Compare):
         sides = [node.left, *node.comparators]
-        return int(any(_is_one(side) for side in sides) and any(_is_instance_id(side) for side in sides))
+        return int(any(_is_one(side) or _holds_one(side) for side in sides) and
+                   any(_is_instance_id(side) for side in sides))
     if isinstance(node, (ast.Assign, ast.AnnAssign)):
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         return int(node.value is not None and _is_one(node.value) and any(_is_instance_id(t) for t in targets))
@@ -148,12 +167,17 @@ def _findings(node) -> int:
                    if isinstance(key, ast.Constant) and isinstance(key.value, str) and
                    _is_instance_id_name(key.value) and _is_one(value))
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return int(bool(_SQL_LITERAL_ONE.search(node.value)))
+        return _sql_findings(node.value)
     if not isinstance(node, ast.Call):
         return 0
     count = sum(1 for keyword in node.keywords if keyword.arg and _is_instance_id_name(keyword.arg) and
                 _is_one(keyword.value))
     func = node.func
+    if isinstance(func, ast.Attribute) and func.attr in ('in_', 'not_in', 'notin_') and _is_instance_id(func.value):
+        count += sum(1 for arg in node.args if _holds_one(arg))
+    if isinstance(func, ast.Attribute) and func.attr == 'get' and len(node.args) == 1 and _is_one(node.args[0]) and \
+            _is_instance_query(func.value):
+        count += 1
     if isinstance(func, ast.Attribute) and func.attr == 'get' and len(node.args) == 2 and \
             isinstance(node.args[0], ast.Name) and node.args[0].id == 'Instance' and _is_one(node.args[1]):
         count += 1
@@ -267,11 +291,27 @@ def sites(x, instance, member, admin_instance_id=1, *, other_instance_id=1):
     text('SELECT 1 FROM "post" WHERE instance_id = 10')
     creator['instance_id'] == 1
     creator['id'] == 1
+    Instance.query.get(1)
+    Instance.id.in_([1])
+    x.instance_id.not_in((1, 2))
+    x.instance_id in (1,)
+    text('SELECT 1 FROM "instance" WHERE instance.id != 1')
+    text('SELECT 1 FROM "instance" WHERE "instance".id = 1')
+    text('SELECT c.id FROM community c JOIN "instance" AS inst ON c.instance_id = inst.id WHERE inst.id <> 1')
+    text('SELECT 1 FROM "post" WHERE instance_id IN (1)')
+    text('SELECT 1 FROM "post" WHERE instance_id NOT IN (2, 1, 3)')
+    User.query.get(1)
+    Instance.query.get(x)
+    x.instance_id.in_(hosted)
+    x.community_id.in_([1])
+    x.instance_id in (2, 3)
+    text('SELECT c.id FROM community c JOIN "instance" i ON c.instance_id = i.id WHERE c.id = 1')
+    text('SELECT 1 FROM "post" WHERE instance_id IN (10, 21)')
 '''
     hits = []
     for node in ast.walk(ast.parse(source)):
         hits += [getattr(node, 'lineno', 0)] * _findings(node)
-    assert sorted(hits) == [2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 26]
+    assert sorted(hits) == [2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 26, 28, 29, 30, 31, 32, 33, 34, 35, 36]
 
 
 def test_the_template_sweep_sees_each_spelling():

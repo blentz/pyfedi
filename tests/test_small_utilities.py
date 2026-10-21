@@ -368,10 +368,10 @@ def test_the_new_instance_list_shows_only_live_unbanned_piefed_peers(app, db_ses
     result = sidebar_new_instances()
     domains = [i.domain for i in result]
 
-    # test.piefed.local, seeded by _seed(), qualifies on every condition too --
-    # it is a live unbanned piefed peer. The assertion names what must and must
-    # not appear rather than the whole list, so it does not silently depend on
-    # how many instances the seed happens to create.
+    # test.piefed.local, seeded by _seed(), is row 1, a hosted row, so it is
+    # left out (tests/test_hosted_instance_ids.py). The assertion names what
+    # must and must not appear rather than the whole list, so it does not
+    # silently depend on how many instances the seed happens to create.
     assert 'wanted.example' in domains
     for disqualified in ['gone.example', 'dormant.example', 'lemmy.example',
                          'banned.example']:

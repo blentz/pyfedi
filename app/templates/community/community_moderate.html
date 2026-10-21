@@ -35,9 +35,10 @@
                <th>{{ _('Created') }}</th>
                <th>{{ _('Actions') }}</th>
             </tr>
+            {% set hosted = hosted_instance_ids() %}{# read once: each report's Local/Remote reads it #}
             {% for report in reports.items %}
                 <tr>
-                    <td>{{ 'Local' if report.is_local() else 'Remote' }}</td>
+                    <td>{{ 'Local' if report.is_local(hosted) else 'Remote' }}</td>
                     <td>{{ report.reasons }}</td>
                     <td>{{ report.description }}</td>
                     <td>{{ report.type_text() }}</td>
