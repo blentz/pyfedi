@@ -51,7 +51,7 @@ def get_topic_list(auth, data, user_id=None) -> dict:
                              banned_from=banned_from, communities_joined=communities_joined,
                              blocked_community_ids=blocked_community_ids,
                              blocked_instance_ids=blocked_instance_ids,
-                             include_communities=include_communities)
+                             include_communities=include_communities, user_id=user_id)
 
             # Process nested children
             if item['children']:

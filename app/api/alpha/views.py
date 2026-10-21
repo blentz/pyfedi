@@ -28,6 +28,7 @@ import app.shared.community as shared_community
 # package before they are defined (import cycle: app.shared.post)
 import app.shared.post as shared_post
 from app.storefront import current_storefront, hosted_instance_ids, public_registration_open, storefront_link, storefront_memo_name, storefront_url
+from app.local_only import community_local_only, user_local_only, without_local_only_actors
 from app.visibility import can_view, visible_to_sql
 
 
@@ -397,6 +398,8 @@ def user_view(user: User | int, variant, stub=False, user_id=None, flair_communi
             # `post_view` raises here and what `shared_error_handler` turns into the
             # 400 'Not found' this is supposed to be.
             raise NoResultFound
+    if variant == 3 and user_id is None and user_local_only(user):
+        raise NoResultFound   # a logged-out caller is never shown a local-only account (owner ruling 2026-10-21)
 
     # Variant 1 - models/person/person.dart
     if variant == 1:
@@ -597,6 +600,8 @@ def community_view(community: Community | int | str, variant, stub=False, user_i
         if community is None:
             community = Community.query.filter(func.lower(Community.name) == name.lower(),
                                                func.lower(Community.ap_domain) == ap_domain.lower()).one()
+    if variant in (3, 4) and user_id is None and community_local_only(community):
+        raise NoResultFound   # a logged-out caller is never shown a local-only community (owner ruling 2026-10-21)
 
     # Variant 1 - models/community/community.dart
     if variant == 1:
@@ -1207,8 +1212,9 @@ def feed_view(feed: Feed | int, variant: int, user_id, subscribed, include_commu
 
         v1['communities'] = []
         if include_communities:
-            for community in Community.query.filter(Community.banned == False, Community.private == False).\
-                join(FeedItem, FeedItem.community_id == Community.id).filter(FeedItem.feed_id == feed.id):
+            listed = Community.query.filter(Community.banned == False, Community.private == False).\
+                join(FeedItem, FeedItem.community_id == Community.id).filter(FeedItem.feed_id == feed.id)
+            for community in without_local_only_actors(listed, Community, visible=user_id is not None):
                 if community.id not in blocked_community_ids and \
                         community.instance_id not in blocked_instance_ids and \
                         community.id not in banned_from:
@@ -1370,7 +1376,7 @@ def conversation_report_view(report: int | Report, variant=1) -> dict:
 
 def topic_view(topic: Topic | int, variant: int, communities_moderating, banned_from,
                communities_joined, blocked_community_ids, blocked_instance_ids,
-               include_communities) -> dict:
+               include_communities, user_id=None) -> dict:
     if isinstance(topic, int):
         topic = db.session.get(Topic, topic)
         if topic is None:  # D1367
@@ -1390,7 +1396,9 @@ def topic_view(topic: Topic | int, variant: int, communities_moderating, banned_
 
         v1['communities'] = []
         if include_communities:
-            for community in Community.query.filter(Community.banned == False, Community.topic_id == topic.id, Community.private == False):
+            listed = Community.query.filter(Community.banned == False, Community.topic_id == topic.id,
+                                            Community.private == False)
+            for community in without_local_only_actors(listed, Community, visible=user_id is not None):
                 if community.id not in blocked_community_ids and \
                         community.instance_id not in blocked_instance_ids and \
                         community.id not in banned_from:
@@ -1449,7 +1457,8 @@ def site_view(user) -> dict:
         "site": site
     }
     for admin in Site.admins():
-        v1['admins'].append(user_view(user=admin, variant=2))
+        if user or not user_local_only(admin):   # a logged-out caller is shown no local-only account
+            v1['admins'].append(user_view(user=admin, variant=2))
     if user:
         v1['my_user'] = user_view(user=user, variant=6)
 

@@ -18,6 +18,7 @@ from app.discovery.podcast import PODCAST_DROP, podcast_route_for, podcast_twin_
 from app.models import Post, PostReply, User, Community, BannedInstances, Feed, ModLog
 from app.storefront import domain_for_host, is_local_host
 from app.user.utils import search_for_user
+from app.local_only import without_local_only_actors
 from app.visibility import can_view, is_open, modlog_local_only_clause, modlog_open_clause
 from app.feed.util import search_for_feed
 from app.utils import authorise_api_user, gibberish, subscribed_feeds, communities_banned_from, \
@@ -480,21 +481,24 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
     raise Exception('No object found.')
 
 
-def get_suggestion(data):
+def get_suggestion(data, auth=None):
     query = data['q']
     result = []
+    visible = bool(auth) and authorise_api_user(auth) is not None   # a logged-out caller: no local-only row
     if query.startswith('@'):
         if 'post_id' in data:
-            people_from_post = User.query.join(PostReply, PostReply.user_id == User.id).\
-                filter(PostReply.post_id == data['post_id']).\
-                filter(User.user_name.ilike(f'{query[1:]}%')).distinct()
+            people_from_post = without_local_only_actors(User.query.join(PostReply, PostReply.user_id == User.id).
+                                                         filter(PostReply.post_id == data['post_id']).
+                                                         filter(User.user_name.ilike(f'{query[1:]}%')), User,
+                                                         visible).distinct()
 
             for person in people_from_post.all():
                 person_text = person.lemmy_link()
                 if person_text not in result:
                     result.append(person_text)
 
-        other_people = User.query.filter(User.user_name.ilike(f'{query[1:]}%')).order_by(desc(User.reputation)).limit(7).all()
+        other_people = without_local_only_actors(User.query.filter(User.user_name.ilike(f'{query[1:]}%')), User,
+                                                 visible).order_by(desc(User.reputation)).limit(7).all()
         for other_person in other_people:
             if len(result) >= 7:
                 break
@@ -502,8 +506,8 @@ def get_suggestion(data):
             if person_text not in result:
                 result.append(person_text)
         if len(result) < 7:
-            other_people = User.query.filter(User.user_name.ilike(f'%{query[1:]}%')).order_by(
-                desc(User.reputation)).limit(7).all()
+            other_people = without_local_only_actors(User.query.filter(User.user_name.ilike(f'%{query[1:]}%')), User,
+                                                     visible).order_by(desc(User.reputation)).limit(7).all()
             for other_person in other_people:
                 if len(result) >= 7:
                     break
@@ -511,7 +515,9 @@ def get_suggestion(data):
                 if person_text not in result:
                     result.append(person_text)
     elif query.startswith('!'):
-        for community in Community.query.filter(Community.name.ilike(f'{query[1:]}%')).order_by(desc(Community.active_monthly)).limit(7).all():
+        communities = without_local_only_actors(Community.query.filter(Community.name.ilike(f'{query[1:]}%')),
+                                                Community, visible)
+        for community in communities.order_by(desc(Community.active_monthly)).limit(7).all():
             result.append(community.lemmy_link()[1:])
     return {'result': result}
 

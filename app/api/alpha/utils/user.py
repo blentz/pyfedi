@@ -16,6 +16,7 @@ from app.api.alpha.views import user_view, reply_view, post_view, community_view
 # find_user is defined (import cycle: app.auth.util)
 import app.auth.util as auth_util
 from app.local_names import local_clause, local_named
+from app.local_only import without_local_only_actors
 from app.constants import *
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message
 from app.models import Conversation, ChatMessage, Notification, PostReply, User, Post, Community, File, UserFlair, \
@@ -107,6 +108,7 @@ def get_user_list(auth, data):
             on_domain(current_storefront()))
     else:
         users = User.query.filter(User.deleted == False)
+    users = without_local_only_actors(users, User, visible=user_id is not None)   # spec §3.4
 
     if query:
         if '@' in query:

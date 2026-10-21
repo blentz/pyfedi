@@ -201,7 +201,7 @@ def get_alpha_federated_instances():
 def get_alpha_suggest_completion(data):
     if not enable_api():
         return abort(400, message="alpha api is not enabled")
-    resp = get_suggestion(data)
+    resp = get_suggestion(data, request.headers.get('Authorization'))
     return GetSuggestCompletionResponse().load(resp)
 
 @misc_bp.route('/modlog', methods=['GET'])  # Get Modlog
