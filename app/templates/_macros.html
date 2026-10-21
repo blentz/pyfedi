@@ -11,6 +11,10 @@
 {% if item.local_only %}<span class="badge text-bg-secondary" title="{{ _('Not shared with other servers') }}">{{ _('Local') }}</span>{% endif %}
 {%- endmacro %}
 
+{% macro followers_only_badge(item) -%}
+{% if item.visibility == 'followers' %}<span class="badge text-bg-secondary" title="{{ _('Only followers of the author can see this') }}">{{ _('Followers only') }}</span>{% endif %}
+{%- endmacro %}
+
 {% macro render_username(user, add_domain=True, htmx_redirect_back_to=None, current_user=None, low_bandwidth=False, collapsed=False, admin_ids=None, user_notes=None, inline=False) -%}
 {% if not inline -%}
     <div class="render_username" xmlns="http://www.w3.org/1999/xhtml">
