@@ -15,7 +15,8 @@ from sqlalchemy.orm import aliased
 
 from app import db
 from app.constants import VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC, VISIBILITY_UNLISTED
-from app.models import Instance, ModLog, Post, PostReply, User, UserFollower
+from app.local_only import federating_clause
+from app.models import Community, Instance, ModLog, Post, PostReply, User, UserFollower
 from app.storefront import hosted_instance_ids
 
 OPEN_VISIBILITIES = (VISIBILITY_PUBLIC, VISIBILITY_UNLISTED)
@@ -166,10 +167,13 @@ def modlog_open_clause():
 
 
 def modlog_local_only_clause():
-    """ModLog entries that name no local-only post or comment: what a reader who is not logged in is shown (spec
-    §3.4), on the web modlog and the API's alike."""
+    """ModLog entries that name no local-only post, comment, community or target account: what a reader who is not
+    logged in is shown (spec §3.4; accounts and communities by the owner ruling of 2026-10-21), on the web modlog and
+    the API's alike."""
     return and_(~exists().where(Post.id == ModLog.post_id, Post.local_only.is_(True)),
-                ~exists().where(PostReply.id == ModLog.reply_id, PostReply.local_only.is_(True)))
+                ~exists().where(PostReply.id == ModLog.reply_id, PostReply.local_only.is_(True)),
+                ~exists().where(Community.id == ModLog.community_id, ~federating_clause(Community)),
+                ~exists().where(User.id == ModLog.target_user_id, ~federating_clause(User)))
 
 
 def listable_clause(model):

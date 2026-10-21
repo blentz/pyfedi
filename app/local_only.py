@@ -101,6 +101,12 @@ def without_local_only(query, model, visible: bool | None = None):
     return query if visible else query.filter(model.local_only.is_(False))
 
 
+def without_local_only_actors(query, model):
+    """`query` over `model` (User or Community) without the local-only accounts or communities, unless the reader may
+    see them. A logged-out visitor never sees one, as with local-only posts (owner ruling 2026-10-21)."""
+    return query if local_only_visible() else query.filter(federating_clause(model))
+
+
 def _closed_domains() -> tuple[list[int], bool]:
     """The ids of the hosted domains that do not federate, and whether the default domain is one of them (it owns the
     local rows no domain was stamped on). From the cached domain_rows(): no query."""
