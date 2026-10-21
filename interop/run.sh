@@ -41,8 +41,9 @@ up() {
     done
     [ -n "$initialised" ] || { echo "run.sh: castopod init-database never succeeded" >&2; return 1; }
     wait_http piefed-web https://castopod.test/cp-auth/login
-    # init-db drops every table first, so run it only on an empty instance table (a re-run of `up` keeps the data)
-    if [ "$($COMPOSE exec -T piefed-db psql -U piefed -tAc 'select count(*) from instance' | tr -d '[:space:]')" = 0 ]; then
+    # init-db drops every table first, so run it only before it has made the site row (a re-run of `up` keeps the
+    # data). Not the instance table: the migrations `flask db upgrade` ran at start-up seed a row there.
+    if [ "$($COMPOSE exec -T piefed-db psql -U piefed -tAc 'select count(*) from site' | tr -d '[:space:]')" = 0 ]; then
         $COMPOSE exec -T piefed-web sh -c 'FLASK_APP=pyfedi.py flask init-db --interactive no'
     fi
     # piped into `python -` (an interactive `flask shell` chokes on the blank-line rules of a pasted script)

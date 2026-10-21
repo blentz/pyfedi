@@ -5518,6 +5518,7 @@ class SiteDomain(db.Model):
     __table_args__ = (
         CheckConstraint("registration IN ('anyone','staff','admin')", name='ck_site_domain_registration'),
         Index('ix_site_domain_one_default', 'is_default', unique=True, postgresql_where=text('is_default')),
+        db.UniqueConstraint('instance_id', name='uq_site_domain_instance_id'),
     )
     id = db.Column(db.Integer, primary_key=True)
     domain = db.Column(db.String(255), unique=True, nullable=False)  # lower-case host name, no scheme or port
@@ -5527,7 +5528,7 @@ class SiteDomain(db.Model):
     is_default = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     is_onion = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     # Its own instance row (spec 2026-10-19 §3.1): row 1 for the default. Set on insert, below.
-    instance_id = db.Column(db.Integer, db.ForeignKey('instance.id'), unique=True, nullable=False)
+    instance_id = db.Column(db.Integer, db.ForeignKey('instance.id', name='fk_site_domain_instance_id'), nullable=False)
 
     @validates('domain')
     def _set_is_onion(self, key, domain):
@@ -5544,12 +5545,37 @@ class SiteDomain(db.Model):
         return federates
 
 
+class InstanceInUse(ValueError):
+    """A new domain would take over an instance row that is not ours to take."""
+
+
+def _instance_has_content(connection, instance_id: int) -> bool:
+    """Whether any user, community, post or reply is stored on this instance row."""
+    return any(connection.execute(text(f'SELECT 1 FROM "{table}" WHERE instance_id = :id LIMIT 1'),
+                                  {'id': instance_id}).first() is not None
+               for table in ('user', 'community', 'post', 'post_reply'))
+
+
+def instance_row_to_take(connection, domain: str) -> int | None:
+    """The instance row a new non-default `domain` takes over, or None when no row is named for it (the domain then
+    gets a new one). The row named for it in any case, the exact spelling first, because find_instance_id looks a host
+    up by that. Only a sparse row may be taken, such as one find_instance_id made for the host: InstanceInUse for
+    row 1 (the default domain's) or a server whose users, communities or content are stored here."""
+    instances = Instance.__table__
+    found = connection.execute(select(instances.c.id).where(func.lower(instances.c.domain) == domain.lower())
+                               .order_by((instances.c.domain == domain).desc(), instances.c.id).limit(1)).scalar()
+    if found is not None and (found == storefront.DEFAULT_INSTANCE_ID or _instance_has_content(connection, found)):
+        raise InstanceInUse(f'{domain} is already a server this site federates with')
+    return found
+
+
 @event.listens_for(SiteDomain, 'before_insert')
 def _give_the_domain_its_instance(mapper, connection, target):
-    """A new domain row gets its instance row in the same transaction, however it is added. The default keeps row 1.
-    Another domain takes the row already named for it, if any (find_instance_id may have made a sparse one for the
-    host, and the unique domain index allows no second), else a new one. Either way it is PieFed's and has no inbox:
-    nothing is ever delivered to a domain of our own."""
+    """A new domain row gets its instance row in the same transaction, however it is added. The default keeps row 1,
+    whatever is on it. Another domain takes the sparse row already named for it, if any (the unique domain index
+    allows no second; `instance_row_to_take` refuses one with content), else a new one. Either way it is PieFed's and
+    has no inbox: nothing is ever delivered to a domain of our own. An Instance already loaded in the session keeps
+    its old inbox until the commit expires it."""
     if target.instance_id is not None:
         return
     instances = Instance.__table__
@@ -5557,8 +5583,7 @@ def _give_the_domain_its_instance(mapper, connection, target):
             select(instances.c.id).where(instances.c.id == storefront.DEFAULT_INSTANCE_ID)).first() is not None:
         target.instance_id = storefront.DEFAULT_INSTANCE_ID
         return
-    found = connection.execute(select(instances.c.id).where(func.lower(instances.c.domain) == target.domain.lower())
-                               .order_by(instances.c.id).limit(1)).scalar()
+    found = instance_row_to_take(connection, target.domain)
     if found is None:
         found = connection.execute(instances.insert().values(domain=target.domain, software='PieFed')
                                    .returning(instances.c.id)).scalar_one()

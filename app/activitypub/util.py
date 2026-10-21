@@ -35,7 +35,7 @@ from app.activitypub.signature import signed_get_capped, signed_get_request, sen
 from app.constants import *
 from app.local_only import federating_clause, federating_sql
 from app.local_names import local_named
-from app.storefront import default_domain, domain_authority, domain_base_url
+from app.storefront import default_domain, domain_authority, domain_base_url, hosted_instance_ids
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
@@ -3521,6 +3521,8 @@ def new_instance_profile_task(instance_id: int):
     try:
         with patch_db_session(session):
             instance: Instance = session.get(Instance, instance_id)
+            if instance_id in hosted_instance_ids():
+                return   # one of our own domains: it has no inbox to learn, and is never fetched over HTTP
             protocol = 'https'
             try:
                 # the root is often an HTML homepage, so it gets a page's cap, not an AP document's

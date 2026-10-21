@@ -14,7 +14,7 @@ from flask_babel import _, lazy_gettext as _l
 from app import db
 from app.constants import DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
     DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE
-from app.models import Community, User, CmsPage, Instance, SiteDomain
+from app.models import Community, User, CmsPage, Instance, InstanceInUse, SiteDomain, instance_row_to_take
 from app.local_names import local_named
 from app.storefront import default_domain, domain_by_id, domain_rows
 from app.onion_guard import MAX_POW_DIFFICULTY
@@ -546,4 +546,8 @@ class SiteDomainForm(FlaskForm):
             raise ValidationError(_l('That is not a valid host name.'))
         if db.session.query(SiteDomain.id).filter_by(domain=domain).first() is not None:
             raise ValidationError(_l('That domain is already listed.'))
+        try:
+            instance_row_to_take(db.session.connection(), domain)
+        except InstanceInUse:
+            raise ValidationError(_l('That domain is already a server this site federates with.'))
         field.data = domain

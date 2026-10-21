@@ -169,6 +169,27 @@ class TestEditingAnInstance:
         client = client_for(env, 'administer all communities')
         assert get(client, '/admin/instance/999999/edit').status_code == 404
 
+    def test_the_inbox_it_names_is_saved(self, env):
+        client = client_for(env, 'administer all communities')
+        post(client, f'/admin/instance/{env.remote.id}/edit', **self.payload(env))
+        db.session.expire_all()
+        assert db.session.get(Instance, env.remote.id).inbox == 'https://remote.test/inbox'
+
+    def test_a_hosted_domains_row_never_gets_an_inbox(self, env):
+        """Nothing is ever delivered to a domain of our own (plan C2): the rest of the form still saves."""
+        db.session.add(SiteDomain(domain='abc.onion', scheme='http', federates=False))
+        db.session.commit()
+        clear_domain_cache()
+        hosted = db.session.query(SiteDomain).filter_by(domain='abc.onion').one().instance_id
+        client = client_for(env, 'administer all communities')
+        response = post(client, f'/admin/instance/{hosted}/edit',
+                        **self.payload(env, inbox='http://abc.onion/inbox', trusted='y'))
+        assert response.status_code == 302
+        db.session.expire_all()
+        instance = db.session.get(Instance, hosted)
+        assert (instance.inbox, instance.trusted) == (None, True)
+        clear_domain_cache()
+
     def test_marking_one_trusted(self, env):
         client = client_for(env, 'administer all communities')
         response = post(client, f'/admin/instance/{env.remote.id}/edit',
