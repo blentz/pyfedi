@@ -70,9 +70,9 @@
                                 {{ render_username(modlog_entry.author) if modlog_entry.author else '' }}
                             {% else %}
                                 {% if modlog_entry.community_id %}
-                                    {{ instances[modlog_entry.community.instance_id] }} mod
+                                    {{ instances.get(modlog_entry.community.instance_id, '') }} mod
                                 {% else %}
-                                    {{ instances[modlog_entry.author.instance_id] if modlog_entry.author else '' }} admin
+                                    {{ instances.get(modlog_entry.author.instance_id, '') if modlog_entry.author else '' }} admin
                                 {% endif %}
                             {% endif %}
                         </td>
