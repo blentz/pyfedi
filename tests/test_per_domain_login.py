@@ -241,7 +241,7 @@ def test_a_bare_name_is_resolved_in_the_home_domain_given(app, world):
 
 
 def test_a_name_taken_on_one_domain_is_free_on_another(app, world):
-    assert user_name_is_taken('wakko')
+    assert user_name_is_taken('wakko', world.hell_domain.id)
     assert user_name_is_taken('wakko', world.onion_domain.id)
     other = SiteDomain(domain='other.example', scheme='https')
     db.session.add(other)

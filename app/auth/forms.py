@@ -5,7 +5,9 @@ from wtforms import StringField, PasswordField, SubmitField, HiddenField, Boolea
     TextAreaField, SelectField
 from wtforms.validators import ValidationError, DataRequired, Email, EqualTo, Length
 
+from app.local_names import local_named
 from app.models import User, Community, Feed
+from app.storefront import current_storefront
 from app.utils import MultiCheckboxField, CaptchaField, get_setting, validate_user_name_charset
 
 
@@ -68,15 +70,16 @@ class RegistrationForm(FlaskForm):
         # app/utils.py's validate_user_name_charset.
         validate_user_name_charset(user_name)
 
-        user = User.query.filter(func.lower(User.user_name) == func.lower(user_name.data.strip())).filter_by(ap_id=None).first()
+        # a name is unique on the domain the account will belong to, the one being registered on
+        domain = current_storefront()
+        user = User.query.filter(local_named(User, user_name.data.strip(), domain)).first()
         if user is not None:
             if user.deleted:
                 raise ValidationError(_l('This username was used in the past and cannot be reused.'))
             else:
                 raise ValidationError(_l('An account with this user name already exists.'))
 
-        community = Community.query.filter(func.lower(Community.name) == func.lower(user_name.data.strip()),
-                                           Community.ap_id == None).first()
+        community = Community.query.filter(local_named(Community, user_name.data.strip(), domain)).first()
         if community is not None:
             raise ValidationError(_l('This name is in use already.'))
 

@@ -45,7 +45,7 @@ from app.shared.post import feature_published_post, make_post
 from app.shared.tasks.media import requeue_stuck_media
 from app.relays.expiry import expire_relayed_posts
 from app.utils import retrieve_block_list, blocked_domains, retrieve_peertube_block_list, canonical_host, \
-    shorten_string, get_request, blocked_communities, gibberish, \
+    shorten_string, get_request, blocked_communities, gibberish, user_name_is_taken, \
     DOMAIN_LIST_MAX_BYTES, DOMAIN_LIST_MAX_SECONDS, LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS, \
     MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, \
     recently_upvoted_post_replies, recently_upvoted_posts, jaccard_similarity, \
@@ -277,8 +277,8 @@ def register(app):
                 print('The admin user created here should be reserved for admin tasks and not used as a primary daily identity (unless this instance will only be for personal use).')
                 user_name = input("Admin user name (ideally not 'admin'): ")
                 email = input("Admin email address: ")
-                while '@' in user_name or ' ' in user_name:
-                    print('User name cannot be an email address or have spaces.')
+                while '@' in user_name or ' ' in user_name or user_name_is_taken(user_name, default_domain().id):
+                    print('User name cannot be an email address or have spaces, and must not be in use already.')
                     user_name = input("Admin user name (ideally not 'admin'): ")
                 password = input("Admin password: ")
                 while len(password) < 8:

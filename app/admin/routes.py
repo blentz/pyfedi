@@ -2357,7 +2357,7 @@ def admin_users_add():
         user.verified = form.verified.data
 
         user.instance_id = 1
-        user.site_domain_id = form.site_domain.data or None
+        user.site_domain_id = form.site_domain.data or default_domain().id
         user.roles.append(db.session.get(Role, form.role.data))
         db.session.add(user)
         db.session.commit()

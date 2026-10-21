@@ -76,6 +76,7 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     PostReply, PostReplyBookmark, AllowedInstances, InstanceBan, Tag, Emoji, UserExtraField, ArchivedPostReply, \
     RevokedToken, CommunityFavorite, UserFollower, CommunityFlairBlock, s3_key_from_url, Role, RolePermission, \
     ServerViewMember
+from app.local_names import local_named
 from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, current_storefront, canonicalise_links, canonicalise_text, domain_base_url, \
     domain_by_id, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
 from collections import Counter
@@ -6666,10 +6667,9 @@ def validate_user_name_charset(user_name):
 RESERVED_USER_NAMES = ('admin',)
 
 
-def user_name_is_taken(user_name: str, site_domain_id: int | None = None) -> bool:
-    """True when a LOCAL user, community or feed already answers to this name. With `site_domain_id`, only the users
-    and communities of that domain count; without, a name held on any domain is taken (local names stay unique across
-    domains until plan C).
+def user_name_is_taken(user_name: str, site_domain_id: int | None) -> bool:
+    """True when a LOCAL user or community already answers to this name on the domain `site_domain_id` (None is the
+    default domain), or any feed does: local names are unique per domain, feed names across the site.
 
     `RegistrationForm.validate_user_name` asks this question one query at a
     time. The OAuth signup path asked a narrower, CASE-SENSITIVE version of
@@ -6678,15 +6678,10 @@ def user_name_is_taken(user_name: str, site_domain_id: int | None = None) -> boo
     (D1140). One function, so the two ends cannot drift apart again.
     """
     name = user_name.strip()
-    users = User.query.filter(func.lower(User.user_name) == func.lower(name), User.ap_id == None)
-    communities = Community.query.filter(func.lower(Community.name) == func.lower(name), Community.ap_id == None)
-    if site_domain_id is not None:
-        domain = domain_by_id(site_domain_id)
-        users = users.filter(on_domain(domain))
-        communities = communities.filter(on_domain(domain, Community))
-    if users.first() is not None:
+    domain = domain_by_id(site_domain_id)
+    if User.query.filter(local_named(User, name, domain)).first() is not None:
         return True
-    if communities.first() is not None:
+    if Community.query.filter(local_named(Community, name, domain)).first() is not None:
         return True
     return Feed.query.filter(func.lower(Feed.name) == func.lower(name),
                              Feed.ap_id == None).first() is not None

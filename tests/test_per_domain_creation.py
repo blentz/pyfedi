@@ -242,43 +242,22 @@ def test_the_api_make_community_builds_an_onion_creators_urls(app, db_session, d
     assert community.ap_domain == 'abc.onion'
 
 
-def test_a_community_name_is_taken_across_domains(app, db_session, domains):
+def test_add_local_takes_a_name_only_on_the_creators_own_domain(app, creators, domains):
     default, onion = domains
-    make_user(db.session.get(Instance, 1), 'founder', local=True)
-    _seed_und_language()
-    clearnet = _api_creator('clearnetter', default)
-    onionite = _api_creator('onionite', onion)
-    make_community(_api_input(name='pets'), SRC_API, bearer(clearnet))
-    with pytest.raises(Exception, match='already exists'):
-        make_community(_api_input(name='Pets'), SRC_API, bearer(onionite))
-    make_community(_api_input(name='toys'), SRC_API, bearer(onionite))
-    with pytest.raises(Exception, match='already exists'):
-        make_community(_api_input(name='toys'), SRC_API, bearer(clearnet))
-    assert Community.query.filter(Community.name.in_(['pets', 'toys'])).count() == 2
-
-
-def test_a_community_name_is_taken_by_a_user_of_another_domain(app, db_session, domains):
-    default, onion = domains
-    make_user(db.session.get(Instance, 1), 'founder', local=True)
-    _seed_und_language()
-    clearnet = _api_creator('clearnetter', default)
-    onionite = _api_creator('onionite', onion)
-    with pytest.raises(Exception, match='User with that name'):
-        make_community(_api_input(name='ONIONITE'), SRC_API, bearer(clearnet))
-    assert Community.query.filter_by(name='onionite').count() == 0
-
-
-def test_add_local_refuses_a_name_another_domain_has(app, creators, domains):
     founder, other = creators
-    first = _create(app, founder, 'abc.onion', url='shared_name')
-    assert _create(app, other, 'abc.onion', url='Shared_Name') == first
-    assert Community.query.filter(db.func.lower(Community.name) == 'shared_name').count() == 1
-    second = _create(app, other, 'abc.onion', url='onion_name')
-    assert _create(app, founder, 'abc.onion', url='onion_name') == second
-    assert Community.query.filter_by(name='onion_name').count() == 1
+
+    def named(name):
+        return sorted(c.site_domain_id for c in Community.query.filter(db.func.lower(Community.name) == name))
+
+    _create(app, founder, 'abc.onion', url='shared_name')
+    assert named('shared_name') == [default.id]
+    _create(app, other, 'abc.onion', url='Shared_Name')
+    assert named('shared_name') == sorted([default.id, onion.id])
+    _create(app, other, 'abc.onion', url='SHARED_NAME')
+    assert named('shared_name') == sorted([default.id, onion.id])
 
 
-def test_an_admin_added_user_cannot_take_a_community_name(app, db_session, domains):
+def test_an_admin_added_user_cannot_take_a_community_name_of_its_own_domain(app, db_session, domains):
     default, onion = domains
     instance = db.session.get(Instance, 1)
     make_user(instance, 'founder', local=True)
@@ -294,9 +273,12 @@ def test_an_admin_added_user_cannot_take_a_community_name(app, db_session, domai
     login(client, admin)
     token = csrf(app, client)
     with patch('app.admin.routes.render_template', return_value='rendered'):
+        client.post('/admin/users/add', data=_add_payload(token, user_name='Pets', site_domain=str(default.id)),
+                    content_type='multipart/form-data')
+        assert User.query.filter_by(user_name='Pets').count() == 0
         client.post('/admin/users/add', data=_add_payload(token, user_name='Pets', site_domain=str(onion.id)),
                     content_type='multipart/form-data')
-    assert User.query.filter_by(user_name='Pets').count() == 0
+    assert User.query.filter_by(user_name='Pets', site_domain_id=onion.id).count() == 1
 
 
 AP = {'Accept': 'application/activity+json'}

@@ -9,7 +9,6 @@ from flask_babel import _, lazy_gettext as _l
 from slugify import slugify
 from flask_login import current_user
 from flask_wtf import FlaskForm
-from sqlalchemy import func
 from wtforms import StringField, SubmitField, TextAreaField, BooleanField, HiddenField, SelectField, FileField, \
     DateField, IntegerField, DateTimeLocalField, RadioField
 
@@ -19,6 +18,7 @@ from app import db
 from app.constants import APPLE_PODCAST_CATEGORIES, COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_PODCAST, \
     COMMUNITY_KIND_VIDEO_CHANNEL, DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
     DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE
+from app.local_names import local_named
 from app.models import Community, Site, utcnow, User, Feed
 from app.utils import domain_from_url, MultiCheckboxField, get_timezones, url_is_parseable, is_hex_color
 
@@ -123,13 +123,13 @@ class AddCommunityForm(PodcastCategoryMixin, FlaskForm):
                 self.url.errors.append(_l('Url is required.'))
                 return False
 
-            community = Community.query.filter(Community.name == self.url.data.strip().lower(),
-                                               Community.ap_id == None).first()
+            # a name is unique on the creator's home domain, where the community will be made
+            domain = current_user.home_domain()
+            community = Community.query.filter(local_named(Community, self.url.data.strip(), domain)).first()
             if community is not None:
                 self.url.errors.append(_l('A community with this url already exists.'))
                 return False
-            user = User.query.filter(func.lower(User.user_name) == func.lower(self.url.data.strip())).filter_by(
-                ap_id=None).first()
+            user = User.query.filter(local_named(User, self.url.data.strip(), domain)).first()
             if user is not None:
                 if user.deleted:
                     self.url.errors.append(_l('This name was used in the past and cannot be reused.'))

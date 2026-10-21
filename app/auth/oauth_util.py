@@ -297,7 +297,7 @@ def find_new_username(email: str) -> str:
     candidate = base
     attempts = 0
     while attempts < 1000:
-        if not user_name_is_taken(candidate):
+        if not user_name_is_taken(candidate, default_domain().id):
             return candidate
         candidate = base + str(randint(1, 1000))
         attempts += 1
