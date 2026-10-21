@@ -7,7 +7,7 @@ from sqlalchemy.orm import aliased
 from app import db
 from app.api.alpha.views import reply_view, reply_stub_view, reply_removal_ack_view, reply_report_view, post_view, community_view, user_view
 from app.constants import *
-from app.storefront import current_storefront, on_domain
+from app.storefront import current_storefront, domain_base_url, on_domain
 from app.models import Notification, PostReply, Post, PostReplyVote, Report, Community, User, utcnow
 from app.shared.reply import vote_for_reply, bookmark_reply, remove_bookmark_reply, subscribe_reply, make_reply, \
     edit_reply, \
@@ -133,7 +133,7 @@ def get_reply_list(auth, data, user_details=None):
     # assigned further down: a conversation is not a listing.
     if replies:
         if type == 'Local':
-            replies = replies.filter(or_(PostReply.ap_id == None, PostReply.ap_id.startswith('https://' + current_app.config['SERVER_NAME'])))
+            replies = replies.filter(or_(PostReply.ap_id == None, PostReply.ap_id.startswith(domain_base_url(current_storefront()) + '/')))
             # and its author belongs to this domain, wherever it was posted
             replies = replies.filter(PostReply.user_id.in_(
                 db.session.query(User.id).filter(User.ap_id == None, on_domain(current_storefront()))))

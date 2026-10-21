@@ -18,7 +18,7 @@ AST) and in the templates (by pattern):
 - in a template, `instance_id == 1` and `instance_id != 1`.
 
 A site where row 1 is meant is in ALLOWED with the count of its findings and a one-line reason: `row 1 is the default
-domain's: <why>`, or `request-domain site, Task 4` / `blocking site, Task 5` for a site a later task moves (that task
+domain's: <why>`, or `blocking site, Task 5` for a site a later task moves (that task
 takes its entry out). Never add a "hosted here" site to make the sweep pass; test it against `hosted_instance_ids()`.
 """
 import ast
@@ -26,20 +26,10 @@ import re
 
 from tests.app_source import APP, app_trees
 
-TASK_4 = 'request-domain site, Task 4'
 TASK_5 = 'blocking site, Task 5'
 
 ALLOWED = {
     # (path under the repo, enclosing function): (findings in it, reason)
-    ('app/main/routes.py', 'home_feed_source'): (2, TASK_4),
-    ('app/main/routes.py', 'index_rss'): (1, TASK_4),
-    ('app/api/alpha/utils/user.py', 'get_user_list'): (1, TASK_4),
-    ('app/community/live.py', 'live_feed_keys'): (1, TASK_4),
-    ('app/instance/routes.py', 'instance_people'): (1, TASK_4),
-    ('app/main/routes.py', 'about_page'): (1, TASK_4),
-    ('app/activitypub/util.py', 'local_posts'): (1, TASK_4),
-    ('app/activitypub/util.py', 'local_comments'): (1, TASK_4),
-    ('app/activitypub/util.py', 'local_communities'): (1, TASK_4),
     ('app/shared/site.py', 'block_remote_instance'): (1, TASK_5),
     ('app/user/routes.py', 'user_block_instance'): (1, TASK_5),
     ('app/user/routes.py', 'user_settings_block_instance'): (1, TASK_5),
@@ -260,7 +250,7 @@ def test_every_allowed_site_is_still_there():
 def test_every_allowed_site_has_a_reason():
     reasons = [reason for _count, reason in ALLOWED.values()] + list(TEMPLATES_ALLOWED.values())
     assert [reason for reason in reasons
-            if reason not in (TASK_4, TASK_5) and not reason.startswith("row 1 is the default domain's: ")] == []
+            if reason != TASK_5 and not reason.startswith("row 1 is the default domain's: ")] == []
 
 
 def test_the_sweep_sees_each_spelling():

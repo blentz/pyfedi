@@ -177,21 +177,25 @@ def active_day(federated: bool = False):
         + _federating_users(federated))).scalar()
 
 
-def local_posts(federated: bool = False):
+def local_posts(federated: bool = False, instance_id: int | None = None):
+    """Posts on `instance_id`'s row: a hosted domain's own. Row 1, the default domain's, when none is named."""
     return db.session.execute(
-        text('SELECT COUNT(*) as c FROM "post" WHERE instance_id = 1 AND deleted is false'
-             + (' AND local_only IS NOT TRUE' if federated else ''))).scalar()
+        text('SELECT COUNT(*) as c FROM "post" WHERE instance_id = :instance_id AND deleted is false'
+             + (' AND local_only IS NOT TRUE' if federated else '')),
+        {'instance_id': instance_id or default_domain().instance_id}).scalar()
 
 
-def local_comments(federated: bool = False):
+def local_comments(federated: bool = False, instance_id: int | None = None):
     return db.session.execute(
-        text('SELECT COUNT(*) as c FROM "post_reply" WHERE instance_id = 1 and deleted is false'
-             + (' AND local_only IS NOT TRUE' if federated else ''))).scalar()
+        text('SELECT COUNT(*) as c FROM "post_reply" WHERE instance_id = :instance_id and deleted is false'
+             + (' AND local_only IS NOT TRUE' if federated else '')),
+        {'instance_id': instance_id or default_domain().instance_id}).scalar()
 
 
-def local_communities(federated: bool = False):
-    return db.session.execute(text('SELECT COUNT(*) as c FROM "community" WHERE instance_id = 1'
-                                   + (f' AND {federating_sql("community")}' if federated else ''))).scalar()
+def local_communities(federated: bool = False, instance_id: int | None = None):
+    return db.session.execute(text('SELECT COUNT(*) as c FROM "community" WHERE instance_id = :instance_id'
+                                   + (f' AND {federating_sql("community")}' if federated else '')),
+                              {'instance_id': instance_id or default_domain().instance_id}).scalar()
 
 
 def stable_create_token(object_id: str) -> str:
@@ -4992,7 +4996,7 @@ def update_post_from_activity(post: Post, request_json: dict):
                                                         'post_id': post.id,
                                                         'post_title': post.title,
                                                         'post_body': post.body,
-                                                        'author_user_name': author.ap_id if author.ap_id else author.user_name
+                                                        'author_user_name': author.stored_link()
                                                         }
                                         # in the recipient's language, as the reply path does (D248)
                                         with force_locale(get_recipient_language(recipient.id)):

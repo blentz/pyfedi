@@ -50,6 +50,12 @@ def scene(app, world, monkeypatch):  # noqa: F811
     replies = {'clear': _reply(app, posts['clear'], world.alice), 'onion': _reply(app, posts['onion'], world.onionite)}
     replies['remote'] = make_post_reply(posts['remote'], remote_user)
     replies['remote'].ap_id = 'https://peer.example/comment/1'
+    # the onion's rows live on the onion's own instance row (C2), as creation on that domain stores them
+    onion_instance = storefront.domain_by_id(world.onion.id).instance_id
+    assert onion_instance != 1
+    for row in (world.onionite, world.hidden, posts['onion'], replies['onion']):
+        row.instance_id = onion_instance
+    replies['onion'].ap_id = f'{ONION}/comment/{replies["onion"].id}'
     db.session.commit()
     assert remote.site_domain_id is None and remote.ap_id is not None
     world.remote = remote
@@ -185,8 +191,8 @@ def test_a_local_comment_belongs_to_its_authors_domain_wherever_it_is_posted(app
         return {item['comment']['id'] for item in response.json['comments']}
     mine = make_post_reply(scene.posts.remote, scene.world.alice)
     theirs = make_post_reply(scene.posts.remote, scene.world.onionite)
-    for reply in (mine, theirs):
-        reply.ap_id = f"{app.config['SERVER_URL']}/comment/{reply.id}"
+    mine.ap_id = f"{app.config['SERVER_URL']}/comment/{mine.id}"
+    theirs.ap_id = f'{ONION}/comment/{theirs.id}'
     db.session.commit()
     assert local_ids(scene.world.alice) == {scene.replies.clear.id, mine.id}   # as before storefronts
     assert local_ids(scene.world.onionite, onion=True) == {scene.replies.onion.id, theirs.id}
@@ -271,3 +277,40 @@ def test_the_local_comment_authors_are_local_users_only(app, scene):
     assert {item['comment']['id'] for item in response.json['comments']} == {scene.replies.clear.id}
     author_filters = [s for s in statements if 'post_reply' in s and '"user".id FROM "user"' in s]
     assert author_filters and all('"user".ap_id IS NULL' in s for s in author_filters)
+
+
+# The About page counts, a Local feed's wake-up and a call outside a request (C2, task 4)
+
+def test_the_about_counts_are_the_request_domains(app, scene):
+    from app.activitypub.util import local_communities, local_posts
+    from app.storefront import current_instance_id
+    onion_id = storefront.domain_by_id(scene.world.onion.id).instance_id
+    scene.world.hidden.instance_id = onion_id
+    assert (local_posts(instance_id=1), local_communities(instance_id=1)) == (1, 1)
+    assert (local_posts(instance_id=onion_id), local_communities(instance_id=onion_id)) == (1, 1)
+    extra = _post(app, scene.world.hidden, scene.world.onionite)
+    extra.instance_id = onion_id
+    db.session.commit()
+    assert local_posts(instance_id=onion_id) == 2 and local_posts(instance_id=1) == 1
+    assert local_posts() == 1 and local_communities() == 1   # NodeInfo's: row 1, whatever the request
+    with current_app.test_request_context('/'):
+        g.storefront = storefront.domain_by_id(scene.world.onion.id)
+        assert current_instance_id() == onion_id
+        assert local_posts() == 1
+    about = _visit(app, '/about', onion=True).get_data(as_text=True)
+    assert 'and made 2 posts' in about and '1 community' in about
+    about = _visit(app, '/about').get_data(as_text=True)
+    assert 'and made 1 post' in about and '1 community' in about
+
+
+def test_outside_a_request_the_local_source_is_the_default_domains(app, scene):
+    with current_app.test_request_context('/'):   # no storefront on g: the default's
+        ids, sql = home_feed_source('local')
+        assert set(get_deduped_post_ids('', ids, 'new', community_sql=sql)) == {scene.posts.clear.id}
+
+
+def test_a_post_in_any_hosted_community_wakes_the_local_feeds(app, scene):
+    from app.community.live import live_feed_keys
+    for post in (scene.posts.clear, scene.posts.onion):
+        assert 'local' in live_feed_keys(post, post.community, backfill=False)
+    assert 'local' not in live_feed_keys(scene.posts.remote, scene.remote, backfill=False)
