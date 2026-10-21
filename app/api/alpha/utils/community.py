@@ -10,7 +10,7 @@ from app.api.alpha.views import community_view, user_view, post_view, cached_mod
 from app.community.util import search_for_community
 from app.constants import *
 from app.local_only import without_local_only_actors
-from app.storefront import current_storefront, on_domain
+from app.storefront import current_storefront, domain_boost_expr, on_domain
 from app.models import Community, CommunityMember, User, CommunityBan, Notification, CommunityJoinRequest, \
     NotificationSubscription, Post, CommunityFlair, Feed, utcnow
 # The module, not the names: app.shared.community reaches this file through a blueprint
@@ -195,6 +195,7 @@ def get_community_list(auth, data):
         communities = communities.order_by(desc(Community.total_subscriptions_count))
     else:
         communities = communities.order_by(desc(Community.last_active))
+    communities = communities.order_by(desc(domain_boost_expr(Community.instance_id)))
 
     communities = communities.paginate(page=page, per_page=limit, error_out=False)
 
