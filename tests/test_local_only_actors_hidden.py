@@ -262,3 +262,52 @@ def test_the_alpha_apis_single_views_refuse_a_local_only_row_to_a_logged_out_cal
     assert response.status_code == 400
     assert ONION not in response.get_data(as_text=True)
     assert api_get(app, path, api, True).status_code == 200
+
+
+# --- subpages (fix round 2) ---------------------------------------------------------------------------------------
+
+@pytest.fixture
+def subpages(world):
+    db.session.add(CommunityWikiPage(community_id=world.onion_art.id, slug='rules', title='Rules', body='be kind',
+                                     body_html='<p>be kind</p>', who_can_edit=0))
+    db.session.add(CommunityWikiPage(community_id=world.hell_art.id, slug='rules', title='Rules', body='be kind',
+                                     body_html='<p>be kind</p>', who_can_edit=0))
+    db.session.commit()
+    return world
+
+
+def subpage_paths(world, onion=True):
+    community, user = (world.onion_art, world.onion_bob) if onion else (world.hell_art, world.hell_bob)
+    name, handle = (ONION_ART, ONION_BOB) if onion else ('art', 'bob')
+    return [f'/community/{name}/wiki/rules', f'/community/get_sidebar/{community.id}',
+            f'/community/community_changed?communities={community.id}', f'/user/{user.id}/preview',
+            f'/user/{user.id}', f'/u/{handle}/feeds', f'/u/{handle}/fediverse_redirect']
+
+
+def test_a_local_only_community_or_accounts_subpages_are_not_found_when_logged_out(app, subpages):
+    for path in subpage_paths(subpages):
+        response = visit(app, path, False, subpages)
+        assert response.status_code == 404, path
+        assert ONION not in response.get_data(as_text=True), path
+
+
+def test_they_render_when_logged_in(app, subpages):
+    for path in subpage_paths(subpages):
+        assert visit(app, path, True, subpages).status_code == 200, path
+
+
+def test_hells_own_subpages_are_unchanged_when_logged_out(app, subpages):
+    for path in subpage_paths(subpages, onion=False):
+        assert visit(app, path, False, subpages).status_code == 200, path
+
+
+@pytest.mark.parametrize('signed_in', [False, True])
+def test_hells_community_page_names_a_local_only_moderator_or_related_community_only_when_logged_in(
+        app, grouped, signed_in):
+    db.session.add(CommunityMember(user_id=grouped.onion_bob.id, community_id=grouped.hell_art.id, is_moderator=True))
+    db.session.commit()
+    response = visit(app, '/c/art', signed_in, grouped)
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert (f'/u/{ONION_BOB}' in body) == signed_in   # the moderator list
+    assert (f'/c/{ONION_ART}' in body) == signed_in   # the related communities
