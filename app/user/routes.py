@@ -2122,8 +2122,8 @@ def fediverse_redirect(actor):
     # and the second in this module after D1019. The page exists to send a
     # visitor to the instance that hosts the account, so a remote one has
     # nowhere to send them.
-    if user is None or not user.is_local():
-        abort(404)
+    if user is None or not user.is_local() or (user_local_only(user) and not local_only_visible()):
+        abort(404)   # nor, to a logged-out visitor, a local-only account (as its profile)
 
     if user and user.is_local():
         form = RemoteFollowForm()
@@ -2265,6 +2265,8 @@ def user_preview(user_id):
     return_to = request.args.get('return_to')
     if (user.deleted or user.banned) and current_user.is_anonymous:
         abort(404)
+    if user_local_only(user) and not local_only_visible():
+        abort(404)   # as the profile: a logged-out visitor never sees a local-only account
     return render_template('user/user_preview.html', user=user, return_to=return_to)
 
 
@@ -2426,8 +2428,8 @@ def user_feeds(actor):
     actor = actor.strip()
     user = user_for_actor(actor)
 
-    if user is None:
-        abort(404)
+    if user is None or (user_local_only(user) and not local_only_visible()):
+        abort(404)   # as the profile: a logged-out visitor never sees a local-only account
 
     # find all user feeds marked as public
     user_public_feeds = Feed.query.filter_by(public=True).filter_by(user_id=user.id).all()

@@ -53,7 +53,8 @@ from app.post.util import form_tags_string
 # The module, not the names: app.shared.community reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
-from app.local_only import community_local_only, local_only_visible, local_only_visible_rss, without_local_only
+from app.local_only import community_local_only, local_only_visible, local_only_visible_rss, without_local_only, \
+    without_local_only_actors
 from app.visibility import is_open, listable_clause, visible_to_clause
 from app.utils import etag_stamp
 from app.utils import user_banned_from_community, back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
@@ -508,7 +509,9 @@ def show_community(community: Community, from_instance=None):
         inactive_mods = User.query.filter(User.id.in_(mod_user_ids),
                                           User.last_seen < utcnow() - timedelta(days=60), User.deleted == False).all()
     else:
-        mod_list = User.query.filter(User.id.in_(mod_user_ids), User.deleted.is_(False)).all()
+        # a logged-out visitor is shown no local-only moderator (owner ruling 2026-10-21)
+        mod_list = without_local_only_actors(User.query.filter(User.id.in_(mod_user_ids), User.deleted.is_(False)),
+                                             User).all()
         inactive_mods = []
         for mod in mod_list:
             if mod.last_seen < utcnow() - timedelta(days=60):
@@ -666,8 +669,9 @@ def show_community(community: Community, from_instance=None):
     breadcrumbs.append(breadcrumb)
 
     if community.topic_id:
-        related_communities = Community.query.filter_by(topic_id=community.topic_id). \
-            filter(Community.id != community.id, Community.banned == False).order_by(Community.name)
+        related_communities = without_local_only_actors(Community.query.filter_by(topic_id=community.topic_id).
+                                                        filter(Community.id != community.id, Community.banned == False),
+                                                        Community).order_by(Community.name)
         topics = []
         previous_topic = db.session.get(Topic, community.topic_id)
         topics.append(previous_topic)
@@ -2528,6 +2532,8 @@ def community_wiki_add(actor):
 @login_required_if_private_instance
 def community_wiki_view(actor, slug):
     community = actor_to_community(actor)
+    if community is not None and community_local_only(community) and not local_only_visible():
+        abort(404)   # as the community's page: a logged-out visitor never sees a local-only community
 
     if community is not None:
         page: CommunityWikiPage = CommunityWikiPage.query.filter_by(slug=slug, community_id=community.id).first()
@@ -3304,8 +3310,8 @@ def community_changed():
         # shape, at the second fragment endpoint in this file. Measured
         # anonymously against a private community:
         # `PROBE i2 title leaked: True`.
-        if community is None or community.banned:
-            abort(404)
+        if community is None or community.banned or (community_local_only(community) and not local_only_visible()):
+            abort(404)   # a local-only community, as its page, for a logged-out visitor too
         if community.private and community.id not in community_membership_private(current_user.get_id()):
             abort(403)
         return flask.render_template('community/community_changed.html', community=community)
@@ -3359,8 +3365,8 @@ def get_sidebar(community_id):
     # for a private one the caller does not belong to. Measured, anonymously,
     # against a private community: `PROBE h2 description leaked: True title
     # leaked: True`. The refusals here are the same three, in the same order.
-    if community is None or community.banned:
-        abort(404)
+    if community is None or community.banned or (community_local_only(community) and not local_only_visible()):
+        abort(404)   # a local-only community, as its page, for a logged-out visitor too
     if community.private and community.id not in community_membership_private(current_user.get_id()):
         abort(403)
     return flask.render_template('community/description.html', community=community, hide_community_actions=True)
