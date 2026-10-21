@@ -4,6 +4,7 @@ from app import db
 from app.api.alpha.views import feed_view
 from app.constants import *
 from app.feed.util import feeds_for_form
+from app.local_names import actor_handle
 from app.models import User, Feed, FeedItem, Community
 # The module, not the names: app.shared.feed reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.feed)
@@ -246,8 +247,7 @@ def put_feed(auth, data):
         communities = data['communities']
     else:
         feed_items = FeedItem.query.filter_by(feed_id=feed_id).all()
-        ap_ids = [c.ap_id if c.ap_id else c.name + '@' + feed.ap_domain
-                  for fi in feed_items if (c := db.session.get(Community, fi.community_id))]
+        ap_ids = [actor_handle(c) for fi in feed_items if (c := db.session.get(Community, fi.community_id))]
         communities = '\n'.join(ap_ids)
 
     input_data = {'url': url, 'title': title, 'public': public, 'description': description,

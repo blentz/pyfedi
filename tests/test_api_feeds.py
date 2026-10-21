@@ -16,7 +16,9 @@ import pytest
 from flask import g
 
 from app import db
-from app.models import Feed, FeedItem, FeedMember, Site, User
+from app.api.alpha.utils.feed import put_feed
+from app.models import Feed, FeedItem, FeedMember, Site, SiteDomain, User
+from app.storefront import clear_domain_cache
 from tests.factories import (make_community, make_community_member,
                              make_instance, make_local_feed, make_user)
 
@@ -478,6 +480,32 @@ def test_editing_keeps_the_communities_that_were_not_sent(app, env):
     assert FeedItem.query.filter_by(feed_id=public.id,
                                     community_id=community.id).first() \
         is not None
+
+
+def test_editing_keeps_another_domains_community_not_its_namesake(app, env):
+    """The rebuilt list names a local community by its own domain: written as `name@<the feed's domain>`, an onion
+    community in a hell.cloud feed was swapped for hell's namesake (plan C1)."""
+    owner, stranger, public, private = env
+    if db.session.query(SiteDomain).filter_by(is_default=True).first() is None:
+        db.session.add(SiteDomain(domain='test.piefed.local', scheme='https', is_default=True))
+    onion = SiteDomain(domain='abc.onion', scheme='http', federates=False)
+    db.session.add(onion)
+    db.session.commit()
+    clear_domain_cache()
+    hell_art = make_community('art')
+    onion_art = make_community('art', host='abc.onion')
+    onion_art.site_domain_id = onion.id
+    db.session.commit()
+    in_feed(public, onion_art)
+
+    try:
+        put_feed(token(owner), {'feed_id': public.id, 'title': 'A Better Title'})
+    finally:
+        clear_domain_cache()
+
+    kept = {fi.community_id for fi in FeedItem.query.filter_by(feed_id=public.id)}
+    assert onion_art.id in kept
+    assert hell_art.id not in kept
 
 
 def test_a_stranger_may_not_edit_a_feed(app, env):
