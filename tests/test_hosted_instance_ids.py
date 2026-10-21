@@ -11,18 +11,21 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+import respx
 from flask import g
 
 import app.activitypub.routes as ap_routes
+import app.cli as cli
 import app.community.live as live
 import app.shared.tasks.maintenance as maintenance
 import app.shared.tasks.pages as pages
 from app import db
 from app.activitypub.routes import announce_activity_to_followers
 from app.api.alpha.utils.private_message import post_private_message_report
-from app.api.alpha.views import federated_instances_view
+from app.api.alpha.views import federated_instances_view, site_instance_chooser_view
 from app.community.live import busiest_microblog_servers, live_feed_keys, post_community_link
-from app.models import ChatMessage, CommunityMember, Feed, FeedMember, Instance, Report, UserFollower, utcnow
+from app.models import (ActivityPubLog, ChatMessage, CommunityMember, Feed, FeedMember, File, Instance, Report, Site,
+                        UserFollower, utcnow)
 from app.shared.tasks.maintenance import check_instance_health, cleanup_old_voting_data, monitor_healthy_instances
 from app.shared.tasks.pages import send_post
 from app.utils import fediverse_domains
@@ -72,6 +75,27 @@ def test_the_lemmy_federated_instances_api_names_no_hosted_domain(app, sisters):
 
 def test_the_alpha_federated_instances_view_names_no_hosted_domain(app, sisters):
     body = json.dumps(federated_instances_view(), default=str)
+    assert PEER in body
+    assert ONION not in body
+
+
+def test_the_alpha_instance_chooser_trusts_no_hosted_domain(app, sisters):
+    hell, onion, onion_row, peer, *_ = sisters
+    make_site()
+    g.site = db.session.get(Site, 1)
+    onion_row.trusted = peer.trusted = True   # an admin can tick "trusted" on any row
+    db.session.commit()
+    assert site_instance_chooser_view()['trusts'] == [PEER]
+
+
+def test_hells_home_sidebar_names_no_hosted_domain(app, sisters):
+    """The "new instances" card lists live piefed peers, newest first. The onion's row is the newest, and is given
+    the lowercase software every peer's nodeinfo stores."""
+    hell, onion, onion_row, peer, *_ = sisters
+    make_site().private_instance = False
+    onion_row.software = 'piefed'
+    db.session.commit()
+    body = app.test_client().get('/', base_url=f'https://{HELL}').get_data(as_text=True)
     assert PEER in body
     assert ONION not in body
 
@@ -145,7 +169,10 @@ def sent(monkeypatch):
     return inboxes
 
 
-def test_a_hell_post_with_an_onion_follower_goes_to_the_peer_only(app, sisters, sent, no_http):
+def test_a_hell_post_with_an_onion_follower_goes_to_the_peer_only(app, sisters, no_http):
+    """The real send path runs (Celery is eager): post_request signs and POSTs through httpx, which respx answers.
+    The onion's inbox has a route that would answer 500, a refusal post_request books against the destination, so
+    selecting the onion's row shows as a call to that route and as a failure logged to its inbox."""
     hell, onion, onion_row, peer, hell_user, onion_user, peer_user, hell_community = sisters
     hell_user.private_key, hell_user.public_key = a_keypair()
     hell_community.private_key, hell_community.public_key = a_keypair()
@@ -156,12 +183,16 @@ def test_a_hell_post_with_an_onion_follower_goes_to_the_peer_only(app, sisters, 
     db.session.commit()
     post = make_post(hell_community, hell_user, None)
 
-    send_post(post.id, session=db.session)
+    with respx.mock(assert_all_called=False) as router:
+        to_peer = router.post(f'https://{PEER}/inbox').respond(202)
+        to_onion = router.route(host=ONION).respond(500)
+        send_post(post.id, session=db.session)
 
-    assert f'https://{PEER}/inbox' in sent
-    assert not [inbox for inbox in sent if ONION in str(inbox)]
+    assert to_peer.called
+    assert not to_onion.called
     assert no_http == []
     db.session.expire_all()
+    assert ActivityPubLog.query.filter(ActivityPubLog.exception_message.contains(ONION)).count() == 0
     assert db.session.get(Instance, onion_row.id).failures in (0, None)
 
 
@@ -263,6 +294,9 @@ def test_report_is_local_for_every_hosted_row(app, sisters):
     assert Report(source_instance_id=onion_row.id).is_local()
     assert not Report(source_instance_id=peer.id).is_local()
     assert not Report(source_instance_id=None).is_local()
+    hosted = frozenset({1, onion_row.id})   # a list page reads the set once and hands it in
+    assert Report(source_instance_id=onion_row.id).is_local(hosted)
+    assert not Report(source_instance_id=peer.id).is_local(hosted)
 
 
 # --- the microblogs community's server views -------------------------------------------------------------------------
@@ -323,3 +357,25 @@ def test_a_local_only_profile_carries_no_schema_org_metadata(app, two_domains, s
     body = ap_get(app, '/u/hidden', host=ONION, headers={'Accept': 'text/html'}).get_data(as_text=True)
     assert 'hidden' in body
     assert 'application/ld+json' not in body
+
+
+def test_moving_post_images_to_s3_takes_every_hosted_domains_first(app, sisters, s3_bucket, monkeypatch):
+    """`flask move-post-images-to-s3` moves local images before remote ones; an onion post's image is local."""
+    hell, onion, onion_row, peer, hell_user, onion_user, peer_user, hell_community = sisters
+    moved = []
+    monkeypatch.setattr(cli, 'move_file_to_s3', lambda file_id, s3: moved.append(file_id))
+    for key, value in (('S3_REGION', 'us-east-1'), ('S3_ENDPOINT', None)):   # the s3_bucket fixture's moto S3
+        monkeypatch.setitem(app.config, key, value)
+    images = {}
+    for name, author in (('peer', peer_user), ('hell', hell_user), ('onion', onion_user)):
+        image = File(file_path=f'app/static/media/posts/{name}.jpg')
+        db.session.add(image)
+        db.session.commit()
+        make_post(hell_community, author, None).image_id = images.setdefault(name, image.id)
+    db.session.commit()
+
+    cli.register(app)   # pyfedi.py registers the commands; the test app has none
+    result = app.test_cli_runner().invoke(args=['move-post-images-to-s3'])
+
+    assert result.exit_code == 0, result.output
+    assert moved == [images['onion'], images['hell'], images['peer']]   # newest first within each kind
