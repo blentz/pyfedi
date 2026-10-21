@@ -86,3 +86,17 @@ def test_the_modlog_name_suggestions_leave_out_local_only_accounts_when_logged_o
     logged_out = app.test_client().post('/modlog/search_suggestions', data={'user_name': 'bob'},
                                         base_url=HOSTS[HELL]).get_data(as_text=True)
     assert logged_out.count('<option') == 2   # hell's and the shop's bob, not the onion's
+
+
+# --- people -------------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize('path', ['/instance/all/people', '/instance/people/interesting'])
+def test_logged_out_people_lists_leave_out_local_only_accounts(app, world, path):
+    body = visit(app, path, False, world).get_data(as_text=True)
+    assert 'href="/u/bob"' in body
+    assert ONION not in body
+
+
+@pytest.mark.parametrize('path', ['/instance/all/people', '/instance/people/interesting'])
+def test_logged_in_people_lists_still_show_them(app, world, path):
+    assert f'/u/{ONION_BOB}' in visit(app, path, True, world).get_data(as_text=True)
