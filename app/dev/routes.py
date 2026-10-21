@@ -12,7 +12,7 @@ from app.admin.routes import unsubscribe_everyone_then_delete
 from app.dev import bp
 from app.dev.forms import AddTestCommunities, AddTestTopics, DeleteTestCommunities, DeleteTestTopics, ActivityPubForm
 from app.inoculation import inoculation
-from app.storefront import default_domain
+from app.storefront import default_domain, instance_id_of
 from app.models import Site, User, Community, CommunityMember, Language, Topic, utcnow
 from app.utils import render_template, community_membership, moderating_communities, joined_communities, menu_topics, \
     markdown_to_html, permission_required, login_required, roles_with
@@ -50,7 +50,7 @@ def tools():
                                   ap_public_url='https://' + current_app.config['SERVER_NAME'] + '/c/' + name,
                                   ap_followers_url='https://' + current_app.config['SERVER_NAME'] + '/c/' + name.lower() + '/followers',
                                   ap_domain=current_app.config['SERVER_NAME'], site_domain_id=default_domain().id,
-                                  subscriptions_count=1, instance_id=1, low_quality='memes' in name)            
+                                  subscriptions_count=1, instance_id=instance_id_of(default_domain()), low_quality='memes' in name)            
             
             # add and commit to db
             db.session.add(community)

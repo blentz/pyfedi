@@ -29,7 +29,7 @@ from app.shared.tasks import task_selector
 from app.shared.upload import process_upload
 from app.user.utils import search_for_user
 from app.storefront import canonical_link, canonicalise_text, default_storefront, delete_memoized_everywhere, domain_authority, \
-    domain_base_url, storefront_url
+    domain_base_url, instance_id_of, storefront_url
 from app.utils import authorise_api_user, blocked_communities, shorten_string, markdown_to_html, \
     instance_banned, community_membership, joined_communities, moderating_communities, is_image_url, \
     communities_banned_from, piefed_markdown_to_lemmy_markdown, community_moderators, add_to_modlog, \
@@ -322,7 +322,7 @@ def make_community(input, src, auth=None, uploaded_icon_file=None, uploaded_bann
                           ap_public_url=base_url + '/c/' + name,
                           ap_followers_url=base_url + '/c/' + name + '/followers',
                           ap_domain=domain_authority(home), site_domain_id=home.id,
-                          subscriptions_count=1, instance_id=1, low_quality='memes' in name,
+                          subscriptions_count=1, instance_id=instance_id_of(home), low_quality='memes' in name,
                           question_answer=question_answer, first_federated_at=utcnow(),
                           kind=kind, user_id=user.id)
     if src == SRC_API:

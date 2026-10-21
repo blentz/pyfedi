@@ -49,7 +49,7 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, RolePermission, Domain, \
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain
-from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, live_registration, hosted_instance_ids
+from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, live_registration, hosted_instance_ids, instance_id_of
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
@@ -2378,8 +2378,9 @@ def admin_users_add():
         user.banned = form.banned.data
         user.verified = form.verified.data
 
-        user.instance_id = 1
-        user.site_domain_id = form.site_domain.data or default_domain().id
+        home = domain_by_id(form.site_domain.data) if form.site_domain.data else default_domain()
+        user.instance_id = instance_id_of(home)
+        user.site_domain_id = home.id
         user.roles.append(db.session.get(Role, form.role.data))
         db.session.add(user)
         db.session.commit()
@@ -2750,7 +2751,7 @@ def admin_community_move(community_id, new_owner):
         community.ap_featured_url = 'https://' + current_app.config['SERVER_NAME'] + '/c/' + form.new_url.data + '/featured'
         community.ap_moderators_url = 'https://' + current_app.config['SERVER_NAME'] + '/c/' + form.new_url.data + '/moderators'
         community.ap_domain = current_app.config['SERVER_NAME']
-        community.instance_id = 1
+        community.instance_id = instance_id_of(default_domain())
         community.site_domain_id = default_domain().id
 
         if form.new_owner.data:
