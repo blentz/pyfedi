@@ -210,14 +210,10 @@ def show_profile(user):
                 left join post p
                     on extract(hour from p.created_at) = h.hour_of_day
                     and p.created_at >= now() - interval '1 month'
-                    and p.user_id in (
-                        select id
-                        from "user"
-                        where user_name = :user_name
-                    )
+                    and p.user_id = :user_id
                 group by h.hour_of_day
                 order by h.hour_of_day;"""
-        posting_pattern = db.session.execute(text(sql), {'user_name': user.user_name}).all()
+        posting_pattern = db.session.execute(text(sql), {'user_id': user.id}).all()
         posting_pattern_labels = [x for x, y in posting_pattern]
         posting_pattern_values = [y for x, y in posting_pattern]
 
@@ -228,14 +224,10 @@ def show_profile(user):
                         left join post_reply p
                             on extract(hour from p.created_at) = h.hour_of_day
                             and p.created_at >= now() - interval '1 month'
-                            and p.user_id in (
-                                select id
-                                from "user"
-                                where user_name = :user_name
-                            )
+                            and p.user_id = :user_id
                         group by h.hour_of_day
                         order by h.hour_of_day;"""
-        comment_pattern = db.session.execute(text(sql), {'user_name': user.user_name}).all()
+        comment_pattern = db.session.execute(text(sql), {'user_id': user.id}).all()
         comment_pattern_labels = [x for x, y in comment_pattern]
         comment_pattern_values = [y for x, y in comment_pattern]
     else:

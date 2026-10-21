@@ -265,8 +265,8 @@ def test_the_feed_branchs_success_path_subscribes_non_owners_and_logs_success(
 
     `community_to_add.ap_id` is the column make_community() never sets (see
     that factory's docstring) -- it stays None, so the actor string
-    do_subscribe receives is `community_to_add.name` (the `ap_id if ap_id
-    else name` fallback at routes.py's current :1422).
+    do_subscribe receives is `actor_handle(community_to_add)`, the local row's
+    `name@domain` for its own domain (C1).
 
     D81, fixed: the feed branch logged nothing on any path; its success is
     now logged like the community branch's.

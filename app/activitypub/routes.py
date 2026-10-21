@@ -752,7 +752,7 @@ def community_profile(actor):
             resp.headers.set('Cache-Control', AP_CACHE_ACTOR)
             resp.headers.set('Vary', 'Accept')
             resp.headers.set('Link',
-                             f'<https://{current_app.config["SERVER_NAME"]}/c/{actor}>; rel="alternate"; type="text/html"')
+                             f'<https://{current_app.config["SERVER_NAME"]}/c/{actor.lower()}>; rel="alternate"; type="text/html"')
             return resp
         else:  # browser request - return html
             return community_routes.show_community(community)

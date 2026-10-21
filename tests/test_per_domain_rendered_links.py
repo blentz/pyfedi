@@ -195,3 +195,31 @@ def test_the_block_lists_community_link_names_that_domains_community(app, world,
     page = signed_in(app, viewer, host).get('/user/settings/filters').get_data(as_text=True)
     [link] = re.findall(r'href="(/c/art[^"]*)"', page)
     assert community_shown(app, world, host, link) == {other(host)}
+
+
+# Minors
+
+def test_the_posting_pattern_counts_only_this_accounts_posts(app, world):
+    """Minor 5: the hour-of-day graphs counted every account with the name, now another domain's too. The graph is
+    an admin's, so the values are read where the view hands them to the template."""
+    for number in range(3):
+        make_post(world.art[ONION], world.bob[ONION], f'{BASE[ONION]}/post/hours-{number}', title=f'hours {number}')
+    db.session.commit()
+
+    def posts_per_hour(path):
+        with patch('app.user.routes.render_template', return_value='rendered') as render:
+            signed_in(app, world.viewers[HELL], HELL).get(path)
+        return render.call_args.kwargs['posting_pattern_values']
+
+    assert posts_per_hour('/u/bob') == [0] * 24
+    assert sum(posts_per_hour(f'/u/bob@{ONION}')) == 3
+
+
+def test_a_communitys_alternate_link_is_lower_case_whatever_its_stored_name(app, two_domains):
+    """The ActivityPub document's `Link: rel=alternate` header, byte-identical to before C1 for a name stored with
+    capitals (one made through the API)."""
+    two_domains.local_community('Art', two_domains.domains[0])
+    response = app.test_client().get('/c/ART', headers={'Accept': 'application/activity+json'},
+                                     base_url=f'https://{HELL}')
+    assert response.status_code == 200
+    assert response.headers['Link'] == f'<https://{HELL}/c/art>; rel="alternate"; type="text/html"'

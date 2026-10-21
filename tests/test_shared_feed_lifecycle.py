@@ -1158,9 +1158,9 @@ def test_join_feed_subscribes_to_the_feeds_communities_only_when_asked(
 
     TWO FeedItem communities, not one, so the loop is a loop and a mutant that
     subscribed to only the first is visible in the call count. One of them has
-    ap_id set and one does not, because :53 chooses between community.ap_id and
-    community.name -- with a single community that ternary is covered but never
-    observed to differ.
+    ap_id set and one does not, because the actor queued is actor_handle(community):
+    the ap_id, or a local row's `name@domain` (C1) -- with a single community one
+    arm is covered and the two are never observed to differ.
 
     do_subscribe is patched at app.community.routes, where the deferred import
     at :38 resolves it; a rebind on app.shared.feed would not take.
@@ -1169,8 +1169,8 @@ def test_join_feed_subscribes_to_the_feeds_communities_only_when_asked(
     local = make_local_feed(name='localjoinfeed', public=True)
     remote_community = make_community(name='remotecommunity', host='far.piefed.local')
     # make_community leaves ap_id None whatever host it is given -- measured,
-    # not assumed: without this line both communities took the .name arm of
-    # :53's ternary and the two arms were never observed to differ.
+    # not assumed: without this line both communities took actor_handle's
+    # local arm and the two arms were never observed to differ.
     remote_community.ap_id = 'remotecommunity@far.piefed.local'
     local_community = make_community(name='localcommunity')
     assert local_community.ap_id is None
