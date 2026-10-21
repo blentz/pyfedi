@@ -172,7 +172,7 @@ def show_profile(user):
         user_has_public_feeds = True
 
     following = User.query.filter(User.banned == False).join(UserFollower, UserFollower.remote_user_id == User.id).\
-        filter(UserFollower.local_user_id == user.id, UserFollower.is_inward == False).all()
+        filter(UserFollower.local_user_id == user.id, UserFollower.is_inward == False, UserFollower.is_accepted == True).all()
     followers = User.query.filter(User.banned == False).join(UserFollower, UserFollower.remote_user_id == User.id). \
         filter(UserFollower.local_user_id == user.id, UserFollower.is_inward == True, UserFollower.is_accepted == True).all()
 
