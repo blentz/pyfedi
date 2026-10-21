@@ -23,7 +23,7 @@ def public(app, world):
     return world
 
 
-@pytest.mark.parametrize('path', ['/u/onionite', '/c/hidden'])
+@pytest.mark.parametrize('path', ['/u/onionite@abc.onion', '/c/hidden@abc.onion'])   # the onion's, named from hell.cloud
 def test_a_local_only_actor_page_has_no_activitypub_alternate(app, public, path):
     response = app.test_client().get(path, headers=HTML)
     assert response.status_code == 200

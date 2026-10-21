@@ -16,7 +16,8 @@ from app.activitypub.util import get_request, signed_get_request, actor_json_to_
     canonical_handle, webfinger_self_link_allowed
 from app.discovery.podcast import podcast_community_for
 from app.models import User, Community, Feed, Site
-from app.storefront import domain_for_host, on_domain
+from app.local_names import local_named
+from app.storefront import current_storefront, domain_for_host, on_domain
 from app.utils import utcnow, get_setting, actor_contains_blocked_words, actor_profile_contains_blocked_words, \
     instance_banned, low_value_reposters, instance_allowed
 
@@ -407,8 +408,9 @@ def find_actor_by_url(actor_url, community_only=False, feed_only=False, allow_ba
         user: User = User.query.filter_by(ap_id=actor_url.lower()).first()
         return user
     else:
-        user: User = User.query.filter(or_(func.lower(User.user_name) == actor_url.lower())).filter_by(ap_id=None).first()
-        if user is None:
+        domain = current_storefront()   # a bare name is on the storefront's domain, not on every domain that holds it
+        user: User = User.query.filter(local_named(User, actor_url, domain)).first()
+        if user is None and domain.is_default:
             user = User.query.filter_by(ap_profile_id=f'{current_app.config["SERVER_URL"]}/u/{actor_url.lower()}',
                                         ap_id=None).first()
         return user

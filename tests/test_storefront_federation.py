@@ -63,7 +63,8 @@ def _strings(document):
 def test_actor_json_on_alias_is_canonical(app, onion):
     make_site()
     _local_user('alice')
-    response = app.test_client().get('/u/alice', headers={'Host': ALIAS, 'Accept': 'application/activity+json'})
+    response = app.test_client().get('/u/alice@test.piefed.local',   # a bare name is the alias's own (C1)
+                                       headers={'Host': ALIAS, 'Accept': 'application/activity+json'})
     assert response.status_code == 200
     actor = response.get_json()
     for value in (actor['id'], actor['inbox'], actor['outbox'], actor['publicKey']['id']):
@@ -72,8 +73,7 @@ def test_actor_json_on_alias_is_canonical(app, onion):
     assert ALIAS not in response.headers.get('Link', '')
 
 
-@pytest.mark.parametrize('resource', ['acct:alice@test.piefed.local', 'acct:alice@abc.onion',
-                                      'http://abc.onion/u/alice'])
+@pytest.mark.parametrize('resource', ['acct:alice@test.piefed.local', 'http://test.piefed.local/u/alice'])
 def test_webfinger_on_alias_is_canonical(app, onion, resource):
     make_site()
     _local_user('alice')
@@ -101,15 +101,26 @@ def test_webfinger_answers_only_for_a_domain_we_answer_on_as_written(app, onion,
     assert response.status_code == 404, resource
 
 
-@pytest.mark.parametrize('resource', ['acct:alice@ABC.onion', 'acct:alice@Test.Piefed.Local',
+@pytest.mark.parametrize('resource', ['acct:alice@Test.Piefed.Local',
                                       # the acct: split stops at the second ':', so a port is never read (as before)
-                                      'acct:alice@test.piefed.local:443', 'acct:alice@abc.onion:80'])
+                                      'acct:alice@test.piefed.local:443'])
 def test_webfinger_domain_ignores_case(app, onion, resource):
     make_site()
     _local_user('alice')
     response = app.test_client().get('/.well-known/webfinger', query_string={'resource': resource})
     assert response.status_code == 200
     assert response.get_json()['subject'] == 'acct:alice@test.piefed.local'
+
+
+@pytest.mark.parametrize('resource', ['acct:alice@abc.onion', 'acct:alice@ABC.onion', 'acct:alice@abc.onion:80',
+                                      'http://abc.onion/u/alice'])
+def test_webfinger_names_the_account_on_the_domain_it_asks_for(app, onion, resource):
+    """alice is on the default domain: the onion has no alice, whatever Host asked (plan C1)."""
+    make_site()
+    _local_user('alice')
+    response = app.test_client().get('/.well-known/webfinger', query_string={'resource': resource},
+                                     headers={'Host': ALIAS})
+    assert response.status_code == 404
 
 
 def test_webfinger_for_an_unregistered_domain_is_404(app, onion):

@@ -9,6 +9,11 @@ from typing import NamedTuple
 import pytest
 from flask import g
 
+import app.activitypub.actor as ap_actor
+import app.activitypub.util as ap_util
+import app.community.util as community_util
+import app.feed.util as feed_util
+import app.user.utils as user_utils
 from app import db
 from app.models import Community, SiteDomain, User
 from app.storefront import DomainInfo, clear_domain_cache, domain_for_host
@@ -76,3 +81,17 @@ def two_domains(app, db_session):
 
     yield TwoDomains((domain_for_host(HELL), domain_for_host(ONION)), instance, local_user, local_community)
     clear_domain_cache()
+
+
+@pytest.fixture
+def no_http(monkeypatch):
+    """The list of URLs fetched. Any fetch fails the test: a hosted handle is in the database or nowhere."""
+    made = []
+
+    def recording_get_request(url, *args, **kwargs):
+        made.append(url)
+        raise AssertionError(f'fetched {url}')
+
+    for module in (user_utils, community_util, feed_util, ap_util, ap_actor):
+        monkeypatch.setattr(module, 'get_request', recording_get_request, raising=False)
+    return made
