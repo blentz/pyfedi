@@ -570,7 +570,8 @@ def list_communities():
         if microblogs.id not in hidden_communities:
             view_rows = server_view_list.server_view_select(
                 microblogs.id, search_param, instance, blocked, keywords,
-                joined_server_views(current_user.get_id()) if subscribe_select == 'subscribed' else None)
+                joined_server_views(current_user.get_id()) if subscribe_select != 'any' else None,
+                joined=subscribe_select == 'subscribed')
         else:
             microblogs = None
     communities = server_view_list.paginate_union(
