@@ -128,9 +128,11 @@ def test_joining_and_leaving_by_name_or_handle_is_that_domains_community(app, wo
 @pytest.mark.parametrize('host', [ONION, HELL])
 def test_a_communitys_feed_is_that_domains(app, world, host):
     cache.clear()
+    world.viewers[host].rss_token = 'viewer-rss-token'   # a feed reader's: the onion's community is local-only
+    db.session.commit()
     client = signed_in(app, world.viewers[host], host)
-    mine = client.get('/community/art/feed').get_data(as_text=True)
-    theirs = client.get(f'/community/art@{other(host)}/feed').get_data(as_text=True)
+    mine = client.get('/community/art/feed?token=viewer-rss-token').get_data(as_text=True)
+    theirs = client.get(f'/community/art@{other(host)}/feed?token=viewer-rss-token').get_data(as_text=True)
     assert world.art[host].title in mine and world.art[other(host)].title not in mine
     assert world.art[other(host)].title in theirs and world.art[host].title not in theirs
 
