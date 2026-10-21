@@ -300,6 +300,7 @@ def test_the_merge_of_tiers_pages_as_the_naive_order_does(crowd, domain, rank, t
         backwards = boosted_posts(Post.query, rank, tail, 4, '<' + bookmark[1:])
         assert [p.id for p in backwards] == naive
         assert [p.id for p in boosted_posts(Post.query, rank, tail, 4, 'garbage')] == naive
+        assert [p.id for p in boosted_posts(Post.query, rank, tail, 4, '>')][:5] == naive[:5]    # no place: the first page
         assert [p.id for p in boosted_posts(Post.query, rank, tail, 4, '>1~2')] == naive
 
 
@@ -379,3 +380,30 @@ def test_the_communities_page_lists_its_own_domains_community_first(app, two_dom
     assert response.status_code == 200
     names = [c.name for c in render.call_args.kwargs['communities'].items if c.name.endswith(('_hell', '_onion'))]
     assert names == (['b_hell', 'a_onion'] if domain == 'hell' else ['a_onion', 'b_hell'])
+
+
+# ------------------------------------------------------------------------ a hot-sort cursor that was not handed out
+
+STAMP = 'dt:2026-10-21 22:57:00.381112'
+
+
+@pytest.mark.parametrize('sort', ['Hot', 'Scaled'])
+@pytest.mark.parametrize('cursor', [
+    '>x~' + STAMP + '~i:5',                  # no rank
+    '>s:high~' + STAMP + '~i:5',             # a rank that is text
+    '>true~' + STAMP + '~i:5',               # a rank that is a flag
+    '>f:6.0~i:7~i:5',                        # a posted_at that is a number
+    '>f:6.0~x~i:5',                          # no posted_at
+    '>f:6.0~' + STAMP + '~f:5.5',            # an id that is not whole
+    '>f:6.0~' + STAMP + '~x',                # no id
+    '>f:6.0~' + STAMP,                       # a value short
+    '<f:6.0~' + STAMP + '~s:five',           # backwards, and the id text
+])
+def test_a_cursor_of_the_wrong_types_is_a_bad_request_not_a_database_error(api, caplog, sort, cursor):
+    if sort == 'Scaled':    # its place has a ranking before posted_at
+        cursor = cursor.replace('~' + STAMP, '~f:5.0~' + STAMP, 1) if STAMP in cursor else cursor
+    with caplog.at_level('ERROR'):
+        with pytest.raises(Exception) as refused:
+            api_titles(api, 'hell', get_post_list2, sort, ignore_sticky=True, page_cursor=cursor)
+    assert type(refused.value) is Exception and str(refused.value) == 'invalid page_cursor'
+    assert not [r for r in caplog.records if 'sqlalchemy' in r.name or 'psycopg2' in r.name]

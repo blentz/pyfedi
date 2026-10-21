@@ -830,6 +830,14 @@ def get_post_interacted_at(user_id, post_ids):
     return {i[0]: i[1] for i in interacted}
 
 
+def ordered_by_boost(posts, rank, tail, limit, bookmark, lead):
+    """`boosted_posts`, a cursor it refuses refused as the keyset page refuses one."""
+    try:
+        return boosted_posts(posts, rank, tail, limit, bookmark, lead)
+    except InvalidPage:
+        raise Exception('invalid page_cursor')
+
+
 def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
     type = data['type_'] if 'type_' in data else "All"
     sort = data['sort'] if 'sort' in data else "Hot"
@@ -1282,7 +1290,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
     if sort == "Hot":
         # A cursor of these two sorts carries the boosted value, which is the storefront's: replayed on another domain
         # it can skip or repeat rows (the filters above still apply, so nothing is shown that was not already)
-        posts = boosted_posts(posts, Post.ranking, (Post.posted_at,), limit, bookmark, sticky_ordered)
+        posts = ordered_by_boost(posts, Post.ranking, (Post.posted_at,), limit, bookmark, sticky_ordered)
     # `desc(a), desc(b)` -- TWO arguments to order_by -- not
     # `desc(a, desc(b))`, which is one call to desc() with two arguments and
     # `TypeError: desc() takes 1 positional argument but 2 were given`. Every
@@ -1323,8 +1331,8 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
     elif sort == "New":
         posts = posts.order_by(desc(Post.posted_at), desc(Post.id))
     elif sort == "Scaled":
-        posts = boosted_posts(posts.filter(Post.ranking_scaled != None), Post.ranking_scaled,
-                              (Post.ranking, Post.posted_at), limit, bookmark, sticky_ordered)
+        posts = ordered_by_boost(posts.filter(Post.ranking_scaled != None), Post.ranking_scaled,
+                                 (Post.ranking, Post.posted_at), limit, bookmark, sticky_ordered)
     elif sort == "Active":
         # `last_active != None` as well as the reply count, which is what
         # get_post_list's Active arm filters on.
