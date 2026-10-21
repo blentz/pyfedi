@@ -64,7 +64,7 @@ from app.shared.tasks.maintenance import (
 )
 from app.utils import move_file_to_s3
 from app.local_names import local_named
-from app.storefront import default_domain, home_storefront, instance_id_of
+from app.storefront import default_domain, home_storefront, hosted_instance_ids, instance_id_of
 from app.discovery.cli import register_discovery_commands
 from app.relays.cli import register_relay_commands
 import app as app_pkg
@@ -1500,10 +1500,11 @@ def register(app):
         with app.app_context():
             processed = 0
             print('Beginning move of post images... this could take a long time. Use tmux.')
+            hosted = {'hosted': tuple(sorted(hosted_instance_ids()))}
             local_post_image_ids = list(db.session.execute(text(
-                'SELECT image_id FROM "post" WHERE deleted is false and image_id is not null and instance_id = 1 ORDER BY id DESC')).scalars())
+                'SELECT image_id FROM "post" WHERE deleted is false and image_id is not null and instance_id IN :hosted ORDER BY id DESC'), hosted).scalars())
             remote_post_image_ids = list(db.session.execute(text(
-                'SELECT image_id FROM "post" WHERE deleted is false and image_id is not null and instance_id != 1 ORDER BY id DESC')).scalars())
+                'SELECT image_id FROM "post" WHERE deleted is false and image_id is not null and instance_id NOT IN :hosted ORDER BY id DESC'), hosted).scalars())
             boto3_session = boto3.session.Session()
             s3 = boto3_session.client(
                 service_name='s3',

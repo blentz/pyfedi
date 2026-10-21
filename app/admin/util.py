@@ -14,7 +14,7 @@ from app.activitypub.signature import default_context, send_post_request
 from app.community.routes import do_subscribe
 from app.community.util import search_for_community
 from app.constants import POST_TYPE_IMAGE
-from app.storefront import home_storefront
+from app.storefront import home_storefront, hosted_instance_ids
 from app.models import User, Community, Instance, CommunityMember, Post, Topic
 from app.utils import gibberish, topic_tree, get_request, store_files_in_s3, ensure_directory_exists, guess_mime_type, get_task_session, patch_db_session, sanitize_svg_bytes, \
     remote_instance_software, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, PAGE_MAX_BYTES, canonical_host
@@ -61,8 +61,9 @@ def unsubscribe_from_everything_then_delete_task(user_id):
                             ],
                             "type": "Delete"
                         }
+                        hosted = hosted_instance_ids()
                         for instance in instances:
-                            if instance.inbox and instance.online() and instance.id != 1:  # instance id 1 is always the current instance
+                            if instance.inbox and instance.online() and instance.id not in hosted:  # nothing goes to a domain of our own
                                 send_post_request(instance.inbox, payload, user.private_key, f"{user.public_url()}#main-key")
 
                     user.delete_dependencies()

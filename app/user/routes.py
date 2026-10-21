@@ -59,7 +59,8 @@ from app.rss_extras import RSSFeed
 import app.api.alpha.views as alpha_views
 from app.utils import user_filters_languages
 from app.local_names import local_clause, local_named, named_by_actor
-from app.storefront import domain_for_host, is_local_host, path_name, storefront_query_cache_key, storefront_url
+from app.storefront import domain_for_host, hosted_instance_ids, is_local_host, path_name, storefront_query_cache_key, \
+    storefront_url
 from app.utils import ap_alternate_url
 from app.utils import canonical_host
 import app as app_pkg
@@ -1134,7 +1135,7 @@ def report_profile(actor):
                             type=REPORT_TYPE_USER,
                             reporter_id=current_user.id,
                             suspect_user_id=user.id, 
-                            source_instance_id=1,
+                            source_instance_id=current_user.instance_id,
                             targets=targets_data)
             db.session.add(report)
 
@@ -1315,8 +1316,9 @@ def send_deletion_requests(user_id):
             "removeData": True,
             "type": "Delete"
         }
+        hosted = hosted_instance_ids()
         for instance in instances:
-            if instance.inbox and instance.online() and instance.id != 1:  # instance id 1 is always the current instance
+            if instance.inbox and instance.online() and instance.id not in hosted:  # nothing goes to a domain of our own
                 send_post_request(instance.inbox, payload, user.private_key, f"{user.public_url()}#main-key")
 
         user.banned = True

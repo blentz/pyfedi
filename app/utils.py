@@ -78,7 +78,7 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     ServerViewMember
 from app.local_names import local_named
 from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, current_storefront, canonicalise_links, canonicalise_text, domain_base_url, \
-    domain_by_id, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
+    domain_by_id, hosted_instance_ids, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
 from collections import Counter
 from flask import has_request_context
 import app as app_pkg
@@ -7252,7 +7252,8 @@ def show_explore():
 
 @cache.memoize(timeout=30)
 def fediverse_domains():
-    return [instance.domain for instance in db.session.query(Instance).filter(Instance.id != 1).all() if instance.online()]
+    return [instance.domain for instance in db.session.query(Instance).filter(Instance.id.not_in(hosted_instance_ids())).all()
+            if instance.online()]
 
 
 def rewrite_href(url: str) -> str:

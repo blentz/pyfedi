@@ -6,6 +6,7 @@ from app.local_only import federated_mentions
 from app.models import Community, Instance, Post, PostReply, User, UserFollower, File, Notification, ChatMessage
 from app.utils import gibberish, instance_banned, get_task_session, patch_db_session
 from app.shared.tasks.pages import can_deliver_to, mentioned_users
+from app.storefront import hosted_instance_ids
 from app.visibility import follower_instances, followers_only_reply_instances, is_open
 
 from flask import current_app
@@ -271,8 +272,9 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
         if user.is_local():
             payload = undo if is_restore else delete
             audience = follower_instances(user) if is_post else followers_only_reply_instances(object)
+            hosted = hosted_instance_ids()
             for instance in audience + [recipient.instance for recipient in recipients]:
-                if instance.id != 1 and instance.domain not in domains_sent_to and can_deliver_to(user, instance):
+                if instance.id not in hosted and instance.domain not in domains_sent_to and can_deliver_to(user, instance):
                     send_post_request(instance.inbox, payload, user.private_key, user.public_url() + '#main-key')
                     domains_sent_to.append(instance.domain)
     elif is_post and followers and not reason:

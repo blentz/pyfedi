@@ -2460,9 +2460,9 @@ def admin_reports():
         reports = reports.filter(or_(Report.reasons.ilike(f"%{search}%"),
                                      Report.description.ilike(f"%{search}%")))
     if local_remote == 'local':
-        reports = reports.filter_by(source_instance_id=1)
+        reports = reports.filter(Report.source_instance_id.in_(hosted_instance_ids()))
     if local_remote == 'remote':
-        reports = reports.filter(Report.source_instance_id != 1)
+        reports = reports.filter(Report.source_instance_id.not_in(hosted_instance_ids()))
     if len(report_types) > 0 and -1 not in report_types:
         reports = reports.filter(Report.type.in_(report_types))
     reports = reports.order_by(desc(Report.created_at)).paginate(page=page, per_page=1000, error_out=False)

@@ -86,7 +86,7 @@ import app.shared.feed as shared_feed
 from app.utils import is_valid_xml_utf8, get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url, joined_server_views
 from app.activitypub.serializers.podcast import uses_podcast_episode
 from app.storefront import (canonicalise_text, default_storefront, delete_memoized_everywhere, domain_authority, domain_base_url,
-                            domain_for_host, instance_id_of, path_name, storefront_host,
+                            domain_for_host, hosted_instance_ids, instance_id_of, path_name, storefront_host,
                             storefront_link, storefront_query_cache_key, storefront_url)
 from app.local_names import local_named, split_local_name
 from app.rss_extras import RSSFeed, PodcastChannel, itunes_image_ok
@@ -1536,7 +1536,7 @@ def community_report(community_id: int):
                         type=REPORT_TYPE_COMMUNITY,
                         reporter_id=current_user.id,
                         suspect_community_id=community.id,
-                        source_instance_id=1,
+                        source_instance_id=current_user.instance_id,
                         targets=targets_data)
         db.session.add(report)
 
@@ -2174,9 +2174,9 @@ def community_moderate(actor):
 
             reports = Report.query.filter_by(status=0, in_community_id=community.id)
             if local_remote == 'local':
-                reports = reports.filter(Report.source_instance_id == 1)
+                reports = reports.filter(Report.source_instance_id.in_(hosted_instance_ids()))
             if local_remote == 'remote':
-                reports = reports.filter(Report.source_instance_id != 1)
+                reports = reports.filter(Report.source_instance_id.not_in(hosted_instance_ids()))
             reports = reports.filter(Report.status >= 0).order_by(desc(Report.created_at)).paginate(page=page,
                                                                                                     per_page=1000,
                                                                                                     error_out=False)

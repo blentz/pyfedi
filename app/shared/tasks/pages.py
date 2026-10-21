@@ -11,6 +11,7 @@ from app.models import Instance, Notification, Poll, PollChoice, Post, User, Use
 from app.local_only import federated_mentions
 from app.mentions import mentioned_users_found_by
 from app.shared.media import media_of
+from app.storefront import hosted_instance_ids
 from app.user.utils import search_for_user
 from app.visibility import can_view, follower_instances, followers_only_addressing, is_open
 from app.utils import user_banned_from_community, gibberish, instance_banned, ap_datetime, get_recipient_language, get_task_session, \
@@ -150,7 +151,8 @@ def send_microblog_note(post, user, community, recipients: list, edit: bool) -> 
                 send_post_request(instance.inbox, group_announce, community.private_key,
                                   community.public_url() + '#main-key')
 
-    targets = [recipient.instance for recipient in recipients if recipient.instance_id != 1]
+    hosted = hosted_instance_ids()
+    targets = [recipient.instance for recipient in recipients if recipient.instance_id not in hosted]
     targets += follower_instances(user) if followers_only else user.following_instances()
     for instance in targets:
         if instance.domain in sent_to or not can_deliver_to(user, instance):
@@ -192,7 +194,8 @@ def send_peertube_video(post, user, community, recipients: list, edit: bool) -> 
             send_post_request(instance.inbox, group_announce, community.private_key, community_key)
         sent_to.add(instance.domain)
 
-    targets = [recipient.instance for recipient in recipients if recipient.instance_id != 1]
+    hosted = hosted_instance_ids()
+    targets = [recipient.instance for recipient in recipients if recipient.instance_id not in hosted]
     for instance in targets + user.following_instances():
         if instance.domain in sent_to or not can_deliver_to(user, instance):
             continue
@@ -474,8 +477,9 @@ def send_post(post_id, edit=False, session=None):
             create['cc'].append(user_details.public_url())
 
     # a followers-only post got no Announce, so a piefed follower host has nothing yet and is sent the Create too
+    hosted = hosted_instance_ids()
     for instance in (follower_instances(user) if followers_only else user.following_instances()):
-        if instance.domain not in domains_sent_to and instance.id != 1 and (followers_only or instance.software != 'piefed'):
+        if instance.domain not in domains_sent_to and instance.id not in hosted and (followers_only or instance.software != 'piefed'):
             if can_deliver_to(user, instance):
                 send_post_request(instance.inbox, create, user.private_key, user.public_url() + '#main-key')
 

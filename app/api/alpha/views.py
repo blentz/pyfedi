@@ -27,7 +27,7 @@ import app.shared.community as shared_community
 # The module, not the names: app.shared.post reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.post)
 import app.shared.post as shared_post
-from app.storefront import current_storefront, public_registration_open, storefront_link, storefront_memo_name, storefront_url
+from app.storefront import current_storefront, hosted_instance_ids, public_registration_open, storefront_link, storefront_memo_name, storefront_url
 from app.visibility import can_view, visible_to_sql
 
 
@@ -548,7 +548,7 @@ def user_view(user: User | int, variant, stub=False, user_id=None, flair_communi
                     "local": True,
                     "deleted": user.deleted,
                     "bot": user.bot,
-                    "instance_id": 1,
+                    "instance_id": user.instance_id,
                     "title": user.display_name(),
                     "avatar": user.avatar.medium_url() if user.avatar_id else None,
                     "banner": user.cover.medium_url() if user.cover_id else None,
@@ -1234,11 +1234,12 @@ def feed_view(feed: Feed | int, variant: int, user_id, subscribed, include_commu
 def private_message_view(cm: ChatMessage, variant, report=None) -> dict:
     creator = user_view(cm.sender_id, variant=1)
     recipient = user_view(cm.recipient_id, variant=1)
-    is_local = (creator['instance_id'] == 1 and recipient['instance_id'] == 1)
+    hosted = hosted_instance_ids()
+    is_local = (creator['instance_id'] in hosted and recipient['instance_id'] in hosted)
     ap_id = cm.ap_id
     if ap_id is None:
         # old CMs will be missing an ap_id
-        if creator['instance_id'] == 1:
+        if creator['instance_id'] in hosted:
             ap_id = f"{current_app.config['SERVER_URL']}/private_message/{cm.id}"
         else:
             # CMs from remote instances can't be re-created so fudge something here to keep validator happy
@@ -1518,7 +1519,7 @@ def site_instance_chooser_view():
 
 @cache.memoize(timeout=600)
 def federated_instances_view():
-    instances = Instance.query.filter(Instance.id != 1, Instance.gone_forever == False).all()
+    instances = Instance.query.filter(Instance.id.not_in(hosted_instance_ids()), Instance.gone_forever == False).all()
     linked = []
     allowed = []
     blocked = []

@@ -252,7 +252,7 @@ def post_private_message_report(auth, data):
                     type=REPORT_TYPE_MESSAGE,
                     reporter_id=user_id,
                     suspect_conversation_id=private_message.conversation_id,
-                    source_instance_id=1,
+                    source_instance_id=db.session.get(User, user_id).instance_id,
                     targets=targets_data)
     db.session.add(report)
 
@@ -311,7 +311,7 @@ def post_private_message_conversation_report(auth, data):
         type=REPORT_TYPE_MESSAGE,
         reporter_id=user.id,
         suspect_conversation_id=conversation_id,
-        source_instance_id=1,
+        source_instance_id=user.instance_id,
         targets=targets_data)
     db.session.add(report)
 

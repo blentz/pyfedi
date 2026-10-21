@@ -867,7 +867,7 @@ class Conversation(db.Model):
     def instances(self):
         retval = []
         for member in self.members:
-            if member.instance.id != 1 and member.instance not in retval:
+            if member.instance.id not in storefront.hosted_instance_ids() and member.instance not in retval:
                 retval.append(member.instance)
         return retval
 
@@ -1609,7 +1609,7 @@ class Community(db.Model):
             {'community_id': self.id, 'type': NOTIF_COMMUNITY}).scalars())
 
 
-    # instances that have users which are members of this community. (excluding the current instance)
+    # instances that have users which are members of this community. (excluding every hosted instance)
     def following_instances(self, include_dormant=False, mod_hosts_only=False) -> List[Instance]:
         instances = db.session.query(Instance).join(User, User.instance_id == Instance.id).join(CommunityMember,
                                                                                                 CommunityMember.user_id == User.id)
@@ -1618,7 +1618,7 @@ class Community(db.Model):
             instances = instances.filter(CommunityMember.is_moderator == True)
         if not include_dormant:
             instances = instances.filter(Instance.dormant == False)
-        instances = instances.filter(Instance.id != 1, Instance.gone_forever == False)
+        instances = instances.filter(Instance.id.not_in(storefront.hosted_instance_ids()), Instance.gone_forever == False)
         return instances.distinct().all()
 
 
@@ -2571,14 +2571,14 @@ class User(UserMixin, db.Model):
 
         return True
 
-    # instances that have users which follow this user. (excluding the current instance). Optionally limit to instances of the specificed software type
+    # instances that have users which follow this user. (excluding every hosted instance). Optionally limit to instances of the specificed software type
     def following_instances(self, include_dormant=False, software: List[str] | None = None) -> List[Instance]:
         instances = db.session.query(Instance).join(User, User.instance_id == Instance.id).\
             join(UserFollower, UserFollower.remote_user_id == User.id).filter(UserFollower.local_user_id == self.id,
                                                                               UserFollower.is_inward == True)
         if not include_dormant:
             instances = instances.filter(Instance.dormant == False)
-        instances = instances.filter(Instance.id != 1, Instance.gone_forever == False)
+        instances = instances.filter(Instance.id.not_in(storefront.hosted_instance_ids()), Instance.gone_forever == False)
         if software:
             if len(software) == 1:
                 instances = instances.filter(Instance.software == software[0])
@@ -5185,7 +5185,7 @@ class Report(db.Model):
     suspect_post_reply_id = db.Column(db.Integer, db.ForeignKey('post_reply.id'))
     suspect_conversation_id = db.Column(db.Integer, db.ForeignKey('conversation.id'))
     in_community_id = db.Column(db.Integer, db.ForeignKey('community.id'))
-    source_instance_id = db.Column(db.Integer, db.ForeignKey('instance.id'))  # the instance of the reporter. mostly used to distinguish between local (instance 1) and remote reports
+    source_instance_id = db.Column(db.Integer, db.ForeignKey('instance.id'))  # the instance of the reporter. mostly used to distinguish between local (a hosted instance) and remote reports
     created_at = db.Column(db.DateTime, default=utcnow)
     updated = db.Column(db.DateTime, default=utcnow)
     targets = db.Column(db.JSON)
@@ -5200,7 +5200,7 @@ class Report(db.Model):
             return types[self.type]
 
     def is_local(self):
-        return self.source_instance_id == 1
+        return self.source_instance_id in storefront.hosted_instance_ids()
 
 
 class NotificationSubscription(db.Model):
@@ -5793,7 +5793,7 @@ class Feed(db.Model):
         instances = instances.filter(FeedMember.feed_id == self.id, FeedMember.is_banned == False)
         if not include_dormant:
             instances = instances.filter(Instance.dormant == False)
-        instances = instances.filter(Instance.id != 1, Instance.gone_forever == False)
+        instances = instances.filter(Instance.id.not_in(storefront.hosted_instance_ids()), Instance.gone_forever == False)
         return instances.all()
 
     def has_followers_from_domain(self, domain: str) -> bool:

@@ -13,7 +13,7 @@
 {% endif %}
 
 {% block schema_org %}
-    {% if user.indexable and user.searchable and user.instance_id == 1 -%}
+    {% if user.indexable and user.searchable and user.instance_id in hosted_instance_ids() and not user_local_only(user) -%}
         {% include "user/_schema_org.html" %}
     {%- endif %}
 {% endblock %}

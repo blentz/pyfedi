@@ -53,7 +53,7 @@ from app.relays import inbound as relay_inbound
 from app.local_only import any_domain_closed, community_local_only, federated_mentions, federating_clause, \
     refused_outbound, user_local_only
 from app.local_names import actor_handle, local_clause, split_local_name
-from app.storefront import current_storefront, domain_for_host, is_served_name
+from app.storefront import current_storefront, domain_for_host, hosted_instance_ids, is_served_name
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
@@ -455,7 +455,7 @@ def lemmy_site():
 @bp.route('/api/v3/federated_instances')
 @cache.cached(timeout=600)
 def lemmy_federated_instances():
-    instances = Instance.query.filter(Instance.id != 1, Instance.gone_forever == False).all()
+    instances = Instance.query.filter(Instance.id.not_in(hosted_instance_ids()), Instance.gone_forever == False).all()
     linked = []
     allowed = []
     blocked = []
@@ -2481,7 +2481,7 @@ def process_delete_request(request_json, store_ap_json, ld_signed=False):
 # Announces incoming activity back out to subscribers
 # if is_flag is set, the report is just sent to any remote mods and the reported user's instance
 def announce_activity_to_followers(community: Community, creator: User, activity, can_batch=False,
-                                   is_flag=False, admin_instance_id=1):
+                                   is_flag=False, admin_instance_id=None):
 
     # avoid announcing activity sent to local users unless it is also in a local community
     if not community.is_local():
@@ -2513,7 +2513,9 @@ def announce_activity_to_followers(community: Community, creator: User, activity
 
     if is_flag:
         instances = community.following_instances(include_dormant=True, mod_hosts_only=True)
-        if admin_instance_id != 1 and not any(i.id == admin_instance_id for i in instances):
+        # the reported author's instance hears of the report too, unless it is one of ours
+        if admin_instance_id is not None and admin_instance_id not in hosted_instance_ids() and \
+                not any(i.id == admin_instance_id for i in instances):
             admin_instance = db.session.get(Instance, admin_instance_id)
             if admin_instance:
                 instances.append(admin_instance)
