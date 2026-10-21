@@ -1,10 +1,10 @@
 from flask_babel import lazy_gettext as _l
 from flask_login import current_user
 from flask_wtf import FlaskForm
-from sqlalchemy import func
 from wtforms import StringField, SubmitField, TextAreaField, BooleanField, SelectField, FileField
 from wtforms.validators import DataRequired, Length, Optional
 
+from app.local_names import local_named
 from app.models import Community, Feed, User
 # The module, not the names: app.shared.feed reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.feed)
@@ -46,13 +46,13 @@ class AddCopyFeedForm(FlaskForm):
             if Feed.query.filter(Feed.name == name).first() is not None:
                 self.url.errors.append(_l('A Feed with this url already exists.'))
                 return False
-            community = Community.query.filter(Community.name == self.url.data.strip().lower(),
-                                               Community.ap_id == None).first()
+            # the feed name is global (checked above); a feed's user and community name is on the owner's home domain
+            domain = current_user.home_domain()
+            community = Community.query.filter(local_named(Community, self.url.data.strip(), domain)).first()
             if community is not None:
                 self.url.errors.append(_l('A community with this url already exists.'))
                 return False
-            user = User.query.filter(func.lower(User.user_name) == func.lower(self.url.data.strip())).filter_by(
-                ap_id=None).first()
+            user = User.query.filter(local_named(User, self.url.data.strip(), domain)).first()
             if user is not None:
                 if user.deleted:
                     self.url.errors.append(_l('This name was used in the past and cannot be reused.'))

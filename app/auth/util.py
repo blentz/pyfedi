@@ -665,7 +665,7 @@ def can_be_a_local_user_name(user_name):
     """
     return bool(USER_NAME_CHARSET_RE.match(user_name)) and \
         user_name not in RESERVED_USER_NAMES and \
-        not user_name_is_taken(user_name)
+        not user_name_is_taken(user_name, default_domain().id)
 
 
 def handle_banned_user(user, ip):

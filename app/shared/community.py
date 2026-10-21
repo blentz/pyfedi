@@ -21,6 +21,7 @@ from app.community.util import community_theme_list, save_banner_file, save_icon
 from app.constants import *
 from app.email import send_email
 from app.local_only import community_local_only, user_local_only
+from app.local_names import local_named
 from app.models import CommunityBlock, CommunityMember, Notification, NotificationSubscription, User, Conversation, \
     Community, Language, File, CommunityFlair, utcnow, CommunityInvitation, CommunityFavorite, \
     CommunityFlairBlock, Topic, Post, _as_url
@@ -303,13 +304,13 @@ def make_community(input, src, auth=None, uploaded_icon_file=None, uploaded_bann
     base_url = domain_base_url(home)
     ap_profile_id = base_url + '/u/' + name.lower()
     existing_user = User.query.filter_by(ap_profile_id=ap_profile_id).first() or \
-        User.query.filter(func.lower(User.user_name) == name.lower(), User.ap_id.is_(None)).first()   # on any domain
+        User.query.filter(local_named(User, name, home)).first()
     if existing_user:
         raise Exception('A User with that name already exists, so it cannot be used for a Community')
     # test community with this name doesn't already exist (it'll be reinforced by the DB, but check first anyway)
     ap_profile_id = base_url + '/c/' + name.lower()
     existing_community = db.session.query(Community).filter_by(ap_profile_id=ap_profile_id).first() or \
-        db.session.query(Community).filter(func.lower(Community.name) == name.lower(), Community.ap_id.is_(None)).first()
+        db.session.query(Community).filter(local_named(Community, name, home)).first()
     if existing_community:
         raise Exception('community with that name already exists')
 

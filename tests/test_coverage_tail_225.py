@@ -33,9 +33,10 @@ import pytest
 from werkzeug.datastructures import MultiDict
 
 from flask import g
+from flask_login import login_user
 
 from app import db
-from app.models import Feed, Site
+from app.models import Feed, Site, User
 from tests.factories import make_community, make_instance, make_site, make_user
 
 HOST = 'test.piefed.local'
@@ -70,7 +71,9 @@ class TestAddCommunityForm:
         data = MultiDict({'community_name': community_name, 'url': url,
                           'description': '', 'posting_warning': '', 'theme': '',
                           'invitations': '0'})
+        creator = User()   # names are checked on the creator's domain: none stamped, so the default
         with app.test_request_context('/', method='POST', data=data):
+            login_user(creator)
             form = AddCommunityForm(formdata=data)
             form.theme.choices = [('', 'None')]
             form.languages.choices = []

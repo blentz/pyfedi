@@ -7,8 +7,7 @@ bypass it: `User.user_name ==`, `func.lower(User.user_name)`, `Community.name ==
 `filter_by(` that names `user_name=` or `name=` together with `ap_id=None`.
 
 A site that legitimately looks up a name on any domain is in ALLOWED with a one-line reason: a remote-row lookup, a
-lookup keyed by `ap_profile_id`, one scoped by `ap_domain`, or a creation check that Task 5 moves onto
-`user_name_is_taken`. Never add a bare-name local lookup here to make the sweep pass; move it onto `local_named`.
+lookup keyed by `ap_profile_id`, or one scoped by `ap_domain`. Never add a bare-name local lookup here to make the sweep pass; move it onto `local_named`.
 
 Feed names stay unique across the site (plan C1 ruling), so a `filter_by` on a Feed query is not a finding.
 """
@@ -16,17 +15,8 @@ import ast
 
 from tests.app_source import APP, app_trees
 
-CREATION = 'creation check, Task 5'
-
 ALLOWED = {
     # (path under the repo, enclosing function): reason
-    ('app/utils.py', 'user_name_is_taken'): CREATION,
-    ('app/auth/forms.py', 'RegistrationForm.validate_user_name'): CREATION,
-    ('app/admin/forms.py', 'AddUserForm.validate_user_name'): CREATION,
-    ('app/admin/forms.py', 'MoveCommunityForm.validate_new_url'): CREATION,
-    ('app/community/forms.py', 'AddCommunityForm.validate'): CREATION,
-    ('app/feed/forms.py', 'AddCopyFeedForm.validate'): CREATION,
-    ('app/shared/community.py', 'make_community'): CREATION,
     ('app/api/alpha/utils/post.py', 'get_post_list'): 'scoped by ap_domain: a community named with its instance',
     ('app/api/alpha/utils/post.py', 'get_post_list2'): 'scoped by ap_domain: a community named with its instance',
     ('app/api/alpha/views.py', 'community_view'): 'scoped by ap_domain: a community named with its instance',
@@ -111,7 +101,7 @@ def test_no_bare_name_lookup_is_left_unscoped():
 
 
 def test_every_allowed_site_is_still_there():
-    """An entry outlives its site only by mistake: Task 5 removes the creation checks' entries as it moves them."""
+    """An entry outlives its site only by mistake: a site moved onto `local_named` takes its entry out."""
     present = {(path, scope) for path, scope, _line in name_lookups()}
     assert sorted(set(ALLOWED) - present) == []
 

@@ -242,6 +242,7 @@ class TestTheUserNameCharset:
 
         field = _Field(value)
         form = form_cls.__new__(form_cls)
+        form.site_domain = _Field(None)   # AddUserForm checks the name on the domain its picker names (none: default)
         try:
             form_cls.validate_user_name(form, field)
             return True, field.data
@@ -366,7 +367,13 @@ class TestTheCommunityUrlCharset:
         data = MultiDict({'community_name': 'A Name', 'url': url,
                           'description': '', 'posting_warning': '',
                           'theme': '', 'invitations': '0'})
+        from flask_login import login_user
+
+        from app.models import User
+
+        creator = User()   # the name is checked on the creator's domain: none stamped, so the default
         with app.test_request_context('/', method='POST', data=data):
+            login_user(creator)
             form = AddCommunityForm(formdata=data)
             form.theme.choices = [('', 'None')]
             form.languages.choices = []

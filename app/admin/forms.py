@@ -16,7 +16,8 @@ from app.constants import DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE
     DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE
 from app.models import Community, User, CmsPage, Instance, SiteDomain
 from app.utils import get_setting, REDIRECT_POLICY_ALL_REFERRERS, REDIRECT_POLICY_FEDERATED_SERVERS, REDIRECT_POLICY_SAME_ORIGIN, REDIRECT_POLICY_TRUSTED_SERVERS, validate_user_name_charset
-from app.storefront import default_domain, domain_rows
+from app.storefront import default_domain, domain_rows, domain_by_id
+from app.local_names import local_named
 from app.onion_guard import MAX_POW_DIFFICULTY
 
 
@@ -403,13 +404,15 @@ class AddUserForm(FlaskForm):
         # downstream, and app/utils.py's apply_feed_url_rules interpolates
         # user_name into a regex. See validate_user_name_charset.
         validate_user_name_charset(user_name)
-        user = User.query.filter(func.lower(User.user_name) == func.lower(user_name.data.strip())).filter_by(ap_id=None).first()
+        # the account is created on the domain the picker names; an empty picker is the default domain
+        domain = domain_by_id(self.site_domain.data or None)
+        user = User.query.filter(local_named(User, user_name.data.strip(), domain)).first()
         if user is not None:
             if user.deleted:
                 raise ValidationError(_l('This username was used in the past and cannot be reused.'))
             else:
                 raise ValidationError(_l('An account with this user name already exists.'))
-        community = Community.query.filter(func.lower(Community.name) == func.lower(user_name.data.strip())).first()
+        community = Community.query.filter(local_named(Community, user_name.data.strip(), domain)).first()
         if community is not None:
             raise ValidationError(_l('A community with this name exists so it cannot be used for a user.'))
 
@@ -487,7 +490,7 @@ class MoveCommunityForm(FlaskForm):
         # `ix_community_ap_profile_id`, a 500. The check has to run the same
         # transform the route does.
         name = slugify(new_url.data, separator='_').lower()
-        existing_community = Community.query.filter(Community.ap_id == None, Community.name == name).first()
+        existing_community = Community.query.filter(local_named(Community, name, default_domain())).first()
         if existing_community:
             raise ValidationError(_l('A local community at that url already exists'))
 
