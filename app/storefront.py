@@ -21,7 +21,9 @@ from bs4.formatter import HTMLFormatter
 from flask import Response, current_app, g, has_app_context, has_request_context, request
 from flask.globals import request_ctx
 from flask_babel import _
-from sqlalchemy import case, or_
+from sqlalchemy import case, desc, or_
+from sqlakeyset import get_page
+from sqlakeyset.results import unserialize_bookmark
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import cache, db, shaped_memo_name
@@ -160,6 +162,7 @@ def hosted_instance_ids() -> frozenset[int]:
 # tenfold score (owner ruling, plan C2 task 7).
 OWN_DOMAIN_BOOST = 1.0
 SISTER_DOMAIN_BOOST = 0.5
+KEYSET_SLACK = 1e-9   # a rounding margin on a keyset cursor translated by a tier's boost
 
 
 def sister_instance_ids() -> frozenset[int]:
@@ -167,17 +170,110 @@ def sister_instance_ids() -> frozenset[int]:
     return hosted_instance_ids() - {current_instance_id()}
 
 
-def domain_boost_sql(alias: str) -> tuple[str, dict]:
+def domain_tiers() -> list[tuple[float, tuple[int, ...] | None]]:
+    """The boost tiers of a hot feed as (boost, instance rows): the remote rows at 0 (instance rows None: every row
+    but a hosted one), then the current domain's own at OWN_DOMAIN_BOOST, then the sister domains' at
+    SISTER_DOMAIN_BOOST when there are any. Every row is in exactly one, which is how `boosted_top_sql` and
+    `tiered_post_ids` bound the rows they read; the boost a row is ranked by is `domain_boost_sql`'s."""
+    tiers = [(0.0, None), (OWN_DOMAIN_BOOST, (current_instance_id(),))]
+    if sisters := sister_instance_ids():
+        tiers.append((SISTER_DOMAIN_BOOST, tuple(sorted(sisters))))
+    return tiers
+
+
+def domain_boost_sql(alias: str, column: str = 'instance_id') -> tuple[str, dict]:
     """A raw SQL number for rows of the table aliased `alias`: OWN_DOMAIN_BOOST for those on the current domain's
     instance row, SISTER_DOMAIN_BOOST for a sister domain's, else 0 (a NULL instance too). With no sisters the
     sister arm is left out, as an empty `IN ()` is not valid SQL. Returns the expression and the parameters to bind;
     `domain_boost_expr` is its twin for a SQLAlchemy query."""
-    sql = f'CASE WHEN {alias}.instance_id = :own_instance THEN {OWN_DOMAIN_BOOST} '
+    sql = f'CASE WHEN {alias}.{column} = :own_instance THEN {OWN_DOMAIN_BOOST} '
     params = {'own_instance': current_instance_id()}
     if sisters := sister_instance_ids():
-        sql += f'WHEN {alias}.instance_id IN :sister_instances THEN {SISTER_DOMAIN_BOOST} '
+        sql += f'WHEN {alias}.{column} IN :sister_instances THEN {SISTER_DOMAIN_BOOST} '
         params['sister_instances'] = tuple(sorted(sisters))
     return sql + 'ELSE 0 END', params
+
+
+def boosted_top_sql(columns: str, outer_columns: str, from_where: str, rank: str, tail: tuple[str, ...], limit: int,
+                    lead: tuple[str, ...] = ()) -> tuple[str, dict]:
+    """The first `limit` posts of `from_where` (which ends in its WHERE clause, over `post` as p) in the order
+    `lead DESC, p.<rank> + boost DESC, tail DESC`, the boost being `domain_boost_sql`'s. Returns the SQL and the
+    parameters to bind (the caller binds its own as well). `columns` is what each row selects and `outer_columns` what
+    the answer returns of them.
+
+    Ordering the whole table by `ranking + CASE ...` scores every row; ordering it by `ranking` walks
+    ix_post_feed_hot and stops. So this reads each tier's first `limit` rows by plain `ranking`, in the order the index
+    holds them, and sorts only that union (at most three times `limit`) by the boosted value. It returns what the
+    naive boosted order would. A boost is never negative, so a post's boosted value is at least its ranking. A post
+    that is outside the first `limit` of its tier by ranking has `limit` posts of that tier above it, ranked above it
+    boosted as well, since the boost is a constant within a tier: so it is outside the first `limit` of the union, and
+    so of everything. Each row is in one tier (the first arm is the remote rows), so the first `limit` of the union
+    by the boosted value is the first `limit` of all rows by it.
+    Each arm keeps the WHERE clause, so `deleted = false AND status > 0` still selects the partial index."""
+    boost, params = domain_boost_sql('t', 'tier_instance_id')
+    params['tier_limit'] = limit
+    params['hosted_instances'] = tuple(sorted(hosted_instance_ids()))
+    ordered = tuple(dict.fromkeys((*lead, rank, *tail)))
+    select = f'SELECT {columns}, p.instance_id AS tier_instance_id, ' + ', '.join(f'p.{c} AS tier_{c}' for c in ordered)
+    order = ', '.join(f'p.{c} DESC' for c in (*lead, rank, *tail))
+    conditions = [' AND (p.instance_id IS NULL OR p.instance_id NOT IN :hosted_instances)',
+                  ' AND p.instance_id = :own_instance']
+    if 'sister_instances' in params:
+        conditions.append(' AND p.instance_id IN :sister_instances')
+    arms = [f'({select} {from_where}{condition} ORDER BY {order} LIMIT :tier_limit)' for condition in conditions]
+    outer_order = ', '.join([*(f't.tier_{c} DESC' for c in lead), f't.tier_{rank} + {boost} DESC',
+                             *(f't.tier_{c} DESC' for c in tail)])
+    sql = f'SELECT {outer_columns} FROM ({" UNION ".join(arms)}) AS t ORDER BY {outer_order} LIMIT :tier_limit'
+    return sql, params
+
+
+def tiered_post_ids(posts, rank, tail: tuple, limit: int, place: tuple | None = None, rank_at: int = 0) -> list[int]:
+    """The ids `boosted_top_sql` selects, for a ORM query: the first `limit` rows of `posts` (filtered, and ordered by
+    any sticky columns already) in the order `rank + boost, tail, id`, found tier by tier by plain `rank`. `place` is a
+    keyset cursor's forward place (sqlakeyset's, the value of every order column of the page's query) and `rank_at`
+    the index in it of the boosted value: each tier reads on from the cursor translated by its own boost, widened a
+    hair so that a float's rounding cannot drop a row; the caller's own keyset page does the exact cut. The argument
+    for why this is the naive order's first `limit` is `boosted_top_sql`'s."""
+    ids = set()
+    for boost, instance_ids in domain_tiers():
+        arm = posts.filter(or_(models.Post.instance_id.is_(None), models.Post.instance_id.not_in(hosted_instance_ids()))) \
+            if instance_ids is None else posts.filter(models.Post.instance_id.in_(instance_ids))
+        arm = arm.order_by(desc(rank), *(desc(c) for c in tail), desc(models.Post.id))
+        if place is None:
+            rows = arm.limit(limit).all()
+        else:
+            moved = list(place)
+            moved[rank_at] = moved[rank_at] - boost + KEYSET_SLACK
+            rows = get_page(arm, per_page=limit + 1, page=(tuple(moved), False))
+        ids.update(row.id for row in rows)
+    return list(ids)
+
+
+def boosted_order_by(rank, tail: tuple, by_id: bool = True) -> list:
+    """The ORDER BY of a hot or scaled feed on a SQLAlchemy query: `rank + boost`, then `tail`, then the id (which a
+    keyset page needs, and a page of ids does not)."""
+    return [desc(rank + domain_boost_expr(models.Post.instance_id)), *(desc(c) for c in tail),
+            *([desc(models.Post.id)] if by_id else [])]
+
+
+def boosted_posts(posts, rank, tail: tuple, limit: int, bookmark=None, rank_at: int = 0):
+    """`posts` (a Post query, filtered and ordered by any sticky columns already) in the order of `boosted_order_by`,
+    and cut to the rows `tiered_post_ids` finds: `limit` is how many rows the caller will show, one more than which
+    is read to tell whether there is a next page. `bookmark` is the keyset cursor the caller will page by; a bookmark
+    that pages backwards is not cut, and a malformed one is left to the caller's own keyset page to refuse."""
+    place = None
+    if bookmark:
+        try:
+            place, backwards = unserialize_bookmark(bookmark)
+        except (ValueError, TypeError):
+            return posts.order_by(*boosted_order_by(rank, tail))
+        if backwards:
+            return posts.order_by(*boosted_order_by(rank, tail))
+    try:
+        ids = tiered_post_ids(posts, rank, tail, limit + 1, place, rank_at)
+    except (IndexError, TypeError, ValueError):   # a cursor this server never handed out
+        return posts.order_by(*boosted_order_by(rank, tail))
+    return posts.filter(models.Post.id.in_(ids)).order_by(*boosted_order_by(rank, tail))
 
 
 def domain_boost_expr(column):

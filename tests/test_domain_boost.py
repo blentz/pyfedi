@@ -13,14 +13,15 @@ from unittest.mock import patch
 import pytest
 from flask import g
 from flask_login import login_user
+from sqlakeyset import get_page
 from sqlalchemy import text
 
 from app import db
 from app.api.alpha.utils.community import get_community_list
 from app.api.alpha.utils.post import get_post_list, get_post_list2
 from app.models import Community, Post, Site, utcnow
-from app.storefront import (OWN_DOMAIN_BOOST, SISTER_DOMAIN_BOOST, domain_boost_expr, domain_boost_sql,
-                            sister_instance_ids)
+from app.storefront import (OWN_DOMAIN_BOOST, SISTER_DOMAIN_BOOST, boosted_order_by, boosted_posts, boosted_top_sql,
+                            domain_boost_expr, domain_boost_sql, sister_instance_ids)
 from app.utils import get_deduped_post_ids, post_ids_to_models
 from tests.factories import make_community, make_instance, make_post, make_user
 from tests.two_domains import ONION, request_on, two_domains  # noqa: F401
@@ -32,7 +33,7 @@ BASE = {'hell': 'https://test.piefed.local', 'onion': f'http://{ONION}'}
 
 def seed(community, author, title, **fields):
     now = utcnow()
-    post = make_post(community, author, f'https://{title}.example/p')
+    post = make_post(community, author, f'https://{title}.example/{uuid.uuid4().hex}')
     post.title = title
     for name, value in dict(dict(reply_count=1, score=0, up_votes=0, down_votes=0, posted_at=now, last_active=now,
                                  ranking=0.0, ranking_scaled=0.0), **fields).items():
@@ -72,7 +73,7 @@ def world(app, two_domains):  # noqa: F811
         return [p.id for p in Post.query.all()]
 
     return SimpleNamespace(put=put, ids=ids, models=models, hell=hell, onion=onion, community=community,
-                           authors=authors, viewers=viewers, on=on)
+                           authors=authors, viewers=viewers, on=on, app=app)
 
 
 def titles(ids):
@@ -139,7 +140,6 @@ def api_titles(world, domain, function, sort, **data):
 
 @pytest.fixture
 def api(world, app):
-    world.app = app
     world.put('hell', ranking=5.0, ranking_scaled=5.0)
     world.put('onion', ranking=4.8, ranking_scaled=4.8)
     return world
@@ -232,3 +232,92 @@ def test_outside_a_request_row_one_is_own_and_the_boost_is_exactly_one_unit(app,
     assert OWN_DOMAIN_BOOST > SISTER_DOMAIN_BOOST > 0
     assert sister_instance_ids() == frozenset()
     assert 'sister_instances' not in params and ' IN ' not in boost
+
+
+# ------------------------------------------------------------------------ the merge of tiers
+
+@pytest.fixture
+def crowd(world):
+    """More posts than a page, remote, own and sister alike, with rankings close enough that the boosts interleave
+    the tiers, and no two posts equal on any sort key."""
+    now = utcnow()
+    for index in range(18):
+        who = ('remote', 'hell', 'onion')[index % 3]
+        ranking = 5.0 + ((index * 7) % 18) * 0.1
+        world.put(who, ranking=ranking, ranking_scaled=ranking + 0.05 * (index % 4), sticky=index % 5 == 0,
+                  posted_at=now - timedelta(minutes=index)).title = f'{who}{index}'
+    db.session.commit()
+    return world
+
+
+def run(sql, params):
+    return [row[0] for row in db.session.execute(text(sql), params).all()]
+
+
+@pytest.mark.parametrize('domain', ['hell', 'onion'])
+@pytest.mark.parametrize('rank, tail, lead', [
+    ('ranking', ('posted_at',), ()),
+    ('ranking_scaled', ('ranking', 'posted_at'), ()),
+    ('ranking', ('posted_at',), ('sticky',)),
+])
+def test_the_merge_of_tiers_is_the_naive_boosted_order_in_sql(crowd, domain, rank, tail, lead):
+    with request_on(crowd.app, crowd.on[domain]):
+        from_where = 'FROM "post" AS p WHERE p.deleted = false AND p.status > 0 '
+        sql, params = boosted_top_sql('p.id', 't.id', from_where, rank, tail, 7, lead)
+        boost, boost_params = domain_boost_sql('p')
+        order = ', '.join([*(f'p.{c} DESC' for c in lead), f'p.{rank} + {boost} DESC', *(f'p.{c} DESC' for c in tail)])
+        naive = run(f'SELECT p.id {from_where} ORDER BY {order} LIMIT 7', boost_params)
+        assert run(sql, params) == naive
+        assert len(naive) == 7 and len({titles([i])[0].rstrip('0123456789') for i in naive}) > 1
+
+
+def test_the_sql_reads_each_tier_by_the_partial_index(crowd):
+    with request_on(crowd.app, crowd.on['onion']):
+        sql, params = boosted_top_sql('p.id', 't.id', 'FROM "post" AS p WHERE p.deleted = false AND p.status > 0 '
+                                      'AND p.instance_sticky is false ', 'ranking', ('posted_at',), 5)
+        db.session.execute(text('SET LOCAL enable_seqscan = off; SET LOCAL enable_sort = off'))
+        plan = '\n'.join(run(f'EXPLAIN {sql}', params))
+    assert plan.count('Index Scan') == 3 and 'Seq Scan' not in plan, plan
+
+
+@pytest.mark.parametrize('domain', ['hell', 'onion'])
+@pytest.mark.parametrize('rank, tail', [('ranking', ('posted_at',)), ('ranking_scaled', ('ranking', 'posted_at'))])
+def test_the_merge_of_tiers_pages_as_the_naive_order_does(crowd, domain, rank, tail):
+    """Every page of a keyset walk, 4 posts at a time, and an offset read of the first 6, against the naive order."""
+    rank, tail = getattr(Post, rank), tuple(getattr(Post, c) for c in tail)
+    with request_on(crowd.app, crowd.on[domain]):
+        naive = [p.id for p in Post.query.order_by(*boosted_order_by(rank, tail)).all()]
+        walked, bookmark = [], None
+        while True:
+            page = get_page(boosted_posts(Post.query, rank, tail, 4, bookmark), per_page=4, page=bookmark)
+            walked += [p.id for p in page]
+            if not page.paging.has_next:
+                break
+            bookmark = page.paging.bookmark_next
+        assert walked == naive
+        first = boosted_posts(Post.query, rank, tail, 6)
+        assert [p.id for p in first.limit(6)] == naive[:6]
+        backwards = boosted_posts(Post.query, rank, tail, 4, '<' + bookmark[1:])
+        assert [p.id for p in backwards] == naive
+        assert [p.id for p in boosted_posts(Post.query, rank, tail, 4, 'garbage')] == naive
+        assert [p.id for p in boosted_posts(Post.query, rank, tail, 4, '>1~2')] == naive
+
+
+# ------------------------------------------------------------------------ the web community list
+
+def test_the_community_list_puts_its_own_domains_community_first(app, two_domains):  # noqa: F811
+    from app.community.server_view_list import paginate_union
+    hell, onion = two_domains.domains
+    stamp = utcnow()
+    for name, domain in (('a_onion', onion), ('b_hell', hell)):
+        community = two_domains.local_community(name, domain)
+        community.last_active, community.title = stamp, 'same'
+    db.session.commit()
+
+    def listing(domain):
+        with request_on(app, domain):
+            page = paginate_union(Community.query, None, 'last_active desc', 1, 50, None)
+            return [c.name for c in page.items]
+
+    assert listing(hell) == ['b_hell', 'a_onion']
+    assert listing(onion) == ['a_onion', 'b_hell']
