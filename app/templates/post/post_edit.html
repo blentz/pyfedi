@@ -180,7 +180,7 @@
                 <p class="small field_hint">{{ _('Provide a URL ending with .mp4, .webm or .mov.') }}</p>
                 {% if not post and can_upload_media(current_user, community) -%}
                 {{ render_field(form.image_file) }}
-                <p class="small field_hint">{{ _('Either provide an url OR upload a file but not both. Use common codecs like h.264 and mp3.') }}</p>
+                <p class="small field_hint">{{ _('Either provide an url OR upload a file but not both. The video must use the H.264, VP9 or AV1 codec. The audio is not checked.') }}</p>
                 {% endif -%}
             {% endif %}
             {{ render_field(form.body) }}
