@@ -101,10 +101,13 @@ def without_local_only(query, model, visible: bool | None = None):
     return query if visible else query.filter(model.local_only.is_(False))
 
 
-def without_local_only_actors(query, model):
+def without_local_only_actors(query, model, visible: bool | None = None):
     """`query` over `model` (User or Community) without the local-only accounts or communities, unless the reader may
-    see them. A logged-out visitor never sees one, as with local-only posts (owner ruling 2026-10-21)."""
-    return query if local_only_visible() else query.filter(federating_clause(model))
+    see them. A logged-out visitor never sees one, as with local-only posts (owner ruling 2026-10-21). `visible` is that
+    answer when the caller has it (an API call's token user), else local_only_visible()."""
+    if visible is None:
+        visible = local_only_visible()
+    return query if visible else query.filter(federating_clause(model))
 
 
 def _closed_domains() -> tuple[list[int], bool]:
