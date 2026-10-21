@@ -321,3 +321,61 @@ def test_the_community_list_puts_its_own_domains_community_first(app, two_domain
 
     assert listing(hell) == ['b_hell', 'a_onion']
     assert listing(onion) == ['a_onion', 'b_hell']
+
+
+# ------------------------------------------------------------------------ ties at a page boundary
+
+@pytest.fixture
+def tied(world):
+    """Posts equal on every sort key but the id: five remote ones, then (for `mixed`) hell's and the onion's whose
+    boosted ranking equals the remote ones', so a tie runs across the tiers too."""
+    stamp = utcnow().replace(microsecond=0) - timedelta(minutes=5)
+    for _ in range(5):
+        world.put('remote', ranking=6.0, ranking_scaled=6.0, posted_at=stamp)
+    world.put('remote', ranking=4.0, ranking_scaled=4.0, posted_at=stamp)
+    return world, stamp
+
+
+@pytest.mark.parametrize('mixed', [False, True])
+@pytest.mark.parametrize('domain', ['hell', 'onion'])
+@pytest.mark.parametrize('rank, tail', [('ranking', ('posted_at',)), ('ranking_scaled', ('ranking', 'posted_at'))])
+def test_a_tie_on_every_key_does_not_cost_a_keyset_page_its_rows(tied, mixed, domain, rank, tail):
+    world, stamp = tied
+    if mixed:
+        for who in ('hell', 'onion'):
+            for _ in range(3):
+                world.put(who, ranking=5.0 if who == 'hell' else 5.5, ranking_scaled=5.0 if who == 'hell' else 5.5,
+                          posted_at=stamp)
+    rank, tail = getattr(Post, rank), tuple(getattr(Post, c) for c in tail)
+    with request_on(world.app, world.on[domain]):
+        naive = [p.id for p in Post.query.order_by(*boosted_order_by(rank, tail)).all()]
+        walked, bookmark = [], None
+        while True:
+            page = get_page(boosted_posts(Post.query, rank, tail, 2, bookmark), per_page=2, page=bookmark)
+            walked += [p.id for p in page]
+            if not page.paging.has_next:
+                break
+            bookmark = page.paging.bookmark_next
+    assert walked == naive and len(naive) == 6 + 6 * mixed
+
+
+# ------------------------------------------------------------------------ the route
+
+@pytest.mark.parametrize('domain', ['hell', 'onion'])
+def test_the_communities_page_lists_its_own_domains_community_first(app, two_domains, domain):  # noqa: F811
+    hell, onion = two_domains.domains
+    viewer = two_domains.local_user('reader', hell if domain == 'hell' else onion)
+    stamp = utcnow()
+    for name, home in (('a_onion', onion), ('b_hell', hell)):
+        community = two_domains.local_community(name, home)
+        community.last_active, community.title = stamp, 'same'
+    db.session.get(Site, 1).private_instance = False
+    db.session.commit()
+    with patch('app.main.routes.render_template', return_value='rendered') as render:
+        client = app.test_client()
+        with client.session_transaction(base_url=BASE[domain]) as session:
+            session['_user_id'], session['_fresh'] = str(viewer.id), True
+        response = client.get('/communities?sort_by=last_active%20desc', base_url=BASE[domain])
+    assert response.status_code == 200
+    names = [c.name for c in render.call_args.kwargs['communities'].items if c.name.endswith(('_hell', '_onion'))]
+    assert names == (['b_hell', 'a_onion'] if domain == 'hell' else ['a_onion', 'b_hell'])
