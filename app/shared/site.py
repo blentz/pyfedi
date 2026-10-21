@@ -9,9 +9,11 @@ from app.utils import authorise_api_user, blocked_or_banned_instances, blocked_i
 
 
 def block_remote_instance(instance_id, src, auth=None):
-    user_id = authorise_api_user(auth) if src == SRC_API else current_user.id
+    user = authorise_api_user(auth, 'model') if src == SRC_API else current_user
+    user_id = user.id
 
-    if instance_id == 1:
+    # The local instance is the viewer's home domain's: a sister domain's row is blockable like any other
+    if instance_id == user.instance_id:
         msg = 'You cannot block the local instance.'
         if src == SRC_API:
             raise Exception(msg)

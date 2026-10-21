@@ -201,7 +201,7 @@
                 </a>
             </li>
         {% endif -%}
-        {% if post.instance_id and post.instance_id != 1 -%}
+        {% if post.instance_id and post.instance_id != current_user.instance_id -%}
             <li>
                 <a class="dropdown-item no-underline" role="button" style="white-space: normal" aria-label="{{ _("Hide every post from author's instance: %(name)s", name=post.instance.domain) }}"
                         hx-post="/post/{{ post.id }}/block_instance" hx-trigger="click throttle:1s"tabindex="0">

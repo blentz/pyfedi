@@ -322,7 +322,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'show_people': 1,
         'user_follow_request_accept': 2,
         'user_follow_request_reject': 2,
-        'user_settings_block_instance': 1,
     },
     'app/user/subscription.py': {
         'choose_plan': 3,

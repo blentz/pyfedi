@@ -18,7 +18,7 @@ AST) and in the templates (by pattern):
 - in a template, `instance_id == 1` and `instance_id != 1`.
 
 A site where row 1 is meant is in ALLOWED with the count of its findings and a one-line reason: `row 1 is the default
-domain's: <why>`, or `blocking site, Task 5` for a site a later task moves (that task takes its entry out). Never add
+domain's: <why>`. Never add
 a "hosted here" site to make the sweep pass; test it against `hosted_instance_ids()`.
 """
 import ast
@@ -26,17 +26,8 @@ import re
 
 from tests.app_source import APP, app_trees
 
-TASK_5 = 'blocking site, Task 5'
-
 ALLOWED = {
     # (path under the repo, enclosing function): (findings in it, reason)
-    ('app/shared/site.py', 'block_remote_instance'): (1, TASK_5),
-    ('app/user/routes.py', 'user_block_instance'): (1, TASK_5),
-    ('app/user/routes.py', 'user_settings_block_instance'): (1, TASK_5),
-    ('app/instance/routes.py', 'instance_block'): (1, TASK_5),
-    ('app/chat/routes.py', 'block_instance'): (1, TASK_5),
-    ('app/post/routes.py', 'post_block_instance'): (1, TASK_5),
-    ('app/post/routes.py', 'post_reply_block_instance'): (1, TASK_5),
     ('app/post/routes.py', 'comment_emoji_list'): (1, "row 1 is the default domain's: emoji are site-wide, and the "
                                                       "site's own are stored on row 1, so they sort first"),
     ('app/admin/routes.py', 'admin_emoji_add'): (1, "row 1 is the default domain's: emoji are site-wide, and an "
@@ -67,8 +58,6 @@ ALLOWED = {
 
 TEMPLATES_ALLOWED = {
     # (path under the repo, line): reason
-    ('app/templates/post/post_options.html', 204): TASK_5,
-    ('app/templates/post/post_reply_options.html', 126): TASK_5,
 }
 
 _SQL_COMPARED = r'\s*(?:=|==|!=|<>)\s*1\b'
@@ -250,7 +239,7 @@ def test_every_allowed_site_is_still_there():
 def test_every_allowed_site_has_a_reason():
     reasons = [reason for _count, reason in ALLOWED.values()] + list(TEMPLATES_ALLOWED.values())
     assert [reason for reason in reasons
-            if reason != TASK_5 and not reason.startswith("row 1 is the default domain's: ")] == []
+            if not reason.startswith("row 1 is the default domain's: ")] == []
 
 
 def test_the_sweep_sees_each_spelling():
