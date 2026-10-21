@@ -11,7 +11,7 @@ from app import db
 from app.models import Instance, ModLog, Site
 from app.storefront import hidden_instance_ids, instance_visible_here
 from tests.conftest import forget_login
-from tests.factories import grant_permission, make_instance, make_post
+from tests.factories import bearer, grant_permission, make_instance, make_post
 from tests.test_per_domain_ap_routes import SHOP, onion_proxy, twins  # noqa: F401
 from tests.test_per_domain_html_routes import BASE, Visitor
 from tests.two_domains import HELL, ONION, default_request, onion_request, two_domains  # noqa: F401
@@ -19,7 +19,7 @@ from tests.two_domains import HELL, ONION, default_request, onion_request, two_d
 pytestmark = pytest.mark.usefixtures('site')
 
 PEER = 'peer.example'
-BASE = {**BASE, SHOP: f'https://{SHOP}'}
+HOSTS = {**BASE, SHOP: f'https://{SHOP}'}
 
 
 @pytest.fixture
@@ -33,7 +33,8 @@ def scene(app, twins):
     peer = make_instance(PEER, software='piefed')
     db.session.get(Site, 1).private_instance = False   # anonymous visitors reach the pages
     db.session.commit()
-    make_post(onion_art, onion_bob, f'http://{ONION}/post/1', title='ONIONPOST')
+    make_post(onion_art, onion_bob, f'http://{ONION}/post/1', title='ONIONPOST').local_only = True   # as creation stamps it
+    db.session.commit()
     return SimpleNamespace(hell_bob=hell_bob, onion_bob=onion_bob, onion_art=onion_art, onion_row=onion_row,
                            shop_row=db.session.get(Instance, shop_bob.instance_id), peer=peer)
 
@@ -42,7 +43,7 @@ def get(app, path, host=HELL, user=None):
     forget_login()
     if user is not None:
         return Visitor(app, user, host).get(path)
-    return app.test_client().get(path, base_url=BASE[host])
+    return app.test_client().get(path, base_url=HOSTS[host])
 
 
 # --- the predicate -----------------------------------------------------------------------------------------------
@@ -83,6 +84,20 @@ def test_a_federating_sister_is_listed_but_not_as_federated(app, scene):
     federated = get(app, '/instances?filters=federated').get_data(as_text=True)
     assert PEER in federated
     assert SHOP not in federated and ONION not in federated
+
+
+@pytest.mark.parametrize('signed_in', [False, True])
+def test_hells_federated_instances_apis_name_no_onion(app, scene, monkeypatch, signed_in):
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    lemmy = get(app, '/api/v3/federated_instances', user=scene.hell_bob if signed_in else None)
+    forget_login()
+    headers = {'Authorization': bearer(scene.hell_bob)} if signed_in else {}
+    alpha = app.test_client().get('/api/alpha/federated_instances', base_url=HOSTS[HELL], headers=headers)
+    for response in (lemmy, alpha):
+        assert response.status_code == 200
+        body = response.get_data(as_text=True)
+        assert PEER in body
+        assert ONION not in body
 
 
 # --- /instance/<domain> -------------------------------------------------------------------------------------------
