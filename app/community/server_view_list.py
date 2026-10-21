@@ -7,13 +7,13 @@ Spec: docs/superpowers/specs/2026-10-08-server-views-in-community-list-design.md
 from datetime import timedelta
 
 from flask import current_app
-from sqlalchemy import Integer, cast, func, literal, not_, null, select, union_all
+from sqlalchemy import Float, Integer, cast, func, literal, not_, null, select, union_all
 from sqlalchemy.orm import joinedload
 
 from app import db
 from app.community.live import LIVE_COMMUNITY
 from app.models import BannedInstances, Community, Instance, Post
-from app.storefront import hosted_instance_ids
+from app.storefront import domain_boost_expr, hosted_instance_ids
 from app.utils import instance_banned, utcnow
 
 VIEW_PREFIX = f'{LIVE_COMMUNITY}@'
@@ -82,7 +82,8 @@ def community_select(community_query):
         Community.title.label('title'), Community.subscriptions_count.label('subscriptions_count'),
         Community.post_count.label('post_count'), Community.post_reply_count.label('post_reply_count'),
         Community.last_active.label('last_active'), Community.created_at.label('created_at'),
-        Community.active_weekly.label('active_weekly')).statement
+        Community.active_weekly.label('active_weekly'),
+        cast(domain_boost_expr(Community.instance_id), Float).label('tier')).statement
 
 
 def server_view_select(microblogs_id: int, search: str = '', host: str = '', blocked_instance_ids=(),
@@ -101,7 +102,8 @@ def server_view_select(microblogs_id: int, search: str = '', host: str = '', blo
                    func.count(Post.id).label('post_count'),
                    func.coalesce(func.sum(Post.reply_count), 0).label('post_reply_count'),
                    func.max(Post.posted_at).label('last_active'), func.min(Post.posted_at).label('created_at'),
-                   func.count(Post.id).filter(Post.posted_at > week_ago).label('active_weekly'))
+                   func.count(Post.id).filter(Post.posted_at > week_ago).label('active_weekly'),
+                   literal(0.0, Float).label('tier'))   # a server view is remote: no domain's
             .select_from(Post)
             .join(Instance, Instance.id == Post.instance_id)
             .where(Post.community_id == microblogs_id, Post.deleted == False, Post.instance_id.not_in(hosted_instance_ids()),
@@ -181,8 +183,9 @@ def paginate_union(community_query, view_select, sort_by, page, per_page, microb
     union = (union_all(*parts) if len(parts) > 1 else parts[0]).subquery()
     field, direction = parse_sort(sort_by)
     key = union.c[field]
-    order = [key.desc() if direction == 'desc' else key.asc(), union.c.title, union.c.community_id,
-             union.c.instance_id]
+    # The tier follows the sort key, not the end of the list: a community id is unique, so a tier after it never decides
+    order = [key.desc() if direction == 'desc' else key.asc(), union.c.tier.desc(), union.c.title,
+             union.c.community_id, union.c.instance_id]
     page = max(page, 1)
     rows = db.session.execute(select(union, func.count().over().label('total')).order_by(*order)
                               .limit(per_page).offset((page - 1) * per_page)).all()
