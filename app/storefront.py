@@ -40,6 +40,11 @@ class DomainInfo(NamedTuple):
     is_default: bool
     is_onion: bool
     id: int | None   # the site_domain row; None only for the synthesised default
+    instance_id: int   # the domain's instance row; DEFAULT_INSTANCE_ID for the default (spec 2026-10-19 §3.1)
+
+
+# Made by `flask init-db` as the local instance, row 1 is the default domain's. Each other domain has a row of its own.
+DEFAULT_INSTANCE_ID = 1
 
 
 _REGISTRATION_FROM_MODE = {'Open': 'anyone', 'RequireApplication': 'anyone', 'Closed': 'admin'}
@@ -103,7 +108,7 @@ def _synthesised_default() -> DomainInfo:
     protocol = current_app.config['HTTP_PROTOCOL']
     scheme = 'https' if protocol in ('https', 'mixed') else protocol
     domain = normalise_host(current_app.config['SERVER_NAME'])
-    return DomainInfo(domain, scheme, True, 'anyone', True, domain.endswith('.onion'), None)
+    return DomainInfo(domain, scheme, True, 'anyone', True, domain.endswith('.onion'), None, DEFAULT_INSTANCE_ID)
 
 
 @cache.memoize(timeout=300, make_name=shaped_memo_name)
@@ -111,8 +116,8 @@ def domain_rows() -> tuple[DomainInfo, ...]:
     rows = db.session.query(models.SiteDomain).order_by(models.SiteDomain.id).all()
     if not rows:
         return (_synthesised_default(),)
-    return tuple(DomainInfo(r.domain, r.scheme, r.federates, r.registration, r.is_default, r.is_onion, r.id)
-                 for r in rows)
+    return tuple(DomainInfo(r.domain, r.scheme, r.federates, r.registration, r.is_default, r.is_onion, r.id,
+                            r.instance_id) for r in rows)
 
 
 def clear_domain_cache() -> None:
@@ -137,6 +142,17 @@ def default_domain() -> DomainInfo:
 def domain_by_id(site_domain_id: int | None) -> DomainInfo:
     """The row with this id; the default domain for None or an id no row has (a row since removed)."""
     return next((row for row in domain_rows() if row.id == site_domain_id), None) or default_domain()
+
+
+def instance_id_of(domain: DomainInfo) -> int:
+    """The instance row `domain`'s accounts, communities and content belong to."""
+    return domain.instance_id
+
+
+def hosted_instance_ids() -> frozenset[int]:
+    """Every hosted domain's instance row: content on any of them is stored here, whichever storefront shows it.
+    Read from `domain_rows`, so `clear_domain_cache` clears it too."""
+    return frozenset(instance_id_of(row) for row in domain_rows())
 
 
 def on_domain(domain: DomainInfo, model=None):
@@ -238,6 +254,11 @@ def check_default_domain() -> None:
 def current_storefront() -> DomainInfo:
     """The storefront this request was addressed to; the default one outside a request."""
     return g.storefront if has_request_context() and 'storefront' in g else default_domain()
+
+
+def current_instance_id() -> int:
+    """The instance row of the storefront this request was addressed to; the default's (row 1) outside a request."""
+    return instance_id_of(current_storefront())
 
 
 def path_name(name: str, site_domain_id: int | None) -> str:

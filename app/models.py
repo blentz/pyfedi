@@ -25,7 +25,7 @@ from flask_login import UserMixin, current_user
 from flask_sqlalchemy.query import Query
 from furl import furl
 from slugify import slugify
-from sqlalchemy import or_, text, desc, Index, func, and_, CheckConstraint
+from sqlalchemy import or_, text, desc, Index, func, and_, CheckConstraint, event, select
 from sqlalchemy.orm import validates
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.dialects.postgresql import BIT
@@ -5526,6 +5526,8 @@ class SiteDomain(db.Model):
     registration = db.Column(db.String(10), nullable=False, default='anyone', server_default='anyone')  # anyone, staff, admin
     is_default = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     is_onion = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    # Its own instance row (spec 2026-10-19 §3.1): row 1 for the default. Set on insert, below.
+    instance_id = db.Column(db.Integer, db.ForeignKey('instance.id'), unique=True, nullable=False)
 
     @validates('domain')
     def _set_is_onion(self, key, domain):
@@ -5540,6 +5542,30 @@ class SiteDomain(db.Model):
                 and local_only.domain_has_owners(self.id):
             raise ValueError('A domain with accounts or communities cannot change whether it federates.')
         return federates
+
+
+@event.listens_for(SiteDomain, 'before_insert')
+def _give_the_domain_its_instance(mapper, connection, target):
+    """A new domain row gets its instance row in the same transaction, however it is added. The default keeps row 1.
+    Another domain takes the row already named for it, if any (find_instance_id may have made a sparse one for the
+    host, and the unique domain index allows no second), else a new one. Either way it is PieFed's and has no inbox:
+    nothing is ever delivered to a domain of our own."""
+    if target.instance_id is not None:
+        return
+    instances = Instance.__table__
+    if target.is_default and connection.execute(
+            select(instances.c.id).where(instances.c.id == storefront.DEFAULT_INSTANCE_ID)).first() is not None:
+        target.instance_id = storefront.DEFAULT_INSTANCE_ID
+        return
+    found = connection.execute(select(instances.c.id).where(func.lower(instances.c.domain) == target.domain.lower())
+                               .order_by(instances.c.id).limit(1)).scalar()
+    if found is None:
+        found = connection.execute(instances.insert().values(domain=target.domain, software='PieFed')
+                                   .returning(instances.c.id)).scalar_one()
+    else:
+        connection.execute(instances.update().where(instances.c.id == found)
+                           .values(software='PieFed', inbox=None, shared_inbox=None))
+    target.instance_id = found
 
 
 # --- Feeds Models ---

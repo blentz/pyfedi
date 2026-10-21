@@ -167,5 +167,5 @@ def test_normalise_host(host, bare):
 def test_authority_is_configured_never_requested(app, onion):
     with app.app_context():
         assert _authority(domain_for_host('abc.onion')) == 'abc.onion'
-        assert _authority(DomainInfo('::1', 'http', True, 'anyone', False, False, None)) == '[::1]'
+        assert _authority(DomainInfo('::1', 'http', True, 'anyone', False, False, None, 1)) == '[::1]'
         assert _authority(default_domain()) == app.config['SERVER_NAME']

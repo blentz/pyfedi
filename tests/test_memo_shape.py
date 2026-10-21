@@ -33,28 +33,40 @@ def _old_key(fn, *args):
     return cache._memoize_make_cache_key()(fn.uncached, *args)
 
 
-class _SixFieldDomainInfo(pickle.Pickler):
-    """Pickles a DomainInfo the way the old 6-field class did: unpickling calls DomainInfo with six arguments."""
+def _v2_key(fn, *args):
+    """The key plan C1's code memoized `fn(*args)` under: `make_name` with memo shape v2."""
+    return cache._memoize_make_cache_key(make_name=lambda name: f'{name}:v2')(fn.uncached, *args)
+
+
+class _ShortDomainInfo(pickle.Pickler):
+    """Pickles a DomainInfo the way an older class with fewer fields did: unpickling calls DomainInfo with that many
+    arguments."""
+
+    def __init__(self, out, fields: int):
+        super().__init__(out, pickle.HIGHEST_PROTOCOL)
+        self.fields = fields
 
     def reducer_override(self, obj):
         if isinstance(obj, DomainInfo):
-            return DomainInfo, tuple(obj)[:6]
+            return DomainInfo, tuple(obj)[:self.fields]
         return NotImplemented
 
 
-def _six_field_pickle(value) -> bytes:
+def _short_pickle(value, fields: int) -> bytes:
     out = io.BytesIO()
-    _SixFieldDomainInfo(out, pickle.HIGHEST_PROTOCOL).dump(value)
+    _ShortDomainInfo(out, fields).dump(value)
     return out.getvalue()
 
 
-def test_an_old_six_field_domain_rows_entry_is_never_read(db_session, real_cache, caplog):
-    old = (DomainInfo('hell.cloud', 'https', True, 'anyone', True, False, 1),)
-    real_cache._cache[_old_key(domain_rows)] = (time.time() + 300, _six_field_pickle(old))
+@pytest.mark.parametrize('key, fields', [(_old_key, 6), (_v2_key, 7)])
+def test_an_older_shorter_domain_rows_entry_is_never_read(db_session, real_cache, caplog, key, fields):
+    """6 fields before plan C1 (no `id`), 7 before C2 (no `instance_id`)."""
+    old = (DomainInfo('hell.cloud', 'https', True, 'anyone', True, False, 1, 1),)
+    real_cache._cache[key(domain_rows)] = (time.time() + 300, _short_pickle(old, fields))
     with caplog.at_level(logging.ERROR):
         rows = domain_rows()
     assert 'Exception possibly due to cache backend' not in caplog.text
-    assert rows and all(len(row) == 7 for row in rows)
+    assert rows and all(len(row) == 8 for row in rows)
 
 
 @pytest.mark.parametrize('fn, args', [

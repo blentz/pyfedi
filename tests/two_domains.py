@@ -1,8 +1,10 @@
 """A site hosting two domains, hell.cloud's default and an onion, for tests of per-domain names (plan C1).
 
-`two_domains` yields a `TwoDomains`: the two `DomainInfo` rows, and factories that insert a local user or community
-straight into a domain (creation refuses a name another domain holds until C1's Task 5, and a test of the helpers
-needs the duplicate to exist). `onion_request` and `default_request` run a request context addressed to a domain."""
+`two_domains` yields a `TwoDomains`: the two `DomainInfo` rows, hell.cloud's instance row (the onion has its own, made
+with its domain row: `domains[1].instance_id`), and factories that insert a local user or community straight into a
+domain, on that domain's instance row (creation refuses a name another domain holds until C1's Task 5, and a test of
+the helpers needs the duplicate to exist). `onion_request` and `default_request` run a request context addressed to a
+domain."""
 from contextlib import contextmanager
 from typing import NamedTuple
 
@@ -59,7 +61,7 @@ def two_domains(app, db_session):
     clear_domain_cache()
 
     def local_user(name: str, domain: DomainInfo) -> User:
-        user = User(user_name=name, email=f'{name}-{domain.domain}@example.com', instance_id=instance.id,
+        user = User(user_name=name, email=f'{name}-{domain.domain}@example.com', instance_id=domain.instance_id,
                     verified=True, banned=False, site_domain_id=domain.id,
                     ap_profile_id=f'{domain.scheme}://{domain.domain}/u/{name}')
         db.session.add(user)
@@ -72,7 +74,7 @@ def two_domains(app, db_session):
 
     def local_community(name: str, domain: DomainInfo) -> Community:
         base = f'{domain.scheme}://{domain.domain}/c/{name}'
-        community = Community(name=name, title=name, instance_id=instance.id, user_id=owner().id, site_domain_id=domain.id,
+        community = Community(name=name, title=name, instance_id=domain.instance_id, user_id=owner().id, site_domain_id=domain.id,
                               ap_profile_id=base, ap_public_url=base, ap_followers_url=f'{base}/followers',
                               ap_domain=domain.domain, subscriptions_count=0, local_only=False, nsfw=False)
         db.session.add(community)

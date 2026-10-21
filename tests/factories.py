@@ -33,15 +33,22 @@ from app.models import (ActivityPubLog, BannedInstances, ChatMessage, Community,
                         CommunityFlair, CommunityFlairBlock, CommunityJoinRequest, CommunityMember, Conversation,
                         Domain, DomainBlock, Feed, FeedItem, FeedJoinRequest, FeedMember, File, Instance, InstanceBan,
                         InstanceBlock, Notification, NotificationSubscription, Poll, PollChoice, Post, PostReply,
-                        PostReplyBookmark, PostReplyVote, PostVote, Role, RolePermission, Site, User, UserBlock,
-                        UserFollower, UserFollowRequest, UserRegistration, hidden_posts, read_posts, user_role,
-                        utcnow)
+                        PostReplyBookmark, PostReplyVote, PostVote, Role, RolePermission, Site, SiteDomain, User,
+                        UserBlock, UserFollower, UserFollowRequest, UserRegistration, hidden_posts, read_posts,
+                        user_role, utcnow)
 from app.utils import get_deduped_post_ids
 
 
 def make_instance(domain: str, software: str = 'mastodon') -> Instance:
-    instance = Instance(domain=domain, software=software)
-    db.session.add(instance)
+    """A new Instance row, or the hosted domain's row when a SiteDomain already names `domain`: a domain row makes
+    its own instance row on insert, and a test that adds the default domain before its instance gets that row back
+    rather than a second one the unique domain index refuses."""
+    instance = db.session.query(Instance).join(SiteDomain, SiteDomain.instance_id == Instance.id) \
+        .filter(Instance.domain == domain).first()
+    if instance is None:
+        instance = Instance(domain=domain)
+        db.session.add(instance)
+    instance.software = software
     db.session.commit()
     return instance
 
