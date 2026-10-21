@@ -1,6 +1,10 @@
 """Each hosted domain has its own instance row; the default keeps row 1 (plan C2 task 1, spec 2026-10-19 §3.1)."""
 import importlib.util
+import re
 from pathlib import Path
+
+import httpx
+import respx
 
 import pytest
 from alembic.migration import MigrationContext
@@ -9,7 +13,8 @@ from cachelib import SimpleCache
 from sqlalchemy import inspect, text
 
 from app import cache, db
-from app.models import Instance, SiteDomain
+from app.activitypub.util import new_instance_profile_task
+from app.models import Instance, InstanceInUse, SiteDomain
 from app.storefront import (clear_domain_cache, current_instance_id, default_domain, domain_for_host,
                             hosted_instance_ids, instance_id_of)
 from tests.factories import make_community, make_instance, make_post, make_post_reply, make_user
@@ -231,6 +236,8 @@ def test_the_upgrade_gives_the_domain_a_new_instance_row_and_moves_its_rows(app,
                                            'gone_forever, trusted, silenced, popular FROM instance WHERE id = :id'),
                                       {'id': onion_instance}).one()
             assert tuple(made) == (ONION, 'PieFed', None, None, 0, False, False, False, False, True)
+            # Row 1 holds hell.cloud's own users, communities and content: the default takes it all the same.
+            assert connection.execute(text('SELECT count(*) FROM "user" WHERE instance_id = 1')).scalar() > 0
             assert connection.execute(text('SELECT instance_id FROM site_domain WHERE is_default')).scalar() == 1
         finally:
             transaction.rollback()
@@ -271,8 +278,188 @@ def test_on_a_database_without_row_one_the_default_gets_a_row_of_its_own(app, db
                 connection.execute(text("INSERT INTO site_domain (domain, scheme, is_default) "
                                         "VALUES (:d, 'https', true)"), {'d': HELL})
                 migration.upgrade()
-            made = connection.execute(text('SELECT i.domain, i.software, i.inbox FROM site_domain d '
+            made = connection.execute(text('SELECT d.instance_id, i.domain, i.software, i.inbox FROM site_domain d '
                                            'JOIN instance i ON i.id = d.instance_id')).one()
         finally:
             transaction.rollback()
-    assert tuple(made) == (HELL, 'PieFed', None)
+    # The instance table is empty and its sequence fresh (db_session resets it), so the new row is row 1, as init-db's
+    # would be.
+    assert tuple(made) == (1, HELL, 'PieFed', None)
+
+
+# --- an instance row a new domain may not take over (fix round 1, I1) ---
+
+def _server_with_content(domain: str) -> Instance:
+    """A peer this site federates with: one of its users is stored here."""
+    peer = make_instance(domain)
+    make_user(peer, 'someone')
+    return peer
+
+
+def test_the_domains_form_refuses_a_server_this_site_federates_with(app, db_session, site):
+    client = app.test_client()
+    login(client, _admin())
+    peer = _server_with_content(ONION)
+    peer.inbox = f'http://{ONION}/inbox'
+    db.session.commit()
+    response = client.post('/admin/domains', data=_form(csrf(app, client)))
+    assert response.status_code == 200
+    assert 'That domain is already a server this site federates with.' in response.get_data(as_text=True)
+    db.session.expire_all()
+    assert db.session.query(SiteDomain).filter_by(domain=ONION).first() is None
+    assert (peer.software, peer.inbox) == ('mastodon', f'http://{ONION}/inbox')
+
+
+def test_the_domains_form_refuses_the_main_instance_rows_domain(app, db_session, site):
+    """SERVER_NAME changed since init-db: row 1 still carries the old name, which is not the default's to give."""
+    make_instance('old.example', software='piefed')
+    db.session.add(SiteDomain(domain=HELL, is_default=True))
+    db.session.commit()
+    client = app.test_client()
+    login(client, _admin())
+    response = client.post('/admin/domains', data=_form(csrf(app, client), domain='old.example'))
+    assert 'That domain is already a server this site federates with.' in response.get_data(as_text=True)
+    assert db.session.query(SiteDomain).count() == 1
+
+
+@pytest.mark.parametrize('content', ['user', 'community', 'post', 'post_reply'])
+def test_a_domain_row_never_takes_over_a_server_with_content(app, db_session, content):
+    local = make_instance(HELL, software='piefed')
+    owner = make_user(local, 'owner', local=True)
+    peer = make_instance(ONION)
+    if content == 'user':
+        make_user(peer, 'someone')
+    else:
+        community = make_community('cave', host=ONION)
+        rows = {'community': community}
+        if content != 'community':
+            post = make_post(community, owner, ap_id=f'http://{ONION}/post/1')
+            rows['post'] = post
+            if content == 'post_reply':
+                rows['post_reply'] = make_post_reply(post, owner)
+        for name, row in rows.items():
+            row.instance_id = peer.id if name == content else local.id
+        db.session.commit()
+    db.session.add(SiteDomain(domain=ONION, federates=False))
+    with pytest.raises(InstanceInUse, match=ONION):
+        db.session.commit()
+    db.session.rollback()
+
+
+def test_a_domain_row_never_takes_over_row_one(app, db_session):
+    make_instance('old.example', software='piefed')
+    db.session.add(SiteDomain(domain=HELL, is_default=True))
+    db.session.commit()
+    db.session.add(SiteDomain(domain='OLD.example'.lower(), federates=False))
+    with pytest.raises(InstanceInUse, match='old.example'):
+        db.session.commit()
+    db.session.rollback()
+
+
+def test_the_default_takes_row_one_full_of_its_own_content(app, db_session):
+    local = make_instance(HELL, software='piefed')
+    make_user(local, 'owner', local=True)
+    make_community('hellish')
+    db.session.add(SiteDomain(domain=HELL, is_default=True))
+    db.session.commit()
+    assert db.session.query(SiteDomain).one().instance_id == 1
+
+
+def test_a_domain_row_takes_the_exactly_spelt_row_first(app, db_session):
+    """find_instance_id looks a host up by its exact spelling: that row is the one that must become hosted."""
+    make_instance(HELL, software='piefed')
+    mixed = make_instance(ONION.upper())
+    exact = make_instance(ONION)
+    db.session.add(SiteDomain(domain=ONION, federates=False))
+    db.session.commit()
+    assert db.session.query(SiteDomain).filter_by(domain=ONION).one().instance_id == exact.id != mixed.id
+
+
+def test_the_constraints_have_the_migrations_names(app, db_session):
+    """So a database built by `flask init-db` (create_all) downgrades like a migrated one."""
+    names = {constraint.name for constraint in SiteDomain.__table__.constraints}
+    assert {'fk_site_domain_instance_id', 'uq_site_domain_instance_id'} <= names
+
+
+def test_the_upgrade_refuses_to_take_over_a_server_with_content(app, pre_c2):
+    rows, peer_id, existing = pre_c2
+    migration = load_migration()
+    with db.engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            with Operations.context(MigrationContext.configure(connection)):
+                migration.downgrade()
+                connection.execute(text('UPDATE "user" SET instance_id = :i WHERE id = :u'),
+                                   {'i': existing, 'u': rows['user']['remote']})
+                with pytest.raises(RuntimeError, match=ONION):
+                    migration.upgrade()
+        finally:
+            transaction.rollback()
+
+
+def test_the_upgrade_takes_the_exactly_spelt_row_first(app, pre_c2):
+    rows, peer_id, existing = pre_c2
+    migration = load_migration()
+    with db.engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            with Operations.context(MigrationContext.configure(connection)):
+                migration.downgrade()
+                connection.execute(text('UPDATE instance SET domain = :d WHERE id = :i'),
+                                   {'d': ONION.upper(), 'i': existing})
+                exact = connection.execute(text("INSERT INTO instance (domain) VALUES (:d) RETURNING id"),
+                                           {'d': ONION}).scalar()
+                migration.upgrade()
+            linked = connection.execute(text('SELECT instance_id FROM site_domain WHERE domain = :d'),
+                                        {'d': ONION}).scalar()
+        finally:
+            transaction.rollback()
+    assert linked == exact != existing
+
+
+def test_the_downgrade_leaves_remote_rows_on_a_sister_row_alone(app, pre_c2):
+    """It mirrors the upgrade: only local rows go back to row 1."""
+    rows, peer_id, existing = pre_c2
+    migration = load_migration()
+    with db.engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            connection.execute(text('UPDATE "user" SET instance_id = :i WHERE id = :u'),
+                               {'i': existing, 'u': rows['user']['remote']})
+            connection.execute(text('UPDATE post SET instance_id = :i WHERE id = :p'),
+                               {'i': existing, 'p': rows['post']['remote']})
+            with Operations.context(MigrationContext.configure(connection)):
+                migration.downgrade()
+            after = (_instance_ids(connection, 'user', [rows['user']['remote']]),
+                     _instance_ids(connection, 'post', [rows['post']['remote']]))
+        finally:
+            transaction.rollback()
+    assert after == ({rows['user']['remote']: existing}, {rows['post']['remote']: existing})
+
+
+# --- a hosted row never gets an inbox back ---
+
+def test_the_instance_profile_task_leaves_a_hosted_row_alone(app, db_session):
+    make_instance(HELL, software='piefed')
+    db.session.add(SiteDomain(domain='faraway.test', federates=False))
+    db.session.commit()
+    clear_domain_cache()
+    hosted = db.session.query(SiteDomain).filter_by(domain='faraway.test').one().instance_id
+    with respx.mock(assert_all_called=False) as router:
+        actor = router.get('https://faraway.test').mock(return_value=httpx.Response(404))
+        new_instance_profile_task(hosted)
+    db.session.expire_all()
+    assert not actor.called
+    assert db.session.get(Instance, hosted).inbox is None
+
+
+def test_the_interop_harness_probes_a_table_only_init_db_fills():
+    """interop/run.sh runs `flask init-db` when its probe table is empty. `flask db upgrade` runs first and some
+    migrations seed rows (from c8f4d2a6b9e1 an instance row), so the probe must be a table no migration writes:
+    `site`, which only init-db's `Site(...)` fills."""
+    script = (Path(__file__).resolve().parent.parent / 'interop' / 'run.sh').read_text()
+    probe = re.search(r"select count\(\*\) from (\w+)'", script)
+    assert probe is not None and probe.group(1) == 'site'
+    versions = (Path(__file__).resolve().parent.parent / 'migrations' / 'versions').glob('*.py')
+    writes = re.compile(r'insert\s+into\s+"?site"?[\s(]|(?<!\w)table\(\s*[\'"]site[\'"]', re.IGNORECASE)
+    assert [path.name for path in versions if writes.search(path.read_text())] == []

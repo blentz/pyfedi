@@ -49,7 +49,7 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, RolePermission, Domain, \
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain
-from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, live_registration
+from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, live_registration, hosted_instance_ids
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
@@ -2627,7 +2627,8 @@ def admin_instance_edit(instance_id):
         instance.posting_warning = sanitise_posting_warning(form.posting_warning.data)  # D1377
         instance.popular = form.popular.data
         instance.admin_note = form.admin_note.data
-        instance.inbox = form.inbox.data
+        if instance_id not in hosted_instance_ids():   # nothing is ever delivered to a domain of our own
+            instance.inbox = form.inbox.data
 
         if instance.software == 'piefed':
             db.session.execute(text('UPDATE "instance_chooser" SET hide = :hide WHERE domain = :domain'),
