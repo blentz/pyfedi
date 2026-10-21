@@ -1184,7 +1184,7 @@ def test_join_feed_subscribes_to_the_feeds_communities_only_when_asked(
     s.member.feed_auto_follow = auto_follow
     db.session.commit()
     member_id = s.member.id
-    expected_actors = {'remotecommunity@far.piefed.local', 'localcommunity'}
+    expected_actors = {'remotecommunity@far.piefed.local', 'localcommunity@test.piefed.local'}   # its domain (C1)
 
     subscribe = MagicMock()
     with web_ctx(app, s.member):

@@ -320,7 +320,7 @@ def test_the_feed_branchs_success_path_subscribes_non_owners_and_logs_success(
     assert FeedItem.query.filter_by(feed_id=feed.id, community_id=community.id).count() == 1
     assert feed.num_communities == 4
     assert community.ap_id is None
-    assert do_subscribe_calls == [((community.name, nonowner.id), {'joined_via_feed': True})]
+    assert do_subscribe_calls == [((f'{community.name}@test.piefed.local', nonowner.id), {'joined_via_feed': True})]
     log = ActivityPubLog.query.one()
     assert log.activity_type == 'Add'
     assert log.result == 'success'

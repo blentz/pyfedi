@@ -9,9 +9,13 @@ from flask import g, session as flask_session
 from flask_wtf.csrf import generate_csrf
 
 from app import cache, db
+from app.api.alpha.utils.post import get_post_list, get_post_list2
 from app.api.alpha.utils.user import get_user, post_user_verify_credentials
-from app.models import CommunityBlock, CommunityMember, ModLog, Site, UserBlock, UserFollower, UserNote
+from app.local_names import actor_handle
+from app.shared.feed import _feed_add_community
+from app.models import Community, CommunityBlock, CommunityMember, ModLog, Site, UserBlock, UserFollower, UserNote
 from app.mentions import stored_user
+from tests.factories import make_local_feed, make_post
 from tests.test_onion_guard_limits import cheap_hashes  # noqa: F401
 from tests.two_domains import HELL, ONION, default_request, onion_request, two_domains  # noqa: F401
 
@@ -223,10 +227,7 @@ def test_the_api_finds_a_person_on_the_storefronts_domain(app, world):
         for name, owner in (('bob', host), (f'bob@{other(host)}', other(host))):
             data = {'username': name}
             with request_on(app):
-                try:
-                    get_user(None, data)
-                except Exception:   # the rest of the view is not this test's; the lookup has already run
-                    pass
+                get_user(None, data)
             assert data['person_id'] == world.bob[owner].id, (host, name)
 
 
@@ -236,3 +237,54 @@ def test_a_bare_mention_name_is_the_storefronts_account(app, world):
         assert stored_user('Bob') is None   # case as typed, as this lookup always matched it
     with default_request(app):
         assert stored_user('bob') == world.bob[HELL]
+
+
+@pytest.mark.parametrize('lister', [get_post_list, get_post_list2])
+def test_the_api_lists_a_bare_community_names_posts_on_the_storefronts_domain(app, world, lister):
+    for host, art in world.art.items():
+        make_post(art, world.bob[host], f'{BASE[host]}/post/{host}', title=f'posted on {host}')
+    db.session.commit()
+    for request_on, host in ((default_request, HELL), (onion_request, ONION)):
+        for name, owner in (('art', host), (f'art@{other(host)}', other(host))):
+            with request_on(app):
+                g.admin_ids = []
+                titles = {post['post']['title'] for post in lister(None, {'community_name': name})['posts']}
+            assert titles == {f'posted on {owner}'}, (host, name)
+
+
+def test_a_feeds_auto_follow_outside_a_request_joins_the_communitys_own_domain(app, world):
+    """The worker that joins a feed's communities has no storefront: the queued name says which domain."""
+    viewer = world.viewers[HELL]
+    viewer.feed_auto_follow = True
+    feed = make_local_feed(name='hellfeed')
+    feed.user_id = viewer.id
+    db.session.commit()
+    onion_art, hell_art, viewer_id = world.art[ONION].id, world.art[HELL].id, viewer.id
+    _feed_add_community(onion_art, 0, feed.id, viewer_id)
+    joined = {m.community_id for m in CommunityMember.query.filter_by(user_id=viewer_id)}
+    assert joined == {onion_art} and hell_art not in joined
+
+
+def test_a_handle_names_the_rows_own_domain(app, world):
+    assert actor_handle(world.art[ONION]) == f'art@{ONION}'
+    assert actor_handle(world.bob[HELL]) == f'bob@{HELL}'
+    assert actor_handle(Community(name='far', ap_id='far@remote.example')) == 'far@remote.example'
+
+
+@pytest.mark.parametrize('host', [ONION, HELL])
+def test_the_profile_pages_show_the_named_domains_row(app, world, host):
+    """Task 3's HTML pages, checked here by effect: /u/<actor> and /c/<actor> show the row the name means."""
+    for domain, bob in world.bob.items():
+        bob.title = f'Bob of {domain}'
+    db.session.commit()
+    client = signed_in(app, world.viewers[host], host)
+    for path, mine, theirs in (('/u/bob', world.bob[host].title, world.bob[other(host)].title),
+                               ('/c/art', world.art[host].title, world.art[other(host)].title)):
+        page = client.get(path).get_data(as_text=True)
+        assert mine in page and theirs not in page, path
+        page = client.get(f'{path}@{other(host)}').get_data(as_text=True)
+        assert theirs in page and mine not in page, path
+
+
+def test_a_name_that_names_nothing_is_404_on_the_onion(app, world):
+    assert signed_in(app, world.viewers[ONION], ONION).post('/u/!/block').status_code == 404
