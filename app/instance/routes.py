@@ -16,7 +16,7 @@ from app.instance import bp
 from app.instance.util import is_fedi_handle, bulk_follow, mastodon_csv_handles
 from app.models import Instance, User, Post, read_posts, AllowedInstances, BannedInstances, utcnow
 from app.shared.site import block_remote_instance, unblock_remote_instance
-from app.storefront import current_instance_id, hosted_instance_ids
+from app.storefront import current_instance_id, hidden_instance_ids, hosted_instance_ids, instance_visible_here
 from app.local_only import without_local_only
 from app.visibility import listable_clause
 from app.utils import render_template, blocked_domains, \
@@ -83,7 +83,7 @@ def list_instances():
         if search:
             instances = instances.filter(BannedInstances.domain.ilike(f"%{search}%"))
     else:
-        instances = Instance.query.order_by(Instance.domain)
+        instances = Instance.query.filter(Instance.id.not_in(hidden_instance_ids())).order_by(Instance.domain)
         if search:
             instances = instances.filter(Instance.domain.ilike(f"%{search}%"))
 
@@ -123,7 +123,7 @@ def list_instances():
 @login_required_if_private_instance
 def instance_overview(instance_domain):
     instance = Instance.query.filter(Instance.domain == instance_domain).first()
-    if instance is None:
+    if instance is None or not instance_visible_here(instance.id):
         abort(404)
 
     return render_template('instance/overview.html', instance=instance,
@@ -145,7 +145,7 @@ def instance_people(instance_domain):
         instance = db.session.get(Instance, current_instance_id())
     else:
         instance = Instance.query.filter(Instance.domain == instance_domain).first()
-        if instance is None:
+        if instance is None or not instance_visible_here(instance.id):
             abort(404)
 
     if current_user.is_authenticated and current_user.is_admin():
@@ -259,7 +259,7 @@ def instance_posts(instance_domain):
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
 
     instance = Instance.query.filter(Instance.domain == instance_domain).first()
-    if instance is None:
+    if instance is None or not instance_visible_here(instance.id):
         abort(404)
 
     if current_user.is_anonymous:

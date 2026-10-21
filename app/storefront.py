@@ -155,6 +155,20 @@ def hosted_instance_ids() -> frozenset[int]:
     return frozenset(instance_id_of(row) for row in domain_rows())
 
 
+def hidden_instance_ids() -> frozenset[int]:
+    """The instance rows this storefront does not show: each local-only (`federates=False`) domain's, but for the
+    storefront's own. Off its own domain an onion's row is never listed or shown, so nothing links it to the clearnet
+    (owner ruling, plan C2 task 6). Outside a request the storefront is the default, so they are all hidden. For a
+    query: `Instance.id.not_in(hidden_instance_ids())`."""
+    here = current_instance_id()
+    return frozenset(instance_id_of(row) for row in domain_rows() if not row.federates and instance_id_of(row) != here)
+
+
+def instance_visible_here(instance_id: int) -> bool:
+    """Whether the current storefront shows the instance row `instance_id`: any row but another local-only domain's."""
+    return instance_id not in hidden_instance_ids()
+
+
 def on_domain(domain: DomainInfo, model=None):
     """A filter for the local rows of `model` (users by default) that belong to `domain`: its own, and on the default
     domain the ones no domain was stamped on."""
