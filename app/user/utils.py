@@ -18,7 +18,7 @@ from app.shared.tasks import task_selector
 from app.storefront import current_storefront, domain_for_host
 from app.utils import gibberish, get_request, get_task_session, patch_db_session, \
     intlist_to_strlist, community_membership_private, paginate_post_ids, post_ids_to_models
-from app.local_only import local_only_visible, without_local_only
+from app.local_only import local_only_visible, without_local_only, without_local_only_actors
 from app.visibility import visible_to_clause, visible_to_sql
 
 import httpx
@@ -379,7 +379,7 @@ def _get_user_moderates(user):
     if current_user.is_anonymous or (user.id != current_user.id and not current_user.is_admin()):
         moderates = moderates.filter(Community.private_mods == False)
 
-    return moderates.all()
+    return without_local_only_actors(moderates, Community).all()   # a logged-out visitor: no local-only community
 
 
 def _get_user_same_ip(user):

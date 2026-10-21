@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from flask import current_app, g
-from sqlalchemy import text, func, or_, inspect
+from sqlalchemy import text, func, or_, inspect, select
 from sqlalchemy.orm.exc import NoResultFound
 
 from app import cache, db
@@ -28,7 +28,7 @@ import app.shared.community as shared_community
 # package before they are defined (import cycle: app.shared.post)
 import app.shared.post as shared_post
 from app.storefront import current_storefront, hosted_instance_ids, public_registration_open, storefront_link, storefront_memo_name, storefront_url
-from app.local_only import community_local_only, user_local_only, without_local_only_actors
+from app.local_only import community_local_only, federating_clause, user_local_only, without_local_only_actors
 from app.visibility import can_view, visible_to_sql
 
 
@@ -345,7 +345,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
 
     # Variant 3 - models/post/get_post_response.dart - /post api endpoint
     if variant == 3:
-        modlist = cached_modlist_for_community(post.community_id)
+        modlist = shown_modlist(cached_modlist_for_community(post.community_id), user_id)
         if communities_moderating is None:
             communities_moderating = moderating_communities_ids_all_users() if user_id else []
 
@@ -475,7 +475,7 @@ def user_view(user: User | int, variant, stub=False, user_id=None, flair_communi
 
     # Variant 3 - models/user/get_person_details.dart - /user?person_id api endpoint
     if variant == 3:
-        modlist = cached_modlist_for_user(user)
+        modlist = shown_modlist(cached_modlist_for_user(user), user_id)
 
         v3 = {'person_view': user_view(user=user, variant=2, user_id=user_id),
               'moderates': modlist,
@@ -678,7 +678,7 @@ def community_view(community: Community | int | str, variant, stub=False, user_i
 
     # Variant 3 - models/community/get_community_response.dart - /community api endpoint
     if variant == 3:
-        modlist = cached_modlist_for_community(community.id)
+        modlist = shown_modlist(cached_modlist_for_community(community.id), user_id)
 
         if community.private and community.id not in community_membership_private(user_id):
             raise Exception('Private community - membership required')
@@ -1576,6 +1576,20 @@ def cached_modlist_for_community(community_id):
         }
         modlist.append(entry)
     return modlist
+
+
+def shown_modlist(modlist: list, user_id) -> list:
+    """`modlist` (a cached_modlist_for_* answer) as `user_id` may see it: for a logged-out caller, without the entries
+    naming a local-only moderator or community (owner ruling 2026-10-21). The cached list is shared by every caller,
+    so it is narrowed here rather than when it is built."""
+    if user_id is not None or not modlist:
+        return modlist
+    hidden = set(db.session.scalars(select(User.id).where(User.id.in_([m['moderator']['id'] for m in modlist]),
+                                                          ~federating_clause(User))))
+    hidden_communities = set(db.session.scalars(
+        select(Community.id).where(Community.id.in_([m['community']['id'] for m in modlist]),
+                                   ~federating_clause(Community))))
+    return [m for m in modlist if m['moderator']['id'] not in hidden and m['community']['id'] not in hidden_communities]
 
 
 @cache.memoize(timeout=3000, make_name=storefront_memo_name)
