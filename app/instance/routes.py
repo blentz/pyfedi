@@ -17,7 +17,7 @@ from app.instance.util import is_fedi_handle, bulk_follow, mastodon_csv_handles
 from app.models import Instance, User, Post, read_posts, AllowedInstances, BannedInstances, utcnow
 from app.shared.site import block_remote_instance, unblock_remote_instance
 from app.storefront import current_instance_id, hidden_instance_ids, hosted_instance_ids, instance_visible_here
-from app.local_only import without_local_only
+from app.local_only import without_local_only, without_local_only_actors
 from app.visibility import listable_clause
 from app.utils import render_template, blocked_domains, \
     blocked_or_banned_instances, blocked_communities, blocked_users, user_filters_home, recently_upvoted_posts, \
@@ -160,6 +160,7 @@ def instance_people(instance_domain):
             people = people.filter(or_(User.instance_id.not_in(instance_ids), User.instance_id == None))
         if instance:
             people = people.filter(User.instance_id == instance.id)
+    people = without_local_only_actors(people, User)   # a logged-out visitor sees no local-only account
     if search:
         people = people.search(search, sort=True)
     people = people.order_by(desc(User.post_count + User.post_reply_count + User.reputation))
@@ -195,6 +196,7 @@ def instance_people_top():
     people = User.query.filter_by(deleted=False, banned=False, searchable=True, bot=False, bot_override=False)
     people = people.filter(User.post_count > 1, User.post_reply_count > 1, User.reputation > 1,
                            User.last_seen > utcnow() - timedelta(days=3), User.avatar_id != None)
+    people = without_local_only_actors(people, User)   # a logged-out visitor sees no local-only account
     if instance_ids := silenced_instances():
         people = people.filter(or_(User.instance_id.not_in(instance_ids), User.instance_id == None))
     if search:
