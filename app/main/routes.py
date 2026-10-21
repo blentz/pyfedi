@@ -170,7 +170,7 @@ def home_feed_source(view_filter: str):
     elif view_filter == 'local':
         microblog_community = find_microblogging_community()
         # Local is this domain's own communities: the local test (its instance row) and the domain test both hold, because
-        # a remote community has no domain either and on_domain_sql's default arm would take it
+        # a legacy community on the default row may be stamped with another domain's site_domain_id
         on_this_domain = on_domain_sql(current_storefront())   # bound by get_deduped_post_ids
         if current_user.is_anonymous:
             community_sql = f'c.private is false and c.instance_id = {current_instance_id()} AND {on_this_domain} and c.id != {microblog_community.id} {low_quality_filter}'
@@ -749,8 +749,8 @@ def modlog_search_suggestions():
 
 @bp.route('/about')
 def about_page():
-    user_amount = users_total()
-    MAU = active_month()
+    user_amount = users_total(instance_id=current_instance_id())
+    MAU = active_month(instance_id=current_instance_id())
     posts_amount = local_posts(instance_id=current_instance_id())
 
     admins = Site.admins()

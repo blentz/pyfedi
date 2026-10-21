@@ -142,14 +142,17 @@ def user_liked_count(user: User) -> int:
 # The counts below take federated=True where another server reads them (NodeInfo, /api/v1/instance, /api/v3/site):
 # local-only accounts, communities and content do not exist to other servers, so they are left out.
 
-def _federating_users(federated: bool) -> str:
-    return ' AND ' + federating_sql('"user"') if federated else ''
+def _federating_users(federated: bool, instance_id: int | None = None) -> str:
+    """The extra conditions on a count of local users: only federating ones, and only `instance_id`'s row (a hosted
+    domain's own; every domain's when None)."""
+    return (' AND ' + federating_sql('"user"') if federated else '') + \
+        (f' AND instance_id = {int(instance_id)}' if instance_id is not None else '')
 
 
-def users_total(federated: bool = False):
+def users_total(federated: bool = False, instance_id: int | None = None):
     return db.session.execute(text(
         'SELECT COUNT(*) as c FROM "user" WHERE ap_id is null AND verified is true AND banned is false AND deleted is false'
-        + _federating_users(federated))).scalar()
+        + _federating_users(federated, instance_id))).scalar()
 
 
 def active_half_year(federated: bool = False):
@@ -158,10 +161,10 @@ def active_half_year(federated: bool = False):
         + _federating_users(federated))).scalar()
 
 
-def active_month(federated: bool = False):
+def active_month(federated: bool = False, instance_id: int | None = None):
     return db.session.execute(text(
         "SELECT COUNT(*) as c FROM \"user\" WHERE last_seen >= CURRENT_DATE - INTERVAL '1 month' AND ap_id is null AND verified is true AND banned is false AND deleted is false"
-        + _federating_users(federated))).scalar()
+        + _federating_users(federated, instance_id))).scalar()
 
 
 def active_week(federated: bool = False):

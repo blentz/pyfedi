@@ -12,8 +12,11 @@ from flask_login import login_user
 from sqlalchemy import event
 
 import app.storefront as storefront
+from app.storefront import current_instance_id
 from app import db
-from app.models import Site
+from app.models import PostReply, Site
+from app.activitypub.util import active_month, local_communities, local_posts, users_total
+from app.community.live import live_feed_keys
 from app.main.routes import home_feed_source
 from app.utils import get_deduped_post_ids
 from tests.conftest import forget_login
@@ -282,8 +285,6 @@ def test_the_local_comment_authors_are_local_users_only(app, scene):
 # The About page counts, a Local feed's wake-up and a call outside a request (C2, task 4)
 
 def test_the_about_counts_are_the_request_domains(app, scene):
-    from app.activitypub.util import local_communities, local_posts
-    from app.storefront import current_instance_id
     onion_id = storefront.domain_by_id(scene.world.onion.id).instance_id
     scene.world.hidden.instance_id = onion_id
     assert (local_posts(instance_id=1), local_communities(instance_id=1)) == (1, 1)
@@ -292,6 +293,9 @@ def test_the_about_counts_are_the_request_domains(app, scene):
     extra.instance_id = onion_id
     db.session.commit()
     assert local_posts(instance_id=onion_id) == 2 and local_posts(instance_id=1) == 1
+    assert users_total(instance_id=1) == 2 and users_total(instance_id=onion_id) == 1   # alice and bob; onionite
+    assert users_total() == 3 and active_month() == 3   # NodeInfo's and the site's own: every domain's
+    assert active_month(instance_id=1) == 2 and active_month(instance_id=onion_id) == 1
     assert local_posts() == 1 and local_communities() == 1   # NodeInfo's: row 1, whatever the request
     with current_app.test_request_context('/'):
         g.storefront = storefront.domain_by_id(scene.world.onion.id)
@@ -310,7 +314,25 @@ def test_outside_a_request_the_local_source_is_the_default_domains(app, scene):
 
 
 def test_a_post_in_any_hosted_community_wakes_the_local_feeds(app, scene):
-    from app.community.live import live_feed_keys
     for post in (scene.posts.clear, scene.posts.onion):
         assert 'local' in live_feed_keys(post, post.community, backfill=False)
     assert 'local' not in live_feed_keys(scene.posts.remote, scene.remote, backfill=False)
+
+
+def test_a_reply_made_by_an_onion_account_is_listed_as_local_on_the_onion(app, scene):
+    """The real creation path stores an onion account's reply under the default domain's base URL."""
+    reply = PostReply.new(scene.world.onionite, scene.posts.onion, None, 'real', '<p>real</p>', True, None, False, False)
+    db.session.commit()
+    assert reply.ap_id.startswith(app.config['SERVER_URL'] + '/comment/')
+    onion = {item['comment']['id'] for item in
+             _api(app, 'comment/list', scene.world.onionite, onion=True, type_='Local').json['comments']}
+    assert reply.id in onion
+    clear = {item['comment']['id'] for item in
+             _api(app, 'comment/list', scene.world.alice, type_='Local').json['comments']}
+    assert reply.id not in clear and scene.replies.clear.id in clear
+
+
+def test_the_live_local_feed_on_the_default_domain_never_returns_the_onions_post(app, scene):
+    response = _visit(app, '/home/live_posts/local?after=0', user=scene.world.alice)
+    text = response.get_data(as_text=True)
+    assert 'CLEARPOST' in text and 'ONIONPOST' not in text

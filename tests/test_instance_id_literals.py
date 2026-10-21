@@ -18,8 +18,8 @@ AST) and in the templates (by pattern):
 - in a template, `instance_id == 1` and `instance_id != 1`.
 
 A site where row 1 is meant is in ALLOWED with the count of its findings and a one-line reason: `row 1 is the default
-domain's: <why>`, or `blocking site, Task 5` for a site a later task moves (that task
-takes its entry out). Never add a "hosted here" site to make the sweep pass; test it against `hosted_instance_ids()`.
+domain's: <why>`, or `blocking site, Task 5` for a site a later task moves (that task takes its entry out). Never add
+a "hosted here" site to make the sweep pass; test it against `hosted_instance_ids()`.
 """
 import ast
 import re
