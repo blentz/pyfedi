@@ -178,6 +178,13 @@ def instrumentation_violations(source: str) -> list[str]:
     return found
 
 
+def could_instrument(source: str) -> bool:
+    """Whether `source` names anything instrumentation_violations looks for. Parsing every collected module took
+    11s alone and passed the 60s timeout under load; a module that never spells these names cannot import or call
+    them, so only the rest are parsed."""
+    return 'run_campaign' in source or any(name in source for name in INSTRUMENTING_CALLS)
+
+
 COLLECTED_MODULES = sorted([*TESTS_ROOT.rglob('test_*.py'), *TESTS_ROOT.rglob('conftest.py')])
 
 
@@ -188,7 +195,8 @@ def test_no_collected_test_imports_run_campaign_or_instruments():
     Fuzz() itself; the campaign's testable logic is in tests.fuzz.campaign."""
     violations = {str(path.relative_to(TESTS_ROOT)): found
                   for path in COLLECTED_MODULES
-                  if (found := instrumentation_violations(path.read_text()))}
+                  if could_instrument(source := path.read_text())
+                  and (found := instrumentation_violations(source))}
     assert violations == {}
 
 
@@ -201,7 +209,7 @@ def test_no_collected_test_imports_run_campaign_or_instruments():
     'from atheris import Fuzz\nFuzz()',
 ])
 def test_the_instrumentation_scan_catches(source):
-    assert instrumentation_violations(source)
+    assert could_instrument(source) and instrumentation_violations(source)
 
 
 @pytest.mark.parametrize('source', [
