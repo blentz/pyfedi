@@ -21,6 +21,7 @@ from bs4.formatter import HTMLFormatter
 from flask import Response, current_app, g, has_app_context, has_request_context, request
 from flask.globals import request_ctx
 from flask_babel import _
+from sqlakeyset import InvalidPage
 from sqlalchemy import case, desc, or_, tuple_
 from sqlakeyset.results import unserialize_bookmark
 from sqlalchemy.exc import SQLAlchemyError
@@ -240,8 +241,6 @@ def tiered_post_ids(posts, rank, tail: tuple, limit: int, place: tuple | None = 
         arm = posts.filter(or_(models.Post.instance_id.is_(None), models.Post.instance_id.not_in(hosted_instance_ids()))) \
             if instance_ids is None else posts.filter(models.Post.instance_id.in_(instance_ids))
         if place is not None:
-            if len(place) != len(lead) + len(tail) + 2:
-                raise ValueError('a cursor of another shape')
             arm = arm.filter(rank <= place[len(lead)] - boost + KEYSET_SLACK,
                              tuple_(*lead, rank + boost, *tail, models.Post.id) < tuple_(*place))
         arm = arm.order_by(desc(rank), *(desc(c) for c in tail), desc(models.Post.id))
@@ -256,23 +255,37 @@ def boosted_order_by(rank, tail: tuple, by_id: bool = True) -> list:
             *([desc(models.Post.id)] if by_id else [])]
 
 
+def check_place(place: tuple, columns: tuple) -> None:
+    """Raise InvalidPage unless the keyset cursor `place` has one value of the right type for each of `columns` (the
+    order columns of the page's query, in order): a number for a number, a timestamp for a timestamp. A cursor this
+    server never handed out would otherwise reach the database as a comparison of mismatched types."""
+    if len(place) != len(columns):
+        raise InvalidPage('a cursor of another shape')
+    for value, column in zip(place, columns):
+        wanted = column.type.python_type
+        if wanted is float:
+            wanted = (int, float)
+        if not isinstance(value, wanted) or (isinstance(value, bool) and wanted is not bool):
+            raise InvalidPage('a cursor of other types')
+
+
 def boosted_posts(posts, rank, tail: tuple, limit: int, bookmark=None, lead: tuple = ()):
     """`posts` (a Post query, filtered and ordered by any sticky columns already) in the order of `boosted_order_by`,
     and cut to the rows `tiered_post_ids` finds: `limit` is how many rows the caller will show, one more than which
     is read to tell whether there is a next page. `bookmark` is the keyset cursor the caller will page by; a bookmark
-    that pages backwards is not cut, and a malformed one is left to the caller's own keyset page to refuse."""
+    that pages backwards is not cut, and a malformed one is left to the caller's own keyset page to refuse. A cursor
+    that parses but whose values are of the wrong shape or types raises InvalidPage, as the caller refuses a bad one."""
     place = None
     if bookmark:
         try:
             place, backwards = unserialize_bookmark(bookmark)
         except (ValueError, TypeError):
             return posts.order_by(*boosted_order_by(rank, tail))
+        if place is not None:
+            check_place(place, (*lead, rank, *tail, models.Post.id))
         if backwards:
             return posts.order_by(*boosted_order_by(rank, tail))
-    try:
-        ids = tiered_post_ids(posts, rank, tail, limit + 1, place, lead)
-    except (IndexError, TypeError, ValueError):   # a cursor this server never handed out
-        return posts.order_by(*boosted_order_by(rank, tail))
+    ids = tiered_post_ids(posts, rank, tail, limit + 1, place, lead)
     return posts.filter(models.Post.id.in_(ids)).order_by(*boosted_order_by(rank, tail))
 
 
