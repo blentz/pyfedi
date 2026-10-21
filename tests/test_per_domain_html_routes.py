@@ -17,7 +17,7 @@ from app.models import Community, CommunityBlock, CommunityMember, ModLog, Site,
 from app.mentions import stored_user
 from tests.factories import make_local_feed, make_post
 from tests.test_onion_guard_limits import cheap_hashes  # noqa: F401
-from tests.two_domains import HELL, ONION, default_request, onion_request, two_domains  # noqa: F401
+from tests.two_domains import HELL, ONION, default_request, no_http, onion_request, two_domains  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -155,6 +155,15 @@ def test_a_lookup_of_a_hosted_name_names_that_domain_or_is_404(app, world, kind,
         response = client.get(f'/{kind}/lookup/{row}/{host}')
         assert response.headers['Location'] == f'/{model_path}/{row}'   # hell.cloud's own redirect, unchanged
         assert client.get(f'/{kind}/lookup/nobody/{other(host)}').status_code == 404
+
+
+@pytest.mark.parametrize('path', [f'/u/nobody@{ONION}', f'/c/nobody@{ONION}', f'/u/nobody@{HELL}'])
+def test_a_signed_in_miss_on_a_hosted_handle_is_404_and_fetches_nothing(app, world, no_http, path):
+    """Only a signed-in visitor reaches search_for_user and search_for_community, the lookups that fetch a remote
+    handle: a hosted one is in the database or nowhere, so a miss is 404 with nothing fetched."""
+    response = signed_in(app, world.viewers[HELL], HELL).get(path, follow_redirects=True)
+    assert response.status_code == 404
+    assert no_http == []
 
 
 def test_a_signed_in_miss_on_a_hosted_community_handle_ends_in_404(app, world):

@@ -60,9 +60,10 @@ import re
 
 import pytest
 from flask import g
+from flask_login import login_user
 
 from app import db
-from app.models import Site
+from app.models import Site, User
 from app.utils import BINARY_RE, USER_NAME_CHARSET_RE, hash_matches_blocked_image
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -367,10 +368,6 @@ class TestTheCommunityUrlCharset:
         data = MultiDict({'community_name': 'A Name', 'url': url,
                           'description': '', 'posting_warning': '',
                           'theme': '', 'invitations': '0'})
-        from flask_login import login_user
-
-        from app.models import User
-
         creator = User()   # the name is checked on the creator's domain: none stamped, so the default
         with app.test_request_context('/', method='POST', data=data):
             login_user(creator)

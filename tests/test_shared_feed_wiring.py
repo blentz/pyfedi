@@ -952,9 +952,10 @@ def test_feed_add_community_subscribe_guard_isolates_both_operands(
 
 
 def test_feed_add_community_subscribes_via_ap_id_when_the_community_has_one(app, db_session):
-    """:435's conditional expression -- `community.ap_id if community.ap_id else community.name`.
+    """The subscribe actor is `actor_handle(community)`: a remote row's ap_id, a local
+    row's `name@domain` for its own domain (C1).
 
-    Two communities differing only in ap_id, so both arms of the expression are
+    Two communities differing only in ap_id, so both arms of actor_handle are
     observed and neither is reached by the other's input. This is fact 75
     cause 7's shape (an arm of a conditional expression) if either proves
     unkillable, but both are reachable here.
@@ -1460,8 +1461,9 @@ def test_announce_add_remove_names_the_feed_at_both_levels_and_carries_two_ids(a
 @pytest.mark.parametrize('community_has_ap_id', [True, False])
 def test_announce_add_remove_subscribes_a_local_member_through_the_right_actor(
         app, db_session, community_has_ap_id):
-    """D661 item (E): the ternary choosing the subscribe actor was unasserted,
-    and BOTH collapses survived.
+    """D661 item (E): the choice of subscribe actor -- now `actor_handle(community)`,
+    a remote row's ap_id or a local row's `name@domain` (C1) -- was unasserted, and
+    BOTH collapses survived.
 
     D661 recorded that this is NOT fact 75 cause 7 -- the arms are genuinely
     distinguishable -- and that the identical expression in

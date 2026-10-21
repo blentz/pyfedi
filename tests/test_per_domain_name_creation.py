@@ -3,7 +3,7 @@
 `bob` on hell.cloud and `bob` on the onion are two accounts: a name another domain holds no longer refuses a
 creation, and a name the same domain holds still does. Feed names stay unique across the site. Every test asserts the
 effect, the second row existing or the refusal happening, not a mock of the check."""
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from flask import g
@@ -11,7 +11,7 @@ from flask_login import login_user
 from werkzeug.datastructures import MultiDict
 from wtforms.validators import ValidationError
 
-from app import db
+from app import cli, db
 from app.admin.forms import MoveCommunityForm
 from app.auth.forms import RegistrationForm
 from app.auth.oauth_util import find_new_username
@@ -279,8 +279,6 @@ def test_a_new_local_row_never_has_a_null_domain(app, domains):
 
 
 def test_the_cli_admin_name_must_be_free(app, db_session, domains):
-    from app import cli
-    from unittest.mock import MagicMock
     cli.register(app)
     default, onion = domains
     taken = make_user(None, 'taken', local=True)
