@@ -7,13 +7,15 @@ from sqlalchemy import text, desc, exists, or_
 
 from app import celery, db
 from app.activitypub.signature import signed_get_request, send_post_request
-from app.activitypub.util import actor_json_to_model, canonical_handle, is_user_actor, webfinger_self_link_allowed
+from app.activitypub.util import actor_json_to_model, canonical_handle, find_actor_or_create, is_user_actor, \
+    webfinger_self_link_allowed
 from app.constants import AP_FETCH_ACCEPT, POST_STATUS_REVIEWING
+from app.local_names import local_named, split_local_name
 from app.mentions import stored_user, user_address_parts
 from app.models import User, CommunityMember, Community, Site, BannedInstances, Post, \
     PostVote, ArchivedPostReply, PostReply, UserNote
 from app.shared.tasks import task_selector
-from app.storefront import domain_for_host
+from app.storefront import current_storefront, domain_for_host
 from app.utils import gibberish, get_request, get_task_session, patch_db_session, \
     intlist_to_strlist, community_membership_private, paginate_post_ids, post_ids_to_models
 from app.local_only import local_only_visible, without_local_only
@@ -21,6 +23,24 @@ from app.visibility import visible_to_clause, visible_to_sql
 
 import httpx
 import app as app_pkg
+
+
+def user_for_actor(actor: str, allow_banned: bool = False) -> User | None:
+    """The user a `/u/<actor>` page acts on, banned ones only with `allow_banned`. A handle is found as
+    find_actor_or_create finds it: a hosted domain's own account, else a stored remote one. A bare name is the
+    storefront's account: on the default domain by the actor URL SERVER_URL builds, as it always was (which also
+    finds an alternate name); on any other domain by its name there."""
+    actor = actor.strip()
+    if '@' in actor:
+        return find_actor_or_create(actor, create_if_not_found=False, allow_banned=allow_banned)
+    if current_storefront().is_default:
+        return find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}', create_if_not_found=False,
+                                    allow_banned=allow_banned)
+    split = split_local_name(actor)
+    if split is None:
+        return None
+    query = User.query.filter(local_named(User, *split))
+    return (query if allow_banned else query.filter(User.banned.is_(False))).first()
 
 
 def purge_user_then_delete(user_id, flush=True):

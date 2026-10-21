@@ -40,7 +40,8 @@ from app.user.forms import ProfileForm, SettingsForm, DeleteAccountForm, ReportU
     UploadFileForm, BlockUserForm, BlockCommunityForm, BlockDomainForm, BlockInstanceForm, UnsubAllForm
 from app.user.utils import unsubscribe_from_community, search_for_user, _get_user_moderates, \
     _get_user_upvoted_posts, _get_user_subscribed_communities, _get_user_posts, _get_user_post_replies, \
-    _get_user_archived_replies, _get_user_posts_and_replies, _get_user_same_ip, insert_or_update_user_note
+    _get_user_archived_replies, _get_user_posts_and_replies, _get_user_same_ip, insert_or_update_user_note, \
+    user_for_actor
 from app.utils import etag_stamp
 from app.utils import user_banned_from_community, back, render_template, markdown_to_html, user_access, markdown_to_text, shorten_string, \
     gibberish, community_membership, user_filters_home, \
@@ -57,7 +58,8 @@ from app.utils import user_banned_from_community, back, render_template, markdow
 from app.rss_extras import RSSFeed
 import app.api.alpha.views as alpha_views
 from app.utils import user_filters_languages
-from app.storefront import is_local_host, storefront_query_cache_key, storefront_url
+from app.local_names import local_clause, local_named, named_by_actor
+from app.storefront import domain_for_host, is_local_host, path_name, storefront_query_cache_key, storefront_url
 from app.utils import ap_alternate_url
 from app.utils import canonical_host
 import app as app_pkg
@@ -274,10 +276,7 @@ def show_profile(user):
 @login_required_if_private_instance
 def user_upvotes(actor):
     actor = actor.strip()
-    if '@' in actor:
-        user = find_actor_or_create(actor, create_if_not_found=False)
-    else:
-        user = find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}', create_if_not_found=False)
+    user = user_for_actor(actor)
 
     # D1074. `_get_user_upvoted_posts` reads `user.id`, and it was called
     # BEFORE the `if user is not None` check three lines below -- so an actor
@@ -302,7 +301,7 @@ def user_upvotes(actor):
 @login_required
 def edit_profile(actor):
     actor = actor.strip()
-    user = User.query.filter_by(user_name=actor, deleted=False, banned=False, ap_id=None).first()
+    user = User.query.filter(local_clause(User, actor), User.deleted.is_(False), User.banned.is_(False)).first()
     if user is None:
         abort(404)
     if current_user.id != user.id:
@@ -902,10 +901,7 @@ def ban_profile(actor):
     form = BanUserForm()
     if user_access('ban users', current_user.id) or user_access('manage users', current_user.id):
         actor = actor.strip()
-        if '@' in actor:
-            user = find_actor_or_create(actor, create_if_not_found=False)
-        else:
-            user = find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}', create_if_not_found=False)
+        user = user_for_actor(actor)
         if user is None:
             abort(404)
 
@@ -944,11 +940,7 @@ def ban_profile(actor):
 def unban_profile(actor):
     if user_access('ban users', current_user.id):
         actor = actor.strip()
-        if '@' in actor:
-            user = find_actor_or_create(actor, create_if_not_found=False, allow_banned=True)
-        else:
-            user = find_actor_or_create(f"{current_app.config['SERVER_URL']}/u/{actor}",
-                                        create_if_not_found=False, allow_banned=True)
+        user = user_for_actor(actor, allow_banned=True)
         if user is None:
             abort(404)
 
@@ -968,10 +960,7 @@ def unban_profile(actor):
 @login_required
 def block_profile(actor):
     actor = actor.strip()
-    if '@' in actor:
-        user = find_actor_or_create(actor, create_if_not_found=False)
-    else:
-        user = find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}', create_if_not_found=False)
+    user = user_for_actor(actor)
     if user is None:
         abort(404)
 
@@ -1013,10 +1002,7 @@ def block_profile(actor):
 @login_required
 def user_block_instance(actor):
     actor = actor.strip()
-    if '@' in actor:
-        user = find_actor_or_create(actor, create_if_not_found=False)
-    else:
-        user = find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}', create_if_not_found=False)
+    user = user_for_actor(actor)
     if user is None:
         abort(404)
 
@@ -1053,10 +1039,7 @@ def user_block_instance(actor):
 @login_required
 def unblock_profile(actor):
     actor = actor.strip()
-    if '@' in actor:
-        user = find_actor_or_create(actor, create_if_not_found=False)
-    else:
-        user = find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}', create_if_not_found=False)
+    user = user_for_actor(actor)
     if user is None:
         abort(404)
 
@@ -1098,10 +1081,7 @@ def report_profile(actor):
     if current_user.banned:
         return show_ban_message()
 
-    if '@' in actor:
-        user = find_actor_or_create(actor, create_if_not_found=False)
-    else:
-        user = find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}', create_if_not_found=False)
+    user = user_for_actor(actor)
     if user is None:
         abort(404)
 
@@ -1197,11 +1177,7 @@ def report_profile(actor):
 def delete_profile(actor):
     if user_access('manage users', current_user.id):
         actor = actor.strip()
-        if '@' in actor:
-            user = find_actor_or_create(actor, create_if_not_found=False)
-        else:
-            user = find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}',
-                                        create_if_not_found=False)
+        user = user_for_actor(actor)
         if user is None:
             abort(404)
         if user.id == current_user.id:
@@ -1799,7 +1775,7 @@ def user_settings_block_user():
                 user_to_block = None
         else:
             # Local username lookup
-            user_to_block = User.query.filter_by(user_name=username, deleted=False, ap_id=None).first()
+            user_to_block = User.query.filter(local_clause(User, username), User.deleted.is_(False)).first()
 
         if not user_to_block:
             flash(_('User not found: %(username)s', username=username), 'error')
@@ -1848,7 +1824,7 @@ def user_settings_block_community():
                 community_to_block = None
         else:
             # Local community lookup
-            community_to_block = Community.query.filter_by(name=community_name).first()
+            community_to_block = Community.query.filter(local_clause(Community, community_name)).first()
 
         if not community_to_block:
             flash(_('Community not found: %(name)s', name=community_name), 'error')
@@ -2146,7 +2122,7 @@ def user_hidden_posts():
 @bp.route('/u/<actor>/fediverse_redirect', methods=['GET', 'POST'])
 def fediverse_redirect(actor):
     actor = actor.strip()
-    user = User.query.filter_by(user_name=actor, deleted=False, ap_id=None).first()
+    user = User.query.filter(local_clause(User, actor), User.deleted.is_(False)).first()
 
     # D1065. Neither `user is None` nor a remote account returned anything, so
     # both answered `TypeError: The view function for
@@ -2263,10 +2239,7 @@ def edit_user_note(actor):
     # than left: a dead check reads as the protection, and the replacement IS
     # the protection. The D983 precedent.
     return_to = safe_redirect_target(request.args.get('return_to', '').strip(), '')
-    if '@' in actor:
-        user: User = User.query.filter_by(ap_id=actor, deleted=False).first()
-    else:
-        user: User = User.query.filter_by(user_name=actor, deleted=False, ap_id=None).first()
+    user: User = User.query.filter(named_by_actor(User, actor), User.deleted.is_(False)).first()
     if user is None:
         abort(404)
     form = UserNoteForm()
@@ -2339,10 +2312,7 @@ def return_to_or_401(actor: str) -> str:
 def user_follow(actor):
     actor = actor.strip()
     return_to = return_to_or_401(actor)
-    if '@' in actor:
-        user: User = User.query.filter_by(ap_id=actor, deleted=False).first()
-    else:
-        user: User = User.query.filter_by(user_name=actor, deleted=False, ap_id=None).first()
+    user: User = User.query.filter(named_by_actor(User, actor), User.deleted.is_(False)).first()
     if user is None:
         abort(404)
     if refuses_remote_contact(current_user, user):   # spec 3.4: said here, not left pending forever
@@ -2368,10 +2338,7 @@ def user_follow(actor):
 def user_unfollow(actor):
     actor = actor.strip()
     return_to = return_to_or_401(actor)
-    if '@' in actor:
-        user: User = User.query.filter_by(ap_id=actor, deleted=False).first()
-    else:
-        user: User = User.query.filter_by(user_name=actor, deleted=False, ap_id=None).first()
+    user: User = User.query.filter(named_by_actor(User, actor), User.deleted.is_(False)).first()
     if user is None:
         abort(404)
 
@@ -2389,10 +2356,7 @@ def user_unfollow(actor):
 def user_bot_challenge(actor):
     actor = actor.strip()
     return_to = return_to_or_401(actor)
-    if '@' in actor:
-        user: User = User.query.filter_by(ap_id=actor, deleted=False).first()
-    else:
-        user: User = User.query.filter_by(user_name=actor, deleted=False, ap_id=None).first()
+    user: User = User.query.filter(named_by_actor(User, actor), User.deleted.is_(False)).first()
     if user is None:
         abort(404)
 
@@ -2407,8 +2371,10 @@ def user_bot_challenge(actor):
 
 @bp.route('/user/lookup/<person>/<domain>')
 def lookup(person, domain):
-    if is_local_host(domain):
-        return redirect('/u/' + person)
+    hosted = domain_for_host(domain)
+    if hosted is not None:   # one of ours: that domain's own account, named as a path names it here, or nobody
+        user = User.query.filter(local_named(User, person, hosted)).first() or abort(404)
+        return redirect('/u/' + path_name(person, user.site_domain_id))
 
     exists = User.query.filter_by(user_name=person, ap_domain=domain).first()
     if exists:
@@ -2467,10 +2433,7 @@ def user_feeds(actor):
     user_has_public_feeds = False
 
     actor = actor.strip()
-    if '@' in actor:
-        user = find_actor_or_create(actor, create_if_not_found=False)
-    else:
-        user = find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}', create_if_not_found=False)
+    user = user_for_actor(actor)
 
     if user is None:
         abort(404)
@@ -2493,10 +2456,7 @@ def user_feeds(actor):
 @as_rss_reader
 def show_profile_rss(actor):
     actor = actor.strip()
-    if '@' in actor:
-        user = find_actor_or_create(actor, create_if_not_found=False)
-    else:
-        user = find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}', create_if_not_found=False)
+    user = user_for_actor(actor)
 
     if user is not None:
         # D1056. The lookup filters `banned` but NOT `deleted`, so a deleted

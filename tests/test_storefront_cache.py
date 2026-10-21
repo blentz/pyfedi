@@ -84,8 +84,9 @@ def get(app, path, host):
     return response.get_data(as_text=True)
 
 
-PRESENTATION_VIEWS = ['/sitemap.xml', '/community/general/feed', '/community/general/feed?limit=5',
-                      '/u/author/feed', '/topic/pictures.rss']
+# hell's rows by their handle, which names them on either host (plan C1: a bare name is the storefront's own)
+PRESENTATION_VIEWS = ['/sitemap.xml', f'/community/general@{CANONICAL}/feed', f'/community/general@{CANONICAL}/feed?limit=5',
+                      f'/u/author@{CANONICAL}/feed', '/topic/pictures.rss']
 
 
 @pytest.mark.parametrize('first, second', [(CANONICAL, ONION), (ONION, CANONICAL)])
@@ -114,8 +115,8 @@ def test_rss_query_string_still_keys_the_cache(app, world):
     """show_community_rss reads `limit` and friends from the query string: each query string is its own entry."""
     make_post(world[1], world[0], f'https://{CANONICAL}/post/2', title='a second picture').instance_id = 1
     db.session.commit()
-    one = get(app, '/community/general/feed?limit=1', ONION)
-    two = get(app, '/community/general/feed?limit=2', ONION)
+    one = get(app, f'/community/general@{CANONICAL}/feed?limit=1', ONION)
+    two = get(app, f'/community/general@{CANONICAL}/feed?limit=2', ONION)
     assert one.count('<item>') == 1
     assert two.count('<item>') == 2
 

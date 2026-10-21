@@ -63,6 +63,7 @@ from app.shared.tasks.maintenance import (
     archive_old_posts, archive_old_users, cleanup_old_read_posts, refresh_instance_chooser, clean_up_tmp
 )
 from app.utils import move_file_to_s3
+from app.local_names import local_named
 from app.storefront import default_domain, home_storefront
 from app.discovery.cli import register_discovery_commands
 from app.relays.cli import register_relay_commands
@@ -1238,7 +1239,7 @@ def register(app):
     def rss_feeds():
 
         # Find or create the feed_bot user
-        feed_bot = User.query.filter_by(user_name='feed_bot', ap_id=None).first()
+        feed_bot = User.query.filter(local_named(User, 'feed_bot', default_domain())).first()
         if not feed_bot:
             # Create the feed_bot user
             private_key, public_key = RsaKeys.generate_keypair()

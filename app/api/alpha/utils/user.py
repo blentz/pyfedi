@@ -12,6 +12,10 @@ from app.activitypub.util import make_image_sizes, normalise_actor_string
 from app.api.alpha.utils.post import get_post_list
 from app.api.alpha.utils.reply import get_reply_list
 from app.api.alpha.views import user_view, reply_view, post_view, community_view
+# The module, not the name: app.auth.util reaches this file, through the activitypub and api blueprints, before
+# find_user is defined (import cycle: app.auth.util)
+import app.auth.util as auth_util
+from app.local_names import local_clause, local_named
 from app.constants import *
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message
 from app.models import Conversation, ChatMessage, Notification, PostReply, User, Post, Community, File, UserFlair, \
@@ -22,7 +26,7 @@ import app.shared.user as shared_user
 from app.utils import authorise_api_user, in_sorted_list, user_in_restricted_country, user_access, user_notes
 from app.utils import markdown_to_html, log_login_failure
 from app.visibility import visible_to_clause
-from app.storefront import canonical_link, canonicalise_text, current_storefront, on_domain, storefront_link
+from app.storefront import canonical_link, canonicalise_text, current_storefront, domain_for_host, on_domain, storefront_link
 
 
 def get_user(auth, data):
@@ -32,17 +36,18 @@ def get_user(auth, data):
         person = int(data['person_id'])
     elif 'username' in data:
         person = data['username']
-        if '@' not in person:
-            name = person.lower()
-            ap_domain = None
+        if '@' not in person:   # a bare name is the storefront's account
+            found = User.query.filter(local_clause(User, person))
         else:
             name, ap_domain = normalise_actor_string(person)   # both lowercased
             if not name or not ap_domain:
                 raise Exception('invalid_request')
-            if ap_domain == current_app.config['SERVER_NAME'].lower():
-                ap_domain = None
-        person = User.query.filter(func.lower(User.user_name) == name, func.lower(User.ap_domain) == ap_domain,
-                                   User.deleted == False).one()
+            hosted = domain_for_host(ap_domain)
+            if hosted is not None:   # a hosted domain's own account
+                found = User.query.filter(local_named(User, name, hosted))
+            else:
+                found = User.query.filter(func.lower(User.user_name) == name, func.lower(User.ap_domain) == ap_domain)
+        person = found.filter(User.deleted == False).one()
         data['person_id'] = person.id
     include_content = data['include_content'] if 'include_content' in data else False
     saved_only = data['saved_only'] if 'saved_only' in data else False
@@ -927,10 +932,9 @@ def post_user_verify_credentials(data):
     username = data['username'].lower()
     password = data['password']
 
-    if '@' in username:
-        user = User.query.filter(func.lower(User.email) == username, User.ap_id == None, User.deleted == False).first()
-    else:
-        user = User.query.filter(func.lower(User.user_name) == username, User.ap_id == None, User.deleted == False).first()
+    # The web login's finder: a bare name on the storefront's domain, a handle on the hosted domain it names, an
+    # email anywhere. A handle on a domain this site does not host finds nobody, and fails as a wrong password does
+    user = auth_util.find_user(username)
 
     # D1179. The API's own login (`api_log_user_in`) refuses a
     # banned account with `incorrect_login`; this endpoint answered 200 for

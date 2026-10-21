@@ -86,8 +86,9 @@ import app.shared.feed as shared_feed
 from app.utils import is_valid_xml_utf8, get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url, joined_server_views
 from app.activitypub.serializers.podcast import uses_podcast_episode
 from app.storefront import (canonicalise_text, default_storefront, delete_memoized_everywhere, domain_authority, domain_base_url,
-                            is_local_host, storefront_host,
+                            domain_for_host, path_name, storefront_host,
                             storefront_link, storefront_query_cache_key, storefront_url)
+from app.local_names import local_named, split_local_name
 from app.rss_extras import RSSFeed, PodcastChannel, itunes_image_ok
 from datetime import timezone, timedelta
 from flask import render_template as flask_render_template
@@ -844,10 +845,7 @@ def show_community(community: Community, from_instance=None):
 @as_rss_reader
 def show_community_rss(actor):
     actor = actor.strip()
-    if '@' in actor:
-        community: Community = Community.query.filter_by(ap_id=actor, banned=False).first()
-    else:
-        community: Community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
+    community: Community = actor_to_community(actor)
     if community is not None:
         # D1013. The private check used to sit BELOW the 304, so a client
         # holding an ETag from before the community was made private got
@@ -941,10 +939,7 @@ def show_community_rss(actor):
 @login_required_if_private_instance
 def show_community_ical(actor):
     actor = actor.strip()
-    if '@' in actor:
-        community: Community = Community.query.filter_by(ap_id=actor, banned=False).first()
-    else:
-        community: Community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
+    community: Community = actor_to_community(actor)
     if community is not None:
         if community.private:
             abort(403)
@@ -1058,15 +1053,16 @@ def server_view_button_response(actor: str, joined: bool, htmx: bool):
 # admin.admin_federation.preload_form and feed subscription process as well
 @celery.task
 def do_subscribe(actor, user_id, admin_preload=False, joined_via_feed=False):
+    actor = actor.strip()
+    local = split_local_name(actor)   # here: the app context below hides the request's storefront, a bare name's domain
     with current_app.app_context():
         session = get_task_session()
         try:
             with patch_db_session(session):
                 remote = False
-                actor = actor.strip()
                 user = db.session.get(User, user_id)
                 pre_load_message = {}
-                if '@' in actor:
+                if local is None and '@' in actor:   # a handle on a domain this site does not host
                     community = Community.query.filter_by(ap_id=actor).first()
                     if community is None:
                         community = search_for_community(f'!{actor}' if '!' not in actor else actor)
@@ -1080,7 +1076,8 @@ def do_subscribe(actor, user_id, admin_preload=False, joined_via_feed=False):
                         community = None
                     remote = True
                 else:
-                    community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
+                    community = None if local is None else \
+                        Community.query.filter(local_named(Community, *local), Community.banned.is_(False)).first()
 
                 if community is not None:
                     pre_load_message['community'] = community.ap_id
@@ -1165,7 +1162,7 @@ def unsubscribe(actor):
         if subscription:
             if subscription != SUBSCRIPTION_OWNER:
                 # Undo the Follow
-                if '@' in actor:  # this is a remote community, so activitypub is needed
+                if not community.is_local():  # a remote community, so activitypub is needed
                     if not community.instance.gone_forever:
                         follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{gibberish(15)}"
                         # D89 (owner ruling): the original Follow's id, for every peer rather than only ovo.st
@@ -3213,8 +3210,10 @@ def community_invite_accept(actor, token):
 
 @bp.route('/lookup/<community>/<domain>')
 def lookup(community, domain):
-    if is_local_host(domain):
-        return redirect('/c/' + community)
+    hosted = domain_for_host(domain)
+    if hosted is not None:   # one of ours: that domain's own community, named as a path names it here, or none
+        found = Community.query.filter(local_named(Community, community, hosted)).first() or abort(404)
+        return redirect('/c/' + path_name(community, found.site_domain_id))
 
     community = community.lower()
     domain = domain.lower()

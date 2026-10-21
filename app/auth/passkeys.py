@@ -14,7 +14,8 @@ from app import db, cache
 from app.auth import bp
 from app.auth.util import split_handle
 from app.models import User, utcnow
-from app.storefront import current_storefront, on_domain, storefront_url
+from app.local_names import local_named
+from app.storefront import current_storefront, storefront_url
 from app.utils import safe_redirect_target
 
 
@@ -25,7 +26,7 @@ def passkey_user(username):
     if not isinstance(username, str):
         return None
     name, domain = split_handle(username, current_storefront())
-    named = (User.user_name == name) & on_domain(domain) if domain else false()
+    named = local_named(User, name, domain, exact_case=True) if domain else false()
     return User.query.filter(named | (User.email == username), User.ap_id == None, User.banned == False).first()
 
 

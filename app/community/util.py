@@ -31,12 +31,13 @@ from app.constants import SRC_WEB, POST_TYPE_LINK, AP_FETCH_ACCEPT
 from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, _as_dict, parse_ap_published, \
     Instance, User, Tag, CommunityFlair, CommunityThemeAllowed, markdown_source, \
     language_from_ap, _as_url
-from app.storefront import domain_for_host, on_domain
+from app.local_names import local_named, named_by_actor
+from app.storefront import domain_for_host
 from app.utils import get_request, gibberish, ensure_directory_exists, ap_datetime, instance_banned, get_task_session, \
     store_files_in_s3, guess_mime_type, patch_db_session, instance_allowed, get_setting, scale_gif, theme_list, \
     save_image_without_metadata, \
     sanitize_svg, can_create_post, can_create_post_reply
-from sqlalchemy import func, desc, text
+from sqlalchemy import desc, text
 import os
 import boto3
 from app.utils import allowlist_html, markdown_to_html, html_to_text
@@ -100,8 +101,7 @@ def search_for_community(address: str, allow_fetch: bool = True, retry: bool = F
 
         hosted = domain_for_host(server)
         if hosted:   # one of ours: that domain's own community, or none. Never fetched (it would be a self-request)
-            return db.session.query(Community).filter(func.lower(Community.name) == name.lower(),
-                                                      Community.ap_id.is_(None), on_domain(hosted, Community)).first()
+            return db.session.query(Community).filter(local_named(Community, name, hosted)).first()
 
         already_exists = db.session.query(Community).filter_by(ap_id=address[1:]).first()
         if already_exists:
@@ -541,12 +541,9 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
 
 
 def actor_to_community(actor) -> Community:
-    actor = actor.strip()
-    if '@' in actor:
-        community = Community.query.filter_by(banned=False, ap_id=actor).first()
-    else:
-        community = Community.query.filter(func.lower(Community.name) == func.lower(actor)).filter_by(banned=False, ap_id=None).first()
-    return community
+    """The unbanned community a `/c/<actor>` path names: a local name on its domain (a bare name is the
+    storefront's), else the remote community whose `ap_id` the handle is."""
+    return Community.query.filter(named_by_actor(Community, actor.strip()), Community.banned.is_(False)).first()
 
 
 def end_poll_date(end_choice):

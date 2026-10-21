@@ -34,6 +34,7 @@ from app import db, cache, celery, plugins
 from app.activitypub.signature import signed_get_capped, signed_get_request, send_post_request, default_context, RsaKeys
 from app.constants import *
 from app.local_only import federating_clause, federating_sql
+from app.local_names import local_named
 from app.storefront import default_domain, domain_authority, domain_base_url
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
@@ -7285,7 +7286,8 @@ def find_community(request_json, author=None):
 
 def find_microblogging_community():
     """ Make a special community to put posts without a community into, e.g. microblog posts """
-    community = db.session.query(Community).filter(Community.instance_id == 1, Community.user_id == 1, Community.name == 'microblogs').first()
+    community = db.session.query(Community).filter(Community.instance_id == 1, Community.user_id == 1,
+                                                   local_named(Community, 'microblogs', default_domain())).first()
     if community is None:
         private_key, public_key = RsaKeys.generate_keypair()
         home = default_domain()

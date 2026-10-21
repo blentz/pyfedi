@@ -105,9 +105,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/api/alpha/utils/reply.py': {
         'get_reply_list': 1,
     },
-    'app/api/alpha/utils/user.py': {
-        'get_user': 1,
-    },
     'app/api/alpha/views.py': {
         '_neutral_post': 1,
         'private_message_view': 1,
@@ -174,7 +171,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'instance_actor': 9,
         'instance_actor_outbox': 1,
         'list_feeds': 1,
-        'modlog': 2,
+        'modlog_shown_name': 1,   # a handle on SERVER_NAME is shown back as its bare name on the default storefront
         'test_hashing': 1,
     },
     'app/models.py': {
@@ -325,24 +322,14 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'is_served_name': 1,   # SERVER_NAME as configured is a name this site answers on: it names no URL
     },
     'app/user/routes.py': {
-        'ban_profile': 1,
-        'block_profile': 1,
-        'delete_profile': 1,
         'export_user_settings': 4,
         'fediverse_redirect': 4,
         'import_settings_task': 1,
-        'report_profile': 1,
         'send_deletion_requests': 1,
         'show_people': 1,
-        'show_profile_rss': 1,
-        'unban_profile': 1,
-        'unblock_profile': 1,
-        'user_block_instance': 1,
-        'user_feeds': 1,
         'user_follow_request_accept': 2,
         'user_follow_request_reject': 2,
         'user_settings_block_instance': 1,
-        'user_upvotes': 1,
     },
     'app/user/subscription.py': {
         'choose_plan': 3,
@@ -350,6 +337,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/user/utils.py': {
         'search_for_user': 1,
         'unsubscribe_from_community': 2,
+        'user_for_actor': 1,   # a bare name on the default domain is found by the actor URL SERVER_URL builds
     },
     'app/utils.py': {
         'get_request': 2,

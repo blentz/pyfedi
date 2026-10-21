@@ -225,11 +225,12 @@ def test_verify_credentials_logs_onion_for_a_hidden_refusal(app, alice, redis_do
 
 def test_verify_credentials_logs_nothing_for_success_or_ban(app, alice, caplog):
     with app.test_request_context('/', environ_base=CLEARNET):
-        assert post_user_verify_credentials({'username': 'alice', 'password': PASSWORD}) == {}
+        # alice is the onion's account: on the clearnet her full handle names her, as for web login
+        assert post_user_verify_credentials({'username': 'alice@abc.onion', 'password': PASSWORD}) == {}
         alice.banned = True
         db.session.commit()
         with pytest.raises(BlockingIOError):
-            post_user_verify_credentials({'username': 'alice', 'password': PASSWORD})
+            post_user_verify_credentials({'username': 'alice@abc.onion', 'password': PASSWORD})
     assert failures(caplog) == []
 
 

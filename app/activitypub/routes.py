@@ -15,7 +15,7 @@ from furl import furl
 # the whole inbox request down with a 500 instead of logging the membership as
 # already existing.
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import desc, exists, false, not_, or_, text, true, func, select, union_all, literal_column
+from sqlalchemy import desc, exists, not_, or_, text, true, func, select, union_all, literal_column
 
 from app import db, cache, celery, limiter
 from app.activitypub import bp
@@ -52,7 +52,7 @@ from app.relays import current_relay_id
 from app.relays import inbound as relay_inbound
 from app.local_only import any_domain_closed, community_local_only, federated_mentions, federating_clause, \
     refused_outbound, user_local_only
-from app.local_names import local_named, split_local_name
+from app.local_names import local_clause, split_local_name
 from app.storefront import current_storefront, domain_for_host, is_served_name
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
@@ -627,13 +627,6 @@ def resolve_remote_handle(actor: str):
         return search_for_user(actor)
     except Exception:
         return None
-
-
-def local_clause(model, actor: str):
-    """The clause for the local `model` an `<actor>` path segment names: a bare name on the storefront's domain,
-    name@host on that hosted domain. A handle on a domain this site does not host names nothing here."""
-    split = split_local_name(actor)
-    return local_named(model, *split) if split is not None else false()
 
 
 def community_collection_id(community: Community, collection: str) -> str:

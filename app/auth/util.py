@@ -21,8 +21,9 @@ from app.auth.forms import LoginForm
 from app.constants import NOTIF_REGISTRATION
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
+from app.local_names import local_named
 from app.storefront import (DomainInfo, current_storefront, default_domain, domain_base_url, domain_for_host, home_storefront,
-                            on_domain, public_registration_open)
+                            public_registration_open)
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role, dummy_password_hash, \
     verify_password_hash
 from app.onion import audit_field, is_onion_request
@@ -545,7 +546,7 @@ def find_user_lookups(user_name, storefront: DomainInfo | None = None):
     name, domain = split_handle(typed, storefront or current_storefront())
     local = and_(User.ap_id.is_(None), User.deleted.is_(False))
     # A domain this site does not host has no accounts, but its lookups run all the same
-    by_name = and_(local, func.lower(User.user_name) == func.lower(name), on_domain(domain)) if domain else false()
+    by_name = and_(User.deleted.is_(False), local_named(User, name, domain)) if domain else false()
     # Equality, not ILIKE: in a pattern the typed '%' and '_' were wildcards, so '%' found some account
     by_profile = (User.deleted.is_(False) &
                   (func.lower(User.ap_profile_id) == f"{domain_base_url(domain)}/u/{name}".lower())) if domain else false()

@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from flask import current_app
-from sqlalchemy import or_, func
+from sqlalchemy import or_
 
 from app import cache, db
 from app.constants import AP_FETCH_ACCEPT
@@ -17,7 +17,7 @@ from app.activitypub.util import get_request, signed_get_request, actor_json_to_
 from app.discovery.podcast import podcast_community_for
 from app.models import User, Community, Feed, Site
 from app.local_names import local_named
-from app.storefront import current_storefront, domain_for_host, on_domain
+from app.storefront import current_storefront, domain_for_host
 from app.utils import utcnow, get_setting, actor_contains_blocked_words, actor_profile_contains_blocked_words, \
     instance_banned, low_value_reposters, instance_allowed
 
@@ -403,7 +403,7 @@ def find_actor_by_url(actor_url, community_only=False, feed_only=False, allow_ba
     if '@' in actor_url:
         if hosted:   # name@<a hosted domain>: that domain's own account, or nobody
             name = actor_url.removeprefix('@').rpartition('@')[0]
-            local = User.query.filter(func.lower(User.user_name) == name, User.ap_id.is_(None), on_domain(hosted))
+            local = User.query.filter(local_named(User, name, hosted))
             return (local if allow_banned else local.filter(User.banned.is_(False))).first()   # as find_local_user
         user: User = User.query.filter_by(ap_id=actor_url.lower()).first()
         return user

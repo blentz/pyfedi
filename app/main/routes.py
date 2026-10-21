@@ -10,7 +10,7 @@ from feedgen.feed import FeedGenerator
 from furl import furl
 from markupsafe import Markup, escape
 from pyld import jsonld
-from sqlalchemy import or_, and_, func
+from sqlalchemy import or_, and_
 from sqlalchemy.orm import joinedload
 from ua_parser import parse as uaparse
 
@@ -42,6 +42,7 @@ from app.main.util import sidebar_active_communities, sidebar_new_instances, sid
     sidebar_new_communities, _base_list_communities_context, reload_url
 from app.translation import LibreTranslateAPI
 from app.local_only import local_only_visible, local_only_visible_rss, without_local_only
+from app.local_names import local_named, split_local_name
 from app.visibility import listable_clause, modlog_local_only_clause, modlog_open_clause, visible_to_clause
 from app.storefront import ON_DOMAIN_PARAM, current_storefront, on_domain, on_domain_sql, storefront_host, storefront_cache_key, storefront_link, \
     storefront_url
@@ -611,6 +612,22 @@ def list_communities():
     return render_template('list_communities.html', **context)
 
 
+def modlog_user(name: str):
+    """The account a modlog filter names: a local name on its domain (a bare name is the storefront's), else the
+    remote account whose handle it is."""
+    split = split_local_name(name)
+    user = User.query.filter(local_named(User, *split)).first() if split is not None else None
+    return user or User.query.filter_by(ap_id=name.lower()).first()
+
+
+def modlog_shown_name(name: str) -> str:
+    """The filter as the page shows it back: on the default storefront, a handle on SERVER_NAME is its bare name,
+    which names the same account there."""
+    if current_storefront().is_default and f"@{current_app.config['SERVER_NAME']}" in name:
+        return name.split('@')[0]
+    return name
+
+
 @bp.route('/modlog', methods=['GET'])
 @limiter.limit("20 per 1 minutes", methods=['GET', 'POST'])
 # A private instance shows nothing to a caller without an account, and this
@@ -646,19 +663,14 @@ def modlog():
     if mod_action:
         modlog_entries = modlog_entries.filter(ModLog.action == mod_action)
     if suspect_user_name:
-        if f"@{current_app.config['SERVER_NAME']}" in suspect_user_name:
-            suspect_user_name = suspect_user_name.split('@')[0]
-        user = User.query.filter(func.lower(User.user_name) == suspect_user_name.lower(), User.ap_id == None).first()
-        if user is None:
-            user = User.query.filter_by(ap_id=suspect_user_name.lower()).first()
+        user = modlog_user(suspect_user_name)
+        suspect_user_name = modlog_shown_name(suspect_user_name)
         if user:
             modlog_entries = modlog_entries.filter(ModLog.target_user_id == user.id)
             if not (current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff())):
                 # R3: an entry about content that is not open names no target user to this reader
                 modlog_entries = modlog_entries.filter(modlog_open_clause())
     if user_name:
-        if f"@{current_app.config['SERVER_NAME']}" in user_name:
-            user_name = user_name.split('@')[0]
         # `user_name`, not `suspect_user_name`: this block filters by the
         # MODERATOR who acted, and it was searching for the suspect's name
         # instead -- a copy of the block above with one word left behind. With
@@ -666,9 +678,8 @@ def modlog():
         # and the fallback lookup by ap_id matches only remote accounts -- so
         # filtering the modlog by a local moderator's name silently returned
         # the whole unfiltered log.
-        user = User.query.filter(func.lower(User.user_name) == user_name.lower(), User.ap_id == None).first()
-        if user is None:
-            user = User.query.filter_by(ap_id=user_name.lower()).first()
+        user = modlog_user(user_name)
+        user_name = modlog_shown_name(user_name)
         if user:
             modlog_entries = modlog_entries.filter(ModLog.user_id == user.id)
     if community_id:

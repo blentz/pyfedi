@@ -13,7 +13,6 @@ from xml.parsers import expat
 
 import httpx
 from flask import current_app
-from sqlalchemy import func
 
 import app.activitypub.util as ap_util   # the module, not names: app.activitypub.util imports this module
 from app import cache, celery, db
@@ -21,7 +20,9 @@ from app.activitypub.signature import HttpSignature
 from app.constants import AP_FETCH_ACCEPT
 from app.discovery.filters import ascii_host, clean_https_url, clean_name, url_is_excluded
 from app.discovery.podcast import podcast_community_for
+from app.local_names import local_named
 from app.models import Post, Site, User
+from app.storefront import default_domain
 from app.utils import get_request_capped, get_task_session, patch_db_session
 
 MAX_FEED_BYTES = 2 * 1024 * 1024
@@ -292,8 +293,7 @@ def _known_user(href: str):
         local = re.fullmatch(r'/u/([A-Za-z0-9_]+)/?', parts.path)
         if local is None:
             return None
-        return db.session.query(User).filter(func.lower(User.user_name) == local.group(1).lower(),
-                                             User.ap_id == None).first()
+        return db.session.query(User).filter(local_named(User, local.group(1), default_domain())).first()
     user = db.session.query(User).filter(User.ap_profile_id == href.lower()).first()
     if user is not None:
         return user
