@@ -195,6 +195,13 @@ def test_the_upload_field_is_offered_to_a_permitted_moderator(env):
     assert b'name="image_file"' in page and b'name="audio_url"' in page
 
 
+def test_the_video_upload_hint_names_the_codecs_processing_accepts(env):
+    """It said h.264 and mp3; processing checks only the video codec, H.264, VP9 or AV1."""
+    client, _ = env.client_for(env.mod)
+    page = client.get(submit_url(env.app, env.chan, 'video')).get_data(as_text=True)
+    assert 'H.264, VP9 or AV1' in page and 'h.264 and mp3' not in page
+
+
 # ---------------------------------------------------------------- 3, 4: the bytes decide
 
 
