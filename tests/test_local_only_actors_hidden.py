@@ -10,7 +10,7 @@ from app import db
 from app.constants import ROLE_ADMIN_NAME
 from app.models import CommunityMember, CommunityWikiPage, File, ModLog, Role, Topic, utcnow
 from tests.conftest import forget_login
-from tests.factories import make_feed_item, make_local_feed, make_post
+from tests.factories import make_feed_item, make_local_feed, make_post, make_post_reply
 from tests.test_instance_visible_here import HOSTS, get, scene  # noqa: F401 -- scene is a fixture
 from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
 from tests.two_domains import HELL, ONION, two_domains  # noqa: F401
@@ -348,3 +348,34 @@ def test_hells_own_profile_names_a_local_only_community_it_moderates_only_when_l
                                                                                          signed_in):
     body = visit(app, '/u/bob', signed_in, cross_moderated).get_data(as_text=True)
     assert (f'/c/{ONION_ART}' in body) == signed_in
+
+
+# --- post and reply pages (fix round 3) ---------------------------------------------------------------------------
+
+@pytest.fixture
+def hell_thread(grouped):
+    """A post and a reply in hell's community, which the onion's bob moderates and whose topic holds the onion's."""
+    db.session.add(CommunityMember(user_id=grouped.onion_bob.id, community_id=grouped.hell_art.id, is_moderator=True))
+    db.session.commit()
+    grouped.post = make_post(grouped.hell_art, grouped.hell_bob, f'https://{HELL}/post/thread', title='a hell thread')
+    grouped.reply = make_post_reply(grouped.post, grouped.hell_bob)
+    grouped.reply.body_html = '<p>a reply</p>'
+    db.session.commit()
+    return grouped
+
+
+def thread_paths(world):
+    return [f'/post/{world.post.id}', f'/post/{world.post.id}/comment/{world.reply.id}']
+
+
+@pytest.mark.parametrize('signed_in', [False, True])
+def test_a_hell_post_page_names_a_local_only_moderator_or_community_only_when_logged_in(app, hell_thread, monkeypatch,
+                                                                                       signed_in):
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the signed-in reply form renders its token
+    for path in thread_paths(hell_thread):
+        response = visit(app, path, signed_in, hell_thread)
+        assert response.status_code == 200, path
+        body = response.get_data(as_text=True)
+        assert (f'/u/{ONION_BOB}' in body) == signed_in, path   # the moderator list
+    body = visit(app, thread_paths(hell_thread)[0], signed_in, hell_thread).get_data(as_text=True)
+    assert (f'/c/{ONION_ART}' in body) == signed_in   # the same-topic communities

@@ -37,7 +37,7 @@ from app.models import Post, PostReply, PostReplyValidationError, \
     Topic, User, Instance, UserFollower, Poll, PollChoice, PollChoiceVote, PostBookmark, \
     PostReplyBookmark, CommunityBlock, File, CommunityFlair, UserFlair, BlockedImage, CommunityBan, Language, Event, \
     Reminder, Emoji
-from app.local_only import without_local_only
+from app.local_only import without_local_only, without_local_only_actors
 from app.post import bp
 from app.visibility import can_view, is_open, post_title_for, visible_to_clause
 from app.post.forms import NewReplyForm, ReportPostForm, MeaCulpaForm, CrossPostForm, ConfirmationForm, \
@@ -239,7 +239,8 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
             mod_list = []
         else:
             mod_user_ids = [mod.user_id for mod in mods]
-            mod_list = User.query.filter(User.id.in_(mod_user_ids), User.deleted.is_(False)).all()
+            mod_list = without_local_only_actors(User.query.filter(User.id.in_(mod_user_ids), User.deleted.is_(False)),
+                                                 User).all()
 
         banned_from_community = False
         if current_user.is_authenticated and community.id in communities_banned_from(current_user.id):
@@ -331,8 +332,9 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
         breadcrumbs.append(breadcrumb)
 
         if community.topic_id:
-            related_communities = Community.query.filter_by(topic_id=community.topic_id). \
-                filter(Community.id != community.id, Community.banned == False).order_by(Community.name)
+            related_communities = without_local_only_actors(
+                Community.query.filter_by(topic_id=community.topic_id).
+                filter(Community.id != community.id, Community.banned == False), Community).order_by(Community.name)
             topics = []
             previous_topic = db.session.get(Topic, community.topic_id)
             topics.append(previous_topic)
@@ -908,7 +910,8 @@ def continue_discussion(post_id, comment_id):
         mod_list = []
     else:
         mod_user_ids = [mod.user_id for mod in mods]
-        mod_list = User.query.filter(User.id.in_(mod_user_ids), User.deleted.is_(False)).all()
+        mod_list = without_local_only_actors(User.query.filter(User.id.in_(mod_user_ids), User.deleted.is_(False)),
+                                             User).all()
     replies = get_comment_branch(post, comment.id, 'top', current_user if current_user.is_authenticated else None)
 
     # Voting history
@@ -1003,7 +1006,8 @@ def continue_discussion_ajax(post_id, comment_id, nonce):
         mod_list = []
     else:
         mod_user_ids = [mod.user_id for mod in mods]
-        mod_list = User.query.filter(User.id.in_(mod_user_ids), User.deleted.is_(False)).all()
+        mod_list = without_local_only_actors(User.query.filter(User.id.in_(mod_user_ids), User.deleted.is_(False)),
+                                             User).all()
     replies = get_comment_branch(post, comment.id, 'top', current_user if current_user.is_authenticated else None)
 
     # user flair
@@ -1075,7 +1079,8 @@ def add_reply(post_id: int, comment_id: int):
         mod_list = []
     else:
         mod_user_ids = [mod.user_id for mod in mods]
-        mod_list = User.query.filter(User.id.in_(mod_user_ids), User.deleted.is_(False)).all()
+        mod_list = without_local_only_actors(User.query.filter(User.id.in_(mod_user_ids), User.deleted.is_(False)),
+                                             User).all()
 
     if in_reply_to.author.has_blocked_user(current_user.id):
         flash(_('You cannot reply to %(name)s', name=in_reply_to.author.display_name()))
@@ -1363,7 +1368,8 @@ def post_edit(post_id: int):
         mod_list = []
     else:
         mod_user_ids = [mod.user_id for mod in mods]
-        mod_list = User.query.filter(User.id.in_(mod_user_ids), User.deleted.is_(False)).all()
+        mod_list = without_local_only_actors(User.query.filter(User.id.in_(mod_user_ids), User.deleted.is_(False)),
+                                             User).all()
 
     if post.user_id == current_user.id:
 
