@@ -53,7 +53,7 @@ from app.relays import inbound as relay_inbound
 from app.local_only import any_domain_closed, community_local_only, federated_mentions, federating_clause, \
     refused_outbound, user_local_only
 from app.local_names import local_named, split_local_name
-from app.storefront import current_storefront, is_served_name
+from app.storefront import current_storefront, domain_for_host, is_served_name
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
@@ -206,6 +206,12 @@ def process_webfinger_request(resource):
         resp.headers.set('Cache-Control', 'public, max-age=15')
         resp.headers.add_header('Access-Control-Allow-Origin', '*')
         return resp
+
+    # until plan C3 builds the subject from the row's domain, only the default domain answers: a row on any other
+    # domain would be named by a subject (SERVER_NAME) whose own WebFinger answer is not that row
+    served = domain_for_host(domain)
+    if not (served and served.is_default):
+        abort(404)
 
     object = None
     if not feed:
@@ -628,6 +634,12 @@ def local_clause(model, actor: str):
     name@host on that hosted domain. A handle on a domain this site does not host names nothing here."""
     split = split_local_name(actor)
     return local_named(model, *split) if split is not None else false()
+
+
+def community_collection_id(community: Community, collection: str) -> str:
+    """The id of a collection of local `community`, built from the stored name as the actor document builds its
+    `outbox`, `followers` and the rest, whatever casing or handle the request named it by."""
+    return f"{current_app.config['SERVER_URL']}/c/{community.ap_profile_id.rsplit('/', 1)[-1]}/{collection}"
 
 
 def local_actor_user(actor: str) -> User:
@@ -2562,7 +2574,7 @@ def community_outbox(actor):
         ordered = listed.order_by(desc(Post.sticky).nulls_last(), desc(Post.posted_at), desc(Post.id))
 
         community_data = paged_outbox(
-            f"{current_app.config['SERVER_URL']}/c/{actor}/outbox", listed.count(),
+            community_collection_id(community, 'outbox'), listed.count(),
             lambda offset, limit: [post_to_activity(post, community)
                                    for post in ordered.offset(offset).limit(limit).all()])
 
@@ -2593,7 +2605,7 @@ def community_featured(actor):
         community_data = {
             "@context": default_context(),
             "type": "OrderedCollection",
-            "id": f"{current_app.config['SERVER_URL']}/c/{actor}/featured",
+            "id": community_collection_id(community, 'featured'),
             "totalItems": len(posts),
             "orderedItems": []
         }
@@ -2629,7 +2641,7 @@ def community_moderators_route(actor):
         community_data = {
             "@context": default_context(),
             "type": "OrderedCollection",
-            "id": f"{current_app.config['SERVER_URL']}/c/{actor}/moderators",
+            "id": community_collection_id(community, 'moderators'),
             "totalItems": len(moderators),
             "orderedItems": []
         }
@@ -2660,7 +2672,7 @@ def community_followers(actor):
             abort(403)   # S3.4: as the community actor document; these never federate
         result = {
             "@context": default_context(),
-            "id": f'{current_app.config["SERVER_URL"]}/c/{actor}/followers',
+            "id": community_collection_id(community, 'followers'),
             "type": "Collection",
             "totalItems": community_members(community.id),
             "items": []  # D175: intended (owner ruling) - a real count, but the member list is private
@@ -2686,7 +2698,7 @@ def community_following(actor):
         abort(404)
     if community.local_only or community.private:
         abort(403)
-    return count_only_collection(f'{current_app.config["SERVER_URL"]}/c/{actor}/following', 0)
+    return count_only_collection(community_collection_id(community, 'following'), 0)
 
 
 @bp.route('/u/<actor>/followers', methods=['GET'])
