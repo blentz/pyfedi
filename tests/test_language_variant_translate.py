@@ -106,18 +106,39 @@ def test_an_item_without_a_language_translates_from_auto(world, client):
     assert lt.call_args_list[0].kwargs['source'] == 'auto'
 
 
-def test_the_button_carries_the_shown_language(world, client):
-    world['viewer'].language_id = Language.query.filter_by(code='fr').first().id
+def speaks(user, code):
+    user.language_id = Language.query.filter_by(code=code).first().id
     db.session.commit()
+
+
+def french(user):
+    speaks(user, 'fr')
+
+
+def test_the_button_carries_the_shown_language(world, client):
+    speaks(world['viewer'], 'en')
     html = client.get(f"/post/{world['post'].id}?lang=fr").get_data(as_text=True)
     assert f"/post/{world['post'].id}/translate?lang=fr" in html
     assert f"/post_reply/{world['reply'].id}/translate?lang=fr" in html
 
 
+def test_there_is_no_button_when_the_version_shown_is_in_the_viewers_language(world, client):
+    french(world['viewer'])
+    html = client.get(f"/post/{world['post'].id}?lang=fr").get_data(as_text=True)
+    assert f"/post/{world['post'].id}/translate" not in html
+    assert f"/post_reply/{world['reply'].id}/translate" not in html
+
+
+def test_the_button_returns_when_the_version_shown_is_not_in_the_viewers_language(world, client):
+    french(world['viewer'])
+    html = client.get(f"/post/{world['post'].id}?lang=en").get_data(as_text=True)
+    assert f"/post/{world['post'].id}/translate?lang=en" in html
+    assert f"/post_reply/{world['reply'].id}/translate?lang=en" in html
+
+
 def test_the_button_has_no_lang_without_variants(world, client):
     world['post'].language_variants = None
-    world['viewer'].language_id = Language.query.filter_by(code='fr').first().id
-    db.session.commit()
+    french(world['viewer'])
     html = client.get(f"/post/{world['post'].id}").get_data(as_text=True)
     assert f"/post/{world['post'].id}/translate\"" in html
 
@@ -126,10 +147,9 @@ def test_the_button_has_no_lang_without_variants(world, client):
 @pytest.mark.parametrize('lang, suffix', [('fr', '?lang=fr'), (None, '')])
 def test_teaser_button_carries_the_shown_language(world, app, theme, lang, suffix):
     make_site()
-    world['viewer'].language_id = Language.query.filter_by(code='fr').first().id
     if lang is None:
         world['post'].language_variants = None
-    db.session.commit()
+    speaks(world['viewer'], 'fr' if lang is None else 'en')   # the post is English, its French version is shown
     source = (f"{{% from '{theme}post/post_teaser/_macros.html' import render_utilities_bar %}}"
               "{{ render_utilities_bar(post, current_user=current_user, joined_communities=[], "
               "communities_banned_from_list=[], reported_posts=[], moderated_community_ids=[], recently_upvoted=[], recently_downvoted=[]) }}")
