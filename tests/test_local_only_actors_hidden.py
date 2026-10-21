@@ -178,3 +178,31 @@ def test_logged_out_topic_and_feed_pages_list_no_local_only_community(app, group
 @pytest.mark.parametrize('path', ['/topic/arts', '/f/artfeed'])
 def test_logged_in_topic_and_feed_pages_still_list_them(app, grouped, path):
     assert 'Onion art' in visit(app, path, True, grouped).get_data(as_text=True)
+
+
+# --- share (fix round 2) -------------------------------------------------------------------------------
+
+SHARED = 'https://example.com/shared-story'
+
+
+@pytest.fixture
+def shared(world):
+    """A post of the same link in hell's community and in the onion's (one written before its domain stopped
+    federating, so the post itself is not stamped local-only: only its community is)."""
+    for community, author in ((world.hell_art, world.hell_bob), (world.onion_art, world.onion_bob)):
+        post = make_post(community, author, f'https://{HELL}/post/{community.id}-shared', title='a shared story')
+        post.url = SHARED
+    db.session.commit()
+    return world
+
+
+def test_logged_out_share_lists_no_local_only_community(app, shared):
+    response = visit(app, f'/share?url={SHARED}', False, shared)
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert 'Hell art' in body
+    assert ONION not in body and 'Onion art' not in body
+
+
+def test_logged_in_share_still_lists_them(app, shared):
+    assert 'Onion art' in visit(app, f'/share?url={SHARED}', True, shared).get_data(as_text=True)

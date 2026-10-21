@@ -60,7 +60,7 @@ import boto3
 from app import db, cache, httpx_client, celery, get_ip_address, plugins, shaped_memo_name
 from app.onion import is_onion_request
 from app.pinned_http import fetch_deadline, is_refused_address
-from app.local_only import local_only_visible
+from app.local_only import local_only_visible, without_local_only_actors
 from app.visibility import OPEN_VISIBILITIES, listable_sql, visible_to_sql
 from app.constants import *
 import re
@@ -6530,12 +6530,13 @@ def possible_communities():
     # branch could drop the restriction out of. can_create_post carries the
     # matching authorisation check; the form field is client-supplied, so hiding
     # them here is not on its own enough.
-    for c in db.session.query(Community.id, Community.ap_id, Community.title, Community.ap_domain).\
-            filter(Community.banned == False).join(Instance, Instance.id == Community.instance_id).\
-            filter(Instance.gone_forever == False, Community.name != 'microblogs').\
-            filter(or_(Community.private == False,
-                       Community.id.in_(community_membership_private(current_user.get_id())))).\
-            order_by(Community.title).all():
+    others = db.session.query(Community.id, Community.ap_id, Community.title, Community.ap_domain).\
+        filter(Community.banned == False).join(Instance, Instance.id == Community.instance_id).\
+        filter(Instance.gone_forever == False, Community.name != 'microblogs').\
+        filter(or_(Community.private == False,
+                   Community.id.in_(community_membership_private(current_user.get_id()))))
+    # a logged-out visitor (the share page) is offered no local-only community
+    for c in without_local_only_actors(others, Community).order_by(Community.title).all():
         if c.id not in already_added:
             if c.ap_id is None:
                 display_name = c.title

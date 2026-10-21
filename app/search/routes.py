@@ -13,7 +13,7 @@ from app.discovery.media import media_post_clause
 from app.discovery.search import viewer_allows_nsfw
 from app.models import Post, Language, Community, Instance, PostReply
 from app.search import bp
-from app.local_only import without_local_only
+from app.local_only import without_local_only, without_local_only_actors
 from app.visibility import listable_clause
 from app.utils import render_template, blocked_domains, blocked_or_banned_instances, \
     communities_banned_from, recently_upvoted_posts, recently_downvoted_posts, blocked_users, blocked_communities, \
@@ -232,7 +232,8 @@ def run_search():
 
     else:
         languages = Language.query.order_by(Language.name).all()
-        communities = Community.query.filter(Community.banned == False).order_by(Community.name)
+        communities = without_local_only_actors(Community.query.filter(Community.banned == False),
+                                                Community).order_by(Community.name)
         instance_software = Instance.unique_software_names()
         if current_user.is_authenticated:
             communities = communities.filter(Community.id.not_in(banned_from))
