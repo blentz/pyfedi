@@ -1110,7 +1110,8 @@ def share():
                                                                             Post.from_reposter == False,
                                                                             Community.name != 'microblogs',
                                                                             visible_to_clause(Post, None))
-    communities = without_local_only(communities, Post).all()   # and the posts below, so the two still agree
+    # and the posts below, so the two still agree; a logged-out visitor is shown no local-only community
+    communities = without_local_only_actors(without_local_only(communities, Post), Community).all()
     posts_keyed_by_community = {}
     if len(communities):
         posts = Post.query.filter(Post.url == url, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
