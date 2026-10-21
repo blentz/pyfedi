@@ -171,12 +171,13 @@ def test_a_profile_with_no_public_feeds_says_so(app, env):
 
 
 def test_the_profile_lists_followers_and_following(app, env):
-    """Two queries that differ only by `is_inward`, and the followers one also
-    requires `is_accepted` -- a pending request is not a follower."""
+    """Two queries that differ only by `is_inward`, and both require `is_accepted`
+    -- a pending request is neither a follower nor someone followed."""
     client, viewer, subject = env
     follower = make_user(instance(), 'follower', local=True)
     followed = make_user(instance(), 'followed', local=True)
     pending = make_user(instance(), 'pending', local=True)
+    asked = make_user(instance(), 'asked', local=True)
     db.session.commit()
     db.session.add_all([
         UserFollower(local_user_id=subject.id, remote_user_id=follower.id,
@@ -184,7 +185,9 @@ def test_the_profile_lists_followers_and_following(app, env):
         UserFollower(local_user_id=subject.id, remote_user_id=pending.id,
                      is_inward=True, is_accepted=None),
         UserFollower(local_user_id=subject.id, remote_user_id=followed.id,
-                     is_inward=False),
+                     is_inward=False, is_accepted=True),
+        UserFollower(local_user_id=subject.id, remote_user_id=asked.id,
+                     is_inward=False, is_accepted=None),
     ])
     db.session.commit()
 
