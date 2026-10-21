@@ -566,7 +566,7 @@
                 </ul>
             </div>
         </div>
-        {% if can_translate and current_user.is_authenticated and current_user.language_id and post.language_id and (current_user.language_id != post.language_id or post.community.always_translate) -%}
+        {% if can_translate and current_user.is_authenticated and current_user.language_id and post.language_id and (current_user.language_id != (v.language_id or post.language_id) or post.community.always_translate) -%}
             <div class="post_translate_icon">
                 <a rel="nofollow noindex" title="{{ _('Translate') }}" href="#"
                         hx-post="{{ url_for('post.post_translate', post_id=post.id) }}{{ '?lang=' ~ v.code if v.others }}"

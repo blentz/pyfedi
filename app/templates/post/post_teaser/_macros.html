@@ -186,7 +186,7 @@
             {% if current_user.is_authenticated and joined_communities and post.community_id not in joined_communities and not post.is_microblog() %}
                 <a class="small" rel="nofollow" title="{{ _('Join this community') }}" aria-label="{{ _('Join this community') }}" href="{{ '/c/' + post.community.link() + '/subscribe' }}">{{ _('Join') }}</a>
             {% endif -%}
-            {% if current_user.is_authenticated and current_user.language_id and post.language_id and (current_user.language_id != post.language_id or post.community.always_translate) -%}
+            {% if current_user.is_authenticated and current_user.language_id and post.language_id and (current_user.language_id != (v.language_id or post.language_id) or post.community.always_translate) -%}
                 <div class="post_translate_icon">
                     <a rel="nofollow noindex" title="{{ _('Translate') }}" href="#" aria-label="{{ _('Translate') }}"
                             hx-post="{{ '/post_teaser/' + post.id|string + '/translate' + ('?lang=' ~ v.code if v.others else '') }}"

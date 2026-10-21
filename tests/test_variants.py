@@ -7,7 +7,7 @@ from sqlalchemy import event
 
 from app import db
 from app.models import Language
-from app.variants import chosen_variant, language_names, shown, switch_url
+from app.variants import chosen_variant, language_ids, language_names, shown, switch_url
 from tests.factories import make_community, make_instance, make_post, make_post_reply, make_user
 
 FR = {'title': 'Bonjour', 'body_html': '<p>bonjour</p>', 'cw': None}
@@ -36,13 +36,14 @@ def item(app, db_session):
     post.language_variants = {'fr': FR, 'de': DE}
     db.session.commit()
     g.pop('language_names', None)
+    g.pop('language_ids', None)
     return post
 
 
 def test_shown_without_variants_is_the_default(item, app):
     item.language_variants = None
     with app.test_request_context('/'):
-        assert shown(item) == ('en', 'Hello', '<p>hello</p>', None, [])
+        assert shown(item) == ('en', 'Hello', '<p>hello</p>', None, [], item.language_id)
 
 
 def test_shown_follows_the_locale(item, app):
@@ -50,6 +51,7 @@ def test_shown_follows_the_locale(item, app):
         v = shown(item)
     assert (v.code, v.title, v.body_html, v.cw) == ('fr', 'Bonjour', '<p>bonjour</p>', None)
     assert v.others == [('en', 'English'), ('de', 'Deutsch')]
+    assert v.language_id == Language.query.filter_by(code='fr').first().id   # the language of the version shown
 
 
 def test_lang_parameter_wins_and_falls_back_to_the_default_title(item, app):
@@ -104,6 +106,21 @@ def test_language_names_is_one_query_per_request(item, app):
 
 def test_language_names_outside_a_request_is_not_cached_in_g(item):
     assert language_names()['de'] == 'Deutsch'
+
+
+def test_language_ids_is_one_query_per_request_and_uncached_outside_one(item, app):
+    expected = Language.query.filter_by(code='fr').first().id
+    assert language_ids()['fr'] == expected
+    with app.test_request_context('/'):
+        statements = []
+        listener = lambda *args: statements.append(args[2])
+        event.listen(db.engine, 'before_cursor_execute', listener)
+        try:
+            for _ in range(5):
+                assert language_ids()['fr'] == expected
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', listener)
+    assert len(statements) == 1
 
 
 def test_switch_url_outside_a_request_is_the_bare_parameter():
