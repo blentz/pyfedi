@@ -213,7 +213,7 @@ def add_local():
         cache.delete_memoized(moderating_communities, current_user.id)
         cache.delete_memoized(community_membership_private, current_user.id)
         _forget_sidebar_new_communities(current_user.id)
-        return redirect('/c/' + community.name)
+        return redirect('/c/' + community.link())
     else:
         form.publicize.data = not current_app.debug and not current_app.config['CONTENT_WARNING']
 
@@ -417,12 +417,12 @@ def show_community(community: Community, from_instance=None):
         if current_app.config['CONTENT_WARNING']:
             if community.nsfl:
                 flash(_('This community is only visible to logged in users.'))
-                next_url = "/c/" + (community.ap_id if community.ap_id else community.name)
+                next_url = "/c/" + community.link()
                 return redirect(url_for("auth.login", next=next_url))
         else:
             if community.nsfw or community.nsfl:
                 flash(_('This community is only visible to logged in users.'))
-                next_url = "/c/" + (community.ap_id if community.ap_id else community.name)
+                next_url = "/c/" + community.link()
                 return redirect(url_for("auth.login", next=next_url))
 
     # If current user is logged in check if they have any feeds
@@ -741,7 +741,7 @@ def show_community(community: Community, from_instance=None):
     description = shorten_string(community.description, 150) if community.description else None
     og_image = community.image.source_url if community.image_id else None
 
-    page_actor = view_actor or (community.ap_id if community.ap_id is not None else community.name)
+    page_actor = view_actor or community.link()
     if content_type == 'posts' or content_type == 'events':
         next_url = url_for('activitypub.community_profile',
                            actor=page_actor,
@@ -1393,7 +1393,7 @@ def add_post(actor, type=None):
             if current_app.debug:
                 raise ex
             return redirect(url_for('activitypub.community_profile',
-                                    actor=community.ap_id if community.ap_id is not None else community.name))
+                                    actor=community.link()))
         else:
             current_user.language_id = form.language_id.data
 
@@ -1605,7 +1605,7 @@ def community_edit(community_id: int):
                            uploaded_banner_file=request.files.get('banner_file'))
             flash(_('Saved'))
             return redirect(url_for('activitypub.community_profile',
-                                    actor=community.ap_id if community.ap_id is not None else community.name))
+                                    actor=community.link()))
         elif request.method == 'GET':
             # `elif request.method == 'GET'`, not `else`. As an `else` this arm
             # also ran for a POST the form REFUSED, overwriting the submission
@@ -2459,7 +2459,7 @@ def community_kick_user(community_id: int, user_id: int):
     else:
         abort(401)
 
-    return redirect(url_for('community.community_moderate_subscribers', actor=community.name))
+    return redirect(url_for('community.community_moderate_subscribers', actor=community.link()))
 
 
 @bp.route('/<actor>/moderate/wiki', methods=['GET'])
@@ -3114,7 +3114,7 @@ def community_leave_all():
     flash(_('You are being unsubscribed from all communities and feeds. '
             'Please allow a couple minutes for the process to complete.'))
 
-    return redirect(url_for('user.edit_profile', actor=current_user.user_name))
+    return redirect(url_for('user.edit_profile', actor=current_user.link()))
 
 
 @bp.route('/<actor>/invite', methods=['GET', 'POST'])

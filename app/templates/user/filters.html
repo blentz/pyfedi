@@ -98,7 +98,7 @@
                     </tr>
                 {% for user in blocked_users %}
                     <tr>
-                        <td><a href="{{ url_for('activitypub.user_profile', actor=user.ap_id if user.ap_id is not none else user.user_name) }}">{{ user.display_name() }}</a></td>
+                        <td><a href="{{ url_for('activitypub.user_profile', actor=user.link()) }}">{{ user.display_name() }}</a></td>
                         <td><a class="no-underline confirm_first send_post" role="button" aria-label="{{ _('Unblock @%(user_name)s', user_name=user.display_name) }}" hx-post="/u/{{ user.link() }}/unblock" hx-trigger="click throttle:1s"><span class="fe fe-delete"></span> {{ _('Unblock %(user_name)s', user_name=user.display_name()) }}</a></td>
                     </tr>
                 {% endfor %}
@@ -119,7 +119,7 @@
                     </tr>
                 {% for community in blocked_communities %}
                     <tr>
-                        <td><a href="{{ url_for('activitypub.community_profile', actor=community.ap_id if community.ap_id is not none else community.name) }}">{{ community.title }}</a></td>
+                        <td><a href="{{ url_for('activitypub.community_profile', actor=community.link()) }}">{{ community.title }}</a></td>
                         <td><a class="no-underline confirm_first" role="button" aria-label="{{ _('Unblock %(community_title)s', community_title=community.title) }}" hx-post="/user/community/{{ community.id }}/unblock" hx-trigger="click throttle:1s"><span class="fe fe-delete"></span> {{ _('Unblock %(community_title)s', community_title=community.title) }}</a></td>
                     </tr>
                 {% endfor %}
@@ -181,7 +181,7 @@
                 {% for flair in blocked_flair %}
                     <tr>
                         <td>{{ flair.flair }}</td>
-                        <td><a href="{{ url_for('activitypub.community_profile', actor=flair.community.ap_id if flair.community.ap_id is not none else flair.community.name) }}">{{ flair.community.title }}</a></td>
+                        <td><a href="{{ url_for('activitypub.community_profile', actor=flair.community.link()) }}">{{ flair.community.title }}</a></td>
                         <td><a class="no-underline confirm_first send_post" role="button" aria-label="{{ _('Unblock %(flair)s', flair=flair.flair) }}" hx-post="/user/flair/{{ flair.id }}/unblock" hx-trigger="click throttle:1s"tabindex="0"><span class="fe fe-delete"></span> {{ _('Unblock') }}</a></td>
                     </tr>
                 {% endfor %}

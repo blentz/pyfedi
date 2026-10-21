@@ -1500,10 +1500,10 @@ def post_delete(post_id: int):
                 return redirect(ref)
             else:
                 return redirect(url_for('activitypub.community_profile',
-                                        actor=community.ap_id if community.ap_id is not None else community.name))
+                                        actor=community.link()))
         else:
             form.referrer.data = referrer(url_for('activitypub.community_profile',
-                                                  actor=community.ap_id if community.ap_id is not None else community.name))
+                                                  actor=community.link()))
             if can_view(post, current_user.id):
                 title = _('Are you sure you want to delete the post "%(post_title)s"?', post_title=post.title)
             else:  # a moderator acting on a post they may not see (D19) is not told what it says
@@ -1552,7 +1552,7 @@ def post_purge(post_id: int):
 
     if not can_view(post, current_user.id):  # a moderator who may not see the post is not shown who wrote it (D19)
         return redirect(url_for('activitypub.community_profile',
-                                actor=post.community.ap_id if post.community.ap_id is not None else post.community.name))
+                                actor=post.community.link()))
     return redirect(url_for('user.show_profile_by_id', user_id=post.user_id))
 
 
@@ -2738,7 +2738,7 @@ def post_block_image_purge_posts(post_id: int):
             return redirect(ref)
         else:
             return redirect(url_for('activitypub.community_profile',
-                                    actor=post.community.ap_id if post.community.ap_id is not None else post.community.name))
+                                    actor=post.community.link()))
 
     posts = Post.query.filter(Post.id.in_(posts_with_blocked_images()), Post.deleted == False).\
         order_by(desc(Post.posted_at)).all()

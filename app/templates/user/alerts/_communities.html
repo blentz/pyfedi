@@ -5,7 +5,7 @@
     <div class="h-entry post_teaser tabindex="0">
       <div class="row">
         <div class="col">
-          <a href="{{ url_for('activitypub.community_profile', actor=community.ap_id if community.ap_id is not none else community.name) }}" aria-label="{{ _('Visit Community') }}">{{ community.title }}</a>
+          <a href="{{ url_for('activitypub.community_profile', actor=community.link()) }}" aria-label="{{ _('Visit Community') }}">{{ community.title }}</a>
         </div>
         <div class="col col-1">
           {% include 'community/_notification_toggle.html' %}

@@ -5672,7 +5672,7 @@ class Feed(db.Model):
 
     def creator(self):
         owner = db.session.get(User, self.user_id)
-        return owner.ap_id if owner.ap_id else owner.user_name
+        return owner.link()
 
     def parent_feed_name(self):
         # D1434, as D1422 in RssFeedItem.delete_dependencies: a top-level feed has

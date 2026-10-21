@@ -8,7 +8,7 @@
   {% if user.ap_profile_id -%}
   "url": {{ user.ap_profile_id|storefront_link|tojson }},
   {% else -%}
-  "url": {{ (site_url + '/u/' + user.user_name)|tojson }},
+  "url": {{ (site_url + '/u/' + user.link())|tojson }},
   {% endif -%}
   {% if user.about -%}
   "description": {{ user.about|tojson }},
@@ -30,7 +30,7 @@
       {% if community.ap_profile_id -%}
       "url": {{ community.ap_profile_id|storefront_link|tojson }}
       {% else -%}
-      "url": {{ (site_url + '/c/' + community.name)|tojson }}
+      "url": {{ (site_url + '/c/' + community.link())|tojson }}
       {% endif -%}
     }{% if not loop.last %},{% endif %}
     {% endfor -%}
