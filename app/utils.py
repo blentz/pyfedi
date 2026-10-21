@@ -78,7 +78,7 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     ServerViewMember
 from app.local_names import local_named
 from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, current_storefront, canonicalise_links, canonicalise_text, domain_base_url, \
-    domain_boost_expr, domain_boost_sql, domain_by_id, hosted_instance_ids, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
+    boosted_order_by, boosted_top_sql, domain_by_id, hosted_instance_ids, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
 from collections import Counter
 from flask import has_request_context
 import app as app_pkg
@@ -5829,7 +5829,7 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
         return json.loads(app_pkg.redis_client.get(cache_key))
 
     params = {}                 # parameters provided to the SQL query
-    post_id_sql = 'SELECT p.id, p.cross_posts, p.user_id, p.reply_count FROM "post" as p\nINNER JOIN "community" as c on p.community_id = c.id\n'
+    post_id_sql = 'FROM "post" as p\nINNER JOIN "community" as c on p.community_id = c.id\n'
     if community_sql:
         community_disjunct = community_sql
         params[ON_DOMAIN_PARAM] = current_storefront().id   # community_sql may use on_domain_sql
@@ -5962,14 +5962,11 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
 
     # sorting
     post_id_sort = ''
+    boosted = None   # (rank column, the columns that break its ties) of a sort the domain's boost applies to
     if sort == '' or sort == 'hot':
-        boost, boost_params = domain_boost_sql('p')
-        params.update(boost_params)
-        post_id_sort = f'ORDER BY p.ranking + {boost} DESC, p.posted_at DESC'
+        boosted = ('ranking', ('posted_at',))
     elif sort == 'scaled':
-        boost, boost_params = domain_boost_sql('p')
-        params.update(boost_params)
-        post_id_sort = f'ORDER BY p.ranking_scaled + {boost} DESC, p.ranking DESC, p.posted_at DESC'
+        boosted = ('ranking_scaled', ('ranking', 'posted_at'))
         post_id_where.append('p.ranking_scaled is not null AND p.from_bot is false ')
     elif sort.startswith('top'):
         if sort != 'top_all':
@@ -6000,8 +5997,14 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
         post_id_sort = 'ORDER BY p.last_active DESC'
     # Filter out posts stickied to the instance, they are handled separately
     post_id_where.append('p.instance_sticky is false ')
-    final_post_id_sql = f"{post_id_sql} WHERE {' AND '.join(post_id_where)}\n{post_id_sort}\nLIMIT 1000"
-    post_ids = db.session.execute(text(final_post_id_sql), params).all()
+    from_where = f"{post_id_sql} WHERE {' AND '.join(post_id_where)}\n"
+    columns = 'p.id, p.cross_posts, p.user_id, p.reply_count'
+    if boosted:   # read tier by tier, so that ix_post_feed_hot still serves each read
+        final_post_id_sql, boost_params = boosted_top_sql(columns, 't.id, t.cross_posts, t.user_id, t.reply_count',
+                                                          from_where, *boosted, 1000)
+    else:
+        final_post_id_sql, boost_params = f'SELECT {columns} {from_where}{post_id_sort}\nLIMIT 1000', {}
+    post_ids = db.session.execute(text(final_post_id_sql), {**params, **boost_params}).all()
     post_ids = dedupe_post_ids(post_ids, limit_to_visible=(community_ids[0] != -1))
 
     if cache_key:  # same key the read above used; see where it is derived
@@ -6013,10 +6016,9 @@ def post_ids_to_models(post_ids: List[int], sort: str):
     posts = Post.query.filter(Post.id.in_([p for p in post_ids]))
     # Final sorting
     if sort == '' or sort == 'hot':
-        posts = posts.order_by(desc(Post.ranking + domain_boost_expr(Post.instance_id))).order_by(desc(Post.posted_at))
+        posts = posts.order_by(*boosted_order_by(Post.ranking, (Post.posted_at,), by_id=False))
     elif sort == 'scaled':
-        posts = posts.order_by(desc(Post.ranking_scaled + domain_boost_expr(Post.instance_id))).order_by(
-            desc(Post.ranking)).order_by(desc(Post.posted_at))
+        posts = posts.order_by(*boosted_order_by(Post.ranking_scaled, (Post.ranking, Post.posted_at), by_id=False))
     elif sort.startswith('top'):
         posts = posts.order_by(desc(Post.score))
     elif sort == 'new':

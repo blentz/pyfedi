@@ -12,7 +12,7 @@ from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
 # app.activitypub before get_all_child_feed_ids is defined (import cycle: feed.routes)
 import app.feed.routes as feed_routes
-from app.storefront import ON_DOMAIN_PARAM, current_storefront, domain_authority, domain_boost_expr, domain_boost_sql, on_domain, on_domain_sql
+from app.storefront import ON_DOMAIN_PARAM, current_storefront, boosted_posts, boosted_top_sql, domain_authority, on_domain, on_domain_sql
 from app.models import Post, Community, CommunityMember, utcnow, User, Feed, FeedItem, Topic, PostReply, PostVote, \
     CommunityFlair, read_posts, Poll, Report
 # The module, not the names: app.shared.post reaches this file through a blueprint
@@ -557,19 +557,20 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         post_query_criteria.append('score >= :minimum_upvotes')
         post_query_parameters['minimum_upvotes'] = minimum_upvotes
     
+    sticky_columns = []     # the columns the stickies are ordered by, ahead of the sort
     if search_by_community and not ignore_sticky:
         posts = posts.order_by(desc(Post.sticky))
         sql_order_by.append('sticky DESC')
+        sticky_columns.append('sticky')
     
     if segregate_instance_stickies and not ignore_sticky:
         posts = posts.order_by(desc(Post.instance_sticky))
         sql_order_by.append('instance_sticky DESC')
+        sticky_columns.append('instance_sticky')
 
+    boosted = None   # (rank column, the columns that break its ties) of a sort the domain's boost applies to
     if sort == "Hot":
-        boost, boost_params = domain_boost_sql('p')
-        post_query_parameters.update(boost_params)
-        posts = posts.order_by(desc(Post.ranking + domain_boost_expr(Post.instance_id))).order_by(desc(Post.posted_at))
-        sql_order_by.extend([f'p.ranking + {boost} DESC', 'posted_at DESC'])
+        boosted = (Post.ranking, (Post.posted_at,))
     elif sort == "Top" or sort == "TopDay":
         posts = posts.filter(Post.posted_at > utcnow() - timedelta(days=1)).order_by(
             desc(Post.score))
@@ -638,13 +639,9 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         posts = posts.order_by(desc(Post.posted_at))
         sql_order_by.append('posted_at DESC')
     elif sort == "Scaled":
-        boost, boost_params = domain_boost_sql('p')
-        post_query_parameters.update(boost_params)
-        posts = posts.filter(Post.ranking_scaled != None, Post.from_bot == False).order_by(
-            desc(Post.ranking_scaled + domain_boost_expr(Post.instance_id))).order_by(
-            desc(Post.ranking)).order_by(desc(Post.posted_at))
+        boosted = (Post.ranking_scaled, (Post.ranking, Post.posted_at))
+        posts = posts.filter(Post.ranking_scaled != None, Post.from_bot == False)
         post_query_criteria.extend(['ranking_scaled IS NOT NULL', 'from_bot = false'])
-        sql_order_by.extend([f'p.ranking_scaled + {boost} DESC', 'ranking DESC', 'posted_at DESC'])
     elif sort == "Active":
         posts = posts.filter(Post.last_active != None)
         posts = posts.order_by(desc(Post.last_active))
@@ -657,8 +654,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         pass    # sorting by relevance is already done by posts = posts.search(query, sort=True)
 
     if use_faster_query:
-        sql = """SELECT
-                    p.id as post_id,
+        columns = """p.id as post_id,
                     p.user_id, p.domain_id, p.instance_id,
                     p.status, p.deleted, p.deleted_by,
                     p.type, p.nsfw, p.nsfl, p.sticky, p.instance_sticky, p.ai_generated,
@@ -667,10 +663,16 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
                     p.reply_count, p.language_id,
                     c.id as community_id, c.show_all, c.show_popular, c.instance_id as community_instance_id,
                     c.nsfw as community_nsfw, c.banned as community_banned,
-                    c.private, c.ap_id as community_ap_id, c.name as community_name, c.ap_domain
-                FROM post p
+                    c.private, c.ap_id as community_ap_id, c.name as community_name, c.ap_domain"""
+        from_where = """FROM post p
                 JOIN community c ON c.id = p.community_id WHERE p.deleted = FALSE AND p.status > 0 AND c.banned = FALSE AND """
-        sql += ' AND '.join(post_query_criteria)
+        from_where += ' AND '.join(post_query_criteria)
+        if boosted:     # read tier by tier, so that ix_post_feed_hot still serves each read
+            sql, boost_params = boosted_top_sql('p.id AS post_id', 't.post_id', from_where, boosted[0].key,
+                                                tuple(c.key for c in boosted[1]), 1000, tuple(sticky_columns))
+            post_query_parameters.update(boost_params)
+        else:
+            sql = f'SELECT {columns} {from_where}'
         # Only when there is something to order by. Every sort above appends a
         # clause except 'Relevance', which relies on the full-text search doing
         # the ordering, and an unrecognised one, which appends nothing at all --
@@ -679,9 +681,10 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         # `psycopg2.errors.SyntaxError: syntax error at or near "LIMIT"`. A URL
         # search sorted by relevance reached it the same way, and that one is a
         # plain `GET /search?type_=Url&sort=Relevance`.
-        if sql_order_by:
-            sql += ' ORDER BY ' + ', '.join(sql_order_by)
-        sql += ' LIMIT 1000'
+        if not boosted:
+            if sql_order_by:
+                sql += ' ORDER BY ' + ', '.join(sql_order_by)
+            sql += ' LIMIT 1000'
         post_ids = db.session.execute(text(sql), post_query_parameters).scalars().all()
         # `page * limit`, not `page + 1 * limit`. `*` binds tighter than `+`, so
         # the test read `len > page + limit` and stayed true long after the rows
@@ -692,6 +695,8 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         post_ids = paginate_post_ids(post_ids, page - 1, page_length=limit)
         posts = post_ids_to_models(post_ids, sort.lower()).all()
     else:
+        if boosted:
+            posts = boosted_posts(posts, *boosted, page * limit, rank_at=len(sticky_columns))
         posts = posts.paginate(page=page, per_page=limit, error_out=False)
 
     if user_id:
@@ -1177,14 +1182,17 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
         # request cannot answer differently depending on which one served it.
         posts = posts.filter(Post.score >= minimum_upvotes)
     
+    sticky_ordered = 0      # how many columns the stickies are ordered by, ahead of the sort
     if search_by_community and not ignore_sticky:
         posts = posts.order_by(desc(Post.sticky))
+        sticky_ordered += 1
     
     if segregate_instance_stickies and not ignore_sticky:
         posts = posts.order_by(desc(Post.instance_sticky))
+        sticky_ordered += 1
 
     if sort == "Hot":
-        posts = posts.order_by(desc(Post.ranking + domain_boost_expr(Post.instance_id))).order_by(desc(Post.posted_at))
+        pass    # ordered, with the boost, below
     elif sort == "Top" or sort == "TopDay":
         posts = posts.filter(Post.posted_at > utcnow() - timedelta(days=1)).order_by(
             desc(Post.score))
@@ -1223,9 +1231,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
     elif sort == "New":
         posts = posts.order_by(desc(Post.posted_at))
     elif sort == "Scaled":
-        posts = posts.filter(Post.ranking_scaled != None, Post.from_bot == False).order_by(
-            desc(Post.ranking_scaled + domain_boost_expr(Post.instance_id))).order_by(
-            desc(Post.ranking)).order_by(desc(Post.posted_at))
+        posts = posts.filter(Post.ranking_scaled != None, Post.from_bot == False)
     elif sort == "Active":
         posts = posts.filter(Post.reply_count > 0)
         posts = posts.order_by(desc(Post.last_active))
@@ -1274,7 +1280,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
             posts = posts.filter(Post.community_id.not_in(filtered_out_community_ids))
 
     if sort == "Hot":
-        posts = posts.order_by(desc(Post.ranking + domain_boost_expr(Post.instance_id)), desc(Post.posted_at), desc(Post.id))
+        posts = boosted_posts(posts, Post.ranking, (Post.posted_at,), limit, bookmark, sticky_ordered)
     # `desc(a), desc(b)` -- TWO arguments to order_by -- not
     # `desc(a, desc(b))`, which is one call to desc() with two arguments and
     # `TypeError: desc() takes 1 positional argument but 2 were given`. Every
@@ -1315,9 +1321,8 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
     elif sort == "New":
         posts = posts.order_by(desc(Post.posted_at), desc(Post.id))
     elif sort == "Scaled":
-        posts = posts.filter(Post.ranking_scaled != None).order_by(
-            desc(Post.ranking_scaled + domain_boost_expr(Post.instance_id)),
-            desc(Post.ranking), desc(Post.posted_at), desc(Post.id))
+        posts = boosted_posts(posts.filter(Post.ranking_scaled != None), Post.ranking_scaled,
+                              (Post.ranking, Post.posted_at), limit, bookmark, sticky_ordered)
     elif sort == "Active":
         # `last_active != None` as well as the reply count, which is what
         # get_post_list's Active arm filters on.
