@@ -2068,6 +2068,11 @@ time {
   cursor: pointer;
 }
 
+.post_link_gallery img.blur {
+  filter: blur(var(--spacing-24));
+  cursor: pointer;
+}
+
 details {
   margin-bottom: var(--spacing-16);
 }

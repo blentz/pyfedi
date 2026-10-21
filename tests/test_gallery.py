@@ -5,6 +5,7 @@ import io
 
 import pytest
 import respx
+from flask import render_template
 from PIL import Image
 
 from app import db
@@ -517,6 +518,39 @@ def test_a_link_post_gallery_is_shown_on_the_post_page_the_api_and_the_badge(app
     assert 'post_gallery_image' in page and SECOND in page and FIRST in page and LINK in page
     assert '2 images' in listing
     assert [i['alt_text'] for i in post_view(post=post, variant=1)['extensions']['gallery']] == ['a', 'b']
+
+
+def _link_gallery_markup(app, ingest, sensitive):
+    """The gallery partial the post page includes under a link post, as a logged-in viewer who blurs sensitive posts sees it."""
+    db.session.add(Language(code='und', name='Undetermined'))
+    post = ingest(album(link(), image(FIRST, 'a'), image(SECOND, 'b')))
+    post.nsfw = sensitive
+    viewer = make_user(make_instance('viewer.example'), 'viewer', local=True)
+    db.session.commit()
+    with app.test_request_context():
+        return render_template('post/_post_gallery.html', post=post, current_user=viewer, low_bandwidth=False)
+
+
+def test_a_sensitive_link_posts_gallery_images_are_blurred(app, ingest):
+    markup = _link_gallery_markup(app, ingest, True)
+    assert markup.count('class="blur"') == 2
+
+
+def test_a_normal_link_posts_gallery_images_are_not_blurred(app, ingest):
+    markup = _link_gallery_markup(app, ingest, False)
+    assert markup.count('post_gallery_image') == 2 and 'blur' not in markup
+
+
+def test_the_link_gallery_blur_has_a_style_rule_and_a_reveal_click_handler():
+    """A blurred gallery image under a link post is outside .post_image: the style and the script must name it too."""
+    import re
+    from pathlib import Path
+    static = Path(__file__).resolve().parent.parent / 'app' / 'static'
+    for name in ('styles.scss', 'styles.css'):
+        text = (static / name).read_text()
+        rule = re.search(r'\.post_link_gallery img\.blur\s*\{([^}]*)\}', text)
+        assert rule and 'filter: blur(' in rule.group(1), name
+    assert ".post_link_gallery a" in (static / 'js' / 'scripts.js').read_text()
 
 
 def picture(n):
