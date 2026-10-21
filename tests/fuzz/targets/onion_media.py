@@ -33,7 +33,7 @@ from tests.fuzz.targets.signatures import _fields, _text
 from tests.fuzz.targets.urls import _no_domain_rows
 
 MAX_INPUT = 4096
-ONION = DomainInfo('fuzzfuzzfuzzfuzz.onion', 'http', False, 'admin', False, True, None)
+ONION = DomainInfo('fuzzfuzzfuzzfuzz.onion', 'http', False, 'admin', False, True, None, 2)
 PROXY_PATH = re.compile(r'/onion_media/([0-9a-f]{64})/([A-Za-z0-9_-]*)')
 _MEDIA_URL_ATTRS = ('src', 'poster')
 

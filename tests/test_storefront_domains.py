@@ -4,6 +4,9 @@ import logging
 from pathlib import Path
 
 import pytest
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from cachelib import SimpleCache
@@ -114,33 +117,53 @@ def test_migration_mapping_matches_app_mapping():
         assert registration_from_mode(mode) == expected
 
 
-def load_migration():
-    path = next(Path(__file__).parent.parent.glob('migrations/versions/*_site_domain.py'))
+def load_migration(name: str = '*_site_domain.py'):
+    path = next(Path(__file__).parent.parent.glob(f'migrations/versions/{name}'))
     spec = importlib.util.spec_from_file_location('site_domain_migration', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
+@pytest.fixture
+def seed_schema(db_session):
+    """site_domain as the seed wrote into it: without the instance link plan C2's migration adds after it."""
+    per_domain_instance = load_migration('c8f4d2a6b9e1_per_domain_instance.py')
+    with Operations.context(MigrationContext.configure(db.session.connection())):
+        per_domain_instance.downgrade()
+    db.session.commit()
+    try:
+        yield
+    finally:
+        db.session.rollback()
+        db.session.execute(text('DELETE FROM site_domain'))
+        with Operations.context(MigrationContext.configure(db.session.connection())):
+            per_domain_instance.upgrade()
+        db.session.commit()
+
+
+def seeded_rows():
+    return db.session.execute(text('SELECT domain, scheme, federates, registration, is_default, is_onion '
+                                   'FROM site_domain')).all()
+
+
 @pytest.mark.parametrize('mode,registration', [('Open', 'anyone'), ('RequireApplication', 'anyone'), ('Closed', 'admin')])
-def test_migration_seeds_from_env(db_session, mode, registration):
+def test_migration_seeds_from_env(db_session, seed_schema, mode, registration):
     db.session.add(Site(name='s', registration_mode=mode))
     db.session.commit()
     load_migration().seed_default(db.session.connection(), {'SERVER_NAME': 'Test.Piefed.LOCAL', 'HTTP_PROTOCOL': 'mixed'})
     db.session.commit()
-    rows = db.session.query(SiteDomain).all()
+    rows = seeded_rows()
     assert len(rows) == 1
-    row = rows[0]
-    assert (row.domain, row.scheme, row.federates, row.registration, row.is_default, row.is_onion) == \
-        ('test.piefed.local', 'https', True, registration, True, False)
+    assert tuple(rows[0]) == ('test.piefed.local', 'https', True, registration, True, False)
 
 
 @pytest.mark.parametrize('server_name,domain', [('127.0.0.1:5000', '127.0.0.1'), ('[::1]:5000', '::1'),
                                                  ('Hell.Onion.', 'hell.onion'), (None, 'localhost')])
-def test_migration_seeds_the_bare_host(db_session, server_name, domain):
+def test_migration_seeds_the_bare_host(db_session, seed_schema, server_name, domain):
     load_migration().seed_default(db.session.connection(), {'SERVER_NAME': server_name, 'HTTP_PROTOCOL': 'http'})
     db.session.commit()
-    assert db.session.query(SiteDomain).one().domain == domain
+    assert [row.domain for row in seeded_rows()] == [domain]
 
 
 def test_startup_check_logs_mismatch(app, db_session, caplog):

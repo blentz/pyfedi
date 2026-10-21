@@ -286,7 +286,21 @@ def app():
 
     with application.app_context():
         _install_search_expressions(application)
+        _clear_seed_rows()
         yield application
+
+
+def _clear_seed_rows():
+    """Start the first test from the empty tables every later one gets from db_session's teardown.
+
+    Some migrations seed rows (the default site_domain row, and from c8f4d2a6b9e1 the instance row it links to, made
+    because a migrated database has no row 1 until `flask init-db`). Left in place, only whichever test runs first in a
+    session saw them, and its `make_instance` then took id 2 or hit the unique domain index.
+    """
+    from app import db
+
+    db.session.connection().exec_driver_sql(_teardown_sql(db))
+    db.session.commit()
 
 
 def _install_search_expressions(application):
