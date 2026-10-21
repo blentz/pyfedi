@@ -106,7 +106,7 @@ def absolute_urls(html):
 def test_page_urls_stay_on_storefront(app, world):
     founder, author, community, post, image = world
     # canonical sources (ActivityPub ids, stored content) are moved onto the storefront by the response rewrite
-    pages = {'/': None, '/c/general': None, f'/post/{post.id}': None, '/u/author': None, '/auth/login': None,
+    pages = {'/': None, f'/c/general@{CANONICAL}': None, f'/post/{post.id}': None, f'/u/author@{CANONICAL}': None, '/auth/login': None,
              '/auth/register': None, '/user/settings': founder, '/search?q=x': None,
              f'/post/{post.id}/embed_code': None}
     offenders = []
@@ -436,7 +436,7 @@ def test_json_ld_urls_name_the_storefront(app, world, host, origin):
     author.extra_fields.append(UserExtraField(label='home', text=f'https://{CANONICAL}/u/author'))
     community.ap_profile_id = None   # the fallback URL, built for the page rather than read from the row
     db.session.commit()
-    for path in (f'/post/{post.id}', '/u/author'):
+    for path in (f'/post/{post.id}', f'/u/author@{CANONICAL}'):   # a hosted handle: the author is on the default domain
         response = on_onion(app).get(path, base_url=f'https://{host}')
         assert response.status_code == 200, (path, response.status_code)
         urls = _json_ld_urls(response.get_data(as_text=True))

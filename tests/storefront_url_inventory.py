@@ -42,7 +42,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'private_message_ap': 1,
         'process_inbox_request': 7,
         'process_remove': 3,
-        'process_webfinger_request': 8,
+        'process_webfinger_request': 7,
         'quote_boost_auth': 2,
         'replay_inbox_request': 1,
         'rerun_parked_request': 1,

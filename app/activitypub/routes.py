@@ -15,7 +15,7 @@ from furl import furl
 # the whole inbox request down with a 500 instead of logging the membership as
 # already existing.
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import desc, exists, not_, or_, text, true, func, select, union_all, literal_column
+from sqlalchemy import desc, exists, false, not_, or_, text, true, func, select, union_all, literal_column
 
 from app import db, cache, celery, limiter
 from app.activitypub import bp
@@ -52,7 +52,8 @@ from app.relays import current_relay_id
 from app.relays import inbound as relay_inbound
 from app.local_only import any_domain_closed, community_local_only, federated_mentions, federating_clause, \
     refused_outbound, user_local_only
-from app.storefront import is_served_name
+from app.local_names import local_named, split_local_name
+from app.storefront import current_storefront, is_served_name
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
@@ -211,14 +212,14 @@ def process_webfinger_request(resource):
         # look for the User first, then the Community, then the Feed that matches
         type = 'Person'
         # not alt_user_name: that is the private-voting pseudonym, and resolving it would name its owner (D166)
-        object = User.query.filter(func.lower(User.user_name) == actor.strip().lower()).filter_by(deleted=False,
-                                                                                                 banned=False,
-                                                                                                 ap_id=None).filter(
+        # the name on the domain the resource names, not on every domain that holds it
+        user_clause = local_clause(User, f'{actor.strip()}@{domain}')
+        community_clause = local_clause(Community, f'{actor.strip()}@{domain}')
+        object = User.query.filter(user_clause).filter_by(deleted=False, banned=False).filter(
             federating_clause(User)).first()   # a local-only account or community does not exist to other servers
         if object is None:
-            profile_id = f"{current_app.config['SERVER_URL']}/c/{actor.strip().lower()}"
-            object = Community.query.filter_by(ap_profile_id=profile_id, ap_id=None, local_only=False,
-                                               banned=False, ap_deleted_at=None).filter(
+            object = Community.query.filter(community_clause).filter_by(local_only=False, banned=False,
+                                                                       ap_deleted_at=None).filter(
                 federating_clause(Community)).first()
             type = 'Group'
             if object is None:
@@ -479,27 +480,28 @@ def user_profile(actor):
     """ Requests to this endpoint can be for a JSON representation of the user, or a HTML rendering of their profile.
     The two types of requests are differentiated by the header """
     actor = actor.strip()
+    split = split_local_name(actor)
 
-    if '@' in actor:
+    if '@' in actor and split is None:
         # don't provide activitypub info for remote users
         if is_activitypub_request():
             abort(400)
         user: User = User.query.filter_by(ap_id=actor.lower()).first()
     else:
+        # a bare name is on the storefront's domain, name@host on that hosted domain: never the same name elsewhere
+        name, domain = split if split is not None else ('', current_storefront())
+        local = local_clause(User, actor)
         # deleted and banned local users are not served here, matching the
         # deleted=False/banned=False guards the webfinger lookup above applies
         # to its own User query.
-        user: User = User.query.filter(or_(func.lower(User.user_name) == actor.lower())).filter_by(deleted=False,
-                                                                                                  banned=False,
-                                                                                                  ap_id=None).first()
-        if user is None:
-            user = User.query.filter_by(ap_profile_id=f'{current_app.config["SERVER_URL"]}/u/{actor.lower()}',
+        user: User = User.query.filter(local).filter_by(deleted=False, banned=False).first()
+        if user is None and domain.is_default:
+            user = User.query.filter_by(ap_profile_id=f'{current_app.config["SERVER_URL"]}/u/{name.lower()}',
                                         deleted=False, banned=False, ap_id=None).first()
         if user is None and is_activitypub_request():
             # S3.2: a deleted account is gone for good, so peers are told to purge it. A ban (banned, not deleted)
             # stays a 404 -- it can be lifted. Account deletion sets both flags, so `deleted` decides.
-            gone = User.query.filter(func.lower(User.user_name) == actor.lower(), User.ap_id.is_(None),
-                                     User.deleted.is_(True)).first()
+            gone = User.query.filter(local, User.deleted.is_(True)).first()
             if gone is not None and not user_local_only(gone):
                 return tombstone_response(gone.public_url(), 'Service' if gone.bot else 'Person')
 
@@ -621,17 +623,22 @@ def resolve_remote_handle(actor: str):
         return None
 
 
+def local_clause(model, actor: str):
+    """The clause for the local `model` an `<actor>` path segment names: a bare name on the storefront's domain,
+    name@host on that hosted domain. A handle on a domain this site does not host names nothing here."""
+    split = split_local_name(actor)
+    return local_named(model, *split) if split is not None else false()
+
+
 def local_actor_user(actor: str) -> User:
     """The local user an actor collection (`/u/<actor>/...`) belongs to, else abort with what user_profile answers
     an ActivityPub request: 410 for a deleted account (S3.2), 404 for a banned, unknown, remote or local-only one. The
     name is matched case-insensitively, as user_profile matches it."""
-    name = actor.strip().lower()
-    user = User.query.filter(func.lower(User.user_name) == name, User.ap_id.is_(None),
-                             User.deleted.is_(False), User.banned.is_(False)).first()
+    local = local_clause(User, actor.strip())
+    user = User.query.filter(local, User.deleted.is_(False), User.banned.is_(False)).first()
     if user is not None and not user_local_only(user):
         return user
-    gone = User.query.filter(func.lower(User.user_name) == name, User.ap_id.is_(None),
-                             User.deleted.is_(True)).first() if user is None else None
+    gone = User.query.filter(local, User.deleted.is_(True)).first() if user is None else None
     abort(410 if gone is not None and not user_local_only(gone) else 404)
 
 
@@ -718,16 +725,17 @@ def community_profile(actor):
     """ Requests to this endpoint can be for a JSON representation of the community, or a HTML rendering of it.
         The two types of requests are differentiated by the header """
     actor = actor.strip()
-    if '@' in actor:
+    if '@' in actor and split_local_name(actor) is None:
         # don't provide activitypub info for remote communities
         if is_activitypub_request():
             abort(400)
         community: Community = Community.query.filter_by(ap_id=actor.lower(), banned=False).first()
     else:
-        actor = actor.lower()  # the canonical name, so the document's id is the stored one whatever the caller's casing
-        # by name, not by a URL built from SERVER_NAME: a community owned by another domain has that domain's URL
-        community: Community = Community.query.filter(func.lower(Community.name) == actor, Community.ap_id.is_(None),
+        # by name on its domain, not by a URL built from SERVER_NAME: a community owned by another domain has that
+        # domain's URL, and a name another domain holds too is not this one
+        community: Community = Community.query.filter(local_clause(Community, actor),
                                                       Community.banned.is_(False)).first()
+        actor = community.name if community is not None else actor.lower()   # the stored name, whatever the casing
     if community is not None:
         if is_activitypub_request():
             if community_local_only(community):
@@ -2541,7 +2549,7 @@ def community_outbox(actor):
     # D177, as user_outbox above
     if not is_activitypub_request():
         return redirect(url_for('activitypub.community_profile', actor=actor))
-    community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
+    community = Community.query.filter(local_clause(Community, actor), Community.banned.is_(False)).first()
     if community is not None:
         if community_local_only(community):
             abort(404)   # as community_profile: a local-only community does not exist to other servers
@@ -2573,7 +2581,7 @@ def community_featured(actor):
     # D177, as user_outbox above
     if not is_activitypub_request():
         return redirect(url_for('activitypub.community_profile', actor=actor))
-    community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
+    community = Community.query.filter(local_clause(Community, actor), Community.banned.is_(False)).first()
     if community is not None:
         if community_local_only(community):
             abort(404)   # as community_profile
@@ -2608,7 +2616,7 @@ def community_moderators_route(actor):
     # D177, as user_outbox above
     if not is_activitypub_request():
         return redirect(url_for('activitypub.community_profile', actor=actor))
-    community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
+    community = Community.query.filter(local_clause(Community, actor), Community.banned.is_(False)).first()
     if community is not None:
         if community_local_only(community):
             abort(404)   # as community_profile
@@ -2644,7 +2652,7 @@ def community_followers(actor):
     # D177, as user_outbox above
     if not is_activitypub_request():
         return redirect(url_for('activitypub.community_profile', actor=actor))
-    community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
+    community = Community.query.filter(local_clause(Community, actor), Community.banned.is_(False)).first()
     if community is not None:
         if community_local_only(community):
             abort(404)   # as community_profile
@@ -2673,7 +2681,7 @@ def community_following(actor):
     actor = actor.strip()
     if not is_activitypub_request():
         return redirect(url_for('activitypub.community_profile', actor=actor))
-    community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first() or abort(404)
+    community = Community.query.filter(local_clause(Community, actor), Community.banned.is_(False)).first() or abort(404)
     if community_local_only(community):
         abort(404)
     if community.local_only or community.private:

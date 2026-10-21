@@ -575,6 +575,9 @@ def check_requestor_domain(data: bytes) -> None:
         assert domain.lower() == reading[0], f'requestor_domain({user_agent!r}) = {domain!r}, RFC 3986 reads {reading[0]!r}'
 
 
+_REAL_USER = ap_routes.User
+
+
 class _Lookups:
     """Stands in for User, Community and Feed in app.activitypub.routes: records a query and finds nothing."""
 
@@ -582,6 +585,14 @@ class _Lookups:
 
     def __init__(self, record):
         self._record = record
+
+    @property
+    def ap_id(self):   # the columns local_named reads
+        return _REAL_USER.ap_id
+
+    @property
+    def site_domain_id(self):
+        return _REAL_USER.site_domain_id
 
     @property
     def query(self):

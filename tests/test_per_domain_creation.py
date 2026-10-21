@@ -327,6 +327,8 @@ def test_a_storefront_home_community_and_user_resolve_by_name(app, creators, dom
 def test_a_default_domain_community_document_is_unchanged(app, creators, domains):
     founder, other = creators
     made = _create(app, founder, 'abc.onion', url='clearnet')
-    response = app.test_client().get('/c/clearnet', headers={**AP, 'Host': 'abc.onion'})
+    response = app.test_client().get('/c/clearnet', headers={**AP, 'Host': 'default.example'})
     assert response.status_code == 200
     assert response.json['id'] == f"{app.config['SERVER_URL']}/c/clearnet" == made.ap_profile_id
+    # a bare name is the storefront's own (plan C1): the onion has no `clearnet`, whoever created it from there
+    assert app.test_client().get('/c/clearnet', headers={**AP, 'Host': 'abc.onion'}).status_code == 404

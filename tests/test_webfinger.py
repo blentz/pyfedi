@@ -472,11 +472,13 @@ def test_a_deleted_community_is_not_served(app, db_session):
 
 
 def test_a_remote_community_is_not_served(app, db_session):
-    """The lookup builds the profile id from OUR SERVER_URL, so a community
-    published on another host cannot match it whatever its name.
+    """A community cached from another host carries that host's `ap_id`, so it is never a local name
+    whatever it is called.
     """
     seed_local_actors()
-    make_community(name='books', host='peer.example')
+    community = make_community(name='books', host='peer.example')
+    community.ap_id = 'books@peer.example'
+    db.session.commit()
 
     response = webfinger_get(app, resource='acct:books@test.piefed.local')
 

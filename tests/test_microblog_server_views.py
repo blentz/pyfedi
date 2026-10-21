@@ -105,7 +105,7 @@ class TestServerViewPage:
     def test_case_is_ignored(self, client, live):
         assert client.get('/c/Microblogs@Mastodon.Example').status_code == 200
 
-    @pytest.mark.parametrize('path', ['/c/microblogs@nowhere.example', '/c/microblogs@test.piefed.local'])
+    @pytest.mark.parametrize('path', ['/c/microblogs@nowhere.example'])
     def test_no_view_is_404_for_a_visitor(self, client, live, path):
         assert client.get(path).status_code == 404
 

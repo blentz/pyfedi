@@ -92,6 +92,8 @@ def test_a_local_only_account_is_404_to_webfinger_and_activitypub(app, world):
         assert _get(app, path).status_code == 404, path
         assert _get(app, path, host='abc.onion').status_code == 404, path
     assert app.test_client().head('/u/onionite', headers=AP).status_code == 404
+    for path in ('/u/onionite@abc.onion', '/u/onionite@abc.onion/outbox', '/u/onionite@abc.onion/followers'):
+        assert _get(app, path).status_code == 404, path   # named from hell.cloud: still local-only
     assert _webfinger(app, 'acct:onionite@abc.onion').status_code == 404
     assert _webfinger(app, f"acct:onionite@{app.config['SERVER_NAME']}").status_code == 404
     # hell.cloud's own account is served as before
@@ -104,6 +106,8 @@ def test_a_local_only_community_is_404_too(app, world):
                  '/c/hidden/followers', '/c/hidden/following'):
         assert _get(app, path).status_code == 404, path
         assert _get(app, path, host='abc.onion').status_code == 404, path
+    for path in ('/c/hidden@abc.onion', '/c/hidden@abc.onion/outbox', '/c/hidden@abc.onion/followers'):
+        assert _get(app, path).status_code == 404, path   # named from hell.cloud: still local-only
     assert _webfinger(app, 'acct:hidden@abc.onion').status_code == 404
     assert _get(app, '/c/clearnet').status_code == 200
 
@@ -354,7 +358,7 @@ def test_a_logged_in_browser_still_sees_local_only_pages(app, world, monkeypatch
     post = _post(app, world.hidden, world.onionite, local_only=True)
     client = app.test_client()
     login(client, world.alice)
-    for path in ('/u/onionite', '/c/hidden', f'/post/{post.id}'):
+    for path in ('/u/onionite@abc.onion', '/c/hidden@abc.onion', f'/post/{post.id}'):   # named from hell.cloud
         assert client.get(path, headers={'Accept': 'text/html'}).status_code == 200, path
 
 
