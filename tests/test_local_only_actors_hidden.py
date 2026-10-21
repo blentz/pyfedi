@@ -100,3 +100,47 @@ def test_logged_out_people_lists_leave_out_local_only_accounts(app, world, path)
 @pytest.mark.parametrize('path', ['/instance/all/people', '/instance/people/interesting'])
 def test_logged_in_people_lists_still_show_them(app, world, path):
     assert f'/u/{ONION_BOB}' in visit(app, path, True, world).get_data(as_text=True)
+
+
+# --- communities --------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize('path', ['/communities', '/'])
+def test_logged_out_community_lists_and_sidebars_leave_out_local_only_communities(app, world, path):
+    body = visit(app, path, False, world).get_data(as_text=True)
+    assert '/c/art"' in body or "/c/art'" in body   # hell's own
+    assert ONION not in body
+
+
+@pytest.mark.parametrize('path', ['/communities', '/'])
+def test_logged_in_community_lists_and_sidebars_still_show_them(app, world, path):
+    assert f'/c/{ONION_ART}' in visit(app, path, True, world).get_data(as_text=True)
+
+
+# --- pages and feeds ----------------------------------------------------------------------------------------------
+
+PAGES = [f'/c/{ONION_ART}', f'/community/{ONION_ART}/feed', f'/community/{ONION_ART}/ical', f'/u/{ONION_BOB}',
+         f'/u/{ONION_BOB}/feed', f'/u/{ONION_BOB}/upvotes']
+
+
+@pytest.mark.parametrize('path', PAGES)
+def test_a_local_only_community_or_profile_page_is_not_found_when_logged_out(app, world, path):
+    response = visit(app, path, False, world)
+    assert response.status_code == 404
+    assert ONION not in response.get_data(as_text=True)
+
+
+@pytest.mark.parametrize('path', [p for p in PAGES if not p.endswith('/feed')])
+def test_a_local_only_community_or_profile_page_renders_when_logged_in(app, world, path):
+    assert visit(app, path, True, world).status_code == 200
+
+
+@pytest.mark.parametrize('path', [f'/community/{ONION_ART}/feed', f'/u/{ONION_BOB}/feed'])
+def test_a_local_only_feed_answers_an_rss_token(app, world, path):
+    world.hell_bob.rss_token = 'hell-bob-rss-token'
+    db.session.commit()
+    assert visit(app, f'{path}?token=hell-bob-rss-token', False, world).status_code == 200
+
+
+@pytest.mark.parametrize('path', [p.replace(f'@{ONION}', '') for p in PAGES])
+def test_hells_own_community_and_profile_pages_are_unchanged_when_logged_out(app, world, path):
+    assert visit(app, path, False, world).status_code == 200

@@ -421,8 +421,8 @@ def list_communities():
             )
         )
     else:
-        # For anonymous users, only show non-private communities
-        communities = communities.filter_by(private=False)
+        # For anonymous users, only show non-private communities, and no local-only one (owner ruling 2026-10-21)
+        communities = without_local_only_actors(communities.filter_by(private=False), Community)
 
     if search_param == '':
         pass

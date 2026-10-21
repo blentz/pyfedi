@@ -403,6 +403,8 @@ def community_post_query(community: Community, content_type: str, flair: str = '
 def show_community(community: Community, from_instance=None):
     if community.banned:
         abort(404)
+    if community_local_only(community) and not local_only_visible():
+        abort(404)   # a logged-out visitor never sees a local-only community (owner ruling 2026-10-21)
 
     # Community.private is invite-only real access control (app/models.py:594):
     # only members may view. 403 matches the RSS and iCal views of this same
@@ -856,6 +858,8 @@ def show_community_rss(actor):
         # answer conditionally.
         if community.private:
             abort(403)
+        if community_local_only(community) and not local_only_visible_rss():
+            abort(404)   # as the community's page: a logged-out reader never sees a local-only community
 
         # If nothing has changed since their last visit, return HTTP 304
         current_etag = f"{community.id}_{etag_stamp(community.last_active)}"
@@ -943,6 +947,8 @@ def show_community_ical(actor):
     if community is not None:
         if community.private:
             abort(403)
+        if community_local_only(community) and not local_only_visible():
+            abort(404)   # as the community's page
         posts = Post.query.filter(Post.community_id == community.id, Post.type == POST_TYPE_EVENT).\
             filter(Post.from_bot == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
                    listable_clause(Post))

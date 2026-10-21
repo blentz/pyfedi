@@ -20,8 +20,8 @@ from app.community.util import save_icon_file, save_banner_file, retrieve_mods_a
 from app.constants import *
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap
-from app.local_only import local_only_visible_rss, refuses_remote_contact, remote_contact_refusal_message, \
-    user_local_only, without_local_only
+from app.local_only import local_only_visible, local_only_visible_rss, refuses_remote_contact, \
+    remote_contact_refusal_message, user_local_only, without_local_only
 from app.visibility import OPEN_VISIBILITIES, visible_to_clause
 from app.onion import is_onion_request
 from app.models import Post, Community, CommunityMember, User, PostReply, Notification, utcnow, File, Site, \
@@ -142,6 +142,8 @@ def show_profile_by_id(user_id):
 def show_profile(user):
     if (user.deleted or user.banned) and current_user.is_anonymous:
         abort(404)
+    if user_local_only(user) and not local_only_visible():
+        abort(404)   # a logged-out visitor never sees a local-only account (owner ruling 2026-10-21)
 
     if user.deleted:
         flash(_('This user has been deleted.'), 'warning')
@@ -276,8 +278,8 @@ def user_upvotes(actor):
     # this instance cannot resolve was `AttributeError: 'NoneType' object has
     # no attribute 'id'` rather than the 404 the function goes on to produce.
     # D992's shape; the guard exists, it was just in the wrong place.
-    if user is None:
-        abort(404)
+    if user is None or (user_local_only(user) and not local_only_visible()):
+        abort(404)   # as the profile: a logged-out visitor never sees a local-only account
 
     upvoted = _get_user_upvoted_posts(user)
 
@@ -2453,6 +2455,8 @@ def show_profile_rss(actor):
         # refuses the profile page itself. Measured: the post was listed.
         if user.deleted:
             abort(404)
+        if user_local_only(user) and not local_only_visible_rss():
+            abort(404)   # as the profile: a logged-out reader never sees a local-only account
 
         # If nothing has changed since their last visit, return HTTP 304
         current_etag = f"{user.id}_{etag_stamp(user.last_seen)}"
