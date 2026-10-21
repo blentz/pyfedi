@@ -6,11 +6,10 @@ from there closes an import cycle (app.user's package runs app.user.routes, whic
 """
 import re
 
-from sqlalchemy import func
-
 from app import db
+from app.local_names import local_named
 from app.models import BannedInstances, User
-from app.storefront import domain_for_host, on_domain
+from app.storefront import current_storefront, domain_for_host
 
 MENTION_RE = re.compile(r"@([a-zA-Z0-9_.-]*)@([a-zA-Z0-9_.-]*)\b")
 
@@ -32,8 +31,8 @@ def user_address_parts(address: str):
 
 def stored_user(address: str, home=None):
     """The user `address` names among those already stored, as search_for_user(address, allow_fetch=False) finds it.
-    A bare name is a local user on `home`, a hosted domain (any domain when None); `name@host` for a host this site
-    hosts is that domain's local user. Raises when the address's server is banned here."""
+    A bare name is a local user on `home`, a hosted domain (the current storefront's when None); `name@host` for a
+    host this site hosts is that domain's local user. Raises when the address's server is banned here."""
     parts = user_address_parts(address)
     if parts is None:
         return None
@@ -45,14 +44,13 @@ def stored_user(address: str, home=None):
             raise Exception(f"{server} is blocked.{reason}")
         hosted = domain_for_host(server)
         if hosted:   # one of ours: that domain's own account, or nobody. Never fetched (it would be a self-request)
-            return db.session.query(User).filter(func.lower(User.user_name) == name, User.ap_id.is_(None),
-                                                 on_domain(hosted)).first()
+            return db.session.query(User).filter(local_named(User, name, hosted)).first()
         # `name` and `server` were lowercased above; `address` was not, so
         # this lookup was case-sensitive and a handle typed with any capital
         # letter in it found nobody.
         return db.session.query(User).filter_by(ap_id=f'{name}@{server}').first()
-    local = db.session.query(User).filter_by(user_name=name, ap_id=None)
-    return (local if home is None else local.filter(on_domain(home))).first()
+    # The name's case as typed, as this lookup has always matched it
+    return db.session.query(User).filter(local_named(User, name, home or current_storefront(), exact_case=True)).first()
 
 
 def mentioned_users_found_by(post, find_user) -> list:

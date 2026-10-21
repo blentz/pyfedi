@@ -21,7 +21,7 @@ from app.models import Domain, SiteDomain, UserFollower
 from app.shared.domain import block_domain
 from app.storefront import clear_domain_cache
 from app.utils import display_back_button, is_local_image_url, is_safe_redirect_target
-from tests.factories import cavage_signed_headers, inbox_activity, make_instance, make_site, make_user
+from tests.factories import cavage_signed_headers, inbox_activity, make_community, make_instance, make_site, make_user
 from tests.test_api_search_resolve import env, token  # noqa: F401 -- env is a fixture
 
 ALIAS = 'abc.onion'
@@ -253,15 +253,26 @@ def test_the_back_button_shows_for_a_referrer_on_any_storefront(app, onion, refe
 
 
 @pytest.mark.parametrize('path, location', [
-    ('/user/lookup/bob/abc.onion', '/u/bob'),
-    ('/community/lookup/general/abc.onion', '/c/general'),
+    ('/user/lookup/bob/abc.onion', '/u/bob@abc.onion'),
+    ('/community/lookup/general/abc.onion', '/c/general@abc.onion'),
     ('/feed/lookup/news/abc.onion', '/f/news'),
 ])
 def test_a_lookup_on_a_registered_domain_is_local(app, onion, path, location):
+    """Plan C1: a local name is the domain's own row, so the redirect names the onion's, never hell's namesake."""
     make_site()
+    onion_id = SiteDomain.query.filter_by(domain=ALIAS).one().id
+    _local_user('bob').site_domain_id = onion_id
+    make_community('general').site_domain_id = onion_id
+    db.session.commit()
     response = app.test_client().get(path)
     assert response.status_code == 302
     assert response.headers['Location'] == location
+
+
+@pytest.mark.parametrize('path', ['/user/lookup/bob/abc.onion', '/community/lookup/general/abc.onion'])
+def test_a_lookup_of_a_name_a_registered_domain_does_not_hold_is_404(app, onion, path):
+    make_site()
+    assert app.test_client().get(path).status_code == 404
 
 
 def test_nobody_blocks_a_registered_domain(app, onion):

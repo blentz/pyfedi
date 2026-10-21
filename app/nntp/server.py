@@ -49,7 +49,8 @@ import logging
 from app.auth.util import split_handle
 from app.models import Post, PostReply, User, utcnow, Site, Community, dummy_password_hash, verify_password_hash
 from sqlalchemy.orm import load_only
-from app.storefront import default_domain, on_domain
+from app.local_names import local_named
+from app.storefront import default_domain
 from app.utils import communities_banned_from, blocked_or_banned_instances, filtered_out_communities, get_setting, \
     get_request, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, log_login_failure
 from sqlalchemy import func
@@ -454,7 +455,7 @@ def _authenticate(user: str, password: str) -> bytes:
         # No storefront here: a bare name is on the default domain, a full handle on the domain it names
         name, domain = split_handle(user, default_domain())
         local = db.session.query(User).filter_by(ap_id=None, deleted=False)
-        u = ((domain and local.filter(func.lower(User.user_name) == name.lower(), on_domain(domain)).first())
+        u = ((domain and local.filter(local_named(User, name, domain)).first())
              or local.filter(func.lower(User.email) == user.lower()).first())
     if u is None:
         # A wrong password's hash work, or the time taken tells which names have accounts

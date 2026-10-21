@@ -970,7 +970,7 @@ def test_verify_credentials_honours_the_delay(app, alice, redis_double, clock, a
     client = app.test_client(use_cookies=False)
     assert [verify(client, 'alice', 'wrong one').status_code for _ in range(6)] == [400] * 6
     assert verify(client, 'alice', PASSWORD).status_code == 429
-    assert verify(client, 'alice', PASSWORD, onion=False).status_code == 200   # clearnet is not delayed
+    assert verify(client, 'alice@abc.onion', PASSWORD, onion=False).status_code == 200   # clearnet is not delayed
     clock.t += 2
     assert verify(client, 'alice', PASSWORD).status_code == 200
     assert not redis_double.exists('onion_login_fail:typed:alice')

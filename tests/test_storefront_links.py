@@ -232,7 +232,7 @@ def test_location_rewritten(app, world):
     founder, author, community, post, image = world
     target = quote(f'https://{CANONICAL}/c/general?x=1#top', safe='')
     # the view redirects to its ?redirect= target as given: an absolute URL on the canonical host
-    response = post_on_onion(app, founder, f'/u/author/block_instance?redirect={target}')
+    response = post_on_onion(app, founder, f'/u/author@{CANONICAL}/block_instance?redirect={target}')
     assert response.status_code == 302
     assert response.headers['Location'] == f'http://{ONION}/c/general@{CANONICAL}?x=1#top'
 
@@ -337,8 +337,9 @@ def test_storefront_html_passes_none(app, onion):
         context.pop()
 
 
-@pytest.mark.parametrize('path', ['/index/feed', '/d/{domain}/feed', '/tag/pics/feed', '/u/author/feed',
-                                  '/community/general/feed'])
+# A bare name on the onion is the onion's own (plan C1): hell's rows are named by their handle there
+@pytest.mark.parametrize('path', ['/index/feed', '/d/{domain}/feed', '/tag/pics/feed', f'/u/author@{CANONICAL}/feed',
+                                  f'/community/general@{CANONICAL}/feed'])
 def test_feed_item_bodies_on_storefront(app, world, path):
     founder, author, community, post, image = world
     domain = make_domain('pics.example')
