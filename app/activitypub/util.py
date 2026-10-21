@@ -3341,8 +3341,7 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                                                 'orig_post_title': post.title,
                                                                 'orig_post_body': post.body,
                                                                 'suspect_user_user_name': (
-                                                                    post.author.ap_id if post.author and post.author.ap_id
-                                                                    else post.author.user_name if post.author else ''),
+                                                                    post.author.stored_link() if post.author else ''),
                                                                 }
                                                 notification = Notification(title='Review this',
                                                                             user_id=1,
@@ -4236,7 +4235,7 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
                                     'post_id': post_reply.post_id,
                                     'comment_id': post_reply.id,
                                     'comment_body': post_reply.body,
-                                    'author_user_name': author.ap_id if author.ap_id else author.user_name
+                                    'author_user_name': author.stored_link()
                                     }
                     with force_locale(get_recipient_language(recipient.id)):
                         notification = Notification(user_id=recipient.id, title=gettext(
@@ -4486,9 +4485,9 @@ def notify_about_post_task(post_id):
                     targets_data = {'gen': '0',
                                     'post_id': post.id,
                                     'post_title': post.title,
-                                    'community_name': community.ap_id if community.ap_id else community.name,
+                                    'community_name': community.stored_link(),
                                     'author_id': post.user_id,
-                                    'author_user_name': author.ap_id if author.ap_id else author.user_name}
+                                    'author_user_name': author.stored_link()}
                     new_notification = Notification(title=shorten_string(post.title, 150), url=f"/post/{post.id}",
                                                     user_id=notify_id, author_id=post.user_id,
                                                     notif_type=NOTIF_USER,
@@ -4514,7 +4513,7 @@ def notify_about_post_task(post_id):
                     targets_data = {'gen': '0',
                                     'post_id': post.id,
                                     'post_title': post.title,
-                                    'community_name': community.ap_id if community.ap_id else community.name,
+                                    'community_name': community.stored_link(),
                                     'community_id': post.community_id}
                     new_notification = Notification(title=shorten_string(post.title, 150), url=f"/post/{post.id}",
                                                     user_id=notify_id, author_id=post.user_id,
@@ -4545,7 +4544,7 @@ def notify_about_post_task(post_id):
                     targets_data = {'gen': '0',
                                     'post_id': post.id,
                                     'post_title': post.title,
-                                    'community_name': community.ap_id if community.ap_id else community.name,
+                                    'community_name': community.stored_link(),
                                     'topic_name': topic.name,
                                     'topic_machine_name': topic.machine_name,
                                     'author_id': post.user_id}
@@ -4581,7 +4580,7 @@ def notify_about_post_task(post_id):
                         targets_data = {'gen': '0',
                                         'post_id': post.id,
                                         'post_title': post.title,
-                                        'community_name': community.ap_id if community.ap_id else community.name,
+                                        'community_name': community.stored_link(),
                                         'feed_id': feed.id,
                                         'feed_name': feed.title
                                         }
@@ -4615,8 +4614,8 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
                 targets_data = {'gen': '0',
                                 'post_id': new_reply.post.id,
                                 'post_title': post_title,
-                                'community_name': community.ap_id if community.ap_id else community.name,
-                                'author_user_name': author.ap_id if author.ap_id else author.user_name,
+                                'community_name': community.stored_link(),
+                                'author_user_name': author.stored_link(),
                                 'comment_id': new_reply.id,
                                 'comment_body': new_reply.body}
                 new_notification = Notification(title=shorten_string(_('Reply to %(post_title)s',
@@ -4658,7 +4657,7 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
                                 'comment_id': new_reply.id,
                                 'comment_body': new_reply.body,
                                 'author_id': new_reply.user_id,
-                                'author_user_name': author.ap_id if author.ap_id else author.user_name, }
+                                'author_user_name': author.stored_link(), }
                 with force_locale(get_recipient_language(notify_id)):
                     new_notification = Notification(
                         title=shorten_string(gettext('Reply to comment on %(post_title)s',
@@ -4813,7 +4812,7 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
                                                         'post_id': reply.post_id,
                                                         'comment_id': reply.id,
                                                         'comment_body': reply.body,
-                                                        'author_user_name': author.ap_id if author.ap_id else author.user_name
+                                                        'author_user_name': author.stored_link()
                                                         }
                                         with force_locale(get_recipient_language(recipient.id)):
                                             notification = Notification(user_id=recipient.id, title=gettext(f"You have been mentioned in comment {reply.id}"),
@@ -4992,7 +4991,7 @@ def update_post_from_activity(post: Post, request_json: dict):
                                                     'post_id': post.id,
                                                     'post_title': post.title,
                                                     'post_body': post.body,
-                                                    'author_user_name': author.ap_id if author.ap_id else author.user_name
+                                                    'author_user_name': author.stored_link()
                                                     }
                                     # in the recipient's language, as the reply path does (D248)
                                     with force_locale(get_recipient_language(recipient.id)):
@@ -5383,8 +5382,7 @@ def update_post_from_activity(post: Post, request_json: dict):
                                     'orig_post_body': post.body,
                                     'orig_post_domain': new_domain.name,
                                     'suspect_user_user_name': (
-                                        post.author.ap_id if post.author and post.author.ap_id
-                                        else post.author.user_name if post.author else ''),
+                                        post.author.stored_link() if post.author else ''),
                                     }
                     if new_domain.notify_mods:
                         for community_member in post.community.moderators():
@@ -5596,9 +5594,9 @@ def process_report(user, reported, request_json, session) -> bool:
         source_instance = session.get(Instance, user.instance_id)
         targets_data = {'gen': '0',
                         'suspect_user_id': reported.id,
-                        'suspect_user_user_name': reported.ap_id if reported.ap_id else reported.user_name,
+                        'suspect_user_user_name': reported.stored_link(),
                         'reporter_id': user.id,
-                        'reporter_user_name': user.ap_id if user.ap_id else user.user_name,
+                        'reporter_user_name': user.stored_link(),
                         'source_instance_id': user.instance_id,
                         'source_instance_domain': source_instance.domain if source_instance else '',
                         'reasons': reasons,
@@ -5633,9 +5631,9 @@ def process_report(user, reported, request_json, session) -> bool:
         targets_data = {'gen': '0',
                         'suspect_post_id': reported.id,
                         'suspect_user_id': reported.author.id,
-                        'suspect_user_user_name': suspect_author.ap_id if suspect_author.ap_id else suspect_author.user_name,
+                        'suspect_user_user_name': suspect_author.stored_link(),
                         'reporter_id': user.id,
-                        'reporter_user_name': user.ap_id if user.ap_id else user.user_name,
+                        'reporter_user_name': user.stored_link(),
                         'source_instance_id': user.instance_id,
                         'source_instance_domain': source_instance.domain if source_instance else '',
                         'orig_post_title': reported.title,
@@ -5694,14 +5692,14 @@ def process_report(user, reported, request_json, session) -> bool:
         targets_data = {'gen': '0',
                         'suspect_comment_id': reported.id,
                         'suspect_user_id': reported.author.id,
-                        'suspect_user_user_name': suspect_author.ap_id if suspect_author.ap_id else suspect_author.user_name,
+                        'suspect_user_user_name': suspect_author.stored_link(),
                         'reporter_id': user.id,
                         # `user_name`, not `name`: `User` has no `name`, so a
                         # reporter with no ap_id -- which is what a LOCAL actor
                         # is -- was an AttributeError here and the report was
                         # never filed. The two branches above spell it
                         # correctly.
-                        'reporter_user_name': user.ap_id if user.ap_id else user.user_name,
+                        'reporter_user_name': user.stored_link(),
                         'source_instance_id': user.instance_id,
                         'source_instance_domain': source_instance.domain if source_instance else '',
                         'orig_comment_body': reported.body

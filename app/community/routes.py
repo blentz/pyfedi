@@ -1528,9 +1528,9 @@ def community_report(community_id: int):
         # and no relationships for a template to follow.
         targets_data = {'gen': '0',
                         'suspect_community_id': community.id,
-                        'suspect_community_name': community.link(),
+                        'suspect_community_name': community.stored_link(),
                         'reporter_id': current_user.id,
-                        'reporter_user_name': current_user.user_name}
+                        'reporter_user_name': current_user.stored_link()}
         report = Report(reasons=form.reasons_to_string(form.reasons.data),
                         description=form.description.data,
                         type=REPORT_TYPE_COMMUNITY,

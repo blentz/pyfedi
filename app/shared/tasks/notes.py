@@ -100,7 +100,7 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
                 author = session.get(User, user.id)
                 targets_data = {'gen':'0',
                                 'post_id':reply.post_id,
-                                'author_user_name': author.ap_id if author.ap_id else author.user_name,
+                                'author_user_name': author.stored_link(),
                                 'comment_id': reply.id,
                                 'comment_body': reply.body
                                 }

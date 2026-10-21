@@ -1117,11 +1117,11 @@ def report_profile(actor):
             source_instance = db.session.get(Instance, user.instance_id) if user.instance_id else None
             targets_data = {'gen': '0',
                             'suspect_user_id': user.id,
-                            'suspect_user_user_name': user.ap_id if user.ap_id else user.user_name,
+                            'suspect_user_user_name': user.stored_link(),
                             'source_instance_id': user.instance_id,
                             'source_instance_domain': source_instance.domain if source_instance else None,
                             'reporter_id': current_user.id,
-                            'reporter_user_name': current_user.user_name,
+                            'reporter_user_name': current_user.stored_link(),
                             # D1392. The federated twin of this report
                             # (app/activitypub/util.py:3904) puts `reasons` and
                             # `description` in the same dict, and

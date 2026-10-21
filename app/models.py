@@ -1472,6 +1472,11 @@ class Community(db.Model):
     def link(self) -> str:
         return storefront.path_name(self.name, self.site_domain_id) if self.ap_id is None else self.ap_id.lower()
 
+    def stored_link(self) -> str:
+        """`link()` for stored data (a notification's or report's targets): the same on any storefront and outside
+        a request, a local community's name bare on the default domain and `name@domain` on another."""
+        return storefront.stored_path_name(self.name, self.site_domain_id) if self.ap_id is None else self.ap_id.lower()
+
     def lemmy_link(self) -> str:
         if self.ap_id is None:
             return f"!{self.name}@{storefront.link_host(self.home_domain())}"
@@ -2130,6 +2135,11 @@ class User(UserMixin, db.Model):
             return storefront.path_name(self.user_name, self.site_domain_id)
         else:
             return self.ap_id
+
+    def stored_link(self) -> str:
+        """`link()` for stored data (a notification's or report's targets): the same on any storefront and outside
+        a request, a local account's name bare on the default domain and `name@domain` on another."""
+        return storefront.stored_path_name(self.user_name, self.site_domain_id) if self.ap_id is None else self.ap_id
 
     def lemmy_link(self) -> str:
         if self.ap_id is None:
@@ -3121,7 +3131,7 @@ class Post(db.Model):
                                 'orig_post_title': post.title,
                                 'orig_post_body': post.body,
                                 'orig_post_domain': domain.name,
-                                'suspect_user_user_name': user.ap_id if user.ap_id else user.user_name,
+                                'suspect_user_user_name': user.stored_link(),
                                 }
                 if domain.notify_mods:
                     # D1423. `post.community`, not `community`. The Post is built a few
@@ -3285,7 +3295,7 @@ class Post(db.Model):
                                                     'post_id': post.id,
                                                     'post_body': post.body,
                                                     'post_title': post.title,
-                                                    'author_user_name': author.ap_id if author.ap_id else author.user_name,
+                                                    'author_user_name': author.stored_link(),
                                                     }
                                     # import here to avoid circular import errors
                                     from app.utils import get_recipient_language  # cycle: app.utils imports from this module
@@ -3504,7 +3514,7 @@ class Post(db.Model):
                                 # notify admin
                                 targets_data = {'gen': '0',
                                                 'suspect_user_id': user.id,
-                                                'suspect_user_user_name': user.ap_id if user.ap_id else user.user_name,
+                                                'suspect_user_user_name': user.stored_link(),
                                                 'source_instance_id': 1,
                                                 'source_instance_domain': '',
                                                 'reporter_id': 1,
@@ -4414,7 +4424,7 @@ class PostReply(db.Model):
                 # notify admin
                 targets_data = {'gen': '0',
                                 'suspect_user_id': user.id,
-                                'suspect_user_user_name': user.ap_id if user.ap_id else user.user_name,
+                                'suspect_user_user_name': user.stored_link(),
                                 'source_instance_id': 1,
                                 'source_instance_domain': '',
                                 'reporter_id': 1,
@@ -4472,7 +4482,7 @@ class PostReply(db.Model):
                             # notify admin
                             targets_data = {'gen': '0',
                                             'suspect_user_id': user.id,
-                                            'suspect_user_user_name': user.ap_id if user.ap_id else user.user_name,
+                                            'suspect_user_user_name': user.stored_link(),
                                             'source_instance_id': 1,
                                             'source_instance_domain': '',
                                             'reporter_id': 1,

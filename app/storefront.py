@@ -250,6 +250,14 @@ def path_name(name: str, site_domain_id: int | None) -> str:
     return name if domain == current else f'{name}@{domain.domain}'
 
 
+def stored_path_name(name: str, site_domain_id: int | None) -> str:
+    """How the local `name` on the domain with this `site_domain_id` (None: the default's) is written in stored data
+    that later renders as a path (a notification's or report's targets): bare on the default domain, else
+    `name@domain`, whichever storefront writes it. A name stored before C1 is bare, and means the default domain."""
+    domain = domain_by_id(site_domain_id)
+    return name if domain.is_default else f'{name}@{domain.domain}'
+
+
 def link_host(domain: DomainInfo) -> str:
     """`host[:port]` that names `domain` in a handle (`name@host`): SERVER_NAME for the default domain, else its host."""
     return _authority(domain)

@@ -749,7 +749,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                             # this dict now have the SAME shape, which is reason (2)
                             # of the arbitration recorded in
                             # tests/test_ap_update_post_tails.py's banner.
-                            'suspect_user_user_name': user.ap_id if user.ap_id else user.user_name,
+                            'suspect_user_user_name': user.stored_link(),
                             }
             if domain.notify_mods:
                 for community_member in post.community.moderators():
@@ -1053,11 +1053,11 @@ def report_post(post: Post, input, src, auth=None):
         'gen': '0',
         'suspect_post_id': post.id,
         'suspect_user_id': post.user_id,
-        'suspect_user_user_name': suspect_user.ap_id if suspect_user.ap_id else suspect_user.user_name,
+        'suspect_user_user_name': suspect_user.stored_link(),
         'source_instance_id': source_instance.id if source_instance else None,
         'source_instance_domain': source_instance.domain if source_instance else None,
         'reporter_id': reporter_user.id,
-        'reporter_user_name': reporter_user.user_name,
+        'reporter_user_name': reporter_user.stored_link(),
         'orig_post_title': post.title,
         'orig_post_body': post.body
     }

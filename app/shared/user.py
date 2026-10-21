@@ -267,7 +267,7 @@ def follow_user(follow_id: int, src, auth=None):
         if is_accepted is None:
             targets_data = {'gen': '0',
                             'author_id': user.id,
-                            'author_user_name': user.ap_id if user.ap_id else user.user_name}
+                            'author_user_name': user.stored_link()}
             new_notification = Notification(title=_('Someone wants to follow you'), url=f"/user/{user.id}",
                                             user_id=to_follow.id, author_id=user.id,
                                             notif_type=NOTIF_FOLLOW,
@@ -276,7 +276,7 @@ def follow_user(follow_id: int, src, auth=None):
         else:
             targets_data = {'gen': '0',
                             'author_id': user.id,
-                            'author_user_name': user.ap_id if user.ap_id else user.user_name}
+                            'author_user_name': user.stored_link()}
             new_notification = Notification(title=_('You have a new follower'), url=f"/user/{user.id}",
                                             user_id=to_follow.id, author_id=user.id,
                                             notif_type=NOTIF_FOLLOW,

@@ -131,6 +131,7 @@ def convert_archived_replies_to_tree(archived_replies: list, post: Post) -> List
         author.ap_id = reply_data.get('author_ap_id')
         author.ap_profile_id = reply_data.get('author_ap_profile_id')
         author.user_name = reply_data.get('author_user_name')
+        author.site_domain_id = reply_data.get('author_site_domain_id')   # None, in an archive from before C1: the default
         author.deleted = reply_data.get('author_deleted')
         author.bot = reply_data.get('author_bot', False)
         author.banned = reply_data.get('author_banned', False)

@@ -395,11 +395,11 @@ def report_reply(reply, input, src, auth=None):
         'gen': '0',
         'suspect_comment_id': reply.id,
         'suspect_user_id': reply.user_id,
-        'suspect_user_user_name': suspect_user.ap_id if suspect_user.ap_id else suspect_user.user_name,
+        'suspect_user_user_name': suspect_user.stored_link(),
         'source_instance_id': source_instance.id if source_instance else None,
         'source_instance_domain': source_instance.domain if source_instance else None,
         'reporter_id': reporter_user.id,
-        'reporter_user_name': reporter_user.user_name,
+        'reporter_user_name': reporter_user.stored_link(),
         'orig_comment_body': reply.body
     }
     # report.type 2 = 'reply'

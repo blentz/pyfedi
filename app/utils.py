@@ -7053,6 +7053,8 @@ def archive_post(post_id: int, s3_connection):
                             'author_indexable': bool(comment.author.indexable) if comment.author else True,
                             'author_deleted': bool(comment.author.deleted) if comment.author else False,
                             'author_user_name': comment.author.user_name if comment.author else False,
+                            # the domain a local author's name is on (C1): read back, the author links by it
+                            'author_site_domain_id': comment.author.site_domain_id if comment.author else None,
                             'author_ap_id': comment.author.ap_id if comment.author else False,
                             'author_ap_profile_id': comment.author.ap_profile_id if comment.author else False,
                             'author_reputation': comment.author.reputation if comment.author else 0,

@@ -225,7 +225,7 @@ def send_post(post_id, edit=False, session=None):
                                 'post_id':post.id,
                                 'post_body':post.body,
                                 'post_title': post.title,
-                                'author_user_name': user.ap_id if user.ap_id else user.user_name
+                                'author_user_name': user.stored_link()
                                 }
                 with force_locale(get_recipient_language(recipient.id)):
                     notification = Notification(user_id=recipient.id, title=gettext(f"You have been mentioned in post {post.id}"),

@@ -1473,7 +1473,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
 
                                 targets_data = {'gen': '0',
                                                 'author_id': remote_user.id,
-                                                'author_user_name': remote_user.ap_id if remote_user.ap_id else remote_user.user_name}
+                                                'author_user_name': remote_user.stored_link()}
                                 new_notification = Notification(title=_('You have a new follower'),
                                                                 url=f"/user/{remote_user.id}",
                                                                 user_id=local_user.id, author_id=remote_user.id,
@@ -1483,7 +1483,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                             else:
                                 targets_data = {'gen': '0',
                                                 'author_id': remote_user.id,
-                                                'author_user_name': remote_user.ap_id if remote_user.ap_id else remote_user.user_name}
+                                                'author_user_name': remote_user.stored_link()}
                                 new_notification = Notification(title=_('Someone is requesting to follow you'),
                                                                 url=f"/user/follow_requests",
                                                                 user_id=local_user.id, author_id=remote_user.id,
