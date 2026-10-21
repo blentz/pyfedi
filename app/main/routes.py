@@ -49,7 +49,7 @@ from app.storefront import ON_DOMAIN_PARAM, current_storefront, on_domain, on_do
 from app.utils import etag_stamp
 from app.utils import render_template, ensure_rss_token, get_setting, request_etag_matches, return_304, blocked_domains, \
     ap_datetime, shorten_string, user_filters_home, \
-    joined_communities, moderating_communities, markdown_to_html, \
+    joined_communities, joined_server_views, moderating_communities, markdown_to_html, \
     blocked_or_banned_instances, communities_banned_from, topic_tree, recently_upvoted_posts, recently_downvoted_posts, \
     menu_topics, blocked_communities, \
     permission_required, debug_mode_only, ip_address, menu_instance_feeds, menu_my_feeds, menu_subscribed_feeds, \
@@ -568,8 +568,9 @@ def list_communities():
             keywords = [keyword.strip() for keyword in (current_user.community_keyword_filter or '').split(',')]
             hidden_communities = set(blocked_community_ids) | set(banned_from) | set(filtered_out_community_ids)
         if microblogs.id not in hidden_communities:
-            view_rows = server_view_list.server_view_select(microblogs.id, search_param, instance, blocked,
-                                                            keywords)
+            view_rows = server_view_list.server_view_select(
+                microblogs.id, search_param, instance, blocked, keywords,
+                joined_server_views(current_user.get_id()) if subscribe_select == 'subscribed' else None)
         else:
             microblogs = None
     communities = server_view_list.paginate_union(

@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import event
 
 from app import cache, db
+from app.community.live import join_server_view
 from app.models import BannedInstances, Community, CommunityBan, CommunityBlock, InstanceBlock, Site
 from app.utils import utcnow
 from tests.discovery_fixtures import fresh_cache  # noqa: F401
@@ -248,14 +249,14 @@ class TestHelpers:
         assert view_side_allowed(**self.base)
 
     @pytest.mark.parametrize('change', [
-        {'home_select': 'local'}, {'subscribe_select': 'subscribed'}, {'subscribe_select': 'not_subscribed'},
+        {'home_select': 'local'}, {'subscribe_select': 'not_subscribed'},
         {'topic_id': 3}, {'topic_id': -1}, {'language_id': 2}, {'feed_id': 1}, {'platform': 'peertube'},
         {'nsfw': 'yes'},
     ])
     def test_filters_a_view_cannot_match_drop_it(self, change):
         assert not view_side_allowed(**{**self.base, **change})
 
-    @pytest.mark.parametrize('change', [{'home_select': 'remote'}, {'nsfw': 'no'}])
+    @pytest.mark.parametrize('change', [{'home_select': 'remote'}, {'nsfw': 'no'}, {'subscribe_select': 'subscribed'}])
     def test_filters_a_view_can_match_keep_it(self, change):
         assert view_side_allowed(**{**self.base, **change})
 
@@ -297,7 +298,7 @@ class TestTheList:
         assert VIEW_LINK in html
         assert '/community/microblogs@mastodon.example/subscribe' in html
 
-    @pytest.mark.parametrize('query', ['home_select=local', 'subscribe_select=subscribed', 'topic_id=1',
+    @pytest.mark.parametrize('query', ['home_select=local', 'subscribe_select=not_subscribed', 'topic_id=1',
                                        'language_id=1', 'feed_id=1', 'platform=peertube', 'nsfw=yes'])
     def test_filters_a_view_cannot_match_drop_views(self, client, live, query):
         live.toot()
@@ -310,6 +311,22 @@ class TestTheList:
         response = client.get(f'/communities?{query}')
 
         assert response.status_code == 200 and VIEW_LINK not in response.get_data(as_text=True)
+
+    def test_subscribed_lists_the_server_views_the_viewer_joined_and_no_others(self, client, live):
+        live.toot()
+        server(live, 'infosec.exchange')
+        join_server_view(live.viewer.id, live.remote)
+        login(client, live.viewer)
+
+        html = client.get('/communities?subscribe_select=subscribed').get_data(as_text=True)
+
+        assert VIEW_LINK in html and 'href="/c/microblogs@infosec.exchange"' not in html
+
+    def test_subscribed_lists_no_server_view_for_a_viewer_who_joined_none(self, client, live):
+        live.toot()
+        login(client, live.viewer)
+
+        assert VIEW_LINK not in client.get('/communities?subscribe_select=subscribed').get_data(as_text=True)
 
     @pytest.mark.parametrize('query', ['home_select=remote', 'nsfw=no', 'instance=mastodon.example'])
     def test_filters_a_view_can_match_keep_views(self, client, live, query):

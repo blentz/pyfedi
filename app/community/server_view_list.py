@@ -68,8 +68,8 @@ def parse_sort(sort_by):
 
 
 def view_side_allowed(*, home_select, subscribe_select, topic_id, language_id, feed_id, platform, nsfw) -> bool:
-    """False when a filter is set that no server view can satisfy."""
-    return not (home_select == 'local' or subscribe_select != 'any' or topic_id or language_id or feed_id
+    """False when a filter is set that no server view can satisfy. A view the viewer joined is Subscribed."""
+    return not (home_select == 'local' or subscribe_select not in ('any', 'subscribed') or topic_id or language_id or feed_id
                 or platform or nsfw == 'yes')
 
 
@@ -84,8 +84,9 @@ def community_select(community_query):
 
 
 def server_view_select(microblogs_id: int, search: str = '', host: str = '', blocked_instance_ids=(),
-                       exclude_keywords=()):
+                       exclude_keywords=(), joined_instance_ids=None):
     """One row per server with a server view, aggregated over the microblogs community's posts.
+    `joined_instance_ids`, when given, keeps only those servers: the views a viewer joined.
     Wildcard bans are not matched here; paginate_union drops those rows."""
     domain = func.lower(Instance.domain)
     title = func.concat(VIEW_PREFIX, domain)
@@ -113,6 +114,8 @@ def server_view_select(microblogs_id: int, search: str = '', host: str = '', blo
         stmt = stmt.where(domain == host.strip().lower())
     if blocked_instance_ids:
         stmt = stmt.where(Post.instance_id.not_in(list(blocked_instance_ids)))
+    if joined_instance_ids is not None:
+        stmt = stmt.where(Post.instance_id.in_(list(joined_instance_ids)))
     return stmt
 
 
