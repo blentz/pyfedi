@@ -41,7 +41,8 @@ from app.main.forms import ShareLinkForm
 from app.main.util import sidebar_active_communities, sidebar_new_instances, sidebar_upcoming_events, \
     sidebar_new_communities, _base_list_communities_context, reload_url
 from app.translation import LibreTranslateAPI
-from app.local_only import local_only_visible, local_only_visible_rss, without_local_only, without_local_only_actors
+from app.local_only import local_only_visible, local_only_visible_rss, user_local_only, without_local_only, \
+    without_local_only_actors
 from app.local_names import local_named, split_local_name
 from app.visibility import listable_clause, modlog_local_only_clause, modlog_open_clause, visible_to_clause
 from app.storefront import ON_DOMAIN_PARAM, current_instance_id, current_storefront, hidden_instance_ids, \
@@ -753,8 +754,9 @@ def about_page():
     MAU = active_month(instance_id=current_instance_id())
     posts_amount = local_posts(instance_id=current_instance_id())
 
-    admins = Site.admins()
-    staff = Site.staff()
+    # a logged-out visitor is shown no local-only account (owner ruling 2026-10-21)
+    admins = [user for user in Site.admins() if local_only_visible() or not user_local_only(user)]
+    staff = [user for user in Site.staff() if local_only_visible() or not user_local_only(user)]
     domains_amount = db.session.execute(text('SELECT COUNT(*) as c FROM "domain" WHERE "banned" IS false')).scalar()
     community_amount = local_communities(instance_id=current_instance_id())
     instance = db.session.get(Instance, current_instance_id())

@@ -311,3 +311,11 @@ def test_hells_community_page_names_a_local_only_moderator_or_related_community_
     body = response.get_data(as_text=True)
     assert (f'/u/{ONION_BOB}' in body) == signed_in   # the moderator list
     assert (f'/c/{ONION_ART}' in body) == signed_in   # the related communities
+
+
+# --- /about (fix round 2) -----------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize('signed_in', [False, True])
+def test_the_about_page_names_a_local_only_admin_only_to_a_logged_in_reader(app, api, signed_in):
+    body = visit(app, '/about', signed_in, api).get_data(as_text=True)
+    assert (ONION in body) == signed_in
