@@ -22,7 +22,7 @@ from app.onion_guard import require_onion_session, resolve_onion_api_rate_key
 from app.storefront import check_default_domain, is_local_link, resolve_storefront, \
     rewrite_response_for_storefront, storefront_host, storefront_link, storefront_url
 from app.shared.media import can_upload_media, media_kind_for, media_of, upload_byte_limit
-from app.utils import getmtime, gibberish, shorten_string, shorten_url, digits, user_access, community_membership, joined_server_views, \
+from app.utils import can_moderate, getmtime, gibberish, shorten_string, shorten_url, digits, user_access, community_membership, joined_server_views, \
     can_upvote, can_downvote, shorten_number, ap_datetime, current_theme, community_link_to_href, \
     in_sorted_list, role_access, first_paragraph, person_link_to_href, feed_membership, html_to_text, remove_images, \
     notif_id_to_string, feed_link_to_href, get_setting, set_setting, show_explore, human_filesize, can_upload_video, can_upload_audio, \
@@ -89,6 +89,7 @@ def register_request_hooks(app):
     app.jinja_env.globals['feed_membership'] = feed_membership
     app.jinja_env.globals['json_loads'] = json.loads
     app.jinja_env.globals['user_access'] = user_access
+    app.jinja_env.globals['can_moderate'] = can_moderate
     app.jinja_env.globals['role_access'] = role_access
     app.jinja_env.globals['ap_datetime'] = ap_datetime
     app.jinja_env.globals['can_upvote'] = can_upvote
