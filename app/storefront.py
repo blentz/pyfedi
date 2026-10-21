@@ -21,7 +21,7 @@ from bs4.formatter import HTMLFormatter
 from flask import Response, current_app, g, has_app_context, has_request_context, request
 from flask.globals import request_ctx
 from flask_babel import _
-from sqlalchemy import or_
+from sqlalchemy import case, or_
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import cache, db, shaped_memo_name
@@ -153,6 +153,39 @@ def hosted_instance_ids() -> frozenset[int]:
     """Every hosted domain's instance row: content on any of them is stored here, whichever storefront shows it.
     Read from `domain_rows`, so `clear_domain_cache` clears it too."""
     return frozenset(instance_id_of(row) for row in domain_rows())
+
+
+# What a post (or community) on the current domain's own instance row, or on a sister domain's, adds to its hot
+# ranking, and the tier it takes in a list's last sort key. One unit of `Post.ranking` is about 12.5 hours or a
+# tenfold score (owner ruling, plan C2 task 7).
+OWN_DOMAIN_BOOST = 1.0
+SISTER_DOMAIN_BOOST = 0.5
+
+
+def sister_instance_ids() -> frozenset[int]:
+    """The other hosted domains' instance rows: every hosted row but the current storefront's."""
+    return hosted_instance_ids() - {current_instance_id()}
+
+
+def domain_boost_sql(alias: str) -> tuple[str, dict]:
+    """A raw SQL number for rows of the table aliased `alias`: OWN_DOMAIN_BOOST for those on the current domain's
+    instance row, SISTER_DOMAIN_BOOST for a sister domain's, else 0 (a NULL instance too). With no sisters the
+    sister arm is left out, as an empty `IN ()` is not valid SQL. Returns the expression and the parameters to bind;
+    `domain_boost_expr` is its twin for a SQLAlchemy query."""
+    sql = f'CASE WHEN {alias}.instance_id = :own_instance THEN {OWN_DOMAIN_BOOST} '
+    params = {'own_instance': current_instance_id()}
+    if sisters := sister_instance_ids():
+        sql += f'WHEN {alias}.instance_id IN :sister_instances THEN {SISTER_DOMAIN_BOOST} '
+        params['sister_instances'] = tuple(sorted(sisters))
+    return sql + 'ELSE 0 END', params
+
+
+def domain_boost_expr(column):
+    """`domain_boost_sql` for a SQLAlchemy query, `column` being the table's `instance_id`."""
+    arms = [(column == current_instance_id(), OWN_DOMAIN_BOOST)]
+    if sisters := sister_instance_ids():
+        arms.append((column.in_(sorted(sisters)), SISTER_DOMAIN_BOOST))
+    return case(*arms, else_=0)
 
 
 def hidden_instance_ids() -> frozenset[int]:

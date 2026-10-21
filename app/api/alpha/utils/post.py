@@ -12,7 +12,7 @@ from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
 # app.activitypub before get_all_child_feed_ids is defined (import cycle: feed.routes)
 import app.feed.routes as feed_routes
-from app.storefront import ON_DOMAIN_PARAM, current_storefront, domain_authority, on_domain, on_domain_sql
+from app.storefront import ON_DOMAIN_PARAM, current_storefront, domain_authority, domain_boost_expr, domain_boost_sql, on_domain, on_domain_sql
 from app.models import Post, Community, CommunityMember, utcnow, User, Feed, FeedItem, Topic, PostReply, PostVote, \
     CommunityFlair, read_posts, Poll, Report
 # The module, not the names: app.shared.post reaches this file through a blueprint
@@ -566,8 +566,10 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         sql_order_by.append('instance_sticky DESC')
 
     if sort == "Hot":
-        posts = posts.order_by(desc(Post.ranking)).order_by(desc(Post.posted_at))
-        sql_order_by.extend(['ranking DESC', 'posted_at DESC'])
+        boost, boost_params = domain_boost_sql('p')
+        post_query_parameters.update(boost_params)
+        posts = posts.order_by(desc(Post.ranking + domain_boost_expr(Post.instance_id))).order_by(desc(Post.posted_at))
+        sql_order_by.extend([f'p.ranking + {boost} DESC', 'posted_at DESC'])
     elif sort == "Top" or sort == "TopDay":
         posts = posts.filter(Post.posted_at > utcnow() - timedelta(days=1)).order_by(
             desc(Post.score))
@@ -636,10 +638,13 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         posts = posts.order_by(desc(Post.posted_at))
         sql_order_by.append('posted_at DESC')
     elif sort == "Scaled":
-        posts = posts.filter(Post.ranking_scaled != None, Post.from_bot == False).order_by(desc(Post.ranking_scaled)).order_by(
+        boost, boost_params = domain_boost_sql('p')
+        post_query_parameters.update(boost_params)
+        posts = posts.filter(Post.ranking_scaled != None, Post.from_bot == False).order_by(
+            desc(Post.ranking_scaled + domain_boost_expr(Post.instance_id))).order_by(
             desc(Post.ranking)).order_by(desc(Post.posted_at))
         post_query_criteria.extend(['ranking_scaled IS NOT NULL', 'from_bot = false'])
-        sql_order_by.extend(['ranking_scaled DESC', 'ranking DESC', 'posted_at DESC'])
+        sql_order_by.extend([f'p.ranking_scaled + {boost} DESC', 'ranking DESC', 'posted_at DESC'])
     elif sort == "Active":
         posts = posts.filter(Post.last_active != None)
         posts = posts.order_by(desc(Post.last_active))
@@ -1179,7 +1184,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
         posts = posts.order_by(desc(Post.instance_sticky))
 
     if sort == "Hot":
-        posts = posts.order_by(desc(Post.ranking)).order_by(desc(Post.posted_at))
+        posts = posts.order_by(desc(Post.ranking + domain_boost_expr(Post.instance_id))).order_by(desc(Post.posted_at))
     elif sort == "Top" or sort == "TopDay":
         posts = posts.filter(Post.posted_at > utcnow() - timedelta(days=1)).order_by(
             desc(Post.score))
@@ -1218,7 +1223,8 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
     elif sort == "New":
         posts = posts.order_by(desc(Post.posted_at))
     elif sort == "Scaled":
-        posts = posts.filter(Post.ranking_scaled != None, Post.from_bot == False).order_by(desc(Post.ranking_scaled)).order_by(
+        posts = posts.filter(Post.ranking_scaled != None, Post.from_bot == False).order_by(
+            desc(Post.ranking_scaled + domain_boost_expr(Post.instance_id))).order_by(
             desc(Post.ranking)).order_by(desc(Post.posted_at))
     elif sort == "Active":
         posts = posts.filter(Post.reply_count > 0)
@@ -1268,7 +1274,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
             posts = posts.filter(Post.community_id.not_in(filtered_out_community_ids))
 
     if sort == "Hot":
-        posts = posts.order_by(desc(Post.ranking), desc(Post.posted_at), desc(Post.id))
+        posts = posts.order_by(desc(Post.ranking + domain_boost_expr(Post.instance_id)), desc(Post.posted_at), desc(Post.id))
     # `desc(a), desc(b)` -- TWO arguments to order_by -- not
     # `desc(a, desc(b))`, which is one call to desc() with two arguments and
     # `TypeError: desc() takes 1 positional argument but 2 were given`. Every
@@ -1309,7 +1315,8 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
     elif sort == "New":
         posts = posts.order_by(desc(Post.posted_at), desc(Post.id))
     elif sort == "Scaled":
-        posts = posts.filter(Post.ranking_scaled != None).order_by(desc(Post.ranking_scaled),
+        posts = posts.filter(Post.ranking_scaled != None).order_by(
+            desc(Post.ranking_scaled + domain_boost_expr(Post.instance_id)),
             desc(Post.ranking), desc(Post.posted_at), desc(Post.id))
     elif sort == "Active":
         # `last_active != None` as well as the reply count, which is what

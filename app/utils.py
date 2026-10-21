@@ -78,7 +78,7 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     ServerViewMember
 from app.local_names import local_named
 from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, current_storefront, canonicalise_links, canonicalise_text, domain_base_url, \
-    domain_by_id, hosted_instance_ids, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
+    domain_boost_expr, domain_boost_sql, domain_by_id, hosted_instance_ids, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
 from collections import Counter
 from flask import has_request_context
 import app as app_pkg
@@ -5963,9 +5963,13 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
     # sorting
     post_id_sort = ''
     if sort == '' or sort == 'hot':
-        post_id_sort = 'ORDER BY p.ranking DESC, p.posted_at DESC'
+        boost, boost_params = domain_boost_sql('p')
+        params.update(boost_params)
+        post_id_sort = f'ORDER BY p.ranking + {boost} DESC, p.posted_at DESC'
     elif sort == 'scaled':
-        post_id_sort = 'ORDER BY p.ranking_scaled DESC, p.ranking DESC, p.posted_at DESC'
+        boost, boost_params = domain_boost_sql('p')
+        params.update(boost_params)
+        post_id_sort = f'ORDER BY p.ranking_scaled + {boost} DESC, p.ranking DESC, p.posted_at DESC'
         post_id_where.append('p.ranking_scaled is not null AND p.from_bot is false ')
     elif sort.startswith('top'):
         if sort != 'top_all':
@@ -6009,9 +6013,10 @@ def post_ids_to_models(post_ids: List[int], sort: str):
     posts = Post.query.filter(Post.id.in_([p for p in post_ids]))
     # Final sorting
     if sort == '' or sort == 'hot':
-        posts = posts.order_by(desc(Post.ranking)).order_by(desc(Post.posted_at))
+        posts = posts.order_by(desc(Post.ranking + domain_boost_expr(Post.instance_id))).order_by(desc(Post.posted_at))
     elif sort == 'scaled':
-        posts = posts.order_by(desc(Post.ranking_scaled)).order_by(desc(Post.ranking)).order_by(desc(Post.posted_at))
+        posts = posts.order_by(desc(Post.ranking_scaled + domain_boost_expr(Post.instance_id))).order_by(
+            desc(Post.ranking)).order_by(desc(Post.posted_at))
     elif sort.startswith('top'):
         posts = posts.order_by(desc(Post.score))
     elif sort == 'new':

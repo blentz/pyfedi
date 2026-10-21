@@ -45,7 +45,7 @@ from app.local_only import local_only_visible, local_only_visible_rss, user_loca
     without_local_only_actors
 from app.local_names import local_named, split_local_name
 from app.visibility import listable_clause, modlog_local_only_clause, modlog_open_clause, visible_to_clause
-from app.storefront import ON_DOMAIN_PARAM, current_instance_id, current_storefront, hidden_instance_ids, \
+from app.storefront import ON_DOMAIN_PARAM, current_instance_id, current_storefront, domain_boost_expr, hidden_instance_ids, \
     hosted_instance_ids, on_domain, on_domain_sql, storefront_host, storefront_cache_key, storefront_link, storefront_url
 from app.utils import etag_stamp
 from app.utils import render_template, ensure_rss_token, get_setting, request_etag_matches, return_304, blocked_domains, \
@@ -1821,7 +1821,8 @@ def health2():
 
     communities = communities.order_by(safe_order_by(sort_by, Community,
                                                      {'title', 'subscriptions_count', 'post_count', 'post_reply_count',
-                                                      'last_active', 'created_at'})).limit(100)
+                                                      'last_active', 'created_at'})).order_by(
+        desc(domain_boost_expr(Community.instance_id))).limit(100)
 
     c = communities.all()   # noqa f841
 

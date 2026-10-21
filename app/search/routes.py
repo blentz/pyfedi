@@ -13,6 +13,7 @@ from app.discovery.media import media_post_clause
 from app.discovery.search import viewer_allows_nsfw
 from app.models import Post, Language, Community, Instance, PostReply
 from app.search import bp
+from app.storefront import domain_boost_expr
 from app.local_only import without_local_only, without_local_only_actors
 from app.visibility import listable_clause
 from app.utils import render_template, blocked_domains, blocked_or_banned_instances, \
@@ -130,6 +131,7 @@ def run_search():
                 posts = posts.order_by(desc(Post.posted_at))
             elif sort_by == 'top':
                 posts = posts.order_by(desc(Post.up_votes - Post.down_votes))
+            posts = posts.order_by(desc(domain_boost_expr(Post.instance_id)))
 
             posts = posts.paginate(page=page,
                                    per_page=100 if current_user.is_authenticated and not low_bandwidth else 50,
@@ -188,6 +190,7 @@ def run_search():
                 replies = replies.order_by(desc(PostReply.posted_at))
             elif sort_by == 'top':
                 replies = replies.order_by(desc(PostReply.up_votes - PostReply.down_votes))
+            replies = replies.order_by(desc(domain_boost_expr(PostReply.instance_id)))
 
             replies = replies.paginate(page=page,
                                        per_page=100 if current_user.is_authenticated and not low_bandwidth else 50,
