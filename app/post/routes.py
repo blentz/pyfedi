@@ -1897,7 +1897,7 @@ def post_block_instance(post_id: int):
     # two flashes, contradicting each other, one of them false. A post with no
     # instance at all was worse: `post.instance.domain` on None, and the
     # INSERT one level down has the same not-null column D1099 hit.
-    if post.instance_id is None or post.instance_id == 1:
+    if post.instance_id is None or post.instance_id == current_user.instance_id:
         abort(404)
 
     block_remote_instance(post.instance_id, SRC_WEB)
@@ -2324,7 +2324,7 @@ def post_reply_block_instance(post_id: int, comment_id: int):
     # D1101's twin. `block_remote_instance` refuses instance 1 with its own
     # flash and this line said the opposite straight after it; a reply with no
     # instance was `AttributeError` on `post_reply.instance.domain`.
-    if post_reply.instance_id is None or post_reply.instance_id == 1:
+    if post_reply.instance_id is None or post_reply.instance_id == current_user.instance_id:
         abort(404)
 
     block_remote_instance(post_reply.instance_id, SRC_WEB)

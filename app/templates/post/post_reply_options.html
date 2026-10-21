@@ -123,7 +123,7 @@
                 </a>
             </li>
         {% endif -%}
-        {% if post_reply.instance_id and post_reply.instance_id != 1 -%}
+        {% if post_reply.instance_id and post_reply.instance_id != current_user.instance_id -%}
             <li>
                 <a class="dropdown-item no-underline" role="button" style="white-space: normal" 
                         aria-label="{{ _("Hide content from author's instance: %(name)s", name=post_reply.instance.domain) }}"

@@ -1004,7 +1004,7 @@ def user_block_instance(actor):
     # caller, and said so as 'Content from None will be hidden.' because a local
     # user has no `ap_domain`. Measured: `PROBE u3 block_remote_instance called
     # with: (1, 1)`.
-    if user.is_local() or user.instance_id is None or user.instance_id == 1:
+    if user.instance_id is None or user.instance_id == current_user.instance_id:
         flash(_('You cannot block this instance.'), 'error')
         return redirect(safe_redirect_target(request.args.get('redirect'), f'/u/{actor}'))
 
@@ -1901,7 +1901,7 @@ def user_settings_block_instance():
         # would be hidden from the caller, with no obvious way back. D1035's
         # shape, at the other end of the same feature: `user_block_instance`
         # reached it from a local profile, this one from the settings page.
-        if instance.id == 1 or instance.domain == current_app.config['SERVER_NAME']:
+        if instance.id == current_user.instance_id:
             flash(_('You cannot block this instance.'), 'error')
             return render_template('user/block_instance.html', form=form, user=current_user)
 
