@@ -44,8 +44,8 @@ from app.translation import LibreTranslateAPI
 from app.local_only import local_only_visible, local_only_visible_rss, without_local_only
 from app.local_names import local_named, split_local_name
 from app.visibility import listable_clause, modlog_local_only_clause, modlog_open_clause, visible_to_clause
-from app.storefront import ON_DOMAIN_PARAM, current_instance_id, current_storefront, hosted_instance_ids, on_domain, on_domain_sql, \
-    storefront_host, storefront_cache_key, storefront_link, storefront_url
+from app.storefront import ON_DOMAIN_PARAM, current_instance_id, current_storefront, hidden_instance_ids, \
+    hosted_instance_ids, on_domain, on_domain_sql, storefront_host, storefront_cache_key, storefront_link, storefront_url
 from app.utils import etag_stamp
 from app.utils import render_template, ensure_rss_token, get_setting, request_etag_matches, return_304, blocked_domains, \
     ap_datetime, shorten_string, user_filters_home, \
@@ -704,7 +704,7 @@ def modlog():
     next_url = url_for('main.modlog', page=modlog_entries.next_num, **arg_dict) if modlog_entries.has_next else None
     prev_url = url_for('main.modlog', page=modlog_entries.prev_num, **arg_dict) if modlog_entries.has_prev and page != 1 else None
 
-    instances = {instance.id: instance.domain for instance in Instance.query.all()}
+    instances = {instance.id: instance.domain for instance in Instance.query.filter(Instance.id.not_in(hidden_instance_ids()))}
     communities = {community.id: community.display_name() for community in Community.query.filter(Community.banned == False).all()}
     community_trusted = db.session.execute(text('SELECT c.id FROM "community" as c INNER JOIN "instance" as i on c.instance_id = i.id WHERE i.trusted is true or i.id IN :hosted'),
                                            {'hosted': tuple(sorted(hosted_instance_ids()))}).scalars()
