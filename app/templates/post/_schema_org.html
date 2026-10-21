@@ -28,7 +28,7 @@
     {% if post.author.ap_profile_id -%}
     "url": {{ post.author.ap_profile_id|storefront_link|tojson }}
     {% else -%}
-    "url": {{ (site_url + '/u/' + post.author.user_name)|tojson }}
+    "url": {{ (site_url + '/u/' + post.author.link())|tojson }}
     {% endif -%}
   },
   "publisher": {
@@ -37,7 +37,7 @@
     {% if post.community.ap_profile_id -%}
     "url": {{ post.community.ap_profile_id|storefront_link|tojson }}
     {% else -%}
-    "url": {{ (site_url + '/c/' + post.community.name)|tojson }}
+    "url": {{ (site_url + '/c/' + post.community.link())|tojson }}
     {% endif -%}
   },
   {% if post.language -%}

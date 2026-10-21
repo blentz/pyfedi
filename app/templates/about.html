@@ -15,9 +15,9 @@
            {{ ngettext('content from <a href="/domains">%(num)d</a> website', 'content from <a href="/domains">%(num)d</a> websites', domains_amount) | safe }}
            {{ ngettext('and made %(num)d post', 'and made %(num)d posts', posts_amount) | safe }}.</p>
         <h2>{{ _('Team') }}</h2>
-        <p>{{ _('This instance is administered by') }} {% for admin in admins %}<a href="/u/{{ admin.user_name }}">{{ admin.user_name }}</a>{{ ", " if not loop.last }}{% endfor %}.</p>
+        <p>{{ _('This instance is administered by') }} {% for admin in admins %}<a href="/u/{{ admin.link() }}">{{ admin.user_name }}</a>{{ ", " if not loop.last }}{% endfor %}.</p>
         {% if staff %}
-        <p>{{ _('It is moderated by') }} {% for s in staff %}<a href="/u/{{ s.user_name }}">{{ s.user_name }}</a>{{ ", " if not loop.last }}{% endfor %}.</p>
+        <p>{{ _('It is moderated by') }} {% for s in staff %}<a href="/u/{{ s.link() }}">{{ s.user_name }}</a>{{ ", " if not loop.last }}{% endfor %}.</p>
         {% endif %}
         <h2>{{ _('Contact') }}</h2>
         <p>{{ g.site.contact_email | safe }}</p>

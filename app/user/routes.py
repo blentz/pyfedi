@@ -179,21 +179,21 @@ def show_profile(user):
     bot_challenge = BotChallenge.query.filter(BotChallenge.user_id == user.id).first()
 
     # pagination urls
-    post_next_url = url_for('activitypub.user_profile', actor=user.ap_id if user.ap_id is not None else user.user_name,
+    post_next_url = url_for('activitypub.user_profile', actor=user.link(),
                             post_page=posts.next_num) if posts.has_next else None
-    post_prev_url = url_for('activitypub.user_profile', actor=user.ap_id if user.ap_id is not None else user.user_name,
+    post_prev_url = url_for('activitypub.user_profile', actor=user.link(),
                             post_page=posts.prev_num) if posts.has_prev and post_page != 1 else None
     replies_next_url = url_for('activitypub.user_profile',
-                               actor=user.ap_id if user.ap_id is not None else user.user_name,
+                               actor=user.link(),
                                replies_page=post_replies.next_num) if post_replies.has_next else None
     replies_prev_url = url_for('activitypub.user_profile',
-                               actor=user.ap_id if user.ap_id is not None else user.user_name,
+                               actor=user.link(),
                                replies_page=post_replies.prev_num) if post_replies.has_prev and replies_page != 1 else None
     overview_next_url = url_for('activitypub.user_profile',
-                                actor=user.ap_id if user.ap_id is not None else user.user_name,
+                                actor=user.link(),
                                 overview_page=overview_page + 1) if overview_has_next_page else None
     overview_prev_url = url_for('activitypub.user_profile',
-                                actor=user.ap_id if user.ap_id is not None else user.user_name,
+                                actor=user.link(),
                                 overview_page=overview_page - 1) if overview_page != 1 else None
     posting_pattern_labels = []
     posting_pattern_values = []
