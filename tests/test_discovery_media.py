@@ -3,6 +3,7 @@ import pytest
 from sqlalchemy import text
 
 from app import db
+from app.constants import COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_PODCAST, COMMUNITY_KIND_VIDEO_CHANNEL
 from app.discovery.media import MEDIA_COMMUNITY_SQL, media_community_clause, media_post_clause, platform_community_clause, platform_of
 from app.models import Community, Post
 from tests.factories import make_community, make_instance, make_post, make_user
@@ -61,3 +62,35 @@ def test_platform_of_a_community_with_no_instance_or_software(db_session):
 def test_the_platform_clause_matches_one_platform_case_insensitively(three):
     assert {c.name for c in Community.query.filter(platform_community_clause('peertube'))} == {'c_peertube'}
     assert {c.name for c in Community.query.filter(platform_community_clause('castopod'))} == {'c_castopod'}
+
+
+@pytest.fixture
+def own(db_session):
+    """This server's own communities of each kind (ap_id None), beside a remote lemmy one that stays out."""
+    made = {}
+    for name, kind in (('own_video', COMMUNITY_KIND_VIDEO_CHANNEL), ('own_podcast', COMMUNITY_KIND_PODCAST),
+                       ('own_talk', COMMUNITY_KIND_DISCUSSION)):
+        community = make_community(name, kind=kind)
+        author = make_user(None, f'a_{name}', local=True)
+        made[name] = (community, make_post(community, author, f'https://test.piefed.local/p/{name}'))
+    db.session.commit()
+    return made
+
+
+def test_the_clause_matches_this_servers_video_and_podcast_communities(own):
+    assert {c.name for c in Community.query.filter(media_community_clause())} == {'own_video', 'own_podcast'}
+
+
+def test_the_post_clause_matches_posts_in_this_servers_video_and_podcast_communities(own):
+    assert {p.ap_id for p in Post.query.filter(media_post_clause())} == \
+        {'https://test.piefed.local/p/own_video', 'https://test.piefed.local/p/own_podcast'}
+
+
+def test_the_raw_fragment_matches_this_servers_video_and_podcast_communities(own, three):
+    rows = db.session.execute(text(f'SELECT c.name FROM community c WHERE {MEDIA_COMMUNITY_SQL}')).scalars()
+    assert set(rows) == {'own_video', 'own_podcast', 'c_peertube', 'c_castopod'}
+
+
+def test_the_platform_clause_files_this_servers_video_channels_under_peertube_and_podcasts_under_castopod(own, three):
+    assert {c.name for c in Community.query.filter(platform_community_clause('peertube'))} == {'own_video', 'c_peertube'}
+    assert {c.name for c in Community.query.filter(platform_community_clause('castopod'))} == {'own_podcast', 'c_castopod'}
