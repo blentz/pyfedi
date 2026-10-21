@@ -3,6 +3,7 @@ import datetime
 from app import celery, db
 from app.activitypub.signature import default_context, post_request, send_post_request
 from app.models import Community, CommunityMember, User, Instance
+from app.storefront import hosted_instance_ids
 from app.utils import gibberish, ap_datetime, get_task_session, patch_db_session
 
 from flask import current_app
@@ -159,8 +160,9 @@ def ban_person(session, user_id, mod_id, community_id, expiry, reason: str, remo
     if not community:
         instances = session.query(Instance).filter(Instance.software.in_(['piefed', 'pylova', 'lemmy', 'mbin'])).\
             filter(Instance.gone_forever == False, Instance.dormant == False).all()
+        hosted = hosted_instance_ids()
         for instance in instances:
-            if instance.inbox and instance.online() and instance.id != 1:
+            if instance.inbox and instance.online() and instance.id not in hosted:
                 send_post_request(instance.inbox, object, mod.private_key, mod.public_url() + '#main-key')
         return
 

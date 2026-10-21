@@ -16,6 +16,7 @@ from app.instance import bp
 from app.instance.util import is_fedi_handle, bulk_follow, mastodon_csv_handles
 from app.models import Instance, User, Post, read_posts, AllowedInstances, BannedInstances, utcnow
 from app.shared.site import block_remote_instance, unblock_remote_instance
+from app.storefront import hosted_instance_ids
 from app.local_only import without_local_only
 from app.visibility import listable_clause
 from app.utils import render_template, blocked_domains, \
@@ -100,7 +101,7 @@ def list_instances():
         if 'gone_forever' in filters:
             instances = instances.filter(Instance.gone_forever == True)
         if 'federated' in filters:
-            instances = instances.filter(Instance.id != 1, Instance.gone_forever == False)
+            instances = instances.filter(Instance.id.not_in(hosted_instance_ids()), Instance.gone_forever == False)
 
     # Pagination
     instances = instances.paginate(page=page, per_page=50, error_out=False)

@@ -94,7 +94,10 @@ PRESENTATION_VIEWS = ['/sitemap.xml', f'/community/general@{CANONICAL}/feed', f'
 def test_cached_view_per_host(app, world, path, first, second):
     get(app, path, first)
     body = get(app, path, second)
-    assert f'{ORIGINS[second]}/' in body
+    # a sitemap lists its own domain's posts (plan C2 task 3), and every onion post is local-only, so the onion's is
+    # empty: that it is not hell's cached entry is the `<loc>` check below
+    if not (path == '/sitemap.xml' and second == ONION):
+        assert f'{ORIGINS[second]}/' in body
     if second == CANONICAL:
         assert ONION not in body                        # the onion is never named to a clearnet visitor
     else:

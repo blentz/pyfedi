@@ -18,6 +18,7 @@ from app.models import Notification, SendQueue, CommunityBan, CommunityMember, U
     DefederationSubscription, Instance, ActivityPubLog, InstanceRole, utcnow, InstanceChooser, \
     InstanceBan, Emoji, RevokedToken, BotChallenge
 from app.shared.post import delete_post
+from app.storefront import hosted_instance_ids
 from app.utils import _capped_request, get_task_session, download_defeds, instance_banned, get_request_instance, get_request, \
     shorten_string, patch_db_session, archive_post, get_setting, set_setting, communities_banned_from_all_users, \
     banned_instances, blocked_or_banned_instances, get_emoji_replacements, store_files_in_s3, ensure_directory_exists
@@ -378,6 +379,7 @@ def cleanup_old_voting_data():
     try:
         local_months = current_app.config['KEEP_LOCAL_VOTE_DATA_TIME']
         remote_months = current_app.config['KEEP_REMOTE_VOTE_DATA_TIME']
+        hosted = tuple(sorted(hosted_instance_ids()))   # a voter on any of our domains is local
 
         if local_months != -1:
             cutoff_local = utcnow() - timedelta(days=28 * local_months)
@@ -386,10 +388,10 @@ def cleanup_old_voting_data():
             session.execute(text('''
                 DELETE FROM "post_vote"
                 WHERE user_id IN (
-                    SELECT id FROM "user" WHERE instance_id = :instance_id
+                    SELECT id FROM "user" WHERE instance_id IN :hosted
                 )
                 AND created_at < :cutoff
-            '''), {'cutoff': cutoff_local, 'instance_id': 1})
+            '''), {'cutoff': cutoff_local, 'hosted': hosted})
 
             session.commit()
 
@@ -397,10 +399,10 @@ def cleanup_old_voting_data():
             session.execute(text('''
                 DELETE FROM "post_reply_vote"
                 WHERE user_id IN (
-                    SELECT id FROM "user" WHERE instance_id = :instance_id
+                    SELECT id FROM "user" WHERE instance_id IN :hosted
                 )
                 AND created_at < :cutoff
-            '''), {'cutoff': cutoff_local, 'instance_id': 1})
+            '''), {'cutoff': cutoff_local, 'hosted': hosted})
 
             session.commit()
 
@@ -411,10 +413,10 @@ def cleanup_old_voting_data():
             session.execute(text('''
                 DELETE FROM "post_vote"
                 WHERE user_id IN (
-                    SELECT id FROM "user" WHERE instance_id != :instance_id
+                    SELECT id FROM "user" WHERE instance_id NOT IN :hosted
                 )
                 AND created_at < :cutoff
-            '''), {'cutoff': cutoff_remote, 'instance_id': 1})
+            '''), {'cutoff': cutoff_remote, 'hosted': hosted})
 
             session.commit()
 
@@ -422,10 +424,10 @@ def cleanup_old_voting_data():
             session.execute(text('''
                 DELETE FROM "post_reply_vote"
                 WHERE user_id IN (
-                    SELECT id FROM "user" WHERE instance_id != :instance_id
+                    SELECT id FROM "user" WHERE instance_id NOT IN :hosted
                 )
                 AND created_at < :cutoff
-            '''), {'cutoff': cutoff_remote, 'instance_id': 1})
+            '''), {'cutoff': cutoff_remote, 'hosted': hosted})
 
             session.commit()
 
@@ -493,7 +495,7 @@ def check_instance_health():
             dormant_to_recheck = session.query(Instance).filter(
                 Instance.dormant == True,
                 Instance.gone_forever == False,
-                Instance.id != 1
+                Instance.id.not_in(hosted_instance_ids())
             ).all()
 
             for instance in dormant_to_recheck:
@@ -587,7 +589,7 @@ def monitor_healthy_instances():
         instances = session.query(Instance).filter(
             Instance.gone_forever == False,
             Instance.dormant == False,
-            Instance.id != 1
+            Instance.id.not_in(hosted_instance_ids())
         ).all()
 
         for instance in instances:

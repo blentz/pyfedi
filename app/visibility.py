@@ -16,6 +16,7 @@ from sqlalchemy.orm import aliased
 from app import db
 from app.constants import VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC, VISIBILITY_UNLISTED
 from app.models import Instance, ModLog, Post, PostReply, User, UserFollower
+from app.storefront import hosted_instance_ids
 
 OPEN_VISIBILITIES = (VISIBILITY_PUBLIC, VISIBILITY_UNLISTED)
 
@@ -93,7 +94,7 @@ def follower_instances(user) -> list:
             .filter(UserFollower.local_user_id == user.id,
                     UserFollower.is_inward.is_(True),
                     UserFollower.is_accepted.is_(True),
-                    Instance.id != 1,
+                    Instance.id.not_in(hosted_instance_ids()),
                     Instance.dormant.is_(False),
                     Instance.gone_forever.is_(False))
             .distinct().all())
@@ -105,7 +106,7 @@ def followers_only_reply_instances(reply) -> list:
     parent = db.session.get(PostReply, reply.parent_id) if reply.parent_id else reply.post
     instances = follower_instances(reply.author)
     parent_instance = parent.author.instance
-    if parent_instance is not None and parent_instance.id != 1 and parent_instance not in instances:
+    if parent_instance is not None and parent_instance.id not in hosted_instance_ids() and parent_instance not in instances:
         instances.append(parent_instance)
     return instances
 

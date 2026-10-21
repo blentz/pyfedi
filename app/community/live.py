@@ -12,7 +12,7 @@ from app import cache, db
 from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_STATUS_REVIEWING, VISIBILITY_PUBLIC
 from app.models import Community, Instance, Post, ServerViewMember, post_stored_hooks
 from app import utils
-from app.storefront import is_local_host
+from app.storefront import hosted_instance_ids, is_local_host
 from app.utils import instance_banned, utcnow
 
 from app.discovery import MEDIA_SOFTWARE
@@ -106,7 +106,7 @@ def post_community_link(post) -> str:
     """Where a post's community link points: its author's server view for a remote microblog in
     the microblogs community, else the community itself (spec: Discovery)."""
     community = post.community
-    if is_local_microblogs(community) and post.instance_id and post.instance_id != 1:
+    if is_local_microblogs(community) and post.instance_id and post.instance_id not in hosted_instance_ids():
         actor = server_view_actor(post.instance_id)
         if actor:
             return actor
@@ -148,7 +148,7 @@ def live_feed_keys(post, community, backfill: bool) -> set:
         keys.add('popular')
     if _software(community) in MEDIA_SOFTWARE:
         keys.add('media')
-    if is_local_microblogs(community) and post.instance_id and post.instance_id != 1:
+    if is_local_microblogs(community) and post.instance_id and post.instance_id not in hosted_instance_ids():
         keys.add(f'instance:{post.instance_id}')   # its author's server view (spec 2026-10-08)
     return keys
 
@@ -183,7 +183,7 @@ def busiest_microblog_servers(community_id: int) -> list:
     count = func.count(Post.id)
     rows = (db.session.query(func.lower(Instance.domain), count)
             .join(Instance, Instance.id == Post.instance_id)
-            .filter(Post.community_id == community_id, Post.instance_id != 1, Post.deleted == False,
+            .filter(Post.community_id == community_id, Post.instance_id.not_in(hosted_instance_ids()), Post.deleted == False,
                     Post.posted_at > utcnow() - timedelta(hours=24))
             .group_by(func.lower(Instance.domain))
             .order_by(count.desc(), func.lower(Instance.domain))

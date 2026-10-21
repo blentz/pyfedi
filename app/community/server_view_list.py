@@ -13,6 +13,7 @@ from sqlalchemy.orm import joinedload
 from app import db
 from app.community.live import LIVE_COMMUNITY
 from app.models import BannedInstances, Community, Instance, Post
+from app.storefront import hosted_instance_ids
 from app.utils import instance_banned, utcnow
 
 VIEW_PREFIX = f'{LIVE_COMMUNITY}@'
@@ -103,7 +104,7 @@ def server_view_select(microblogs_id: int, search: str = '', host: str = '', blo
                    func.count(Post.id).filter(Post.posted_at > week_ago).label('active_weekly'))
             .select_from(Post)
             .join(Instance, Instance.id == Post.instance_id)
-            .where(Post.community_id == microblogs_id, Post.deleted == False, Post.instance_id != 1,
+            .where(Post.community_id == microblogs_id, Post.deleted == False, Post.instance_id.not_in(hosted_instance_ids()),
                    domain != current_app.config['SERVER_NAME'].lower(),
                    domain.not_in(banned), title.not_in(real))
             .group_by(domain))

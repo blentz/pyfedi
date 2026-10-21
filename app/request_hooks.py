@@ -19,7 +19,8 @@ from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, PO
 from app.models import Site, utcnow
 from app.onion import is_onion_request
 from app.onion_guard import require_onion_session, resolve_onion_api_rate_key
-from app.storefront import check_default_domain, is_local_link, resolve_storefront, \
+from app.local_only import user_local_only
+from app.storefront import check_default_domain, hosted_instance_ids, is_local_link, resolve_storefront, \
     rewrite_response_for_storefront, storefront_host, storefront_link, storefront_url
 from app.shared.media import can_upload_media, media_kind_for, media_of, upload_byte_limit
 from app.utils import can_moderate, getmtime, gibberish, shorten_string, shorten_url, digits, user_access, community_membership, joined_server_views, \
@@ -124,6 +125,8 @@ def register_request_hooks(app):
     before_render_template.connect(prime_quotes, app)  # C2: one lookup per table per rendered page
     app.jinja_env.globals['post_community_link'] = post_community_link
     app.jinja_env.globals['joined_server_views'] = joined_server_views
+    app.jinja_env.globals['hosted_instance_ids'] = hosted_instance_ids   # stored on one of our domains
+    app.jinja_env.globals['user_local_only'] = user_local_only
     app.jinja_env.filters['community_links'] = community_link_to_href
     app.jinja_env.filters['feed_links'] = feed_link_to_href
     app.jinja_env.filters['person_links'] = person_link_to_href
