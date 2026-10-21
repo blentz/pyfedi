@@ -190,6 +190,13 @@
 
             {{ render_field(form.language_id) }}
             {% if show_visibility and form.visibility %}{{ render_field(form.visibility) }}{% endif %}
+            {% if visibility_text %}
+                <div class="mb-3">
+                    <label class="form-label">{{ _('Visibility') }}</label>
+                    <p class="form-control-plaintext">{{ visibility_text }}</p>
+                    <div class="form-text">{{ _('The visibility of a post is fixed when it is created.') }}</div>
+                </div>
+            {% endif %}
 
             {% if post_type == POST_TYPE_POLL %}
                 <fieldset id="pollChoicesFieldset">

@@ -30,7 +30,7 @@ from app.constants import NOTIF_REPORT, NOTIF_REPORT_ESCALATION, POST_STATUS_SCH
     POST_TYPE_EVENT, NOTIF_MENTION, NOTIF_ANSWER, SRC_API, AP_FETCH_ACCEPT
 from app.constants import SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, POST_TYPE_LINK, \
     POST_TYPE_IMAGE, \
-    POST_TYPE_ARTICLE, POST_TYPE_VIDEO, POST_TYPE_POLL, SRC_WEB
+    POST_TYPE_ARTICLE, POST_TYPE_VIDEO, POST_TYPE_POLL, SRC_WEB, VISIBILITY_FOLLOWERS, VISIBILITY_UNLISTED
 from app.inoculation import inoculation
 from app.models import Post, PostReply, PostReplyValidationError, \
     PostReplyVote, PostVote, Notification, utcnow, UserBlock, DomainBlock, Report, Site, Community, \
@@ -61,7 +61,7 @@ from app.shared.tasks import task_selector
 import app.variants as variants
 from app.storefront import storefront_url
 from app.utils import etag_stamp
-from app.utils import clean_ap_url, can_moderate, render_template, markdown_to_html, validation_required, \
+from app.utils import clean_ap_url, can_moderate, is_local_microblogs, render_template, markdown_to_html, validation_required, \
     shorten_string, markdown_to_text, gibberish, ap_datetime, return_304, \
     request_etag_matches, ip_address, instance_banned, \
     blocked_or_banned_instances, blocked_domains, community_moderators, show_ban_message, recently_upvoted_posts, \
@@ -80,6 +80,13 @@ import dateparser
 import pendulum
 from sqlalchemy import or_
 import app as app_pkg
+
+def visibility_name(post) -> str:
+    """The audience of a post as the edit form tells it: visibility is chosen at creation and never edited."""
+    if post.visibility == VISIBILITY_FOLLOWERS:
+        return _('Followers only')
+    return _('Unlisted') if post.visibility == VISIBILITY_UNLISTED else _('Public')
+
 
 def can_view_private(community):
     """The membership test `refuse_private_community` aborts on, as a
@@ -1467,6 +1474,7 @@ def post_edit(post_id: int):
                 form.sticky.render_kw = {'disabled': True}
             return render_template('post/post_edit.html', title=_('Edit post'), form=form,
                                    post_type=post_type, community=post.community, post=post,
+                                   visibility_text=visibility_name(post) if is_local_microblogs(post.community) else None,
                                    markdown_editor=current_user.markdown_editor, mods=mod_list,
                                    event_online=event_online,
                                    inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None,
