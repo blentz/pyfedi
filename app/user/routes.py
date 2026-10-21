@@ -999,23 +999,21 @@ def user_block_instance(actor):
     if user is None:
         abort(404)
 
-    # D1035. Nothing checked that the user was REMOTE. A local profile has
-    # `instance_id` 1 -- this instance -- so this blocked the whole site for the
-    # caller, and said so as 'Content from None will be hidden.' because a local
-    # user has no `ap_domain`. Measured: `PROBE u3 block_remote_instance called
-    # with: (1, 1)`.
+    # D1035. A profile on the caller's own instance would block the caller's whole home domain. A sister
+    # domain's local profile is blockable, but has no `ap_domain`, so the flash names the instance row's domain.
     if user.instance_id is None or user.instance_id == current_user.instance_id:
         flash(_('You cannot block this instance.'), 'error')
         return redirect(safe_redirect_target(request.args.get('redirect'), f'/u/{actor}'))
 
     block_remote_instance(user.instance_id, SRC_WEB)
-    flash(_('Content from %(name)s will be hidden.', name=user.ap_domain))
+    instance_domain = user.instance.domain
+    flash(_('Content from %(name)s will be hidden.', name=instance_domain))
 
     if request.headers.get('HX-Request'):
         resp = make_response()
         curr_url = request.headers.get('HX-Current-Url')
 
-        if user.ap_domain in curr_url:
+        if instance_domain in curr_url:
             resp.headers["HX-Redirect"] = url_for("main.index")
         elif "/u/" in curr_url:
             resp.headers["HX-Redirect"] = url_for("main.index")
@@ -1896,11 +1894,8 @@ def user_settings_block_instance():
             flash(_('Instance not found: %(domain)s', domain=instance_domain), 'error')
             return render_template('user/block_instance.html', form=form, user=current_user)
 
-        # D1053. Typing this instance's own domain into the box blocked it --
-        # instance 1 is this server, so every local post, comment and community
-        # would be hidden from the caller, with no obvious way back. D1035's
-        # shape, at the other end of the same feature: `user_block_instance`
-        # reached it from a local profile, this one from the settings page.
+        # D1053. Typing the caller's own instance (their home domain's) into the box would hide every local post,
+        # comment and community of that domain from them, with no obvious way back. Another hosted domain is fine.
         if instance.id == current_user.instance_id:
             flash(_('You cannot block this instance.'), 'error')
             return render_template('user/block_instance.html', form=form, user=current_user)

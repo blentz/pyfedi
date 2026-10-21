@@ -1891,12 +1891,9 @@ def post_block_instance(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     refuse_invisible(post)
 
-    # D1101. `block_remote_instance` refuses instance 1 with its own flash
-    # ("You cannot block the local instance."), and this line then said
-    # "Content from test.piefed.local will be hidden." straight after it --
-    # two flashes, contradicting each other, one of them false. A post with no
-    # instance at all was worse: `post.instance.domain` on None, and the
-    # INSERT one level down has the same not-null column D1099 hit.
+    # D1101. `block_remote_instance` refuses the caller's own instance (their home domain's) with its own flash,
+    # and the success flash then contradicted it. A post with no instance at all was worse: `post.instance.domain`
+    # on None, and the INSERT one level down has the same not-null column D1099 hit.
     if post.instance_id is None or post.instance_id == current_user.instance_id:
         abort(404)
 
@@ -2321,9 +2318,8 @@ def post_reply_block_instance(post_id: int, comment_id: int):
     if post_reply.post_id != post.id:  # D1077's family: the post gate means nothing for an unrelated post id
         abort(404)
 
-    # D1101's twin. `block_remote_instance` refuses instance 1 with its own
-    # flash and this line said the opposite straight after it; a reply with no
-    # instance was `AttributeError` on `post_reply.instance.domain`.
+    # D1101's twin. The caller's own instance is refused, not announced as hidden; a reply with no instance was
+    # `AttributeError` on `post_reply.instance.domain`.
     if post_reply.instance_id is None or post_reply.instance_id == current_user.instance_id:
         abort(404)
 

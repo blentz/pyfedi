@@ -349,7 +349,7 @@ def instance_posts(instance_domain):
 def instance_block(instance_id):
     instance = db.session.get(Instance, instance_id) or abort(404)
     block_remote_instance(instance_id, SRC_WEB)
-    if instance_id != current_user.instance_id:  # D608: the viewer's own instance was refused, with its own flash
+    if instance_id != current_user.instance_id:  # the viewer's own instance was refused with its own flash
         flash(_('Content from %(instance_domain)s will be hidden.', instance_domain=instance.domain))
 
     if request.headers.get('HX-Request'):

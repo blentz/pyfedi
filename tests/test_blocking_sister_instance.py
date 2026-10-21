@@ -9,7 +9,7 @@ from app import db
 from app.api.alpha.utils.post import get_post_list
 from app.api.alpha.utils.site import post_site_block
 from app.models import InstanceBlock, Site
-from tests.factories import bearer, make_instance, make_post, make_post_reply
+from tests.factories import bearer, make_instance, make_post, make_post_reply, make_user
 from tests.test_per_domain_html_routes import BASE, Visitor
 from tests.two_domains import HELL, ONION, two_domains  # noqa: F401
 
@@ -143,15 +143,42 @@ def test_the_settings_box_takes_a_sister_but_not_ones_own_instance(app, world, h
     assert blocked(viewer) == {world.instances[sister]}
 
 
+def flashes(visitor):
+    with visitor.client.session_transaction(base_url=visitor.base) as session:
+        return [message for _category, message in session.get('_flashes', [])]
+
+
 @pytest.mark.parametrize('host', [HELL, ONION])
 def test_a_profile_on_a_sister_blocks_its_instance_but_not_ones_own(app, world, host):
     sister = ONION if host == HELL else HELL
     viewer = world.viewers[host]
     visitor = Visitor(app, viewer, host)
-    visitor.post(f'/u/{world.viewers[host].user_name}/block_instance')
+    assert visitor.post(f'/u/{viewer.user_name}/block_instance').status_code == 302
     assert blocked(viewer) == set()
-    visitor.post(f'/u/{world.viewers[sister].user_name}@{sister}/block_instance')
+    assert flashes(visitor) == ['You cannot block this instance.']
+    assert visitor.post(f'/u/{world.viewers[sister].user_name}@{sister}/block_instance').status_code == 302
     assert blocked(viewer) == {world.instances[sister]}
+    assert f'Content from {sister} will be hidden.' in flashes(visitor)
+
+
+def test_a_sisters_profile_blocked_over_htmx_goes_home_when_viewed_on_that_domain(app, world):
+    visitor = Visitor(app, world.viewers[HELL], HELL)
+    response = visitor.client.post(f'/u/viewer@{ONION}/block_instance', data={'csrf_token': visitor.token},
+                                   base_url=visitor.base,
+                                   headers={'HX-Request': 'true', 'HX-Current-Url': f'http://{ONION}/u/viewer'})
+    assert response.status_code == 200
+    assert response.headers['HX-Redirect'] == '/home'
+
+
+def test_a_remote_profile_blocks_its_instance_naming_the_remote_domain(app, world):
+    remote = make_instance('remote.example', software='lemmy')
+    stranger = make_user(remote, 'stranger')
+    db.session.commit()
+    viewer = world.viewers[HELL]
+    visitor = Visitor(app, viewer, HELL)
+    assert visitor.post(f'/u/stranger@remote.example/block_instance').status_code == 302
+    assert blocked(viewer) == {remote.id}
+    assert 'Content from remote.example will be hidden.' in flashes(visitor)
 
 
 @pytest.mark.parametrize('host', [HELL, ONION])
@@ -159,7 +186,31 @@ def test_a_chat_blocks_a_sister_instance_but_not_ones_own(app, world, host):
     sister = ONION if host == HELL else HELL
     viewer = world.viewers[host]
     visitor = Visitor(app, viewer, host)
-    visitor.post(f'/chat/{world.instances[host]}/block_instance')
+    assert visitor.post(f'/chat/{world.instances[host]}/block_instance').status_code == 302
     assert blocked(viewer) == set()
-    visitor.post(f'/chat/{world.instances[sister]}/block_instance')
+    assert flashes(visitor) == [OWN]
+    assert visitor.post(f'/chat/{world.instances[sister]}/block_instance').status_code == 302
     assert blocked(viewer) == {world.instances[sister]}
+    assert 'Instance blocked.' in flashes(visitor)
+
+
+def test_a_viewer_with_no_home_instance_is_refused(app, world):
+    viewer = world.viewers[HELL]
+    viewer.instance_id = None
+    db.session.commit()
+    with pytest.raises(Exception) as refused:
+        post_site_block(bearer(viewer), {'instance_id': world.instances[ONION], 'block': True})
+    assert str(refused.value) == OWN
+    assert blocked(viewer) == set()
+
+
+@pytest.mark.parametrize('host', [HELL, ONION])
+def test_unblocking_a_sister_instance_brings_its_content_back(app, world, host):
+    sister = ONION if host == HELL else HELL
+    viewer = world.viewers[host]
+    visitor = Visitor(app, viewer, host)
+    assert visitor.post(f'/instance/{world.instances[sister]}/block').status_code == 302
+    assert feed(viewer, world.communities[sister]) == []
+    assert visitor.post(f'/instance/{world.instances[sister]}/unblock').status_code == 302
+    assert blocked(viewer) == set()
+    assert len(feed(viewer, world.communities[sister])) == 1
