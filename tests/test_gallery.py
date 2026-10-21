@@ -2,6 +2,8 @@
 first are kept in `Post.gallery`, shown on the post page, and offered to API
 clients under `extensions`."""
 import io
+import re
+from pathlib import Path
 
 import pytest
 import respx
@@ -543,8 +545,6 @@ def test_a_normal_link_posts_gallery_images_are_not_blurred(app, ingest):
 
 def test_the_link_gallery_blur_has_a_style_rule_and_a_reveal_click_handler():
     """A blurred gallery image under a link post is outside .post_image: the style and the script must name it too."""
-    import re
-    from pathlib import Path
     static = Path(__file__).resolve().parent.parent / 'app' / 'static'
     for name in ('styles.scss', 'styles.css'):
         text = (static / name).read_text()

@@ -3,7 +3,7 @@ import pytest
 
 from app import db
 from app.constants import COMMUNITY_KIND_MICROBLOGS
-from app.models import Language, Site
+from app.models import Site
 from tests.factories import make_community, make_community_member, make_post
 from tests.test_community_add_post import poster  # noqa: F401 (poster is a fixture)
 
