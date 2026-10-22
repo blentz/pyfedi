@@ -13,6 +13,7 @@ from app.discovery.instance_answers import instance_actor_url
 from app.models import Community, Post, PostReply, Relay, utcnow
 from app.relays import RELAY_ACCEPTED, RELAY_PENDING, RELAY_REFUSED, relay_context
 from app.relays import subscribe as relay_subscribe
+from app.storefront import acting_as_default
 from app.utils import get_task_session, instance_banned, patch_db_session
 
 
@@ -261,6 +262,7 @@ def relayed_activity_allowed(activity):
 
 
 @celery.task
+@acting_as_default()   # instance-level: the default domain's, whoever queued it (plan C3)
 def send_relay_follow_accept(relay_id, follow):
     session = get_task_session()
     try:
@@ -273,6 +275,7 @@ def send_relay_follow_accept(relay_id, follow):
 
 
 @celery.task
+@acting_as_default()   # instance-level: the default domain's, whoever queued it (plan C3)
 def process_relayed_announce(relay_id, object_uri):
     """Fetch a relayed object from its origin and store it (an Announce-style relay's Announce, or a Mastodon-style
     forward with no verifiable LD signature)."""

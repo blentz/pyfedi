@@ -557,7 +557,12 @@ def acting_domain() -> DomainInfo:
     - else the domain the request came in on, as an inbox POST to a sister domain is that domain's to answer;
     - else the default domain, for relays, housekeeping and anything no account or domain caused.
     A local-only domain (the onion) makes no request another server sees named by it, so it and its accounts act as
-    the default domain, as before C3."""
+    the default domain, as before C3.
+
+    Known edge (re-review N2): the storefront step reads `g.storefront`, which `home_storefront(user)` and
+    `default_storefront()` re-pin for their block, so an anonymous request's fetch or task published inside such a
+    block (mail to one account) acts as the pinned domain, not the one the request came in on. No fetch is made in
+    those blocks today; one that is should run in an `acting_for` block."""
     domain = _acting.get()
     if domain is None and has_request_context():
         domain = request.environ.get(_ACTING_ENVIRON) or _signed_in_domain() or current_storefront()

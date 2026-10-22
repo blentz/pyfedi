@@ -9,6 +9,7 @@ from app import celery
 from app.constants import POST_STATUS_REVIEWING
 from app.models import (Community, CommunityMember, Post, PostBookmark, PostReply, PostVote, Report, User,
                         UserFollower, flush_cdn_cache, utcnow)
+from app.storefront import acting_as_default
 from app.utils import get_setting, get_task_session, patch_db_session
 
 RELAY_EXPIRY_BATCH = 500
@@ -51,6 +52,7 @@ def _kept_clause():
 
 
 @celery.task
+@acting_as_default()   # instance-level: the default domain's, whoever queued it (plan C3)
 def expire_relayed_posts():
     days = relay_retention_days()
     if days <= 0:

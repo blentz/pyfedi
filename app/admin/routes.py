@@ -49,7 +49,7 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, RolePermission, Domain, \
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain, instance_row_referenced
-from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, live_registration, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url
+from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, live_registration, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
@@ -1305,6 +1305,7 @@ def admin_federation_ban_lists():
 
 
 @celery.task
+@acting_as_default()   # instance-level: the default domain's, whoever queued it (plan C3)
 def import_bans_task(contents):
     with current_app.app_context():
         session = get_task_session()

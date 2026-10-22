@@ -18,7 +18,7 @@ from app.models import Notification, SendQueue, CommunityBan, CommunityMember, U
     DefederationSubscription, Instance, ActivityPubLog, InstanceRole, utcnow, InstanceChooser, \
     InstanceBan, Emoji, RevokedToken, BotChallenge
 from app.shared.post import delete_post
-from app.storefront import hosted_instance_ids
+from app.storefront import acting_as_default, hosted_instance_ids
 from app.utils import _capped_request, get_task_session, download_defeds, instance_banned, get_request_instance, get_request, \
     shorten_string, patch_db_session, archive_post, get_setting, set_setting, communities_banned_from_all_users, \
     banned_instances, blocked_or_banned_instances, get_emoji_replacements, store_files_in_s3, ensure_directory_exists
@@ -457,6 +457,7 @@ def unban_expired_users():
 
 
 @celery.task
+@acting_as_default()   # instance-level: the default domain's, whoever queued it (plan C3)
 def sync_defederation_subscriptions():
     """Update and sync defederation subscriptions"""
     session = get_task_session()
@@ -473,6 +474,7 @@ def sync_defederation_subscriptions():
 
 
 @celery.task
+@acting_as_default()   # instance-level: the default domain's, whoever queued it (plan C3)
 def check_instance_health():
     """Check for dormant or dead instances"""
     session = get_task_session()
@@ -580,6 +582,7 @@ def _version_at_least(version: str, minimum: str) -> bool:
 
 
 @celery.task
+@acting_as_default()   # instance-level: the default domain's, whoever queued it (plan C3)
 def monitor_healthy_instances():
     """Check healthy instances to see if still healthy"""
     session = get_task_session()
@@ -1090,6 +1093,7 @@ def archive_user(user_id, session):
 
 
 @celery.task
+@acting_as_default()   # instance-level: the default domain's, whoever queued it (plan C3)
 def refresh_instance_chooser():
     main_list = get_setting('main_instance_list', 'piefed.social')
 
@@ -1258,6 +1262,7 @@ def build_instance_list():
 
 
 @celery.task
+@acting_as_default()   # instance-level: the default domain's, whoever queued it (plan C3)
 def add_remote_communities():
     try:
         response = get_request('https://lemmy.world/api/v3/post/list', params={

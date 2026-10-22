@@ -13,6 +13,7 @@ from app.discovery.backfill import backfill_in_progress, queue_backfill, run_bac
 from app.discovery.filters import host_is_excluded
 from app.discovery.instance_actor import send_instance_follow, send_instance_undo
 from app.models import Community, DiscoveryEntry, DiscoveryExclusion, DiscoverySync, utcnow
+from app.storefront import acting_as_default
 from app.utils import get_setting
 
 SYNC_PLATFORMS = ('peertube', 'castopod')
@@ -95,6 +96,7 @@ def _unusable(community) -> bool:
 
 
 @celery.task
+@acting_as_default()   # instance-level: the default domain's, whoever queued it (plan C3)
 def poll_synced_community(community_id: int) -> None:
     """Re-walk one synced outbox, newest first, up to the first post already here. Failures are recorded on the row
     and left for tomorrow's run: no retry here (D738/D775)."""
@@ -242,6 +244,7 @@ def enqueue_polls() -> int:
 
 
 @celery.task
+@acting_as_default()   # instance-level: the default domain's, whoever queued it (plan C3)
 def reconcile_sync_task() -> dict:
     summary = reconcile_sync()
     enqueue_polls()
