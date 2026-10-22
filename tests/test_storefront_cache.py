@@ -77,9 +77,13 @@ def world(app, onion):
     return author, community, post
 
 
-def get(app, path, host):
+def fetch(app, path, host):
     g.pop('_login_user', None)   # the suite's requests share the fixture's app context, and flask.g with it
-    response = app.test_client().get(path, base_url=ORIGINS[host])
+    return app.test_client().get(path, base_url=ORIGINS[host])
+
+
+def get(app, path, host):
+    response = fetch(app, path, host)
     assert response.status_code == 200, (path, host, response.status_code)
     return response.get_data(as_text=True)
 
@@ -173,15 +177,11 @@ def test_ap_discovery_documents_are_cached_per_host(app, onion, path):
     """Each federating domain describes itself (plan C3), so these are cached per host. The onion federates with no
     one and describes no server: a 404, in either order of first request, and the canonical host's copy never
     answers it."""
-    def onion_status():
-        g.pop('_login_user', None)
-        return app.test_client().get(path, base_url=ORIGINS[ONION]).status_code
-
     clearnet = get(app, path, CANONICAL)
-    assert onion_status() == 404
+    assert fetch(app, path, ONION).status_code == 404
     assert ONION not in clearnet
     cache.clear()
-    assert onion_status() == 404
+    assert fetch(app, path, ONION).status_code == 404
     assert get(app, path, CANONICAL) == clearnet
 
 
