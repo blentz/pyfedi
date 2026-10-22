@@ -48,7 +48,7 @@ from app.email import send_registration_approved_email
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, RolePermission, Domain, \
-    Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain
+    Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain, instance_row_referenced
 from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, live_registration, hosted_instance_ids, instance_id_of
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
@@ -364,8 +364,15 @@ def admin_domains_delete(domain_id):
         flash(_('The default domain cannot be deleted.'), 'error')
     elif domain_has_owners(row.id):
         flash(_('A domain with accounts or communities cannot be deleted.'), 'error')
+    elif instance_row_referenced(db.session.connection(), row.instance_id):
+        # Its instance row would stay behind, no longer a hosted domain's: a peer, listed and polled by its name.
+        flash(_('This domain still has content, blocks or other records on its instance row, so it cannot be '
+                'deleted.'), 'error')
     else:
+        instance_id = row.instance_id
         db.session.delete(row)
+        db.session.flush()
+        db.session.query(Instance).filter(Instance.id == instance_id).delete(synchronize_session='fetch')
         db.session.commit()
         clear_domain_cache()
         flash(_('Domain deleted.'))
