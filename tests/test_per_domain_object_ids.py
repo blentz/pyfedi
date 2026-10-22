@@ -8,6 +8,7 @@ domains for another of our domains' object is the 404 of an unknown object, so n
 hell.cloud's ids keep their shape (golden strings below)."""
 import json
 import re
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -27,10 +28,12 @@ from app import cache, db
 from app.activitypub.routes import process_inbox_request
 from app.activitypub.serializers.microblog import link_hashtags, microblog_note
 from app.activitypub.util import comment_model_to_json, post_to_page
+from app.constants import COMMUNITY_KIND_MICROBLOGS, COMMUNITY_KIND_VIDEO_CHANNEL, POST_TYPE_VIDEO
 from app.federation_urls import activity_id, hosted_domain_names, object_base, owned_elsewhere
-from app.models import ActivityPubLog, ChatMessage, CommunityFlair, CommunityMember, Conversation, Feed, Instance, \
+from app.models import ActivityPubLog, ChatMessage, CommunityFlair, CommunityMember, Conversation, Feed, File, Instance, \
     PostVote, Site, SiteDomain, Tag
 from app.quotes import resolve_quotes
+from app.shared.media import with_media
 from app.shared.tasks.deletes import delete_object
 from app.shared.tasks.follows import join_community, leave_community
 from app.shared.tasks.likes import send_vote
@@ -574,3 +577,80 @@ def test_a_posts_page_advertises_its_activitypub_id_on_its_owners_domain(app, si
     assert response.status_code == 200
     assert page_alternates(response) == [f'<{base}/post/{post.id}>; rel="alternate"; type="application/activity+json"']
     assert fetch(app, f'/post/{post.id}', host).status_code == 200   # the advertised URL answers there
+
+
+def remote_authors_post(sites, community):
+    post = make_post(community, sites.rem, ap_id='https://peer.example/post/77', title='theirs')
+    post.nsfw = True   # a moderator's NSFW edit
+    db.session.commit()
+    return post
+
+
+@pytest.mark.parametrize('where', ['hell', 'shop'])
+def test_a_moderators_edit_of_a_remote_authors_post_is_announced_by_the_community(app, sites, monkeypatch, where):
+    """I3: the community Announces the Update of a remote author's post, signed by the community, as at BASE; only
+    what would go out as the author (whose key its own server holds) is skipped. The ids are the community's
+    domain's: hell.cloud's as before, the shop's for a shop community."""
+    community, base = (sites.pit, HELL_BASE) if where == 'hell' else (sites.wares, SHOP_BASE)
+    post = remote_authors_post(sites, community)
+    mastodon = make_instance('toot.example', software='mastodon')
+    mastodon.inbox = 'https://toot.example/inbox'
+    make_community_member(make_user(mastodon, 'tooter'), community)
+    sent = captured(monkeypatch, pages_module)
+
+    send_post(post.id, edit=True, session=db.session)
+
+    [(inbox, announce, key_id)] = sent   # nothing to the Mastodon follower: that would be the author's Update
+    assert inbox == 'https://peer.example/inbox'
+    assert key_id == f'{base}/c/{community.name}#main-key'
+    assert re.fullmatch(rf'{base}/activities/announce/{TOKEN}', announce['id'])
+    update = announce['object']
+    assert re.fullmatch(rf'{base}/activities/update/{TOKEN}', update['id'])
+    assert update['actor'] == sites.rem.public_url() and update['object']['id'] == post.ap_id
+    if where == 'shop':
+        assert no_hell(announce), json.dumps(announce)
+
+
+def test_a_remote_authors_post_in_a_remote_community_is_not_sent(app, sites, monkeypatch):
+    post = make_post(two_domains_away(sites), sites.rem, ap_id='https://peer.example/post/78')
+    sent = captured(monkeypatch, pages_module)
+    send_post(post.id, edit=True, session=db.session)
+    assert sent == []
+
+
+def test_a_moderators_edit_of_a_remote_authors_microblog_is_announced_by_the_community(app, sites, monkeypatch):
+    sites.pit.kind = COMMUNITY_KIND_MICROBLOGS
+    post = remote_authors_post(sites, sites.pit)
+    post.body_html = '<p>a toot</p>'
+    mastodon = make_instance('toot.example', software='mastodon')
+    mastodon.inbox = 'https://toot.example/inbox'
+    make_community_member(make_user(mastodon, 'tooter'), sites.pit)
+    sent = captured(monkeypatch, pages_module)
+
+    send_post(post.id, edit=True, session=db.session)
+
+    [(inbox, announce, key_id)] = sent
+    assert (inbox, key_id) == ('https://peer.example/inbox', f'{HELL_BASE}/c/pit#main-key')
+    assert re.fullmatch(rf'{HELL_BASE}/activities/update/{TOKEN}', announce['object']['id'])
+
+
+def test_a_moderators_edit_of_a_remote_authors_video_is_announced_by_the_community(app, sites, monkeypatch):
+    sites.pit.kind = COMMUNITY_KIND_VIDEO_CHANNEL
+    post = remote_authors_post(sites, sites.pit)
+    post.nsfw = False
+    post.type = POST_TYPE_VIDEO
+    post.url = f'{HELL_BASE}/static/media/posts/ab/cd/abcdefghijklmno.mp4'
+    with_media(post, status='ready', uuid=str(uuid.uuid4()), mime='video/mp4', bytes=12741, duration_s=10,
+               width=640, height=360, fps=30, thumbnail_width=640, thumbnail_height=360)
+    post.image = File(source_url=f'{HELL_BASE}/static/media/posts/ef/gh/thumbthumbthumb.jpg', width=640, height=360)
+    tube = make_instance('tube.example', software='peertube')
+    tube.inbox = 'https://tube.example/inbox'
+    make_community_member(make_user(tube, 'watcher'), sites.pit)
+    db.session.commit()
+    sent = captured(monkeypatch, pages_module)
+
+    send_post(post.id, edit=True, session=db.session)
+
+    [(inbox, announce, key_id)] = sent   # PeerTube would be sent the author's Update: skipped
+    assert (inbox, key_id) == ('https://peer.example/inbox', f'{HELL_BASE}/c/pit#main-key')
+    assert re.fullmatch(rf'{HELL_BASE}/activities/update/{TOKEN}', announce['object']['id'])
