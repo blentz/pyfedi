@@ -147,7 +147,9 @@ def shaped_memo_name(fname: str) -> str:
 
 compress = Compress()
 limiter = Limiter(rate_limit_key, storage_uri='redis+'+Config.CACHE_REDIS_URL if Config.CACHE_REDIS_URL.startswith("unix://") else Config.CACHE_REDIS_URL)
-celery = Celery(__name__, broker=Config.CELERY_BROKER_URL)
+# Every task acts as the domain that queued it (app.celery_acting, plan C3); named, not imported, as that module imports
+# app.storefront, which imports this package
+celery = Celery(__name__, broker=Config.CELERY_BROKER_URL, task_cls='app.celery_acting:ActingTask')
 
 
 @task_prerun.connect
