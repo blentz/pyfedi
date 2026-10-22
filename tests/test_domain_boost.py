@@ -5,6 +5,7 @@ A post's `instance_id` says where it lives. On the storefront for instance row N
 score (one unit is about 12.5 hours or a tenfold score), so the boost is a lift and not an override. Only `hot` and
 `scaled` use it; every other feed sort, and every list, uses the tier only as its last sort key.
 """
+import re
 import uuid
 from datetime import timedelta
 from types import SimpleNamespace
@@ -14,14 +15,14 @@ import pytest
 from flask import g
 from flask_login import login_user
 from sqlakeyset import get_page
-from sqlalchemy import desc, text
+from sqlalchemy import desc, event, text
 
 from app import db
 from app.api.alpha.utils.community import get_community_list
 from app.api.alpha.utils.post import get_post_list, get_post_list2
 from app.models import Community, Post, Site, utcnow
-from app.storefront import (OWN_DOMAIN_BOOST, SISTER_DOMAIN_BOOST, boosted_order_by, boosted_posts, boosted_top_sql,
-                            domain_boost_expr, domain_boost_sql, sister_instance_ids)
+from app.storefront import (BOOST_WINDOW, OWN_DOMAIN_BOOST, SISTER_DOMAIN_BOOST, boosted_order_by, boosted_posts,
+                            boosted_top_sql, domain_boost_expr, domain_boost_sql, sister_instance_ids, tiered_post_ids)
 from app.utils import get_deduped_post_ids, post_ids_to_models
 from tests.factories import make_community, make_instance, make_post, make_user
 from tests.two_domains import ONION, request_on, two_domains  # noqa: F401
@@ -502,3 +503,61 @@ def test_the_route_answers_a_cursor_number_no_float_holds_with_a_400(api, monkey
                                          query_string={'sort': sort, 'ignore_sticky': 'true', 'page_cursor': cursor})
     assert response.status_code == 400
     assert response.get_json()['message'] == 'invalid page_cursor'
+
+
+# ------------------------------------------------------------------------ the legacy list's page number
+
+def api_pages(world, domain, sort, pages, limit=2, **data):
+    """The post ids of get_post_list's numbered pages, in order."""
+    viewer = world.viewers[domain]
+    walked = []
+    with request_on(world.app, world.on[domain]):
+        for page in pages:
+            g.site, g.admin_ids = db.session.get(Site, 1), []
+            res = get_post_list(f'Bearer {viewer.encode_jwt_token()}', dict(sort=sort, limit=limit, page=page, **data))
+            walked += [entry['post']['id'] for entry in res['posts']]
+    return walked
+
+
+@pytest.mark.parametrize('domain', ['hell', 'onion'])
+@pytest.mark.parametrize('sort, rank, tail', [('Hot', 'ranking', ('posted_at',)),
+                                              ('Scaled', 'ranking_scaled', ('ranking', 'posted_at'))])
+def test_the_legacy_lists_pages_inside_the_window_are_the_naive_boosted_order(crowd, domain, sort, rank, tail):
+    rank, tail = getattr(Post, rank), tuple(getattr(Post, c) for c in tail)
+    with request_on(crowd.app, crowd.on[domain]):
+        naive = [p.id for p in Post.query.order_by(desc(Post.sticky), *boosted_order_by(rank, tail)).all()]
+    walked = api_pages(crowd, domain, sort, range(1, 11), community_name='art@test.piefed.local')
+    assert walked == naive and len(naive) == 18
+
+
+@pytest.mark.parametrize('sort', ['Hot', 'Scaled'])
+def test_a_legacy_page_past_the_window_reads_no_tier(crowd, sort):
+    """A page number a client chose: past BOOST_WINDOW rows the list is the plain order, read straight to its OFFSET,
+    and no tier is read that deep."""
+    with patch('app.storefront.tiered_post_ids', side_effect=AssertionError('a tier read past the window')):
+        assert api_pages(crowd, 'hell', sort, [10 ** 6], community_name='art@test.piefed.local') == []
+        assert api_pages(crowd, 'hell', sort, [BOOST_WINDOW // 2 + 1], community_name='art@test.piefed.local') == []
+
+
+def test_the_last_page_inside_the_window_is_still_boosted(crowd):
+    """page * limit == BOOST_WINDOW is the deepest boosted page: its tiers are read."""
+    with patch('app.storefront.tiered_post_ids', wraps=tiered_post_ids) as tiers:
+        assert api_pages(crowd, 'hell', 'Hot', [BOOST_WINDOW // 2], community_name='art@test.piefed.local') == []
+    assert tiers.call_count == 1 and tiers.call_args.args[3] == BOOST_WINDOW + 1
+
+
+def test_a_tier_reads_post_ids_and_not_whole_posts(crowd):
+    statements = []
+
+    def record(conn, cursor, statement, *args):
+        statements.append(statement)
+
+    with request_on(crowd.app, crowd.on['onion']):
+        event.listen(db.engine, 'before_cursor_execute', record)
+        try:
+            tiered_post_ids(Post.query, Post.ranking, (Post.posted_at,), 5)
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', record)
+    tiers = [s for s in statements if 'FROM post' in s]
+    assert len(tiers) == 3, statements
+    assert all(re.match(r'SELECT post\.id(?: AS post_id)? \nFROM post', s) for s in tiers), tiers

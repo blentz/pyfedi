@@ -12,7 +12,8 @@ from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
 # app.activitypub before get_all_child_feed_ids is defined (import cycle: feed.routes)
 import app.feed.routes as feed_routes
-from app.storefront import ON_DOMAIN_PARAM, current_storefront, boosted_posts, boosted_top_sql, domain_authority, on_domain, on_domain_sql
+from app.storefront import ON_DOMAIN_PARAM, BOOST_WINDOW, current_storefront, boosted_posts, boosted_top_sql, \
+    domain_authority, on_domain, on_domain_sql, unboosted_order_by
 from app.models import Post, Community, CommunityMember, utcnow, User, Feed, FeedItem, Topic, PostReply, PostVote, \
     CommunityFlair, read_posts, Poll, Report
 # The module, not the names: app.shared.post reaches this file through a blueprint
@@ -669,7 +670,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         from_where += ' AND '.join(post_query_criteria)
         if boosted:     # read tier by tier, so that ix_post_feed_hot still serves each read
             sql, boost_params = boosted_top_sql('p.id AS post_id', 't.post_id', from_where, boosted[0].key,
-                                                tuple(c.key for c in boosted[1]), 1000, tuple(sticky_columns))
+                                                tuple(c.key for c in boosted[1]), BOOST_WINDOW, tuple(sticky_columns))
             post_query_parameters.update(boost_params)
         else:
             sql = f'SELECT {columns} {from_where}'
@@ -695,8 +696,9 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         post_ids = paginate_post_ids(post_ids, page - 1, page_length=limit)
         posts = post_ids_to_models(post_ids, sort.lower()).all()
     else:
-        if boosted:
-            posts = boosted_posts(posts, *boosted, page * limit)
+        if boosted:     # past the boosted window, the plain order the index reads straight to the OFFSET
+            posts = boosted_posts(posts, *boosted, page * limit) if page * limit <= BOOST_WINDOW else \
+                posts.order_by(*unboosted_order_by(*boosted))
         posts = posts.paginate(page=page, per_page=limit, error_out=False)
 
     if user_id:
