@@ -3,8 +3,8 @@ import pytest
 from flask import current_app
 
 from app import db
-from app.models import SiteDomain
-from app.storefront import domain_for_host
+from app.models import Instance, InstanceBlock, Site, SiteDomain
+from app.storefront import clear_domain_cache, domain_for_host
 from tests.factories import grant_permission, make_instance, make_user
 from tests.test_admin_site_profile import csrf, login
 
@@ -179,3 +179,54 @@ def test_page_says_later_release_and_dns(app):
     assert html.count('takes effect in a later release') >= 1
     assert 'deploy/DEPLOY_GUIDE.md' in html
     assert 'DNS' in html and 'TLS' in html and 'Tor' in html
+
+
+# --- a deleted domain takes its instance row with it (plan C2 final wave) ---
+
+def _onion_row():
+    _default_row()
+    row = SiteDomain(domain='abc.onion', scheme='http', federates=False)
+    db.session.add(row)
+    db.session.commit()
+    clear_domain_cache()
+    return row
+
+
+def _delete(app, row):
+    client = app.test_client()
+    login(client, _admin())
+    client.post(f'/admin/domains/{row.id}/delete', data={'csrf_token': csrf(app, client)})
+    return client
+
+
+def test_deleting_a_domain_deletes_its_instance_row_so_no_peer_list_names_it(app):
+    row = _onion_row()
+    instance_id = row.instance_id
+    peer = make_instance('peer.example', software='piefed')
+    db.session.get(Site, 1).private_instance = False
+    db.session.commit()
+    client = _delete(app, row)
+    assert 'abc.onion' not in _domains()
+    assert db.session.get(Instance, instance_id) is None
+    assert Instance.query.filter(db.func.lower(Instance.domain) == 'abc.onion').first() is None
+    for path in ('/instances', '/api/v3/federated_instances'):
+        body = client.get(path).get_data(as_text=True)
+        assert peer.domain in body and 'abc.onion' not in body, path
+
+
+@pytest.mark.parametrize('reference', ['user', 'block'])
+def test_a_domain_whose_instance_row_is_referenced_is_not_deleted(app, reference):
+    row = _onion_row()
+    instance_id = row.instance_id
+    peer = make_instance('peer.example', software='piefed')
+    if reference == 'user':   # an account on the row that the domain does not own
+        make_user(db.session.get(Instance, instance_id), 'stray')
+    else:   # a hell.cloud account that blocked the onion's row
+        blocker = make_user(make_instance('test.piefed.local', software='piefed'), 'blocker', local=True)
+        db.session.add(InstanceBlock(user_id=blocker.id, instance_id=instance_id))
+    db.session.commit()
+    client = _delete(app, row)
+    assert 'abc.onion' in _domains()
+    assert db.session.get(Instance, instance_id) is not None
+    html = client.get('/admin/domains').get_data(as_text=True)
+    assert 'This domain still has content, blocks or other records on its instance row' in html

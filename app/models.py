@@ -5559,6 +5559,22 @@ def _instance_has_content(connection, instance_id: int) -> bool:
                for table in ('user', 'community', 'post', 'post_reply'))
 
 
+def instance_row_referenced(connection, instance_id: int) -> bool:
+    """Whether any row but a domain's own refers to this instance row: content (`_instance_has_content`), or a row of
+    any table with a foreign key to it (a block, a ban, a role, a report's source, an outbound batch...)."""
+    if _instance_has_content(connection, instance_id):
+        return True
+    instances = Instance.__table__
+    for table in db.metadata.sorted_tables:
+        if table is SiteDomain.__table__:
+            continue
+        for column in table.columns:
+            if any(key.column is instances.c.id for key in column.foreign_keys) and connection.execute(
+                    select(column).where(column == instance_id).limit(1)).first() is not None:
+                return True
+    return False
+
+
 def instance_row_to_take(connection, domain: str) -> int | None:
     """The instance row a new non-default `domain` takes over, or None when no row is named for it (the domain then
     gets a new one). The row named for it in any case, the exact spelling first, because find_instance_id looks a host
