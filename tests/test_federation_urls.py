@@ -12,9 +12,10 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from sqlalchemy import inspect, text
 
 from app import db
-from app.federation_urls import (activity_id, domain_of_url, instance_actor_signing, instance_actor_url,
-                                 owner_base, owner_domain)
+from app.federation_urls import (MissingInstanceKey, activity_id, domain_of_url, federating_domain_of_url,
+                                 instance_actor_signing, instance_actor_url, owner_base, owner_domain)
 from app.models import Site, SiteDomain
+from app.rsa_keys import RsaKeys
 from app.storefront import clear_domain_cache, default_domain, domain_for_host
 from tests.factories import (a_keypair, make_chat_message, make_feed, make_instance, make_post, make_post_reply,
                              make_post_reply_vote, make_post_vote, make_user)
@@ -32,7 +33,7 @@ def load_migration():
 
 
 @pytest.fixture
-def shop(app, two_domains):
+def shop(app, two_domains):  # noqa: F811 -- two_domains is the imported fixture
     db.session.add(SiteDomain(domain=SHOP, scheme='https', federates=True))
     db.session.commit()
     clear_domain_cache()
@@ -62,7 +63,7 @@ def _signs_with(private_pem: str, public_pem: str) -> bool:
 
 # --- the default domain: today's strings ---
 
-def test_the_default_domains_helpers_are_todays_literals(app, keyed_site, two_domains):
+def test_the_default_domains_helpers_are_todays_literals(app, keyed_site, two_domains):  # noqa: F811 -- two_domains is the imported fixture
     server_url = app.config['SERVER_URL']
     default = default_domain()
     assert instance_actor_url(default) == f'{server_url}/actor'
@@ -82,7 +83,7 @@ def test_a_synthesised_default_signs_with_site_one(app, keyed_site):
 
 # --- whose domain a row is federated from ---
 
-def test_a_shop_rows_owner_is_the_shop(app, shop, two_domains):
+def test_a_shop_rows_owner_is_the_shop(app, shop, two_domains):  # noqa: F811 -- two_domains is the imported fixture
     hell = two_domains.domains[0]
     bob, hell_bob = two_domains.local_user('bob', shop), two_domains.local_user('hellbob', hell)
     art = two_domains.local_community('art', shop)
@@ -99,7 +100,7 @@ def test_a_shop_rows_owner_is_the_shop(app, shop, two_domains):
     assert owner_domain(make_post_vote(hell_bob, post, 1.0)) == hell
 
 
-def test_a_remote_authors_rows_have_no_owner_here(app, shop, two_domains):
+def test_a_remote_authors_rows_have_no_owner_here(app, shop, two_domains):  # noqa: F811 -- two_domains is the imported fixture
     peer = make_instance('peer.example')
     remote = make_user(peer, 'remote')
     art = two_domains.local_community('art', shop)
@@ -112,7 +113,7 @@ def test_a_remote_authors_rows_have_no_owner_here(app, shop, two_domains):
             activity_id('like', row)
 
 
-def test_a_feed_is_the_default_domains(app, shop, two_domains):
+def test_a_feed_is_the_default_domains(app, shop, two_domains):  # noqa: F811 -- two_domains is the imported fixture
     local_feed = make_feed(two_domains.instance, 'myfeed', local=True)
     assert owner_domain(local_feed) == default_domain()
     assert owner_domain(make_feed(make_instance('peer.example'), 'theirs')) is None
@@ -123,7 +124,7 @@ def test_an_unknown_owner_is_an_error(app, shop):
         owner_domain(object())
 
 
-def test_the_owner_not_the_request_decides(app, shop, two_domains):
+def test_the_owner_not_the_request_decides(app, shop, two_domains):  # noqa: F811 -- two_domains is the imported fixture
     bob = two_domains.local_user('bob', shop)
     assert owner_domain(bob) == shop                   # no request at all: a Celery task
     with onion_request(app):
@@ -143,6 +144,17 @@ def test_the_owner_not_the_request_decides(app, shop, two_domains):
     (f'https://evil.example/{SHOP}', None),
     (f'https://bob@{SHOP}/u/bob', None),
     (f'https://{SHOP}:8443/u/bob', None),
+    (f'https://{SHOP}:80/u/bob', None),           # http's default port, on https
+    (f'http://{SHOP}:443/u/bob', None),
+    (f'https://{SHOP}:443/u/bob', SHOP),          # the scheme's default port, as is_local_host reads it
+    (f'http://{SHOP}:80/u/bob', SHOP),
+    (f'https://{SHOP}./u/bob', SHOP),             # a trailing dot, as is_local_host reads it
+    (f'https://{SHOP}.:443/u/bob', SHOP),
+    (f'//{SHOP}/x', None),                        # no scheme: not a URL a peer fetches
+    (f'gopher://{SHOP}/', None),
+    (f'javascript://{SHOP}/%0aalert(1)', None),
+    (f'ftp://{SHOP}/', None),
+    (f'HTTPS://{SHOP}/u/bob', SHOP),
     ('https://peer.example/u/bob', None),
     ('not a url', None),
     ('https://[::1/x', None),
@@ -152,6 +164,16 @@ def test_the_owner_not_the_request_decides(app, shop, two_domains):
 def test_domain_of_url_is_an_exact_authority_match(app, shop, url, expected):
     found = domain_of_url(url)
     assert (found.domain if found else None) == expected
+
+
+def test_only_a_federating_domain_is_a_federating_domain_of_a_url(app, shop):
+    """The onion is hosted, so domain_of_url names it; it never federates, so federating_domain_of_url does not."""
+    onion_url = f'http://{ONION}/u/bob'
+    assert domain_of_url(onion_url).domain == ONION
+    assert federating_domain_of_url(onion_url) is None
+    assert federating_domain_of_url(f'https://{SHOP}/u/bob') == shop
+    assert federating_domain_of_url('https://test.piefed.local/post/1') == default_domain()
+    assert federating_domain_of_url('https://peer.example/u/bob') is None
 
 
 # --- the keys ---
@@ -181,6 +203,29 @@ def test_the_shops_instance_actor_signs_with_the_shops_key(app, keyed_site, shop
     assert instance_actor_url(shop) == f'https://{SHOP}/actor'
     assert _signs_with(private_key, row.public_key)
     assert not _signs_with(private_key, keyed_site.public_key)
+
+
+def test_a_domain_with_no_key_does_not_sign(app, db_session, shop):
+    db.session.execute(text('UPDATE site_domain SET private_key = NULL, public_key = NULL WHERE id = :id'),
+                       {'id': shop.id})
+    db.session.commit()
+    with pytest.raises(MissingInstanceKey) as refusal:
+        instance_actor_signing(shop)
+    assert SHOP in str(refusal.value) and 'PRIVATE' not in str(refusal.value)
+    with pytest.raises(MissingInstanceKey):
+        instance_actor_signing(default_domain())   # no Site row 1 at all
+
+
+def test_the_hook_makes_keys_with_the_real_generator(app, db_session, pooled_domain_keys, monkeypatch):
+    """The suite hands the hook pooled keys (conftest's pooled_domain_keys): the name it replaced is the real class,
+    and with that class back the hook makes a fresh pair of its own."""
+    assert pooled_domain_keys is RsaKeys
+    monkeypatch.setattr('app.models.RsaKeys', RsaKeys)
+    db.session.add(SiteDomain(domain=SHOP))
+    db.session.commit()
+    row = db.session.query(SiteDomain).filter_by(domain=SHOP).one()
+    assert _signs_with(row.private_key, row.public_key)
+    assert row.private_key not in {a_keypair()[0] for _ in range(32)}
 
 
 def test_the_key_is_read_on_demand_not_cached(app, keyed_site, shop):

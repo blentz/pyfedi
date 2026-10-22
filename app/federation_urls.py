@@ -26,7 +26,10 @@ def owner_domain(obj) -> DomainInfo | None:
     community, or a row a remote account made). A local account or community is its home domain's; a post, reply or
     private message its author's (the sender's); a vote its voter's, not the voted-on author's; a local feed the
     default domain's, as feeds have no domain of their own. A DomainInfo is its own owner. TypeError for anything
-    else, a row with no author among them."""
+    else, a row with no author among them.
+
+    The domain may be a local-only one (an onion-homed account's): a caller deciding federation checks `.federates`
+    (or relies on `local_only.refused_outbound`) before it sends anything named by it."""
     if isinstance(obj, DomainInfo):
         return obj
     if isinstance(obj, (models.User, models.Community)):
@@ -51,17 +54,49 @@ def owner_base(obj) -> str:
     return domain_base_url(domain)
 
 
+# The port a URL of each scheme names when it names none. A URL is ours only over http or https: a scheme-relative
+# reference, javascript:, gopher: and the rest name no ActivityPub object.
+_DEFAULT_PORTS = {'http': ':80', 'https': ':443'}
+
+
+def _comparable(scheme: str, authority: str) -> str:
+    """`authority` lower-cased, with the scheme's default port and a trailing dot on the host dropped, as
+    `storefront.is_local_host` ignores them. Any other port stays: `host:8443` is not `host`."""
+    authority = authority.lower()
+    host, port = authority, ''
+    if ':' in authority and not authority.endswith(']'):   # host:port; a bracketed IPv6 literal with no port ends in ]
+        host, _, port = authority.rpartition(':')
+        port = f':{port}'
+    if port == _DEFAULT_PORTS[scheme]:
+        port = ''
+    return host.rstrip('.') + port
+
+
 def domain_of_url(url: str | None) -> DomainInfo | None:
-    """The hosted domain whose authority is exactly `url`'s, ignoring case, else None. Not a prefix or suffix match:
-    shop.example.evil and evil.shop.example are not shop.example, and neither is a URL with userinfo or another port.
-    The default domain's authority is SERVER_NAME verbatim, its port included."""
+    """The hosted domain an http(s) `url` names, else None: its authority is that domain's, ignoring case, a trailing
+    dot and the scheme's default port (as `storefront.is_local_host` does). Not a prefix or suffix match:
+    shop.example.evil and evil.shop.example are not shop.example, and neither is a URL with userinfo, another port,
+    or another scheme (a scheme-relative `//shop.example/` too). The default domain's authority is SERVER_NAME
+    verbatim, its port included.
+
+    Any hosted domain, a local-only one too (the onion). A caller deciding federation, an inbound "is this object
+    ours" or an outbound id or signature, uses `federating_domain_of_url` or checks `.federates` itself."""
     try:
-        authority = urlsplit(url or '').netloc.lower()
+        parts = urlsplit(url or '')
     except ValueError:   # an unbalanced IPv6 bracket
         return None
-    if not authority:
+    scheme = parts.scheme.lower()
+    if scheme not in _DEFAULT_PORTS or not parts.netloc or '@' in parts.netloc:
         return None
-    return next((row for row in domain_rows() if domain_authority(row).lower() == authority), None)
+    authority = _comparable(scheme, parts.netloc)
+    return next((row for row in domain_rows() if _comparable(scheme, domain_authority(row)) == authority), None)
+
+
+def federating_domain_of_url(url: str | None) -> DomainInfo | None:
+    """`domain_of_url`'s domain when it federates, else None. What federation code asks: a local-only domain's URL is
+    never an object a peer may name, nor one we send."""
+    found = domain_of_url(url)
+    return found if found is not None and found.federates else None
 
 
 def activity_id(verb: str, owner, token: str | None = None) -> str:
@@ -75,12 +110,20 @@ def instance_actor_url(domain: DomainInfo) -> str:
     return f'{domain_base_url(domain)}/actor'
 
 
+class MissingInstanceKey(LookupError):
+    """A domain's instance actor has no private key to sign with."""
+
+
 def instance_actor_signing(domain: DomainInfo) -> tuple[str, str]:
     """The private key `domain`'s instance actor signs with and its keyId. The default domain's is Site row 1's,
     every other domain's its site_domain row's. Read from the database on each call, not from the cached DomainInfo,
-    so a key never sits in the cache and a changed key is used at once."""
+    so a key never sits in the cache and a changed key is used at once. MissingInstanceKey when there is none (the
+    row is gone, or its key was never made): nothing is sent unsigned or signed by another domain's key."""
     if domain.is_default:
         query = select(models.Site.private_key).where(models.Site.id == 1)
     else:
         query = select(models.SiteDomain.private_key).where(models.SiteDomain.id == domain.id)
-    return db.session.execute(query).scalar(), f'{instance_actor_url(domain)}#main-key'
+    private_key = db.session.execute(query).scalar()
+    if not private_key:
+        raise MissingInstanceKey(f'{domain.domain} has no instance actor key')
+    return private_key, f'{instance_actor_url(domain)}#main-key'
