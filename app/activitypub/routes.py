@@ -56,7 +56,7 @@ from app.local_names import actor_handle, local_clause, split_local_name
 from app.federation_urls import activity_id, domain_site_name, federating_storefront, instance_actor_url, object_base, \
     owned_elsewhere, owner_base, owner_domain
 from app.storefront import current_storefront, domain_authority, domain_base_url, domain_for_host, hosted_instance_ids, \
-    is_served_name, storefront_cache_key
+    is_served_name, registration_mode_on, storefront_cache_key
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
@@ -348,7 +348,7 @@ def nodeinfo2():
             "activitypub"
         ],
         "usage": nodeinfo_usage(domain),
-        "openRegistrations": g.site.registration_mode != 'Closed'
+        "openRegistrations": registration_mode_on(domain, g.site) != 'Closed'
     }
     return jsonify(nodeinfo_data)
 
@@ -370,7 +370,7 @@ def nodeinfo21():
             "activitypub"
         ],
         "usage": nodeinfo_usage(domain),
-        "openRegistrations": g.site.registration_mode != 'Closed',
+        "openRegistrations": registration_mode_on(domain, g.site) != 'Closed',
         "services": {
             "inbound": [],
             "outbound": []
@@ -392,7 +392,7 @@ def nodeinfo21():
 @cache.cached(timeout=600, key_prefix=storefront_cache_key)
 def api_v1_instance():
     domain = federating_storefront()
-    usage = nodeinfo_usage(domain)
+    usage, registration = nodeinfo_usage(domain), registration_mode_on(domain, g.site)
     retval = {
         'title': domain_site_name(domain, g.site),
         'uri': domain_authority(domain),
@@ -401,8 +401,8 @@ def api_v1_instance():
             "status_count": usage['localPosts'] + usage['localComments'],
             "domain_count": 1
         },
-        'registrations': g.site.registration_mode != 'Closed',
-        'approval_required': g.site.registration_mode == 'RequireApplication'
+        'registrations': registration != 'Closed',
+        'approval_required': registration == 'RequireApplication'
     }
     return jsonify(retval)
 

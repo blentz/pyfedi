@@ -264,3 +264,28 @@ def test_the_shops_alpha_site_documents_name_only_the_shop(app, two_domains, sho
     assert (hell_site['site']['name'], hell_site['site']['user_count']) == (HELL, 1)
     hell_chooser = alpha_get(app, '/api/alpha/site/instance_chooser', HELL).get_json()
     assert (hell_chooser['name'], hell_chooser['mau']) == (HELL, 1)
+
+
+@pytest.fixture
+def shop_admin_only(app, golden_site, shop_rows):
+    """Sign-up open on hell (Site.registration_mode), the shop's accounts made by an admin only."""
+    db.session.get(Site, 1).registration_mode = 'RequireApplication'
+    db.session.get(SiteDomain, shop_rows[0].id).registration = 'admin'
+    db.session.commit()
+    clear_domain_cache()
+    cache.clear()
+
+
+@pytest.mark.usefixtures('shop_admin_only')
+def test_a_shop_that_takes_no_sign_ups_says_so(app):
+    """I2: the domain's own registration, not the Site row's: hell is open (by application), the shop is closed."""
+    for path in ('/nodeinfo/2.0', '/nodeinfo/2.1'):
+        assert json.loads(shop_body(app, path))['openRegistrations'] is False
+        assert json.loads(get(app, path, host=HELL).data)['openRegistrations'] is True
+    shop = json.loads(shop_body(app, '/api/v1/instance'))
+    assert (shop['registrations'], shop['approval_required']) == (False, False)
+    hell = json.loads(get(app, '/api/v1/instance', host=HELL).data)
+    assert (hell['registrations'], hell['approval_required']) == (True, True)
+    assert json.loads(shop_body(app, '/api/v3/site'))['site_view']['local_site']['registration_mode'] == 'Closed'
+    assert json.loads(get(app, '/api/v3/site', host=HELL).data)['site_view']['local_site']['registration_mode'] == \
+        'RequireApplication'

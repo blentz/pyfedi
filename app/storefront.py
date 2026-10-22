@@ -72,6 +72,12 @@ def public_registration_open(storefront: DomainInfo) -> bool:
     return storefront.is_default or storefront.registration == 'anyone'
 
 
+def registration_mode_on(storefront: DomainInfo, site) -> str:
+    """`site.registration_mode` as `storefront` offers it: 'Closed' where public sign-up is not open
+    (`public_registration_open`). The default domain's is the Site row's own."""
+    return site.registration_mode if public_registration_open(storefront) else 'Closed'
+
+
 _NOT_IN_AUTHORITY = frozenset('@/\\?#')
 
 

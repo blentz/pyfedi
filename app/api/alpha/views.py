@@ -28,7 +28,7 @@ import app.shared.community as shared_community
 # package before they are defined (import cycle: app.shared.post)
 import app.shared.post as shared_post
 from app.federation_urls import domain_site_name, owner_domain
-from app.storefront import DomainInfo, current_storefront, default_domain, domain_base_url, hosted_instance_ids, public_registration_open, storefront_link, storefront_memo_name, storefront_url
+from app.storefront import DomainInfo, current_storefront, default_domain, domain_base_url, hosted_instance_ids, registration_mode_on, storefront_link, storefront_memo_name, storefront_url
 from app.local_only import community_local_only, federating_clause, user_local_only, without_local_only_actors
 from app.visibility import can_view, visible_to_sql
 
@@ -1410,7 +1410,7 @@ def topic_view(topic: Topic | int, variant: int, communities_moderating, banned_
 
 def advertised_registration_mode() -> str:
     """The site's registration mode as this storefront offers it: Closed where public sign-up is not open."""
-    return g.site.registration_mode if public_registration_open(current_storefront()) else 'Closed'
+    return registration_mode_on(current_storefront(), g.site)
 
 
 def described_domain() -> DomainInfo:

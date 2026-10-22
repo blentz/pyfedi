@@ -38,7 +38,7 @@ from app.local_names import local_named
 from app.federation_urls import activity_id, domain_site_name, instance_actor_public_key, object_base, owner_base, \
     owner_domain
 from app.storefront import DomainInfo, default_domain, domain_authority, domain_base_url, hosted_instance_ids, \
-    instance_id_of
+    instance_id_of, registration_mode_on
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
@@ -6230,7 +6230,7 @@ def lemmy_site_data(domain: DomainInfo):
                 "captcha_difficulty": "medium",
                 "published": site.created_at.isoformat(),
                 "updated": site.updated.isoformat(),
-                "registration_mode": site.registration_mode,
+                "registration_mode": registration_mode_on(domain, site),
                 "reports_email_admins": site.reports_email_admins
             },
             "local_site_rate_limit": {
