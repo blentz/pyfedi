@@ -157,8 +157,12 @@ def test_served_by_us_knows_the_canonical_media_urls(app, onion):
 
 
 def test_post_ap_json_image_is_canonical(app, world):
+    """The post is the canonical domain's, so the onion answers its ActivityPub fetch with a 404 (owner ruling, plan
+    C3 task 3), and the canonical document names the canonical image."""
     founder, author, community, post, image = world
     response = on_onion(app).get(f'/post/{post.id}', headers={'Host': ONION, 'Accept': 'application/activity+json'})
+    assert response.status_code == 404
+    response = app.test_client().get(f'/post/{post.id}', headers={'Accept': 'application/activity+json'})
     assert response.status_code == 200
     assert urlsplit(response.get_json()['image']['url']).hostname == CANONICAL
 
