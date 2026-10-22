@@ -174,9 +174,11 @@ def test_the_onions_instance_actor_answers_no_other_server(app, path):
     assert onion_get(client, path, headers=AP).status_code == 404
 
 
-def test_hells_feed_stays_hells_whatever_host_asks(app, shop_rows):
-    """A feed has no domain of its own: its owner is the default domain (Task 1's owner_domain)."""
-    assert json.loads(served(app, '/f/goldfeed').data)['id'] == f'https://{HELL}/f/goldfeed'
+def test_hells_feed_is_hells_and_unknown_to_the_shop(app, shop_rows):
+    """A feed has no domain of its own: its owner is the default domain (Task 1's owner_domain). Fetched through the
+    shop it is another of our domains' object, so the shop answers the 404 of an unknown one (owner ruling, Task 3)."""
+    assert json.loads(served(app, '/f/goldfeed', host=HELL).data)['id'] == f'https://{HELL}/f/goldfeed'
+    assert app.test_client().get('/f/goldfeed', headers=AP, base_url=SHOP_BASE).status_code == 404
 
 
 # --------------------------------------------------------------------------

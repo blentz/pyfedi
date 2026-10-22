@@ -26,7 +26,7 @@ from app import cache, db
 from app.activitypub.routes import process_inbox_request
 from app.activitypub.serializers.microblog import link_hashtags, microblog_note
 from app.activitypub.util import comment_model_to_json, post_to_page
-from app.federation_urls import activity_id, hosted_domain_names, object_base
+from app.federation_urls import activity_id, hosted_domain_names, object_base, owned_elsewhere
 from app.models import ActivityPubLog, ChatMessage, CommunityFlair, CommunityMember, Conversation, Feed, Instance, \
     PostVote, SiteDomain, Tag
 from app.quotes import resolve_quotes
@@ -39,7 +39,7 @@ from app.storefront import clear_domain_cache, domain_for_host
 from tests.factories import a_keypair, make_community, make_community_member, make_instance, make_post, \
     make_post_reply, make_user
 from tests.test_onion_guard_limits import PROXY, a_session, onion_get
-from tests.two_domains import HELL, ONION, two_domains  # noqa: F401  (fixture)
+from tests.two_domains import HELL, ONION, request_on, two_domains  # noqa: F401  (fixture)
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -399,7 +399,7 @@ def test_a_quote_of_a_shop_posts_own_url_is_found(app, sites):
 
 
 # --------------------------------------------------------------------------
-# an activity is looked up on the domain it is asked of
+# an ActivityPub fetch through another of our domains is a 404 (owner ruling)
 # --------------------------------------------------------------------------
 
 def fetch(app, path, host, headers=AP):
@@ -408,6 +408,77 @@ def fetch(app, path, host, headers=AP):
         a_session(client)
         return onion_get(client, path, headers=headers)
     return client.get(path, headers=headers, base_url=f'https://{host}')
+
+
+@pytest.fixture
+def owned(sites):
+    """A post, a comment and a private message of each of hell's and the shop's, and a public feed of hell's."""
+    rows = {}
+    for name, community, author in (('hell', sites.pit, sites.hal), ('shop', sites.wares, sites.sam)):
+        post = a_post(community, author)
+        reply = a_reply(post, author)
+        conversation = Conversation(user_id=author.id)
+        db.session.add(conversation)
+        db.session.flush()
+        message = ChatMessage(sender_id=author.id, recipient_id=sites.rem.id, conversation_id=conversation.id,
+                              body='hi', body_html='<p>hi</p>')
+        db.session.add(message)
+        db.session.flush()
+        message.ap_id = message.ap_id or f'{object_base(message)}/private_message/{message.id}'
+        rows[name] = SimpleNamespace(post=post, reply=reply, message=message, user=author, community=community)
+    feed = Feed(name='hellfeed', title='Hell feed', public=True, user_id=sites.hal.id,
+                instance_id=sites.hell.instance_id, ap_profile_id=f'{HELL_BASE}/f/hellfeed',
+                ap_public_url=f'{HELL_BASE}/f/hellfeed')
+    db.session.add(feed)
+    db.session.commit()
+    cache.clear()
+    return rows
+
+
+def object_paths(row) -> list[str]:
+    name, community = row.user.user_name, row.community.name
+    return [f'/post/{row.post.id}', f'/post/{row.post.id}/replies', f'/post/{row.post.id}/context',
+            f'/post/{row.post.id}/likes', row.post.slug, f'/comment/{row.reply.id}', f'/comment/{row.reply.id}/likes',
+            f'/u/{name}', f'/u/{name}/outbox', f'/u/{name}/followers', f'/u/{name}/following', f'/u/{name}/liked',
+            f'/c/{community}', f'/c/{community}/outbox', f'/c/{community}/featured', f'/c/{community}/moderators',
+            f'/c/{community}/followers', f'/c/{community}/following']
+
+
+@pytest.mark.parametrize('owner, other', [('hell', SHOP), ('shop', HELL), ('hell', ONION)])
+def test_another_of_our_domains_objects_are_unknown_here(app, sites, owned, owner, other):
+    row = owned[owner]
+    home = HELL if owner == 'hell' else SHOP
+    for path in object_paths(row):
+        spelt = path
+        if path.startswith(('/u/', '/c/')):   # name@host reaches the other domain's row from this one
+            kind, rest = path[1], path[3:]
+            name, _, collection = rest.partition('/')
+            spelt = f'/{kind}/{name}@{home}' + (f'/{collection}' if collection else '')
+        assert fetch(app, spelt, other).status_code == 404, (spelt, other)
+        assert fetch(app, path, home).status_code == 200, (path, home)
+
+
+@pytest.mark.parametrize('path', ['/f/hellfeed', '/f/hellfeed/outbox', '/f/hellfeed/following',
+                                  '/f/hellfeed/moderators', '/f/hellfeed/followers'])
+def test_a_feed_is_hells_and_unknown_on_the_shop(app, sites, owned, path):
+    assert fetch(app, path, SHOP).status_code == 404
+    assert fetch(app, path, HELL).status_code == 200
+
+
+def test_a_gone_account_of_another_domain_is_no_tombstone_here(app, sites, owned):
+    sites.sam.deleted = True
+    db.session.commit()
+    assert fetch(app, f'/u/sam@{SHOP}', HELL).status_code == 404
+    assert fetch(app, f'/u/sam@{SHOP}/outbox', HELL).status_code == 404
+    assert fetch(app, '/u/sam', SHOP).status_code == 410
+    assert fetch(app, '/u/sam/outbox', SHOP).status_code == 410
+
+
+def test_a_private_message_is_unknown_on_another_of_our_domains(app, sites, owned):
+    for name, other in (('hell', SHOP), ('shop', HELL)):
+        message = owned[name].message
+        assert message.ap_id.startswith(HELL_BASE if name == 'hell' else SHOP_BASE)
+        assert fetch(app, f'/private_message/{message.id}', other).status_code == 404
 
 
 def test_an_activity_is_looked_up_on_the_domain_asked(app, sites):
@@ -424,6 +495,21 @@ def test_an_activity_is_looked_up_on_the_domain_asked(app, sites):
     db.session.query(ActivityPubLog).filter(ActivityPubLog.activity_id.startswith(SHOP_BASE)).delete()
     db.session.commit()
     assert fetch(app, f'/activities/like/{token}', SHOP).status_code == 404   # hell's is not the shop's
+
+
+def test_a_browser_request_is_answered_as_before(app, sites, owned):
+    """HTML is unaffected: the shop's storefront answers a hell post's page as C2 left it (a login first), not 404."""
+    post_id = owned['hell'].post.id
+    response = fetch(app, f'/post/{post_id}', SHOP, headers={})
+    assert (response.status_code, response.headers['Location']) == (302, f'/auth/login?next=/post/{post_id}')
+    assert fetch(app, f'/post/{post_id}', HELL, headers={}).status_code == 302   # as for anyone logged out
+
+
+def test_owned_elsewhere_reads_the_requests_domain(app, sites, owned):
+    with request_on(app, sites.shop):
+        assert owned_elsewhere(owned['hell'].post) and not owned_elsewhere(owned['shop'].post)
+        assert not owned_elsewhere(make_post(two_domains_away(sites), sites.rem, ap_id='https://peer.example/p/9'))
+    assert owned_elsewhere(owned['shop'].reply) and not owned_elsewhere(owned['hell'].reply)   # no request: default
 
 
 # --------------------------------------------------------------------------

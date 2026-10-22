@@ -15,7 +15,7 @@ from flask import current_app
 from sqlalchemy import select
 
 from app import db
-from app.storefront import DomainInfo, default_domain, domain_authority, domain_base_url, \
+from app.storefront import DomainInfo, current_storefront, default_domain, domain_authority, domain_base_url, \
     domain_rows, hosted_instance_ids
 # The modules, not the names: app.models and app.utils import much of the app, which may import this module
 # (import cycle: models, utils)
@@ -71,6 +71,14 @@ def object_base(obj) -> str:
     (SERVER_URL), as before C3. Unlike `owner_base`, never raises."""
     domain = naming_domain(obj)
     return domain_base_url(domain if domain is not None else default_domain())
+
+
+def owned_elsewhere(obj) -> bool:
+    """True when `obj` is named on another hosted domain (`naming_domain`) than the one the request came in on. Its
+    ActivityPub document is not this domain's to serve: the answer is the 404 an unknown object gets, so a fetch
+    never shows that two of our domains are one server (owner ruling)."""
+    domain = naming_domain(obj)
+    return domain is not None and domain.domain != current_storefront().domain
 
 
 def hosted_domain_names() -> list[str]:

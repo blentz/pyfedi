@@ -53,7 +53,7 @@ from app.relays import inbound as relay_inbound
 from app.local_only import any_domain_closed, community_local_only, federated_mentions, federating_clause, \
     refused_outbound, user_local_only
 from app.local_names import actor_handle, local_clause, split_local_name
-from app.federation_urls import activity_id, object_base, owner_base, owner_domain
+from app.federation_urls import activity_id, object_base, owned_elsewhere, owner_base, owner_domain
 from app.storefront import current_storefront, domain_authority, domain_base_url, domain_for_host, hosted_instance_ids, \
     is_served_name
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
@@ -510,15 +510,15 @@ def user_profile(actor):
             # S3.2: a deleted account is gone for good, so peers are told to purge it. A ban (banned, not deleted)
             # stays a 404 -- it can be lifted. Account deletion sets both flags, so `deleted` decides.
             gone = User.query.filter(local, User.deleted.is_(True)).first()
-            if gone is not None and not user_local_only(gone):
+            if gone is not None and not user_local_only(gone) and not owned_elsewhere(gone):
                 return tombstone_response(gone.public_url(), 'Service' if gone.bot else 'Person')
 
     if user is None:
         user = resolve_remote_handle(actor)
 
     if user is not None:
-        if user_local_only(user) and is_activitypub_request():
-            abort(404)   # a local-only account does not exist to other servers
+        if (user_local_only(user) or owned_elsewhere(user)) and is_activitypub_request():
+            abort(404)   # a local-only account does not exist to other servers, another of our domains' not here
         if request.method == 'HEAD':
             if is_activitypub_request():
                 resp = jsonify('')
@@ -645,10 +645,10 @@ def local_actor_user(actor: str) -> User:
     name is matched case-insensitively, as user_profile matches it."""
     local = local_clause(User, actor.strip())
     user = User.query.filter(local, User.deleted.is_(False), User.banned.is_(False)).first()
-    if user is not None and not user_local_only(user):
+    if user is not None and not user_local_only(user) and not owned_elsewhere(user):
         return user
     gone = User.query.filter(local, User.deleted.is_(True)).first() if user is None else None
-    abort(410 if gone is not None and not user_local_only(gone) else 404)
+    abort(410 if gone is not None and not user_local_only(gone) and not owned_elsewhere(gone) else 404)
 
 
 def count_only_collection(collection_id: str, total: int):
@@ -747,8 +747,8 @@ def community_profile(actor):
         actor = community.name if community is not None else actor.lower()   # the stored name, whatever the casing
     if community is not None:
         if is_activitypub_request():
-            if community_local_only(community):
-                abort(404)   # a local-only community does not exist to other servers
+            if community_local_only(community) or owned_elsewhere(community):
+                abort(404)   # a local-only community does not exist to other servers, another of our domains' not here
             if community.local_only or community.private:
                 abort(403)
             resp = jsonify(actor_document(community_actor_data(community)))
@@ -2566,7 +2566,7 @@ def community_outbox(actor):
         return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter(local_clause(Community, actor), Community.banned.is_(False)).first()
     if community is not None:
-        if community_local_only(community):
+        if community_local_only(community) or owned_elsewhere(community):
             abort(404)   # as community_profile: a local-only community does not exist to other servers
         if community.local_only or community.private:
             abort(403)   # S3.4: as the community actor document (community_profile); these never federate
@@ -2598,7 +2598,7 @@ def community_featured(actor):
         return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter(local_clause(Community, actor), Community.banned.is_(False)).first()
     if community is not None:
-        if community_local_only(community):
+        if community_local_only(community) or owned_elsewhere(community):
             abort(404)   # as community_profile
         if community.local_only or community.private:
             abort(403)   # S3.4: as the community actor document; these never federate
@@ -2633,7 +2633,7 @@ def community_moderators_route(actor):
         return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter(local_clause(Community, actor), Community.banned.is_(False)).first()
     if community is not None:
-        if community_local_only(community):
+        if community_local_only(community) or owned_elsewhere(community):
             abort(404)   # as community_profile
         if community.local_only or community.private:
             abort(403)   # S3.4: as the community actor document; these never federate
@@ -2669,7 +2669,7 @@ def community_followers(actor):
         return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter(local_clause(Community, actor), Community.banned.is_(False)).first()
     if community is not None:
-        if community_local_only(community):
+        if community_local_only(community) or owned_elsewhere(community):
             abort(404)   # as community_profile
         if community.local_only or community.private:
             abort(403)   # S3.4: as the community actor document; these never federate
@@ -2697,7 +2697,7 @@ def community_following(actor):
     if not is_activitypub_request():
         return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter(local_clause(Community, actor), Community.banned.is_(False)).first() or abort(404)
-    if community_local_only(community):
+    if community_local_only(community) or owned_elsewhere(community):
         abort(404)
     if community.local_only or community.private:
         abort(403)
@@ -2737,8 +2737,8 @@ def user_liked(actor):
 def comment_ap_refusal(reply: PostReply):
     """The response that refuses an ActivityPub fetch of local `reply` (or of its count collections), or None to
     serve it. comment_ap's checks, in their order, held here so the comment and its collections cannot diverge."""
-    if reply.local_only:
-        abort(404)   # a local-only comment does not exist to other servers
+    if reply.local_only or owned_elsewhere(reply):
+        abort(404)   # a local-only comment does not exist to other servers, another of our domains' not on this one
     if reply.community.local_only or reply.community.private:
         abort(403)
     if reply.visibility not in OPEN_VISIBILITIES and not followers_entitled(reply):
@@ -2889,7 +2889,7 @@ def private_message_ap(message_id):
                 or not (conversation.is_member(current_user) or current_user.is_admin())):
             abort(404)
         return redirect(url_for('chat.chat_home', conversation_id=conversation.id))
-    if not ours or message.deleted or message.recipient_id is None:
+    if not ours or message.deleted or message.recipient_id is None or owned_elsewhere(message):
         abort(404)
     recipient = db.session.get(User, message.recipient_id)
     # the sender is always local, so only the recipient (or its host) can be entitled
@@ -2918,8 +2918,8 @@ def post_ap_refusal(post: Post):
 
     Visibility is checked before deletion so a Tombstone never confirms that a post existed somewhere the caller
     may not see."""
-    if post.local_only:
-        abort(404)   # a local-only post does not exist to other servers
+    if post.local_only or owned_elsewhere(post):
+        abort(404)   # a local-only post does not exist to other servers, another of our domains' not on this one
     if post.community.local_only or post.community.private or post.status < POST_STATUS_PUBLISHED:
         abort(403)
     if post.visibility not in OPEN_VISIBILITIES and not followers_entitled(post):
@@ -3771,8 +3771,8 @@ def feed_profile(actor, feed_owner=None):
         feed: Feed = db.session.query(Feed).filter_by(name=actor, ap_id=None, banned=False).first()
     if feed is not None:
         if is_activitypub_request():
-            if feed_local_only(feed):
-                abort(404)   # a local-only account's feed does not exist to other servers
+            if feed_local_only(feed) or owned_elsewhere(feed):
+                abort(404)   # a local-only account's feed does not exist to other servers, a feed is the default's
             # check if feed is public, if not abort
             # with 403 (forbidden)
             if not feed.public:
@@ -3867,7 +3867,7 @@ def feed_outbox(actor):
         feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None, banned=False).first()
 
     # unknown feed - 404 rather than crashing on feed.public below; a local-only account's feed is unknown there too
-    if feed is None or feed_local_only(feed):
+    if feed is None or feed_local_only(feed) or owned_elsewhere(feed):
         abort(404)
 
     # check if feed is public, if not abort
@@ -3903,7 +3903,7 @@ def feed_following(actor):
         feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None, banned=False).first()
 
     # unknown feed - 404 rather than crashing on feed.public below; a local-only account's feed is unknown there too
-    if feed is None or feed_local_only(feed):
+    if feed is None or feed_local_only(feed) or owned_elsewhere(feed):
         abort(404)
 
     # check if feed is public, if not abort
@@ -3949,7 +3949,7 @@ def feed_moderators_route(actor):
     # `feed_profile`, `/outbox` and `/following` all answer 403 for a private
     # feed; this one named its owner and `/followers` counted its members. Same
     # 403, so a private feed is private at all five.
-    if feed is not None and feed_local_only(feed):
+    if feed is not None and (feed_local_only(feed) or owned_elsewhere(feed)):
         abort(404)   # as feed_profile
     if feed is not None and not feed.public:
         abort(403)
@@ -3990,7 +3990,7 @@ def feed_followers(actor):
         abort(400)
     else:
         feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None, banned=False).first()
-        if feed is not None and feed_local_only(feed):
+        if feed is not None and (feed_local_only(feed) or owned_elsewhere(feed)):
             abort(404)   # as feed_profile
         # D1394, as feed_moderators_route above.
         if feed is not None and not feed.public:

@@ -60,17 +60,21 @@ def _strings(document):
 # --------------------------------------------------------------------------
 
 
-def test_actor_json_on_alias_is_canonical(app, onion):
+def test_actor_json_is_canonical_and_unknown_on_the_alias(app, onion):
+    """The actor document is the canonical domain's. Asked of the alias, another of our domains, it is the 404 of an
+    unknown actor (owner ruling, plan C3 task 3): no fetch shows the alias and the canonical domain are one server."""
     make_site()
     _local_user('alice')
-    response = app.test_client().get('/u/alice@test.piefed.local',   # a bare name is the alias's own (C1)
-                                       headers={'Host': ALIAS, 'Accept': 'application/activity+json'})
+    response = app.test_client().get('/u/alice', headers={'Accept': 'application/activity+json'})
     assert response.status_code == 200
     actor = response.get_json()
     for value in (actor['id'], actor['inbox'], actor['outbox'], actor['publicKey']['id']):
         assert value.startswith(f'{CANONICAL}/')
     assert ALIAS not in _strings(actor)
     assert ALIAS not in response.headers.get('Link', '')
+    on_alias = app.test_client().get('/u/alice@test.piefed.local',   # a bare name is the alias's own (C1)
+                                     headers={'Host': ALIAS, 'Accept': 'application/activity+json'})
+    assert on_alias.status_code == 404
 
 
 @pytest.mark.parametrize('resource', ['acct:alice@test.piefed.local', 'http://test.piefed.local/u/alice'])
