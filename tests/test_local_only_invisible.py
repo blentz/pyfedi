@@ -222,7 +222,9 @@ def test_a_federating_communitys_moderators_and_counts_leave_local_only_members_
 
 def test_a_local_only_account_cannot_be_made_moderator_of_a_federating_community(app, world, monkeypatch):
     monkeypatch.setattr('app.shared.community.authorise_api_user', lambda *a, **k: world.alice)
-    with app.test_request_context():
+    # its own app context: the anonymous user flask_login loads into g here (a queued task reads who is acting,
+    # plan C3) must not still be in g when the test client's request below runs in the test's app context
+    with app.app_context(), app.test_request_context():
         with pytest.raises(Exception, match='local_only_moderator'):
             shared_community.add_mod_to_community(world.clearnet.id, world.onionite.id, SRC_API, auth='token')
         # the onion's own community may have it, and a hell.cloud account may moderate hell.cloud's
