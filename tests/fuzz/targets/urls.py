@@ -34,6 +34,7 @@ from furl import furl
 from werkzeug.exceptions import HTTPException
 
 import app.activitypub.routes as ap_routes
+import app.federation_urls as federation_urls
 import app.storefront as storefront
 import app.utils as app_utils
 from app.cli import strip_tracking
@@ -829,6 +830,43 @@ def check_browser_host(data: bytes) -> None:
                 assert bare in storefront._css_urls(f'{prefix}{spelling}{bare})'), f'{prefix!r} hides {spelling}{bare!r})'
 
 
+# ---------------------------------------------------------------------------
+# federation_urls.domain_of_url
+# ---------------------------------------------------------------------------
+
+_SISTER = 'shop.example'
+
+
+@contextmanager
+def _a_sister_domain():
+    """The default domain and a federating sister, without the database read behind domain_rows."""
+    default = storefront._synthesised_default()
+    sister = default._replace(domain=_SISTER, is_default=False, is_onion=False, id=2, instance_id=2)
+    saved = federation_urls.domain_rows
+    federation_urls.domain_rows = lambda: (default, sister)
+    try:
+        yield default, sister
+    finally:
+        federation_urls.domain_rows = saved
+
+
+def check_domain_of_url(data: bytes) -> None:
+    """domain_of_url names a hosted domain only for a URL a browser reads that domain's host from, on its port, with
+    no userinfo: a lookalike (a suffix, a prefix, a backslash, an @) is never ours. It never raises."""
+    url = _text(data[:MAX_INPUT])
+    with _a_sister_domain() as (default, sister):
+        for candidate in (url, f'https://{url}', f'https://{_SISTER}{url}'):
+            found = federation_urls.domain_of_url(candidate)
+            if found is None:
+                continue
+            assert found in (default, sister), f'{candidate!r} gave {found!r}'
+            scheme, host = whatwg_reading(candidate)
+            authority = storefront.domain_authority(found)
+            assert scheme in SPECIAL_SCHEMES and host == found.domain, (
+                f'{candidate!r} is {found.domain}, a browser reads {host!r}')
+            assert urlsplit(candidate).netloc.lower() == authority.lower() and '@' not in authority, candidate
+
+
 # None is budgeted: no regex here has a backtracking shape. The redirect, request-host, webfinger and resolver
 # targets need an app: they read current_app.config or push a request context.
 TARGETS = [
@@ -843,4 +881,6 @@ TARGETS = [
     Target(name='strip_tracking', check=check_strip_tracking, surface='urls', budget_ms=None, needs_app=False),
     Target(name='storefront_browser_host', check=check_browser_host, surface='urls', budget_ms=200, needs_app=False),
     Target(name='nodeinfo_hrefs', check=check_nodeinfo_hrefs, surface='urls', budget_ms=None, needs_app=False),
+    Target(name='federation_domain_of_url', check=check_domain_of_url, surface='urls', budget_ms=None,
+           needs_app=True),
 ]
