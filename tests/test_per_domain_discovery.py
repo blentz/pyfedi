@@ -323,3 +323,19 @@ def test_the_feeds_document_is_hells_only(app):
     assert app.test_client().get('/feeds', headers=AP, base_url=SHOP_BASE).status_code == 404
     hell = app.test_client().get('/feeds', headers=AP, base_url=f'https://{HELL}')
     assert hell.status_code == 200 and json.loads(hell.data)['site_view']['site']['actor_id'] == f'https://{HELL}/'
+
+
+@pytest.mark.usefixtures('real_cache')
+@pytest.mark.parametrize('path', ['/api/v1/instance/domain_blocks', '/api/v3/federated_instances'])
+@pytest.mark.parametrize('hell_first', [True, False])
+def test_the_onion_serves_no_block_or_peer_list(app, path, hell_first):
+    """The onion federates with no one, so it lists no server's blocks or peers: 404, whichever host is asked first,
+    and hell's cached copy never answers it."""
+    client = app.test_client()
+    a_session(client)
+    for host in ((HELL, ONION) if hell_first else (ONION, HELL)) * 2:
+        if host == ONION:
+            assert onion_get(client, path, headers={}).status_code == 404
+        else:
+            assert get(app, path, host=HELL).status_code == 200
+    assert get(app, path, host=SHOP).status_code == 200

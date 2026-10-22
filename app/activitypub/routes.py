@@ -408,8 +408,9 @@ def api_v1_instance():
 
 
 @bp.route('/api/v1/instance/domain_blocks')
-@cache.cached(timeout=600, key_prefix=storefront_cache_key)   # one copy per host, as the documents above
+@cache.cached(timeout=600, key_prefix=storefront_cache_key)   # per host, and none on a local-only one, as above
 def domain_blocks():
+    federating_storefront()   # a local-only domain lists no server's blocks
     use_allowlist = get_setting('use_allowlist', False)
     if use_allowlist:
         return jsonify([])
@@ -465,8 +466,9 @@ def lemmy_site():
 
 
 @bp.route('/api/v3/federated_instances')
-@cache.cached(timeout=600, key_prefix=storefront_cache_key)   # one copy per host, as the documents above
+@cache.cached(timeout=600, key_prefix=storefront_cache_key)   # per host, and none on a local-only one, as above
 def lemmy_federated_instances():
+    federating_storefront()   # a local-only domain lists no peers
     instances = Instance.query.filter(Instance.id.not_in(hosted_instance_ids()), Instance.gone_forever == False).all()
     linked = []
     allowed = []
