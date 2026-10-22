@@ -61,6 +61,7 @@ from app.constants import AP_FETCH_ACCEPT, DATETIME_MS_FORMAT
 from app.discovery.instance_answers import record_delivery_refusal
 from app.local_only import refused_outbound
 from app.relays.refusals import record_relay_refusal
+from app.rsa_keys import RsaKeys  # noqa: F401  (re-exported: RsaKeys has always been imported from here)
 from app.storefront import domain_for_host, domain_rows
 from app.models import utcnow, ActivityPubLog, Community, Instance, CommunityMember, Site, User, SendQueue, public_key_pem
 from app.utils import RequestNotSendable, ResponseTooLarge, _capped_get, _capped_request, get_request_capped, \
@@ -270,32 +271,6 @@ def signed_get_capped(uri: str, private_key: str, key_id: str, max_bytes: int,
 # pyld's default loader fetches every @context over the network, uncached and
 # with no timeout, at a URL the sender chose; serve bundled copies instead.
 jsonld.set_document_loader(ld_document_loader)
-
-
-class RsaKeys:
-    @classmethod
-    def generate_keypair(cls) -> tuple[str, str]:
-        """
-        Generates a new RSA keypair
-        """
-        private_key = rsa.generate_private_key(
-            public_exponent=65537,
-            key_size=2048,
-        )
-        private_key_serialized = private_key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption(),
-        ).decode("ascii")
-        public_key_serialized = (
-            private_key.public_key()
-            .public_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo,
-            )
-            .decode("ascii")
-        )
-        return private_key_serialized, public_key_serialized
 
 
 def parse_signature_header(signature: str | None) -> dict[str, str]:

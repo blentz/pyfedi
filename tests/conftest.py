@@ -107,6 +107,8 @@ from app import celery
 from app.activitypub.ld_contexts import ld_document_loader
 from config import Config
 from tests import static_leak_gate
+from tests.factories import a_keypair
+import app.models as app_models
 
 TEST_DATABASE_URL = os.environ.get('TEST_DATABASE_URL')
 
@@ -509,6 +511,25 @@ def site(db_session):
     """
     from tests.factories import make_site
     return make_site()
+
+
+class _PooledRsaKeys:
+    """RsaKeys for SiteDomain's before_insert hook, handing out the factories' pooled pairs."""
+    @classmethod
+    def generate_keypair(cls) -> tuple[str, str]:
+        return a_keypair()
+
+
+@pytest.fixture(scope='session', autouse=True)
+def pooled_domain_keys():
+    """A sister domain's row gets an instance actor key pair on insert (plan C3), and the suite inserts hundreds of
+    them (two_domains' onion alone, in every test that uses it). At ~96ms a pair (tests/factories.py) that is tens of
+    seconds of key material almost no test reads, so the hook takes the factories' pool of real pairs instead. Only
+    app.models' name is replaced: RsaKeys itself, and every other caller of it, is untouched."""
+    previous = app_models.RsaKeys
+    app_models.RsaKeys = _PooledRsaKeys
+    yield
+    app_models.RsaKeys = previous
 
 
 @pytest.fixture(scope='session', autouse=True)

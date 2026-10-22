@@ -47,6 +47,7 @@ import app as app_pkg
 import app.storefront as storefront
 import app.local_only as local_only
 from app.relays import current_relay_id
+from app.rsa_keys import RsaKeys
 
 
 def utcnow(naive=True):
@@ -5532,6 +5533,10 @@ class SiteDomain(db.Model):
     is_onion = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     # Its own instance row (spec 2026-10-19 §3.1): row 1 for the default. Set on insert, below.
     instance_id = db.Column(db.Integer, db.ForeignKey('instance.id', name='fk_site_domain_instance_id'), nullable=False)
+    # Its instance actor's key pair (plan C3): set on insert for every other domain, below. NULL for the default,
+    # whose instance actor signs with Site row 1's. Read on demand by app.federation_urls, never cached.
+    public_key = db.Column(db.Text)
+    private_key = db.Column(db.Text)
 
     @validates('domain')
     def _set_is_onion(self, key, domain):
@@ -5594,7 +5599,10 @@ def _give_the_domain_its_instance(mapper, connection, target):
     whatever is on it. Another domain takes the sparse row already named for it, if any (the unique domain index
     allows no second; `instance_row_to_take` refuses one with content), else a new one. Either way it is PieFed's and
     has no inbox: nothing is ever delivered to a domain of our own. An Instance already loaded in the session keeps
-    its old inbox until the commit expires it."""
+    its old inbox until the commit expires it. A non-default domain also gets its instance actor's key pair, unless
+    it was given one."""
+    if not target.is_default and target.private_key is None:
+        target.private_key, target.public_key = RsaKeys.generate_keypair()
     if target.instance_id is not None:
         return
     instances = Instance.__table__
