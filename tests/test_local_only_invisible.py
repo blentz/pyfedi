@@ -279,6 +279,8 @@ def test_when_the_default_domain_does_not_federate_its_unstamped_accounts_are_lo
     # a domain that federates with no one describes no server to one (plan C3, task 4)
     assert _get(app, '/nodeinfo/2.0').status_code == 404
     assert _get(app, '/api/v3/site').status_code == 404
+    assert _get(app, '/api/v1/instance/domain_blocks').status_code == 404
+    assert _get(app, '/api/v3/federated_instances').status_code == 404
 
 
 def test_when_every_domain_federates_nothing_is_left_out(app, world):
