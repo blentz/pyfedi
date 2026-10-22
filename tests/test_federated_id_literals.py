@@ -10,10 +10,11 @@ This sweep finds, in app/ Python (by AST), a URL built on SERVER_URL or SERVER_N
 `.replace()` whose origin is one of them, first or after `://`, directly or through a local alias such as
 `server = current_app.config['SERVER_NAME']`; a handle `name@SERVER_NAME` is no URL) that is:
 - assigned to a name, attribute or subscript named like an id or URL (`ap_*`, `id`, `url`, `href`, `*_id`, `*_url`)
-  or `User-Agent`;
+  or `User-Agent` or `Link`;
 - the value of a dict entry with such a key;
 - a keyword argument with such a name (not of a query's `filter`/`filter_by`: that looks a row up, it names nothing);
-- an argument of a signing or sending call (`send_post_request`, `signed_get_request` and the rest).
+- an argument of a signing or sending call (`send_post_request`, `signed_get_request` and the rest);
+- the value of a `Link` header set with `headers.add`/`headers.set` (an ActivityPub alternate names an id).
 
 A site that is meant to stay is in ALLOWED with the count of its findings under each of REASONS that applies. The entries of a later
 task are removed by that task: `discovery: Task 4` (WebFinger, NodeInfo, site documents), `User-Agent: Task 5`
@@ -54,7 +55,7 @@ ALLOWED = {
     # feeds stay on the default domain (global names, C1 ruling)
     ('app/activitypub/routes.py', 'feed_followers'): {FEEDS: 1},
     ('app/activitypub/routes.py', 'feed_moderators_route'): {FEEDS: 1},
-    ('app/activitypub/routes.py', 'feed_profile'): {FEEDS: 5},
+    ('app/activitypub/routes.py', 'feed_profile'): {FEEDS: 6},
     ('app/feed/routes.py', 'feed_copy'): {FEEDS: 3},
     ('app/shared/feed.py', 'announce_feed_add_remove_to_subscribers'): {FEEDS: 2},
     ('app/shared/feed.py', 'edit_feed'): {FEEDS: 3},
@@ -85,10 +86,11 @@ ALLOWED = {
 }
 
 _CONFIG_KEYS = frozenset(('SERVER_URL', 'SERVER_NAME'))
-_ID_NAME = re.compile(r'(?:ap_\w+|id|url|href|\w+_id|\w+_url|User-Agent)')
+_ID_NAME = re.compile(r'(?:ap_\w+|id|url|href|\w+_id|\w+_url|User-Agent|Link)')
 _SEND_CALLS = frozenset(('send_post_request', 'post_request', 'post_request_in_background', 'signed_get_request',
                          'signed_request', 'send_to_remote_instance', 'send_to_remote_instance_fast'))
 _LOOKUP_CALLS = frozenset(('filter', 'filter_by'))
+_HEADER_CALLS = frozenset(('add', 'set', 'add_header'))
 
 
 def _is_config_ref(node) -> bool:
@@ -121,7 +123,7 @@ def _is_server(node, aliases) -> bool:
 def _names_a_url_on_the_server(node, aliases) -> bool:
     """Whether the string `node` builds has SERVER_URL or SERVER_NAME (or an alias) as its origin: first, or right
     after a scheme's `://` (`https://{SERVER_NAME}/...`, a User-Agent's `+https://{SERVER_NAME}`). A handle
-    (`name@SERVER_NAME`) or a title naming the server is no URL."""
+    (`name@SERVER_NAME`) or a title naming the server is no URL. `<{SERVER_URL}/...>` (a Link header) is one."""
     parts = _parts(node)
     if len(parts) < 2 and not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and
                                node.func.attr == 'replace'):
@@ -132,7 +134,7 @@ def _names_a_url_on_the_server(node, aliases) -> bool:
         if _is_server(part, aliases):
             before = parts[index - 1] if index else None
             if before is None or (isinstance(before, ast.Constant) and isinstance(before.value, str) and
-                                  before.value.endswith('://')):
+                                  before.value.endswith(('://', '<'))):   # `<` opens a Link header's URL
                 return True
     return False
 
@@ -198,6 +200,9 @@ def _findings(node, aliases) -> int:
     if name in _SEND_CALLS:
         count += sum(1 for arg in [*node.args, *(keyword.value for keyword in node.keywords)]
                      if _built(arg, aliases))
+    if name in _HEADER_CALLS and node.args and isinstance(node.args[0], ast.Constant) and \
+            _is_id_name(node.args[0].value):   # headers.add('Link', '<https://{SERVER_NAME}/...>; rel=...')
+        count += sum(1 for arg in node.args[1:] if _built(arg, aliases))
     return count
 
 
@@ -284,6 +289,11 @@ def sites(post, user, flask_app):
     community_ap_id = community_ap_id + '@' + current_app.config['SERVER_NAME']
     community = f"{community}@{current_app.config['SERVER_NAME']}"
     {'url': community, 'id': 'https://' + current_app.config['SERVER_NAME'] + '/x'}
+    response.headers.add('Link', f'<https://{current_app.config["SERVER_NAME"]}/post/1>; rel="alternate"')
+    resp.headers.set('Link', f'<{server_url}/f/x>; rel="alternate"; type="text/html"')
+    response.headers['Link'] = f'<{current_app.config["SERVER_URL"]}/u/x>; rel="alternate"'
+    response.headers.add('Link', f'<{object_base(post)}/post/1>; rel="alternate"')
+    response.headers.add('Vary', f'{current_app.config["SERVER_URL"]}')
 '''
     tree = ast.parse(source)
     function = tree.body[0]
@@ -291,4 +301,4 @@ def sites(post, user, flask_app):
     hits = []
     for node in ast.walk(tree):
         hits += [getattr(node, 'lineno', 0)] * _findings(node, aliases)
-    assert sorted(hits) == [3, 4, 5, 6, 7, 9, 10, 11, 13, 18, 25]
+    assert sorted(hits) == [3, 4, 5, 6, 7, 9, 10, 11, 13, 18, 25, 26, 27, 28]

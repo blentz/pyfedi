@@ -139,7 +139,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'post_edit': 1,
         'post_move': 1,
         'post_share_mastodon': 1,
-        'show_post': 1,
     },
     'app/relays/expiry.py': {
         '_local_user_ids': 1,

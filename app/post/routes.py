@@ -9,7 +9,7 @@ from random import randint
 from flask import redirect, url_for, flash, current_app, abort, request, g, make_response, jsonify
 from flask_babel import _, force_locale, gettext
 from flask_login import current_user
-from app.federation_urls import activity_id
+from app.federation_urls import activity_id, object_base
 from app.onion import audit_field
 from furl import furl
 from sqlalchemy import text, desc, Integer, case
@@ -495,8 +495,8 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
         # discovering the object from the HTML had nothing to follow.
         # Measured: `PROBE ah1 Link headers:` one oembed link and the site's
         # rsl licence, which survives only because `after_request` uses `add`.
-        response.headers.add('Link',
-                             f'<https://{current_app.config["SERVER_NAME"]}/post/{post.id}>; rel="alternate"; type="application/activity+json"')
+        response.headers.add('Link',   # the id's domain, the post's owner's (plan C3): its fetch answers there
+                             f'<{object_base(post)}/post/{post.id}>; rel="alternate"; type="application/activity+json"')
         oembed_url = url_for('post.post_oembed', post_id=post.id, _external=True)
         response.headers.add('Link', f'<{oembed_url}>; rel="alternate"; type="application/json+oembed"')
         if current_user.is_anonymous:
