@@ -306,6 +306,7 @@ def test_a_remote_community_receives_the_update_unwrapped(
     about this function. The nested Group's shape is what this test pins.
     """
     s = _seed(local_community=False, with_keys=True)
+    s.community.ap_followers_url = None   # a peer that never told us its collections
     _make_deliverable(s)
     route = http_mock.post(PEER_INBOX).respond(200, json={})
 
@@ -315,6 +316,13 @@ def test_a_remote_community_receives_the_update_unwrapped(
     assert update['type'] == 'Update'
     assert update['object']['type'] == 'Group'
     assert _key_id_of(route) == s.user.public_url() + '#main-key'
+    # the Group is the remote community's own, by its stored id: the collections it never told us are under it
+    group = update['object']
+    assert group['id'] == 'https://peer.example/c/c1'
+    assert (group['followers'], group['featured'], group['outbox'], group['attributedTo'], group['inbox']) == \
+        ('https://peer.example/c/c1/followers', 'https://peer.example/c/c1/featured',
+         'https://peer.example/c/c1/outbox', 'https://peer.example/c/c1/moderators', PEER_INBOX)
+    assert 'endpoints' not in group   # its server's shared inbox is not known
 
 
 def test_a_non_moderator_sends_nothing(db_session, http_mock):

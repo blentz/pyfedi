@@ -214,16 +214,21 @@ def test_the_group_update_names_the_shop(app, shop_rows, monkeypatch):
 
 
 def test_a_shop_moderators_update_of_a_remote_group_names_the_shop(app, shop_rows, monkeypatch):
-    """The remote branch: the Update goes to the Group's own inbox, signed by the moderator, and our copy of the
-    Group is named on the moderator's domain, as a remote community is no domain's of ours."""
+    """The remote branch: the Update goes to the Group's own inbox, signed by the moderator, its id on the
+    moderator's domain. The Group it carries is the remote community's own: its stored id and collections, never a
+    URL of ours (Task 3: before, the Group was named on the moderator's domain, as SERVER_URL before C3)."""
     shop, user, _ = shop_rows
     user.private_key, user.public_key = a_keypair()
-    peer = Instance(domain='peer.example', software='lemmy')
+    peer = Instance(domain='peer.example', software='lemmy', inbox='https://peer.example/inbox')
     db.session.add(peer)
     db.session.flush()
     remote = Community(name='faraway', title='Far away', instance_id=peer.id, user_id=user.id,
-                       ap_id='faraway@peer.example', ap_profile_id='https://peer.example/c/faraway', ap_public_url='https://peer.example/c/faraway',
-                       ap_inbox_url='https://peer.example/c/faraway/inbox', ap_domain='peer.example')
+                       ap_id='faraway@peer.example', ap_profile_id='https://peer.example/c/faraway',
+                       ap_public_url='https://peer.example/c/faraway', ap_inbox_url='https://peer.example/c/faraway/inbox',
+                       ap_outbox_url='https://peer.example/c/faraway/outbox',
+                       ap_followers_url='https://peer.example/c/faraway/followers',
+                       ap_featured_url='https://peer.example/c/faraway/featured',
+                       ap_moderators_url='https://peer.example/c/faraway/moderators', ap_domain='peer.example')
     db.session.add(remote)
     db.session.flush()
     db.session.add(CommunityMember(user_id=user.id, community_id=remote.id, is_moderator=True))
@@ -238,7 +243,15 @@ def test_a_shop_moderators_update_of_a_remote_group_names_the_shop(app, shop_row
     assert key_id == f'{SHOP_BASE}/u/goldie#main-key'
     assert HELL not in json.dumps(update)
     assert update['id'].startswith(f'{SHOP_BASE}/activities/update/')
-    assert update['object']['id'] == f'{SHOP_BASE}/c/faraway'
+    group = update['object']
+    assert group['id'] == 'https://peer.example/c/faraway'
+    assert (group['inbox'], group['followers'], group['featured'], group['outbox'], group['attributedTo']) == \
+        ('https://peer.example/c/faraway/inbox', 'https://peer.example/c/faraway/followers',
+         'https://peer.example/c/faraway/featured', 'https://peer.example/c/faraway/outbox',
+         'https://peer.example/c/faraway/moderators')
+    assert group['endpoints'] == {'sharedInbox': 'https://peer.example/inbox'}
+    assert group['publicKey']['id'] == 'https://peer.example/c/faraway#main-key'
+    assert group['publicKey']['owner'] == 'https://peer.example/c/faraway'
 
 
 # --------------------------------------------------------------------------
