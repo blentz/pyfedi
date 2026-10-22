@@ -126,3 +126,34 @@ def test_hells_document_is_its_golden_copy(app, name, path):
                                         ('/f/goldfeed', f'<https://{HELL}/f/goldfeed>')])
 def test_hells_actor_documents_link_to_hells_page(app, path, link):
     assert served(app, path).headers['Link'] == f'{link}; rel="alternate"; type="text/html"'
+
+
+# hell.cloud's discovery documents (plan C3, task 4): WebFinger, host-meta, NodeInfo and the site documents, captured
+# from the code before Task 4 made them per domain (BASE b49a5ca83). Nothing in them is normalised: the fixture fixes
+# every count (one account, no posts or comments, one community), and Task 4's count change (hell counts only its own
+# accounts) does not show here, as no other domain has an account in this fixture.
+DISCOVERY_PATHS = {
+    'host_meta.xml': '/.well-known/host-meta',
+    'host_meta.json': '/.well-known/host-meta.json',
+    'nodeinfo_index.json': '/.well-known/nodeinfo',
+    'nodeinfo_2.0.json': '/nodeinfo/2.0',
+    'nodeinfo_2.1.json': '/nodeinfo/2.1',
+    'webfinger_user.json': f'/.well-known/webfinger?resource=acct:goldie@{HELL}',
+    'webfinger_community.json': f'/.well-known/webfinger?resource=acct:goldart@{HELL}',
+    'webfinger_feed.json': f'/.well-known/webfinger?resource=acct:~goldfeed@{HELL}',
+    'webfinger_instance_actor.json': f'/.well-known/webfinger?resource=acct:{HELL}@{HELL}',
+    'api_v1_instance.json': '/api/v1/instance',
+    'api_v3_site.json': '/api/v3/site',
+}
+
+
+@pytest.mark.usefixtures('golden_site')
+@pytest.mark.parametrize('name, path', sorted(DISCOVERY_PATHS.items()))
+def test_hells_discovery_document_is_its_golden_copy(app, name, path):
+    response = app.test_client().get(path, base_url=f'https://{HELL}')
+    assert response.status_code == 200, path
+    golden = GOLDEN / name
+    if not golden.exists():   # a deliberate capture: see the module docstring
+        golden.write_bytes(response.data)
+        pytest.fail(f'captured {golden}; review it and run again')
+    assert response.data == golden.read_bytes()
