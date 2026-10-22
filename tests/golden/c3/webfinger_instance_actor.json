@@ -1,0 +1,1 @@
+{"aliases":["https://test.piefed.local/actor"],"links":[{"href":"https://test.piefed.local/about","rel":"http://webfinger.net/rel/profile-page","type":"text/html"},{"href":"https://test.piefed.local/actor","rel":"self","type":"application/activity+json"}],"subject":"acct:test.piefed.local@test.piefed.local"}

@@ -1,0 +1,1 @@
+{"aliases":["https://test.piefed.local/f/goldfeed"],"links":[{"href":"https://test.piefed.local/f/goldfeed","rel":"http://webfinger.net/rel/profile-page","type":"text/html"},{"href":"https://test.piefed.local/f/goldfeed","properties":{"https://www.w3.org/ns/activitystreams#type":"Feed"},"rel":"self","type":"application/activity+json"}],"subject":"acct:goldfeed@test.piefed.local"}
