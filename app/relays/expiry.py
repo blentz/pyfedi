@@ -25,9 +25,12 @@ def relay_retention_days() -> int:
 
 
 def _local_user_ids():
-    """Ids of local users, as User.is_local() defines them."""
-    return select(User.id).where(or_(User.ap_id.is_(None),
-                                     User.ap_profile_id.startswith(current_app.config['SERVER_URL'], autoescape=True)))
+    """Ids of local users, as User.is_local() defines them: no ap_id (every hosted domain's accounts), or an
+    ap_profile_id `is_local_url` takes, SERVER_URL itself or under SERVER_URL + '/' -- not a bare prefix, which took a
+    lookalike host (https://piefed.example.evil) for this one."""
+    base = current_app.config['SERVER_URL']
+    return select(User.id).where(or_(User.ap_id.is_(None), User.ap_profile_id == base,
+                                     User.ap_profile_id.startswith(base + '/', autoescape=True)))
 
 
 def _kept_clause():
