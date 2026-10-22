@@ -835,36 +835,49 @@ def check_browser_host(data: bytes) -> None:
 # ---------------------------------------------------------------------------
 
 _SISTER = 'shop.example'
+_LOCAL_ONLY = 'abc.onion'
 
 
 @contextmanager
 def _a_sister_domain():
-    """The default domain and a federating sister, without the database read behind domain_rows."""
+    """The default domain, a federating sister and a local-only one, without the database read behind domain_rows."""
     default = storefront._synthesised_default()
     sister = default._replace(domain=_SISTER, is_default=False, is_onion=False, id=2, instance_id=2)
+    local_only = default._replace(domain=_LOCAL_ONLY, scheme='http', federates=False, is_default=False, is_onion=True,
+                                  id=3, instance_id=3)
     saved = federation_urls.domain_rows
-    federation_urls.domain_rows = lambda: (default, sister)
+    federation_urls.domain_rows = lambda: (default, sister, local_only)
     try:
-        yield default, sister
+        yield default, sister, local_only
     finally:
         federation_urls.domain_rows = saved
 
 
+_DEFAULT_PORT = {'http': 80, 'https': 443}
+
+
 def check_domain_of_url(data: bytes) -> None:
-    """domain_of_url names a hosted domain only for a URL a browser reads that domain's host from, on its port, with
-    no userinfo: a lookalike (a suffix, a prefix, a backslash, an @) is never ours. It never raises."""
+    """domain_of_url names a hosted domain only for an http(s) URL a browser reads that domain's host from (a trailing
+    dot aside), on that domain's port or, for a domain with none, the scheme's default, with no userinfo: a lookalike
+    (a suffix, a prefix, a backslash, an @, another scheme, no scheme) is never ours. federating_domain_of_url names
+    it only when it federates. Neither raises."""
     url = _text(data[:MAX_INPUT])
-    with _a_sister_domain() as (default, sister):
-        for candidate in (url, f'https://{url}', f'https://{_SISTER}{url}'):
+    with _a_sister_domain() as hosted:
+        for candidate in (url, f'https://{url}', f'https://{_SISTER}{url}', f'//{_SISTER}{url}',
+                          f'http://{_LOCAL_ONLY}{url}'):
             found = federation_urls.domain_of_url(candidate)
+            federating = federation_urls.federating_domain_of_url(candidate)
+            assert federating == (found if found is not None and found.federates else None), candidate
             if found is None:
                 continue
-            assert found in (default, sister), f'{candidate!r} gave {found!r}'
+            assert found in hosted, f'{candidate!r} gave {found!r}'
             scheme, host = whatwg_reading(candidate)
-            authority = storefront.domain_authority(found)
-            assert scheme in SPECIAL_SCHEMES and host == found.domain, (
-                f'{candidate!r} is {found.domain}, a browser reads {host!r}')
-            assert urlsplit(candidate).netloc.lower() == authority.lower() and '@' not in authority, candidate
+            assert scheme in _DEFAULT_PORT and host is not INVALID and host.rstrip('.') == found.domain, (
+                f'{candidate!r} is {found.domain}, a browser reads {scheme!r} {host!r}')
+            parts = urlsplit(candidate)
+            assert '@' not in parts.netloc, candidate
+            authority_port = urlsplit(f'//{storefront.domain_authority(found)}').port
+            assert parts.port in ({authority_port} if authority_port else {None, _DEFAULT_PORT[scheme]}), candidate
 
 
 # None is budgeted: no regex here has a backtracking shape. The redirect, request-host, webfinger and resolver

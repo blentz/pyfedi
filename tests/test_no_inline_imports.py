@@ -23,7 +23,7 @@ from tests.app_source import app_trees
 
 APP = pathlib.Path(__file__).resolve().parent.parent / 'app'
 
-KEPT = 85
+KEPT = 84
 TAGS = ('# lazy:', '# cycle:')
 
 

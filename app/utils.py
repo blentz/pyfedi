@@ -60,6 +60,7 @@ import boto3
 from app import db, cache, httpx_client, celery, get_ip_address, plugins, shaped_memo_name
 from app.onion import is_onion_request
 from app.pinned_http import fetch_deadline, is_refused_address
+from app.rsa_keys import RsaKeys
 from app.local_only import local_only_visible, without_local_only_actors
 from app.visibility import OPEN_VISIBILITIES, listable_sql, visible_to_sql
 from app.constants import *
@@ -4369,7 +4370,6 @@ def community_moderators(community_id):
 
 
 def finalize_user_setup(user):
-    from app.activitypub.signature import RsaKeys  # cycle: app.activitypub.signature imports from this module
     user.verified = True
     user.last_seen = utcnow()
     if user.private_key is None and user.public_key is None:

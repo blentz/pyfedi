@@ -528,7 +528,7 @@ def pooled_domain_keys():
     app.models' name is replaced: RsaKeys itself, and every other caller of it, is untouched."""
     previous = app_models.RsaKeys
     app_models.RsaKeys = _PooledRsaKeys
-    yield
+    yield previous   # the class it replaced, for the test that the hook's production path binds the real one
     app_models.RsaKeys = previous
 
 
