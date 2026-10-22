@@ -325,6 +325,19 @@ def test_a_remote_community_receives_the_update_unwrapped(
     assert 'endpoints' not in group   # its server's shared inbox is not known
 
 
+def test_a_remote_group_with_no_inbox_is_sent_nothing(db_session, http_mock, caplog):
+    """A remote community whose inbox was never stored: the Update has nowhere to go, so it is not built or sent
+    (no route is registered: http_mock fails on any request), and a line is logged."""
+    s = _seed(local_community=False, with_keys=True)
+    s.community.ap_inbox_url = None
+    _make_deliverable(s)
+
+    with caplog.at_level('INFO'):
+        edit_community(None, s.user.id, s.community.id)
+
+    assert 'has no inbox' in caplog.text
+
+
 def test_a_non_moderator_sends_nothing(db_session, http_mock):
     """`:62`'s true arm. Reached only past `:59`, so the community must be
     neither local_only nor (post-fix) private.

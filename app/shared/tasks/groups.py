@@ -62,6 +62,9 @@ def edit_community(send_async, user_id, community_id):
 
                 if not community.is_moderator(user):
                     return
+                if not community.is_local() and not community.ap_inbox_url:
+                    current_app.logger.info(f'Group Update for community {community.id} not sent: it has no inbox')
+                    return
 
                 # Named on the owners' domains (plan C3), from the rows, as a Celery worker has no request: the
                 # Update is the moderator's activity, the Group and its Announce the community's. A remote
