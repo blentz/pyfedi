@@ -27,8 +27,8 @@ import app.shared.community as shared_community
 # The module, not the names: app.shared.post reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.post)
 import app.shared.post as shared_post
-from app.federation_urls import domain_site_name
-from app.storefront import current_storefront, default_domain, domain_base_url, hosted_instance_ids, public_registration_open, storefront_link, storefront_memo_name, storefront_url
+from app.federation_urls import domain_site_name, owner_domain
+from app.storefront import DomainInfo, current_storefront, default_domain, domain_base_url, hosted_instance_ids, public_registration_open, storefront_link, storefront_memo_name, storefront_url
 from app.local_only import community_local_only, federating_clause, user_local_only, without_local_only_actors
 from app.visibility import can_view, visible_to_sql
 
@@ -1413,10 +1413,15 @@ def advertised_registration_mode() -> str:
     return g.site.registration_mode if public_registration_open(current_storefront()) else 'Closed'
 
 
+def described_domain() -> DomainInfo:
+    """The domain the site documents describe: a federating storefront itself (plan C3), so nothing a sister domain
+    publishes names hell.cloud; a local-only one (the onion) the default domain's site, as before."""
+    return current_storefront() if current_storefront().federates else default_domain()
+
+
 def site_view(user) -> dict:
     logo = g.site.logo if g.site.logo else '/static/images/piefed_logo_icon_t_75.png'
-    # a federating storefront describes itself (plan C3); a local-only one (the onion) the default domain's site
-    storefront = current_storefront() if current_storefront().federates else default_domain()
+    storefront = described_domain()
 
     site = {
         "enable_downvotes": g.site.enable_downvotes,
@@ -1424,7 +1429,7 @@ def site_view(user) -> dict:
         "registration_mode": advertised_registration_mode(),
         "name": domain_site_name(storefront, g.site),   # a sister domain is named by itself
         "actor_id": f"{domain_base_url(storefront)}/",
-        "user_count": users_total(),
+        "user_count": users_total(storefront.instance_id),
         "all_languages": []
     }
 
@@ -1460,6 +1465,9 @@ def site_view(user) -> dict:
         "site": site
     }
     for admin in Site.admins():
+        home = owner_domain(admin)
+        if not storefront.is_default and (home is None or home.domain != storefront.domain):
+            continue   # a sister domain names only its own admins: another domain's would name that domain
         if user or not user_local_only(admin):   # a logged-out caller is shown no local-only account
             v1['admins'].append(user_view(user=admin, variant=2))
     if user:
@@ -1470,6 +1478,7 @@ def site_view(user) -> dict:
 
 def site_instance_chooser_view():
     logo = g.site.logo if g.site.logo else '/static/images/piefed_logo_icon_t_75.png'
+    storefront = described_domain()
     # Site.language_id is nullable and an instance that has never chosen one
     # leaves it so, which made `language.id` below an AttributeError: the
     # instance chooser -- the page a NEW instance is most likely to be asked
@@ -1511,14 +1520,14 @@ def site_instance_chooser_view():
         } if language else None,
         'nsfw': g.site.enable_nsfw,
         'newbie_friendly': num_topics() >= 3,
-        'name': g.site.name,
+        'name': domain_site_name(storefront, g.site),
         'elevator_pitch': get_setting('elevator_pitch', ''),
         'description': g.site.description or '',
         'about': g.site.about_html or '',
         'sidebar': g.site.sidebar_html or '',
         'logo_url': f"{storefront_url()}{logo}",
         'maturity': maturity,
-        'mau': active_month(instance_id=default_domain().instance_id),   # other servers read it: row 1's only
+        'mau': active_month(instance_id=storefront.instance_id),   # the described domain's own accounts
         'can_make_communities': not g.site.community_creation_admin_only,
         'defederation': list(set([instance.domain for instance in defed_list])),
         'trusts': list(set([instance.domain for instance in trusted_list])),
@@ -1613,12 +1622,13 @@ def cached_modlist_for_user(user):
 
 
 @cache.memoize(timeout=3000)
-def users_total():
-    """The default domain's accounts: what other servers and logged-out callers are told, as NodeInfo tells them. A
-    hosted local-only domain's accounts are on its own instance row, so they are not counted."""
+def users_total(instance_id: int | None = None):
+    """The accounts on `instance_id`'s row (the default domain's when None): what other servers and logged-out callers
+    are told, as NodeInfo tells them. A hosted local-only domain's accounts are on its own instance row, so they are
+    not counted on another domain's. The row is part of the memo key."""
     return db.session.execute(text(
         'SELECT COUNT(*) as c FROM "user" WHERE ap_id is null AND verified is true AND banned is false AND deleted is false'
-        ' AND instance_id = :instance_id'), {'instance_id': default_domain().instance_id}).scalar()
+        ' AND instance_id = :instance_id'), {'instance_id': instance_id or default_domain().instance_id}).scalar()
 
 
 def moderating_communities_view(user):
