@@ -7,6 +7,7 @@ published call (ActingTask.apply_async's eager branch hands Task.apply the same 
 and `run` runs it later with no request of any kind: what it names then came from the headers alone, through the
 same task_prerun/task_postrun handlers a worker runs.
 """
+import contextlib
 import threading
 from types import SimpleNamespace
 
@@ -17,18 +18,26 @@ from celery import Task
 from flask_login import login_user
 
 from app import db
-from app.activitypub.util import refresh_user_profile
+from app.activitypub.util import refresh_user_profile, remote_object_to_json
+from app.admin.routes import import_bans_task
+from app.admin.util import move_community_images_to_here, process_topic_communities
 from app.activitypub.signature import HttpSignature
 from app.celery_acting import ACTING_HEADER, ActingTask, _queuing_domain_id, _runs, _stop_acting, queued_domain_id
 from app.discovery.credits import fetch_feed
-from app.models import Post, SiteDomain
+from app.discovery.sync import poll_synced_community, reconcile_sync_task
+from app.models import DiscoverySync, Post, SiteDomain
+from app.relays.expiry import expire_relayed_posts
+from app.relays.inbound import process_relayed_announce, send_relay_follow_accept
 from app.shared.tasks import task_selector
+from app.shared.tasks.maintenance import add_remote_communities, check_instance_health, monitor_healthy_instances, \
+    refresh_instance_chooser, sync_defederation_subscriptions
 from app.shared.tasks.pages import make_post
 from app.storefront import acting_domain, acting_for, clear_domain_cache, domain_for_host
+from app.utils import download_defeds_worker
 from tests.factories import inbox_activity, make_community, make_instance, make_user
 from tests.test_per_domain_signing import ACTOR_URL, HELL_KEY_ID, REMOTE, SHOP, SHOP_KEY_ID, _key_id, \
     _signing_site, hell_ua, shop_ua
-from tests.two_domains import HELL, two_domains  # noqa: F401 -- two_domains is a fixture
+from tests.two_domains import HELL, request_on, two_domains  # noqa: F401 -- two_domains is a fixture
 
 
 class Domains:
@@ -232,3 +241,87 @@ def test_a_workers_request_carries_the_domain_as_an_attribute():
 def test_a_postrun_for_a_task_that_never_started_acting_is_a_no_op():
     _stop_acting(task_id='never-ran')
     assert 'never-ran' not in _runs
+
+
+# --------------------------------------------------------------------------
+# Fix round 2: instance-level tasks are the default domain's, whoever queued them
+# --------------------------------------------------------------------------
+
+PROBE_URL = f'{REMOTE}/objects/probe'
+
+
+class _Stop(Exception):
+    """Ends a task once the probe has fetched: only what it fetched as is under test."""
+
+
+def _probe(*_args, **_kwargs):
+    """A fetch as the task's acting domain (unsigned, then signed on the 401), made where the task begins."""
+    remote_object_to_json(PROBE_URL, retry_delay=0)
+    raise _Stop()
+
+
+def _poll_row(domains):
+    community = make_community('synced', 'tube.example')
+    db.session.add(DiscoverySync(community_id=community.id, follow_target=community.ap_profile_id))
+    db.session.commit()
+    return (community.id,)
+
+
+INSTANCE_LEVEL = [
+    # (task, the name its body calls first, which the probe stands in for, its arguments)
+    (reconcile_sync_task, 'app.discovery.sync.reconcile_sync', lambda domains: ()),
+    (poll_synced_community, 'app.discovery.sync.run_backfill', _poll_row),
+    (import_bans_task, 'app.admin.routes.get_task_session', lambda domains: ('{}',)),
+    (download_defeds_worker, 'app.utils.get_task_session', lambda domains: (1, 'lists.example')),
+    (process_topic_communities, 'app.admin.util.get_task_session', lambda domains: ({}, 1)),
+    (move_community_images_to_here, 'app.admin.util.get_task_session', lambda domains: (1,)),
+    (send_relay_follow_accept, 'app.relays.inbound.get_task_session', lambda domains: (1, {})),
+    (expire_relayed_posts, 'app.relays.expiry.relay_retention_days', lambda domains: ()),
+    (sync_defederation_subscriptions, 'app.shared.tasks.maintenance.get_task_session', lambda domains: ()),
+    (check_instance_health, 'app.shared.tasks.maintenance.get_task_session', lambda domains: ()),
+    (monitor_healthy_instances, 'app.shared.tasks.maintenance.get_task_session', lambda domains: ()),
+    (refresh_instance_chooser, 'app.shared.tasks.maintenance.get_task_session', lambda domains: ()),
+    (add_remote_communities, 'app.shared.tasks.maintenance.get_request', lambda domains: ()),
+]
+
+
+@pytest.mark.parametrize('task, hook, arguments', INSTANCE_LEVEL, ids=[row[0].name.rsplit('.', 1)[-1]
+                                                                        for row in INSTANCE_LEVEL])
+def test_an_instance_level_task_a_shop_admin_queues_is_the_defaults(app, domains, router, queued, monkeypatch, task,
+                                                                     hook, arguments):
+    """Relays, the discovery sync, ban and defederation imports, topic imports and the maintenance probes are the
+    instance's housekeeping: queued from a request a shop-home admin makes (stamped shop), each still fetches as
+    hell.cloud, unsigned and signed."""
+    route = router.get(PROBE_URL).mock(side_effect=lambda request: httpx.Response(
+        404 if 'Signature' in request.headers else 401))
+    monkeypatch.setattr(hook, _probe)
+    args = arguments(domains)
+    context = _signed_in(app, domains.shop_user)
+    try:
+        task.delay(*args)
+    finally:
+        context.pop()
+    [entry] = queued
+    assert entry[3]['headers'][ACTING_HEADER] == domains.shop.id   # the stamp is the shop's...
+    with contextlib.suppress(_Stop):   # a task that records its failures (the sync poll) does not re-raise it
+        run(entry)
+    unsigned, signed = (call.request for call in route.calls)   # the probe ran: two fetches
+    assert unsigned.headers['User-Agent'] == signed.headers['User-Agent'] == hell_ua(app)   # ...the work hell's
+    assert _key_id(signed) == HELL_KEY_ID
+    assert acting_domain() == domains.hell and not _runs
+
+
+def test_a_relayed_announce_queued_from_a_shop_inbox_is_fetched_as_the_default(app, domains, router, queued):
+    """A relay is the default domain's: an Announce it delivers to a sister's inbox (an anonymous request there acts
+    as the sister, and the task is stamped so) is still fetched as hell.cloud. The task's own flow, unpatched."""
+    route = router.get(PROBE_URL).mock(side_effect=lambda request: httpx.Response(
+        404 if 'Signature' in request.headers else 401))
+    with request_on(app, domains.shop):
+        assert acting_domain() == domains.shop
+        process_relayed_announce.delay(1, PROBE_URL)
+    [entry] = queued
+    assert entry[3]['headers'][ACTING_HEADER] == domains.shop.id
+    run(entry)
+    unsigned, signed = (call.request for call in route.calls)
+    assert unsigned.headers['User-Agent'] == signed.headers['User-Agent'] == hell_ua(app)
+    assert _key_id(signed) == HELL_KEY_ID

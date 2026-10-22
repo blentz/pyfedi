@@ -15,7 +15,7 @@ from app.community.routes import do_subscribe
 from app.community.util import search_for_community
 from app.constants import POST_TYPE_IMAGE
 from app.federation_urls import activity_id
-from app.storefront import home_storefront, hosted_instance_ids
+from app.storefront import acting_as_default, home_storefront, hosted_instance_ids
 from app.models import User, Community, Instance, CommunityMember, Post, Topic
 from app.utils import gibberish, topic_tree, get_request, store_files_in_s3, ensure_directory_exists, guess_mime_type, get_task_session, patch_db_session, sanitize_svg_bytes, \
     remote_instance_software, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, PAGE_MAX_BYTES, canonical_host
@@ -162,6 +162,7 @@ def topics_for_form_children(topics, current_topic: int, depth: int) -> List[Tup
 
 
 @celery.task
+@acting_as_default()   # instance-level: the default domain's, whoever queued it (plan C3)
 def move_community_images_to_here(community_id):
     with current_app.app_context():
         session = get_task_session()
@@ -451,6 +452,7 @@ def create_topic_and_children(topic_data, parent_new_topic):
 
 
 @celery.task
+@acting_as_default()   # instance-level: the default domain's, whoever queued it (plan C3)
 def process_topic_communities(topic_data, topic_id):
     """Process communities for a topic, subscribing to unknown ones."""
 
