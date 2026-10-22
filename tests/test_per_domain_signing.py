@@ -257,6 +257,8 @@ def test_with_no_instance_key_nothing_is_signed(app, domains, router):
     ('https://test.piefed.local.evil/post/1', False),
     ('http://abc.onion/post/1', False),        # local-only: never an object a peer may name
     ('https://shop.example:8443/post/1', False),
+    ('http://shop.example/post/1', False),        # shop is https: another scheme is not its URL
+    ('http://test.piefed.local/post/1', False),   # nor is SERVER_URL's host over another scheme
     ('//shop.example/post/1', False),
     ('javascript://shop.example/post/1', False),
     (None, False),
