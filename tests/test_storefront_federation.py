@@ -178,10 +178,12 @@ def test_rfc9421_signed_inbox_on_alias(app, onion, signing_peer, monkeypatch):
 
 @pytest.mark.usefixtures('redis_double')
 def test_an_rfc9421_signature_for_the_canonical_origin_does_not_verify_on_the_alias(app, onion, signing_peer,
-                                                                                  monkeypatch):
+                                                                                  monkeypatch, http_mock):
     """R-HOSTPIN holds per storefront: a signature covering https://test.piefed.local/inbox, replayed with Host
-    abc.onion, names another target URI than the one it arrived at."""
+    abc.onion, names another target URI than the one it arrived at. (The signer's key is refetched once, as the
+    alias's instance actor since plan C3, and is the same.)"""
     monkeypatch.setitem(app.config, 'DEBUG', True)
+    http_mock.get(signing_peer.ap_profile_id).respond(404)
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     bob = _local_user('bob', manually_approves=True)
     body = json.dumps(_follow_of(bob, signing_peer)).encode('utf8')
