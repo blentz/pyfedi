@@ -29,7 +29,7 @@ from app.storefront import acting_domain, acting_for, clear_domain_cache, domain
 from app.user.utils import search_for_user
 from app.utils import authorise_api_user, user_agent
 from tests.factories import a_keypair, inbox_activity, make_community, make_instance, make_site, make_user
-from tests.two_domains import HELL, ONION, two_domains  # noqa: F401 -- two_domains is a fixture
+from tests.two_domains import HELL, ONION, request_on, two_domains  # noqa: F401 -- two_domains is a fixture
 
 SHOP = 'shop.example'
 REMOTE = 'https://remote.example'
@@ -400,6 +400,43 @@ def test_a_create_sent_to_both_domains_inboxes_is_processed_once(app, domains, s
 # --------------------------------------------------------------------------
 # Fix round 1
 # --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize('host, key_id, ua', [(SHOP, SHOP_KEY_ID, shop_ua), (HELL, HELL_KEY_ID, hell_ua),
+                                              (ONION, HELL_KEY_ID, hell_ua)])
+def test_an_anonymous_request_acts_as_the_federating_storefront_it_came_in_on(app, domains, host, key_id, ua):
+    """Ruling (a): with no account acting, a request on a federating sister domain acts as that domain (an inbox
+    POST to shop.example is shop's to answer); the onion, local-only, acts as the default."""
+    with request_on(app, domain_for_host(host)):
+        assert acting_domain().domain == (SHOP if host == SHOP else HELL)
+        assert user_agent() == ua(app)
+
+
+@pytest.mark.usefixtures('redis_double')
+@pytest.mark.parametrize('host, key_id, ua', [(SHOP, SHOP_KEY_ID, shop_ua), (HELL, HELL_KEY_ID, hell_ua)])
+def test_a_rotated_keys_refetch_is_signed_by_the_inbox_it_was_delivered_to(app, domains, signing_peer, router,
+                                                                         monkeypatch, host, key_id, ua):
+    """A signer whose stored key is stale delivers to shop.example's inbox: the one refetch of its actor is the
+    shop instance actor's, named as the shop, never hell.cloud seconds after the shop was written to."""
+    monkeypatch.setitem(app.config, 'DEBUG', True)
+    dispatched = []
+    monkeypatch.setattr('app.activitypub.routes.process_inbox_request', lambda *a, **kw: dispatched.append(a))
+    current_pem = signing_peer.public_key
+    while signing_peer.public_key == current_pem:   # rotated: the stored key is another pool pair's
+        signing_peer.public_key = a_keypair()[1]
+    db.session.commit()
+    refetch = router.get(signing_peer.ap_profile_id).respond(200, json={
+        'id': signing_peer.ap_profile_id, 'type': 'Person',
+        'publicKey': {'id': f'{signing_peer.ap_profile_id}#main-key', 'owner': signing_peer.ap_profile_id,
+                      'publicKeyPem': current_pem}})
+    activity = _follow_of(domains.shop_user, signing_peer)
+    _uri, headers, body = HttpSignature.signed_request(f'https://{host}/inbox', activity, signing_peer.private_key,
+                                                       f'{signing_peer.ap_profile_id}#main-key', send_via_async=True)
+    response = app.test_client().post('/inbox', data=body, headers=headers, content_type='application/activity+json')
+    assert response.status_code == 200
+    assert len(dispatched) == 1
+    sent = refetch.calls.last.request
+    assert _key_id(sent) == key_id and sent.headers['User-Agent'] == ua(app)
 
 
 def test_relay_retention_counts_an_account_local_by_its_url_not_by_a_prefix(app, domains):
