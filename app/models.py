@@ -82,10 +82,10 @@ def is_hosted_url(url) -> bool:
 
 
 def federation_base(obj) -> str:
-    """The origin a post's or comment's URLs are named on, as `federation_urls.object_base` decides it (that module
-    imports this one, so this one cannot import it): the author's domain when the author is ours, else the domain of
-    the local community it is in, else the default domain's (SERVER_URL). Never the storefront a request came in on:
-    a Celery task has none."""
+    """The origin a post's or comment's URLs are named on: the author's domain when the author is ours, else the
+    domain of the local community it is in, else the default domain's (SERVER_URL). `federation_urls.object_base`
+    returns this for a post or comment (that module imports this one, so this one cannot import it). Never the
+    storefront a request came in on: a Celery task has none."""
     for actor in (obj.author, obj.community):
         if actor is not None and actor.is_local():
             return storefront.domain_base_url(actor.home_domain())

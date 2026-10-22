@@ -68,7 +68,10 @@ def naming_domain(obj) -> DomainInfo | None:
 
 def object_base(obj) -> str:
     """The origin our URLs of a post or comment are named on: its `naming_domain`'s, else the default domain's
-    (SERVER_URL), as before C3. Unlike `owner_base`, never raises."""
+    (SERVER_URL), as before C3. For a post or comment it is the models' own `federation_base`, so the two cannot
+    disagree. Unlike `owner_base`, never raises."""
+    if isinstance(obj, (models.Post, models.PostReply)):
+        return models.federation_base(obj)
     domain = naming_domain(obj)
     return domain_base_url(domain if domain is not None else default_domain())
 
