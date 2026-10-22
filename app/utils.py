@@ -79,7 +79,7 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     ServerViewMember
 from app.local_names import local_named
 from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, current_storefront, canonicalise_links, canonicalise_text, domain_base_url, \
-    acting_domain, domain_authority, \
+    act_in_this_request, acting_domain, domain_authority, \
     boosted_order_by, boosted_top_sql, domain_by_id, hosted_instance_ids, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
 from collections import Counter
 from flask import has_request_context
@@ -5278,7 +5278,7 @@ def authorise_api_user(auth, return_type=None, id_match=None) -> User | dict | i
         if id_match and user.id != id_match:
             raise Exception('incorrect_login')
         if has_request_context():   # the account acting in this request: its fetches name its domain (acting_domain)
-            g.acting_domain = user.home_domain()
+            act_in_this_request(user.home_domain())
         if return_type and return_type == 'model':
             return user
         elif return_type and return_type == 'dict':

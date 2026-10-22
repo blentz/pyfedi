@@ -543,17 +543,27 @@ def current_instance_id() -> int:
 _acting: ContextVar[DomainInfo | None] = ContextVar('storefront_acting_domain', default=None)
 
 
+# Where `act_in_this_request` keeps the API caller's domain: the request's environ, which ends with the request (g is
+# the app context's, and outlives a request pushed inside an app context a test or a worker holds)
+_ACTING_ENVIRON = 'piefed.acting_domain'
+
+
 def acting_domain() -> DomainInfo:
     """The federating domain an instance-level request (an unsigned fetch's User-Agent, a fetch signed by an instance
     actor) is made as, plan C3: the one an `acting_for` block names; else, in a request, the home domain of the local
-    account acting in it (the signed-in user, or the API caller `authorise_api_user` accepted), as a fetch a shop
+    account acting in it (the API caller `authorise_api_user` accepted, or the signed-in user), as a fetch a shop
     account caused is the shop's; else the default domain, for relays, housekeeping and anything no account caused.
     A local-only domain (the onion) makes no request another server sees named by it, so its accounts act as the
     default domain, as before C3."""
     domain = _acting.get()
     if domain is None and has_request_context():
-        domain = g.get('acting_domain') or _signed_in_domain()
+        domain = request.environ.get(_ACTING_ENVIRON) or _signed_in_domain()
     return domain if domain is not None and domain.federates else default_domain()
+
+
+def act_in_this_request(domain: DomainInfo) -> None:
+    """Make the rest of this request act as `domain` (`acting_domain`): an API caller's home domain."""
+    request.environ[_ACTING_ENVIRON] = domain
 
 
 def _signed_in_domain() -> DomainInfo | None:
