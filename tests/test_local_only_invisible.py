@@ -276,9 +276,9 @@ def test_when_the_default_domain_does_not_federate_its_unstamped_accounts_are_lo
     server = app.config['SERVER_NAME']
     assert _webfinger(app, f'acct:bob@{server}').status_code == 404
     assert _webfinger(app, f'acct:clearnet@{server}').status_code == 404
-    usage = _get(app, '/nodeinfo/2.0').json['usage']
-    assert usage['users']['total'] == 0
-    assert _get(app, '/api/v3/site').json['site_view']['counts']['communities'] == 0
+    # a domain that federates with no one describes no server to one (plan C3, task 4)
+    assert _get(app, '/nodeinfo/2.0').status_code == 404
+    assert _get(app, '/api/v3/site').status_code == 404
 
 
 def test_when_every_domain_federates_nothing_is_left_out(app, world):
@@ -286,7 +286,7 @@ def test_when_every_domain_federates_nothing_is_left_out(app, world):
     db.session.execute(update(SiteDomain).where(SiteDomain.id == world.onion.id).values(federates=True))
     db.session.commit()
     clear_domain_cache()
-    assert _webfinger(app, 'acct:onionite@abc.onion').status_code == 404   # WebFinger answers only for the default domain until C3
+    assert _webfinger(app, 'acct:onionite@abc.onion').status_code == 404   # the onion's to answer, not the default domain's
     assert _webfinger(app, f"acct:~nofeed@{app.config['SERVER_NAME']}").status_code == 404   # the feed lookup runs
     assert _get(app, '/nodeinfo/2.0').json['usage']['users']['total'] == 3
     assert _get(app, '/api/v3/site').json['site_view']['counts']['communities'] == 2

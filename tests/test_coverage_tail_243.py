@@ -281,8 +281,9 @@ class TestWhatTheSiteDictPublishes:
         """`lemmy_site_data()` -- the `/api/v3/site` payload, which is what a Lemmy client
         reads to learn this instance's languages and emojis."""
         from app.activitypub.util import lemmy_site_data
+        from app.storefront import default_domain
 
-        return lemmy_site_data()
+        return lemmy_site_data(default_domain())
 
     def test_every_language_is_listed_but_only_two_are_discussion_languages(self, seeded):
         """`all_languages` is the whole table; `discussion_languages` is hardcoded to

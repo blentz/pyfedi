@@ -93,12 +93,22 @@ def test_webfinger_for_a_community_names_its_domains_row(app, twins):
     assert json.loads(response.data)['links'][1]['href'] == twins[1].public_url()
 
 
-def test_webfinger_answers_only_for_the_default_domain(app, twins):
-    """Until plan C3 builds the subject from the row's domain, a row on another domain answers 404, federating or not."""
-    for resource in (f'acct:bob@{SHOP}', f'acct:art@{SHOP}', f'acct:bob@{SHOP.upper()}', f'http://{SHOP}/u/bob',
-                     f'acct:bob@{ONION}'):
+def test_webfinger_answers_for_a_row_only_on_its_own_federating_domain(app, twins):
+    """Each federating domain answers WebFinger for its own rows, named on it, and for no other domain's (plan C3,
+    task 4): the shop's bob and art are the shop's to answer, hell's are hell's, and the onion's are no one's."""
+    shop_bob, shop_art = twins[4], twins[5]
+    for resource, row in ((f'acct:bob@{SHOP}', shop_bob), (f'acct:art@{SHOP}', shop_art),
+                          (f'acct:bob@{SHOP.upper()}', shop_bob), (f'http://{SHOP}/u/bob', shop_bob)):
         cache.clear()
         assert get(app, f'/.well-known/webfinger?resource={resource}', headers={}).status_code == 404, resource
+        answer = get(app, f'/.well-known/webfinger?resource={resource}', host=SHOP, headers={})
+        assert answer.status_code == 200, resource
+        assert json.loads(answer.data)['subject'] == f'acct:{"art" if row is shop_art else "bob"}@{SHOP}'
+        assert json.loads(answer.data)['links'][1]['href'] == row.public_url()
+    for host in (HELL, SHOP):
+        assert get(app, f'/.well-known/webfinger?resource=acct:bob@{ONION}', host=host, headers={}).status_code == 404
+        assert get(app, f'/.well-known/webfinger?resource=acct:bob@{HELL}', host=host,
+                   headers={}).status_code == (200 if host == HELL else 404)
 
 
 @pytest.mark.parametrize('path', ['outbox', 'featured', 'moderators', 'followers', 'following'])
