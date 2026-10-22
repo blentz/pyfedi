@@ -3,6 +3,7 @@ replies (owner ruling 2026-10-21, plan C2 task 6 fix round 1). They are left out
 their pages and feeds answer 404; a logged-in user still sees them. On hell.cloud their names read `bob@abc.onion`, so
 the onion hostname is what each test looks for. hell.cloud's own accounts and communities are the control."""
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 
@@ -243,6 +244,22 @@ def test_the_alpha_apis_lists_still_name_them_to_a_logged_in_caller(app, api, pa
     response = api_get(app, path, api, True)
     assert response.status_code == 200
     assert ONION in response.get_data(as_text=True)
+
+
+@pytest.mark.parametrize('token', ['Bearer garbage', 'Bearer ', 'Basic dXNlcjpwYXNz', 'expired'])
+@pytest.mark.parametrize('query', ['!art', '@bob'])
+def test_suggest_completion_answers_a_token_that_fails_to_authorise_as_logged_out(app, api, monkeypatch, token,
+                                                                                    query):
+    """As hell.cloud always did: the Authorization header is optional here, and a stale one is no error (final wave)."""
+    if token == 'expired':
+        monkeypatch.setitem(app.config, 'JWT_EXPIRY_DAYS', -1)
+        token = f'Bearer {api.hell_bob.encode_jwt_token()}'
+    forget_login()
+    response = app.test_client().get(f'/api/alpha/suggest_completion?q={quote(query)}', base_url=HOSTS[HELL],
+                                     headers={'Authorization': token})
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert HELL in body and ONION not in body
 
 
 @pytest.mark.parametrize('signed_in', [False, True])

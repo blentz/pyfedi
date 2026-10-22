@@ -20,11 +20,13 @@ from sqlalchemy import desc, event, text
 from app import db
 from app.api.alpha.utils.community import get_community_list
 from app.api.alpha.utils.post import get_post_list, get_post_list2
-from app.models import Community, Post, Site, utcnow
+from app.community.server_view_list import paginate_union
+from app.models import Community, Post, PostReply, Site, utcnow
 from app.storefront import (BOOST_WINDOW, OWN_DOMAIN_BOOST, SISTER_DOMAIN_BOOST, boosted_order_by, boosted_posts,
                             boosted_top_sql, domain_boost_expr, domain_boost_sql, sister_instance_ids, tiered_post_ids)
 from app.utils import get_deduped_post_ids, post_ids_to_models
 from tests.factories import make_community, make_instance, make_post, make_user
+from tests.test_search_routes import _post, _reply
 from tests.two_domains import ONION, request_on, two_domains  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -181,7 +183,6 @@ def test_a_community_list_puts_its_own_domains_community_first(app, two_domains)
 
 @pytest.mark.parametrize('sort_by, kind', [('top', 'posts'), ('date', 'posts'), ('top', 'comments'), ('date', 'comments')])
 def test_a_search_tie_goes_to_the_domains_own_content(world, app, sort_by, kind):
-    from tests.test_search_routes import _post, _reply
     for who in ('onion', 'hell'):
         post = _post(world.community, world.authors[who], f'{who} article', instance_id=world.authors[who].instance_id,
                      up_votes=1, posted_at=utcnow())
@@ -191,7 +192,6 @@ def test_a_search_tie_goes_to_the_domains_own_content(world, app, sort_by, kind)
     posts = Post.query.all()
     for post in posts:    # a tie on the sort key, so only the tier orders them
         post.posted_at = utcnow().replace(microsecond=0) - timedelta(hours=1)
-    from app.models import PostReply
     for reply in PostReply.query.all():
         reply.posted_at = utcnow().replace(microsecond=0) - timedelta(hours=1)
     db.session.commit()
@@ -308,7 +308,6 @@ def test_the_merge_of_tiers_pages_as_the_naive_order_does(crowd, domain, rank, t
 # ------------------------------------------------------------------------ the web community list
 
 def test_the_community_list_puts_its_own_domains_community_first(app, two_domains):  # noqa: F811
-    from app.community.server_view_list import paginate_union
     hell, onion = two_domains.domains
     stamp = utcnow()
     for name, domain in (('a_onion', onion), ('b_hell', hell)):
@@ -470,6 +469,50 @@ def test_the_api_walks_a_sticky_led_feed_to_its_end_in_the_boosted_order(pinned,
     with request_on(pinned.app, pinned.on[domain]):
         naive = [p.id for p in Post.query.order_by(desc(lead), *boosted_order_by(rank, tail)).all()]
     walked, cursors = api_walk(pinned, domain, sort, **data)
+    assert walked == naive and len(naive) == 12 and len(cursors) == 5
+
+
+# ------------------------------------------------------------------------ two sticky leads
+
+@pytest.fixture
+def two_pins(world):
+    """Twelve posts, community stickies and instance stickies apart and together, ranked so that the boosts
+    interleave the tiers within each of the four lead groups."""
+    now = utcnow()
+    for index in range(12):
+        who = ('remote', 'hell', 'onion')[index % 3]
+        ranking = 5.0 + ((index * 5) % 12) * 0.1
+        world.put(who, ranking=ranking, ranking_scaled=ranking, sticky=index % 4 < 2, instance_sticky=index % 2 == 0,
+                  posted_at=now - timedelta(minutes=index))
+    return world
+
+
+@pytest.mark.parametrize('domain', ['hell', 'onion'])
+@pytest.mark.parametrize('rank, tail', [('ranking', ('posted_at',)), ('ranking_scaled', ('ranking', 'posted_at'))])
+def test_a_keyset_walk_led_by_both_stickies_is_the_naive_order(two_pins, domain, rank, tail):
+    lead, rank, tail = (Post.sticky, Post.instance_sticky), getattr(Post, rank), tuple(getattr(Post, c) for c in tail)
+    with request_on(two_pins.app, two_pins.on[domain]):
+        sticky_first = Post.query.order_by(desc(Post.sticky)).order_by(desc(Post.instance_sticky))
+        naive = [p.id for p in sticky_first.order_by(*boosted_order_by(rank, tail)).all()]
+        walked, bookmark = [], None
+        while True:
+            page = get_page(boosted_posts(sticky_first, rank, tail, 2, bookmark, lead), per_page=2, page=bookmark)
+            walked += [p.id for p in page]
+            if not page.paging.has_next:
+                break
+            bookmark = page.paging.bookmark_next
+    assert walked == naive and len(naive) == 12
+
+
+@pytest.mark.parametrize('sort, rank, tail', [('Hot', 'ranking', ('posted_at',)),
+                                              ('Scaled', 'ranking_scaled', ('ranking', 'posted_at'))])
+def test_the_api_walks_a_feed_led_by_both_stickies_in_the_boosted_order(two_pins, sort, rank, tail):
+    """A Local listing named by community: its community stickies lead, and its instance stickies after them."""
+    rank, tail = getattr(Post, rank), tuple(getattr(Post, c) for c in tail)
+    with request_on(two_pins.app, two_pins.on['hell']):
+        naive = [p.id for p in Post.query.order_by(desc(Post.sticky), desc(Post.instance_sticky),
+                                                   *boosted_order_by(rank, tail)).all()]
+    walked, cursors = api_walk(two_pins, 'hell', sort, type_='Local', community_name='art@test.piefed.local')
     assert walked == naive and len(naive) == 12 and len(cursors) == 5
 
 

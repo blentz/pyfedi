@@ -484,7 +484,12 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
 def get_suggestion(data, auth=None):
     query = data['q']
     result = []
-    visible = bool(auth) and authorise_api_user(auth) is not None   # a logged-out caller: no local-only row
+    try:   # a logged-out caller sees no local-only row; a token that fails to authorise is logged out, not an error
+        visible = bool(auth) and authorise_api_user(auth) is not None
+    except Exception as refused:
+        if str(refused) != 'incorrect_login':
+            raise
+        visible = False
     if query.startswith('@'):
         if 'post_id' in data:
             people_from_post = without_local_only_actors(User.query.join(PostReply, PostReply.user_id == User.id).
