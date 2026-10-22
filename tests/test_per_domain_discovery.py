@@ -9,6 +9,7 @@ copies (tests/test_c3_golden_documents.py). The onion is local-only: it answers 
 import json
 
 import pytest
+from cachelib import SimpleCache
 from flask import g
 
 import app.api.alpha.routes as alpha_routes
@@ -29,6 +30,13 @@ pytestmark = pytest.mark.usefixtures('golden_site', 'shop_rows', 'site_named_hel
 @pytest.fixture(autouse=True)
 def onion_proxy(app, monkeypatch):
     monkeypatch.setitem(app.config, 'ONION_PROXY_IP', PROXY)
+
+
+@pytest.fixture
+def real_cache(app, monkeypatch):
+    """A working cache for one test: conftest's NullCache stores nothing, so a cached copy answering the wrong host
+    could not show (tests/test_activitypub_util.py `real_cache`)."""
+    monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
 
 
 def get(app, path, host=SHOP):
@@ -108,6 +116,7 @@ def test_the_onion_answers_no_webfinger(app, two_domains, resource):
     assert get(app, webfinger(resource), host=HELL).status_code == (200 if HELL in resource else 404)
 
 
+@pytest.mark.usefixtures('real_cache')
 @pytest.mark.parametrize('first, second', [(SHOP, HELL), (HELL, SHOP)])
 def test_a_webfinger_answer_is_remembered_per_host(app, first, second):
     """The same resource asked of both hosts: each host's own answer, whichever is asked first (Review Focus 3)."""
@@ -193,6 +202,7 @@ CACHED = ['/.well-known/host-meta', '/.well-known/host-meta.json', '/.well-known
           '/nodeinfo/2.0.json', '/nodeinfo/2.1', '/nodeinfo/2.1.json', '/api/v1/instance', '/api/v3/site']
 
 
+@pytest.mark.usefixtures('real_cache')
 @pytest.mark.parametrize('path', CACHED)
 @pytest.mark.parametrize('shop_first', [True, False])
 def test_each_host_gets_its_own_cached_copy(app, path, shop_first):
@@ -206,6 +216,7 @@ def test_each_host_gets_its_own_cached_copy(app, path, shop_first):
     assert SHOP.encode() not in bodies[HELL]
 
 
+@pytest.mark.usefixtures('real_cache')
 @pytest.mark.parametrize('path', CACHED)
 def test_the_onion_answers_no_discovery_document(app, path):
     """The onion federates with no one, so it describes no server to one: 404, as its instance actor is."""
@@ -289,3 +300,19 @@ def test_a_shop_that_takes_no_sign_ups_says_so(app):
     assert json.loads(shop_body(app, '/api/v3/site'))['site_view']['local_site']['registration_mode'] == 'Closed'
     assert json.loads(get(app, '/api/v3/site', host=HELL).data)['site_view']['local_site']['registration_mode'] == \
         'RequireApplication'
+
+
+@pytest.mark.usefixtures('real_cache')
+@pytest.mark.parametrize('path', ['/api/v1/instance/domain_blocks', '/api/v3/federated_instances'])
+@pytest.mark.parametrize('shop_first', [True, False])
+def test_the_site_lists_are_cached_per_host(app, path, shop_first):
+    """M2: each host keeps its own cached copy. A ban made after the first host's copy was cached shows on the
+    second host, whose copy is made after it, and not on the first, whose copy is still the cached one."""
+    first, second = (SHOP, HELL) if shop_first else (HELL, SHOP)
+    before = get(app, path, host=first)
+    assert before.status_code == 200
+    db.session.add(Instance(domain='banned.example', software='lemmy'))
+    db.session.add(BannedInstances(domain='banned.example', reason='spam'))
+    db.session.commit()
+    assert b'banned.example' in get(app, path, host=second).data
+    assert get(app, path, host=first).data == before.data
