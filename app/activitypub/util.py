@@ -39,7 +39,7 @@ from app.local_names import local_named
 from app.federation_urls import activity_id, domain_site_name, instance_actor_public_key, object_base, owner_base, \
     owner_domain
 from app.storefront import DomainInfo, default_domain, domain_authority, domain_base_url, hosted_instance_ids, \
-    instance_id_of
+    instance_id_of, registration_mode_on
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
@@ -6198,10 +6198,9 @@ def lemmy_site_data(domain: DomainInfo):
     site = g.site
     base = domain_base_url(domain)
     logo = site.logo if site.logo else '/static/images/piefed_logo_icon_t_75.png'
-    if site.registration_mode == 'RequireApplication' or site.registration_mode == 'Open':  # spammers crawl /api/v3/site looking for open instances
-        registration_mode = 'RequireApplication'                                            # so never identify ourselves as open
-    else:
-        registration_mode = site.registration_mode
+    registration_mode = registration_mode_on(domain, site)   # C3: this domain's own
+    if registration_mode == 'RequireApplication' or registration_mode == 'Open':  # spammers crawl /api/v3/site looking for open instances
+        registration_mode = 'RequireApplication'                                  # so never identify ourselves as open
     data = {
         "site_view": {
             "site": {
