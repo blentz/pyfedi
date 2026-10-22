@@ -411,3 +411,14 @@ def test_relay_retention_counts_an_account_local_by_its_url_not_by_a_prefix(app,
     local = set(db.session.execute(_local_user_ids()).scalars())
     assert legacy.id in local and lookalike.id not in local
     assert domains.shop_user.id in local and db.session.get(User, domains.shop_user.id).ap_id is None
+
+
+def test_an_api_callers_domain_does_not_outlive_its_request(app, domains):
+    """The API caller's domain is the request's, not the app context's: under one app context (a test's, a
+    worker's) the next request does not inherit it."""
+    with app.app_context():
+        with app.test_request_context():
+            authorise_api_user(f'Bearer {domains.shop_user.encode_jwt_token()}')
+            assert acting_domain() == domains.shop
+        with app.test_request_context():
+            assert acting_domain() == domains.hell
