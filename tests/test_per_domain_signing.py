@@ -22,12 +22,13 @@ from app.activitypub.actor import fetch_remote_actor_data
 from app.activitypub.signature import HttpSignature, parse_signature_header, send_post_request
 from app.activitypub.util import process_announce_of_uri, remote_object_to_json, served_by_us
 from app.constants import APLOG_DUPLICATE, APLOG_IGNORED
-from app.models import ActivityPubLog, Post, Relay, Site, SiteDomain
+from app.models import ActivityPubLog, Post, Relay, Site, SiteDomain, User
+from app.relays.expiry import _local_user_ids
 from app.relays.subscribe import add_relay
 from app.storefront import acting_domain, acting_for, clear_domain_cache, domain_for_host, is_federating_url
 from app.user.utils import search_for_user
 from app.utils import authorise_api_user, user_agent
-from tests.factories import a_keypair, inbox_activity, make_community, make_site
+from tests.factories import a_keypair, inbox_activity, make_community, make_instance, make_site, make_user
 from tests.two_domains import HELL, ONION, two_domains  # noqa: F401 -- two_domains is a fixture
 
 SHOP = 'shop.example'
@@ -395,3 +396,18 @@ def test_a_create_sent_to_both_domains_inboxes_is_processed_once(app, domains, s
     duplicates = ActivityPubLog.query.filter_by(activity_id=activity['id'], result=APLOG_IGNORED[1]).all()
     assert len(duplicates) == 1
 
+
+# --------------------------------------------------------------------------
+# Fix round 1
+# --------------------------------------------------------------------------
+
+
+def test_relay_retention_counts_an_account_local_by_its_url_not_by_a_prefix(app, domains):
+    lookalike = make_user(make_instance('test.piefed.local.evil'), 'mallory')
+    lookalike.ap_profile_id = 'https://test.piefed.local.evil/u/mallory'
+    legacy = make_user(make_instance('legacy.example'), 'legacy')
+    legacy.ap_profile_id = 'https://test.piefed.local/u/legacy'
+    db.session.commit()
+    local = set(db.session.execute(_local_user_ids()).scalars())
+    assert legacy.id in local and lookalike.id not in local
+    assert domains.shop_user.id in local and db.session.get(User, domains.shop_user.id).ap_id is None
