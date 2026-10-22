@@ -330,6 +330,14 @@ def hidden_instance_ids() -> frozenset[int]:
     return frozenset(instance_id_of(row) for row in domain_rows() if not row.federates and instance_id_of(row) != here)
 
 
+def hidden_host_names() -> frozenset[str]:
+    """The host names of the domains whose instance rows `hidden_instance_ids` hides, as a link `Domain` row names a
+    host (lower-case, no leading `www.`): a link to one is not listed or shown off its own storefront either."""
+    here = current_instance_id()
+    names = (row.domain.lower() for row in domain_rows() if not row.federates and instance_id_of(row) != here)
+    return frozenset(name.removeprefix('www.') for name in names)
+
+
 def instance_visible_here(instance_id: int) -> bool:
     """Whether the current storefront shows the instance row `instance_id`: any row but another local-only domain's."""
     return instance_id not in hidden_instance_ids()
