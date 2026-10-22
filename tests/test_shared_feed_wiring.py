@@ -1194,7 +1194,7 @@ def test_feed_remove_community_reuses_the_join_request_uuid(app, db_session):
     expected_uuid = str(jr.uuid)
 
     with patch('app.shared.feed.community_membership', return_value=0):
-        with patch('app.shared.feed.gibberish', return_value='NOTTHEUUID'):
+        with patch('app.utils.gibberish', return_value='NOTTHEUUID'):
             with patch('app.shared.feed.send_post_request') as send:
                 _feed_remove_community(s.community.id, s.feed.id)
 
@@ -1227,7 +1227,7 @@ def test_feed_remove_community_generates_a_follow_id_with_no_stored_join_request
         user_id=member.id, community_id=s.community.id).first() is None
 
     with patch('app.shared.feed.community_membership', return_value=0):
-        with patch('app.shared.feed.gibberish', return_value='GENERATEDID'):
+        with patch('app.utils.gibberish', return_value='GENERATEDID'):   # where activity_id reads it
             with patch('app.shared.feed.send_post_request') as send:
                 _feed_remove_community(s.community.id, s.feed.id)
 

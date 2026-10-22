@@ -33,6 +33,7 @@ from app.constants import NOTIF_COMMUNITY, NOTIF_POST, NOTIF_REPLY, POST_STATUS_
     POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_IMAGE, NOTIF_REMINDER, POST_TYPE_VIDEO, POST_TYPE_ARTICLE, SRC_API, \
     ROLE_ADMIN_NAME, ROLE_STAFF_NAME, ANNOUNCE_MAX_OBJECTS
 from app.email import send_email
+from app.federation_urls import activity_id
 from app.onion_media import evict
 from app.models import CronJobLog, Settings, BannedInstances, Role, User, RolePermission, Domain, ActivityPubLog, utcnow, \
     utcnow, Site, Instance, File, Notification, Post, CommunityMember, NotificationSubscription, PostReply, Language, \
@@ -1176,7 +1177,7 @@ def register(app):
             payloads = ActivityBatch.query.filter(ActivityBatch.instance_id == current_instance.id, ActivityBatch.community_id == community.id).order_by(ActivityBatch.created).all()
             # D54 (owner ruling): at most ANNOUNCE_MAX_OBJECTS objects per Announce, the most a receiver processes
             for start in range(0, len(payloads), ANNOUNCE_MAX_OBJECTS):
-                announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
+                announce_id = activity_id('announce', community)
                 actor = community.public_url()
                 to = ["https://www.w3.org/ns/activitystreams#Public"]
                 cc = [community.ap_followers_url]

@@ -2,9 +2,10 @@ from app import celery, db
 from app.activitypub.serializers import peertube_video, uses_peertube_video
 from app.activitypub.signature import default_context, send_post_request
 from app.constants import NOTIF_REPORT, NOTIF_REPORT_ESCALATION
+from app.federation_urls import activity_id
 from app.local_only import federated_mentions
 from app.models import Community, Instance, Post, PostReply, User, UserFollower, File, Notification, ChatMessage
-from app.utils import gibberish, instance_banned, get_task_session, patch_db_session
+from app.utils import instance_banned, get_task_session, patch_db_session
 from app.shared.tasks.pages import can_deliver_to, mentioned_users
 from app.storefront import hosted_instance_ids
 from app.visibility import follower_instances, followers_only_reply_instances, is_open
@@ -122,7 +123,7 @@ def restore_community(send_async, user_id, community_id):
 
 def _video_create(post) -> dict:
     video = peertube_video(post)
-    return {'id': f"{current_app.config['SERVER_URL']}/activities/create/{gibberish(15)}", 'type': 'Create',
+    return {'id': activity_id('create', post.author), 'type': 'Create',
             'actor': post.author.public_url(), 'object': video, 'to': video['to'], 'cc': video['cc'],
             '@context': default_context()}
 
@@ -146,6 +147,8 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     if followers_only:
         user = object.author
         reason = None
+    if not user.is_local():
+        return   # a remote account's Delete is its own server's to send: none of our domains names it
 
     # local_only communities can also be used to send activity to User Followers (only applies to posts, not comments)
     # return now though, if there aren't any
@@ -168,7 +171,7 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     #    if user.has_blocked_instance(community.instance.id) or instance_banned(community.instance.domain):
     #        return
 
-    delete_id = f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}"
+    delete_id = activity_id('delete', user)
     if followers_only:
         recipients = federated_mentions(mentioned_users(object, allow_fetch=False))   # as send_post addressed it
         to = [user.followers_url()]
@@ -195,7 +198,7 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
 
     if is_restore:
         del delete['@context']
-        undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/{gibberish(15)}"
+        undo_id = activity_id('undo', user)
         undo = {
           'id': undo_id,
           'type': 'Undo',
@@ -225,7 +228,7 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
             del delete['@context']
             object_json=delete
 
-        announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
+        announce_id = activity_id('announce', community)
         actor = community.public_url()
         cc = [community.ap_followers_url]
         announce = {
@@ -376,7 +379,7 @@ def delete_message(message, recipient, is_restore=False):
     if recipient.is_local():
         return
 
-    delete_id = f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}"
+    delete_id = activity_id('delete', message.sender)
     delete = {
       'id': delete_id,
       'type': 'Delete',
@@ -388,7 +391,7 @@ def delete_message(message, recipient, is_restore=False):
 
     if is_restore:
         del delete['@context']
-        undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/{gibberish(15)}"
+        undo_id = activity_id('undo', message.sender)
         undo = {
           'id': undo_id,
           'type': 'Undo',

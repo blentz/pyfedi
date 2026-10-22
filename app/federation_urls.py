@@ -11,10 +11,12 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
+from flask import current_app
 from sqlalchemy import select
 
 from app import db
-from app.storefront import DomainInfo, default_domain, domain_authority, domain_base_url, domain_rows
+from app.storefront import DomainInfo, default_domain, domain_authority, domain_base_url, \
+    domain_rows, hosted_instance_ids
 # The modules, not the names: app.models and app.utils import much of the app, which may import this module
 # (import cycle: models, utils)
 import app.models as models
@@ -52,6 +54,30 @@ def owner_base(obj) -> str:
     if domain is None:
         raise ValueError(f'{type(obj).__name__} is not federated from a domain of ours')
     return domain_base_url(domain)
+
+
+def naming_domain(obj) -> DomainInfo | None:
+    """The hosted domain our URLs of `obj` are named on: its owner (`owner_domain`); for a remote post or comment,
+    the local community it is in, as that community serves its copy (its context and replies collections). None
+    when no domain of ours names it."""
+    domain = owner_domain(obj)
+    if domain is None and isinstance(obj, (models.Post, models.PostReply)):
+        domain = owner_domain(obj.community)
+    return domain
+
+
+def object_base(obj) -> str:
+    """The origin our URLs of a post or comment are named on: its `naming_domain`'s, else the default domain's
+    (SERVER_URL), as before C3. Unlike `owner_base`, never raises."""
+    domain = naming_domain(obj)
+    return domain_base_url(domain if domain is not None else default_domain())
+
+
+def hosted_domain_names() -> list[str]:
+    """SERVER_NAME and the domain of every hosted domain's instance row: the hosts a fan-out never sends to, as
+    their accounts are told here."""
+    rows = db.session.execute(select(models.Instance.domain).where(models.Instance.id.in_(hosted_instance_ids())))
+    return [current_app.config['SERVER_NAME'], *rows.scalars()]
 
 
 # The port a URL of each scheme names when it names none. A URL is ours only over http or https: a scheme-relative

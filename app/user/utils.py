@@ -10,13 +10,14 @@ from app.activitypub.signature import signed_get_request, send_post_request
 from app.activitypub.util import actor_json_to_model, canonical_handle, find_actor_or_create, is_user_actor, \
     webfinger_self_link_allowed
 from app.constants import AP_FETCH_ACCEPT, POST_STATUS_REVIEWING
+from app.federation_urls import activity_id
 from app.local_names import local_named, split_local_name
 from app.mentions import stored_user, user_address_parts
 from app.models import User, CommunityMember, Community, Site, BannedInstances, Post, \
     PostVote, ArchivedPostReply, PostReply, UserNote
 from app.shared.tasks import task_selector
 from app.storefront import current_storefront, domain_for_host
-from app.utils import gibberish, get_request, get_task_session, patch_db_session, \
+from app.utils import get_request, get_task_session, patch_db_session, \
     intlist_to_strlist, community_membership_private, paginate_post_ids, post_ids_to_models
 from app.local_only import local_only_visible, without_local_only, without_local_only_actors
 from app.visibility import visible_to_clause, visible_to_sql
@@ -91,14 +92,16 @@ def purge_user_then_delete_task(user_id, flush):
 def unsubscribe_from_community(community, user):
     if community.instance.gone_forever or community.instance.dormant:
         return
+    if not user.is_local():
+        return   # a remote account follows from its own server: no Follow of ours to undo
 
-    undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/" + gibberish(15)
+    undo_id = activity_id('undo', user)
     follow = {
         "actor": user.public_url(),
         "to": [community.public_url()],
         "object": community.public_url(),
         "type": "Follow",
-        "id": f"{current_app.config['SERVER_URL']}/activities/follow/{gibberish(15)}"
+        "id": activity_id('follow', user)
     }
     undo = {
         'actor': user.public_url(),

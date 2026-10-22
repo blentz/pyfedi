@@ -1,9 +1,9 @@
 """The PeerTube Video a local video_channel post is pushed and fetched as (spec 2026-10-14 §4.3, §10 A11, A15.4).
 Every field PeerTube v8.3.1 requires is always present; an optional field is sent only in a form PeerTube accepts,
 since one bad field rejects the whole object."""
-from flask import current_app
 
 from app.constants import COMMUNITY_KIND_VIDEO_CHANNEL, POST_TYPE_VIDEO
+from app.federation_urls import object_base
 from app.models import media_of
 from app.utils import ap_datetime, guess_mime_type
 from app.visibility import is_open
@@ -63,7 +63,7 @@ def peertube_video(post) -> dict:
     """The Video, without @context."""
     media = media_of(post)
     community = post.community
-    base = f"{current_app.config['SERVER_URL']}/post/{post.id}"
+    base = f"{object_base(post)}/post/{post.id}"
     video = {
         'id': post.public_url(),
         'type': 'Video',

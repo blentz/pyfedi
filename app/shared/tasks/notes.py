@@ -2,12 +2,13 @@ import json
 from app import cache, celery, db
 from app.activitypub.signature import default_context, post_request, send_post_request
 from app.constants import NOTIF_MENTION
+from app.federation_urls import activity_id, hosted_domain_names
 from app.local_only import federated_mentions
 from app.models import Community, CommunityJoinRequest, CommunityMember, Notification, Post, \
     PostReply, utcnow, User
 from app.shared.tasks.pages import can_deliver_to, reply_recipients
 from app.visibility import can_view, follower_instances, followers_only_addressing, is_open
-from app.utils import user_banned_from_community, community_membership, gibberish, joined_communities, instance_banned, ap_datetime, \
+from app.utils import user_banned_from_community, community_membership, joined_communities, instance_banned, ap_datetime, \
     recently_upvoted_posts, recently_downvoted_posts, recently_upvoted_post_replies, \
     recently_downvoted_post_replies, get_recipient_language, get_task_session, patch_db_session
 
@@ -114,6 +115,8 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
                     session.add(notification)
                     session.commit()
     recipients = federated_mentions(recipients)   # a local-only account is Mentioned as plain text only
+    if not user.is_local():
+        return   # a remote account's reply is its own server's to federate: none of our domains names it
 
     if community.local_only or community.private or community.is_gone():   # interop C1 item 10: nothing goes to a gone Group
         return
@@ -169,7 +172,7 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
         note['updated'] = ap_datetime(utcnow())
 
     activity = 'create' if not edit else 'update'
-    create_id = f"{current_app.config['SERVER_URL']}/activities/{activity}/{gibberish(15)}"
+    create_id = activity_id(activity, user)
     type = 'Create' if not edit else 'Update'
     create = {
       'id': create_id,
@@ -186,7 +189,7 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
         del create['audience']
         note['interactionPolicy'] = addressing['interactionPolicy']
 
-    domains_sent_to = [current_app.config['SERVER_NAME']]
+    domains_sent_to = hosted_domain_names()   # never one of ours: its accounts are told here, not sent to
 
     # send the activity as an Announce if the community is local, or as a Create if not. A followers-only reply is
     # never Announced, and a remote community's inbox is not its audience either.
@@ -195,7 +198,7 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
     elif community.is_local():
         del create['@context']
 
-        announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
+        announce_id = activity_id('announce', community)
         cc = [community.ap_followers_url]
         announce = {
           'id': announce_id,
@@ -250,7 +253,7 @@ def send_answer(post_reply_id, user_id, is_undo):
             if post_reply.community.local_only or post_reply.community.private or not (post_reply.community.instance_id and post_reply.community.instance.online()):
                 return
 
-            answer_ap_id = f"{current_app.config['SERVER_URL']}/activities/answer/{gibberish(15)}"
+            answer_ap_id = activity_id('answer', user)
             to = ["https://www.w3.org/ns/activitystreams#Public"]
             cc = [post_reply.community.public_url()]
             lock = {
@@ -266,7 +269,7 @@ def send_answer(post_reply_id, user_id, is_undo):
 
             if is_undo:
                 del lock['@context']
-                undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/{gibberish(15)}"
+                undo_id = activity_id('undo', user)
                 undo = {
                   'id': undo_id,
                   'type': 'Undo',
@@ -286,7 +289,7 @@ def send_answer(post_reply_id, user_id, is_undo):
                     del lock['@context']
                     object=lock
 
-                announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
+                announce_id = activity_id('announce', post_reply.community)
                 actor = post_reply.community.public_url()
                 cc = [post_reply.community.ap_followers_url]
                 announce = {

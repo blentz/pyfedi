@@ -19,6 +19,7 @@ import app.auth.util as auth_util
 from app.community.util import save_icon_file, save_banner_file, retrieve_mods_and_backfill, search_for_community
 from app.constants import *
 from app.email import send_verification_email
+from app.federation_urls import activity_id
 from app.ldap_utils import sync_user_to_ldap
 from app.local_only import local_only_visible, local_only_visible_rss, refuses_remote_contact, \
     remote_contact_refusal_message, user_local_only, without_local_only
@@ -1308,7 +1309,7 @@ def send_deletion_requests(user_id):
         payload = {
             "@context": default_context(),
             "actor": user.public_url(),
-            "id": f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}",
+            "id": activity_id('delete', user),
             "object": user.public_url(),
             "to": [
                 "https://www.w3.org/ns/activitystreams#Public"
@@ -1535,7 +1536,7 @@ def import_settings_task(user_id, redis_key):
                                         "to": [community.public_url()],
                                         "object": community.public_url(),
                                         "type": "Follow",
-                                        "id": f"{current_app.config['SERVER_URL']}/activities/follow/{join_request.uuid}"
+                                        "id": activity_id('follow', user, join_request.uuid)
                                     }
                                     send_post_request(community.ap_inbox_url, follow, user.private_key,
                                                       user.public_url() + '#main-key')
@@ -2649,9 +2650,9 @@ def user_follow_request_accept(user_id):
                       "actor": current_user.public_url(),
                       "to": [remote_user.public_url()],
                       "object": {"actor": remote_user.public_url(), "to": None,
-                                 "object": current_user.public_url(), "type": "Follow", "id": f'{current_app.config["SERVER_URL"]}/activities/follow/{gibberish(32)}'},
+                                 "object": current_user.public_url(), "type": "Follow", "id": activity_id('follow', current_user, gibberish(32))},
                       "type": "Accept",
-                      "id": f"{current_app.config['SERVER_URL']}/activities/accept/" + gibberish(32)}
+                      "id": activity_id('accept', current_user, gibberish(32))}
             send_post_request(follow_answer_inbox(remote_user), accept, current_user.private_key,
                               f"{current_user.public_url()}#main-key")
     return 'Done'
@@ -2683,9 +2684,9 @@ def user_follow_request_reject(user_id):
                       "to": [remote_user.public_url()],
                       "object": {"actor": remote_user.public_url(), "to": None,
                                  "object": current_user.public_url(), "type": "Follow",
-                                 "id": f'{current_app.config["SERVER_URL"]}/activities/follow/{gibberish(32)}'},
+                                 "id": activity_id('follow', current_user, gibberish(32))},
                       "type": "Reject",
-                      "id": f"{current_app.config['SERVER_URL']}/activities/reject/" + gibberish(32)}
+                      "id": activity_id('reject', current_user, gibberish(32))}
             send_post_request(follow_answer_inbox(remote_user), accept, current_user.private_key,
                               f"{current_user.public_url()}#main-key")
     return 'Done'

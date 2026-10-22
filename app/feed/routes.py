@@ -19,6 +19,7 @@ from app.activitypub.util import extract_domain_and_actor
 from app.community.util import save_icon_file, save_banner_file, hashtags_used_in_communities
 from app.constants import SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, POST_TYPE_IMAGE, \
     POST_TYPE_LINK, POST_TYPE_VIDEO, NOTIF_FEED, SUBSCRIPTION_MEMBER, SUBSCRIPTION_NONMEMBER, SRC_WEB
+from app.federation_urls import activity_id
 from app.feed import bp
 from app.feed.forms import AddCopyFeedForm, EditFeedForm, SearchRemoteFeed
 from app.feed.util import feeds_for_form, search_for_feed, actor_to_feed, feed_communities_for_edit
@@ -732,13 +733,13 @@ def feed_unsubscribe(actor):
                 # Undo the Follow
                 if '@' in actor:  # this is a remote feed, so activitypub is needed
                     if not feed.instance.gone_forever:
-                        follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{gibberish(15)}"
+                        follow_id = activity_id('follow', current_user)
                         # D89 (owner ruling): the original Follow's id, for every peer rather than only ovo.st
                         join_request = FeedJoinRequest.query.filter_by(user_id=current_user.id,
                                                                        feed_id=feed.id).first()
                         if join_request:
-                            follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{join_request.uuid}"
-                        undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/" + gibberish(15)
+                            follow_id = activity_id('follow', current_user, join_request.uuid)
+                        undo_id = activity_id('undo', current_user)
                         follow = {
                             "actor": current_user.public_url(),
                             "to": [feed.public_url()],

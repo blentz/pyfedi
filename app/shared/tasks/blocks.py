@@ -2,9 +2,10 @@ import datetime
 
 from app import celery, db
 from app.activitypub.signature import default_context, post_request, send_post_request
+from app.federation_urls import activity_id, owner_base
 from app.models import Community, CommunityMember, User, Instance
 from app.storefront import hosted_instance_ids
-from app.utils import gibberish, ap_datetime, get_task_session, patch_db_session
+from app.utils import ap_datetime, get_task_session, patch_db_session
 
 from flask import current_app
 
@@ -111,9 +112,9 @@ def ban_person(session, user_id, mod_id, community_id, expiry, reason: str, remo
         community = None
         communities = []
         cc = []
-        target = f"{current_app.config['SERVER_URL']}/"
+        target = f"{owner_base(mod)}/"   # the site the moderator bans from
 
-    block_id = f"{current_app.config['SERVER_URL']}/activities/block/{gibberish(15)}"
+    block_id = activity_id('block', mod)
     to = ["https://www.w3.org/ns/activitystreams#Public"]
     block = {
       'id': block_id,
@@ -136,7 +137,7 @@ def ban_person(session, user_id, mod_id, community_id, expiry, reason: str, remo
 
     if is_undo:
         del block['@context']
-        undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/{gibberish(15)}"
+        undo_id = activity_id('undo', mod)
         undo = {
           'id': undo_id,
           'type': 'Undo',
@@ -173,7 +174,7 @@ def ban_person(session, user_id, mod_id, community_id, expiry, reason: str, remo
     # community ban - local mod / local communities
     # (just 1 for community ban of a local or remote user, but all joined if site ban of remote user)
     for community in communities:
-        announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
+        announce_id = activity_id('announce', community)
         cc = [community.ap_followers_url]
         announce = {
           'id': announce_id,

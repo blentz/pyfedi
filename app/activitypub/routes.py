@@ -53,7 +53,7 @@ from app.relays import inbound as relay_inbound
 from app.local_only import any_domain_closed, community_local_only, federated_mentions, federating_clause, \
     refused_outbound, user_local_only
 from app.local_names import actor_handle, local_clause, split_local_name
-from app.federation_urls import owner_base, owner_domain
+from app.federation_urls import activity_id, object_base, owner_base, owner_domain
 from app.storefront import current_storefront, domain_authority, domain_base_url, domain_for_host, hosted_instance_ids, \
     is_served_name
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
@@ -1361,6 +1361,10 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                     if not target:
                         log_incoming_ap(id, APLOG_FOLLOW, APLOG_FAILURE, saved_json, 'Could not find target of Follow')
                         return
+                    if isinstance(target, (Community, Feed)) and not target.is_local():
+                        # its own server answers it: no domain of ours names the Accept, nor holds the key
+                        log_incoming_ap(id, APLOG_FOLLOW, APLOG_FAILURE, saved_json, 'Follow of another server\'s actor')
+                        return
                     if isinstance(target, Community):
                         community = target
                         reject_follow = False
@@ -1380,7 +1384,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                       "object": {"actor": user.public_url(), "to": None, "object": community.public_url(),
                                                  "type": "Follow", "id": follow_id},
                                       "type": "Reject",
-                                      "id": f"{current_app.config['SERVER_URL']}/activities/reject/" + gibberish(32)}
+                                      "id": activity_id('reject', community, gibberish(32))}
                             send_post_request(follow_answer_inbox(user), reject, community.private_key, f"{community.public_url()}#main-key")
                         else:
                             existing_member = session.query(CommunityMember).filter_by(user_id=user.id, community_id=community.id).first()
@@ -1400,7 +1404,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                       "object": {"actor": user.public_url(), "to": None,
                                                  "object": community.public_url(), "type": "Follow", "id": follow_id},
                                       "type": "Accept",
-                                      "id": f"{current_app.config['SERVER_URL']}/activities/accept/" + gibberish(32)}
+                                      "id": activity_id('accept', community, gibberish(32))}
                             send_post_request(follow_answer_inbox(user), accept, community.private_key, f"{community.public_url()}#main-key")
                             log_incoming_ap(id, APLOG_FOLLOW, APLOG_SUCCESS, saved_json,
                                             'Already a member, Accept re-sent' if existing_member else None)
@@ -1421,7 +1425,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                       "object": {"actor": user.public_url(), "to": None, "object": feed.public_url(),
                                                  "type": "Follow", "id": follow_id},
                                       "type": "Reject",
-                                      "id": f"{current_app.config['SERVER_URL']}/activities/reject/" + gibberish(32)}
+                                      "id": activity_id('reject', feed, gibberish(32))}
                             send_post_request(follow_answer_inbox(user), reject, feed.private_key, f"{feed.public_url()}#main-key")
                         else:
                             already_member = feed_membership(user, feed) == SUBSCRIPTION_MEMBER
@@ -1438,7 +1442,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                       "object": {"actor": user.public_url(), "to": None, "object": feed.public_url(),
                                                  "type": "Follow", "id": follow_id},
                                       "type": "Accept",
-                                      "id": f"{current_app.config['SERVER_URL']}/activities/accept/" + gibberish(32)}
+                                      "id": activity_id('accept', feed, gibberish(32))}
                             send_post_request(follow_answer_inbox(user), accept, feed.private_key,
                                               f"{feed.public_url()}#main-key")
                             log_incoming_ap(id, APLOG_FOLLOW, APLOG_SUCCESS, saved_json,
@@ -1471,7 +1475,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                           "object": {"actor": remote_user.public_url(), "to": None,
                                                      "object": local_user.public_url(), "type": "Follow", "id": follow_id},
                                           "type": "Accept",
-                                          "id": f"{current_app.config['SERVER_URL']}/activities/accept/" + gibberish(32)}
+                                          "id": activity_id('accept', local_user, gibberish(32))}
                                 send_post_request(follow_answer_inbox(remote_user), accept, local_user.private_key,
                                                   f"{local_user.public_url()}#main-key")
 
@@ -1506,7 +1510,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                       "object": {"actor": remote_user.public_url(), "to": None,
                                                  "object": local_user.public_url(), "type": "Follow", "id": follow_id},
                                       "type": "Accept",
-                                      "id": f"{current_app.config['SERVER_URL']}/activities/accept/" + gibberish(32)}
+                                      "id": activity_id('accept', local_user, gibberish(32))}
                             send_post_request(follow_answer_inbox(remote_user), accept, local_user.private_key,
                                               f"{local_user.public_url()}#main-key")
                             log_incoming_ap(id, APLOG_FOLLOW, APLOG_SUCCESS, saved_json, 'Already following, Accept re-sent')
@@ -1789,7 +1793,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                 # R3 fix 2: our own Update, so none of the moderator's top-level fields (id, addressing,
                                 # an LD signature over a document we no longer send) go out under our signature
                                 announce_activity_to_followers(community, user, {
-                                    'id': f"{current_app.config['SERVER_URL']}/activities/update/{gibberish(15)}",
+                                    'id': activity_id('update', community),
                                     'type': 'Update',
                                     'actor': community.public_url(),
                                     'object': community_actor_data(community),
@@ -2509,7 +2513,7 @@ def announce_activity_to_followers(community: Community, creator: User, activity
             f"{community.public_url()}/followers"
         ],
         "type": "Announce",
-        "id": f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
+        "id": activity_id('announce', community)
     }
     # checked once, before any of the three ways out below: the batch, the notification server and the send queue
     if refused_outbound(announce_activity, community.public_url()):
@@ -2764,8 +2768,7 @@ def comment_ap(comment_id):
         resp = jsonify(reply_data)
         resp.content_type = ap_media_type()
         ap_content_headers(resp, reply)
-        resp.headers.set('Link',
-                         f'<https://{current_app.config["SERVER_NAME"]}/comment/{reply.id}>; rel="alternate"; type="text/html"')
+        resp.headers.set('Link', f'<{object_base(reply)}/comment/{reply.id}>; rel="alternate"; type="text/html"')
         return resp
     else:
         return post_routes.continue_discussion(reply.post.id, comment_id)
@@ -2876,7 +2879,9 @@ def private_message_ap(message_id):
     received it through its shared inbox. Anything else -- missing, deleted, not ours, not entitled -- is the
     same 404, so a refusal never confirms a message exists. HEAD is answered from this GET by Flask."""
     message = db.session.get(ChatMessage, message_id)
-    ours = message is not None and message.ap_id == f"{current_app.config['SERVER_URL']}/private_message/{message.id}"
+    sender_domain = owner_domain(message) if message is not None else None
+    ours = sender_domain is not None and \
+        message.ap_id == f"{domain_base_url(sender_domain)}/private_message/{message.id}"
     if not is_activitypub_request():
         # a browser is sent on only by someone who may read the conversation; everyone else gets the AP refusal
         conversation = db.session.get(Conversation, message.conversation_id) if ours and message.conversation_id else None
@@ -2953,11 +2958,9 @@ def post_ap(post_id):
             resp.content_type = ap_media_type()
             ap_content_headers(resp, post)
             if post.slug:
-                resp.headers.set('Link',
-                                 f'<https://{current_app.config["SERVER_NAME"]}{post.slug}>; rel="alternate"; type="text/html"')
+                resp.headers.set('Link', f'<{object_base(post)}{post.slug}>; rel="alternate"; type="text/html"')
             else:
-                resp.headers.set('Link',
-                                 f'<https://{current_app.config["SERVER_NAME"]}/post/{post.id}>; rel="alternate"; type="text/html"')
+                resp.headers.set('Link', f'<{object_base(post)}/post/{post.id}>; rel="alternate"; type="text/html"')
             return resp
         else:
             return redirect(post.ap_id, code=301)
@@ -3051,7 +3054,7 @@ def activities_json(type, id):
 
     No @cache.cached: the answer depends on who signed the request. A refusal is the same 404 as a miss."""
     activity = ActivityPubLog.query.filter_by(
-        activity_id=f"{current_app.config['SERVER_URL']}/activities/{type}/{id}").first()
+        activity_id=f"{domain_base_url(current_storefront())}/activities/{type}/{id}").first()   # this domain's own
     activity_json = json.loads(activity.activity_json) if activity and activity.activity_json else None
     if isinstance(activity_json, dict) and activity_json:
         addressees = addressees_of(activity_json)
@@ -3520,13 +3523,13 @@ def process_remove(core_activity, user, community, feed, announced, id, saved_js
                         # Undo the Follow
                         if not community_to_remove.is_local():  # this is a remote community, so activitypub is needed
                             if not community_to_remove.instance.gone_forever:
-                                follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{gibberish(15)}"
+                                follow_id = activity_id('follow', fm_user)
                                 # D89 (owner ruling): the original Follow's id, for every peer rather than only ovo.st
                                 join_request = session.query(CommunityJoinRequest).filter_by(user_id=fm_user.id,
                                                                                     community_id=community_to_remove.id).first()
                                 if join_request:
-                                    follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{join_request.uuid}"
-                                undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/" + gibberish(15)
+                                    follow_id = activity_id('follow', fm_user, join_request.uuid)
+                                undo_id = activity_id('undo', fm_user)
                                 follow = {'actor': fm_user.public_url(),
                                           'to': [community_to_remove.public_url()],
                                           'object': community_to_remove.public_url(), 'type': 'Follow',
@@ -4103,9 +4106,9 @@ def quote_boost_auth():
                 },
             },
         ],
-        'id': current_app.config['SERVER_URL'] + '/quote_boost_auth?stamp=' + urllib.parse.quote(local_post_id, safe='') + ';' + urllib.parse.quote(remote_post_id, safe=''),
+        'id': owner_base(quoted) + '/quote_boost_auth?stamp=' + urllib.parse.quote(local_post_id, safe='') + ';' + urllib.parse.quote(remote_post_id, safe=''),
         'type': 'QuoteAuthorization',
-        'attributedTo': current_app.config['SERVER_URL'],
+        'attributedTo': owner_base(quoted),
         'interactionTarget': local_post_id,
         'interactingObject': remote_post_id,
     }

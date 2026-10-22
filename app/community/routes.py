@@ -42,6 +42,7 @@ from app.constants import SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, POST_TYPE_LIN
     POST_TYPE_EVENT, REPORT_TYPE_COMMUNITY, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO, POST_STATUS_PUBLISHED, \
     COMMUNITY_KIND_MICROBLOGS, COMMUNITY_KIND_PODCAST
 from app.email import send_email
+from app.federation_urls import activity_id
 from app.inoculation import inoculation
 from app.models import served_path, User, Community, CommunityMember, CommunityJoinRequest, CommunityBan, Post, Site, \
     File, utcnow, Report, Notification, Topic, PostReply, \
@@ -58,7 +59,7 @@ from app.local_only import community_local_only, local_only_visible, local_only_
 from app.visibility import is_open, listable_clause, visible_to_clause
 from app.utils import etag_stamp
 from app.utils import user_banned_from_community, back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
-    shorten_string, gibberish, community_membership, _capped_get, PAGE_MAX_BYTES, \
+    shorten_string, community_membership, _capped_get, PAGE_MAX_BYTES, \
     request_etag_matches, return_304, can_upvote, can_downvote, user_filters_posts, \
     joined_communities, moderating_communities, moderating_communities_ids, blocked_domains, \
     blocked_or_banned_instances, \
@@ -1126,7 +1127,7 @@ def do_subscribe(actor, user_id, admin_preload=False, joined_via_feed=False):
                                     "to": [community.public_url()],
                                     "object": community.public_url(),
                                     "type": "Follow",
-                                    "id": f"{current_app.config['SERVER_URL']}/activities/follow/{join_request.uuid}"
+                                    "id": activity_id('follow', user, join_request.uuid)
                                 }
                                 send_post_request(community.ap_inbox_url, follow, user.private_key, user.public_url() + '#main-key', timeout=10)
 
@@ -1174,13 +1175,13 @@ def unsubscribe(actor):
                 # Undo the Follow
                 if not community.is_local():  # a remote community, so activitypub is needed
                     if not community.instance.gone_forever:
-                        follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{gibberish(15)}"
+                        follow_id = activity_id('follow', current_user)
                         # D89 (owner ruling): the original Follow's id, for every peer rather than only ovo.st
                         join_request = CommunityJoinRequest.query.filter_by(user_id=current_user.id,
                                                                             community_id=community.id).first()
                         if join_request:
-                            follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{join_request.uuid}"
-                        undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/" + gibberish(15)
+                            follow_id = activity_id('follow', current_user, join_request.uuid)
+                        undo_id = activity_id('undo', current_user)
                         follow = {
                             "actor": current_user.public_url(),
                             "to": [community.public_url()],
@@ -1249,7 +1250,7 @@ def join_then_add(actor):
                     "to": [community.public_url()],
                     "object": community.public_url(),
                     "type": "Follow",
-                    "id": f"{current_app.config['SERVER_URL']}/activities/follow/{join_request.uuid}"
+                    "id": activity_id('follow', current_user, join_request.uuid)
                 }
                 send_post_request(community.ap_inbox_url, follow, current_user.private_key,
                                   current_user.public_url() + '#main-key')

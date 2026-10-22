@@ -22,33 +22,18 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'find_actor_by_url': 2,
     },
     'app/activitypub/routes.py': {
-        'activities_json': 1,
-        'announce_activity_to_followers': 1,
         'api_v1_instance': 1,
-        'comment_ap': 1,
         'feed_followers': 1,
         'feed_moderators_route': 1,
         'feed_profile': 5,
         'host_meta': 1,
         'host_meta_json': 1,
         'nodeinfo': 2,
-        'post_ap': 2,
-        'private_message_ap': 1,
-        'process_inbox_request': 7,
-        'process_remove': 3,
         'process_webfinger_request': 7,
-        'quote_boost_auth': 2,
         'replay_inbox_request': 1,
         'rerun_parked_request': 1,
         'shared_inbox': 1,
         'user_profile': 1,
-    },
-    'app/activitypub/serializers/microblog.py': {
-        '_hashtag_href': 1,
-        'microblog_note': 1,
-    },
-    'app/activitypub/serializers/peertube.py': {
-        'peertube_video': 1,
     },
     'app/activitypub/signature.py': {
         'HttpSignature.signed_request': 1,
@@ -58,18 +43,10 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     },
     'app/activitypub/util.py': {
         '_origin_refusal_of_delete': 1,
-        'comment_count_collections': 1,
-        'comment_model_to_json': 1,
-        'create_activity_of': 1,
         'create_post_reply': 2,
         'fetch_object_capped': 1,
         'lemmy_site_data': 4,
-        'post_count_collections': 1,
-        'post_to_activity': 1,
-        'post_to_page': 2,
-        'proactively_delete_content': 2,
         'process_announce_of_uri': 1,
-        'process_quote_boost': 2,
         'process_report': 2,
         'refresh_community_profile_task': 1,
         'refresh_feed_profile_task': 1,
@@ -84,8 +61,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     },
     'app/admin/util.py': {
         'move_community_images_to_here': 4,
-        'unsubscribe_from_community': 2,
-        'unsubscribe_from_everything_then_delete_task': 1,
     },
     'app/api/alpha/utils/community.py': {
         'get_community': 1,
@@ -99,13 +74,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'reply_removal_ack_view': 1,
         'site_view': 1,
     },
-    'app/auth/onboarding.py': {
-        'send_community_follow': 1,
-    },
-    'app/chat/util.py': {
-        'send_message': 2,
-        'update_message': 1,
-    },
     'app/cli.py': {
         'register.config_check': 2,
         'register.init_db': 1,
@@ -113,37 +81,27 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'register.move_more_post_images_to_s3': 1,
         'register.process_email_bounces': 4,
         'register.rss_feeds': 1,
-        'register.send_batched_activities': 1,
     },
     'app/community/routes.py': {
         'community_invite': 1,
         'community_move': 1,   # the community handle shown on the move page names the federation domain
-        'do_subscribe': 1,
-        'join_then_add': 1,
-        'unsubscribe': 3,
     },
     'app/community/server_view_list.py': {
         'server_view_select': 1,
-    },
-    'app/community/util.py': {
-        'delete_post_from_community_task': 2,
-        'delete_post_reply_from_community_task': 2,
     },
     'app/discovery/credits.py': {
         '_known_user': 1,
         '_signed_headers': 1,
         'verified_credit_user': 1,
     },
-    'app/discovery/instance_actor.py': {
-        'follow_activity': 1,
-        'send_instance_undo': 1,
-    },
     'app/discovery/instance_answers.py': {
         'instance_actor_url': 1,
     },
+    'app/federation_urls.py': {
+        'hosted_domain_names': 1,   # the hosts a fan-out never sends to
+    },
     'app/feed/routes.py': {
         'feed_copy': 2,
-        'feed_unsubscribe': 3,
     },
     'app/feed/util.py': {
         'feed_communities_for_edit': 1,
@@ -157,7 +115,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'test_hashing': 1,
     },
     'app/models.py': {
-        'Community.flair_for_ap': 1,
         'Community.local_url': 1,
         'Feed.lemmy_link': 1,
         'Feed.local_url': 1,
@@ -165,12 +122,8 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'Feed.public_url': 1,
         'File.delete_from_disk': 2,
         'File.local_path_for_url': 2,
-        'Post.generate_ap_id': 4,
         'Post.generate_slug': 1,
         'Post.new': 2,
-        'Post.profile_id': 1,
-        'Post.tags_for_activitypub': 2,
-        'PostReply.profile_id': 1,
         'User.encode_jwt_token': 1,
         'is_local_url': 1,
         'media_local_path': 1,
@@ -185,12 +138,8 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'post_cross_post': 1,
         'post_edit': 1,
         'post_move': 1,
-        'post_reply_restore': 3,
         'post_share_mastodon': 1,
         'show_post': 1,
-    },
-    'app/quotes.py': {
-        'resolve_quotes': 1,
     },
     'app/relays/expiry.py': {
         '_local_user_ids': 1,
@@ -209,12 +158,10 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'invite_with_email': 1,
     },
     'app/shared/feed.py': {
-        '_feed_remove_community': 3,
         'announce_feed_add_remove_to_subscribers': 2,
         'announce_feed_delete_to_subscribers': 1,
         'edit_feed': 2,
         'form_communities_to_ids': 1,
-        'join_feed': 1,
         'make_feed': 2,
     },
     'app/shared/media.py': {
@@ -227,35 +174,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/shared/reply.py': {
         'report_reply': 1,
     },
-    'app/shared/tasks/adds.py': {
-        'add_object': 2,
-    },
-    'app/shared/tasks/blocks.py': {
-        'ban_person': 4,
-    },
-    'app/shared/tasks/deletes.py': {
-        '_video_create': 1,
-        'delete_message': 2,
-        'delete_object': 3,
-    },
-    'app/shared/tasks/flags.py': {
-        'report_chat': 1,
-        'report_object': 1,
-    },
-    'app/shared/tasks/follows.py': {
-        'follow_user': 1,
-        'join_community': 1,
-        'leave_community': 2,
-        'leave_feed': 2,
-        'unfollow_user': 3,
-    },
-    'app/shared/tasks/likes.py': {
-        'send_vote': 3,
-        'vote_for_poll': 2,
-    },
-    'app/shared/tasks/locks.py': {
-        'lock_object': 3,
-    },
     'app/shared/tasks/maintenance.py': {
         'add_remote_community_from_post': 1,
     },
@@ -263,17 +181,10 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         '_thumbnail': 1,
     },
     'app/shared/tasks/notes.py': {
-        'send_answer': 3,
-        'send_reply': 5,
+        'send_reply': 2,
     },
     'app/shared/tasks/pages.py': {
-        'move_object': 2,
-        'send_microblog_note': 2,
-        'send_peertube_video': 2,
-        'send_post': 7,
-    },
-    'app/shared/tasks/removes.py': {
-        'remove_object': 2,
+        'send_post': 4,
     },
     'app/shared/upload.py': {
         'process_upload': 1,
@@ -297,18 +208,13 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/user/routes.py': {
         'export_user_settings': 4,
         'fediverse_redirect': 4,
-        'import_settings_task': 1,
-        'send_deletion_requests': 1,
         'show_people': 1,
-        'user_follow_request_accept': 2,
-        'user_follow_request_reject': 2,
     },
     'app/user/subscription.py': {
         'choose_plan': 3,
     },
     'app/user/utils.py': {
         'search_for_user': 1,
-        'unsubscribe_from_community': 2,
         'user_for_actor': 1,   # a bare name on the default domain is found by the actor URL SERVER_URL builds
     },
     'app/utils.py': {

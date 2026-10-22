@@ -210,7 +210,7 @@ def test_a_queued_retry_of_a_local_only_activity_is_dropped(env, wire, app, monk
 
 def test_a_hell_cloud_post_in_a_hell_cloud_community_is_sent_unchanged(env, wire, monkeypatch):
     """The body that leaves is byte-for-byte the one sent with the guard and the mention filter switched off."""
-    monkeypatch.setattr('app.shared.tasks.pages.gibberish', lambda *a: 'fixed')
+    monkeypatch.setattr('app.utils.gibberish', lambda *a: 'fixed')   # where activity_id reads it
     post = _post(env.hell, env.hal, body='plain words')
     send_post(post.id, session=db.session)
     guarded = _sent(wire)

@@ -17,7 +17,7 @@ THE NORMALISATION IS HUNK-DIRECTED, NOT A BLIND remove-to-add REWRITE, and the
 runnable recipe is at the END OF THIS FILE rather than here, because it contains
 regex escapes a docstring would eat. Two hunks defeat a blind rewrite:
 `unsticky_post` -> `sticky_post` is the deletion of an `un` PREFIX, not a
-substitution of the token `remove`; and `:23` -- "For Announce, remove @context
+substitution of the token `remove`; and `:24` -- "For Announce, remove @context
 from inner object" -- carries the English word `remove` IDENTICALLY IN BOTH
 FILES, so rewriting it changes a line that never differed. A blind rewrite
 manufactures two spurious differences on a pair that has not diverged, which is
@@ -343,13 +343,13 @@ def test_the_twins_are_structurally_identical(db_session):
 
     def normalise(src):
         """`removes.py` rewritten into `adds.py`'s names. Line-addressed,
-        because `:23`'s English word `remove` is identical in both files."""
+        because `:24`'s English word `remove` is identical in both files."""
         out = []
         for number, line in enumerate(src.splitlines(keepends=True), start=1):
             line = re.sub(r'\bunsticky_post\b', 'sticky_post', line)
             line = re.sub(r'\bremove_([a-z]*)', r'add_\1', line)
             line = re.sub(r'\bRemove\b', 'Add', line)
-            if number != 23:
+            if number != 24:
                 line = re.sub(r'\bremove\b', 'add', line)
             out.append(line)
         return ''.join(out)
@@ -360,8 +360,8 @@ def test_the_twins_are_structurally_identical(db_session):
     adds_lines, adds_extents = shape(adds_src)
     removes_lines, removes_extents = shape(removes_src)
 
-    assert adds_lines == removes_lines == 108   # interop C1 item 10: is_gone() wraps the guard in both twins
-    assert adds_extents == removes_extents == [(28, 39), (43, 54), (57, 108)]
+    assert adds_lines == removes_lines == 109   # interop C1 item 10: is_gone() wraps the guard in both twins
+    assert adds_extents == removes_extents == [(29, 40), (44, 55), (58, 109)]
 
     assert normalise(removes_src) == adds_src, (
         'the twins have DIVERGED beyond the four naming rules. Run the recipe '
@@ -1181,10 +1181,10 @@ def test_unsticky_post_closes_the_session_on_the_happy_path(
 # rewrite of the token `remove` to `add` does NOT work, for two reasons:
 #
 #   1. `unsticky_post` -> `sticky_post` is the deletion of an `un` PREFIX. No
-#      substitution of `remove` can produce it, so :27 still differs.
-#   2. :23 -- "For Announce, remove @context from inner object" -- carries the
+#      substitution of `remove` can produce it, so :28 still differs.
+#   2. :24 -- "For Announce, remove @context from inner object" -- carries the
 #      English word `remove` IDENTICALLY IN BOTH FILES. Rewriting it changes a
-#      line that never differed, so :23 differs afterwards when it did not
+#      line that never differed, so :24 differs afterwards when it did not
 #      before.
 #
 # A blind rewrite therefore reports TWO spurious differences on a pair that has

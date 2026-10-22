@@ -35,7 +35,7 @@ from app.activitypub.signature import signed_get_capped, signed_get_request, sen
 from app.constants import *
 from app.local_only import federating_clause, federating_sql
 from app.local_names import local_named
-from app.federation_urls import owner_base
+from app.federation_urls import activity_id, object_base, owner_base
 from app.storefront import default_domain, domain_authority, domain_base_url, hosted_instance_ids, instance_id_of
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
@@ -220,7 +220,7 @@ def create_activity_of(obj: Post | PostReply) -> dict:
     community = obj.community
     as_object = post_to_page(obj) if isinstance(obj, Post) else comment_model_to_json(obj)
     create_id = obj.ap_create_id if obj.ap_create_id else \
-        f"{current_app.config['SERVER_URL']}/activities/create/{stable_create_token(as_object['id'])}"
+        f"{object_base(obj)}/activities/create/{stable_create_token(as_object['id'])}"
     return {
         "id": create_id,
         "actor": obj.author.public_url(),
@@ -238,7 +238,7 @@ def create_activity_of(obj: Post | PostReply) -> dict:
 
 def post_to_activity(post: Post, community: Community):
     # local PieFed posts do not have a create or announce id
-    announce_id = post.ap_announce_id if post.ap_announce_id else f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
+    announce_id = post.ap_announce_id if post.ap_announce_id else activity_id('announce', community)
     activity_data = {
         "actor": community.public_url(),
         "to": [
@@ -391,7 +391,7 @@ def post_shares_count(post_id: int) -> int:
 def post_count_collections(post: Post) -> dict:
     """`likes`, `dislikes` and `shares` of local `post`, as post_to_page embeds them and post_count_collection_ap
     serves them. A NULL cached count is 0."""
-    base = f"{current_app.config['SERVER_URL']}/post/{post.id}"
+    base = f"{object_base(post)}/post/{post.id}"
     return {'likes': count_collection(f'{base}/likes', post.up_votes or 0),
             'dislikes': count_collection(f'{base}/dislikes', post.down_votes or 0),
             'shares': count_collection(f'{base}/shares', post_shares_count(post.id))}
@@ -400,7 +400,7 @@ def post_count_collections(post: Post) -> dict:
 def comment_count_collections(reply: PostReply) -> dict:
     """`likes` and `dislikes` of local `reply`. No `shares`: comments have no boost records, and an inline 0 could
     make a peer overwrite its own count with 0."""
-    base = f"{current_app.config['SERVER_URL']}/comment/{reply.id}"
+    base = f"{object_base(reply)}/comment/{reply.id}"
     return {'likes': count_collection(f'{base}/likes', reply.up_votes or 0),
             'dislikes': count_collection(f'{base}/dislikes', reply.down_votes or 0)}
 
@@ -415,7 +415,7 @@ def post_to_page(post: Post):
     activity_data = {
         "type": "Page",
         "id": post.ap_id,
-        "context": f"{current_app.config['SERVER_URL']}/post/{post.id}/context",
+        "context": f"{object_base(post)}/post/{post.id}/context",
         "attributedTo": post.author.ap_public_url,
         "to": [
             post.community.public_url(),
@@ -434,7 +434,7 @@ def post_to_page(post: Post):
         "stickied": post.sticky,
         "audience": post.community.public_url(),
         "tag": post.tags_for_activitypub(),
-        "replies": f'{current_app.config["SERVER_URL"]}/post/{post.id}/replies',
+        "replies": f'{object_base(post)}/post/{post.id}/replies',
         "language": {
             "identifier": post.language_code(),
             "name": post.language_name()
@@ -556,7 +556,7 @@ def comment_model_to_json(reply: PostReply) -> dict:
         ],
         "type": "Note",
         "id": reply.ap_id,
-        "context": f"{current_app.config['SERVER_URL']}/post/{reply.post.id}/context",
+        "context": f"{object_base(reply.post)}/post/{reply.post.id}/context",
         "attributedTo": reply.author.public_url(),
         "inReplyTo": reply.in_reply_to(),
         "to": [
@@ -5907,10 +5907,10 @@ def process_quote_boost(core_activity: dict, post_ap: str, their_post_ap: str):
           ],
           "type": "Accept",
           "to": core_activity['actor'],
-          "id": f"{current_app.config['SERVER_URL']}/activities/{gibberish(15)}",
+          "id": f"{owner_base(post)}/activities/{gibberish(15)}",
           "actor": post.author.public_url(),
           "object": core_activity,
-          "result": f"{current_app.config['SERVER_URL']}/quote_boost_auth?stamp={urllib.parse.quote(post.public_url(), safe='')};{urllib.parse.quote(their_post_ap, safe='')}"
+          "result": f"{owner_base(post)}/quote_boost_auth?stamp={urllib.parse.quote(post.public_url(), safe='')};{urllib.parse.quote(their_post_ap, safe='')}"
         }
         to = find_actor_or_create_cached(core_activity['actor'])
         if to and to.instance.inbox:
@@ -7399,7 +7399,7 @@ def proactively_delete_content(community: Community, ap_id: str):
         deletor = db.session.get(User, 1)
     if deletor:
 
-        delete_id = f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}"
+        delete_id = activity_id('delete', deletor)
         to = ["https://www.w3.org/ns/activitystreams#Public"]
         cc = [community.public_url()]
         delete = {
@@ -7413,7 +7413,7 @@ def proactively_delete_content(community: Community, ap_id: str):
           'summary': 'Automatic deletion due to block'
         }
 
-        announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
+        announce_id = activity_id('announce', community)
         actor = community.public_url()
         cc = [community.ap_followers_url]
         to = ["https://www.w3.org/ns/activitystreams#Public"]

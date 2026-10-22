@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 import pendulum
 import jwt
-from flask import current_app, g, json
+from flask import current_app, g, has_request_context, json
 from flask_babel import _, lazy_gettext as _l
 from flask_babel import force_locale, gettext
 from flask_login import UserMixin, current_user
@@ -61,6 +61,35 @@ def is_local_url(url) -> bool:
     lookalike host (https://piefed.example.evil.com for https://piefed.example) for this one."""
     base = current_app.config['SERVER_URL']
     return isinstance(url, str) and (url == base or url.startswith(base + '/'))
+
+
+def _hosted_bases() -> tuple[str, ...]:
+    """Every hosted domain's base URL, read once per request (a page tests many rows): a worker reads them each time,
+    as it keeps one app context for life and a request-less g would never see a new domain."""
+    if has_request_context() and '_hosted_bases' in g:
+        return g._hosted_bases
+    bases = tuple(storefront.domain_base_url(row) for row in storefront.domain_rows())
+    if has_request_context():
+        g._hosted_bases = bases
+    return bases
+
+
+def is_hosted_url(url) -> bool:
+    """`is_local_url` for any hosted domain: a post, comment or private message is named on its owner's domain
+    (plan C3), so a sister domain's is ours too. SERVER_URL is tested first, so the default domain's reads no rows."""
+    return is_local_url(url) or (isinstance(url, str) and
+                                 any(url == base or url.startswith(base + '/') for base in _hosted_bases()))
+
+
+def federation_base(obj) -> str:
+    """The origin a post's or comment's URLs are named on, as `federation_urls.object_base` decides it (that module
+    imports this one, so this one cannot import it): the author's domain when the author is ours, else the domain of
+    the local community it is in, else the default domain's (SERVER_URL). Never the storefront a request came in on:
+    a Celery task has none."""
+    for actor in (obj.author, obj.community):
+        if actor is not None and actor.is_local():
+            return storefront.domain_base_url(actor.home_domain())
+    return storefront.domain_base_url(storefront.default_domain())
 
 
 def votes_cast_today(user_id: int) -> int:
@@ -1678,13 +1707,21 @@ class Community(db.Model):
         else:
             return 0
 
+    def flair_tag_id(self, flair, base_if_remote: str) -> str:
+        """The `lemmy:CommunityTag` id of one of this community's flairs: on the community's own domain when it is
+        ours (plan C3), else on `base_if_remote`, the domain of whoever names our copy of it."""
+        if self.is_local():
+            return f'{storefront.domain_base_url(self.home_domain())}/c/{self.name}/tag/{flair.id}'
+        return f'{base_if_remote}/c/{self.link()}/tag/{flair.id}'
+
     def flair_for_ap(self, version=1):
         result = []
 
         if version == 1:
+            default_base = storefront.domain_base_url(storefront.default_domain())   # a remote community's: as before C3
             for flair in self.flair:
                 result.append({'type': 'lemmy:CommunityTag',
-                            'id': f'{current_app.config["SERVER_URL"]}/c/{self.link()}/tag/{flair.id}',
+                            'id': self.flair_tag_id(flair, default_base),
                             'display_name': flair.flair,
                             'text_color': flair.text_color,
                             'background_color': flair.background_color,
@@ -2811,7 +2848,7 @@ class Post(db.Model):
     )
 
     def is_local(self):
-        return self.ap_id is None or is_local_url(self.ap_id)
+        return self.ap_id is None or is_hosted_url(self.ap_id)   # its owner's domain may be a sister (plan C3)
 
     @classmethod
     def get_by_ap_id(cls, ap_id):
@@ -3800,22 +3837,23 @@ class Post(db.Model):
         return 'https://' + furl(self.url).host + '/'
 
     def generate_ap_id(self, community: Community):
+        base = federation_base(self)   # the author's domain (plan C3): SERVER_URL for the default domain
         if not community.post_url_type or community.post_url_type == 'friendly':
             # Make the ActivityPub ID of a post in the format of instance.tld/c/community@instance/p/post_id/post-title-as-slug
             # Use this for posts this instance is creating only - remote posts will already have an AP ID.
             if self.ap_id is None or self.ap_id == '' or len(self.ap_id) == 10:
-                slug = slugify(self.title, max_length=100 - len(current_app.config["SERVER_NAME"]))
+                slug = slugify(self.title, max_length=100 - len(urlparse(base).netloc))
                 if slug:
-                    self.ap_id = f'{current_app.config["SERVER_URL"]}/c/{community.name}@{community.ap_domain}/p/{self.id}/{slug}'
+                    self.ap_id = f'{base}/c/{community.name}@{community.ap_domain}/p/{self.id}/{slug}'
                     self.slug = f'/c/{community.name}@{community.ap_domain}/p/{self.id}/{slug}'
                 else:
                     # Post title can't be slugified, fall back to old url structure
-                    self.ap_id = f'{current_app.config["SERVER_URL"]}/post/{self.id}'
+                    self.ap_id = f'{base}/post/{self.id}'
                     self.slug = f'/post/{self.id}'
         else:
             # Make the ActivityPub ID of a post in the format of instance.tld/post/post_id
             if self.ap_id is None or self.ap_id == '' or len(self.ap_id) == 10:
-                self.ap_id = f'{current_app.config["SERVER_URL"]}/post/{self.id}'
+                self.ap_id = f'{base}/post/{self.id}'
                 self.slug = f'/post/{self.id}'
 
     def generate_slug(self, community: Community):
@@ -3847,7 +3885,7 @@ class Post(db.Model):
         if self.ap_id:
             return self.ap_id
         else:
-            return f"{current_app.config['SERVER_URL']}/post/{self.id}"
+            return f"{federation_base(self)}/post/{self.id}"
 
     def public_url(self):
         return self.profile_id()
@@ -3920,16 +3958,17 @@ class Post(db.Model):
 
     def tags_for_activitypub(self):
         return_value = []
+        base = federation_base(self)
         for flair in self.flair:
             return_value.append({'type': 'lemmy:CommunityTag',
-                                 'id': f'{current_app.config["SERVER_URL"]}/c/{self.community.link()}/tag/{flair.id}',
+                                 'id': self.community.flair_tag_id(flair, base),
                                  'display_name': flair.flair,
                                  'text_color': flair.text_color,
                                  'background_color': flair.background_color,
                                  'blur_images': flair.blur_images})
         for tag in self.tags:
             return_value.append({'type': 'Hashtag',
-                                 'href': f'{current_app.config["SERVER_URL"]}/tag/{tag.name}',
+                                 'href': f'{base}/tag/{tag.name}',
                                  'name': f'#{tag.name}'})
 
         # include emojis used in body text
@@ -4515,7 +4554,7 @@ class PostReply(db.Model):
             return 'English'
 
     def is_local(self):
-        return self.ap_id is None or is_local_url(self.ap_id)
+        return self.ap_id is None or is_hosted_url(self.ap_id)   # its owner's domain may be a sister (plan C3)
 
     @classmethod
     def get_by_ap_id(cls, ap_id):
@@ -4525,7 +4564,7 @@ class PostReply(db.Model):
         if self.ap_id:
             return self.ap_id
         else:
-            return f"{current_app.config['SERVER_URL']}/comment/{self.id}"
+            return f"{federation_base(self)}/comment/{self.id}"
 
     def public_url(self):
         return self.profile_id()

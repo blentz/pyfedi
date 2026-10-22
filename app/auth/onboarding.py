@@ -8,6 +8,7 @@ from app.auth import bp
 from app.auth.forms import ChooseTopicsForm, FilterSetupForm
 from app.auth.util import get_country
 from app.constants import SUBSCRIPTION_NONMEMBER
+from app.federation_urls import activity_id
 from app.models import User, Topic, Community, CommunityJoinRequest, CommunityMember, Filter, InstanceChooser, Language
 from app.utils import user_banned_from_community, render_template, joined_communities, community_membership, get_setting, num_topics, ip_address
 
@@ -197,6 +198,6 @@ def send_community_follow(community_id: int, join_request_id: int, user_id: int)
                 "to": [community.public_url()],
                 "object": community.public_url(),
                 "type": "Follow",
-                "id": f"{current_app.config['SERVER_URL']}/activities/follow/{join_request_id}"
+                "id": activity_id('follow', user, join_request_id)
             }
             send_post_request(community.ap_inbox_url, follow, user.private_key, user.public_url() + '#main-key')

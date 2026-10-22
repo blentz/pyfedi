@@ -6,6 +6,7 @@ from app.activitypub.serializers import (episode_attachment, microblog_note, pee
 from app.activitypub.signature import default_context, send_post_request
 from app.constants import POST_TYPE_LINK, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_VIDEO, \
     POST_TYPE_POLL, MICROBLOG_APPS, NOTIF_MENTION, POST_TYPE_EVENT
+from app.federation_urls import activity_id, hosted_domain_names
 from app.models import Instance, Notification, Poll, PollChoice, Post, User, UserFollower, utcnow, Event, \
     Community, more_info_link
 from app.local_only import federated_mentions
@@ -14,7 +15,7 @@ from app.shared.media import media_of
 from app.storefront import hosted_instance_ids
 from app.user.utils import search_for_user
 from app.visibility import can_view, follower_instances, followers_only_addressing, is_open
-from app.utils import user_banned_from_community, gibberish, instance_banned, ap_datetime, get_recipient_language, get_task_session, \
+from app.utils import user_banned_from_community, instance_banned, ap_datetime, get_recipient_language, get_task_session, \
     patch_db_session, TaskError
 
 from flask import current_app
@@ -121,14 +122,14 @@ def send_microblog_note(post, user, community, recipients: list, edit: bool) -> 
     see the post as its author's own status, and a receiver dedupes by object id."""
     note = microblog_note(post, recipients)
     verb = 'update' if edit else 'create'
-    activity = {'id': f"{current_app.config['SERVER_URL']}/activities/{verb}/{gibberish(15)}",
+    activity = {'id': activity_id(verb, user),
                 'type': 'Update' if edit else 'Create', 'actor': user.public_url(), 'object': note,
                 'to': note['to'], 'cc': note['cc'], '@context': default_context()}
     followers_only = not is_open(post)
 
     sent_to = set()
     if not followers_only:
-        announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
+        announce_id = activity_id('announce', community)
         inner = {key: value for key, value in activity.items() if key != '@context'}
         microblog_announce = {'id': announce_id, 'type': 'Announce', 'actor': community.public_url(),
                               'object': post.ap_id, 'to': note['to'], 'cc': [community.ap_followers_url],
@@ -170,12 +171,12 @@ def send_peertube_video(post, user, community, recipients: list, edit: bool) -> 
     author's activity."""
     video = peertube_video(post)
     verb = 'update' if edit else 'create'
-    activity = {'id': f"{current_app.config['SERVER_URL']}/activities/{verb}/{gibberish(15)}",
+    activity = {'id': activity_id(verb, user),
                 'type': 'Update' if edit else 'Create', 'actor': user.public_url(), 'object': video,
                 'to': video['to'], 'cc': video['cc'], '@context': default_context()}
     audience = community.public_url()
     inner = {key: value for key, value in activity.items() if key != '@context'}
-    microblog_announce = {'id': f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}",
+    microblog_announce = {'id': activity_id('announce', community),
                           'type': 'Announce', 'actor': community.public_url(), 'object': post.ap_id,
                           'to': video['to'], 'cc': [community.ap_followers_url], '@context': default_context()}
     group_announce = dict(microblog_announce,
@@ -240,6 +241,8 @@ def send_post(post_id, edit=False, session=None):
                     session.add(notification)
                     session.commit()
     recipients = federated_mentions(recipients)   # a local-only account is Mentioned as plain text only
+    if not user.is_local():
+        return   # a remote account's post is its own server's to federate: none of our domains names it
 
     if not (community.instance_id and community.instance.online()):
         return
@@ -360,7 +363,7 @@ def send_post(post_id, edit=False, session=None):
             page['attachment'].append(more_info_link(event.more_info_url))
 
     activity = 'create' if not edit else 'update'
-    create_id = f"{current_app.config['SERVER_URL']}/activities/{activity}/{gibberish(15)}"
+    create_id = activity_id(activity, user)
     type = 'Create' if not edit else 'Update'
     create = {
       'id': create_id,
@@ -376,7 +379,7 @@ def send_post(post_id, edit=False, session=None):
         del page['audience']
         del create['audience']
 
-    domains_sent_to = [current_app.config['SERVER_NAME']]
+    domains_sent_to = hosted_domain_names()   # never one of ours: its accounts are told here, not sent to
 
     # if the community is local, and remote instance is something like Lemmy, Announce the activity
     # if the community is local, and remote instance is something like Mastodon, Announce creates (so the community Boosts it), but send updates directly and from the user
@@ -388,7 +391,7 @@ def send_post(post_id, edit=False, session=None):
         if community.is_local():
             del create['@context']
 
-            announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
+            announce_id = activity_id('announce', community)
             cc = [community.ap_followers_url]
             group_announce = {
               'id': announce_id,
@@ -532,7 +535,7 @@ def move_object(session, user_id, object, origin, target):
     if not is_open(object):     # Amendment B (S7.4): move_post refuses this; never federate one that got through
         return
 
-    move_id = f"{current_app.config['SERVER_URL']}/activities/move/{gibberish(15)}"
+    move_id = activity_id('move', user)
     to = ["https://www.w3.org/ns/activitystreams#Public"]
     cc = [community.public_url()]
     move = {
@@ -550,7 +553,7 @@ def move_object(session, user_id, object, origin, target):
     if community.is_local():
         del move['@context']
 
-        announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
+        announce_id = activity_id('announce', community)
         actor = community.public_url()
         cc = [community.ap_followers_url]
         announce = {

@@ -9,6 +9,7 @@ from random import randint
 from flask import redirect, url_for, flash, current_app, abort, request, g, make_response, jsonify
 from flask_babel import _, force_locale, gettext
 from flask_login import current_user
+from app.federation_urls import activity_id
 from app.onion import audit_field
 from furl import furl
 from sqlalchemy import text, desc, Integer, case
@@ -62,7 +63,7 @@ import app.variants as variants
 from app.storefront import storefront_url
 from app.utils import etag_stamp
 from app.utils import clean_ap_url, can_moderate, is_local_microblogs, render_template, markdown_to_html, validation_required, \
-    shorten_string, markdown_to_text, gibberish, ap_datetime, return_304, \
+    shorten_string, markdown_to_text, ap_datetime, return_304, \
     request_etag_matches, ip_address, instance_banned, \
     blocked_or_banned_instances, blocked_domains, community_moderators, show_ban_message, recently_upvoted_posts, \
     recently_downvoted_posts, recently_upvoted_post_replies, recently_downvoted_post_replies, \
@@ -2574,7 +2575,7 @@ def post_reply_restore(post_id: int, comment_id: int):
                 "actor": current_user.public_url(),
                 "to": ["https://www.w3.org/ns/activitystreams#Public"],
                 "object": {
-                    'id': f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}",
+                    'id': activity_id('delete', current_user),
                     'type': 'Delete',
                     'actor': current_user.public_url(),
                     'audience': post.community.public_url(),
@@ -2589,7 +2590,7 @@ def post_reply_restore(post_id: int, comment_id: int):
                 "cc": [post.community.public_url()],
                 "audience": post.community.public_url(),
                 "type": "Undo",
-                "id": f"{current_app.config['SERVER_URL']}/activities/undo/{gibberish(15)}"
+                "id": activity_id('undo', current_user)
             }
             if was_mod_deletion:
                 delete_json['object']['summary'] = "Deleted by mod"
@@ -2602,7 +2603,7 @@ def post_reply_restore(post_id: int, comment_id: int):
 
             else:  # local community - send it to followers on remote instances
                 announce = {
-                    "id": f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}",
+                    "id": activity_id('announce', post.community),
                     "type": 'Announce',
                     "to": [
                         "https://www.w3.org/ns/activitystreams#Public"

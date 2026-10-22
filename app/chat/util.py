@@ -1,13 +1,14 @@
-from flask import flash, current_app, json
+from flask import flash, json
 from flask_babel import _
 from flask_login import current_user
 
 from app import db
 from app.activitypub.signature import send_post_request
 from app.constants import NOTIF_MESSAGE, SRC_WEB
+from app.federation_urls import activity_id, owner_base
 from app.models import User, ChatMessage, Notification, utcnow, Conversation
 from app.storefront import canonicalise_text
-from app.utils import shorten_string, gibberish, markdown_to_html, publish_sse_event
+from app.utils import shorten_string, markdown_to_html, publish_sse_event
 
 
 def send_message(message: str, conversation_id: int, user: User = current_user, src=SRC_WEB) -> ChatMessage:
@@ -21,7 +22,7 @@ def send_message(message: str, conversation_id: int, user: User = current_user, 
     for recipient in conversation.members:
         if recipient.id != user.id:
             reply.recipient_id = recipient.id
-            reply.ap_id = f"{current_app.config['SERVER_URL']}/private_message/{reply.id}"
+            reply.ap_id = f"{owner_base(reply)}/private_message/{reply.id}"   # the sender's domain (plan C3)
             db.session.commit()
             if recipient.is_local():
                 publish_sse_event(f"messages:{recipient.id}", json.dumps({'conversation': conversation.id}))
@@ -46,7 +47,7 @@ def send_message(message: str, conversation_id: int, user: User = current_user, 
                 # Federate reply
                 reply_json = {
                     "actor": user.public_url(),
-                    "id": f"{current_app.config['SERVER_URL']}/activities/create/{gibberish(15)}",
+                    "id": activity_id('create', user),
                     "object": {
                         "attributedTo": user.public_url(),
                         "content": reply.body_html,
@@ -127,7 +128,7 @@ def update_message(reply: ChatMessage):
         # Federate reply
         reply_json = {
             "actor": user.public_url(),
-            "id": f"{current_app.config['SERVER_URL']}/activities/update/{gibberish(15)}",
+            "id": activity_id('update', user),
             "object": {**chat_message_ap_object(reply, recipient), "updated": reply.edited_at.isoformat() + 'Z'},
             "to": [recipient.public_url()],
             # an edit is an Update, as app/shared/tasks/notes.py:187 and

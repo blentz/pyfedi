@@ -12,6 +12,7 @@ from app import db, cache, celery
 from app.activitypub.signature import send_post_request, default_context, RsaKeys
 from app.activitypub.util import find_actor_or_create, make_image_sizes
 from app.constants import *
+from app.federation_urls import activity_id
 from app.models import User, Feed, FeedMember, FeedItem, Community, FeedJoinRequest, CommunityMember, \
     CommunityJoinRequest, Instance, File, _as_url
 from app.shared.tasks import task_selector
@@ -77,7 +78,7 @@ def join_feed(actor, user_id, src=SRC_WEB):
                             "to": [feed.public_url()],
                             "object": feed.public_url(),
                             "type": "Follow",
-                            "id": f"{current_app.config['SERVER_URL']}/activities/follow/{join_request.uuid}"
+                            "id": activity_id('follow', user, join_request.uuid)
                         }
                         send_post_request(feed.ap_inbox_url, follow, user.private_key, user.public_url() + '#main-key',
                                           timeout=10)
@@ -696,13 +697,13 @@ def _feed_remove_community(community_id: int, current_feed_id: int):
                 # Undo the Follow
                 if not community.is_local():  # this is a remote community, so activitypub is needed
                     if not community.instance.gone_forever:
-                        follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{gibberish(15)}"
+                        follow_id = activity_id('follow', user)
                         # D89 (owner ruling): the original Follow's id, for every peer rather than only ovo.st
                         join_request = db.session.query(CommunityJoinRequest).filter_by(user_id=user.id,
                                                                                         community_id=community.id).first()
                         if join_request:
-                            follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{join_request.uuid}"
-                        undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/" + gibberish(15)
+                            follow_id = activity_id('follow', user, join_request.uuid)
+                        undo_id = activity_id('undo', user)
                         follow = {
                             "actor": user.public_url(),
                             "to": [community.public_url()],
