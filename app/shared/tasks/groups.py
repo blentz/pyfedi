@@ -62,49 +62,33 @@ def edit_community(send_async, user_id, community_id):
 
                 if not community.is_moderator(user):
                     return
-                if not community.is_local() and not community.ap_inbox_url:
-                    current_app.logger.info(f'Group Update for community {community.id} not sent: it has no inbox')
+                if not community.is_local():
+                    # A remote Group is its home server's: our copy may be stale, and an Update naming it would make
+                    # the home apply our copy over its own moderators' changes. The edit stays here (plan C3 ruling)
                     return
 
                 # Named on the owners' domains (plan C3), from the rows, as a Celery worker has no request: the
-                # Update is the moderator's activity, the Group and its Announce the community's. A remote
-                # community's Group is its own, named by its stored id and collections; only a relative image of
-                # ours is on the sending moderator's domain
+                # Update is the moderator's activity, the Group and its Announce the community's
                 update_id = activity_id('update', user)
-                base = owner_base(community if community.is_local() else user)
-                if community.is_local():
-                    group_id = f"{base}/c/{community.name}"
-                    urls = {'attributedTo': group_id + '/moderators', 'featured': group_id + '/featured',
-                            'followers': group_id + '/followers', 'endpoints': {'sharedInbox': f"{base}/inbox"},
-                            'inbox': group_id + '/inbox', 'outbox': group_id + '/outbox'}
-                else:
-                    group_id = community.ap_profile_id
-                    urls = {'attributedTo': community.ap_moderators_url or group_id + '/moderators',
-                            'featured': community.ap_featured_url or group_id + '/featured',
-                            'followers': community.ap_followers_url or group_id + '/followers',
-                            'inbox': community.ap_inbox_url, 'outbox': community.ap_outbox_url or group_id + '/outbox'}
-                    if community.instance.inbox:
-                        urls['endpoints'] = {'sharedInbox': community.instance.inbox}
+                base = owner_base(community)
+                group_id = f"{base}/c/{community.name}"
                 group = {
                   'id': group_id,
                   'type': 'Group',
-                  'attributedTo': urls['attributedTo'],
+                  'attributedTo': group_id + '/moderators',
                   'name': community.title,
                   'preferredUsername': community.name,
                   'sensitive': True if community.nsfw or community.nsfl else False,
                   'published': ap_datetime(community.created_at),
                   'updated': ap_datetime(utcnow()),
                   'postingRestrictedToMods': community.restricted_to_mods,
-                  'featured': urls['featured'],
-                  'followers': urls['followers'],
-                }
-                if 'endpoints' in urls:
-                    group['endpoints'] = urls['endpoints']
-                group.update({
-                  'inbox': urls['inbox'],
-                  'outbox': urls['outbox'],
+                  'featured': group_id + '/featured',
+                  'followers': group_id + '/followers',
+                  'endpoints': {'sharedInbox': f"{base}/inbox"},
+                  'inbox': group_id + '/inbox',
+                  'outbox': group_id + '/outbox',
                   'publicKey':  {'id': group_id + '#main-key', 'owner': group_id, 'publicKeyPem': community.public_key}
-                })
+                }
                 if community.description_html:
                     group['summary'] = community.description_html
                 if community.description:
@@ -149,22 +133,19 @@ def edit_community(send_async, user_id, community_id):
                   'cc': cc,
                   'audience': community.public_url()
                 }
-                if community.is_local():
-                    announce = {
-                      'id': activity_id('announce', community),
-                      'type': 'Announce',
-                      'actor': community.public_url(),
-                      'object': update,
-                      'to': to,
-                      'cc': cc,
-                      '@context': default_context()
-                    }
+                announce = {
+                  'id': activity_id('announce', community),
+                  'type': 'Announce',
+                  'actor': community.public_url(),
+                  'object': update,
+                  'to': to,
+                  'cc': cc,
+                  '@context': default_context()
+                }
 
-                    for instance in community.following_instances():
-                        if instance.inbox and instance.online():
-                            send_post_request(instance.inbox, announce, community.private_key, community.public_url() + '#main-key')
-                else:
-                    send_post_request(community.ap_inbox_url, update, user.private_key, user.public_url() + '#main-key')
+                for instance in community.following_instances():
+                    if instance.inbox and instance.online():
+                        send_post_request(instance.inbox, announce, community.private_key, community.public_url() + '#main-key')
         except Exception:
             session.rollback()
             raise
