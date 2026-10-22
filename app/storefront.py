@@ -23,7 +23,7 @@ from flask import Response, current_app, g, has_app_context, has_request_context
 from flask.globals import request_ctx
 from flask_babel import _
 from sqlakeyset import InvalidPage
-from sqlalchemy import case, desc, or_, tuple_
+from sqlalchemy import and_, case, desc, func, or_, tuple_
 from sqlakeyset.results import unserialize_bookmark
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -331,12 +331,36 @@ def hidden_instance_ids() -> frozenset[int]:
     return frozenset(instance_id_of(row) for row in domain_rows() if not row.federates and instance_id_of(row) != here)
 
 
+def normalised_host(name: str) -> str:
+    """A host name as `hidden_host_names` compares it: lower-case, without trailing dots or a leading `www.`."""
+    return name.lower().rstrip('.').removeprefix('www.')
+
+
 def hidden_host_names() -> frozenset[str]:
-    """The host names of the domains whose instance rows `hidden_instance_ids` hides, as a link `Domain` row names a
-    host (lower-case, no leading `www.`): a link to one is not listed or shown off its own storefront either."""
+    """The host names of the domains whose instance rows `hidden_instance_ids` hides, normalised: a link to one is
+    not listed or shown off its own storefront either."""
     here = current_instance_id()
-    names = (row.domain.lower() for row in domain_rows() if not row.federates and instance_id_of(row) != here)
-    return frozenset(name.removeprefix('www.') for name in names)
+    return frozenset(normalised_host(row.domain) for row in domain_rows()
+                     if not row.federates and instance_id_of(row) != here)
+
+
+def host_hidden_here(name: str) -> bool:
+    """Whether a link host `name` (a `Domain` row's) names a hidden domain: the host itself, or any name under it,
+    since Tor ignores the subdomains of an onion address. Written in any case and with a trailing dot alike."""
+    host = normalised_host(name)
+    return any(host == hidden or host.endswith('.' + hidden) for hidden in hidden_host_names())
+
+
+def host_not_hidden_clause(column):
+    """`host_hidden_here` negated, as a filter on a column of host names (`Domain.name`); None when nothing is
+    hidden, so a caller adds no condition at all."""
+    hidden = hidden_host_names()
+    if not hidden:
+        return None
+    name = func.lower(func.rtrim(func.coalesce(column, ''), '.'))
+    escaped = (h.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') for h in sorted(hidden))
+    return and_(*(~or_(name == host, name.like('%.' + pattern, escape='\\'))
+                  for host, pattern in zip(sorted(hidden), escaped)))
 
 
 def instance_visible_here(instance_id: int) -> bool:
