@@ -457,10 +457,16 @@ def federating_domain_of_url(url: str | None) -> DomainInfo | None:
 
 
 def is_federating_url(url) -> bool:
-    """Whether `url` names something a federating domain of ours serves (`federating_domain_of_url`): the inbound
-    "is it ours" test (plan C3). Every federating domain's URL is, a local-only domain's (the onion) never is, nor is
-    a lookalike host or any value that is not an http(s) URL string."""
-    return isinstance(url, str) and federating_domain_of_url(url) is not None
+    """Whether `url` names something a federating domain of ours serves: the inbound "is it ours" test (plan C3).
+    `federating_domain_of_url`'s domain, over that domain's own scheme (SERVER_URL's for the default): an object of
+    ours is named on its domain's base URL, so `http://shop.example/...` is not ours when shop.example is https. Every
+    federating domain's URL is, a local-only domain's (the onion) never is, nor is a lookalike host or any value that
+    is not an http(s) URL string. (`domain_of_url` itself takes either scheme: a link pasted over http is still to
+    one of our domains.)"""
+    if not isinstance(url, str):
+        return False
+    domain = federating_domain_of_url(url)
+    return domain is not None and urlsplit(url).scheme.lower() == urlsplit(domain_base_url(domain)).scheme
 
 
 def is_registered_host(host: str) -> bool:
