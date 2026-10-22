@@ -29,7 +29,7 @@ from app.activitypub.serializers.microblog import link_hashtags, microblog_note
 from app.activitypub.util import comment_model_to_json, post_to_page
 from app.federation_urls import activity_id, hosted_domain_names, object_base, owned_elsewhere
 from app.models import ActivityPubLog, ChatMessage, CommunityFlair, CommunityMember, Conversation, Feed, Instance, \
-    PostVote, SiteDomain, Tag
+    PostVote, Site, SiteDomain, Tag
 from app.quotes import resolve_quotes
 from app.shared.tasks.deletes import delete_object
 from app.shared.tasks.follows import join_community, leave_community
@@ -556,3 +556,21 @@ def test_a_hell_owners_feed_delete_keeps_its_shape(app, sites, monkeypatch):
                                                     ['https://peer.example/inbox'])
     [(_, delete, _)] = sent
     assert re.fullmatch(rf'https://test\.piefed\.local/delete/{TOKEN}', delete['id'])
+
+
+def page_alternates(response) -> list[str]:
+    return [link for link in response.headers.getlist('Link') if 'application/activity+json' in link]
+
+
+@pytest.mark.parametrize('owner', ['hell', 'shop'])
+def test_a_posts_page_advertises_its_activitypub_id_on_its_owners_domain(app, sites, owner):
+    """I2: the HTML page's ActivityPub alternate is the URL that answers the fetch, on the post's domain."""
+    author, community, host, base = (sites.hal, sites.pit, HELL, HELL_BASE) if owner == 'hell' else \
+        (sites.sam, sites.wares, SHOP, SHOP_BASE)
+    post = a_post(community, author)
+    db.session.get(Site, 1).private_instance = False   # a logged-out visitor sees the page
+    db.session.commit()
+    response = app.test_client().get(f'/post/{post.id}', base_url=f'https://{host}')
+    assert response.status_code == 200
+    assert page_alternates(response) == [f'<{base}/post/{post.id}>; rel="alternate"; type="application/activity+json"']
+    assert fetch(app, f'/post/{post.id}', host).status_code == 200   # the advertised URL answers there
