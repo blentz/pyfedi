@@ -444,9 +444,10 @@ def double_knock(uri: str, send) -> httpx.Response:
 
 
 def _fetch_actor_key(actor_url: str) -> str | None:
-    """The PEM `actor_url` publishes now, fetched with a signed GET as the acting domain's instance actor (the default
-    domain's: an inbound request has no account of ours acting); None on any failure, no instance key among them.
-    Only the key is taken: the daily profile refresh does the rest."""
+    """The PEM `actor_url` publishes now, fetched with a signed GET as the acting domain's instance actor: in an inbox
+    request, the domain it was delivered to (`acting_domain`), so a refetch for a delivery to a sister domain is that
+    domain's, never hell.cloud's; None on any failure, no instance key among them. Only the key is taken: the daily
+    profile refresh does the rest."""
     try:
         private_key, key_id = instance_actor_signing(acting_domain())
         response = signed_get_request(actor_url, private_key, key_id)

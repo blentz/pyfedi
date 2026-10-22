@@ -550,14 +550,17 @@ _ACTING_ENVIRON = 'piefed.acting_domain'
 
 def acting_domain() -> DomainInfo:
     """The federating domain an instance-level request (an unsigned fetch's User-Agent, a fetch signed by an instance
-    actor) is made as, plan C3: the one an `acting_for` block names; else, in a request, the home domain of the local
-    account acting in it (the API caller `authorise_api_user` accepted, or the signed-in user), as a fetch a shop
-    account caused is the shop's; else the default domain, for relays, housekeeping and anything no account caused.
-    A local-only domain (the onion) makes no request another server sees named by it, so its accounts act as the
-    default domain, as before C3."""
+    actor) is made as, plan C3:
+    - the one an `acting_for` block names (a Celery task's run is one: app.celery_acting, the domain that queued it);
+    - else, in a request, the home domain of the local account acting in it (the API caller `authorise_api_user`
+      accepted, or the signed-in user), as a fetch a shop account caused is the shop's;
+    - else the domain the request came in on, as an inbox POST to a sister domain is that domain's to answer;
+    - else the default domain, for relays, housekeeping and anything no account or domain caused.
+    A local-only domain (the onion) makes no request another server sees named by it, so it and its accounts act as
+    the default domain, as before C3."""
     domain = _acting.get()
     if domain is None and has_request_context():
-        domain = request.environ.get(_ACTING_ENVIRON) or _signed_in_domain()
+        domain = request.environ.get(_ACTING_ENVIRON) or _signed_in_domain() or current_storefront()
     return domain if domain is not None and domain.federates else default_domain()
 
 
