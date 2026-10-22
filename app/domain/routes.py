@@ -14,7 +14,7 @@ from app.domain.forms import PostWarningForm
 from app.inoculation import inoculation
 from app.models import Post, Domain, Community, DomainBlock, read_posts
 from app.shared.domain import block_domain, unblock_domain
-from app.storefront import hidden_host_names, is_local_host, storefront_link, storefront_url
+from app.storefront import host_hidden_here, host_not_hidden_clause, is_local_host, storefront_link, storefront_url
 from app.local_only import local_only_visible_rss, without_local_only
 from app.visibility import listable_clause
 from app.utils import render_template, permission_required, user_filters_posts, blocked_domains, \
@@ -41,7 +41,7 @@ def show_domain(domain_id):
             domain = db.session.get(Domain, domain_id) or abort(404)
             if domain.banned:
                 domain = None
-        if domain and domain.name in hidden_host_names():   # a sister local-only domain: not shown off its own
+        if domain and host_hidden_here(domain.name):   # a sister local-only domain: not shown off its own
             domain = None
         if domain:
             if current_user.is_authenticated and (current_user.is_staff() or current_user.is_admin()):
@@ -130,7 +130,7 @@ def show_domain_rss(domain_id):
             domain = db.session.get(Domain, domain_id) or abort(404)
             if domain.banned:
                 domain = None
-        if domain and domain.name in hidden_host_names():   # as show_domain
+        if domain and host_hidden_here(domain.name):   # as show_domain
             domain = None
         if domain:
             # If nothing has changed since their last visit, return HTTP 304
@@ -193,8 +193,9 @@ def domains():
     search = request.args.get('search', '')
 
     domains = Domain.query.filter_by(banned=False)
-    if hidden := hidden_host_names():   # a sister local-only domain's host is not listed off its own storefront
-        domains = domains.filter(Domain.name.not_in(hidden))
+    # A sister local-only domain's host, or a name under it, is not listed off its own storefront.
+    if (shown := host_not_hidden_clause(Domain.name)) is not None:
+        domains = domains.filter(shown)
     if search != '':
         domains = domains.filter(Domain.name.ilike(f'%{search}%'))
     domains = domains.order_by(Domain.name)
@@ -221,8 +222,8 @@ def domains_blocked_list():
     search = request.args.get('search', '')
 
     domains = Domain.query.filter_by(banned=True)
-    if hidden := hidden_host_names():   # as domains()
-        domains = domains.filter(Domain.name.not_in(hidden))
+    if (shown := host_not_hidden_clause(Domain.name)) is not None:   # as domains()
+        domains = domains.filter(shown)
     if search != '':
         domains = domains.filter(Domain.name.ilike(f'%{search}%'))
     domains = domains.order_by(Domain.name)
