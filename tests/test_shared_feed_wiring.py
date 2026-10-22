@@ -72,6 +72,7 @@ def _seed():
     """
     instance = _burn_a_seed()
     owner = make_user(instance, 'feedowner')
+    owner.ap_id = owner.ap_domain = None   # a feed's owner is ours: its Delete of the feed is named on its domain (C3)
     actor = make_user(instance, 'feedactor')
     bystander_community = make_community(name='bystander')
     community = make_community(name='wiring')
@@ -657,10 +658,14 @@ def test_announce_delete_skips_the_feed_owner(app, db_session):
     assert owner_instance.id != other_instance.id
     assert owner_instance.inbox != other_instance.inbox
 
+    with patch('app.shared.feed.instance_banned', return_value=False):
+        inboxes = remote_subscriber_inboxes(s.feed)
+    # the owner sending the Delete is ours (its id is on the owner's domain, C3); it was remote only to show the
+    # owner is skipped for itself, not merely as a local member
+    s.owner.ap_id = None
+    db.session.commit()
     with patch('app.shared.feed.send_post_request') as send:
-        with patch('app.shared.feed.instance_banned', return_value=False):
-            announce_feed_delete_to_subscribers(s.owner.id, s.feed.ap_public_url,
-                                                remote_subscriber_inboxes(s.feed))
+        announce_feed_delete_to_subscribers(s.owner.id, s.feed.ap_public_url, inboxes)
 
     assert send.call_count == 1
     assert send.call_args.args[0] == other_instance.inbox
@@ -782,7 +787,7 @@ def test_announce_delete_rolls_back_and_re_raises_on_failure(app, db_session):
         RAISE rather than with anything about the rollback it exists for.
         """
         if model is User:
-            return remote
+            return s.owner if ident == s.owner.id else remote   # the sender is the feed's owner, ours
         if model is Instance:
             return s.instance
         return MagicMock()

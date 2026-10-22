@@ -20,6 +20,7 @@ import app.shared.tasks.deletes as deletes_module
 import app.shared.tasks.follows as follows_module
 import app.shared.tasks.likes as likes_module
 import app.shared.tasks.notes as notes_module
+import app.shared.feed as shared_feed
 import app.shared.tasks.pages as pages_module
 import app.user.utils as user_utils
 from app import cache, db
@@ -532,3 +533,26 @@ def test_a_shop_moderators_site_ban_targets_the_shop(app, sites, monkeypatch):
     [(_, block, key_id)] = sent
     assert block['target'] == f'{SHOP_BASE}/'
     assert_shops(block, 'block', key_id)
+
+
+# --------------------------------------------------------------------------
+# Fix round 1
+# --------------------------------------------------------------------------
+
+def test_a_shop_owners_feed_delete_is_the_shops(app, sites, monkeypatch):
+    """I1: the Delete is the owner's activity, so its id is on the owner's domain, as its actor and key are."""
+    sent = captured(monkeypatch, shared_feed)
+    shared_feed.announce_feed_delete_to_subscribers(sites.sam.id, f'{HELL_BASE}/f/samsfeed',
+                                                    ['https://peer.example/inbox'])
+    [(inbox, delete, key_id)] = sent
+    assert inbox == 'https://peer.example/inbox'
+    assert re.fullmatch(rf'{SHOP_BASE}/delete/{TOKEN}', delete['id'])
+    assert delete['actor'] == f'{SHOP_BASE}/u/sam' and key_id == f'{SHOP_BASE}/u/sam#main-key'
+
+
+def test_a_hell_owners_feed_delete_keeps_its_shape(app, sites, monkeypatch):
+    sent = captured(monkeypatch, shared_feed)
+    shared_feed.announce_feed_delete_to_subscribers(sites.hal.id, f'{HELL_BASE}/f/halsfeed',
+                                                    ['https://peer.example/inbox'])
+    [(_, delete, _)] = sent
+    assert re.fullmatch(rf'https://test\.piefed\.local/delete/{TOKEN}', delete['id'])

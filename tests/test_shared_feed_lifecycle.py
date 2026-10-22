@@ -68,6 +68,7 @@ def _seed():
     """
     instance = _burn_a_seed()
     owner = make_user(instance, 'feedowner')
+    owner.ap_id = owner.ap_domain = None   # a feed's owner is ours: its Delete of the feed is named on its domain (C3)
     member = make_user(instance, 'feedmember', local=True)   # who joins is ours: the Follow is named on its domain (C3)
     make_community(name='bystandercommunity1')
     make_community(name='bystandercommunity2')

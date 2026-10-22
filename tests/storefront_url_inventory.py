@@ -159,7 +159,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     },
     'app/shared/feed.py': {
         'announce_feed_add_remove_to_subscribers': 2,
-        'announce_feed_delete_to_subscribers': 1,
         'edit_feed': 2,
         'form_communities_to_ids': 1,
         'make_feed': 2,
