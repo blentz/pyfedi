@@ -190,7 +190,7 @@ SURFACES: dict[str, list[str]] = {
         'app.storefront.rewrite_links',
         'app.storefront._fetchable',
         'app.storefront._proxied_style',
-        'app.federation_urls.domain_of_url',
+        'app.storefront.domain_of_url',
         'app.onion_media.remote_for',
         'app.utils.is_invalid_get_request_uri',
         'app.pinned_http.is_refused_address',

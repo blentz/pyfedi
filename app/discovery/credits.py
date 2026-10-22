@@ -21,8 +21,9 @@ from app.constants import AP_FETCH_ACCEPT
 from app.discovery.filters import ascii_host, clean_https_url, clean_name, url_is_excluded
 from app.discovery.podcast import podcast_community_for
 from app.local_names import local_named
-from app.models import Post, Site, User
-from app.storefront import default_domain
+from app.federation_urls import MissingInstanceKey, instance_actor_signing
+from app.models import Post, User
+from app.storefront import acting_as_default, default_domain
 from app.utils import get_request_capped, get_task_session, patch_db_session
 
 MAX_FEED_BYTES = 2 * 1024 * 1024
@@ -129,6 +130,7 @@ def parse_feed_credits(feed_bytes: bytes, episode_url: str) -> list[dict]:
 _FEED_ACCEPT = 'application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.1'
 
 
+@acting_as_default()   # the credits are the default domain's housekeeping, whoever's page asked for them
 def fetch_feed(rss_url: str) -> bytes | None:
     if url_is_excluded(rss_url):
         return None
@@ -243,18 +245,19 @@ def _stored_urls(user) -> set:
 
 
 def _signed_headers(url) -> dict | None:
-    """The headers of a GET of url signed as this instance's actor, as signed_get_request sends them; None when the
-    site has no key."""
-    site = db.session.get(Site, 1)
-    if site is None or not site.private_key:
+    """The headers of a GET of url signed as the default domain's instance actor, as signed_get_request sends them;
+    None when it has no key."""
+    try:
+        private_key, key_id = instance_actor_signing(default_domain())
+    except MissingInstanceKey:
         return None
     # send_via_async: sign only, so the GET itself goes through get_request_capped's cap and deadline
-    _uri, headers, _body = HttpSignature.signed_request(url, None, site.private_key,
-                                                        f"{current_app.config['SERVER_URL']}/actor#main-key",
-                                                        method='get', send_via_async=True)
+    _uri, headers, _body = HttpSignature.signed_request(url, None, private_key, key_id, method='get',
+                                                        send_via_async=True)
     return headers
 
 
+@acting_as_default()
 def fetch_actor_document(url) -> dict | None:
     """One capped, ActivityPub-flavoured GET of an actor document (get_request's SSRF guards, no redirects), never
     to a refused host. A server that refuses it unsigned (401 or 403, authorized fetch) is asked once more, signed,

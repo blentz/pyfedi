@@ -1063,6 +1063,16 @@ def note_document(attributed_to: str = PEER_ACTOR_URI, uri: str = PEER_OBJECT_UR
 AS_PUBLIC_URI = 'https://www.w3.org/ns/activitystreams#Public'
 
 
+def give_site_a_key() -> Site:
+    """A pooled RSA keypair on Site row 1, the default domain's instance actor. Its signing
+    (`federation_urls.instance_actor_signing`) raises MissingInstanceKey for a row with none (plan C3), so a test
+    whose code signs as the instance actor needs one."""
+    site = db.session.get(Site, 1)
+    site.private_key, site.public_key = a_keypair()
+    db.session.commit()
+    return site
+
+
 def seed_signing_site() -> Site:
     """A Site row (id 1) carrying a real RSA keypair, required before the
     401 branch's signed fetch (signed_get_capped) can run at all.

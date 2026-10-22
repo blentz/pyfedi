@@ -59,13 +59,14 @@ from app.activitypub.signature_errors import KeyMismatchError, KeyRefetchable, U
     VerificationFormatError  # VerificationError and VerificationFormatError are re-exported
 from app.constants import AP_FETCH_ACCEPT, DATETIME_MS_FORMAT
 from app.discovery.instance_answers import record_delivery_refusal
+from app.federation_urls import MissingInstanceKey, federating_domain_of_url, instance_actor_signing
 from app.local_only import refused_outbound
 from app.relays.refusals import record_relay_refusal
 from app.rsa_keys import RsaKeys  # noqa: F401  (re-exported: RsaKeys has always been imported from here)
-from app.storefront import domain_for_host, domain_rows
-from app.models import utcnow, ActivityPubLog, Community, Instance, CommunityMember, Site, User, SendQueue, public_key_pem
+from app.storefront import acting_domain, default_domain, domain_base_url, domain_for_host, domain_rows
+from app.models import utcnow, ActivityPubLog, Community, Instance, CommunityMember, User, SendQueue, public_key_pem
 from app.utils import RequestNotSendable, ResponseTooLarge, _capped_get, _capped_request, get_request_capped, \
-    get_task_session, is_invalid_get_request_uri
+    get_task_session, is_invalid_get_request_uri, user_agent
 import app.activitypub.util as activitypub_util
 
 
@@ -325,13 +326,14 @@ def _target_uri(request) -> str:
     'mixed'), then the path and query. Never the Host header as sent (R-HOSTPIN): a signature made for another
     instance, replayed here with that instance's Host, must not verify.
 
-    A request addressed to a registered alias (a Tor-capable peer posting to the onion, spec Review Focus 5) was
-    signed for that alias, so its target is the alias's own scheme and domain. Only a registered domain can be named
-    this way; any other Host is answered by SERVER_URL as before."""
+    A request addressed to another federating domain of ours (each is an ActivityPub server of its own, plan C3)
+    was signed for that domain, so its target is that domain's own scheme and authority. Only a federating domain
+    can be named this way: any other Host, a local-only domain's (the onion) among them, is answered by SERVER_URL
+    as before, so a signature made for it does not verify."""
     path = request.full_path if request.query_string else request.path
     storefront = domain_for_host(request.host)
-    if storefront is not None and not storefront.is_default:
-        return f"{storefront.scheme}://{storefront.domain}{path}"
+    if storefront is not None and storefront.federates and not storefront.is_default:
+        return f"{domain_base_url(storefront)}{path}"
     server = urlparse(current_app.config['SERVER_URL'])
     return f"{server.scheme}://{server.netloc}{path}"
 
@@ -347,11 +349,14 @@ def _authority(value: str) -> str:
 
 def _check_signed_host(request) -> None:
     """Refuse a cavage signature whose signed Host is not this instance (R-HOSTPIN): otherwise a request signed
-    for another instance verifies here when replayed with that instance's Host. Every registered domain is this
-    instance, so a peer that signed for the onion alias it posted to verifies. The default domain is SERVER_NAME, port
-    included: a stored domain is a bare host, so only SERVER_NAME can say which port a signed Host must carry."""
+    for another instance verifies here when replayed with that instance's Host. Every federating domain is an
+    ActivityPub server of ours (plan C3), so a peer that signed for the one it posted to verifies; a local-only
+    domain (the onion) is no server any peer may address, so a signature made for it does not. The default domain is
+    SERVER_NAME, port included: a stored domain is a bare host, so only SERVER_NAME can say which port a signed Host
+    must carry."""
     host = _authority(request.headers.get('Host', ''))
-    ours = {_authority(current_app.config['SERVER_NAME'])} | {row.domain for row in domain_rows() if not row.is_default}
+    ours = {_authority(current_app.config['SERVER_NAME'])} | \
+        {row.domain for row in domain_rows() if row.federates and not row.is_default}
     if host not in ours:
         raise VerificationError(f'Signed host {request.headers.get("Host", "")} is not this instance')
 
@@ -439,15 +444,13 @@ def double_knock(uri: str, send) -> httpx.Response:
 
 
 def _fetch_actor_key(actor_url: str) -> str | None:
-    """The PEM `actor_url` publishes now, fetched with a signed GET as the instance actor; None on any failure.
+    """The PEM `actor_url` publishes now, fetched with a signed GET as the acting domain's instance actor (the default
+    domain's: an inbound request has no account of ours acting); None on any failure, no instance key among them.
     Only the key is taken: the daily profile refresh does the rest."""
-    site = db.session.get(Site, 1)
-    if site is None or not site.private_key:
-        return None
     try:
-        response = signed_get_request(actor_url, site.private_key,
-                                      f"{current_app.config['SERVER_URL']}/actor#main-key")
-    except (httpx.HTTPError, ValueError):
+        private_key, key_id = instance_actor_signing(acting_domain())
+        response = signed_get_request(actor_url, private_key, key_id)
+    except (MissingInstanceKey, httpx.HTTPError, ValueError):
         return None
     try:
         if response.status_code != 200:
@@ -829,7 +832,8 @@ class HttpSignature:
             # Send the request with all those headers except the pseudo one
             del headers["(request-target)"]
 
-        headers["User-Agent"] = f'PieFed/{current_app.config["VERSION"]}; +https://{current_app.config["SERVER_NAME"]}'
+        # Named as the signer's domain, so the two never disagree; the default domain's for a key that is no domain's
+        headers["User-Agent"] = user_agent(federating_domain_of_url(key_id) or default_domain())
         if send_via_async:  # 'async' sending involves passing the data through to the piefed_notifs service. See announce_activity_to_followers().
             return uri, headers, body_bytes
         else:

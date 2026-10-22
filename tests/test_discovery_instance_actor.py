@@ -9,9 +9,15 @@ from app.discovery.instance_answers import instance_actor_url
 from app.discovery.instance_actor import follow_activity, send_instance_follow, \
     send_instance_undo
 from app.models import DiscoverySync, Site
-from tests.factories import make_community, make_instance, make_user
+from tests.factories import give_site_a_key, make_community, make_instance, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
+
+
+@pytest.fixture(autouse=True)
+def site_key(site):
+    """The instance actor signs here (relays, the discovery sync): Site row 1 needs a key (plan C3)."""
+    give_site_a_key()
 
 
 @pytest.fixture(autouse=True)

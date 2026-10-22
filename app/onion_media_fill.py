@@ -34,7 +34,8 @@ import app as app_pkg
 from app import celery
 from app.onion_media import BYTES_KEY, cache_name, kind, url_kind
 from app.pinned_http import fetch_deadline
-from app.utils import domain_from_url, get_setting, instance_banned, is_invalid_get_request_uri
+from app.storefront import default_domain
+from app.utils import domain_from_url, get_setting, instance_banned, is_invalid_get_request_uri, user_agent
 
 DEAD_KEY = 'onion_media:dead:{}'
 DEAD_SECONDS = 3600             # a refused or failed URL is not fetched again for an hour
@@ -170,7 +171,8 @@ def _fetch(remote: str, temporary: pathlib.Path, deadline: float) -> str:
     final body to `temporary`. Returns the bare Content-Type. Each request is built here rather than by httpx's own
     redirect handling, which would send the next hop unchecked, and carries no cookie and no Referer."""
     url = remote
-    headers = {'User-Agent': f'PieFed/{current_app.config["VERSION"]}; +https://{current_app.config["SERVER_NAME"]}',
+    # The default domain's name, never the onion's: the onion is local-only, and its address stays off other servers
+    headers = {'User-Agent': user_agent(default_domain()),
                'Accept-Encoding': 'identity'}   # uncompressed, so the byte cap is the cap on what is read
     for _ in range(MAX_REDIRECTS + 1):
         if _hop_refused(url):

@@ -18,36 +18,24 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'create_app': 2,
     },
     'app/activitypub/actor.py': {
-        'fetch_remote_actor_data': 1,
         'find_actor_by_url': 2,
     },
     'app/activitypub/routes.py': {
         'feed_followers': 1,
         'feed_moderators_route': 1,
         'feed_profile': 5,
-        'replay_inbox_request': 1,
         'rerun_parked_request': 1,
-        'shared_inbox': 1,
         'user_profile': 1,
     },
     'app/activitypub/signature.py': {
-        'HttpSignature.signed_request': 1,
         '_check_signed_host': 1,
-        '_fetch_actor_key': 1,
         '_target_uri': 1,
     },
     'app/activitypub/util.py': {
-        '_origin_refusal_of_delete': 1,
-        'create_post_reply': 2,
-        'fetch_object_capped': 1,
-        'process_announce_of_uri': 1,
+        'create_post_reply': 1,
         'process_report': 2,
-        'refresh_community_profile_task': 1,
-        'refresh_feed_profile_task': 1,
-        'refresh_user_profile_task': 1,
-        'served_by_us': 1,
-        'update_post_from_activity': 3,
-        'update_post_reply_from_activity': 3,
+        'update_post_from_activity': 2,
+        'update_post_reply_from_activity': 2,
     },
     'app/admin/routes.py': {
         'admin_federation_ban_lists': 1,
@@ -84,7 +72,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     },
     'app/discovery/credits.py': {
         '_known_user': 1,
-        '_signed_headers': 1,
         'verified_credit_user': 1,
     },
     'app/discovery/instance_answers.py': {
@@ -116,16 +103,13 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'File.delete_from_disk': 2,
         'File.local_path_for_url': 2,
         'Post.generate_slug': 1,
-        'Post.new': 2,
+        'Post.new': 1,
         'User.encode_jwt_token': 1,
         'is_local_url': 1,
         'media_local_path': 1,
     },
     'app/nntp/server.py': {
         'PieFedNNTPServer.__init__': 1,
-    },
-    'app/onion_media_fill.py': {
-        '_fetch': 1,      # the User-Agent of a media fetch: the same instance identity get_request sends
     },
     'app/post/routes.py': {
         'post_cross_post': 1,
@@ -205,12 +189,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'choose_plan': 3,
     },
     'app/user/utils.py': {
-        'search_for_user': 1,
         'user_for_actor': 1,   # a bare name on the default domain is found by the actor URL SERVER_URL builds
-    },
-    'app/utils.py': {
-        'get_request': 2,
-        'get_request_capped': 1,
     },
     'app/visibility.py': {
         '_mentions': 1,

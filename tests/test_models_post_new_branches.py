@@ -23,6 +23,7 @@ from app.constants import POST_TYPE_ARTICLE, POST_TYPE_POLL
 from app.models import (Notification, Poll, PollChoice, Post, Site, User,
                         UserBlock, parse_ap_timestamp)
 from tests.factories import (make_community, make_community_member, make_user)
+from tests.two_domains import register_local_only_onion
 
 AUTHOR = 'https://remote.test/u/someone'
 PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
@@ -106,13 +107,23 @@ class TestAPostThatMentionsSomebodyHere:
         assert post is not None
         assert Notification.query.filter_by(user_id=env.local.id).count() == 1
 
-    def test_a_mention_whose_host_is_uppercased_is_not_matched(self, env):
-        """Recorded, not repaired: `profile_id.startswith(SERVER_URL)` is
-        case-sensitive, and a URL's scheme and host are not. Every implementation
-        that sends a mention copies the profile url verbatim, so this costs
-        nothing today -- but it is a comparison, not a decision, and the next
-        reader should know which it is."""
+    def test_a_mention_whose_host_is_uppercased_is_matched(self, env):
+        """A URL's scheme and host ignore case, and the guard is by domain now
+        (`storefront.is_federating_url`, plan C3), not the case-sensitive
+        `startswith(SERVER_URL)` it was."""
         post = new(env, tag=self.a_mention(env.local.ap_profile_id.upper()))
+        assert post is not None
+        assert Notification.query.filter_by(user_id=env.local.id).count() == 1
+
+    def test_a_mention_of_a_local_only_domains_account_is_not_matched(self, env):
+        """The guard itself, as distinct from the lookup after it: an onion
+        account is local (ap_id None) and its ap_profile_id equals the href, so
+        only the guard -- a local-only domain is no domain a peer may name --
+        keeps the Mention from notifying."""
+        onion = register_local_only_onion()
+        env.local.ap_profile_id = f'{onion}/u/{env.local.user_name}'
+        db.session.commit()
+        post = new(env, tag=self.a_mention(env.local.ap_profile_id))
         assert post is not None
         assert Notification.query.filter_by(user_id=env.local.id).count() == 0
 

@@ -33,6 +33,7 @@ from app.utils import utcnow
 from tests.factories import (make_community, make_instance, make_instance_block,
                              make_notification_subscription, make_post, make_post_reply,
                              make_site, make_user, make_user_block)
+from tests.two_domains import register_local_only_onion
 
 PEER = 'peer.example'
 
@@ -1278,12 +1279,12 @@ def test_a_mention_of_a_remote_user_produces_no_notification(app, db_session, re
     assert Notification.query.count() == 0
 
 
-def test_a_same_host_case_mismatched_href_produces_no_notification(app, db_session, redis_lock_only_double):
-    """Kills the `.startswith('https://' + current_app.config['SERVER_NAME'])`
-    conjunct -- the trap sub-project 14 hit on its own twin guard. This href
-    names the right host with the wrong CASE; `str.startswith` is
-    case-sensitive, so correctly-guarded code refuses it here, but a
-    recipient is seeded that WOULD match it once `.lower()`'d -- so a guard
+def test_a_local_only_domains_href_produces_no_notification(app, db_session, redis_lock_only_double):
+    """Kills the `is_federating_url(profile_id)` guard (plan C3; it was a
+    case-sensitive `.startswith('https://' + SERVER_NAME)`, and is by domain
+    now, so a same-host href in another case is ours). This href names a
+    local-only domain's account (the onion), which the guard refuses, and a
+    local recipient is seeded with exactly that ap_profile_id -- so a guard
     forced to always pass would find that recipient and create a real
     Notification, which the assertion below would catch.
 
@@ -1295,10 +1296,12 @@ def test_a_same_host_case_mismatched_href_produces_no_notification(app, db_sessi
     """
     community, post, replier = _seed_scenario()
     _use_a_non_microblog_instance(replier)
-    _seed_local_recipient('localuser')
+    recipient = _seed_local_recipient('localuser')
+    recipient.ap_profile_id = f'{register_local_only_onion()}/u/localuser'
+    db.session.commit()
     document = _reply_doc(content='hello',
                           tag=[{'type': 'Mention',
-                               'href': 'https://TEST.PIEFED.LOCAL/u/localuser'},
+                               'href': recipient.ap_profile_id},
                               {'name': 'decoy'}])
 
     reply = _create(community, post, replier, document=document)

@@ -8,14 +8,15 @@ from app import db
 from app.activitypub.signature import send_post_request
 from app.discovery import SYNC_NONE, SYNC_PENDING
 from app.discovery.instance_answers import instance_actor_url
-from app.federation_urls import activity_id
-from app.models import Site, utcnow
+from app.federation_urls import activity_id, instance_actor_signing
+from app.models import utcnow
 from app.storefront import default_domain   # the sync is the default domain's housekeeping
 
 
 def _signing():
-    site = db.session.get(Site, 1)   # not g.site: this runs from Celery and the CLI too
-    return site.private_key, instance_actor_url() + '#main-key'
+    """The default domain's instance actor key (Site row 1's) and keyId; MissingInstanceKey when it has none, before
+    anything is sent or the row changes."""
+    return instance_actor_signing(default_domain())
 
 
 def follow_activity(row) -> dict:

@@ -8,8 +8,10 @@ from app import db
 from app.activitypub.signature import send_post_request
 from app.activitypub.util import remote_object_to_json
 from app.discovery.instance_answers import instance_actor_url
-from app.models import Relay, Site, utcnow
+from app.federation_urls import instance_actor_signing
+from app.models import Relay, utcnow
 from app.relays import FOLLOW_PATH, PUBLIC, RELAY_ACCEPTED, RELAY_PENDING, STYLE_LITEPUB, STYLE_MASTODON
+from app.storefront import acting_as_default, default_domain
 
 
 class RelayError(Exception):
@@ -17,8 +19,9 @@ class RelayError(Exception):
 
 
 def _signing():
-    site = db.session.get(Site, 1)
-    return site.private_key, instance_actor_url() + '#main-key'
+    """The default domain's instance actor key (Site row 1's) and keyId: relays are its only (spec). MissingInstanceKey
+    when it has none."""
+    return instance_actor_signing(default_domain())
 
 
 def _actor_parts(document):
@@ -35,6 +38,7 @@ RELAY_ACTOR_TYPES = ('Application', 'Service')
 RELAY_ACTOR_TYPES = ('Application', 'Service')
 
 
+@acting_as_default()   # a relay is the default domain's, whichever admin added it
 def detect_relay(url: str) -> dict:
     """The relay at `url`: its style, inbox, actor and key. Reached from the admin relay page and the relay CLI
     (add_relay, retry_relay) and from inbox signature verification (inbound._relay_key); no housekeeping task calls
@@ -103,6 +107,7 @@ def _collection_items(collection) -> list:
     return [item.get('id') if isinstance(item, dict) else item for item in items]
 
 
+@acting_as_default()
 def _lists_us_as_follower(relay) -> bool:
     """True when the relay's followers collection names the instance actor.
 

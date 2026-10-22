@@ -39,6 +39,7 @@ from app.utils import utcnow
 from tests.factories import (make_community, make_instance, make_post,
                              make_post_flair, make_post_reply, make_site,
                              make_user, make_user_block)
+from tests.two_domains import register_local_only_onion
 
 PEER = 'peer.example'
 
@@ -956,29 +957,24 @@ def test_a_reply_tag_of_another_type_is_not_treated_as_a_mention(app, db_session
     assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
 
 
-def test_a_reply_mention_with_a_case_mismatched_host_notifies_nobody(app, db_session, redis_lock_only_double):
-    """The `profile_id.startswith('https://' + SERVER_NAME)` conjunct itself,
-    as distinct from the recipient lookup that follows it. A href whose host
-    differs from SERVER_NAME only by case fails this case-sensitive
-    `startswith` before any lowering happens (`profile_id.lower()` only runs
-    INSIDE the guard, once it has already passed).
-
-    A same-host-but-wrong-case href, rather than
-    test_a_reply_mention_of_a_remote_user_notifies_nobody's foreign PEER href,
-    is what makes this conjunct's effect observable: PEER's href would find
-    no matching local recipient regardless of whether this conjunct ran, so
-    that test alone does not kill a mutant that drops this conjunct. Here,
-    lower-casing the mixed-case href (what the guard's own next line would do
-    if it were reached) reproduces the recipient's `ap_profile_id` exactly --
-    so if `startswith` were bypassed, this Mention WOULD resolve and notify.
+def test_a_reply_mention_of_a_local_only_domains_account_notifies_nobody(app, db_session, redis_lock_only_double):
+    """The `is_federating_url(profile_id)` guard itself (plan C3), as distinct
+    from the recipient lookup that follows it. It is by domain now: a host that
+    differs from SERVER_NAME only by case is ours, as a URL's host ignores case
+    (test_models_post_new_branches pins that). What only the guard refuses is a
+    local-only domain's account: an onion account is local (ap_id None) and its
+    ap_profile_id equals the href, so if the guard were bypassed this Mention
+    WOULD resolve and notify.
     """
     reply = _seed_reply()
     recipient = _seed_local_recipient()
+    recipient.ap_profile_id = f'{register_local_only_onion()}/u/localuser'
+    db.session.commit()
 
     update_post_reply_from_activity(reply, _update(
         content='hello',
         tag=[{'type': 'Hashtag', 'name': '#x'},
-             {'type': 'Mention', 'href': 'https://Test.Piefed.Local/u/localuser'}],
+             {'type': 'Mention', 'href': recipient.ap_profile_id}],
     ))
 
     assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
@@ -2515,27 +2511,23 @@ def test_a_post_mention_with_a_non_string_href_notifies_nobody(app, db_session, 
     assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
 
 
-def test_a_post_mention_with_a_case_mismatched_host_notifies_nobody(app, db_session, redis_lock_only_double):
-    """The `profile_id.startswith('https://' + SERVER_NAME)` conjunct itself,
-    as distinct from the recipient lookup that follows it. A href whose host
-    differs from SERVER_NAME only by case fails this case-sensitive
-    `startswith` before any lowering happens (`profile_id.lower()` only runs
-    INSIDE the guard, once it has already passed).
-
-    A same-host-but-wrong-case href is what makes this conjunct's effect
-    observable: a foreign-host href would find no matching local recipient
-    regardless of whether this conjunct ran, so it would not distinguish this
-    guard from its absence. Here, lower-casing the mixed-case href (what the
-    guard's own next line would do if it were reached) reproduces the
-    recipient's `ap_profile_id` exactly -- so if `startswith` were bypassed,
-    this Mention WOULD resolve and notify.
+def test_a_post_mention_of_a_local_only_domains_account_notifies_nobody(app, db_session, redis_lock_only_double):
+    """The `is_federating_url(profile_id)` guard itself (plan C3), as distinct
+    from the recipient lookup that follows it. It is by domain now: a host that
+    differs from SERVER_NAME only by case is ours, as a URL's host ignores case
+    (test_models_post_new_branches pins that). What only the guard refuses is a
+    local-only domain's account: an onion account is local (ap_id None) and its
+    ap_profile_id equals the href, so if the guard were bypassed this Mention
+    WOULD resolve and notify.
     """
     post = _seed_post()
     recipient = _seed_local_recipient()
+    recipient.ap_profile_id = f'{register_local_only_onion()}/u/localuser'
+    db.session.commit()
 
     update_post_from_activity(post, _update(
         name='t', content='x',
-        tag=[{'type': 'Mention', 'href': 'https://Test.Piefed.Local/u/localuser'}],
+        tag=[{'type': 'Mention', 'href': recipient.ap_profile_id}],
         type='Note',
     ))
 

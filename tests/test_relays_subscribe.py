@@ -7,8 +7,15 @@ from app.relays import (PUBLIC, RELAY_ACCEPTED, RELAY_FAILED, RELAY_PENDING, REL
                         STYLE_MASTODON)
 from app.relays import subscribe
 from app.relays.refusals import record_relay_refusal
+from tests.factories import give_site_a_key
 
 pytestmark = pytest.mark.usefixtures('site')
+
+
+@pytest.fixture(autouse=True)
+def site_key(site):
+    """The instance actor signs here (relays, the discovery sync): Site row 1 needs a key (plan C3)."""
+    give_site_a_key()
 
 ACTOR = {'id': 'https://relay.example/actor', 'type': 'Application', 'inbox': 'https://relay.example/inbox',
          'publicKey': {'id': 'https://relay.example/actor#main-key', 'publicKeyPem': 'PEM'}}

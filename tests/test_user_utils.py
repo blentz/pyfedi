@@ -39,14 +39,14 @@ from flask_login import login_user, logout_user
 
 from app import db
 from app.constants import AP_FETCH_ACCEPT
-from app.models import BannedInstances, Post, PostReply, Site, User, UserNote
+from app.models import BannedInstances, Post, PostReply, User, UserNote
 from app.user.utils import (SimplePagination, _get_user_archived_replies,
                             _get_user_moderates, _get_user_post_replies,
                             _get_user_posts, _get_user_posts_and_replies,
                             _get_user_same_ip, _get_user_subscribed_communities,
                             _get_user_upvoted_posts, insert_or_update_user_note,
                             search_for_user, unsubscribe_from_community)
-from tests.factories import (make_community, make_community_member, make_post,
+from tests.factories import (give_site_a_key, make_community, make_community_member, make_post,
                              make_post_reply, make_post_vote, make_user)
 
 WEBFINGER = 'https://remote.test/.well-known/webfinger'
@@ -58,7 +58,7 @@ def env(app, api_baseline, monkeypatch):
     from types import SimpleNamespace
 
     g.admin_ids = []
-    g.site = db.session.get(Site, 1)
+    g.site = give_site_a_key()   # a signed retry signs as the instance actor
     monkeypatch.setattr('app.user.utils.time.sleep', lambda seconds: None)
     return SimpleNamespace(app=app, baseline=api_baseline,
                            server=current_app.config['SERVER_NAME'])

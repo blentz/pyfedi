@@ -19,7 +19,6 @@ import httpx
 import pytest
 from flask import g
 
-from app import db
 from app.activitypub.actor import create_actor_from_remote
 from app.activitypub.util import remote_object_to_json, resolve_remote_post_from_search
 from app.admin.util import process_topic_communities
@@ -27,11 +26,11 @@ from app.api.alpha.utils.misc import get_resolve_object
 from app.community.util import search_for_community
 from app.feed.util import search_for_feed
 from app.instance.util import bulk_follow
-from app.models import Site
 from app.shared.tasks.maintenance import add_remote_community_from_post
 from app.shared.tasks.pages import mentioned_users
 from app.user.utils import search_for_user
 from app.utils import get_request
+from tests.factories import give_site_a_key
 
 SERVER = 'remote.test'
 WEBFINGER = f'https://{SERVER}/.well-known/webfinger'
@@ -54,7 +53,7 @@ def sleeps(monkeypatch):
 @pytest.fixture
 def env(app, db_session, site):
     g.admin_ids = []
-    g.site = db.session.get(Site, 1)
+    g.site = give_site_a_key()   # the signed retry signs as the instance actor
 
 
 def self_link():
