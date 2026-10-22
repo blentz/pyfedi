@@ -57,7 +57,6 @@ ALLOWED = {
     ('app/activitypub/routes.py', 'feed_profile'): {FEEDS: 5},
     ('app/feed/routes.py', 'feed_copy'): {FEEDS: 3},
     ('app/shared/feed.py', 'announce_feed_add_remove_to_subscribers'): {FEEDS: 2},
-    ('app/shared/feed.py', 'announce_feed_delete_to_subscribers'): {FEEDS: 1},
     ('app/shared/feed.py', 'edit_feed'): {FEEDS: 3},
     ('app/shared/feed.py', 'make_feed'): {FEEDS: 3},
     # Task 4: WebFinger, NodeInfo and the site documents answer per domain

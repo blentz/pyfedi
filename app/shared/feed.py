@@ -12,7 +12,7 @@ from app import db, cache, celery
 from app.activitypub.signature import send_post_request, default_context, RsaKeys
 from app.activitypub.util import find_actor_or_create, make_image_sizes
 from app.constants import *
-from app.federation_urls import activity_id
+from app.federation_urls import activity_id, owner_base
 from app.models import User, Feed, FeedMember, FeedItem, Community, FeedJoinRequest, CommunityMember, \
     CommunityJoinRequest, Instance, File, _as_url
 from app.shared.tasks import task_selector
@@ -850,7 +850,7 @@ def announce_feed_delete_to_subscribers(user_id, feed_ap_public_url, inbox_urls)
             "@context": default_context(),
             "type": "Delete",
             "actor": user.ap_public_url,
-            "id": f"{current_app.config['SERVER_URL']}/delete/{gibberish(15)}",
+            "id": f"{owner_base(user)}/delete/{gibberish(15)}",   # the owner's activity: on its domain (plan C3)
             "object": {
                 "type": "Feed",
                 "id": feed_ap_public_url
