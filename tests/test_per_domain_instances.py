@@ -94,6 +94,15 @@ def test_adding_a_domain_creates_its_instance_row_without_an_inbox(app, db_sessi
     assert domain_for_host(ONION).instance_id == instance.id
 
 
+def test_a_domain_given_its_instance_keeps_it(app, db_session, site):
+    """The insert hook leaves alone a domain row that already names its instance."""
+    own = make_instance('kept.example', software='PieFed')
+    db.session.add(SiteDomain(domain='kept.example', federates=False, instance_id=own.id))
+    db.session.commit()
+    assert db.session.query(SiteDomain).filter_by(domain='kept.example').one().instance_id == own.id
+    assert db.session.query(Instance).filter_by(domain='kept.example').count() == 1
+
+
 def test_adding_a_domain_reuses_an_instance_row_already_named_for_it(app, db_session, site):
     """find_instance_id may already have made a sparse row for the host. The unique domain index allows one row, so
     the domain takes it over, without the inbox a sister row must never have."""

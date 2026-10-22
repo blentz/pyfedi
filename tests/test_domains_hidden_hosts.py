@@ -46,6 +46,15 @@ def test_hells_onion_host_page_is_not_found(app, links, signed_in, path):
     assert get(app, path.format(name='example.com', id=ordinary.id), user=user).status_code == 200
 
 
+def test_hells_banned_domain_list_names_no_onion_host(app, links):
+    """/domains/banned filters as /domains does: a banned onion host stays off hell's list."""
+    scene, onion_host, ordinary = links
+    onion_host.banned = ordinary.banned = True
+    db.session.commit()
+    body = get(app, '/domains/banned', user=scene.hell_bob).get_data(as_text=True)
+    assert ONION not in body and 'example.com' in body
+
+
 def test_the_onion_lists_and_shows_its_own_host(app, links):
     scene, onion_host, ordinary = links
     assert ONION in get(app, '/domains', host=ONION, user=scene.onion_bob).get_data(as_text=True)

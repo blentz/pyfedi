@@ -7,6 +7,7 @@ from urllib.parse import quote
 
 import pytest
 
+import app.api.alpha.utils.misc as misc_utils
 from app import db
 from app.constants import ROLE_ADMIN_NAME
 from app.models import CommunityMember, CommunityWikiPage, File, ModLog, Role, Topic, utcnow
@@ -244,6 +245,15 @@ def test_the_alpha_apis_lists_still_name_them_to_a_logged_in_caller(app, api, pa
     response = api_get(app, path, api, True)
     assert response.status_code == 200
     assert ONION in response.get_data(as_text=True)
+
+
+def test_get_suggestion_passes_on_a_refusal_that_is_not_a_failed_login(app, api, monkeypatch):
+    """Only 'incorrect_login' means logged out; any other failure from authorise_api_user is not swallowed."""
+    def broken(auth):
+        raise RuntimeError('database gone')
+    monkeypatch.setattr(misc_utils, 'authorise_api_user', broken)
+    with pytest.raises(RuntimeError, match='database gone'):
+        misc_utils.get_suggestion({'q': '!art'}, auth='Bearer x')
 
 
 @pytest.mark.parametrize('token', ['Bearer garbage', 'Bearer ', 'Basic dXNlcjpwYXNz', 'expired'])
