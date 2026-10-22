@@ -556,6 +556,34 @@ def test_an_onion_users_community_post_and_reply_carry_the_onion_instance(app, d
     assert reply.instance_id == onion.instance_id
 
 
+def test_a_clearnet_users_post_and_reply_keep_the_default_instance(app, db_session, site, domains):
+    """hell.cloud unchanged (plan C2 final wave): a clearnet account's post and reply are on row 1, in its own
+    community and in the onion's alike, since a post's row is its author's."""
+    default, onion = domains
+    client, token = _admin_adding(app)
+    torfan = _admin_add_user(app, client, token, 'torfan', onion)
+    clearfan = _admin_add_user(app, client, token, 'clearfan', default)
+    for user in (torfan, clearfan):
+        able_to_create(user)
+        user.private_key = 'test-key-not-a-real-pem'
+    db.session.add(Language(code='und', name='Undetermined'))
+    db.session.add(Language(code='en', name='English'))
+    db.session.get(Site, 1).community_creation_admin_only = False
+    db.session.commit()
+    clear = _create(app, clearfan, default.domain, url='clearnet')
+    hidden = _create(app, torfan, 'abc.onion', url='hidden')
+    assert (clear.instance_id, hidden.instance_id) == (1, onion.instance_id)
+
+    _, post = make_post_through(_api_input_post(), clear, POST_TYPE_ARTICLE, SRC_API, auth=bearer(clearfan))
+    _, reply = make_reply({'body': 'hi', 'notify_author': False, 'language_id': None}, post, None, SRC_API,
+                          auth=bearer(clearfan))
+    _, onion_post = make_post_through(_api_input_post(), hidden, POST_TYPE_ARTICLE, SRC_API, auth=bearer(torfan))
+    _, onion_reply = make_reply({'body': 'from hell', 'notify_author': False, 'language_id': None}, onion_post, None,
+                                SRC_API, auth=bearer(clearfan))
+    assert (post.instance_id, reply.instance_id, onion_reply.instance_id) == (1, 1, 1)
+    assert onion_post.instance_id == onion.instance_id
+
+
 def test_a_clearnet_community_belongs_to_the_default_instance(app, db_session, site, creators, domains):
     default, onion = domains
     founder, other = creators

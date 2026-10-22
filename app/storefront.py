@@ -238,12 +238,13 @@ def tiered_post_ids(posts, rank, tail: tuple, limit: int, place: tuple | None = 
     that order) and `lead` the columns that come before the boosted value in it. Each tier reads on from the cursor
     in two cuts. The index range is `(lead, rank) <= (the cursor's lead, its rank - boost)`, widened a hair so that a
     float's rounding cannot drop a row: a row value, so that a row below the cursor on a lead column is in it whatever
-    its rank (the index orders by the lead columns first, so it is still a range of it). The exact cut is `(lead, rank + boost, tail, id) < place`, which is what keeps the rows that tie the cursor
-    on its rank apart, by the keys after it. The argument for why this is the naive order's first `limit` is
-    `boosted_top_sql`'s."""
+    its rank (the index orders by the lead columns first, so it is still a range of it). The exact cut is
+    `(lead, rank + boost, tail, id) < place`, which is what keeps the rows that tie the cursor on its rank apart, by
+    the keys after it. The argument for why this is the naive order's first `limit` is `boosted_top_sql`'s."""
     ids = set()
     for boost, instance_ids in domain_tiers():
-        arm = posts.filter(or_(models.Post.instance_id.is_(None), models.Post.instance_id.not_in(hosted_instance_ids()))) \
+        arm = posts.filter(or_(models.Post.instance_id.is_(None),
+                               models.Post.instance_id.not_in(hosted_instance_ids()))) \
             if instance_ids is None else posts.filter(models.Post.instance_id.in_(instance_ids))
         if place is not None:
             bound = place[len(lead)] - boost + KEYSET_SLACK
