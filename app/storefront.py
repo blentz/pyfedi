@@ -164,6 +164,9 @@ def hosted_instance_ids() -> frozenset[int]:
 OWN_DOMAIN_BOOST = 1.0
 SISTER_DOMAIN_BOOST = 0.5
 KEYSET_SLACK = 1e-9   # a rounding margin on a keyset cursor translated by a tier's boost
+# How deep a hot feed is read in the boosted order: the web feed's window. Past it a list by page number falls back
+# to the plain order (owner ruling, plan C2 final wave): an OFFSET walk past it cannot read every tier that deep.
+BOOST_WINDOW = 1000
 
 
 def sister_instance_ids() -> frozenset[int]:
@@ -247,8 +250,14 @@ def tiered_post_ids(posts, rank, tail: tuple, limit: int, place: tuple | None = 
             arm = arm.filter(tuple_(*lead, rank) <= tuple_(*place[:len(lead)], bound) if lead else rank <= bound,
                              tuple_(*lead, rank + boost, *tail, models.Post.id) < tuple_(*place))
         arm = arm.order_by(desc(rank), *(desc(c) for c in tail), desc(models.Post.id))
-        ids.update(row.id for row in arm.limit(limit).all())
+        ids.update(row.id for row in arm.with_entities(models.Post.id).limit(limit))   # the ids only, not whole posts
     return list(ids)
+
+
+def unboosted_order_by(rank, tail: tuple) -> list:
+    """`boosted_order_by` without the boost: `rank`, then `tail`, then the id. The order of a page past BOOST_WINDOW,
+    which the index reads straight to its OFFSET."""
+    return [desc(rank), *(desc(c) for c in tail), desc(models.Post.id)]
 
 
 def boosted_order_by(rank, tail: tuple, by_id: bool = True) -> list:
