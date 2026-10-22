@@ -31,7 +31,7 @@ from app.activitypub.util import comment_model_to_json, post_to_page
 from app.constants import COMMUNITY_KIND_MICROBLOGS, COMMUNITY_KIND_VIDEO_CHANNEL, POST_TYPE_VIDEO
 from app.federation_urls import activity_id, hosted_domain_names, object_base, owned_elsewhere
 from app.models import ActivityPubLog, ChatMessage, CommunityFlair, CommunityMember, Conversation, Feed, File, Instance, \
-    PostVote, Site, SiteDomain, Tag
+    Post, PostVote, Site, SiteDomain, Tag, federation_base
 from app.quotes import resolve_quotes
 from app.shared.media import with_media
 from app.shared.tasks.deletes import delete_object
@@ -654,3 +654,12 @@ def test_a_moderators_edit_of_a_remote_authors_video_is_announced_by_the_communi
     [(inbox, announce, key_id)] = sent   # PeerTube would be sent the author's Update: skipped
     assert (inbox, key_id) == ('https://peer.example/inbox', f'{HELL_BASE}/c/pit#main-key')
     assert re.fullmatch(rf'{HELL_BASE}/activities/update/{TOKEN}', announce['object']['id'])
+
+
+def test_object_base_never_raises_and_agrees_with_the_models(app, sites):
+    """One decision for a post's or comment's domain (Task 3 review M1): federation_urls.object_base is the models'
+    federation_base, so the two cannot drift; a row with no author yet is named on its community's domain."""
+    orphan = Post(community=sites.wares, title='no author yet')
+    assert object_base(orphan) == SHOP_BASE
+    post = a_post(sites.pit, sites.sam)
+    assert object_base(post) == federation_base(post) == SHOP_BASE
