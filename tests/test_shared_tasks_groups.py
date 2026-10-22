@@ -286,56 +286,15 @@ def test_edit_community_announces_an_update_to_a_following_instance(
     assert _key_id_of(route) == s.community.public_url() + '#main-key'
 
 
-def test_a_remote_community_receives_the_update_unwrapped(
-        db_session, http_mock):
-    """`:143-144`'s else arm: no Announce, the Update goes straight to
-    `community.ap_inbox_url` signed with the USER's key rather than the
-    community's.
-
-    THE KEYID IS THE ONLY OBSERVABLE THAT DISCRIMINATES `:144`'s signer.
-    `_seed(with_keys=True)` copies the user's key MATERIAL onto the
-    community, so the signature bytes are identical whichever actor
-    `send_post_request` was told to sign as -- only the declared `keyId`
-    (`user.public_url()` vs `community.public_url()`) tells the two apart.
-
-    NO `@context` ASSERTION BELONGS ON THE UPDATE ITSELF HERE. It is the
-    top-level object on this path, so `signature.py:100-101` reinjects a
-    default `@context` whether or not `edit_community` ever set one -- the
-    module never sets `@context` on `update` at all (`:120-128`), so its
-    presence on the wire would prove only the reinjection ran, not anything
-    about this function. The nested Group's shape is what this test pins.
-    """
+def test_a_remote_community_is_sent_no_update(db_session, http_mock):
+    """A moderator's edit of a REMOTE community is not federated (plan C3 ruling): the Group is its home server's,
+    and our possibly stale copy, under its real id, would undo its own moderators' changes. Upstream's Update named
+    a URL of ours, which the home ignored. NO ROUTE IS REGISTERED: `http_mock` (assert_all_called) fails the test on
+    any request, so this proves nothing was sent, to the Group's inbox or anywhere."""
     s = _seed(local_community=False, with_keys=True)
-    s.community.ap_followers_url = None   # a peer that never told us its collections
     _make_deliverable(s)
-    route = http_mock.post(PEER_INBOX).respond(200, json={})
 
     edit_community(None, s.user.id, s.community.id)
-
-    update = _sent_activity(route)
-    assert update['type'] == 'Update'
-    assert update['object']['type'] == 'Group'
-    assert _key_id_of(route) == s.user.public_url() + '#main-key'
-    # the Group is the remote community's own, by its stored id: the collections it never told us are under it
-    group = update['object']
-    assert group['id'] == 'https://peer.example/c/c1'
-    assert (group['followers'], group['featured'], group['outbox'], group['attributedTo'], group['inbox']) == \
-        ('https://peer.example/c/c1/followers', 'https://peer.example/c/c1/featured',
-         'https://peer.example/c/c1/outbox', 'https://peer.example/c/c1/moderators', PEER_INBOX)
-    assert 'endpoints' not in group   # its server's shared inbox is not known
-
-
-def test_a_remote_group_with_no_inbox_is_sent_nothing(db_session, http_mock, caplog):
-    """A remote community whose inbox was never stored: the Update has nowhere to go, so it is not built or sent
-    (no route is registered: http_mock fails on any request), and a line is logged."""
-    s = _seed(local_community=False, with_keys=True)
-    s.community.ap_inbox_url = None
-    _make_deliverable(s)
-
-    with caplog.at_level('INFO'):
-        edit_community(None, s.user.id, s.community.id)
-
-    assert 'has no inbox' in caplog.text
 
 
 def test_a_non_moderator_sends_nothing(db_session, http_mock):

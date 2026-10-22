@@ -213,10 +213,9 @@ def test_the_group_update_names_the_shop(app, shop_rows, monkeypatch):
     assert group['image']['url'] == f'{SHOP_BASE}/static/media/communities/sh/op/banner.webp'
 
 
-def test_a_shop_moderators_update_of_a_remote_group_names_the_shop(app, shop_rows, monkeypatch):
-    """The remote branch: the Update goes to the Group's own inbox, signed by the moderator, its id on the
-    moderator's domain. The Group it carries is the remote community's own: its stored id and collections, never a
-    URL of ours (Task 3: before, the Group was named on the moderator's domain, as SERVER_URL before C3)."""
+def test_a_shop_moderators_edit_of_a_remote_group_is_sent_nowhere(app, shop_rows, monkeypatch):
+    """A remote Group is its home server's: a moderator's edit of our copy is not federated (plan C3 ruling), so no
+    domain of ours names it and its home never applies our possibly stale copy."""
     shop, user, _ = shop_rows
     user.private_key, user.public_key = a_keypair()
     peer = Instance(domain='peer.example', software='lemmy', inbox='https://peer.example/inbox')
@@ -238,20 +237,7 @@ def test_a_shop_moderators_update_of_a_remote_group_names_the_shop(app, shop_row
 
     edit_community(False, user.id, remote.id)
 
-    [(inbox, update, (_, key_id))] = sent
-    assert inbox == 'https://peer.example/c/faraway/inbox'
-    assert key_id == f'{SHOP_BASE}/u/goldie#main-key'
-    assert HELL not in json.dumps(update)
-    assert update['id'].startswith(f'{SHOP_BASE}/activities/update/')
-    group = update['object']
-    assert group['id'] == 'https://peer.example/c/faraway'
-    assert (group['inbox'], group['followers'], group['featured'], group['outbox'], group['attributedTo']) == \
-        ('https://peer.example/c/faraway/inbox', 'https://peer.example/c/faraway/followers',
-         'https://peer.example/c/faraway/featured', 'https://peer.example/c/faraway/outbox',
-         'https://peer.example/c/faraway/moderators')
-    assert group['endpoints'] == {'sharedInbox': 'https://peer.example/inbox'}
-    assert group['publicKey']['id'] == 'https://peer.example/c/faraway#main-key'
-    assert group['publicKey']['owner'] == 'https://peer.example/c/faraway'
+    assert sent == []
 
 
 # --------------------------------------------------------------------------
