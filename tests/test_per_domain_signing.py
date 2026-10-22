@@ -298,7 +298,7 @@ def test_an_inbound_announce_of_a_shop_post_is_ours(app, domains, signing_peer, 
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     with app.test_client() as client:
         response = client.post('/inbox', json=_announce_of(actor_url, signing_peer))
-    assert response.status_code in (200, 400, 401)
+    assert response.status_code == (200 if ours else 400)   # ours: dropped before the signature check
     messages = [row.exception_message for row in ActivityPubLog.query.all()]
     assert (LOCAL_CONTENT in messages) is ours, messages
 
