@@ -78,12 +78,14 @@ def test_actor_json_is_canonical_and_unknown_on_the_alias(app, onion):
 
 
 @pytest.mark.parametrize('resource', ['acct:alice@test.piefed.local', 'http://test.piefed.local/u/alice'])
-def test_webfinger_on_alias_is_canonical(app, onion, resource):
+def test_webfinger_on_alias_is_unknown(app, onion, resource):
+    """The canonical domain's account, asked of the alias: the alias is local-only and answers no WebFinger, and the
+    account is another domain's to answer (plan C3, task 4). The canonical domain answers it."""
     make_site()
     _local_user('alice')
     response = app.test_client().get(f'/.well-known/webfinger?resource={resource}', headers={'Host': ALIAS})
-    assert response.status_code == 200
-    answer = response.get_json()
+    assert response.status_code == 404
+    answer = app.test_client().get(f'/.well-known/webfinger?resource={resource}').get_json()
     assert answer['subject'] == 'acct:alice@test.piefed.local'
     assert all(link['href'].startswith(f'{CANONICAL}/') for link in answer['links'] if 'href' in link)
     assert ALIAS not in _strings(answer)

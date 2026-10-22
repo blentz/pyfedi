@@ -644,7 +644,7 @@ def check_webfinger_resource(data: bytes) -> None:
     with _no_actor_lookups() as lookups, _no_domain_rows(), \
             current_app.test_request_context('/.well-known/webfinger'):
         try:
-            response = ap_routes.process_webfinger_request.uncached(resource)
+            response = ap_routes.process_webfinger_request.uncached(resource, server)   # asked of this server
         except HTTPException as refusal:
             assert 400 <= refusal.code < 500, f'{resource!r} gave {refusal.code}'
             response = None

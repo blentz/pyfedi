@@ -45,9 +45,10 @@ from app.local_only import local_only_visible, local_only_visible_rss, user_loca
     without_local_only_actors
 from app.local_names import local_named, split_local_name
 from app.visibility import listable_clause, modlog_local_only_clause, modlog_open_clause, visible_to_clause
-from app.federation_urls import instance_actor_public_key, instance_actor_url
-from app.storefront import ON_DOMAIN_PARAM, current_instance_id, current_storefront, domain_authority, domain_base_url, \
-    hidden_instance_ids, hosted_instance_ids, on_domain, on_domain_sql, storefront_host, storefront_cache_key, storefront_link, storefront_url
+from app.federation_urls import domain_site_name, federating_storefront, instance_actor_public_key, instance_actor_url
+from app.storefront import ON_DOMAIN_PARAM, current_instance_id, current_storefront, default_domain, domain_authority, \
+    domain_base_url, hidden_instance_ids, hosted_instance_ids, on_domain, on_domain_sql, storefront_host, storefront_cache_key, \
+    storefront_link, storefront_url
 from app.utils import etag_stamp
 from app.utils import render_template, ensure_rss_token, get_setting, request_etag_matches, return_304, blocked_domains, \
     ap_datetime, shorten_string, user_filters_home, \
@@ -1292,15 +1293,6 @@ def ap_application_cache_key() -> str:
     return f'view/activitypub_application/{current_storefront().domain}/{ap_media_type()}'
 
 
-def federating_storefront():
-    """The domain this request came in on, whose instance actor answers it. A local-only domain (the onion) has none
-    another server may see: 404, as a local-only account's document is."""
-    domain = current_storefront()
-    if not domain.federates:
-        abort(404)
-    return domain
-
-
 def activitypub_application():
     domain = federating_storefront()
     return _activitypub_application(domain)
@@ -1309,8 +1301,7 @@ def activitypub_application():
 @cache.cached(timeout=6, key_prefix=ap_application_cache_key)
 def _activitypub_application(domain):
     base = domain_base_url(domain)
-    # A sister domain's site is named by the domain itself: Site.name is the default domain's (hell.cloud on prod)
-    site_name = g.site.name if domain.is_default else domain_authority(domain)
+    site_name = domain_site_name(domain, g.site)
     application_data = {
         '@context': default_context(),
         'type': 'Application',
@@ -1462,7 +1453,7 @@ def list_feeds():
 
     # respond with json collection of public feeds for curl/AP requests
     if is_activitypub_request():
-        site_data = lemmy_site_data()
+        site_data = lemmy_site_data(default_domain())   # feeds stay on the default domain (C1 ruling)
         feeds_list = []
         for f in public_feeds:
             if f['feed'].is_local():

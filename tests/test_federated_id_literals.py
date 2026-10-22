@@ -17,7 +17,7 @@ This sweep finds, in app/ Python (by AST), a URL built on SERVER_URL or SERVER_N
 - the value of a `Link` header set with `headers.add`/`headers.set` (an ActivityPub alternate names an id).
 
 A site that is meant to stay is in ALLOWED with the count of its findings under each of REASONS that applies. The entries of a later
-task are removed by that task: `discovery: Task 4` (WebFinger, NodeInfo, site documents), `User-Agent: Task 5`
+task are removed by that task (Task 4's, WebFinger, NodeInfo and the site documents, are gone): `User-Agent: Task 5`
 (instance-level signing, User-Agent and inbound "is it ours" matching, all Task 5's), `media: Task 6`. Never add a
 federated id to make the sweep pass; build it with `activity_id`, `owner_base` or `object_base`.
 """
@@ -29,10 +29,9 @@ from tests.app_source import APP, app_trees
 RENDERED = 'rendered link'
 RELAYS = 'default-only by ruling: relays'
 FEEDS = 'default-only by ruling: feeds'
-TASK_4 = 'discovery: Task 4'
 TASK_5 = 'User-Agent: Task 5'   # Task 5's sites: instance-level signing and the User-Agent
 TASK_6 = 'media: Task 6'
-REASONS = (RENDERED, RELAYS, FEEDS, TASK_4, TASK_5, TASK_6)
+REASONS = (RENDERED, RELAYS, FEEDS, TASK_5, TASK_6)
 
 ALLOWED = {
     # (path under the repo, enclosing function): {reason: findings in it}
@@ -60,11 +59,6 @@ ALLOWED = {
     ('app/shared/feed.py', 'announce_feed_add_remove_to_subscribers'): {FEEDS: 2},
     ('app/shared/feed.py', 'edit_feed'): {FEEDS: 3},
     ('app/shared/feed.py', 'make_feed'): {FEEDS: 3},
-    # Task 4: WebFinger, NodeInfo and the site documents answer per domain
-    ('app/activitypub/routes.py', 'nodeinfo'): {TASK_4: 2},
-    ('app/activitypub/routes.py', 'process_webfinger_request'): {TASK_4: 2},
-    ('app/activitypub/util.py', 'lemmy_site_data'): {TASK_4: 2},
-    ('app/api/alpha/views.py', 'site_view'): {TASK_4: 1},
     # Task 5: instance-level signing (the keyId) and the User-Agent name the acting domain
     ('app/activitypub/actor.py', 'fetch_remote_actor_data'): {TASK_5: 1},
     ('app/activitypub/signature.py', 'HttpSignature.signed_request'): {TASK_5: 1},

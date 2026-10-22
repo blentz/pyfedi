@@ -35,8 +35,10 @@ from app.activitypub.signature import signed_get_capped, signed_get_request, sen
 from app.constants import *
 from app.local_only import federating_clause, federating_sql
 from app.local_names import local_named
-from app.federation_urls import activity_id, object_base, owner_base
-from app.storefront import default_domain, domain_authority, domain_base_url, hosted_instance_ids, instance_id_of
+from app.federation_urls import activity_id, domain_site_name, instance_actor_public_key, object_base, owner_base, \
+    owner_domain
+from app.storefront import DomainInfo, default_domain, domain_authority, domain_base_url, hosted_instance_ids, \
+    instance_id_of
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
@@ -6183,24 +6185,28 @@ def process_announce_of_uri(request_json, community, id, store_ap_json) -> Union
     return post
 
 
-def lemmy_site_data():
+def lemmy_site_data(domain: DomainInfo):
+    """The Lemmy site document `domain` answers /api/v3/site with: its URLs, its name (`domain_site_name`), its
+    instance actor's key, its own counts and the admins and staff whose accounts are on it. The description, sidebar
+    and settings are the site's, shared by every domain."""
     site = g.site
+    base = domain_base_url(domain)
     logo = site.logo if site.logo else '/static/images/piefed_logo_icon_t_75.png'
     data = {
         "site_view": {
             "site": {
                 "id": 1,
-                "name": site.name,
+                "name": domain_site_name(domain, site),
                 "sidebar": site.sidebar,
                 "published": site.created_at.isoformat(),
                 "updated": site.updated.isoformat(),
-                "icon": f"{current_app.config['SERVER_URL']}{logo}",
+                "icon": f"{base}{logo}",
                 "banner": "",
                 "description": site.description,
-                "actor_id": f"{current_app.config['SERVER_URL']}/",
+                "actor_id": f"{base}/",
                 "last_refreshed_at": site.updated.isoformat(),
-                "inbox_url": f"{current_app.config['SERVER_URL']}/inbox",
-                "public_key": site.public_key,
+                "inbox_url": f"{base}/inbox",
+                "public_key": instance_actor_public_key(domain),
                 "instance_id": 1
             },
             "local_site": {
@@ -6247,14 +6253,14 @@ def lemmy_site_data():
             "counts": {
                 "id": 1,
                 "site_id": 1,
-                "users": users_total(federated=True),
-                "posts": local_posts(federated=True),
-                "comments": local_comments(federated=True),
-                "communities": local_communities(federated=True),
-                "users_active_day": active_day(federated=True),
-                "users_active_week": active_week(federated=True),
-                "users_active_month": active_month(federated=True),
-                "users_active_half_year": active_half_year(federated=True)
+                "users": users_total(federated=True, instance_id=domain.instance_id),
+                "posts": local_posts(federated=True, instance_id=domain.instance_id),
+                "comments": local_comments(federated=True, instance_id=domain.instance_id),
+                "communities": local_communities(federated=True, instance_id=domain.instance_id),
+                "users_active_day": active_day(federated=True, instance_id=domain.instance_id),
+                "users_active_week": active_week(federated=True, instance_id=domain.instance_id),
+                "users_active_month": active_month(federated=True, instance_id=domain.instance_id),
+                "users_active_half_year": active_half_year(federated=True, instance_id=domain.instance_id)
             }
         },
         "admins": [],
@@ -6300,13 +6306,16 @@ def lemmy_site_data():
         }
         data['custom_emojis'].append(emoji_data)
 
-    # Admins (plus staff)
+    # Admins (plus staff) whose accounts are on this domain: another domain's would name that domain
     for admin in Site.admins() + Site.staff():
+        home = owner_domain(admin)
+        if home is None or home.domain != domain.domain:
+            continue
         person = {
             "id": admin.id,
             "name": admin.user_name,
             "display_name": admin.display_name(),
-            "avatar": 'https://' + current_app.config['SERVER_NAME'] + admin.avatar_image(),
+            "avatar": 'https://' + domain_authority(domain) + admin.avatar_image(),
             "banned": admin.banned,
             "published": admin.created.isoformat() + 'Z',
             "updated": admin.created.isoformat() + 'Z',

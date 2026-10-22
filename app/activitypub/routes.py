@@ -53,9 +53,10 @@ from app.relays import inbound as relay_inbound
 from app.local_only import any_domain_closed, community_local_only, federated_mentions, federating_clause, \
     refused_outbound, user_local_only
 from app.local_names import actor_handle, local_clause, split_local_name
-from app.federation_urls import activity_id, object_base, owned_elsewhere, owner_base, owner_domain
+from app.federation_urls import activity_id, domain_site_name, federating_storefront, instance_actor_url, object_base, \
+    owned_elsewhere, owner_base, owner_domain
 from app.storefront import current_storefront, domain_authority, domain_base_url, domain_for_host, hosted_instance_ids, \
-    is_served_name
+    is_served_name, storefront_cache_key
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
@@ -157,13 +158,17 @@ def webfinger():
                 abort(403)
 
     if request.args.get('resource'):
-        return process_webfinger_request(request.args.get('resource'))
+        # the host is part of the memo key: the same resource has another answer on each of our domains
+        return process_webfinger_request(request.args.get('resource'), current_storefront().domain)
     else:
         abort(404)
 
 
 @cache.memoize(timeout=60)
-def process_webfinger_request(resource):
+def process_webfinger_request(resource, host):
+    """WebFinger's answer to `resource` asked of `host`, one of our domains. Each federating domain answers only for
+    its own rows, named on it (plan C3): a resource on another of our domains is that domain's to answer, so it is the
+    404 an unknown one gets, and a local-only domain (the onion) answers none."""
 
     feed = False
     query = resource  # acct:alice@tada.club
@@ -184,22 +189,27 @@ def process_webfinger_request(resource):
     # only answer for resources on this instance (any domain it answers on), not for a same-named actor elsewhere
     if not is_served_name(domain):
         abort(404)
+    # and only for the domain asked, when it federates
+    served = domain_for_host(host)
+    if served is None or not served.federates or domain_for_host(domain) != served:
+        abort(404)
+    authority, base = domain_authority(served), domain_base_url(served)
 
     # special case: instance actor
-    if actor == current_app.config['SERVER_NAME']:
+    if actor == authority:
         webfinger_data = {
-            "subject": f"acct:{actor}@{current_app.config['SERVER_NAME']}",
-            "aliases": [f"{current_app.config['SERVER_URL']}/actor"],
+            "subject": f"acct:{actor}@{authority}",
+            "aliases": [instance_actor_url(served)],
             "links": [
                 {
                     "rel": "http://webfinger.net/rel/profile-page",
                     "type": "text/html",
-                    "href": f"{current_app.config['SERVER_URL']}/about"
+                    "href": f"{base}/about"
                 },
                 {
                     "rel": "self",
                     "type": "application/activity+json",
-                    "href": f"{current_app.config['SERVER_URL']}/actor",
+                    "href": instance_actor_url(served),
                 }
             ]
         }
@@ -208,12 +218,6 @@ def process_webfinger_request(resource):
         resp.headers.set('Cache-Control', 'public, max-age=15')
         resp.headers.add_header('Access-Control-Allow-Origin', '*')
         return resp
-
-    # until plan C3 builds the subject from the row's domain, only the default domain answers: a row on any other
-    # domain would be named by a subject (SERVER_NAME) whose own WebFinger answer is not that row
-    served = domain_for_host(domain)
-    if not (served and served.is_default):
-        abort(404)
 
     object = None
     if not feed:
@@ -230,11 +234,11 @@ def process_webfinger_request(resource):
                                                                        ap_deleted_at=None).filter(
                 federating_clause(Community)).first()
             type = 'Group'
-            if object is None:
+            if object is None and served.is_default:   # feeds stay on the default domain (C1 ruling)
                 object = Feed.query.filter_by(name=actor.strip().lower(), ap_id=None, public=True,
                                               banned=False, ap_deleted_at=None).filter(federating_feed_clause()).first()
                 type = 'Feed'
-    else:
+    elif served.is_default:
         object = Feed.query.filter_by(name=actor.strip().lower(), ap_id=None, public=True,
                                       banned=False, ap_deleted_at=None).filter(federating_feed_clause()).first()
         type = 'Feed'
@@ -243,7 +247,7 @@ def process_webfinger_request(resource):
         abort(404)
 
     webfinger_data = {
-        "subject": f"acct:{actor.strip()}@{current_app.config['SERVER_NAME']}",
+        "subject": f"acct:{actor.strip()}@{authority}",
         "aliases": [object.public_url()],
         "links": [
             {
@@ -264,7 +268,7 @@ def process_webfinger_request(resource):
     if isinstance(object, User):
         webfinger_data['links'].append({
           "rel": "https://w3id.org/fep/3b86/Create",
-          "template": f"{current_app.config['SERVER_URL']}/share?url=" + '{object}'
+          "template": f"{base}/share?url=" + '{object}'
         })
     elif isinstance(object, Community):
         webfinger_data['links'].append({
@@ -279,42 +283,61 @@ def process_webfinger_request(resource):
 
 
 
+# The discovery documents below describe the federating domain the request came in on (plan C3): its URLs, its name
+# and its own accounts and content. Each is cached per host (storefront_cache_key), so one domain's copy never answers
+# another, and a local-only domain (the onion) answers none of them.
+
 @bp.route('/.well-known/nodeinfo')
-@cache.cached(timeout=600)
+@cache.cached(timeout=600, key_prefix=storefront_cache_key)
 def nodeinfo():
+    base = domain_base_url(federating_storefront())
     nodeinfo_data = {"links": [{"rel": "http://nodeinfo.diaspora.software/ns/schema/2.0",
-                                "href": f"{current_app.config['SERVER_URL']}/nodeinfo/2.0"},
+                                "href": f"{base}/nodeinfo/2.0"},
                                {"rel": "http://nodeinfo.diaspora.software/ns/schema/2.1",
-                                "href": f"{current_app.config['SERVER_URL']}/nodeinfo/2.1"},
+                                "href": f"{base}/nodeinfo/2.1"},
                                ]}
     return jsonify(nodeinfo_data)
 
 
 @bp.route('/.well-known/host-meta')
-@cache.cached(timeout=600)
+@cache.cached(timeout=600, key_prefix=storefront_cache_key)
 def host_meta():
     resp = make_response(
         '<?xml version="1.0" encoding="UTF-8"?>\n<XRD xmlns="http://docs.oasis-open.org/ns/xri/xrd-1.0">\n<Link rel="lrdd" template="https://' +
-        current_app.config["SERVER_NAME"] + '/.well-known/webfinger?resource={uri}"/>\n</XRD>')
+        domain_authority(federating_storefront()) + '/.well-known/webfinger?resource={uri}"/>\n</XRD>')
     resp.content_type = 'application/xrd+xml; charset=utf-8'
     return resp
 
 
 @bp.route('/.well-known/host-meta.json')
-@cache.cached(timeout=600)
+@cache.cached(timeout=600, key_prefix=storefront_cache_key)
 def host_meta_json():
     """The JRD form of host-meta (RFC 6415 section 3), the same lrdd template as the XML route above (C1 item 9)."""
     resp = jsonify({'links': [{'rel': 'lrdd',
-                               'template': 'https://' + current_app.config["SERVER_NAME"] +
+                               'template': 'https://' + domain_authority(federating_storefront()) +
                                            '/.well-known/webfinger?resource={uri}'}]})
     resp.content_type = 'application/jrd+json'
     return resp
 
 
+def nodeinfo_usage(domain) -> dict:
+    """NodeInfo's `usage`: `domain`'s own federating accounts, posts and comments, on its instance row."""
+    return {
+        "users": {
+            "total": users_total(federated=True, instance_id=domain.instance_id),
+            "activeHalfyear": active_half_year(federated=True, instance_id=domain.instance_id),
+            "activeMonth": active_month(federated=True, instance_id=domain.instance_id)
+        },
+        "localPosts": local_posts(federated=True, instance_id=domain.instance_id),
+        "localComments": local_comments(federated=True, instance_id=domain.instance_id)
+    }
+
+
 @bp.route('/nodeinfo/2.0')
 @bp.route('/nodeinfo/2.0.json')
-@cache.cached(timeout=600)
+@cache.cached(timeout=600, key_prefix=storefront_cache_key)
 def nodeinfo2():
+    domain = federating_storefront()
     nodeinfo_data = {
         "version": "2.0",
         "software": {
@@ -324,15 +347,7 @@ def nodeinfo2():
         "protocols": [
             "activitypub"
         ],
-        "usage": {
-            "users": {
-                "total": users_total(federated=True),
-                "activeHalfyear": active_half_year(federated=True),
-                "activeMonth": active_month(federated=True)
-            },
-            "localPosts": local_posts(federated=True),
-            "localComments": local_comments(federated=True)
-        },
+        "usage": nodeinfo_usage(domain),
         "openRegistrations": g.site.registration_mode != 'Closed'
     }
     return jsonify(nodeinfo_data)
@@ -340,8 +355,9 @@ def nodeinfo2():
 
 @bp.route('/nodeinfo/2.1')
 @bp.route('/nodeinfo/2.1.json')
-@cache.cached(timeout=600)
+@cache.cached(timeout=600, key_prefix=storefront_cache_key)
 def nodeinfo21():
+    domain = federating_storefront()
     nodeinfo_data = {
         "version": "2.1",
         "software": {
@@ -353,15 +369,7 @@ def nodeinfo21():
         "protocols": [
             "activitypub"
         ],
-        "usage": {
-            "users": {
-                "total": users_total(federated=True),
-                "activeHalfyear": active_half_year(federated=True),
-                "activeMonth": active_month(federated=True)
-            },
-            "localPosts": local_posts(federated=True),
-            "localComments": local_comments(federated=True)
-        },
+        "usage": nodeinfo_usage(domain),
         "openRegistrations": g.site.registration_mode != 'Closed',
         "services": {
             "inbound": [],
@@ -381,14 +389,16 @@ def nodeinfo21():
 
 
 @bp.route('/api/v1/instance')
-@cache.cached(timeout=600)
+@cache.cached(timeout=600, key_prefix=storefront_cache_key)
 def api_v1_instance():
+    domain = federating_storefront()
+    usage = nodeinfo_usage(domain)
     retval = {
-        'title': g.site.name,
-        'uri': current_app.config['SERVER_NAME'],
+        'title': domain_site_name(domain, g.site),
+        'uri': domain_authority(domain),
         'stats': {
-            "user_count": users_total(federated=True),
-            "status_count": local_posts(federated=True) + local_comments(federated=True),
+            "user_count": usage['users']['total'],
+            "status_count": usage['localPosts'] + usage['localComments'],
             "domain_count": 1
         },
         'registrations': g.site.registration_mode != 'Closed',
@@ -449,9 +459,9 @@ def api_is_email_banned():
 
 
 @bp.route('/api/v3/site')
-@cache.cached(timeout=600)
+@cache.cached(timeout=600, key_prefix=storefront_cache_key)
 def lemmy_site():
-    return orjson_response(lemmy_site_data())
+    return orjson_response(lemmy_site_data(federating_storefront()))
 
 
 @bp.route('/api/v3/federated_instances')

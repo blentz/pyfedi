@@ -164,20 +164,25 @@ def test_make_cache_key_includes_host(app, onion):
 
 
 AP_CACHED_ROUTES = ['/.well-known/nodeinfo', '/.well-known/host-meta', '/.well-known/host-meta.json',
-                    '/nodeinfo/2.0', '/nodeinfo/2.0.json', '/nodeinfo/2.1', '/nodeinfo/2.1.json']
+                    '/nodeinfo/2.0', '/nodeinfo/2.0.json', '/nodeinfo/2.1', '/nodeinfo/2.1.json',
+                    '/api/v1/instance', '/api/v3/site']
 
 
 @pytest.mark.parametrize('path', AP_CACHED_ROUTES)
-def test_ap_cached_view_shared(app, onion, path):
-    """These name the canonical origin only (federation identity never varies by host), so one cache entry, keyed
-    by path, serves both hosts: the bodies are byte-identical in either order of first request."""
+def test_ap_discovery_documents_are_cached_per_host(app, onion, path):
+    """Each federating domain describes itself (plan C3), so these are cached per host. The onion federates with no
+    one and describes no server: a 404, in either order of first request, and the canonical host's copy never
+    answers it."""
+    def onion_status():
+        g.pop('_login_user', None)
+        return app.test_client().get(path, base_url=ORIGINS[ONION]).status_code
+
     clearnet = get(app, path, CANONICAL)
-    assert get(app, path, ONION) == clearnet
+    assert onion_status() == 404
     assert ONION not in clearnet
     cache.clear()
-    onion_first = get(app, path, ONION)
-    assert ONION not in onion_first
-    assert get(app, path, CANONICAL) == onion_first
+    assert onion_status() == 404
+    assert get(app, path, CANONICAL) == clearnet
 
 
 def call_on(app, host, fn, *args, **kwargs):

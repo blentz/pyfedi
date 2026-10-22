@@ -510,8 +510,9 @@ def storefront_host() -> str:
 
 def storefront_cache_key() -> str:
     """`key_prefix` for an `@cache.cached` presentation view (spec §3.4a). Flask-Caching's default key is the path
-    alone, so a page cached on one storefront, and the storefront URLs in it, would be served on every other.
-    ActivityPub documents name only the canonical origin and keep their path keys."""
+    alone, so a page cached on one storefront, and the storefront URLs in it, would be served on every other. The
+    discovery documents (NodeInfo, host-meta, the site documents) are keyed by it too: each federating domain's names
+    that domain (plan C3)."""
     return f'view/{current_storefront().domain}{request.path}'
 
 

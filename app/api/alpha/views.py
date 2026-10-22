@@ -27,7 +27,8 @@ import app.shared.community as shared_community
 # The module, not the names: app.shared.post reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.post)
 import app.shared.post as shared_post
-from app.storefront import current_storefront, default_domain, hosted_instance_ids, public_registration_open, storefront_link, storefront_memo_name, storefront_url
+from app.federation_urls import domain_site_name
+from app.storefront import current_storefront, default_domain, domain_base_url, hosted_instance_ids, public_registration_open, storefront_link, storefront_memo_name, storefront_url
 from app.local_only import community_local_only, federating_clause, user_local_only, without_local_only_actors
 from app.visibility import can_view, visible_to_sql
 
@@ -1414,13 +1415,15 @@ def advertised_registration_mode() -> str:
 
 def site_view(user) -> dict:
     logo = g.site.logo if g.site.logo else '/static/images/piefed_logo_icon_t_75.png'
+    # a federating storefront describes itself (plan C3); a local-only one (the onion) the default domain's site
+    storefront = current_storefront() if current_storefront().federates else default_domain()
 
     site = {
         "enable_downvotes": g.site.enable_downvotes,
         "icon": f"{storefront_url()}{logo}",
         "registration_mode": advertised_registration_mode(),
-        "name": g.site.name,
-        "actor_id": f"{current_app.config['SERVER_URL']}/",
+        "name": domain_site_name(storefront, g.site),   # a sister domain is named by itself
+        "actor_id": f"{domain_base_url(storefront)}/",
         "user_count": users_total(),
         "all_languages": []
     }

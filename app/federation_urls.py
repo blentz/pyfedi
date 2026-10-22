@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
-from flask import current_app
+from flask import abort, current_app
 from sqlalchemy import select
 
 from app import db
@@ -82,6 +82,22 @@ def owned_elsewhere(obj) -> bool:
     never shows that two of our domains are one server (owner ruling)."""
     domain = naming_domain(obj)
     return domain is not None and domain.domain != current_storefront().domain
+
+
+def federating_storefront() -> DomainInfo:
+    """The domain this request came in on, whose instance actor and discovery documents answer it. A local-only
+    domain (the onion) has none another server may see: 404, as a local-only account's document is."""
+    domain = current_storefront()
+    if not domain.federates:
+        abort(404)
+    return domain
+
+
+def domain_site_name(domain: DomainInfo, site) -> str:
+    """The name `domain`'s site goes by in what it tells other servers and clients: `site.name` for the default
+    domain, the domain itself for any other, as Site.name is the default domain's (hell.cloud on prod) and nothing a
+    sister domain publishes names hell.cloud (owner ruling)."""
+    return site.name if domain.is_default else domain_authority(domain)
 
 
 def hosted_domain_names() -> list[str]:
