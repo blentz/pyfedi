@@ -18,7 +18,7 @@ from app.models import BannedInstances, Instance, Site, SiteDomain
 from app.storefront import clear_domain_cache, domain_for_host
 from app.utils import get_setting
 from tests.factories import make_post
-from tests.test_c3_golden_documents import AP, DISCOVERY_PATHS, GOLDEN, SHOP, golden_site  # noqa: F401  (fixture)
+from tests.test_c3_golden_documents import AP, DISCOVERY_PATHS, SHOP, golden_copy, golden_site  # noqa: F401  (fixture)
 from tests.test_onion_guard_limits import PROXY, a_session, onion_get
 from tests.test_per_domain_actor_documents import SHOP_BASE, shop_rows, site_named_hell  # noqa: F401  (fixtures)
 from tests.two_domains import HELL, ONION, request_on, two_domains  # noqa: F401  (fixture)
@@ -226,7 +226,7 @@ def test_hells_discovery_documents_stay_their_golden_copies_beside_the_shops(app
         shop_body(app, path.replace(HELL, SHOP))   # the shop's answer, cached first
     response = get(app, path, host=HELL)
     assert response.status_code == 200
-    assert response.data == (GOLDEN / name).read_bytes()
+    assert response.data == golden_copy(name)
 
 
 # --------------------------------------------------------------------------
