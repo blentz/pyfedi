@@ -133,7 +133,7 @@
                     {% endfor %}
                     </ul>
                 {% endif -%}
-                {% cache 60*5, g.locale %}
+                {% cache 60*5, g.locale, instance_domain|string %}   {#- this domain's counts: one fragment per domain #}
                     {% set active_monthly = g.site.active_monthly() -%}
                     {% if active_monthly > 100 -%}
                         <hr>

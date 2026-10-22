@@ -5470,19 +5470,19 @@ class Site(db.Model):
 
     def active_daily(self):
         from app.activitypub.util import active_day  # cycle: app.activitypub.util imports from this module
-        return active_day()
+        return active_day(instance_id=storefront.current_instance_id())   # this domain's accounts
 
     def active_weekly(self):
         from app.activitypub.util import active_week  # cycle: app.activitypub.util imports from this module
-        return active_week()
+        return active_week(instance_id=storefront.current_instance_id())   # this domain's accounts
 
     def active_monthly(self):
         from app.activitypub.util import active_month  # cycle: app.activitypub.util imports from this module
-        return active_month()
+        return active_month(instance_id=storefront.current_instance_id())   # this domain's accounts
 
     def active_6monthly(self):
         from app.activitypub.util import active_half_year  # cycle: app.activitypub.util imports from this module
-        return active_half_year()
+        return active_half_year(instance_id=storefront.current_instance_id())   # this domain's accounts
 
     def all_active_6monthly(self):
         return db.session.execute(text(

@@ -155,10 +155,10 @@ def users_total(federated: bool = False, instance_id: int | None = None):
         + _federating_users(federated, instance_id))).scalar()
 
 
-def active_half_year(federated: bool = False):
+def active_half_year(federated: bool = False, instance_id: int | None = None):
     return db.session.execute(text(
         "SELECT COUNT(*) as c FROM \"user\" WHERE last_seen >= CURRENT_DATE - INTERVAL '6 months' AND ap_id is null AND verified is true AND banned is false AND deleted is false"
-        + _federating_users(federated))).scalar()
+        + _federating_users(federated, instance_id))).scalar()
 
 
 def active_month(federated: bool = False, instance_id: int | None = None):
@@ -167,16 +167,16 @@ def active_month(federated: bool = False, instance_id: int | None = None):
         + _federating_users(federated, instance_id))).scalar()
 
 
-def active_week(federated: bool = False):
+def active_week(federated: bool = False, instance_id: int | None = None):
     return db.session.execute(text(
         "SELECT COUNT(*) as c FROM \"user\" WHERE last_seen >= CURRENT_DATE - INTERVAL '1 week' AND ap_id is null AND verified is true AND banned is false AND deleted is false"
-        + _federating_users(federated))).scalar()
+        + _federating_users(federated, instance_id))).scalar()
 
 
-def active_day(federated: bool = False):
+def active_day(federated: bool = False, instance_id: int | None = None):
     return db.session.execute(text(
         "SELECT COUNT(*) as c FROM \"user\" WHERE last_seen >= CURRENT_DATE - INTERVAL '1 day' AND ap_id is null AND verified is true AND banned is false AND deleted is false"
-        + _federating_users(federated))).scalar()
+        + _federating_users(federated, instance_id))).scalar()
 
 
 def local_posts(federated: bool = False, instance_id: int | None = None):

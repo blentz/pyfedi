@@ -27,7 +27,7 @@ import app.shared.community as shared_community
 # The module, not the names: app.shared.post reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.post)
 import app.shared.post as shared_post
-from app.storefront import current_storefront, hosted_instance_ids, public_registration_open, storefront_link, storefront_memo_name, storefront_url
+from app.storefront import current_storefront, default_domain, hosted_instance_ids, public_registration_open, storefront_link, storefront_memo_name, storefront_url
 from app.local_only import community_local_only, federating_clause, user_local_only, without_local_only_actors
 from app.visibility import can_view, visible_to_sql
 
@@ -1515,7 +1515,7 @@ def site_instance_chooser_view():
         'sidebar': g.site.sidebar_html or '',
         'logo_url': f"{storefront_url()}{logo}",
         'maturity': maturity,
-        'mau': active_month(),
+        'mau': active_month(instance_id=default_domain().instance_id),   # other servers read it: row 1's only
         'can_make_communities': not g.site.community_creation_admin_only,
         'defederation': list(set([instance.domain for instance in defed_list])),
         'trusts': list(set([instance.domain for instance in trusted_list])),
@@ -1611,8 +1611,11 @@ def cached_modlist_for_user(user):
 
 @cache.memoize(timeout=3000)
 def users_total():
+    """The default domain's accounts: what other servers and logged-out callers are told, as NodeInfo tells them. A
+    hosted local-only domain's accounts are on its own instance row, so they are not counted."""
     return db.session.execute(text(
-        'SELECT COUNT(*) as c FROM "user" WHERE ap_id is null AND verified is true AND banned is false AND deleted is false')).scalar()
+        'SELECT COUNT(*) as c FROM "user" WHERE ap_id is null AND verified is true AND banned is false AND deleted is false'
+        ' AND instance_id = :instance_id'), {'instance_id': default_domain().instance_id}).scalar()
 
 
 def moderating_communities_view(user):
