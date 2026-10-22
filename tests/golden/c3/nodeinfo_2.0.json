@@ -1,1 +1,1 @@
-{"openRegistrations":false,"protocols":["activitypub"],"software":{"name":"piefed","version":"1.7.17"},"usage":{"localComments":0,"localPosts":0,"users":{"activeHalfyear":1,"activeMonth":1,"total":1}},"version":"2.0"}
+{"openRegistrations":false,"protocols":["activitypub"],"software":{"name":"piefed","version":"{VERSION}"},"usage":{"localComments":0,"localPosts":0,"users":{"activeHalfyear":1,"activeMonth":1,"total":1}},"version":"2.0"}
