@@ -17,9 +17,10 @@ This sweep finds, in app/ Python (by AST), a URL built on SERVER_URL or SERVER_N
 - the value of a `Link` header set with `headers.add`/`headers.set` (an ActivityPub alternate names an id).
 
 A site that is meant to stay is in ALLOWED with the count of its findings under each of REASONS that applies. The entries of a later
-task are removed by that task (Task 4's, WebFinger, NodeInfo and the site documents, are gone): `User-Agent: Task 5`
-(instance-level signing, User-Agent and inbound "is it ours" matching, all Task 5's), `media: Task 6`. Never add a
-federated id to make the sweep pass; build it with `activity_id`, `owner_base` or `object_base`.
+task are removed by that task (Task 4's, WebFinger, NodeInfo and the site documents, are gone, and Task 5's, the
+instance-level keyId and the User-Agent, which name the acting domain through `instance_actor_signing` and
+`utils.user_agent`): `media: Task 6`. Never add a federated id to make the sweep pass; build it with `activity_id`,
+`owner_base` or `object_base`.
 """
 import ast
 import re
@@ -29,9 +30,8 @@ from tests.app_source import APP, app_trees
 RENDERED = 'rendered link'
 RELAYS = 'default-only by ruling: relays'
 FEEDS = 'default-only by ruling: feeds'
-TASK_5 = 'User-Agent: Task 5'   # Task 5's sites: instance-level signing and the User-Agent
 TASK_6 = 'media: Task 6'
-REASONS = (RENDERED, RELAYS, FEEDS, TASK_5, TASK_6)
+REASONS = (RENDERED, RELAYS, FEEDS, TASK_6)
 
 ALLOWED = {
     # (path under the repo, enclosing function): {reason: findings in it}
@@ -59,18 +59,6 @@ ALLOWED = {
     ('app/shared/feed.py', 'announce_feed_add_remove_to_subscribers'): {FEEDS: 2},
     ('app/shared/feed.py', 'edit_feed'): {FEEDS: 3},
     ('app/shared/feed.py', 'make_feed'): {FEEDS: 3},
-    # Task 5: instance-level signing (the keyId) and the User-Agent name the acting domain
-    ('app/activitypub/actor.py', 'fetch_remote_actor_data'): {TASK_5: 1},
-    ('app/activitypub/signature.py', 'HttpSignature.signed_request'): {TASK_5: 1},
-    ('app/activitypub/signature.py', '_fetch_actor_key'): {TASK_5: 1},
-    ('app/activitypub/util.py', 'refresh_community_profile_task'): {TASK_5: 1},
-    ('app/activitypub/util.py', 'refresh_feed_profile_task'): {TASK_5: 1},
-    ('app/activitypub/util.py', 'refresh_user_profile_task'): {TASK_5: 1},
-    ('app/discovery/credits.py', '_signed_headers'): {TASK_5: 1},
-    ('app/onion_media_fill.py', '_fetch'): {TASK_5: 1},
-    ('app/user/utils.py', 'search_for_user'): {TASK_5: 1},
-    ('app/utils.py', 'get_request'): {TASK_5: 2},
-    ('app/utils.py', 'get_request_capped'): {TASK_5: 1},
     # Task 6: a new upload's stored URL, and a local file's federated URL, on the owner's domain
     ('app/admin/util.py', 'move_community_images_to_here'): {TASK_6: 2},
     ('app/shared/media.py', 'store_uploaded_media'): {TASK_6: 1},

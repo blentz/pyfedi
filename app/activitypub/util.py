@@ -35,10 +35,10 @@ from app.activitypub.signature import signed_get_capped, signed_get_request, sen
 from app.constants import *
 from app.local_only import federating_clause, federating_sql
 from app.local_names import local_named
-from app.federation_urls import activity_id, domain_site_name, instance_actor_public_key, object_base, owner_base, \
-    owner_domain
-from app.storefront import DomainInfo, default_domain, domain_authority, domain_base_url, hosted_instance_ids, \
-    instance_id_of, registration_mode_on
+from app.federation_urls import MissingInstanceKey, activity_id, domain_site_name, instance_actor_public_key, \
+    instance_actor_signing, is_federating_url, object_base, owner_base, owner_domain
+from app.storefront import DomainInfo, acting_domain, default_domain, domain_authority, domain_base_url, \
+    hosted_instance_ids, instance_id_of, registration_mode_on
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
@@ -1078,7 +1078,7 @@ def served_by_us(url: str, file) -> bool:
     banner URLs included. Compared only with `source_url` -- None for an upload -- they read as new images, and a
     remote moderator's edit of a LOCAL community deleted its uploads and fetched the URL of the file just deleted.
     For a local community such a URL is no change."""
-    if host_of(url) == host_of(current_app.config['SERVER_URL']):
+    if is_federating_url(url):   # any federating domain of ours serves its own communities' images (plan C3)
         return True
     return file is not None and url in (file.source_url, file.view_url(canonical=True), file.medium_url(canonical=True),
                                         file.thumbnail_url(canonical=True))
@@ -1498,9 +1498,8 @@ def refresh_user_profile_task(user_id, activity_json=None):
                         return
                     except Exception:  # not bare: a worker shutdown must propagate (D220)
                         try:
-                            site = session.get(Site, 1)
-                            actor_data = signed_get_request(user.ap_public_url, site.private_key,
-                                                            f"{current_app.config['SERVER_URL']}/actor#main-key")
+                            private_key, key_id = instance_actor_signing(acting_domain())
+                            actor_data = signed_get_request(user.ap_public_url, private_key, key_id)
                         except Exception:
                             return
                     if actor_data.status_code == 200:
@@ -1675,9 +1674,8 @@ def refresh_community_profile_task(community_id, activity_json=None):
                         return
                     except Exception:  # a peer that requires signed fetches, as for users (D221)
                         try:
-                            site = session.get(Site, 1)
-                            actor_data = signed_get_request(community.ap_public_url, site.private_key,
-                                                            f"{current_app.config['SERVER_URL']}/actor#main-key")
+                            private_key, key_id = instance_actor_signing(acting_domain())
+                            actor_data = signed_get_request(community.ap_public_url, private_key, key_id)
                         except Exception:
                             return
                     if actor_data.status_code == 200:
@@ -1975,9 +1973,8 @@ def refresh_feed_profile_task(feed_id, activity_json=None):
                         return
                     except Exception:  # a peer that requires signed fetches, as for users (D221)
                         try:
-                            site = session.get(Site, 1)
-                            actor_data = signed_get_request(feed.ap_public_url, site.private_key,
-                                                            f"{current_app.config['SERVER_URL']}/actor#main-key")
+                            private_key, key_id = instance_actor_signing(acting_domain())
+                            actor_data = signed_get_request(feed.ap_public_url, private_key, key_id)
                         except Exception:
                             return
                     if actor_data.status_code == 200:
@@ -4171,7 +4168,7 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
                 json_tag = _as_dict(json_tag)
                 if 'type' in json_tag and json_tag['type'] == 'Mention':
                     profile_id = json_tag['href'] if 'href' in json_tag else None
-                    if profile_id and isinstance(profile_id, str) and profile_id.startswith('https://' + current_app.config['SERVER_NAME']):
+                    if is_federating_url(profile_id):
                         profile_id = profile_id.lower()
                         # once per recipient: a repeated Mention tag notified twice (D262)
                         if profile_id != reply_parent.author.ap_profile_id and profile_id not in local_users_to_notify:
@@ -4769,7 +4766,7 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
                 json_tag = _as_dict(json_tag)
                 if 'type' in json_tag and json_tag['type'] == 'Mention':
                     profile_id = json_tag['href'] if 'href' in json_tag else None
-                    if profile_id and isinstance(profile_id, str) and profile_id.startswith('https://' + current_app.config['SERVER_NAME']):
+                    if is_federating_url(profile_id):
                         profile_id = profile_id.lower()
                         if reply.parent_id:
                             reply_parent = db.session.get(PostReply, reply.parent_id)
@@ -4986,7 +4983,7 @@ def update_post_from_activity(post: Post, request_json: dict):
                     flair_tags.append(json_tag)
                 if 'type' in json_tag and json_tag['type'] == 'Mention':
                     profile_id = json_tag['href'] if 'href' in json_tag else None
-                    if profile_id and isinstance(profile_id, str) and profile_id.startswith('https://' + current_app.config['SERVER_NAME']):
+                    if is_federating_url(profile_id):
                         profile_id = profile_id.lower()
                         recipient = User.query.filter_by(ap_profile_id=profile_id, ap_id=None).first()
                         # the reply path's suppression rules that mean anything on a post: the author
@@ -6172,7 +6169,7 @@ def process_announce_of_uri(request_json, community, id, store_ap_json) -> Union
                         'Announce has no object URI')
         return None
 
-    if uri.startswith('https://' + current_app.config['SERVER_NAME']):
+    if is_federating_url(uri):   # any federating domain's post is ours, not only the default's (plan C3)
         log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, request_json if store_ap_json else None,
                         'Activity about local content which is already present')
         return None
@@ -6401,13 +6398,12 @@ def fetch_object_capped(uri: str, retry_delay: float = 0) -> Tuple[Union[dict, N
         return None, 'the object could not be fetched'
     prefix = 'the object'
     if status == 401:
-        site = db.session.get(Site, 1)
-        if site is None:
-            return None, 'the object needs a signed fetch and there is no Site row to sign it'
         try:
-            status, body = attempt(lambda: signed_get_capped(uri, site.private_key,
-                                                             f"{current_app.config['SERVER_URL']}/actor#main-key",
-                                                             OBJECT_MAX_BYTES))
+            private_key, key_id = instance_actor_signing(acting_domain())
+        except MissingInstanceKey:
+            return None, 'the object needs a signed fetch and there is no instance key to sign it'
+        try:
+            status, body = attempt(lambda: signed_get_capped(uri, private_key, key_id, OBJECT_MAX_BYTES))
         except httpx.HTTPError:
             return None, 'the object could not be fetched with a signed request'
         prefix = 'the signed object'
@@ -6990,14 +6986,14 @@ def _origin_refusal_of_delete(object_id: str, label: str, tombstone_required: bo
         return f'{label}: the object could not be fetched'
     suffix = ''
     if status in (401, 403):
-        site = db.session.get(Site, 1)
-        if site is not None and site.private_key:
-            try:
-                status, body = signed_get_capped(object_id, site.private_key,
-                                                 f"{current_app.config['SERVER_URL']}/actor#main-key", max_bytes)
-            except httpx.HTTPError:
-                return f'{label}: the object could not be fetched with a signed request'
+        try:
+            private_key, key_id = instance_actor_signing(acting_domain())
+            status, body = signed_get_capped(object_id, private_key, key_id, max_bytes)
             suffix = ' to a signed fetch'
+        except MissingInstanceKey:   # no key to sign with: the unsigned answer stands
+            pass
+        except httpx.HTTPError:
+            return f'{label}: the object could not be fetched with a signed request'
     if private:
         if status == 410 or (status == 200 and _is_tombstone(body, object_id)):
             return None

@@ -57,8 +57,13 @@ def utcnow(naive=True):
 
 
 def is_local_url(url) -> bool:
-    """True when `url` is on this instance: SERVER_URL itself or SERVER_URL then '/'. A bare prefix test took a
-    lookalike host (https://piefed.example.evil.com for https://piefed.example) for this one."""
+    """True when `url` is on the default domain: SERVER_URL itself or SERVER_URL then '/'. A bare prefix test took a
+    lookalike host (https://piefed.example.evil.com for https://piefed.example) for this one.
+
+    The default domain only, on purpose (plan C3): it backs User/Community/Feed.is_local, where a row of any hosted
+    domain is local by its NULL ap_id and only a legacy default-domain row is told by its URL, and feeds are the
+    default's. `is_hosted_url` is the test for any hosted domain's URL, `storefront.is_federating_url` the inbound
+    "is it ours" test of federation (federating domains only, never the onion)."""
     base = current_app.config['SERVER_URL']
     return isinstance(url, str) and (url == base or url.startswith(base + '/'))
 
@@ -3320,7 +3325,8 @@ class Post(db.Model):
                     json_tag = _as_dict(json_tag)
                     if 'type' in json_tag and json_tag['type'] == 'Mention':
                         profile_id = json_tag['href'] if 'href' in json_tag else None
-                        if profile_id and isinstance(profile_id, str) and profile_id.startswith(current_app.config['SERVER_URL']):
+                        # an account of any federating domain of ours (plan C3)
+                        if storefront.is_federating_url(profile_id):
                             profile_id = profile_id.lower()
                             recipient = User.query.filter_by(ap_profile_id=profile_id, ap_id=None).first()
                             # A mention must not hand a followers-only body to a recipient who may not view it

@@ -34,7 +34,6 @@ from furl import furl
 from werkzeug.exceptions import HTTPException
 
 import app.activitypub.routes as ap_routes
-import app.federation_urls as federation_urls
 import app.storefront as storefront
 import app.utils as app_utils
 from app.cli import strip_tracking
@@ -831,7 +830,7 @@ def check_browser_host(data: bytes) -> None:
 
 
 # ---------------------------------------------------------------------------
-# federation_urls.domain_of_url
+# storefront.domain_of_url (federation_urls names it too)
 # ---------------------------------------------------------------------------
 
 _SISTER = 'shop.example'
@@ -845,12 +844,12 @@ def _a_sister_domain():
     sister = default._replace(domain=_SISTER, is_default=False, is_onion=False, id=2, instance_id=2)
     local_only = default._replace(domain=_LOCAL_ONLY, scheme='http', federates=False, is_default=False, is_onion=True,
                                   id=3, instance_id=3)
-    saved = federation_urls.domain_rows
-    federation_urls.domain_rows = lambda: (default, sister, local_only)
+    saved = storefront.domain_rows
+    storefront.domain_rows = lambda: (default, sister, local_only)
     try:
         yield default, sister, local_only
     finally:
-        federation_urls.domain_rows = saved
+        storefront.domain_rows = saved
 
 
 _DEFAULT_PORT = {'http': 80, 'https': 443}
@@ -865,8 +864,8 @@ def check_domain_of_url(data: bytes) -> None:
     with _a_sister_domain() as hosted:
         for candidate in (url, f'https://{url}', f'https://{_SISTER}{url}', f'//{_SISTER}{url}',
                           f'http://{_LOCAL_ONLY}{url}'):
-            found = federation_urls.domain_of_url(candidate)
-            federating = federation_urls.federating_domain_of_url(candidate)
+            found = storefront.domain_of_url(candidate)
+            federating = storefront.federating_domain_of_url(candidate)
             assert federating == (found if found is not None and found.federates else None), candidate
             if found is None:
                 continue

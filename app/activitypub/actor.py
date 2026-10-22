@@ -15,9 +15,10 @@ from app.activitypub.util import get_request, signed_get_request, actor_json_to_
     refresh_community_profile, refresh_feed_profile, extract_domain_and_actor, normalise_actor_string, \
     canonical_handle, webfinger_self_link_allowed
 from app.discovery.podcast import podcast_community_for
-from app.models import User, Community, Feed, Site
+from app.federation_urls import instance_actor_signing
+from app.models import User, Community, Feed
 from app.local_names import local_named
-from app.storefront import current_storefront, domain_for_host
+from app.storefront import acting_domain, current_storefront, domain_for_host
 from app.utils import utcnow, get_setting, actor_contains_blocked_words, actor_profile_contains_blocked_words, \
     instance_banned, low_value_reposters, instance_allowed
 
@@ -212,9 +213,9 @@ def fetch_remote_actor_data(url: str, retry=False, retry_count=1):
 
             elif response.status_code == 401:
                 signed_response = None
-                try:
-                    site = db.session.get(Site, 1)
-                    signed_response = signed_get_request(url, site.private_key, f"{current_app.config['SERVER_URL']}/actor#main-key")
+                try:   # MissingInstanceKey is caught below with the rest: no key, no signed fetch
+                    private_key, key_id = instance_actor_signing(acting_domain())
+                    signed_response = signed_get_request(url, private_key, key_id)
                     try:
                         return signed_response.json()
                     except ValueError:

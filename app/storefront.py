@@ -22,6 +22,7 @@ from bs4.formatter import HTMLFormatter
 from flask import Response, current_app, g, has_app_context, has_request_context, request
 from flask.globals import request_ctx
 from flask_babel import _
+from flask_login import current_user
 from sqlakeyset import InvalidPage
 from sqlalchemy import and_, case, desc, func, or_, tuple_
 from sqlakeyset.results import unserialize_bookmark
@@ -410,6 +411,58 @@ def domain_authority(info: DomainInfo) -> str:
     return current_app.config['SERVER_NAME'] if info.is_default else _authority(info)
 
 
+# The port a URL of each scheme names when it names none. A URL is ours only over http or https: a scheme-relative
+# reference, javascript:, gopher: and the rest name no ActivityPub object.
+_DEFAULT_PORTS = {'http': ':80', 'https': ':443'}
+
+
+def _comparable(scheme: str, authority: str) -> str:
+    """`authority` lower-cased, with the scheme's default port and a trailing dot on the host dropped, as
+    `storefront.is_local_host` ignores them. Any other port stays: `host:8443` is not `host`."""
+    authority = authority.lower()
+    host, port = authority, ''
+    if ':' in authority and not authority.endswith(']'):   # host:port; a bracketed IPv6 literal with no port ends in ]
+        host, _, port = authority.rpartition(':')
+        port = f':{port}'
+    if port == _DEFAULT_PORTS[scheme]:
+        port = ''
+    return host.rstrip('.') + port
+
+
+def domain_of_url(url: str | None) -> DomainInfo | None:
+    """The hosted domain an http(s) `url` names, else None: its authority is that domain's, ignoring case, a trailing
+    dot and the scheme's default port (as `storefront.is_local_host` does). Not a prefix or suffix match:
+    shop.example.evil and evil.shop.example are not shop.example, and neither is a URL with userinfo, another port,
+    or another scheme (a scheme-relative `//shop.example/` too). The default domain's authority is SERVER_NAME
+    verbatim, its port included.
+
+    Any hosted domain, a local-only one too (the onion). A caller deciding federation, an inbound "is this object
+    ours" or an outbound id or signature, uses `federating_domain_of_url` or checks `.federates` itself."""
+    try:
+        parts = urlsplit(url or '')
+    except ValueError:   # an unbalanced IPv6 bracket
+        return None
+    scheme = parts.scheme.lower()
+    if scheme not in _DEFAULT_PORTS or not parts.netloc or '@' in parts.netloc:
+        return None
+    authority = _comparable(scheme, parts.netloc)
+    return next((row for row in domain_rows() if _comparable(scheme, domain_authority(row)) == authority), None)
+
+
+def federating_domain_of_url(url: str | None) -> DomainInfo | None:
+    """`domain_of_url`'s domain when it federates, else None. What federation code asks: a local-only domain's URL is
+    never an object a peer may name, nor one we send."""
+    found = domain_of_url(url)
+    return found if found is not None and found.federates else None
+
+
+def is_federating_url(url) -> bool:
+    """Whether `url` names something a federating domain of ours serves (`federating_domain_of_url`): the inbound
+    "is it ours" test (plan C3). Every federating domain's URL is, a local-only domain's (the onion) never is, nor is
+    a lookalike host or any value that is not an http(s) URL string."""
+    return isinstance(url, str) and federating_domain_of_url(url) is not None
+
+
 def is_registered_host(host: str) -> bool:
     return domain_for_host(host) is not None
 
@@ -478,6 +531,48 @@ def current_storefront() -> DomainInfo:
 def current_instance_id() -> int:
     """The instance row of the storefront this request was addressed to; the default's (row 1) outside a request."""
     return instance_id_of(current_storefront())
+
+
+# The domain an `acting_for` block makes instance-level requests as, else None
+_acting: ContextVar[DomainInfo | None] = ContextVar('storefront_acting_domain', default=None)
+
+
+def acting_domain() -> DomainInfo:
+    """The federating domain an instance-level request (an unsigned fetch's User-Agent, a fetch signed by an instance
+    actor) is made as, plan C3: the one an `acting_for` block names; else, in a request, the home domain of the local
+    account acting in it (the signed-in user, or the API caller `authorise_api_user` accepted), as a fetch a shop
+    account caused is the shop's; else the default domain, for relays, housekeeping and anything no account caused.
+    A local-only domain (the onion) makes no request another server sees named by it, so its accounts act as the
+    default domain, as before C3."""
+    domain = _acting.get()
+    if domain is None and has_request_context():
+        domain = g.get('acting_domain') or _signed_in_domain()
+    return domain if domain is not None and domain.federates else default_domain()
+
+
+def _signed_in_domain() -> DomainInfo | None:
+    if not getattr(current_user, 'is_authenticated', False) or not current_user.is_local():
+        return None
+    return current_user.home_domain()
+
+
+@contextmanager
+def acting_for(domain: DomainInfo):
+    """Make the block's instance-level requests as `domain` (the default domain when it does not federate), whoever
+    is signed in: a relay's or the discovery credits' fetches are the default domain's even when a sister domain's
+    admin asked for them."""
+    token = _acting.set(domain if domain.federates else default_domain())
+    try:
+        yield
+    finally:
+        _acting.reset(token)
+
+
+@contextmanager
+def acting_as_default():
+    """`acting_for(default_domain())`; usable as a decorator, `@acting_as_default()`."""
+    with acting_for(default_domain()):
+        yield
 
 
 def path_name(name: str, site_domain_id: int | None) -> str:

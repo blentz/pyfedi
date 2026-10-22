@@ -29,7 +29,7 @@ from app.activitypub.actor import (create_actor_from_remote, fetch_actor_from_we
                                    find_local_user, find_remote_actor,
                                    schedule_actor_refresh, validate_remote_actor)
 from app.models import Community, Feed, Site, User
-from tests.factories import make_community, make_instance, make_local_feed, make_user
+from tests.factories import give_site_a_key, make_community, make_instance, make_local_feed, make_user
 from tests.app_source import app_trees
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -504,6 +504,7 @@ def test_a_four_oh_one_is_retried_with_the_servers_own_signature(app, db_session
     again with this server's key, and the signed reply is what comes back.
     """
     _seed()
+    give_site_a_key()
     actor = {'type': 'Person', 'id': 'https://remote.example/u/alice'}
     signed = _Resp(payload=actor)
 
@@ -519,6 +520,7 @@ def test_a_four_oh_one_is_retried_with_the_servers_own_signature(app, db_session
 
 def test_a_signed_retry_that_returns_junk_gives_nothing(app, db_session):
     _seed()
+    give_site_a_key()
     signed = _Resp(raises=ValueError('not json'))
 
     with patch('app.activitypub.actor.get_request', return_value=_Resp(status_code=401)):

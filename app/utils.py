@@ -79,6 +79,7 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     ServerViewMember
 from app.local_names import local_named
 from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, current_storefront, canonicalise_links, canonicalise_text, domain_base_url, \
+    acting_domain, domain_authority, \
     boosted_order_by, boosted_top_sql, domain_by_id, hosted_instance_ids, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
 from collections import Counter
 from flask import has_request_context
@@ -362,6 +363,13 @@ def _capped_get(uri, params=None, headers=None, timeout=10, max_bytes: int = FET
                            max_seconds=max_seconds)
 
 
+def user_agent(domain=None) -> str:
+    """The User-Agent a request this server makes names itself by: `domain`'s, else the `acting_domain`'s (plan C3:
+    a request a shop account caused names the shop, never hell.cloud). For the default domain it is the string it has
+    always been, `+https://` then SERVER_NAME verbatim."""
+    return f'PieFed/{current_app.config["VERSION"]}; +https://{domain_authority(domain or acting_domain())}'
+
+
 # do a GET request to a uri, return the result. At most max_bytes of body within max_seconds (_capped_get), or
 # ResponseTooLarge, which is not retried. A transport error is not retried either: one attempt, no sleep, so no
 # request or inbox path can wait (D738/D775). Only a housekeeping Celery task passes retry=True, which sleeps 3-10 s
@@ -373,9 +381,9 @@ def get_request(uri, params=None, headers=None, *, max_bytes: int = FETCH_MAX_BY
         raise httpx.HTTPError("HTTPError: invalid uri") from None
     timeout = 15 if 'washingtonpost.com' in uri else 10  # Washington Post is really slow on og:image for some reason
     if headers is None:
-        headers = {'User-Agent': f'PieFed/{current_app.config["VERSION"]}; +https://{current_app.config["SERVER_NAME"]}'}
+        headers = {'User-Agent': user_agent()}
     else:
-        headers.update({'User-Agent': f'PieFed/{current_app.config["VERSION"]}; +https://{current_app.config["SERVER_NAME"]}'})
+        headers.update({'User-Agent': user_agent()})
     if params and '/webfinger' in uri:
         payload_str = urllib.parse.urlencode(params, safe=':@')
     else:
@@ -438,7 +446,7 @@ def get_request_capped(uri, max_bytes: int, headers=None, max_seconds: float = 1
         current_app.logger.info(f"invalid get request {uri}")
         raise httpx.HTTPError("HTTPError: invalid uri") from None
     headers = dict(headers or {})
-    headers['User-Agent'] = f'PieFed/{current_app.config["VERSION"]}; +https://{current_app.config["SERVER_NAME"]}'
+    headers.setdefault('User-Agent', user_agent())   # a signed GET's names its signer (HttpSignature.signed_request)
     headers['Accept-Encoding'] = 'identity'
     deadline = time.monotonic() + max_seconds
     try:
@@ -5269,6 +5277,8 @@ def authorise_api_user(auth, return_type=None, id_match=None) -> User | dict | i
                 raise Exception('incorrect_login')
         if id_match and user.id != id_match:
             raise Exception('incorrect_login')
+        if has_request_context():   # the account acting in this request: its fetches name its domain (acting_domain)
+            g.acting_domain = user.home_domain()
         if return_type and return_type == 'model':
             return user
         elif return_type and return_type == 'dict':

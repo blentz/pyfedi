@@ -51,6 +51,17 @@ def default_request(app):
         yield
 
 
+def register_local_only_onion() -> str:
+    """hell.cloud's default row and the local-only onion, with no fixture: for a test that needs only a URL the onion
+    names (an "is it ours" guard that refuses it). Returns the onion's origin."""
+    if db.session.query(SiteDomain).filter_by(is_default=True).first() is None:
+        db.session.add(SiteDomain(domain=HELL, scheme='https', is_default=True))
+    db.session.add(SiteDomain(domain=ONION, scheme='http', federates=False))
+    db.session.commit()
+    clear_domain_cache()
+    return f'http://{ONION}'
+
+
 @pytest.fixture
 def two_domains(app, db_session):
     instance = make_instance(HELL, software='piefed')

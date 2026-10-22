@@ -9,14 +9,15 @@ instance actor signs with Site row 1's key, so hell.cloud's federation does not 
 """
 from __future__ import annotations
 
-from urllib.parse import urlsplit
-
 from flask import abort, current_app
 from sqlalchemy import select
 
 from app import db
 from app.storefront import DomainInfo, current_storefront, default_domain, domain_authority, domain_base_url, \
-    domain_rows, hosted_instance_ids
+    hosted_instance_ids
+# Defined in app.storefront, which app.models can import (this module imports app.models); named here too, as the
+# helpers every federation decision uses
+from app.storefront import domain_of_url, federating_domain_of_url, is_federating_url  # noqa: F401
 # The modules, not the names: app.models and app.utils import much of the app, which may import this module
 # (import cycle: models, utils)
 import app.models as models
@@ -105,51 +106,6 @@ def hosted_domain_names() -> list[str]:
     their accounts are told here."""
     rows = db.session.execute(select(models.Instance.domain).where(models.Instance.id.in_(hosted_instance_ids())))
     return [current_app.config['SERVER_NAME'], *rows.scalars()]
-
-
-# The port a URL of each scheme names when it names none. A URL is ours only over http or https: a scheme-relative
-# reference, javascript:, gopher: and the rest name no ActivityPub object.
-_DEFAULT_PORTS = {'http': ':80', 'https': ':443'}
-
-
-def _comparable(scheme: str, authority: str) -> str:
-    """`authority` lower-cased, with the scheme's default port and a trailing dot on the host dropped, as
-    `storefront.is_local_host` ignores them. Any other port stays: `host:8443` is not `host`."""
-    authority = authority.lower()
-    host, port = authority, ''
-    if ':' in authority and not authority.endswith(']'):   # host:port; a bracketed IPv6 literal with no port ends in ]
-        host, _, port = authority.rpartition(':')
-        port = f':{port}'
-    if port == _DEFAULT_PORTS[scheme]:
-        port = ''
-    return host.rstrip('.') + port
-
-
-def domain_of_url(url: str | None) -> DomainInfo | None:
-    """The hosted domain an http(s) `url` names, else None: its authority is that domain's, ignoring case, a trailing
-    dot and the scheme's default port (as `storefront.is_local_host` does). Not a prefix or suffix match:
-    shop.example.evil and evil.shop.example are not shop.example, and neither is a URL with userinfo, another port,
-    or another scheme (a scheme-relative `//shop.example/` too). The default domain's authority is SERVER_NAME
-    verbatim, its port included.
-
-    Any hosted domain, a local-only one too (the onion). A caller deciding federation, an inbound "is this object
-    ours" or an outbound id or signature, uses `federating_domain_of_url` or checks `.federates` itself."""
-    try:
-        parts = urlsplit(url or '')
-    except ValueError:   # an unbalanced IPv6 bracket
-        return None
-    scheme = parts.scheme.lower()
-    if scheme not in _DEFAULT_PORTS or not parts.netloc or '@' in parts.netloc:
-        return None
-    authority = _comparable(scheme, parts.netloc)
-    return next((row for row in domain_rows() if _comparable(scheme, domain_authority(row)) == authority), None)
-
-
-def federating_domain_of_url(url: str | None) -> DomainInfo | None:
-    """`domain_of_url`'s domain when it federates, else None. What federation code asks: a local-only domain's URL is
-    never an object a peer may name, nor one we send."""
-    found = domain_of_url(url)
-    return found if found is not None and found.federates else None
 
 
 def activity_id(verb: str, owner, token: str | None = None) -> str:

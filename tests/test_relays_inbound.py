@@ -12,10 +12,16 @@ from app.constants import ALLOWLIST_STRONG, APLOG_FAILURE, APLOG_IGNORED, APLOG_
 from app.models import BannedInstances, Community, Post, PostReply, Relay, Site, User, utcnow
 from app.relays import RELAY_ACCEPTED, RELAY_PENDING, RELAY_REFUSED, STYLE_LITEPUB, STYLE_MASTODON
 from app.relays import inbound
-from tests.factories import (a_keypair, make_community_ban, make_instance_ban, make_community, make_instance, make_post, make_post_reply, make_user,
+from tests.factories import (a_keypair, give_site_a_key, make_community_ban, make_instance_ban, make_community, make_instance, make_post, make_post_reply, make_user,
                              signed_inbox_post)
 
 pytestmark = pytest.mark.usefixtures('site', 'redis_double')
+
+
+@pytest.fixture(autouse=True)
+def site_key(site):
+    """The instance actor signs here (relays, the discovery sync): Site row 1 needs a key (plan C3)."""
+    give_site_a_key()
 
 PEM = 'THE-RELAY-KEY'
 FOLLOW_ID = 'https://test.piefed.local/activities/relay-follow/abc'

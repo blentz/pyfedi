@@ -10,13 +10,13 @@ from app.activitypub.signature import signed_get_request, send_post_request
 from app.activitypub.util import actor_json_to_model, canonical_handle, find_actor_or_create, is_user_actor, \
     webfinger_self_link_allowed
 from app.constants import AP_FETCH_ACCEPT, POST_STATUS_REVIEWING
-from app.federation_urls import activity_id
+from app.federation_urls import MissingInstanceKey, activity_id, instance_actor_signing
 from app.local_names import local_named, split_local_name
 from app.mentions import stored_user, user_address_parts
-from app.models import User, CommunityMember, Community, Site, BannedInstances, Post, \
+from app.models import User, CommunityMember, Community, BannedInstances, Post, \
     PostVote, ArchivedPostReply, PostReply, UserNote
 from app.shared.tasks import task_selector
-from app.storefront import current_storefront, domain_for_host
+from app.storefront import acting_domain, current_storefront, domain_for_host
 from app.utils import get_request, get_task_session, patch_db_session, \
     intlist_to_strlist, community_membership_private, paginate_post_ids, post_ids_to_models
 from app.local_only import local_only_visible, without_local_only, without_local_only_actors
@@ -164,11 +164,14 @@ def search_for_user(address: str, allow_fetch: bool = True, retry: bool = False,
                 if object_request is None:
                     return None
                 if object_request.status_code == 401:
-                    site = db.session.get(Site, 1)
+                    try:   # as the account searching, whose fetch this is (plan C3)
+                        private_key, key_id = instance_actor_signing(acting_domain())
+                    except MissingInstanceKey:   # no key, no signed fetch: the account is not found
+                        return None
                     object_request = None
                     for attempt in [1,2]:
                         try:
-                            object_request = signed_get_request(links['href'], site.private_key, f"{current_app.config['SERVER_URL']}/actor#main-key")
+                            object_request = signed_get_request(links['href'], private_key, key_id)
                             break
                         except httpx.HTTPError:
                             if not retry:

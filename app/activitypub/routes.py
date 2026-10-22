@@ -53,8 +53,8 @@ from app.relays import inbound as relay_inbound
 from app.local_only import any_domain_closed, community_local_only, federated_mentions, federating_clause, \
     refused_outbound, user_local_only
 from app.local_names import actor_handle, local_clause, split_local_name
-from app.federation_urls import activity_id, domain_site_name, federating_storefront, instance_actor_url, object_base, \
-    owned_elsewhere, owner_base, owner_domain
+from app.federation_urls import activity_id, domain_site_name, federating_storefront, instance_actor_url, \
+    is_federating_url, object_base, owned_elsewhere, owner_base, owner_domain
 from app.storefront import current_storefront, domain_authority, domain_base_url, domain_for_host, hosted_instance_ids, \
     is_served_name, registration_mode_on, storefront_cache_key
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
@@ -855,8 +855,8 @@ def shared_inbox():
                                 'Missing minimum expected fields in JSON Announce object')
             return '', 200
 
-        if 'actor' in object and isinstance(object['actor'], str) and object['actor'].startswith(
-                'https://' + current_app.config['SERVER_NAME']):
+        # by its domain, any federating one of ours (plan C3): not a prefix, which took a lookalike host for ours
+        if 'actor' in object and is_federating_url(object['actor']):
             log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json,
                             'Activity about local content which is already present')
             return '', 200
@@ -1129,8 +1129,7 @@ def replay_inbox_request(request_json):
                 log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, request_json, 'REPLAY: Missing minimum expected fields in JSON Announce object')
             return
 
-        if 'actor' in object and isinstance(object['actor'], str) and object['actor'].startswith(
-                'https://' + current_app.config['SERVER_NAME']):
+        if 'actor' in object and is_federating_url(object['actor']):
             log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, request_json, 'REPLAY: Activity about local content which is already present')
             return
 
