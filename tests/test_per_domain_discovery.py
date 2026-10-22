@@ -11,12 +11,14 @@ import json
 import pytest
 from flask import g
 
+import app.api.alpha.routes as alpha_routes
 from app import cache, db
 from app.api.alpha.views import site_view
-from app.models import Site, SiteDomain
-from app.storefront import domain_for_host
+from app.models import BannedInstances, Instance, Site, SiteDomain
+from app.storefront import clear_domain_cache, domain_for_host
+from app.utils import get_setting
 from tests.factories import make_post
-from tests.test_c3_golden_documents import DISCOVERY_PATHS, GOLDEN, SHOP, golden_site  # noqa: F401  (fixture)
+from tests.test_c3_golden_documents import AP, DISCOVERY_PATHS, GOLDEN, SHOP, golden_site  # noqa: F401  (fixture)
 from tests.test_onion_guard_limits import PROXY, a_session, onion_get
 from tests.test_per_domain_actor_documents import SHOP_BASE, shop_rows, site_named_hell  # noqa: F401  (fixtures)
 from tests.two_domains import HELL, ONION, request_on, two_domains  # noqa: F401  (fixture)
@@ -225,3 +227,40 @@ def test_hells_discovery_documents_stay_their_golden_copies_beside_the_shops(app
     response = get(app, path, host=HELL)
     assert response.status_code == 200
     assert response.data == (GOLDEN / name).read_bytes()
+
+
+# --------------------------------------------------------------------------
+# Task 4 fix round 1
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def alpha_api(app, monkeypatch):
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    monkeypatch.setattr(alpha_routes, 'get_setting', lambda name, default=None:
+                        True if name == 'enable_instance_chooser' else get_setting(name, default))
+
+
+def alpha_get(app, path, host):
+    g.site = db.session.get(Site, 1)
+    response = get(app, path, host=host)
+    assert response.status_code == 200, (path, host, response.status_code)
+    return response
+
+
+@pytest.mark.usefixtures('alpha_api')
+def test_the_shops_alpha_site_documents_name_only_the_shop(app, two_domains, shop_rows):
+    """I1: the shop names none of hell's admins, and counts its own accounts (two, hell has one)."""
+    two_domains.local_user('extra', shop_rows[0])
+    site = alpha_get(app, '/api/alpha/site', SHOP)
+    assert HELL.encode() not in site.data
+    assert site.get_json()['admins'] == []
+    assert (site.get_json()['site']['name'], site.get_json()['site']['user_count']) == (SHOP, 2)
+    chooser = alpha_get(app, '/api/alpha/site/instance_chooser', SHOP)
+    assert HELL.encode() not in chooser.data
+    assert (chooser.get_json()['name'], chooser.get_json()['mau']) == (SHOP, 2)
+    # hell's are as they were: its own admin, name and counts
+    hell_site = alpha_get(app, '/api/alpha/site', HELL).get_json()
+    assert [admin['person']['actor_id'] for admin in hell_site['admins']] == [f'https://{HELL}/u/goldie']
+    assert (hell_site['site']['name'], hell_site['site']['user_count']) == (HELL, 1)
+    hell_chooser = alpha_get(app, '/api/alpha/site/instance_chooser', HELL).get_json()
+    assert (hell_chooser['name'], hell_chooser['mau']) == (HELL, 1)
