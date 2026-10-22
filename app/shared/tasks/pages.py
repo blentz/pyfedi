@@ -122,7 +122,8 @@ def send_microblog_note(post, user, community, recipients: list, edit: bool) -> 
     see the post as its author's own status, and a receiver dedupes by object id."""
     note = microblog_note(post, recipients)
     verb = 'update' if edit else 'create'
-    activity = {'id': activity_id(verb, user),
+    remote_author = not user.is_local()   # as send_post: only the community's Announce goes out for it
+    activity = {'id': activity_id(verb, community if remote_author else user),
                 'type': 'Update' if edit else 'Create', 'actor': user.public_url(), 'object': note,
                 'to': note['to'], 'cc': note['cc'], '@context': default_context()}
     followers_only = not is_open(post)
@@ -143,7 +144,8 @@ def send_microblog_note(post, user, community, recipients: list, edit: bool) -> 
                 continue
             if instance.software in MICROBLOG_APPS:
                 if edit:
-                    send_post_request(instance.inbox, activity, user.private_key, user.public_url() + '#main-key')
+                    if not remote_author:
+                        send_post_request(instance.inbox, activity, user.private_key, user.public_url() + '#main-key')
                     sent_to.add(instance.domain)
                 else:
                     send_post_request(instance.inbox, microblog_announce, community.private_key,
@@ -152,6 +154,8 @@ def send_microblog_note(post, user, community, recipients: list, edit: bool) -> 
                 send_post_request(instance.inbox, group_announce, community.private_key,
                                   community.public_url() + '#main-key')
 
+    if remote_author:
+        return
     hosted = hosted_instance_ids()
     targets = [recipient.instance for recipient in recipients if recipient.instance_id not in hosted]
     targets += follower_instances(user) if followers_only else user.following_instances()
@@ -171,7 +175,8 @@ def send_peertube_video(post, user, community, recipients: list, edit: bool) -> 
     author's activity."""
     video = peertube_video(post)
     verb = 'update' if edit else 'create'
-    activity = {'id': activity_id(verb, user),
+    remote_author = not user.is_local()   # as send_post: only the community's Announce goes out for it
+    activity = {'id': activity_id(verb, community if remote_author else user),
                 'type': 'Update' if edit else 'Create', 'actor': user.public_url(), 'object': video,
                 'to': video['to'], 'cc': video['cc'], '@context': default_context()}
     audience = community.public_url()
@@ -188,13 +193,16 @@ def send_peertube_video(post, user, community, recipients: list, edit: bool) -> 
         if not can_deliver_to(user, instance):
             continue
         if instance.software == 'peertube' or (edit and instance.software in MICROBLOG_APPS):
-            send_post_request(instance.inbox, activity, user.private_key, author_key)
+            if not remote_author:
+                send_post_request(instance.inbox, activity, user.private_key, author_key)
         elif instance.software in MICROBLOG_APPS:
             send_post_request(instance.inbox, microblog_announce, community.private_key, community_key)
         else:
             send_post_request(instance.inbox, group_announce, community.private_key, community_key)
         sent_to.add(instance.domain)
 
+    if remote_author:
+        return
     hosted = hosted_instance_ids()
     targets = [recipient.instance for recipient in recipients if recipient.instance_id not in hosted]
     for instance in targets + user.following_instances():
@@ -241,8 +249,11 @@ def send_post(post_id, edit=False, session=None):
                     session.add(notification)
                     session.commit()
     recipients = federated_mentions(recipients)   # a local-only account is Mentioned as plain text only
-    if not user.is_local():
-        return   # a remote account's post is its own server's to federate: none of our domains names it
+    # A moderator's flair or NSFW edit of a remote author's post in a local community: the community still Announces
+    # the Update (its key, its domain), but nothing goes out as the author, whose key only its own server holds
+    remote_author = not user.is_local()
+    if remote_author and not community.is_local():
+        return
 
     if not (community.instance_id and community.instance.online()):
         return
@@ -363,7 +374,7 @@ def send_post(post_id, edit=False, session=None):
             page['attachment'].append(more_info_link(event.more_info_url))
 
     activity = 'create' if not edit else 'update'
-    create_id = activity_id(activity, user)
+    create_id = activity_id(activity, community if remote_author else user)   # the Announcing community's domain
     type = 'Create' if not edit else 'Update'
     create = {
       'id': create_id,
@@ -416,7 +427,7 @@ def send_post(post_id, edit=False, session=None):
                     if instance.software in MICROBLOG_APPS:
                         if activity == 'create':
                             send_post_request(instance.inbox, microblog_announce, community.private_key, community.public_url() + '#main-key')
-                        else:
+                        elif not remote_author:
                             send_post_request(instance.inbox, create, user.private_key, user.public_url() + '#main-key')
                     else:
                         send_post_request(instance.inbox, group_announce, community.private_key, community.public_url() + '#main-key')
@@ -425,6 +436,9 @@ def send_post(post_id, edit=False, session=None):
         else:
             send_post_request(community.ap_inbox_url, create, user.private_key, user.public_url() + '#main-key')
             domains_sent_to.append(community.instance.domain)
+
+    if remote_author:
+        return   # the mentions and followers below are sent the author's own activity
 
     # amend copy of the Create, for anyone Mentioned in post body or who is following the user, to a format more likely to be understood by Mastodon
     if '@context' not in create:
