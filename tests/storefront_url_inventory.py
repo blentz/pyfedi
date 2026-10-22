@@ -26,8 +26,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'announce_activity_to_followers': 1,
         'api_v1_instance': 1,
         'comment_ap': 1,
-        'community_collection_id': 1,
-        'community_profile': 1,
         'feed_followers': 1,
         'feed_moderators_route': 1,
         'feed_profile': 5,
@@ -43,7 +41,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'replay_inbox_request': 1,
         'rerun_parked_request': 1,
         'shared_inbox': 1,
-        'user_profile': 6,
+        'user_profile': 1,
     },
     'app/activitypub/serializers/microblog.py': {
         '_hashtag_href': 1,
@@ -62,7 +60,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         '_origin_refusal_of_delete': 1,
         'comment_count_collections': 1,
         'comment_model_to_json': 1,
-        'community_actor_data': 4,
         'create_activity_of': 1,
         'create_post_reply': 2,
         'fetch_object_capped': 1,
@@ -82,8 +79,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'update_post_reply_from_activity': 3,
     },
     'app/admin/routes.py': {
-        'admin_community_edit': 2,
-        'admin_community_move': 6,
         'admin_federation_ban_lists': 1,
         'admin_topics_export': 1,
     },
@@ -113,11 +108,11 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     },
     'app/cli.py': {
         'register.config_check': 2,
-        'register.init_db': 4,
+        'register.init_db': 1,
         'register.lemmy_import': 1,
         'register.move_more_post_images_to_s3': 1,
         'register.process_email_bounces': 4,
-        'register.rss_feeds': 4,
+        'register.rss_feeds': 1,
         'register.send_batched_activities': 1,
     },
     'app/community/routes.py': {
@@ -133,9 +128,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/community/util.py': {
         'delete_post_from_community_task': 2,
         'delete_post_reply_from_community_task': 2,
-    },
-    'app/dev/routes.py': {
-        'tools': 4,
     },
     'app/discovery/credits.py': {
         '_known_user': 1,
@@ -160,9 +152,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'outbound_refusal': 1,   # the canonical host is ours in the "names our post or comment" test (plan B task 7)
     },
     'app/main/routes.py': {
-        'activitypub_application': 6,
-        'instance_actor': 9,
-        'instance_actor_outbox': 1,
         'list_feeds': 1,
         'modlog_shown_name': 1,   # a handle on SERVER_NAME is shown back as its bare name on the default storefront
         'test_hashing': 1,
@@ -170,8 +159,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/models.py': {
         'Community.flair_for_ap': 1,
         'Community.local_url': 1,
-        'Community.profile_id': 1,
-        'Community.public_url': 1,
         'Feed.lemmy_link': 1,
         'Feed.local_url': 1,
         'Feed.profile_id': 1,
@@ -185,10 +172,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'Post.tags_for_activitypub': 2,
         'PostReply.profile_id': 1,
         'User.encode_jwt_token': 1,
-        'User.instance_domain': 1,
-        'User.mention_tag': 1,
-        'User.profile_id': 1,
-        'User.public_url': 1,
         'is_local_url': 1,
         'media_local_path': 1,
     },
@@ -265,9 +248,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'leave_community': 2,
         'leave_feed': 2,
         'unfollow_user': 3,
-    },
-    'app/shared/tasks/groups.py': {
-        'edit_community': 6,
     },
     'app/shared/tasks/likes.py': {
         'send_vote': 3,

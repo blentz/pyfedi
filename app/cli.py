@@ -64,7 +64,7 @@ from app.shared.tasks.maintenance import (
 )
 from app.utils import move_file_to_s3
 from app.local_names import local_named
-from app.storefront import default_domain, home_storefront, hosted_instance_ids, instance_id_of
+from app.storefront import default_domain, domain_base_url, home_storefront, hosted_instance_ids, instance_id_of
 from app.discovery.cli import register_discovery_commands
 from app.relays.cli import register_relay_commands
 import app as app_pkg
@@ -295,9 +295,10 @@ def register(app):
                 admin_user.roles.append(admin_role)
                 admin_user.verified = True
                 admin_user.last_seen = utcnow()
-                admin_user.ap_profile_id = f"{current_app.config['SERVER_URL']}/u/{admin_user.user_name.lower()}"
-                admin_user.ap_public_url = f"{current_app.config['SERVER_URL']}/u/{admin_user.user_name}"
-                admin_user.ap_inbox_url = f"{current_app.config['SERVER_URL']}/u/{admin_user.user_name.lower()}/inbox"
+                base = domain_base_url(default_domain())   # the admin's home domain, as site_domain_id says
+                admin_user.ap_profile_id = f"{base}/u/{admin_user.user_name.lower()}"
+                admin_user.ap_public_url = f"{base}/u/{admin_user.user_name}"
+                admin_user.ap_inbox_url = f"{base}/u/{admin_user.user_name.lower()}/inbox"
                 db.session.add(admin_user)
 
             db.session.commit()
@@ -1241,8 +1242,9 @@ def register(app):
         # Find or create the feed_bot user
         feed_bot = User.query.filter(local_named(User, 'feed_bot', default_domain())).first()
         if not feed_bot:
-            # Create the feed_bot user
+            # Create the feed_bot user, on the default domain its RSS posts federate from
             private_key, public_key = RsaKeys.generate_keypair()
+            base = domain_base_url(default_domain())
             feed_bot = User(
                 user_name='feed_bot',
                 title='RSS',
@@ -1256,9 +1258,9 @@ def register(app):
                 verified=True,
                 email_unread_sent=False,
                 alt_user_name=random_token(20),
-                ap_profile_id=f"{current_app.config['SERVER_URL']}/u/feed_bot",
-                ap_public_url=f"{current_app.config['SERVER_URL']}/u/feed_bot",
-                ap_inbox_url=f"{current_app.config['SERVER_URL']}/u/feed_bot/inbox",
+                ap_profile_id=f"{base}/u/feed_bot",
+                ap_public_url=f"{base}/u/feed_bot",
+                ap_inbox_url=f"{base}/u/feed_bot/inbox",
                 suppress_crossposts=True,
                 accept_private_messages=0,
                 admin_note='Automatically created bot to author RSS feed posts',

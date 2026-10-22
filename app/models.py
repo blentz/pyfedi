@@ -1551,12 +1551,16 @@ class Community(db.Model):
     def is_admin_or_staff(self, user):
         return user.is_admin_or_staff()
 
+    # A local community with no stored URL is named on its home domain (plan C3). home_domain, not owner_base:
+    # is_local reads profile_id, so asking whether the community is local here would never return.
     def profile_id(self):
-        retval = self.ap_profile_id if self.ap_profile_id else f"{current_app.config['SERVER_URL']}/c/{self.name}"
+        retval = self.ap_profile_id if self.ap_profile_id else \
+            f"{storefront.domain_base_url(self.home_domain())}/c/{self.name}"
         return retval.lower()
 
     def public_url(self):
-        result = self.ap_public_url if self.ap_public_url else f"{current_app.config['SERVER_URL']}/c/{self.name}"
+        result = self.ap_public_url if self.ap_public_url else \
+            f"{storefront.domain_base_url(self.home_domain())}/c/{self.name}"
         return result
 
     def is_local(self):
@@ -2159,7 +2163,7 @@ class User(UserMixin, db.Model):
         if self.ap_domain:
             return self.ap_domain
         if self.is_local():
-            return current_app.config['SERVER_NAME']
+            return storefront.domain_authority(self.home_domain())
         else:
             return self.instance.domain
 
@@ -2310,12 +2314,15 @@ class User(UserMixin, db.Model):
         return Community.query.filter(Community.banned == False). \
             join(CommunityMember).filter(CommunityMember.is_banned == False, CommunityMember.user_id == self.id).all()
 
+    # A local account with no stored URL is named on its home domain (plan C3)
     def profile_id(self):
-        result = self.ap_profile_id if self.ap_profile_id else f"{current_app.config['SERVER_URL']}/u/{self.user_name.lower()}"
+        result = self.ap_profile_id if self.ap_profile_id else \
+            f"{storefront.domain_base_url(self.home_domain())}/u/{self.user_name.lower()}"
         return result
 
     def public_url(self):
-        return self.ap_public_url if self.ap_public_url else f"{current_app.config['SERVER_URL']}/u/{self.user_name}"
+        return self.ap_public_url if self.ap_public_url else \
+            f"{storefront.domain_base_url(self.home_domain())}/u/{self.user_name}"
 
     def follow_answer_inbox(self):
         """Where the Accept or Reject of this remote user's Follow goes: their own `inbox` (spec 2026-10-14 §10 A12).
@@ -2502,7 +2509,7 @@ class User(UserMixin, db.Model):
 
     def mention_tag(self):
         if self.ap_domain is None:
-            return '@' + self.user_name + '@' + current_app.config['SERVER_NAME']
+            return '@' + self.user_name + '@' + storefront.domain_authority(self.home_domain())
         else:
             return '@' + self.user_name + '@' + self.ap_domain
 

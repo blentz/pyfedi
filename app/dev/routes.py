@@ -12,7 +12,7 @@ from app.admin.routes import unsubscribe_everyone_then_delete
 from app.dev import bp
 from app.dev.forms import AddTestCommunities, AddTestTopics, DeleteTestCommunities, DeleteTestTopics, ActivityPubForm
 from app.inoculation import inoculation
-from app.storefront import default_domain, instance_id_of
+from app.storefront import domain_authority, domain_base_url, instance_id_of
 from app.models import Site, User, Community, CommunityMember, Language, Topic, utcnow
 from app.utils import render_template, community_membership, moderating_communities, joined_communities, menu_topics, \
     markdown_to_html, permission_required, login_required, roles_with
@@ -32,6 +32,8 @@ def tools():
 
     # create 30 dev_ communities
     if communities_form.communities_submit.data and communities_form.validate():
+        home = current_user.home_domain()   # the developer's own domain, as a community they create is
+        base_url = domain_base_url(home)
         for n in range(30):
             # generate a keypair
             private_key, public_key = RsaKeys.generate_keypair()
@@ -46,11 +48,11 @@ def tools():
             community = Community(title=title, name=name, description=description,
                                   rules=rules, nsfw=False, private_key=private_key,
                                   public_key=public_key, description_html=markdown_to_html(description), local_only=True,
-                                  ap_profile_id='https://' + current_app.config['SERVER_NAME'] + '/c/' + name.lower(),
-                                  ap_public_url='https://' + current_app.config['SERVER_NAME'] + '/c/' + name,
-                                  ap_followers_url='https://' + current_app.config['SERVER_NAME'] + '/c/' + name.lower() + '/followers',
-                                  ap_domain=current_app.config['SERVER_NAME'], site_domain_id=default_domain().id,
-                                  subscriptions_count=1, instance_id=instance_id_of(default_domain()), low_quality='memes' in name)            
+                                  ap_profile_id=base_url + '/c/' + name.lower(),
+                                  ap_public_url=base_url + '/c/' + name,
+                                  ap_followers_url=base_url + '/c/' + name.lower() + '/followers',
+                                  ap_domain=domain_authority(home), site_domain_id=home.id,
+                                  subscriptions_count=1, instance_id=instance_id_of(home), low_quality='memes' in name)            
             
             # add and commit to db
             db.session.add(community)

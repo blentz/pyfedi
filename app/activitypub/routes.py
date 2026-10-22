@@ -53,7 +53,8 @@ from app.relays import inbound as relay_inbound
 from app.local_only import any_domain_closed, community_local_only, federated_mentions, federating_clause, \
     refused_outbound, user_local_only
 from app.local_names import actor_handle, local_clause, split_local_name
-from app.storefront import current_storefront, domain_for_host, hosted_instance_ids, is_served_name
+from app.federation_urls import owner_base, owner_domain
+from app.storefront import current_storefront, domain_authority, domain_for_host, hosted_instance_ids, is_served_name
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
@@ -527,6 +528,7 @@ def user_profile(actor):
             else:
                 return ''
         if is_activitypub_request():
+            base = owner_base(user)   # its home domain's: a sister domain's account names none of hell.cloud's URLs
             actor_data = {"@context": default_context(),
                           "type": "Person" if not user.bot else "Service",
                           "id": user.public_url(),
@@ -547,10 +549,10 @@ def user_profile(actor):
                               "publicKeyPem": user.public_key
                           },
                           "endpoints": {
-                              "sharedInbox": f"{current_app.config['SERVER_URL']}/inbox"
+                              "sharedInbox": f"{base}/inbox"
                           },
                           "published": ap_datetime(user.created),
-                          "attributionDomains": [current_app.config['SERVER_NAME']]
+                          "attributionDomains": [domain_authority(owner_domain(user))]
                           }
 
             if user.avatar_id is not None:
@@ -563,7 +565,7 @@ def user_profile(actor):
                 else:
                     actor_data["icon"] = {
                         "type": "Image",
-                        "url": f"{current_app.config['SERVER_URL']}{user.avatar_image()}"
+                        "url": f"{base}{user.avatar_image()}"
                     }
             if user.cover_id is not None:
                 cover_image = user.cover_image()
@@ -575,7 +577,7 @@ def user_profile(actor):
                 else:
                     actor_data["image"] = {
                         "type": "Image",
-                        "url": f"{current_app.config['SERVER_URL']}{user.cover_image()}"
+                        "url": f"{base}{user.cover_image()}"
                     }
             if user.about_html:
                 actor_data['summary'] = user.about_html
@@ -593,7 +595,7 @@ def user_profile(actor):
             resp.headers.set('Cache-Control', AP_CACHE_ACTOR)
             resp.headers.set('Vary', 'Accept')
             resp.headers.set('Link',
-                             f'<https://{current_app.config["SERVER_NAME"]}/u/{actor}>; rel="alternate"; type="text/html"')
+                             f'<{base}/u/{actor}>; rel="alternate"; type="text/html"')
             return resp
         else:
             return user_routes.show_profile(user)
@@ -632,7 +634,7 @@ def resolve_remote_handle(actor: str):
 def community_collection_id(community: Community, collection: str) -> str:
     """The id of a collection of local `community`, built from the stored name as the actor document builds its
     `outbox`, `followers` and the rest, whatever casing or handle the request named it by."""
-    return f"{current_app.config['SERVER_URL']}/c/{community.ap_profile_id.rsplit('/', 1)[-1]}/{collection}"
+    return f"{owner_base(community)}/c/{community.ap_profile_id.rsplit('/', 1)[-1]}/{collection}"
 
 
 def local_actor_user(actor: str) -> User:
@@ -752,7 +754,7 @@ def community_profile(actor):
             resp.headers.set('Cache-Control', AP_CACHE_ACTOR)
             resp.headers.set('Vary', 'Accept')
             resp.headers.set('Link',
-                             f'<https://{current_app.config["SERVER_NAME"]}/c/{actor.lower()}>; rel="alternate"; type="text/html"')
+                             f'<{owner_base(community)}/c/{actor.lower()}>; rel="alternate"; type="text/html"')
             return resp
         else:  # browser request - return html
             return community_routes.show_community(community)

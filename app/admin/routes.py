@@ -47,8 +47,8 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, RolePermission, Domain, \
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, SiteDomain, \
     instance_row_referenced
-from app.storefront import canonicalise_text, clear_domain_cache, default_domain, domain_by_id, hosted_instance_ids, \
-    instance_id_of, live_registration, storefront_url
+from app.storefront import canonicalise_text, clear_domain_cache, default_domain, domain_authority, domain_base_url, \
+    domain_by_id, hosted_instance_ids, instance_id_of, live_registration, storefront_url
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
@@ -1658,13 +1658,14 @@ def admin_community_edit(community_id):
         # the server that publishes it, and the template already warns that its
         # settings are overwritten from there.
         if community.is_local() and form.url.data != community.name:
-            base = f"https://{current_app.config['SERVER_NAME']}/c/{form.url.data}"
+            home = community.home_domain()   # renamed on its own domain (plan C3)
+            base = f"{domain_base_url(home)}/c/{form.url.data}"
             community.ap_profile_id = base
             community.ap_public_url = base
             community.ap_followers_url = f'{base}/followers'
             community.ap_featured_url = f'{base}/featured'
             community.ap_moderators_url = f'{base}/moderators'
-            community.ap_domain = current_app.config['SERVER_NAME']
+            community.ap_domain = domain_authority(home)
         community.name = form.url.data
         community.title = form.title.data
         community.description = canonicalise_text(form.description.data)
@@ -2694,14 +2695,17 @@ def admin_community_move(community_id, new_owner):
         community.name = form.new_url.data.lower()
         community.private_key = private_key
         community.public_key = public_key
-        community.ap_profile_id = 'https://' + current_app.config['SERVER_NAME'] + '/c/' + form.new_url.data
-        community.ap_public_url = 'https://' + current_app.config['SERVER_NAME'] + '/c/' + form.new_url.data
-        community.ap_followers_url = 'https://' + current_app.config['SERVER_NAME'] + '/c/' + form.new_url.data + '/followers'
-        community.ap_featured_url = 'https://' + current_app.config['SERVER_NAME'] + '/c/' + form.new_url.data + '/featured'
-        community.ap_moderators_url = 'https://' + current_app.config['SERVER_NAME'] + '/c/' + form.new_url.data + '/moderators'
-        community.ap_domain = current_app.config['SERVER_NAME']
-        community.instance_id = instance_id_of(default_domain())
-        community.site_domain_id = default_domain().id
+        # A moved community is the default domain's: MoveCommunityForm checked its url there
+        home = default_domain()
+        base = f"{domain_base_url(home)}/c/{form.new_url.data}"
+        community.ap_profile_id = base
+        community.ap_public_url = base
+        community.ap_followers_url = base + '/followers'
+        community.ap_featured_url = base + '/featured'
+        community.ap_moderators_url = base + '/moderators'
+        community.ap_domain = domain_authority(home)
+        community.instance_id = instance_id_of(home)
+        community.site_domain_id = home.id
 
         if form.new_owner.data:
             community.user_id = new_owner_user.id

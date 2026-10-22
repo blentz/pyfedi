@@ -110,6 +110,17 @@ def instance_actor_url(domain: DomainInfo) -> str:
     return f'{domain_base_url(domain)}/actor'
 
 
+def instance_actor_public_key(domain: DomainInfo) -> str | None:
+    """The public key `domain`'s instance actor (`/actor`, and `/`) publishes: Site row 1's for the default domain,
+    every other domain's its site_domain row's. Read from the database on each call, as `instance_actor_signing`
+    reads the private half."""
+    if domain.is_default:
+        query = select(models.Site.public_key).where(models.Site.id == 1)
+    else:
+        query = select(models.SiteDomain.public_key).where(models.SiteDomain.id == domain.id)
+    return db.session.execute(query).scalar()
+
+
 class MissingInstanceKey(LookupError):
     """A domain's instance actor has no private key to sign with."""
 

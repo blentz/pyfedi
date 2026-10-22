@@ -1,7 +1,8 @@
 from app import celery
 from app.activitypub.signature import default_context, post_request, send_post_request
 from app.models import Community, User, utcnow
-from app.utils import gibberish, ap_datetime, get_task_session, patch_db_session
+from app.federation_urls import activity_id, owner_base
+from app.utils import ap_datetime, get_task_session, patch_db_session
 from app.shared.community import get_comm_flair_list, comm_flair_ap_format
 
 from flask import current_app
@@ -62,9 +63,13 @@ def edit_community(send_async, user_id, community_id):
                 if not community.is_moderator(user):
                     return
 
-                announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
-                update_id = f"{current_app.config['SERVER_URL']}/activities/update/{gibberish(15)}"
-                group_id = f"{current_app.config['SERVER_URL']}/c/{community.name}"
+                # Named on the owners' domains (plan C3), from the rows, as a Celery worker has no request: the
+                # Update is the moderator's activity, the Group and its Announce the community's. A remote
+                # community's home server ignores our copy of its Group: that copy is named on the sending
+                # moderator's domain (SERVER_URL before C3)
+                update_id = activity_id('update', user)
+                base = owner_base(community if community.is_local() else user)
+                group_id = f"{base}/c/{community.name}"
                 group = {
                   'id': group_id,
                   'type': 'Group',
@@ -77,7 +82,7 @@ def edit_community(send_async, user_id, community_id):
                   'postingRestrictedToMods': community.restricted_to_mods,
                   'featured': group_id + '/featured',
                   'followers': group_id + '/followers',
-                  'endpoints': {'sharedInbox': f"{current_app.config['SERVER_URL']}/inbox"},
+                  'endpoints': {'sharedInbox': f"{base}/inbox"},
                   'inbox': group_id + '/inbox',
                   'outbox': group_id + '/outbox',
                   'publicKey':  {'id': group_id + '#main-key', 'owner': group_id, 'publicKeyPem': community.public_key}
@@ -95,7 +100,7 @@ def edit_community(send_async, user_id, community_id):
                     else:
                         group['icon'] = {
                             'type': 'Image',
-                            'url': f"{current_app.config['SERVER_URL']}{community.icon_image()}"
+                            'url': f"{base}{community.icon_image()}"
                         }
                 if community.image_id:
                     if community.header_image().startswith('http'):
@@ -106,7 +111,7 @@ def edit_community(send_async, user_id, community_id):
                     else:
                         group['image'] = {
                             'type': 'Image',
-                            'url': f"{current_app.config['SERVER_URL']}{community.header_image()}"
+                            'url': f"{base}{community.header_image()}"
                         }
                 language = []
                 for community_language in community.languages:
@@ -128,7 +133,7 @@ def edit_community(send_async, user_id, community_id):
                 }
                 if community.is_local():
                     announce = {
-                      'id': announce_id,
+                      'id': activity_id('announce', community),
                       'type': 'Announce',
                       'actor': community.public_url(),
                       'object': update,

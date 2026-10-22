@@ -45,8 +45,9 @@ from app.local_only import local_only_visible, local_only_visible_rss, user_loca
     without_local_only_actors
 from app.local_names import local_named, split_local_name
 from app.visibility import listable_clause, modlog_local_only_clause, modlog_open_clause, visible_to_clause
-from app.storefront import ON_DOMAIN_PARAM, current_instance_id, current_storefront, hidden_instance_ids, \
-    hosted_instance_ids, on_domain, on_domain_sql, storefront_host, storefront_cache_key, storefront_link, storefront_url
+from app.federation_urls import instance_actor_public_key, instance_actor_url
+from app.storefront import ON_DOMAIN_PARAM, current_instance_id, current_storefront, domain_authority, domain_base_url, \
+    hidden_instance_ids, hosted_instance_ids, on_domain, on_domain_sql, storefront_host, storefront_cache_key, storefront_link, storefront_url
 from app.utils import etag_stamp
 from app.utils import render_template, ensure_rss_token, get_setting, request_etag_matches, return_304, blocked_domains, \
     ap_datetime, shorten_string, user_filters_home, \
@@ -1286,16 +1287,32 @@ def verification_warning():
 
 
 def ap_application_cache_key() -> str:
-    """activitypub_application's content type follows the Accept header (ap_media_type), so its cache entry does."""
-    return f'view/activitypub_application/{ap_media_type()}'
+    """activitypub_application's content type follows the Accept header (ap_media_type), so its cache entry does, and
+    its URLs and key follow the domain asked (plan C3), so the entry is per domain too."""
+    return f'view/activitypub_application/{current_storefront().domain}/{ap_media_type()}'
+
+
+def federating_storefront():
+    """The domain this request came in on, whose instance actor answers it. A local-only domain (the onion) has none
+    another server may see: 404, as a local-only account's document is."""
+    domain = current_storefront()
+    if not domain.federates:
+        abort(404)
+    return domain
+
+
+def activitypub_application():
+    domain = federating_storefront()
+    return _activitypub_application(domain)
 
 
 @cache.cached(timeout=6, key_prefix=ap_application_cache_key)
-def activitypub_application():
+def _activitypub_application(domain):
+    base = domain_base_url(domain)
     application_data = {
         '@context': default_context(),
         'type': 'Application',
-        'id': f"{current_app.config['SERVER_URL']}/",
+        'id': f"{base}/",
         'name': 'PieFed',
         # Both halves are nullable, and `Site()` with no arguments -- which is
         # what app/models.py and app/admin/routes.py fall back to when row 1 is
@@ -1306,16 +1323,16 @@ def activitypub_application():
         'summary': ' - '.join(part for part in (g.site.name, g.site.description) if part),
         'published': ap_datetime(g.site.created_at),
         'updated': ap_datetime(g.site.updated),
-        'inbox': f"{current_app.config['SERVER_URL']}/inbox",
-        'outbox': f"{current_app.config['SERVER_URL']}/site_outbox",
+        'inbox': f"{base}/inbox",
+        'outbox': f"{base}/site_outbox",
         'icon': {
             'type': 'Image',
-            'url': f"{current_app.config['SERVER_URL']}/static/images/piefed_logo_icon_t_75.png"
+            'url': f"{base}/static/images/piefed_logo_icon_t_75.png"
         },
         'publicKey': {
-            'id': f"{current_app.config['SERVER_URL']}/#main-key",
-            'owner': f"{current_app.config['SERVER_URL']}/",
-            'publicKeyPem': g.site.public_key
+            'id': f"{base}/#main-key",
+            'owner': f"{base}/",
+            'publicKeyPem': instance_actor_public_key(domain)
         }
     }
     resp = jsonify(application_data)
@@ -1327,27 +1344,30 @@ def activitypub_application():
 
 # instance actor (literally uses the word 'actor' without the /u/)
 # required for interacting with instances using 'secure mode' (aka authorized fetch)
+# Each federating domain has its own (plan C3): its id, name and key are the domain's the request came in on.
 @bp.route('/actor', methods=['GET'])
 def instance_actor():
+    domain = federating_storefront()
+    base, actor = domain_base_url(domain), instance_actor_url(domain)
     application_data = {
         '@context': default_context(),
         'type': 'Application',
-        'id': f"{current_app.config['SERVER_URL']}/actor",
-        'preferredUsername': f"{current_app.config['SERVER_NAME']}",
+        'id': actor,
+        'preferredUsername': domain_authority(domain),
         # Castopod stores a follower from `name` without checking it exists, and refuses the
         # Follow when it is absent (interop D24: the instance actor follows synced podcasts)
-        'name': f"{current_app.config['SERVER_NAME']}",
-        'url': f"{current_app.config['SERVER_URL']}/about",
+        'name': domain_authority(domain),
+        'url': f"{base}/about",
         'manuallyApprovesFollowers': True,
-        'inbox': f"{current_app.config['SERVER_URL']}/actor/inbox",
-        'outbox': f"{current_app.config['SERVER_URL']}/actor/outbox",
+        'inbox': f"{actor}/inbox",
+        'outbox': f"{actor}/outbox",
         'publicKey': {
-            'id': f"{current_app.config['SERVER_URL']}/actor#main-key",
-            'owner': f"{current_app.config['SERVER_URL']}/actor",
-            'publicKeyPem': g.site.public_key
+            'id': f"{actor}#main-key",
+            'owner': actor,
+            'publicKeyPem': instance_actor_public_key(domain)
         },
         'endpoints': {
-            'sharedInbox': f"{current_app.config['SERVER_URL']}/inbox",
+            'sharedInbox': f"{base}/inbox",
         }
     }
     resp = jsonify(application_data)
@@ -1359,7 +1379,7 @@ def instance_actor():
 def instance_actor_outbox():
     """The outbox /actor advertises (S3.1). The instance actor publishes nothing, so it is empty, but it exists:
     peers that dereference an advertised outbox got 404 before."""
-    outbox = paged_outbox(f"{current_app.config['SERVER_URL']}/actor/outbox", 0, lambda offset, limit: [])
+    outbox = paged_outbox(f"{instance_actor_url(federating_storefront())}/outbox", 0, lambda offset, limit: [])
     resp = jsonify(outbox)
     resp.content_type = ap_media_type()
     resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)

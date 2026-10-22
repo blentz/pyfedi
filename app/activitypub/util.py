@@ -35,6 +35,7 @@ from app.activitypub.signature import signed_get_capped, signed_get_request, sen
 from app.constants import *
 from app.local_only import federating_clause, federating_sql
 from app.local_names import local_named
+from app.federation_urls import owner_base
 from app.storefront import default_domain, domain_authority, domain_base_url, hosted_instance_ids, instance_id_of
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
@@ -1084,36 +1085,36 @@ def served_by_us(url: str, file) -> bool:
 def community_actor_data(community: Community) -> dict:
     """The ActivityPub actor document of LOCAL `community`, as community_profile serves it and as its re-announce of
     a moderator's Group Update carries it (final review M1)."""
-    server = current_app.config['SERVER_NAME']
+    base = owner_base(community)   # its home domain's, never hell.cloud's for a sister domain's community
     actor = community.ap_profile_id.rsplit('/', 1)[-1]   # the canonical name community_profile looked it up by
     actor_data = {"@context": default_context(),
                   "type": "Group",
-                  "id": f"https://{server}/c/{actor}",
+                  "id": f"{base}/c/{actor}",
                   "name": community.title,
                   "postingWarning": community.posting_warning,
                   "sensitive": True if community.nsfw or community.nsfl else False,
                   "preferredUsername": actor,
-                  "inbox": f"https://{server}/c/{actor}/inbox",
-                  "outbox": f"https://{server}/c/{actor}/outbox",
-                  "followers": f"https://{server}/c/{actor}/followers",
-                  "following": f"https://{server}/c/{actor}/following",
-                  "moderators": f"https://{server}/c/{actor}/moderators",
-                  "featured": f"https://{server}/c/{actor}/featured",
-                  "attributedTo": f"https://{server}/c/{actor}/moderators",
+                  "inbox": f"{base}/c/{actor}/inbox",
+                  "outbox": f"{base}/c/{actor}/outbox",
+                  "followers": f"{base}/c/{actor}/followers",
+                  "following": f"{base}/c/{actor}/following",
+                  "moderators": f"{base}/c/{actor}/moderators",
+                  "featured": f"{base}/c/{actor}/featured",
+                  "attributedTo": f"{base}/c/{actor}/moderators",
                   "postingRestrictedToMods": community.restricted_to_mods or community.local_only,
                   "questionAnswer": community.question_answer,
                   "defaultPostType": community.default_post_type,
                   "newModsWanted": community.new_mods_wanted,
                   "privateMods": community.private_mods,
                   "genAI": community.ai_generated,
-                  "url": f"https://{server}/c/{actor}",
+                  "url": f"{base}/c/{actor}",
                   "publicKey": {
-                      "id": f"https://{server}/c/{actor}#main-key",
-                      "owner": f"https://{server}/c/{actor}",
+                      "id": f"{base}/c/{actor}#main-key",
+                      "owner": f"{base}/c/{actor}",
                       "publicKeyPem": community.public_key
                   },
                   "endpoints": {
-                      "sharedInbox": f"{current_app.config['SERVER_URL']}/inbox"
+                      "sharedInbox": f"{base}/inbox"
                   },
                   "published": ap_datetime(community.created_at),
                   "updated": ap_datetime(community.last_active),
@@ -1140,7 +1141,7 @@ def community_actor_data(community: Community) -> dict:
         else:
             actor_data["icon"] = {
                 "type": "Image",
-                "url": f"{current_app.config['SERVER_URL']}{community.icon_image()}"
+                "url": f"{base}{community.icon_image()}"
             }
     if community.image_id is not None:
         header_image = community.header_image()
@@ -1152,7 +1153,7 @@ def community_actor_data(community: Community) -> dict:
         else:
             actor_data["image"] = {
                 "type": "Image",
-                "url": f"{current_app.config['SERVER_URL']}{community.header_image()}"
+                "url": f"{base}{community.header_image()}"
             }
     actor_data['language'] = []
     for language in community.languages:
