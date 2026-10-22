@@ -316,3 +316,10 @@ def test_the_site_lists_are_cached_per_host(app, path, shop_first):
     db.session.commit()
     assert b'banned.example' in get(app, path, host=second).data
     assert get(app, path, host=first).data == before.data
+
+
+def test_the_feeds_document_is_hells_only(app):
+    """M4: /feeds as ActivityPub is the default domain's site document: another domain answers it 404."""
+    assert app.test_client().get('/feeds', headers=AP, base_url=SHOP_BASE).status_code == 404
+    hell = app.test_client().get('/feeds', headers=AP, base_url=f'https://{HELL}')
+    assert hell.status_code == 200 and json.loads(hell.data)['site_view']['site']['actor_id'] == f'https://{HELL}/'

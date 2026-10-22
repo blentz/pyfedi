@@ -1453,7 +1453,10 @@ def list_feeds():
 
     # respond with json collection of public feeds for curl/AP requests
     if is_activitypub_request():
-        site_data = lemmy_site_data(default_domain())   # feeds stay on the default domain (C1 ruling)
+        # feeds stay on the default domain (C1 ruling): another domain's answer would be the default domain's site
+        if not current_storefront().is_default:
+            abort(404)
+        site_data = lemmy_site_data(default_domain())
         feeds_list = []
         for f in public_feeds:
             if f['feed'].is_local():
