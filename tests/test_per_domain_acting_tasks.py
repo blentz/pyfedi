@@ -8,6 +8,7 @@ and `run` runs it later with no request of any kind: what it names then came fro
 same task_prerun/task_postrun handlers a worker runs.
 """
 import threading
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -18,7 +19,7 @@ from flask_login import login_user
 from app import db
 from app.activitypub.util import refresh_user_profile
 from app.activitypub.signature import HttpSignature
-from app.celery_acting import ACTING_HEADER, ActingTask, _queuing_domain_id, _runs
+from app.celery_acting import ACTING_HEADER, ActingTask, _queuing_domain_id, _runs, _stop_acting, queued_domain_id
 from app.discovery.credits import fetch_feed
 from app.models import Post, SiteDomain
 from app.shared.tasks import task_selector
@@ -218,3 +219,16 @@ def test_a_task_queued_with_no_app_context_is_the_defaults(app, domains):
     thread.start()
     thread.join()
     assert found == [None]
+
+
+def test_a_workers_request_carries_the_domain_as_an_attribute():
+    """A broker message's headers are attributes of the worker's request; an eager run's are in `headers`."""
+    assert queued_domain_id(SimpleNamespace(**{ACTING_HEADER: 5})) == 5
+    assert queued_domain_id(SimpleNamespace(headers={ACTING_HEADER: 6})) == 6
+    assert queued_domain_id(SimpleNamespace(headers=None)) is None
+    assert queued_domain_id(SimpleNamespace(**{ACTING_HEADER: 'shop.example'})) is None   # only an id names one
+
+
+def test_a_postrun_for_a_task_that_never_started_acting_is_a_no_op():
+    _stop_acting(task_id='never-ran')
+    assert 'never-ran' not in _runs

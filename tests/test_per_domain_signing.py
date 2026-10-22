@@ -24,6 +24,7 @@ from app.activitypub.util import process_announce_of_uri, remote_object_to_json,
 from app.constants import APLOG_DUPLICATE, APLOG_IGNORED
 from app.models import ActivityPubLog, Post, Relay, Site, SiteDomain, User
 from app.relays.expiry import _local_user_ids
+from app.discovery.credits import _signed_headers as _credits_signed_headers
 from app.relays.subscribe import add_relay
 from app.storefront import acting_domain, acting_for, clear_domain_cache, domain_for_host, is_federating_url
 from app.user.utils import search_for_user
@@ -459,3 +460,9 @@ def test_an_api_callers_domain_does_not_outlive_its_request(app, domains):
             assert acting_domain() == domains.shop
         with app.test_request_context():
             assert acting_domain() == domains.hell
+
+
+def test_the_discovery_credits_sign_nothing_with_no_instance_key(app, domains):
+    db.session.get(Site, 1).private_key = None
+    db.session.commit()
+    assert _credits_signed_headers(ACTOR_URL) is None
