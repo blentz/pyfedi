@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import math
 import re
 import unicodedata
 from contextlib import contextmanager
@@ -232,8 +233,9 @@ def tiered_post_ids(posts, rank, tail: tuple, limit: int, place: tuple | None = 
     any sticky columns already) in the order `lead, rank + boost, tail, id`, found tier by tier by plain `rank`.
     `place` is a keyset cursor's forward place (sqlakeyset's: the value of every order column of the page's query, in
     that order) and `lead` the columns that come before the boosted value in it. Each tier reads on from the cursor
-    in two cuts. The index range is `rank <= cursor - boost`, widened a hair so that a float's rounding cannot drop a
-    row. The exact cut is `(lead, rank + boost, tail, id) < place`, which is what keeps the rows that tie the cursor
+    in two cuts. The index range is `(lead, rank) <= (the cursor's lead, its rank - boost)`, widened a hair so that a
+    float's rounding cannot drop a row: a row value, so that a row below the cursor on a lead column is in it whatever
+    its rank (the index orders by the lead columns first, so it is still a range of it). The exact cut is `(lead, rank + boost, tail, id) < place`, which is what keeps the rows that tie the cursor
     on its rank apart, by the keys after it. The argument for why this is the naive order's first `limit` is
     `boosted_top_sql`'s."""
     ids = set()
@@ -241,7 +243,8 @@ def tiered_post_ids(posts, rank, tail: tuple, limit: int, place: tuple | None = 
         arm = posts.filter(or_(models.Post.instance_id.is_(None), models.Post.instance_id.not_in(hosted_instance_ids()))) \
             if instance_ids is None else posts.filter(models.Post.instance_id.in_(instance_ids))
         if place is not None:
-            arm = arm.filter(rank <= place[len(lead)] - boost + KEYSET_SLACK,
+            bound = place[len(lead)] - boost + KEYSET_SLACK
+            arm = arm.filter(tuple_(*lead, rank) <= tuple_(*place[:len(lead)], bound) if lead else rank <= bound,
                              tuple_(*lead, rank + boost, *tail, models.Post.id) < tuple_(*place))
         arm = arm.order_by(desc(rank), *(desc(c) for c in tail), desc(models.Post.id))
         ids.update(row.id for row in arm.limit(limit).all())
@@ -258,7 +261,9 @@ def boosted_order_by(rank, tail: tuple, by_id: bool = True) -> list:
 def check_place(place: tuple, columns: tuple) -> None:
     """Raise InvalidPage unless the keyset cursor `place` has one value of the right type for each of `columns` (the
     order columns of the page's query, in order): a number for a number, a timestamp for a timestamp. A cursor this
-    server never handed out would otherwise reach the database as a comparison of mismatched types."""
+    server never handed out would otherwise reach the database as a comparison of mismatched types. A number for a
+    float column must be a finite one a float holds: a huge int would overflow in Python or in Postgres, and NaN or
+    infinity is no place a page ever ends at."""
     if len(place) != len(columns):
         raise InvalidPage('a cursor of another shape')
     for value, column in zip(place, columns):
@@ -267,6 +272,16 @@ def check_place(place: tuple, columns: tuple) -> None:
             wanted = (int, float)
         if not isinstance(value, wanted) or (isinstance(value, bool) and wanted is not bool):
             raise InvalidPage('a cursor of other types')
+        if wanted == (int, float) and not finite(value):
+            raise InvalidPage('a cursor number no float holds')
+
+
+def finite(number: int | float) -> bool:
+    """Whether `number` is a finite float, or an int one converts to."""
+    try:
+        return math.isfinite(float(number))
+    except OverflowError:
+        return False
 
 
 def boosted_posts(posts, rank, tail: tuple, limit: int, bookmark=None, lead: tuple = ()):

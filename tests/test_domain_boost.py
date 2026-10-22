@@ -14,7 +14,7 @@ import pytest
 from flask import g
 from flask_login import login_user
 from sqlakeyset import get_page
-from sqlalchemy import text
+from sqlalchemy import desc, text
 
 from app import db
 from app.api.alpha.utils.community import get_community_list
@@ -407,3 +407,98 @@ def test_a_cursor_of_the_wrong_types_is_a_bad_request_not_a_database_error(api, 
             api_titles(api, 'hell', get_post_list2, sort, ignore_sticky=True, page_cursor=cursor)
     assert type(refused.value) is Exception and str(refused.value) == 'invalid page_cursor'
     assert not [r for r in caplog.records if 'sqlalchemy' in r.name or 'psycopg2' in r.name]
+
+
+# ------------------------------------------------------------------------ a page boundary among the stickies
+
+@pytest.fixture
+def pinned(world):
+    """Six stickies (community and instance stickies both) ranked below six other posts, remote, own and sister
+    alike, so that a page boundary among the stickies has every later non-sticky post ranked above its cursor."""
+    now = utcnow()
+    for index in range(12):
+        who = ('remote', 'hell', 'onion')[index % 3]
+        ranking = (4.0 if index < 6 else 6.0) + index * 0.1
+        world.put(who, ranking=ranking, ranking_scaled=ranking, sticky=index < 6, instance_sticky=index < 6,
+                  posted_at=now - timedelta(minutes=index))
+    return world
+
+
+def api_walk(world, domain, sort, **data):
+    """Every page of get_post_list2, two posts at a time: the post ids in order, and every cursor it handed out."""
+    viewer = world.viewers[domain]
+    walked, cursors, cursor = [], [], None
+    with request_on(world.app, world.on[domain]):
+        while True:
+            g.site, g.admin_ids = db.session.get(Site, 1), []
+            res = get_post_list2(f'Bearer {viewer.encode_jwt_token()}',
+                                 dict(sort=sort, limit=2, **data, **({'page_cursor': cursor} if cursor else {})))
+            walked += [entry['post']['id'] for entry in res['posts']]
+            if not (cursor := res['next_page']):
+                return walked, cursors
+            cursors.append(cursor)
+
+
+@pytest.mark.parametrize('domain', ['hell', 'onion'])
+@pytest.mark.parametrize('rank, tail', [('ranking', ('posted_at',)), ('ranking_scaled', ('ranking', 'posted_at'))])
+@pytest.mark.parametrize('lead', ['sticky', 'instance_sticky'])
+def test_a_keyset_page_boundary_among_the_stickies_keeps_every_row(pinned, domain, rank, tail, lead):
+    lead, rank, tail = (getattr(Post, lead),), getattr(Post, rank), tuple(getattr(Post, c) for c in tail)
+    with request_on(pinned.app, pinned.on[domain]):
+        sticky_first = Post.query.order_by(desc(lead[0]))
+        naive = [p.id for p in sticky_first.order_by(*boosted_order_by(rank, tail)).all()]
+        walked, bookmark = [], None
+        while True:
+            page = get_page(boosted_posts(sticky_first, rank, tail, 2, bookmark, lead), per_page=2, page=bookmark)
+            walked += [p.id for p in page]
+            if not page.paging.has_next:
+                break
+            bookmark = page.paging.bookmark_next
+    assert walked == naive and len(naive) == 12
+
+
+@pytest.mark.parametrize('domain', ['hell', 'onion'])
+@pytest.mark.parametrize('sort, rank, tail', [('Hot', 'ranking', ('posted_at',)),
+                                              ('Scaled', 'ranking_scaled', ('ranking', 'posted_at'))])
+@pytest.mark.parametrize('lead, data', [('sticky', {'community_name': 'art@test.piefed.local'}),   # a community's
+                                        ('instance_sticky', {})])                                 # everything
+def test_the_api_walks_a_sticky_led_feed_to_its_end_in_the_boosted_order(pinned, domain, sort, rank, tail, lead,
+                                                                         data):
+    """Every cursor the API hands out on the walk is one it takes back."""
+    lead, rank, tail = getattr(Post, lead), getattr(Post, rank), tuple(getattr(Post, c) for c in tail)
+    with request_on(pinned.app, pinned.on[domain]):
+        naive = [p.id for p in Post.query.order_by(desc(lead), *boosted_order_by(rank, tail)).all()]
+    walked, cursors = api_walk(pinned, domain, sort, **data)
+    assert walked == naive and len(naive) == 12 and len(cursors) == 5
+
+
+# ------------------------------------------------------------------------ a cursor number no float can hold
+
+HUGE = 'i:' + '9' * 400
+
+
+@pytest.mark.parametrize('sort, cursor', [
+    ('Hot', f'>{HUGE}~{STAMP}~i:5'),                   # the rank
+    ('Hot', f'<{HUGE}~{STAMP}~i:5'),                   # the rank, backwards
+    ('Hot', f'>f:nan~{STAMP}~i:5'),
+    ('Hot', f'>f:inf~{STAMP}~i:5'),
+    ('Scaled', f'>{HUGE}~f:5.0~{STAMP}~i:5'),          # the rank
+    ('Scaled', f'>f:6.0~{HUGE}~{STAMP}~i:5'),          # the tail's ranking
+    ('Scaled', f'>f:6.0~f:-inf~{STAMP}~i:5'),
+    ('Scaled', f'>f:6.0~f:nan~{STAMP}~i:5'),
+])
+def test_a_cursor_number_no_float_holds_is_a_bad_request(api, caplog, sort, cursor):
+    with caplog.at_level('ERROR'):
+        with pytest.raises(Exception) as refused:
+            api_titles(api, 'hell', get_post_list2, sort, ignore_sticky=True, page_cursor=cursor)
+    assert type(refused.value) is Exception and str(refused.value) == 'invalid page_cursor'
+    assert not [r for r in caplog.records if 'sqlalchemy' in r.name or 'psycopg2' in r.name]
+
+
+@pytest.mark.parametrize('sort, cursor', [('Hot', f'>{HUGE}~{STAMP}~i:5'), ('Scaled', f'>f:6.0~{HUGE}~{STAMP}~i:5')])
+def test_the_route_answers_a_cursor_number_no_float_holds_with_a_400(api, monkeypatch, sort, cursor):
+    monkeypatch.setitem(api.app.config, 'ENABLE_ALPHA_API', 'true')
+    response = api.app.test_client().get('/api/alpha/post/list2', base_url=BASE['hell'],
+                                         query_string={'sort': sort, 'ignore_sticky': 'true', 'page_cursor': cursor})
+    assert response.status_code == 400
+    assert response.get_json()['message'] == 'invalid page_cursor'
