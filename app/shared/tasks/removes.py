@@ -1,7 +1,8 @@
 from app import celery
 from app.activitypub.signature import default_context, post_request, send_post_request
+from app.federation_urls import activity_id
 from app.models import Community, Post, User
-from app.utils import gibberish, instance_banned, get_task_session, patch_db_session
+from app.utils import instance_banned, get_task_session, patch_db_session
 from app.visibility import is_open
 
 from flask import current_app
@@ -71,7 +72,7 @@ def remove_object(session, user_id, object, community_id=None):
     if not is_open(object) and (community.is_local() or object.author.is_local()):
         return
 
-    remove_id = f"{current_app.config['SERVER_URL']}/activities/remove/{gibberish(15)}"
+    remove_id = activity_id('remove', user)
     to = ["https://www.w3.org/ns/activitystreams#Public"]
     cc = [community.public_url()]
     remove = {
@@ -89,7 +90,7 @@ def remove_object(session, user_id, object, community_id=None):
     if community.is_local():
         del remove['@context']
 
-        announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
+        announce_id = activity_id('announce', community)
         actor = community.public_url()
         cc = [community.ap_followers_url]
         announce = {

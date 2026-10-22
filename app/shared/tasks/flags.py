@@ -1,7 +1,8 @@
 from app import celery
 from app.activitypub.signature import default_context, send_post_request
+from app.federation_urls import activity_id
 from app.models import Post, PostReply, User, Instance
-from app.utils import gibberish, get_task_session, patch_db_session
+from app.utils import get_task_session, patch_db_session
 
 from flask import current_app
 
@@ -58,7 +59,7 @@ def report_object(session, user_id, object, summary, instance_ids):
             not (community.instance_id and community.instance.online()):   # is_gone: interop C1 item 10
         return
 
-    flag_id = f"{current_app.config['SERVER_URL']}/activities/flag/{gibberish(15)}"
+    flag_id = activity_id('flag', user)
     to = [community.public_url()]
     flag = {
       'id': flag_id,
@@ -94,7 +95,7 @@ def report_chat(send_async, user_id, reported_id, message_ap_ids, summary):
                         instance.gone_forever:
                     return
                 flag = {
-                    'id': f"{current_app.config['SERVER_URL']}/activities/flag/{gibberish(15)}",
+                    'id': activity_id('flag', user),
                     'type': 'Flag',
                     'actor': user.public_url(),
                     'object': [reported.ap_profile_id or reported.public_url(), *message_ap_ids],

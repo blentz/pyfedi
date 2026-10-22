@@ -1,9 +1,10 @@
 from app import celery
 from app.activitypub.signature import default_context, send_post_request, HttpSignature
+from app.federation_urls import activity_id
 from app.local_only import refused_outbound
 from app.models import Post, PostReply, User, ActivityBatch, Community, PollChoiceVote, PollChoice, PostVote, PostReplyVote, utcnow
 from app.shared.tasks import task_selector
-from app.utils import user_banned_from_community, gibberish, instance_banned, get_task_session, patch_db_session
+from app.utils import user_banned_from_community, instance_banned, get_task_session, patch_db_session
 from app.visibility import is_open
 
 from flask import current_app, json
@@ -90,7 +91,7 @@ def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
             type = vote_to_undo
         else:
             type = 'Like' if vote_direction == 'upvote' else 'Dislike'
-        vote_id = f"{current_app.config['SERVER_URL']}/activities/{type.lower()}/{gibberish(15)}"
+        vote_id = activity_id(type.lower(), user)
 
         # public actor URL
         public_actor = user.public_url()
@@ -109,7 +110,7 @@ def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
 
         # Create undo
         if vote_to_undo:
-            undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/{gibberish(15)}"
+            undo_id = activity_id('undo', user)
 
             # Undo payload
             vote_public_copy = vote_public.copy()
@@ -134,7 +135,7 @@ def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
             del payload_copy['@context']
 
             # Create announcement with the selected payload
-            announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
+            announce_id = activity_id('announce', community)
             actor = community.public_url()
             to = ["https://www.w3.org/ns/activitystreams#Public"]
             cc = [community.ap_followers_url]
@@ -205,7 +206,7 @@ def vote_for_poll(send_async, user_id, post_id, choice_text):
             if community.local_only or community.private or not (community.instance_id and community.instance.online()):
                 return
             type = 'PollVote'
-            poll_vote_id = f"{current_app.config['SERVER_URL']}/activities/{type.lower()}/{gibberish(15)}"
+            poll_vote_id = activity_id(type.lower(), user)
 
             # public actor URL
             public_actor = user.public_url()
@@ -228,7 +229,7 @@ def vote_for_poll(send_async, user_id, post_id, choice_text):
                 del payload['@context']
 
                 # Create announcement with the selected payload
-                announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
+                announce_id = activity_id('announce', post.community)
                 actor = post.community.public_url()
                 to = ["https://www.w3.org/ns/activitystreams#Public"]
                 cc = [post.community.ap_followers_url]

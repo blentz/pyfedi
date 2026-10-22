@@ -28,6 +28,7 @@ from app.activitypub.util import find_actor_or_create, actor_json_to_model, \
     canonical_handle, webfinger_self_link_allowed
 from app.community.forms import CreateLinkForm
 from app.constants import SRC_WEB, POST_TYPE_LINK, NOTIF_NEW_POST, AP_FETCH_ACCEPT
+from app.federation_urls import activity_id
 from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, \
     Instance, User, Tag, CommunityFlair, CommunityThemeAllowed, Notification, markdown_source, language_from_ap, _as_dict, _as_url, parse_ap_published
 from app.local_names import local_named, named_by_actor
@@ -687,7 +688,7 @@ def delete_post_from_community_task(post_id, user_id):
                 # home, is still sent the Delete (R-a)
                 if not community.local_only and (is_open(post) or not community.is_local()):
                     delete_json = {
-                        'id': f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}",
+                        'id': activity_id('delete', user),
                         'type': 'Delete',
                         'actor': user.public_url(),
                         'audience': post.community.public_url(),
@@ -703,7 +704,7 @@ def delete_post_from_community_task(post_id, user_id):
                         send_post_request(post.community.ap_inbox_url, delete_json, user.private_key, user.public_url() + '#main-key')
                     else:  # local community - send it to followers on remote instances
                         announce = {
-                            "id": f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}",
+                            "id": activity_id('announce', post.community),
                             "type": 'Announce',
                             "to": [
                                 "https://www.w3.org/ns/activitystreams#Public"
@@ -759,7 +760,7 @@ def delete_post_reply_from_community_task(post_reply_id, user_id):
                 # reached them; a remote community, its home, is still sent it -- R-a)
                 if not post.community.local_only and (is_open(post_reply) or not post.community.is_local()):
                     delete_json = {
-                        'id': f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}",
+                        'id': activity_id('delete', user),
                         'type': 'Delete',
                         'actor': user.public_url(),
                         'audience': post.community.public_url(),
@@ -776,7 +777,7 @@ def delete_post_reply_from_community_task(post_reply_id, user_id):
 
                     else:  # local community - send it to followers on remote instances
                         announce = {
-                            "id": f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}",
+                            "id": activity_id('announce', post.community),
                             "type": 'Announce',
                             "to": [
                                 "https://www.w3.org/ns/activitystreams#Public"

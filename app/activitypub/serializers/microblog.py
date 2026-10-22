@@ -3,11 +3,11 @@ import re
 from urllib.parse import urlsplit
 
 from bs4 import BeautifulSoup, NavigableString
-from flask import current_app
 from markupsafe import escape
 
 import app.activitypub.util as activitypub_util   # the module: app.activitypub.util imports this one
 from app.constants import POST_TYPE_EVENT, POST_TYPE_IMAGE, POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO
+from app.federation_urls import object_base
 from app.local_only import federated_mentions
 from app.utils import ap_datetime, guess_mime_type, html_to_text, is_local_microblogs
 from app.visibility import followers_only_addressing, is_open
@@ -40,24 +40,20 @@ def _starts_with_title(text: str, title: str) -> bool:
     return not rest or not rest[0].isalnum()
 
 
-def _hashtag_href(name: str) -> str:
-    return f"{current_app.config['SERVER_URL']}/tag/{name}"
-
-
-def link_hashtags(body_html: str) -> tuple:
-    """(html, names): the body with each `#word` in its text nodes linked the way Mastodon marks up a hashtag, and
-    the lowercased names in order of first use. Text inside <a>, <code> and <pre> and attribute values are never
-    touched. Markup with no hashtag comes back byte for byte."""
-    html, spellings = _link_hashtags(body_html)
+def link_hashtags(body_html: str, base: str) -> tuple:
+    """(html, names): the body with each `#word` in its text nodes linked the way Mastodon marks up a hashtag, to
+    the tag page on `base` (the post's domain, plan C3), and the lowercased names in order of first use. Text inside
+    <a>, <code> and <pre> and attribute values are never touched. Markup with no hashtag comes back byte for byte."""
+    html, spellings = _link_hashtags(body_html, base)
     return html, list(spellings)
 
 
 def body_hashtags(body_html: str) -> dict:
     """The hashtags link_hashtags finds in `body_html`: lowercased name -> the spelling first used, in order."""
-    return _link_hashtags(body_html)[1]
+    return _link_hashtags(body_html, '')[1]   # the names only: the links made on the way are dropped
 
 
-def _link_hashtags(body_html: str) -> tuple:
+def _link_hashtags(body_html: str, base: str) -> tuple:
     soup = BeautifulSoup(body_html, 'html.parser')
     spellings = {}
     for text in soup.find_all(string=True):
@@ -67,7 +63,7 @@ def _link_hashtags(body_html: str) -> tuple:
         for match in HASHTAG_RE.finditer(str(text)):
             name = match.group(1).lower()
             spellings.setdefault(name, match.group(1))
-            link = soup.new_tag('a', href=_hashtag_href(name), rel='tag')
+            link = soup.new_tag('a', href=f'{base}/tag/{name}', rel='tag')
             link['class'] = 'mention hashtag'
             link.append('#')
             span = soup.new_tag('span')
@@ -91,7 +87,7 @@ def note_content(post) -> str:
     """The title as its own paragraph, then the body. A Note has no title, and the form requires one, so leaving it
     out would lose what the author wrote. Left out only when the body's text already starts with it as whole words."""
     original = post.body_html or ''
-    body = link_hashtags(original)[0]
+    body = link_hashtags(original, object_base(post))[0]
     title = (post.title or '').strip()
     if not title or _starts_with_title(html_to_text(original).strip(), title):
         return body
@@ -125,7 +121,7 @@ def note_attachments(post) -> list:
 def microblog_note(post, mentions: list) -> dict:
     """The Note, without @context. `mentions` are the users the body Mentions: the push finds them with fetching
     allowed, a fetch with it refused (stored_mentioned_users(post)), as for followers-only addressing."""
-    server_url = current_app.config['SERVER_URL']
+    server_url = object_base(post)   # the author's domain (plan C3)
     mentions = federated_mentions(mentions)   # a local-only account is Mentioned as plain text only, pushed or fetched
     addressing = note_addressing(post, mentions)
     content = note_content(post)

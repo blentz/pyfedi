@@ -14,6 +14,7 @@ from app.activitypub.signature import default_context, send_post_request
 from app.community.routes import do_subscribe
 from app.community.util import search_for_community
 from app.constants import POST_TYPE_IMAGE
+from app.federation_urls import activity_id
 from app.storefront import home_storefront, hosted_instance_ids
 from app.models import User, Community, Instance, CommunityMember, Post, Topic
 from app.utils import gibberish, topic_tree, get_request, store_files_in_s3, ensure_directory_exists, guess_mime_type, get_task_session, patch_db_session, sanitize_svg_bytes, \
@@ -54,7 +55,7 @@ def unsubscribe_from_everything_then_delete_task(user_id):
                         payload = {
                             "@context": default_context(),
                             "actor": user.public_url(),
-                            "id": f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}",
+                            "id": activity_id('delete', user),
                             "object": user.public_url(),
                             "to": [
                                 "https://www.w3.org/ns/activitystreams#Public"
@@ -79,14 +80,16 @@ def unsubscribe_from_everything_then_delete_task(user_id):
 def unsubscribe_from_community(community, user):
     if community.instance.gone_forever:
         return
+    if not user.is_local():
+        return   # a remote account follows from its own server: no Follow of ours to undo
 
-    undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/" + gibberish(15)
+    undo_id = activity_id('undo', user)
     follow = {
         "actor": user.public_url(),
         "to": [community.public_url()],
         "object": community.public_url(),
         "type": "Follow",
-        "id": f"{current_app.config['SERVER_URL']}/activities/follow/{gibberish(15)}"
+        "id": activity_id('follow', user)
     }
     undo = {
         'actor': user.public_url(),

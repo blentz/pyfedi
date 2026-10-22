@@ -1,12 +1,13 @@
 from app import cache, celery, db
 from app.constants import *
 from app.activitypub.signature import default_context, post_request, send_post_request
+from app.federation_urls import activity_id
 from app.models import Community, CommunityJoinRequest, User, Feed, FeedJoinRequest, UserFollowRequest
 from app.utils import user_banned_from_community, community_membership, gibberish, joined_communities, instance_banned, get_task_session, \
     feed_membership, menu_subscribed_feeds, patch_db_session, \
     community_link_markup
 
-from flask import current_app, flash
+from flask import flash
 from markupsafe import Markup
 from flask_babel import _
 
@@ -77,7 +78,7 @@ def join_community(send_async, user_id, community_id, src):
                 session.add(join_request)
                 session.commit()
 
-                follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{join_request.uuid}"
+                follow_id = activity_id('follow', user, join_request.uuid)
                 follow = {
                   'id': follow_id,
                   'type': 'Follow',
@@ -143,7 +144,7 @@ def leave_community(send_async, user_id, community_id):
                instance_banned(community.instance.domain)):
                 return
 
-            follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{join_request_uuid}"
+            follow_id = activity_id('follow', user, join_request_uuid)
             follow = {
               'id': follow_id,
               'type': 'Follow',
@@ -151,7 +152,7 @@ def leave_community(send_async, user_id, community_id):
               'object': community.public_url(),
               'to': [community.public_url()]
             }
-            undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/{gibberish(15)}"
+            undo_id = activity_id('undo', user)
             undo = {
               'id': undo_id,
               'type': 'Undo',
@@ -199,8 +200,8 @@ def leave_feed(send_async, user_id, feed_id):
 
             # This code is based on feed.feed_unsubscribe and leave_community above
             if not feed.instance.gone_forever:  # pragma: no branch -- see proof in test_shared_tasks_follows.py
-                follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{uuid}"
-                undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/" + gibberish(15)
+                follow_id = activity_id('follow', user, uuid)
+                undo_id = activity_id('undo', user)
                 follow = {
                     "actor": user.public_url(),
                     "to": [feed.public_url()],
@@ -236,7 +237,7 @@ def follow_user(to_follow_id, user_id, send_async=True):
             session.add(join_request)
             session.commit()
 
-            to_follow_ap_id = f"{current_app.config['SERVER_URL']}/activities/follow_user/{join_request.uuid}"
+            to_follow_ap_id = activity_id('follow_user', user, join_request.uuid)
             follow = {
                 'id': to_follow_ap_id,
                 'type': 'Follow',
@@ -266,10 +267,10 @@ def unfollow_user(to_follow_id, user_id, send_async=True):
                 join_request_uuid = join_request.uuid
                 session.delete(join_request)
                 session.commit()
-                to_follow_ap_id = f"{current_app.config['SERVER_URL']}/activities/follow_user/{join_request_uuid}"
+                to_follow_ap_id = activity_id('follow_user', user, join_request_uuid)
             else:
-                to_follow_ap_id = f"{current_app.config['SERVER_URL']}/activities/follow_user/{gibberish(15)}"
-            undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/" + gibberish(15)
+                to_follow_ap_id = activity_id('follow_user', user)
+            undo_id = activity_id('undo', user)
             follow = {
                 'id': to_follow_ap_id,
                 'type': 'Follow',

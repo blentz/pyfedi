@@ -335,7 +335,7 @@ def test_a_follow_of_a_non_public_feed_is_rejected_and_logged(app, db_session, m
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     sends = record_sends(monkeypatch)
-    follower, feed = _seed_follow_of_feed()
+    follower, feed = _seed_follow_of_feed(local=True)   # only our own feed is answered
 
     activity = inbox_activity(follower, activity_type='Follow', object_uri=feed.ap_profile_id)
     follow_id = activity['id']

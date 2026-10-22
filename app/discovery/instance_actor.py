@@ -8,7 +8,9 @@ from app import db
 from app.activitypub.signature import send_post_request
 from app.discovery import SYNC_NONE, SYNC_PENDING
 from app.discovery.instance_answers import instance_actor_url
+from app.federation_urls import activity_id
 from app.models import Site, utcnow
+from app.storefront import default_domain   # the sync is the default domain's housekeeping
 
 
 def _signing():
@@ -18,7 +20,7 @@ def _signing():
 
 def follow_activity(row) -> dict:
     return {'actor': instance_actor_url(), 'to': [row.follow_target], 'object': row.follow_target, 'type': 'Follow',
-            'id': f"{current_app.config['SERVER_URL']}/activities/follow/{row.follow_uuid}"}
+            'id': activity_id('follow', default_domain(), row.follow_uuid)}
 
 
 def send_instance_follow(row, community) -> bool:
@@ -45,7 +47,7 @@ def send_instance_undo(row, community) -> None:
         return
     try:
         undo = {'type': 'Undo', 'actor': instance_actor_url(), 'object': follow_activity(row),
-                'id': f"{current_app.config['SERVER_URL']}/activities/undo/{uuid.uuid4()}"}
+                'id': activity_id('undo', default_domain(), str(uuid.uuid4()))}
         private_key, key_id = _signing()
         send_post_request(community.ap_inbox_url, undo, private_key, key_id, timeout=10)
     except Exception as error:

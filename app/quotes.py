@@ -8,13 +8,15 @@ look each one up. What `_shows_card` needs of the viewer and of the site's bans 
 import re
 from collections import defaultdict
 
-from flask import current_app, g, has_request_context
+from flask import g, has_request_context
 from flask_login import current_user
 from sqlalchemy.orm import selectinload
 
 from app import db
 from app.constants import POST_STATUS_PUBLISHED
+from app.federation_urls import federating_domain_of_url, object_base
 from app.models import BannedInstances, Instance, Post, PostReply, QuoteAuthorization
+from app.storefront import domain_base_url
 from app.utils import blocked_communities, blocked_or_banned_instances, blocked_users, communities_banned_from, \
     community_membership_private, \
     shorten_string, user_in_restricted_country
@@ -33,12 +35,14 @@ def resolve_quotes(ids: set[str]) -> dict:
     if rest:
         found.update({r.ap_id: r for r in db.session.query(PostReply).options(selectinload(PostReply.post))
                       .filter(PostReply.ap_id.in_(rest))})
-    prefix = current_app.config['SERVER_URL']
     for quoted_id in ids - found.keys():
-        match = _LOCAL_PATH.fullmatch(quoted_id[len(prefix):]) if quoted_id.startswith(prefix) else None
+        # a /post/<id> or /comment/<id> URL of the federating domain that owns the row (plan C3)
+        domain = federating_domain_of_url(quoted_id)
+        prefix = domain_base_url(domain) if domain is not None else None
+        match = _LOCAL_PATH.fullmatch(quoted_id[len(prefix):]) if prefix and quoted_id.startswith(prefix) else None
         if match:
             row = db.session.get(Post if match.group(1) == 'post' else PostReply, int(match.group(2)))
-            if row is not None:
+            if row is not None and object_base(row) == prefix:   # not another of our domains' row
                 found[quoted_id] = row
     return found
 

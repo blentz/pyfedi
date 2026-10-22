@@ -1284,8 +1284,9 @@ def test_deleting_a_local_user_unsubscribes_and_federates_the_deletion(
 
 def test_deleting_a_remote_user_does_not_federate_a_delete(app, db_session):
     """`if user.is_local():` -- this instance does not get to announce the
-    deletion of somebody else's account. The Undo still goes out, because the
-    membership was ours."""
+    deletion of somebody else's account. Nor an Undo of its Follow (plan C3):
+    the account followed from its own server, so no domain of ours names an
+    Undo of it, and we hold no key to sign one."""
     from app.admin.util import unsubscribe_from_everything_then_delete_task
     from app.models import CommunityMember, Instance
     from tests.factories import make_community
@@ -1307,8 +1308,7 @@ def test_deleting_a_remote_user_does_not_federate_a_delete(app, db_session):
             unsubscribe_from_everything_then_delete_task(user_id)
 
     sent = [call.args[1]['type'] for call in send.call_args_list]
-    assert 'Delete' not in sent
-    assert 'Undo' in sent
+    assert sent == []
 
 
 def test_a_community_on_a_dead_instance_is_not_contacted(app, db_session):

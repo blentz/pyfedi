@@ -1,7 +1,8 @@
 from app import celery
 from app.activitypub.signature import default_context, send_post_request
+from app.federation_urls import activity_id
 from app.models import Post, User, PostReply
-from app.utils import gibberish, instance_banned, get_task_session, patch_db_session
+from app.utils import instance_banned, get_task_session, patch_db_session
 from app.visibility import is_open
 
 from flask import current_app
@@ -97,7 +98,7 @@ def lock_object(session, user_id, object, is_undo=False):
     if not is_open(object) and (community.is_local() or object.author.is_local()):
         return
 
-    lock_id = f"{current_app.config['SERVER_URL']}/activities/lock/{gibberish(15)}"
+    lock_id = activity_id('lock', user)
     to = ["https://www.w3.org/ns/activitystreams#Public"]
     cc = [community.public_url()]
     lock = {
@@ -113,7 +114,7 @@ def lock_object(session, user_id, object, is_undo=False):
 
     if is_undo:
         del lock['@context']
-        undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/{gibberish(15)}"
+        undo_id = activity_id('undo', user)
         undo = {
           'id': undo_id,
           'type': 'Undo',
@@ -133,7 +134,7 @@ def lock_object(session, user_id, object, is_undo=False):
             del lock['@context']
             object=lock
 
-        announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
+        announce_id = activity_id('announce', community)
         actor = community.public_url()
         cc = [community.ap_followers_url]
         announce = {

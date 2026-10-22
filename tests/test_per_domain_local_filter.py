@@ -320,10 +320,12 @@ def test_a_post_in_any_hosted_community_wakes_the_local_feeds(app, scene):
 
 
 def test_a_reply_made_by_an_onion_account_is_listed_as_local_on_the_onion(app, scene):
-    """The real creation path stores an onion account's reply under the default domain's base URL."""
+    """The real creation path stores an onion account's reply under its owner's, the onion's, base URL (plan C3: it
+    was the default domain's before); it never federates, being local-only."""
     reply = PostReply.new(scene.world.onionite, scene.posts.onion, None, 'real', '<p>real</p>', True, None, False, False)
     db.session.commit()
-    assert reply.ap_id.startswith(app.config['SERVER_URL'] + '/comment/')
+    assert reply.ap_id == f'{storefront.domain_base_url(storefront.domain_by_id(scene.world.onion.id))}/comment/{reply.id}'
+    assert reply.is_local()
     onion = {item['comment']['id'] for item in
              _api(app, 'comment/list', scene.world.onionite, onion=True, type_='Local').json['comments']}
     assert reply.id in onion

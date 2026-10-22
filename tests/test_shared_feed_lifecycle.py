@@ -68,7 +68,7 @@ def _seed():
     """
     instance = _burn_a_seed()
     owner = make_user(instance, 'feedowner')
-    member = make_user(instance, 'feedmember')
+    member = make_user(instance, 'feedmember', local=True)   # who joins is ours: the Follow is named on its domain (C3)
     make_community(name='bystandercommunity1')
     make_community(name='bystandercommunity2')
     make_community(name='bystandercommunity3')

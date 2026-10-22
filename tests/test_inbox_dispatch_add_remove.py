@@ -1379,10 +1379,9 @@ def test_remove_keeps_the_generated_follow_id_when_no_join_request_exists(
     """D89's other half: with NO CommunityJoinRequest row for this
     user/community pair there is no original id to reuse, so the generated
     `follow_id` (`gibberish(15)`) is kept.
-    `gibberish` is patched at its `activitypub_routes` binding site (the
-    module imports it by name, `from app.utils import gibberish, ...`) to a
-    fixed value so the generated id is a known, assertable string rather
-    than an unpredictable random one.
+    `gibberish` is patched where `federation_urls.activity_id` reads it (the
+    `app.utils` module attribute) to a fixed value so the generated id is a
+    known, assertable string rather than an unpredictable random one.
     """
     instance, community, feed = _seed_remote_removable_feed_community(
         host='peer.example', name='ovostnojoincomm', instance_domain='other-peer.example')
@@ -1397,7 +1396,7 @@ def test_remove_keeps_the_generated_follow_id_when_no_join_request_exists(
     assert CommunityJoinRequest.query.filter_by(
         user_id=member.id, community_id=community.id).count() == 0
 
-    monkeypatch.setattr(activitypub_routes, 'gibberish', lambda length=10: 'fixedgibberish')
+    monkeypatch.setattr('app.utils.gibberish', lambda length=10: 'fixedgibberish')
 
     sends = record_sends(monkeypatch)
 

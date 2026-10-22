@@ -12,7 +12,7 @@ from sqlalchemy import desc, asc, text, or_, func
 from app import db, cache
 from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_VIDEO, POST_TYPE_POLL, POST_TYPE_GALLERY, VISIBILITY_PUBLIC
 from app.models import PostReply, Post, Community, User, Language, utcnow, UserFlair, UserExtraField
-from app.activitypub.serializers.microblog import link_hashtags
+from app.activitypub.serializers.microblog import link_hashtags, body_hashtags
 from app.visibility import mark_restricted, OPEN_VISIBILITIES, RestrictedReply
 from app.utils import blocked_or_banned_instances, blocked_users, is_video_hosting_site, get_request, \
     silenced_instances, html_to_text, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, is_local_microblogs
@@ -315,7 +315,7 @@ def form_tags_string(post: Post) -> str:
     """The tags field of a form filled from `post`. A local microblogs post leaves out its body hashtags: saving
     stores them again from the body (spec 2026-10-14 §10 A12), and filling them in would make them explicit tags
     that taking the #word out of the body could no longer drop."""
-    body_names = link_hashtags(post.body_html or '')[1] if is_local_microblogs(post.community) else ()
+    body_names = body_hashtags(post.body_html or '') if is_local_microblogs(post.community) else ()
     return tags_to_string(post, exclude=body_names)
 
 

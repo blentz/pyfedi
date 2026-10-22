@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 from app import db
 from app.activitypub.serializers import (microblog_note, note_addressing, note_attachments, note_content,
                                          uses_microblog_note)
-from app.activitypub.serializers.microblog import link_hashtags
+from app.activitypub.serializers.microblog import body_hashtags
 from app.constants import (COMMUNITY_KIND_MICROBLOGS, POST_TYPE_ARTICLE, POST_TYPE_EVENT, POST_TYPE_IMAGE,
                            POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO, VISIBILITY_FOLLOWERS)
 from app.models import File
@@ -289,7 +289,7 @@ def _hashtags(note):
 
 def _names(body_html):
     """The hashtags a body holds, as the post create and edit store them in post.tags (§10 A12)."""
-    return link_hashtags(body_html)[1]
+    return list(body_hashtags(body_html))
 
 
 def test_body_hashtag_is_linked_and_its_tag_comes_from_post_tags(db_session):
