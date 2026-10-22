@@ -54,7 +54,8 @@ from app.local_only import any_domain_closed, community_local_only, federated_me
     refused_outbound, user_local_only
 from app.local_names import actor_handle, local_clause, split_local_name
 from app.federation_urls import owner_base, owner_domain
-from app.storefront import current_storefront, domain_authority, domain_for_host, hosted_instance_ids, is_served_name
+from app.storefront import current_storefront, domain_authority, domain_base_url, domain_for_host, hosted_instance_ids, \
+    is_served_name
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
@@ -528,7 +529,8 @@ def user_profile(actor):
             else:
                 return ''
         if is_activitypub_request():
-            base = owner_base(user)   # its home domain's: a sister domain's account names none of hell.cloud's URLs
+            home = owner_domain(user)   # a sister domain's account names none of hell.cloud's URLs
+            base = domain_base_url(home)
             actor_data = {"@context": default_context(),
                           "type": "Person" if not user.bot else "Service",
                           "id": user.public_url(),
@@ -552,7 +554,7 @@ def user_profile(actor):
                               "sharedInbox": f"{base}/inbox"
                           },
                           "published": ap_datetime(user.created),
-                          "attributionDomains": [domain_authority(owner_domain(user))]
+                          "attributionDomains": [domain_authority(home)]
                           }
 
             if user.avatar_id is not None:

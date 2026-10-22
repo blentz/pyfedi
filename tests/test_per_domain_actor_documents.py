@@ -13,7 +13,7 @@ from flask import g
 
 import app.shared.tasks.groups as groups_module
 from app import cache, cli, db
-from app.models import Community, CommunityMember, File, Instance, Language, SiteDomain, User, UserExtraField
+from app.models import Community, CommunityMember, File, Instance, Language, Site, SiteDomain, User, UserExtraField
 from app.shared.tasks.groups import edit_community
 from app.storefront import default_domain, domain_for_host
 from tests.factories import a_keypair, grant_permission, make_user
@@ -62,6 +62,15 @@ def shop_rows(app):
     db.session.commit()
     cache.clear()
     return shop, user, community
+
+
+@pytest.fixture
+def site_named_hell(app):
+    """Site row 1 named as prod's is (Site.name 'hell.cloud'), so a document that copies the site name onto a sister
+    domain names hell.cloud and the full-body check sees it."""
+    db.session.get(Site, 1).name = HELL
+    db.session.commit()
+    cache.clear()
 
 
 def served(app, path, host=SHOP):
@@ -119,7 +128,7 @@ def test_a_shop_collection_names_only_shop(app, shop_rows, path):
     assert json.loads(response.data)['id'] == f'{SHOP_BASE}{path}'
 
 
-def test_the_shops_instance_actor_is_the_shops(app, shop_rows):
+def test_the_shops_instance_actor_is_the_shops(app, shop_rows, site_named_hell):
     shop = shop_rows[0]
     response = served(app, '/actor')
     assert_on_shop(response.data)
@@ -132,7 +141,7 @@ def test_the_shops_instance_actor_is_the_shops(app, shop_rows):
     assert document['endpoints'] == {'sharedInbox': f'{SHOP_BASE}/inbox'}
     assert document['publicKey'] == {'id': f'{SHOP_BASE}/actor#main-key', 'owner': f'{SHOP_BASE}/actor',
                                      'publicKeyPem': db.session.get(SiteDomain, shop.id).public_key}
-    assert document['publicKey']['publicKeyPem'] != pem('SITE')
+    assert document['publicKey']['publicKeyPem'] and document['publicKey']['publicKeyPem'] != pem('SITE')
 
 
 def test_the_shops_instance_actor_outbox_is_the_shops(app, shop_rows):
@@ -141,7 +150,7 @@ def test_the_shops_instance_actor_outbox_is_the_shops(app, shop_rows):
     assert json.loads(response.data)['id'] == f'{SHOP_BASE}/actor/outbox'
 
 
-def test_the_shops_application_document_is_the_shops(app, shop_rows):
+def test_the_shops_application_document_is_the_shops(app, shop_rows, site_named_hell):
     shop = shop_rows[0]
     hell_first = served(app, '/', host=HELL).data   # cached per host: hell's copy never answers the shop
     response = served(app, '/')
@@ -151,8 +160,10 @@ def test_the_shops_application_document_is_the_shops(app, shop_rows):
     assert document['inbox'] == f'{SHOP_BASE}/inbox'
     assert document['outbox'] == f'{SHOP_BASE}/site_outbox'
     assert document['icon']['url'] == f'{SHOP_BASE}/static/images/piefed_logo_icon_t_75.png'
+    assert document['summary'] == f'{SHOP} - Fixed for the golden copies'   # the site name is the domain's own
     assert document['publicKey'] == {'id': f'{SHOP_BASE}/#main-key', 'owner': f'{SHOP_BASE}/',
                                      'publicKeyPem': db.session.get(SiteDomain, shop.id).public_key}
+    assert document['publicKey']['publicKeyPem']
     assert served(app, '/', host=HELL).data == hell_first   # and the shop's never answers hell
 
 
@@ -198,6 +209,34 @@ def test_the_group_update_names_the_shop(app, shop_rows, monkeypatch):
     assert group['endpoints'] == {'sharedInbox': f'{SHOP_BASE}/inbox'}
     assert group['icon']['url'] == f'{SHOP_BASE}/static/media/communities/sh/op/icon.webp'
     assert group['image']['url'] == f'{SHOP_BASE}/static/media/communities/sh/op/banner.webp'
+
+
+def test_a_shop_moderators_update_of_a_remote_group_names_the_shop(app, shop_rows, monkeypatch):
+    """The remote branch: the Update goes to the Group's own inbox, signed by the moderator, and our copy of the
+    Group is named on the moderator's domain, as a remote community is no domain's of ours."""
+    shop, user, _ = shop_rows
+    user.private_key, user.public_key = a_keypair()
+    peer = Instance(domain='peer.example', software='lemmy')
+    db.session.add(peer)
+    db.session.flush()
+    remote = Community(name='faraway', title='Far away', instance_id=peer.id, user_id=user.id,
+                       ap_id='faraway@peer.example', ap_profile_id='https://peer.example/c/faraway', ap_public_url='https://peer.example/c/faraway',
+                       ap_inbox_url='https://peer.example/c/faraway/inbox', ap_domain='peer.example')
+    db.session.add(remote)
+    db.session.flush()
+    db.session.add(CommunityMember(user_id=user.id, community_id=remote.id, is_moderator=True))
+    db.session.commit()
+    sent = []
+    monkeypatch.setattr(groups_module, 'send_post_request', lambda inbox, body, *args: sent.append((inbox, body, args)))
+
+    edit_community(False, user.id, remote.id)
+
+    [(inbox, update, (_, key_id))] = sent
+    assert inbox == 'https://peer.example/c/faraway/inbox'
+    assert key_id == f'{SHOP_BASE}/u/goldie#main-key'
+    assert HELL not in json.dumps(update)
+    assert update['id'].startswith(f'{SHOP_BASE}/activities/update/')
+    assert update['object']['id'] == f'{SHOP_BASE}/c/faraway'
 
 
 # --------------------------------------------------------------------------

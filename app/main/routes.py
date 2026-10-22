@@ -1309,6 +1309,8 @@ def activitypub_application():
 @cache.cached(timeout=6, key_prefix=ap_application_cache_key)
 def _activitypub_application(domain):
     base = domain_base_url(domain)
+    # A sister domain's site is named by the domain itself: Site.name is the default domain's (hell.cloud on prod)
+    site_name = g.site.name if domain.is_default else domain_authority(domain)
     application_data = {
         '@context': default_context(),
         'type': 'Application',
@@ -1320,7 +1322,7 @@ def _activitypub_application(domain):
         # the document every fediverse peer fetches when it first hears of this
         # instance, so a site whose tagline was never filled in answered its
         # introductions with a 500.
-        'summary': ' - '.join(part for part in (g.site.name, g.site.description) if part),
+        'summary': ' - '.join(part for part in (site_name, g.site.description) if part),
         'published': ap_datetime(g.site.created_at),
         'updated': ap_datetime(g.site.updated),
         'inbox': f"{base}/inbox",
