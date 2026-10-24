@@ -462,7 +462,7 @@ class TestTheMediaList:
                                        data={'csrf_token': token})
         assert response.status_code == 302
         delete.assert_called_once_with('https://cdn.test/media/photo.png',
-                                       env.member.id)
+                                       env.member.id, purge=True)   # an admin purge
 
     def test_a_file_nobody_uploaded(self, env):
         login(env.client, an_admin(env, 'administer all users'))
@@ -497,7 +497,7 @@ class TestTheMediaList:
         with patch('app.admin.routes.process_file_delete') as delete:
             delete_user_files_in_background(env.member.id)
         delete.assert_called_once_with('https://cdn.test/media/photo.png',
-                                       env.member.id)
+                                       env.member.id, purge=True)   # an admin purge
 
     def test_an_account_that_uploaded_nothing(self, env):
         from app.admin.routes import delete_user_files_in_background

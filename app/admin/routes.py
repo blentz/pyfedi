@@ -2218,13 +2218,13 @@ def admin_user_edit(user_id):
         user.verified = form.verified.data
         if form.remove_avatar.data and user.avatar_id:
             file = db.session.get(File, user.avatar_id)
-            file.delete_from_disk()
+            file.delete_from_disk(purge=True)   # an admin purge
             user.avatar_id = None
             db.session.delete(file)
 
         if form.remove_banner.data and user.cover_id:
             file = db.session.get(File, user.cover_id)
-            file.delete_from_disk()
+            file.delete_from_disk(purge=True)
             user.cover_id = None
             db.session.delete(file)
 
@@ -3033,7 +3033,7 @@ def admin_media():
 @permission_required('administer all users')
 def admin_media_delete(file_id):
     file = db.session.get(File, file_id) or abort(404)
-    process_file_delete(file.source_url, file.user.first().id)
+    process_file_delete(file.source_url, file.user.first().id, purge=True)
     flash(_('File deleted.'))
     return redirect(referrer(url_for('admin.admin_media')))
 
@@ -3060,7 +3060,7 @@ def delete_user_files_in_background(user_id):
                 files = session.query(File).join(user_file).filter(user_file.c.file_id == File.id)
                 files = files.filter(user_file.c.user_id == user_id)
                 for file in files:
-                    process_file_delete(file.source_url, file.user.first().id)
+                    process_file_delete(file.source_url, file.user.first().id, purge=True)
 
         except Exception:
             session.rollback()

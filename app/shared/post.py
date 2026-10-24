@@ -583,6 +583,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
     
     url_changed = False
     hash = None
+    uploaded_name = None   # the name the upload below gives the file it writes (File.wrote_its_source)
 
     if not from_scratch:
         # Remove any subscription that currently exists
@@ -700,6 +701,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                 os.unlink(original_place)   # the upload was re-encoded under a new extension (D465)
 
         url = f"{owner_base(user)}{served_path(final_place)}"  # D1363; on the uploader's domain (plan C3)
+        uploaded_name = os.path.basename(final_place)
 
         if current_app.config['IMAGE_HASHING_ENDPOINT'] and not is_video_url(final_place):
             hash = retrieve_image_hash(url)
@@ -778,7 +780,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
 
         thumbnail_url, embed_url = fixup_url(url)
         if is_image_url(url):
-            file = File(source_url=url, hash=hash)
+            file = File(source_url=url, hash=hash, file_name=uploaded_name)
             if (uploaded_file and type == POST_TYPE_IMAGE) or type == POST_TYPE_LINK:
                 # change this line when uploaded_file is supported in API
                 file.alt_text = image_alt_text

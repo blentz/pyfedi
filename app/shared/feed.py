@@ -237,7 +237,7 @@ def store_icon_and_banner(uploaded_icon_file, uploaded_banner_file):
             if uploaded_banner_file else None
     except Exception:
         if icon_url:
-            File(source_url=icon_url).delete_from_disk(purge_cdn=False)
+            File(source_url=icon_url, file_name=icon_url.rsplit('/', 1)[-1]).delete_from_disk(purge_cdn=False)   # ours
         raise
     return icon_url, banner_url
 

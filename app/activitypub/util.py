@@ -3803,13 +3803,13 @@ def site_ban_remove_data(blocker_id, blocked):
     # Images attached to posts can't be restored, but site ban reversals don't have a 'removeData' field anyway.
     files = db.session.query(File).join(Post).filter(Post.user_id == blocked.id).all()
     for file in files:
-        file.delete_from_disk(purge_cdn=True)
+        file.delete_from_disk(purge_cdn=True, purge=True)   # a moderation purge: whatever else still names them
         file.source_url = ''
     if blocked.avatar_id:
-        blocked.avatar.delete_from_disk()
+        blocked.avatar.delete_from_disk(purge=True)
         blocked.avatar.source_url = ''
     if blocked.cover_id:
-        blocked.cover.delete_from_disk()
+        blocked.cover.delete_from_disk(purge=True)
         blocked.cover.source_url = ''
 
     db.session.commit()
@@ -3845,7 +3845,7 @@ def community_ban_remove_data(blocker_id, community_id, blocked):
     # Delete attached images to save moderators from having to see disgusting stuff.
     files = File.query.join(Post).filter(Post.user_id == blocked.id, Post.community_id == community_id).all()
     for file in files:
-        file.delete_from_disk()
+        file.delete_from_disk(purge=True)   # a moderation purge: whatever else still names them
         file.source_url = ''
     db.session.commit()
 

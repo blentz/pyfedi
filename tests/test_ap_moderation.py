@@ -103,11 +103,13 @@ def _double_file_deletion(monkeypatch):
     asymmetry: `site_ban_remove_data` passes `purge_cdn=True` explicitly and
     `community_ban_remove_data` takes the default. Recording the flag is what
     lets a test state that difference rather than assert it from the source.
+    The recorded `purge` is the other: a ban's data removal is a moderation
+    purge, which removes a file whatever else still names it (plan C3, task 6).
     """
     calls = []
 
-    def fake_delete(self, purge_cdn=True):
-        calls.append((self.id, purge_cdn))
+    def fake_delete(self, purge_cdn=True, purge=False):
+        calls.append((self.id, purge_cdn, purge))
 
     monkeypatch.setattr(File, 'delete_from_disk', fake_delete)
     return calls
@@ -954,7 +956,7 @@ def test_a_site_ban_deletes_attached_files_and_purges_the_cdn(
 
     ap_util.site_ban_remove_data(moderator.id, author)
 
-    assert (attached.id, True) in calls
+    assert (attached.id, True, True) in calls
     assert attached.source_url == ''
 
 
@@ -979,8 +981,7 @@ def test_a_site_ban_deletes_the_users_avatar_and_cover(app, db_session, monkeypa
 
     ap_util.site_ban_remove_data(moderator.id, author)
 
-    assert avatar.id in [c[0] for c in calls]
-    assert cover.id in [c[0] for c in calls]
+    assert (avatar.id, True, True) in calls and (cover.id, True, True) in calls   # purges
     assert avatar.source_url == ''
     assert cover.source_url == ''
 
@@ -1150,6 +1151,7 @@ def test_a_community_ban_purges_the_cdn_despite_its_bare_call(
     assert len(calls) == 1
     assert calls[0][0] == attached.id
     assert calls[0][1] is True   # the default -- same as the site path passes
+    assert calls[0][2] is True   # a moderation purge
     assert attached.source_url == ''
 
 

@@ -720,6 +720,28 @@ def s3_object_is_referenced_elsewhere(url, file_id=None, post_id=None):
     return db.session.query(posts.exists()).scalar()
 
 
+def local_file_is_referenced_elsewhere(path: str, file_id: int) -> bool:
+    """Whether a record that owns the local media file at `path` (a resolved path in the media folders), other than
+    File `file_id`, still names it: a File our upload code made (`File.wrote_its_source`) or one naming it by a path
+    only we write (`file_path`, `thumbnail_path`), or a post by a local author linking it other than the post whose
+    own image this File is. A peer's row never keeps a file of ours, and is never what decides that one may go: this
+    is retention only, so the spellings matched are the ones our own code stores (each hosted origin and the served
+    path), and a spelling it misses only lets our last record of the file remove it."""
+    stored = os.path.join('app', os.path.relpath(path, os.path.realpath('app')))
+    urls = [f'{base}{served_path(stored)}' for base in _hosted_bases()]   # the default domain's is SERVER_URL
+    ours = or_(File.file_name.isnot(None), File.id.in_(select(user_file.c.file_id)))
+    files = db.session.query(File.id).filter(File.id != file_id, or_(
+        File.file_path.in_((stored, path)), File.thumbnail_path.in_((stored, path)),
+        and_(File.source_url.in_(urls), ours)))
+    if db.session.query(files.exists()).scalar():
+        return True
+    local_authors = select(User.id).where(User.instance_id.in_(storefront.hosted_instance_ids()))
+    posts = db.session.query(Post.id).filter(or_(Post.url.in_(urls), Post.archived.in_(urls)),
+                                             Post.user_id.in_(local_authors),
+                                             or_(Post.image_id.is_(None), Post.image_id != file_id))
+    return db.session.query(posts.exists()).scalar()
+
+
 def reputation_delta(old_effect: float, new_effect: float, low_quality: bool) -> float:
     """What a change of vote does to the author's reputation.
 
@@ -1181,9 +1203,23 @@ class File(db.Model):
             return None
         return candidate
 
-    def delete_from_disk(self, purge_cdn=True, cache_urls=None):
+    def wrote_its_source(self) -> bool:
+        """Whether our upload code wrote the local file this record's `source_url` names: it gave the record the
+        file's name, or linked it to its uploader (`user_file`). A peer's record has neither, whatever URL it holds."""
+        if self.file_name:
+            return True
+        return self.id is not None and db.session.execute(
+            select(user_file.c.file_id).where(user_file.c.file_id == self.id).limit(1)).first() is not None
+
+    def delete_from_disk(self, purge_cdn=True, cache_urls=None, purge=False):
         """`cache_urls`, when given, receives the URLs this delete invalidates
         instead of them being flushed here.
+
+        A local file named by `source_url` is unlinked only when our upload code
+        wrote it (`wrote_its_source`): a peer's record never removes a file,
+        however it spells the URL. Another record that owns the file keeps it
+        (`local_file_is_referenced_elsewhere`), unless `purge`: a moderation or
+        admin purge always removes it. Its CDN copy is purged either way.
 
         D1350. Deleting a post's image with `purge_cdn=False` was how every caller
         avoided one Cloudflare request per file, and the cost was that no post
@@ -1239,14 +1275,15 @@ class File(db.Model):
                     purge_from_cache.append(self.source_url)
             elif self.source_url.startswith('http'):
                 # `local_path_for_url` answers None for anything that is not a
-                # file of ours, which is what stops a peer naming someone else's
-                # (D1324).
+                # file of ours (D1324), and only a record our upload code made may
+                # remove the file: a peer can name someone else's.
                 local_path = self.local_path_for_url(self.source_url)
-                if local_path:
-                    try:
-                        os.unlink(local_path)
-                    except FileNotFoundError:
-                        ...
+                if local_path and self.wrote_its_source():
+                    if purge or not local_file_is_referenced_elsewhere(local_path, self.id):
+                        try:
+                            os.unlink(local_path)
+                        except FileNotFoundError:
+                            ...
                     purge_from_cache.append(self.source_url)
 
         if len(s3_files_to_delete) > 0:

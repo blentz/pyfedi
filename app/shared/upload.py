@@ -148,7 +148,7 @@ def process_upload(image_file, destination='posts', user: User | None = None, ow
 
     # associate file with uploader. Only provide user_id to this function when the image is not being used for a community icon, user avatar, etc where there is some other way to associate the image with the user.
     if user:
-        file = File(source_url=url)
+        file = File(source_url=url, file_name=os.path.basename(final_place))   # our own upload (wrote_its_source)
         db.session.add(file)
         db.session.commit()
         db.session.execute(text('INSERT INTO "user_file" (file_id, user_id, size) VALUES (:file_id, :user_id, :size)'),
@@ -161,7 +161,7 @@ def process_upload(image_file, destination='posts', user: User | None = None, ow
     return url
 
 
-def process_file_delete(url: str, user_id: int):
+def process_file_delete(url: str, user_id: int, purge: bool = False):
     if user_id:
         # the media library sends back the storefront form it was shown; source_url is on the uploader's domain, or
         # canonical for a file stored before plan C3
@@ -169,7 +169,7 @@ def process_file_delete(url: str, user_id: int):
         file = db.session.query(File).join(user_file).filter(user_file.c.file_id == File.id, user_file.c.user_id == user_id)\
             .filter(File.source_url.in_(stored)).first()
         if file:
-            file.delete_from_disk()
+            file.delete_from_disk(purge=purge)   # an admin's purge removes the file whatever else names it
             db.session.execute(text('DELETE FROM "user_file" WHERE file_id = :file_id'), {'file_id': file.id})
             db.session.delete(file)
             db.session.commit()
