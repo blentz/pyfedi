@@ -749,3 +749,9 @@ class TestTheUrlAnUploadReturns:
             for path in sorted(set(files_under(MEDIA_ROOT)) - set(before)):
                 if os.path.isfile(path):
                     os.remove(path)
+
+
+def test_deleting_a_file_for_an_account_that_is_gone_raises_nothing(app, db_session):
+    """Task 6 M6: the uploader's base came from `object_base(None)` when the account row was gone (TypeError)."""
+    with app.app_context():
+        process_file_delete(f"{app.config['SERVER_URL']}/static/media/posts/ab/cd/gone.png", 999999)
