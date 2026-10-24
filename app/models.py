@@ -1311,6 +1311,12 @@ class File(db.Model):
         return self.id is not None and bool(_local_owners([self.id])) and \
             not named_by_any_other_record(path, self.id, in_s3=in_s3)
 
+    def _left_on_disk(self, path: str) -> None:
+        """A delete failed closed on a local file: say which, as the caller may blank the record (a moderation purge
+        does), so an admin can still find an abusive original and remove it by hand (final re-review N-M3)."""
+        current_app.logger.info(f'delete_from_disk: File {self.id} left {path} on disk: its record cannot prove the '
+                                f'file is ours to remove')
+
     def delete_from_disk(self, purge_cdn=True, cache_urls=None, purge=False):
         """`cache_urls`, when given, receives the URLs this delete invalidates
         instead of them being flushed here.
@@ -1348,11 +1354,14 @@ class File(db.Model):
                 # nothing at all. Whether the local copy is still there says
                 # nothing about whether an edge still holds it.
                 written = self._in_the_media_folders(self.file_path)
-                if written and os.path.isfile(written) and self._may_remove_written(written):
-                    try:
-                        os.unlink(written)
-                    except FileNotFoundError:
-                        ...
+                if written and os.path.isfile(written):
+                    if self._may_remove_written(written):
+                        try:
+                            os.unlink(written)
+                        except FileNotFoundError:
+                            ...
+                    else:
+                        self._left_on_disk(written)
                 purge_from_cache.append(self.file_path.replace('app/', f"{current_app.config['SERVER_URL']}/"))
 
         if self.thumbnail_path:
@@ -1363,11 +1372,14 @@ class File(db.Model):
                 purge_from_cache.append(self.thumbnail_path)
             else:
                 written = self._in_the_media_folders(self.thumbnail_path)
-                if written and os.path.isfile(written) and self._may_remove_written(written):  # D1349, as above
-                    try:
-                        os.unlink(written)
-                    except FileNotFoundError:
-                        ...
+                if written and os.path.isfile(written):  # D1349, as above
+                    if self._may_remove_written(written):
+                        try:
+                            os.unlink(written)
+                        except FileNotFoundError:
+                            ...
+                    else:
+                        self._left_on_disk(written)
                 purge_from_cache.append(
                     self.thumbnail_path.replace('app/', f"{current_app.config['SERVER_URL']}/"))
         if self.source_url:
@@ -1391,12 +1403,14 @@ class File(db.Model):
                     purge_from_cache.append(self.source_url)   # whoever wrote it, as at BASE: the edge refetches
                     # A record that cannot prove we wrote the file (no `file_name`) never removes it, purge or
                     # not: a URL someone typed can name anyone's file (fail closed)
-                    if self.wrote_its_source() and \
-                            (purge or not local_file_is_referenced_elsewhere(local_path, self.id)):
-                        try:
-                            os.unlink(local_path)
-                        except FileNotFoundError:
-                            ...
+                    if self.wrote_its_source():
+                        if purge or not local_file_is_referenced_elsewhere(local_path, self.id):
+                            try:
+                                os.unlink(local_path)
+                            except FileNotFoundError:
+                                ...
+                    elif os.path.isfile(local_path):
+                        self._left_on_disk(local_path)
 
         if len(s3_files_to_delete) > 0:
             from app.shared.tasks.maintenance import delete_from_s3  # cycle: app.shared.tasks.maintenance imports from this module

@@ -937,3 +937,27 @@ class TestTheBucketFollowsTheDiskRule:
         env.baseline.user1.avatar_id = file.id
         db.session.commit()
         assert self.deleted_keys(monkeypatch, file) == ['users/aa/bb/avatar.webp']
+
+
+def test_a_delete_that_fails_closed_logs_the_file_it_left(env, caplog):
+    """Final re-review N-M3. A moderation purge blanks the record of a legacy original it may not unlink, so the
+    path is logged: an admin can find and remove an abusive original by hand."""
+    import logging
+    path = a_media_file('probe_left.png')
+    copy = a_media_file('probe_left_copy.webp')
+    try:
+        peer = make_user(make_instance('peer.test'), 'peerleft')
+        post = make_post(env.baseline.community1, peer, ap_id='https://peer.test/post/left')
+        post.image = a_file(source_url=f'{env.server_url}/static/media/probe_left.png',
+                            file_path='app/static/media/probe_left_copy.webp')
+        db.session.commit()
+        with caplog.at_level(logging.INFO):
+            post.image.delete_from_disk(purge_cdn=False, purge=True)
+        assert os.path.exists(path) and os.path.exists(copy)
+        left = [record.getMessage() for record in caplog.records if record.levelno == logging.INFO]
+        assert any(os.path.realpath(path) in message and f'File {post.image_id}' in message for message in left)
+        assert any(os.path.realpath(copy) in message for message in left)
+    finally:
+        for leftover in (path, copy):
+            if os.path.exists(leftover):
+                os.unlink(leftover)
