@@ -265,6 +265,8 @@ class TestAFileAlreadyGoneFromDisk:
 
     def test_a_file_that_is_there_is_purged_and_unlinked(self, env):
         file = a_file(UPLOAD)
+        file.file_name = 'upload.webp'   # our upload's record: only a record that is ours unlinks a path (C3)
+        db.session.commit()
         try:
             file.delete_from_disk()
 

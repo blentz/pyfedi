@@ -3068,7 +3068,9 @@ def replace_local_upload_task(community_id: int, column: str, file_id: int) -> N
                 return
             old = getattr(community, column)
             # a detached copy: delete-orphan drops the old row at the commit, and its paths are needed after it
-            doomed = File(file_path=old.file_path, thumbnail_path=old.thumbnail_path) if old is not None else None
+            # it keeps the old row's name, by which it is ours to remove (File._may_remove_written)
+            doomed = File(file_path=old.file_path, thumbnail_path=old.thumbnail_path, file_name=old.file_name) \
+                if old is not None else None
             setattr(community, column, replacement)
             session.commit()
             if doomed is not None:

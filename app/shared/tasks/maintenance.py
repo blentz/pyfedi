@@ -1032,13 +1032,13 @@ def archive_user(user_id, session):
     cache_urls = []
     if user.avatar_id:
         avatar_file = user.avatar
+        avatar_file.delete_from_disk(cache_urls=cache_urls)   # while it is the avatar: that makes it ours to remove
         user.avatar_id = None
-        avatar_file.delete_from_disk(cache_urls=cache_urls)
         session.delete(avatar_file)
     if user.cover_id:
         cover_file = user.cover
-        user.cover_id = None
         cover_file.delete_from_disk(cache_urls=cache_urls)
+        user.cover_id = None
         session.delete(cover_file)
     if cache_urls:
         flush_cdn_cache(cache_urls)

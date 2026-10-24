@@ -687,7 +687,8 @@ def test_the_blocked_image_batch_recalculates_cross_posts_and_removes_the_file(
     db.session.commit()
     other.cross_posts = [s.post.id]
     s.post.cross_posts = [other.id]
-    fd, real_file_path = tempfile.mkstemp(suffix='.png')
+    os.makedirs('app/static/media', exist_ok=True)   # only the media folders are ever unlinked from
+    fd, real_file_path = tempfile.mkstemp(suffix='.png', dir='app/static/media')
     os.close(fd)
     try:
         assert os.path.isfile(real_file_path)
@@ -1320,7 +1321,8 @@ def test_the_blocked_image_batch_removes_every_album_image_from_disk(db_session,
     try:
         files = []
         for weight in (0, 1, GALLERY_BLOCKED_WEIGHT):
-            fd, path = tempfile.mkstemp(suffix='.png')
+            os.makedirs('app/static/media', exist_ok=True)   # only the media folders are ever unlinked from
+            fd, path = tempfile.mkstemp(suffix='.png', dir='app/static/media')
             os.close(fd)
             paths.append(path)
             files.append((make_file(file_path=path), weight))

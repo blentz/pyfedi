@@ -742,7 +742,7 @@ def _locally_owned_files(file_ids):
 def _local_owners(file_ids) -> dict[int, set[int]]:
     """The local accounts that own each of the File ids given: the uploader of a media-library row (`user_file`), the
     account whose avatar or cover it is, the owner of the local community or feed whose icon or banner it is, and the
-    local author of the post or comment whose image it is. A peer's File has none."""
+    local author of the post (its image or album) or comment whose image it is. A peer's File has none."""
     hosted = storefront.hosted_instance_ids()
     local_users = select(User.id).where(User.instance_id.in_(hosted))
     pairs = [select(user_file.c.file_id, user_file.c.user_id).where(user_file.c.file_id.in_(file_ids),
@@ -750,16 +750,18 @@ def _local_owners(file_ids) -> dict[int, set[int]]:
              select(User.avatar_id, User.id).where(User.avatar_id.in_(file_ids), User.instance_id.in_(hosted)),
              select(User.cover_id, User.id).where(User.cover_id.in_(file_ids), User.instance_id.in_(hosted)),
              select(Post.image_id, Post.user_id).where(Post.image_id.in_(file_ids), Post.user_id.in_(local_users)),
+             select(post_file.c.file_id, Post.user_id).join(Post, Post.id == post_file.c.post_id).where(
+                 post_file.c.file_id.in_(file_ids), Post.user_id.in_(local_users)),   # a local post's album
              select(PostReply.image_id, PostReply.user_id).where(PostReply.image_id.in_(file_ids),
                                                                  PostReply.user_id.in_(local_users))]
     for model in (Community, Feed):
-        pairs += [select(column, model.user_id).where(column.in_(file_ids), model.instance_id.in_(hosted))
+        pairs += [select(column, model.user_id).where(column.in_(file_ids), model.instance_id.in_(hosted),
+                                                      model.user_id.isnot(None))
                   for column in (model.icon_id, model.image_id)]
     owners = {}
     for query in pairs:
         for owned, owner in db.session.execute(query).all():
-            if owner is not None:
-                owners.setdefault(owned, set()).add(owner)
+            owners.setdefault(owned, set()).add(owner)
     return owners
 
 
@@ -1282,11 +1284,25 @@ class File(db.Model):
         row: its `user_file` link records a URL someone typed, not a file we wrote."""
         return bool(self.file_name)
 
+    @staticmethod
+    def _in_the_media_folders(value) -> str | None:
+        """The resolved path of `value`, a local path, when it is inside the media folders (`MEDIA_ROOT`, as
+        `local_path_for_url` confines a URL), else None: nothing else is ever unlinked."""
+        if not value or value.startswith('http'):
+            return None
+        resolved = os.path.realpath(value)
+        return resolved if resolved.startswith(os.path.realpath(MEDIA_ROOT) + os.sep) else None
+
     def _may_remove_written(self, path: str) -> bool:
-        """Whether this record may unlink `path`, a copy the server wrote for it (`file_path`, `thumbnail_path`). A
-        record of our own upload may (`file_name`); one made before upload names were kept only when no other record
-        of any kind names the copy (`named_by_any_other_record`, fail closed)."""
-        return bool(self.file_name) or not named_by_any_other_record(os.path.realpath(path), self.id)
+        """Whether this record may unlink `path` (resolved, in the media folders), its `file_path` or
+        `thumbnail_path`. Our upload's record may (`file_name`). Any other only when a local account, community or
+        feed owns it (`_local_owners`) and no other record of any kind names the path (`named_by_any_other_record`,
+        fail closed). A peer post's File never does: until 397a91156 a peer's attachment could set `file_path`, and a
+        path on our disk, even one shaped like our thumbnailer's, is no proof that we wrote it."""
+        if self.file_name:
+            return True
+        return self.id is not None and bool(_local_owners([self.id])) and \
+            not named_by_any_other_record(path, self.id)
 
     def delete_from_disk(self, purge_cdn=True, cache_urls=None, purge=False):
         """`cache_urls`, when given, receives the URLs this delete invalidates
@@ -1323,9 +1339,10 @@ class File(db.Model):
                 # whose files had already been removed by any other means purged
                 # nothing at all. Whether the local copy is still there says
                 # nothing about whether an edge still holds it.
-                if os.path.isfile(self.file_path) and self._may_remove_written(self.file_path):
+                written = self._in_the_media_folders(self.file_path)
+                if written and os.path.isfile(written) and self._may_remove_written(written):
                     try:
-                        os.unlink(self.file_path)
+                        os.unlink(written)
                     except FileNotFoundError:
                         ...
                 purge_from_cache.append(self.file_path.replace('app/', f"{current_app.config['SERVER_URL']}/"))
@@ -1336,9 +1353,10 @@ class File(db.Model):
                 s3_files_to_delete.append(s3_key)
                 purge_from_cache.append(self.thumbnail_path)
             else:
-                if os.path.isfile(self.thumbnail_path) and self._may_remove_written(self.thumbnail_path):  # D1349
+                written = self._in_the_media_folders(self.thumbnail_path)
+                if written and os.path.isfile(written) and self._may_remove_written(written):  # D1349, as above
                     try:
-                        os.unlink(self.thumbnail_path)
+                        os.unlink(written)
                     except FileNotFoundError:
                         ...
                 purge_from_cache.append(
@@ -2553,7 +2571,17 @@ class User(UserMixin, db.Model):
         # Get cover and avatar file IDs before clearing references
         cover_file_id = self.cover_id
         avatar_file_id = self.avatar_id
-        
+        # Their files go from disk while this account still names them: that is what makes them ours to remove
+        # (File._may_remove_written). The rows go below, once nothing else references them
+        doomed = []
+        for file_id in (cover_file_id, avatar_file_id):
+            file = db.session.get(File, file_id) if file_id is not None else None
+            if file is not None and not db.session.query(User).filter(
+                    User.id != self.id, or_(User.cover_id == file_id, User.avatar_id == file_id)).count() and \
+                    not db.session.query(user_file).filter(user_file.c.file_id == file_id).count():
+                file.delete_from_disk()
+                doomed.append(file)
+
         # Clear references first
         self.cover_id = None
         self.avatar_id = None
@@ -2579,44 +2607,26 @@ class User(UserMixin, db.Model):
         for file in user_files:
             shared = db.session.query(user_file).filter(
                 user_file.c.file_id == file.id, user_file.c.user_id != self.id).count()
+            # before this account's link goes: the link is what makes the file ours to remove
+            removable = not shared and not db.session.query(User).filter(
+                or_(User.cover_id == file.id, User.avatar_id == file.id)).count()
+            if removable:
+                file.delete_from_disk(purge_cdn=purge_cdn)
             db.session.execute(
                 text('DELETE FROM "user_file" WHERE file_id = :file_id AND user_id = :user_id'),
                 {'file_id': file.id, 'user_id': self.id})
-            if shared:
-                continue
             # D1426. The cover/avatar loop below checks `User.cover_id` / `User.avatar_id`
             # before deleting a File; this loop checked only OTHER USERS' `user_file`
             # associations. So a file this account uploaded that another account references as
             # its avatar or cover was deleted here, and the DELETE hit
             # `user_avatar_id_fkey` -- a ForeignKeyViolation that aborts the whole
             # `delete_dependencies` call, leaving the account half-deleted. Same check, same
-            # policy as the loop below.
-            if db.session.query(User).filter(
-                    or_(User.cover_id == file.id, User.avatar_id == file.id)).count() > 0:
-                continue
-            file.delete_from_disk(purge_cdn=purge_cdn)
-            db.session.delete(file)
+            # policy as the loop below (`removable`).
+            if removable:
+                db.session.delete(file)
         
-        # Now handle cover and avatar files - delete them one at a time
-        # after checking they're no longer referenced
-        for file_id in [cover_file_id, avatar_file_id]:
-            if file_id is None:
-                continue
-            file = db.session.get(File, file_id)
-            if file is None:
-                continue
-            
-            # Check if any user still references this file
-            if db.session.query(User).filter(
-                or_(User.cover_id == file_id, User.avatar_id == file_id)
-            ).count() > 0:
-                continue
-            # Check user_file table
-            if db.session.query(user_file).filter(user_file.c.file_id == file_id).count() > 0:
-                continue
-            
-            # Safe to delete
-            file.delete_from_disk()
+        # Now the cover and avatar rows, whose files went above: no account or media library references them
+        for file in doomed:
             db.session.delete(file)
         db.session.execute(text('DELETE FROM "post_vote" WHERE user_id = :user_id'), {'user_id': self.id})
         db.session.execute(text('DELETE FROM "post_reply_vote" WHERE user_id = :user_id'), {'user_id': self.id})

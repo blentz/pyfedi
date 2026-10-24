@@ -166,20 +166,20 @@ class TestWhatAUrlIsAllowedToName:
 class TestDeletingTheFileItself:
     def test_a_local_file_path_is_unlinked(self, env):
         path = a_media_file('probe_local.png')
-        file = a_file(file_path=path)
+        file = a_file(file_path=path, file_name='probe_local.png')   # our upload's record (save_icon_file)
         file.delete_from_disk(purge_cdn=False)
         assert not os.path.exists(path)
 
     def test_a_thumbnail_is_unlinked_too(self, env):
         path = a_media_file('probe_thumb.png')
-        file = a_file(thumbnail_path=path)
+        file = a_file(thumbnail_path=path, file_name='probe_thumb.png')
         file.delete_from_disk(purge_cdn=False)
         assert not os.path.exists(path)
 
     def test_both_at_once(self, env):
         first = a_media_file('probe_both_1.png')
         second = a_media_file('probe_both_2.png')
-        file = a_file(file_path=first, thumbnail_path=second)
+        file = a_file(file_path=first, thumbnail_path=second, file_name='probe_both_1.png')
         file.delete_from_disk(purge_cdn=False)
         assert not os.path.exists(first)
         assert not os.path.exists(second)
@@ -249,7 +249,7 @@ class TestWhatIsPurgedFromTheCdn:
 
     def test_a_local_file_is_purged_by_its_url(self, env, monkeypatch):
         path = a_media_file('probe_purge.png')
-        file = a_file(file_path=path)
+        file = a_file(file_path=path, file_name='probe_purge.png')
         assert self.purged(env, monkeypatch, file) == \
             [f'{env.server_url}/static/media/probe_purge.png']
 
@@ -270,7 +270,7 @@ class TestWhatIsPurgedFromTheCdn:
 
     def test_nothing_is_purged_when_the_caller_says_not_to(self, env, monkeypatch):
         path = a_media_file('probe_nopurge.png')
-        file = a_file(file_path=path)
+        file = a_file(file_path=path, file_name='probe_nopurge.png')
         seen = []
         monkeypatch.setattr('app.models.flush_cdn_cache',
                             lambda urls: seen.append(urls))
@@ -787,3 +787,63 @@ class TestAnUploadIsItsUploaders:
         db.session.commit()
         gone(upload)
         assert os.path.exists(owned)
+
+
+class TestWhatAWrittenPathMayRemove:
+    """`file_path` and `thumbnail_path` are unlinked only inside the media folders, and only by a record that is ours:
+    our upload's (`file_name`) or one a local account, community or feed owns. Until 397a91156 a peer's Image
+    attachment could set `file_path` to any path, so a peer post's File never unlinks one (the disk is not proof:
+    a forged path can name a real file of ours)."""
+
+    def test_a_path_outside_the_media_folders_is_never_unlinked(self, env):
+        target = env.tmp_path / 'outside.txt'
+        target.write_text('do not delete me')
+        relative = os.path.join('app', os.path.relpath(str(target), os.path.realpath('app')))
+        inside_app = os.path.join('app', 'probe_not_media.txt')
+        with open(inside_app, 'w') as handle:
+            handle.write('do not delete me')
+        link = os.path.join('app/static/media', 'probe_link.png')
+        os.makedirs('app/static/media', exist_ok=True)
+        os.symlink(str(target), link)
+        try:
+            for path in (str(target), relative, inside_app, 'app/static/media/../probe_not_media.txt', link):
+                a_file(file_path=path, thumbnail_path=path, file_name='ours.png').delete_from_disk(purge_cdn=False)
+            assert target.exists() and os.path.exists(inside_app) and os.path.lexists(link)
+        finally:
+            os.unlink(inside_app)
+            os.unlink(link)
+
+    @pytest.mark.parametrize('column', ['file_path', 'thumbnail_path'])
+    def test_a_peer_posts_file_never_unlinks_a_path(self, env, column):
+        path = a_media_file('probe_named.png')
+        try:
+            peer = make_user(make_instance('peer.test'), 'peerpath')
+            post = make_post(env.baseline.community1, peer, ap_id='https://peer.test/post/path')
+            post.image = a_file(source_url='https://peer.test/i.png', **{column: path})
+            db.session.commit()
+            post.image.delete_from_disk(purge_cdn=False, purge=True)
+            assert os.path.exists(path)
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def test_an_ownerless_unnamed_record_never_unlinks_a_path(self, env):
+        path = a_media_file('probe_orphan.png')
+        try:
+            a_file(file_path=path).delete_from_disk(purge_cdn=False, purge=True)
+            assert os.path.exists(path)
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    @pytest.mark.parametrize('owner', ['avatar', 'post image'])
+    def test_a_local_owners_record_unlinks_its_written_copy(self, env, owner):
+        path = a_media_file('probe_resized.webp')
+        file = a_file(source_url='https://elsewhere.example/a.png', file_path=path)
+        if owner == 'avatar':
+            env.baseline.user1.avatar_id = file.id
+        else:
+            make_post(env.baseline.community1, env.baseline.user1, ap_id=f'{env.server_url}/post/own').image_id = file.id
+        db.session.commit()
+        file.delete_from_disk(purge_cdn=False)
+        assert not os.path.exists(path)
