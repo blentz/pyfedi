@@ -707,6 +707,29 @@ def link_on(url, base: str):
     return _moved_to(url, base)
 
 
+_UPLOAD_PATH = '/static/media/'   # the served media tree: every file of ours a URL names
+
+
+def is_upload_link(url) -> bool:
+    """Whether `url` names a file of ours: a link to one of our hosts into the served media tree."""
+    return is_local_link(url) and urlsplit(url).path.startswith(_UPLOAD_PATH)
+
+
+def stored_link(url, upload_base: str):
+    """`url`, a link pasted into something stored and federated, as it is stored (plan C3): a file of ours on
+    `upload_base`, the federating domain that names it (every host serves the same files); a link to a local-only host
+    of ours (the onion) on the default domain's base, as that host is never stored; any other link, a federating
+    domain's of ours too, as typed: it names that domain's object, which another of our domains does not serve (the
+    404 rule). A value that is not a link of ours comes back unchanged."""
+    if not is_local_link(url):
+        return url
+    if is_upload_link(url):
+        return _moved_to(url, upload_base)
+    if federating_domain_of_url(url) is None:
+        return _moved_to(url, canonical_url())
+    return url
+
+
 def canonical_url() -> str:
     """The federation origin. It never varies with the request host."""
     return current_app.config['SERVER_URL']

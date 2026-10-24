@@ -22,8 +22,8 @@ from app import db
 from app.activitypub.util import comment_model_to_json, post_to_page
 from app.api.alpha.utils.upload import post_upload_community_image
 from app.api.alpha.utils.user import put_user_save_user_settings
-from app.constants import COMMUNITY_KIND_VIDEO_CHANNEL, POST_STATUS_PUBLISHED, POST_TYPE_IMAGE, POST_TYPE_VIDEO, \
-    SRC_API
+from app.constants import COMMUNITY_KIND_VIDEO_CHANNEL, POST_STATUS_PUBLISHED, POST_TYPE_IMAGE, POST_TYPE_LINK, \
+    POST_TYPE_VIDEO, SRC_API
 from app.models import Emoji, File, Post, Site, media_local_path, user_file
 from app.shared.community import edit_community
 from app.shared.media import media_of, store_uploaded_media
@@ -45,6 +45,7 @@ pytestmark = pytest.mark.usefixtures('site', 'private_static_tree', 'site_named_
 
 FIX = os.path.join(os.path.dirname(__file__), 'fixtures', 'media')
 NAME = r'[0-9A-Za-z]{2}/[0-9A-Za-z]{2}/[0-9A-Za-z]{15}'
+DEFAULT_BASE = 'https://test.piefed.local'   # SERVER_URL itself: what a local-only owner's URLs are stored on
 
 
 def an_image(filename='pic.png'):
@@ -158,6 +159,30 @@ def test_an_image_link_a_shop_user_read_on_hell_is_stored_on_the_shop(app, sites
     db.session.refresh(post)
     assert post.url == f'{SHOP_BASE}/static/media/posts/ab/cd/abcdefghijklmno.png'
     assert post.image.source_url == post.url
+
+
+@pytest.mark.parametrize('author, typed, stored', [
+    ('sam', f'{HELL_BASE}/post/5', f'{HELL_BASE}/post/5'),   # hell's post, named on hell: the shop would 404 it
+    ('sam', f'{HELL_BASE}/c/pit', f'{HELL_BASE}/c/pit'),
+    ('sam', f'{HELL_BASE}/u/hal', f'{HELL_BASE}/u/hal'),
+    ('hal', f'{SHOP_BASE}/post/5', f'{SHOP_BASE}/post/5'),
+    ('hal', f'{SHOP_BASE}/c/wares', f'{SHOP_BASE}/c/wares'),
+    ('ollie', f'{HELL_BASE}/post/5', f'{HELL_BASE}/post/5'),
+    ('ollie', f'http://{ONION}/post/5', f'{DEFAULT_BASE}/post/5'),   # the onion's host is never stored
+    ('sam', f'http://{ONION}/post/5', f'{DEFAULT_BASE}/post/5'),
+    ('sam', f'http://{ONION}/static/media/posts/ab/cd/abcdefghijklmno.png',
+     f'{SHOP_BASE}/static/media/posts/ab/cd/abcdefghijklmno.png'),   # a file of ours: the post's to federate
+])
+def test_a_pasted_link_keeps_the_federating_host_typed(app, onion_rows, http_mock, author, typed, stored):
+    """Only a file of ours moves (onto the post's domain), and a local-only host (onto the default domain's base);
+    a link to any federating domain of ours names that domain's object and keeps its host (ruling 2)."""
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    user = getattr(onion_rows, author)
+    community = {'sam': onion_rows.wares, 'hal': onion_rows.pit, 'ollie': onion_rows.pit}[author]
+    post = a_post(community, user)
+    edit_post(_api_input(url=typed), post, POST_TYPE_LINK, SRC_API, user=user)
+    db.session.refresh(post)
+    assert post.url == stored
 
 
 def test_a_stored_image_link_sent_back_as_read_on_the_shop_is_kept(app, sites, http_mock):
@@ -336,9 +361,6 @@ def test_the_media_route_serves_a_file_on_the_shop_host(app, sites):
 # --------------------------------------------------------------------------
 # a local-only owner (the onion): its host is never stored (C1 I4, C2)
 # --------------------------------------------------------------------------
-
-DEFAULT_BASE = 'https://test.piefed.local'   # SERVER_URL itself: what a local-only owner's URLs are stored on
-
 
 @pytest.fixture
 def onion_rows(sites, two_domains):
