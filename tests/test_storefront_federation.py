@@ -43,6 +43,20 @@ def onion(db_session):
     clear_domain_cache()
 
 
+# A sister domain on an onion host never federates (final fix wave M1), so the signature checks of a FEDERATING alias
+# run on a clearnet one, beside the onion
+FEDERATING_ALIAS = 'alias.example'
+
+
+@pytest.fixture
+def federating_alias(onion):
+    db.session.add(SiteDomain(domain=FEDERATING_ALIAS, scheme='http', federates=True))
+    db.session.commit()
+    clear_domain_cache()
+    yield FEDERATING_ALIAS
+    clear_domain_cache()
+
+
 def _local_user(name='alice', manually_approves=False):
     user = make_user(make_instance('local.example'), name, local=True, with_keys=True)
     user.ap_profile_id = f'{CANONICAL}/u/{name}'
@@ -146,15 +160,16 @@ def _follow_of(local_user, sender):
 
 
 @pytest.mark.usefixtures('redis_double')
-def test_signed_inbox_on_alias(app, onion, signing_peer, monkeypatch):
-    """A Tor-capable peer signs for the Host it sent to. The signature verifies, the Follow is stored, and what is
-    stored names the canonical actor."""
+def test_signed_inbox_on_alias(app, federating_alias, signing_peer, monkeypatch):
+    """A peer signs for the Host it sent to. The signature verifies, the Follow is stored, and what is stored names
+    the canonical actor."""
     monkeypatch.setitem(app.config, 'DEBUG', True)
     bob = _local_user('bob', manually_approves=True)
     activity = _follow_of(bob, signing_peer)
-    _uri, headers, body = HttpSignature.signed_request(f'http://{ALIAS}/inbox', activity, signing_peer.private_key,
+    _uri, headers, body = HttpSignature.signed_request(f'http://{FEDERATING_ALIAS}/inbox', activity,
+                                                       signing_peer.private_key,
                                                        f'{signing_peer.ap_profile_id}#main-key', send_via_async=True)
-    assert headers['Host'] == ALIAS
+    assert headers['Host'] == FEDERATING_ALIAS
     response = app.test_client().post('/inbox', data=body, headers=headers, content_type='application/activity+json')
     assert response.status_code in (200, 202)
     follow = UserFollower.query.filter_by(local_user_id=bob.id, remote_user_id=signing_peer.id).one()
@@ -163,24 +178,25 @@ def test_signed_inbox_on_alias(app, onion, signing_peer, monkeypatch):
 
 
 @pytest.mark.usefixtures('redis_double')
-def test_rfc9421_signed_inbox_on_alias(app, onion, signing_peer, monkeypatch):
+def test_rfc9421_signed_inbox_on_alias(app, federating_alias, signing_peer, monkeypatch):
     """An RFC 9421 signer covers @target-uri: on the alias that is the alias's own origin."""
     monkeypatch.setitem(app.config, 'DEBUG', True)
     bob = _local_user('bob', manually_approves=True)
     body = json.dumps(_follow_of(bob, signing_peer)).encode('utf8')
-    headers = signature_rfc9421.sign('post', f'http://{ALIAS}/inbox', body, signing_peer.private_key,
+    headers = signature_rfc9421.sign('post', f'http://{FEDERATING_ALIAS}/inbox', body, signing_peer.private_key,
                                      f'{signing_peer.ap_profile_id}#main-key')
-    headers['Host'] = ALIAS
+    headers['Host'] = FEDERATING_ALIAS
     response = app.test_client().post('/inbox', data=body, headers=headers, content_type='application/activity+json')
     assert response.status_code in (200, 202)
     assert UserFollower.query.filter_by(local_user_id=bob.id, remote_user_id=signing_peer.id).count() == 1
 
 
 @pytest.mark.usefixtures('redis_double')
-def test_an_rfc9421_signature_for_the_canonical_origin_does_not_verify_on_the_alias(app, onion, signing_peer,
-                                                                                  monkeypatch, http_mock):
+def test_an_rfc9421_signature_for_the_canonical_origin_does_not_verify_on_the_alias(app, federating_alias,
+                                                                                  signing_peer, monkeypatch,
+                                                                                  http_mock):
     """R-HOSTPIN holds per storefront: a signature covering https://test.piefed.local/inbox, replayed with Host
-    abc.onion, names another target URI than the one it arrived at. (The signer's key is refetched once, as the
+    alias.example, names another target URI than the one it arrived at. (The signer's key is refetched once, as the
     alias's instance actor since plan C3, and is the same.)"""
     monkeypatch.setitem(app.config, 'DEBUG', True)
     http_mock.get(signing_peer.ap_profile_id).respond(404)
@@ -189,15 +205,15 @@ def test_an_rfc9421_signature_for_the_canonical_origin_does_not_verify_on_the_al
     body = json.dumps(_follow_of(bob, signing_peer)).encode('utf8')
     headers = signature_rfc9421.sign('post', f'{CANONICAL}/inbox', body, signing_peer.private_key,
                                      f'{signing_peer.ap_profile_id}#main-key')
-    headers['Host'] = ALIAS
+    headers['Host'] = FEDERATING_ALIAS
     response = app.test_client().post('/inbox', data=body, headers=headers, content_type='application/activity+json')
     assert response.status_code == 400
     assert UserFollower.query.count() == 0
 
 
 @pytest.mark.usefixtures('redis_double')
-@pytest.mark.parametrize('signed_host, accepted', [(ALIAS, True), (f'{ALIAS}:6666', False)])
-def test_a_cavage_signature_for_the_alias_on_another_port_is_refused(app, onion, signing_peer, monkeypatch,
+@pytest.mark.parametrize('signed_host, accepted', [(FEDERATING_ALIAS, True), (f'{FEDERATING_ALIAS}:6666', False)])
+def test_a_cavage_signature_for_the_alias_on_another_port_is_refused(app, federating_alias, signing_peer, monkeypatch,
                                                                      signed_host, accepted):
     """R-HOSTPIN for the alias (fix-B1): a stored domain is a bare host, so a signed Host naming it with a port is not
     this instance. The request still routes (the storefront ignores the port), but the signature is refused."""

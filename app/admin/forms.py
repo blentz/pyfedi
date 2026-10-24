@@ -534,6 +534,11 @@ class SiteDomainForm(FlaskForm):
                                description=_l('Registration per domain takes effect in a later release.'))
     submit = SubmitField(_l('Add domain'))
 
+    def validate_federates(self, field):
+        """An onion host is never published to another server (`models.refuse_a_federating_onion`)."""
+        if field.data and (self.domain.data or '').strip().lower().rstrip('.').endswith('.onion'):
+            raise ValidationError(_l('An onion domain never federates.'))
+
     def validate_domain(self, field):
         """Normalise to lower case without a trailing dot, then require a plain IDNA-encodable host name."""
         domain = field.data.strip().lower().rstrip('.')

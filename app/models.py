@@ -5736,7 +5736,22 @@ class SiteDomain(db.Model):
         if self.id is not None and self.federates is not None and federates != self.federates \
                 and local_only.domain_has_owners(self.id):
             raise ValueError('A domain with accounts or communities cannot change whether it federates.')
+        if federates and self.id is not None and self.is_onion and not self.is_default:
+            raise ValueError(ONION_NEVER_FEDERATES)   # a new row is checked on insert, once every column is set
         return federates
+
+
+ONION_NEVER_FEDERATES = 'An onion domain never federates: its host is never published to another server.'
+
+
+def refuse_a_federating_onion(target) -> None:
+    """A sister domain on an onion host never federates (Task 5 refuses an onion's signatures by `federates`); one
+    added with no choice made is local-only. A site whose own default domain is an onion is not a sister."""
+    if (target.domain or '').endswith('.onion') and not target.is_default:
+        if target.federates is None:
+            target.federates = False
+        elif target.federates:
+            raise ValueError(ONION_NEVER_FEDERATES)
 
 
 class InstanceInUse(ValueError):
@@ -5787,6 +5802,7 @@ def _give_the_domain_its_instance(mapper, connection, target):
     has no inbox: nothing is ever delivered to a domain of our own. An Instance already loaded in the session keeps
     its old inbox until the commit expires it. A non-default domain also gets its instance actor's key pair, unless
     it was given one."""
+    refuse_a_federating_onion(target)
     if not target.is_default and target.private_key is None:
         target.private_key, target.public_key = RsaKeys.generate_keypair()
     if target.instance_id is not None:

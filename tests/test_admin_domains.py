@@ -1,9 +1,11 @@
 """Admin "Domains" section (spec 2026-10-17 §3.1, §3.2)."""
+from types import SimpleNamespace
+
 import pytest
 from flask import current_app
 
 from app import db
-from app.models import Instance, InstanceBlock, Site, SiteDomain
+from app.models import Instance, InstanceBlock, Site, SiteDomain, refuse_a_federating_onion
 from app.storefront import clear_domain_cache, domain_for_host
 from tests.factories import grant_permission, make_instance, make_user
 from tests.test_admin_site_profile import csrf, login
@@ -248,3 +250,33 @@ def test_a_domain_whose_instance_row_is_referenced_is_not_deleted(app, reference
     assert db.session.get(Instance, instance_id) is not None
     html = client.get('/admin/domains').get_data(as_text=True)
     assert 'This domain still has content, blocks or other records on its instance row' in html
+
+
+def test_a_federating_onion_domain_is_refused_by_the_form(app):
+    """An onion host is never published to the fediverse (Task 5 refuses its signatures by `federates`): the form will
+    not add one that federates (final review M1)."""
+    client = app.test_client()
+    login(client, _admin())
+    response = client.post('/admin/domains', data=_form(csrf(app, client), domain='def.onion', federates='y'))
+    assert response.status_code == 200
+    assert 'def.onion' not in _domains()
+    assert 'An onion domain never federates' in response.get_data(as_text=True)
+
+
+def test_a_federating_onion_domain_is_refused_by_the_model(app):
+    for row in (SiteDomain(domain='def.onion', scheme='http', federates=True),
+                SiteDomain(federates=True, scheme='http', domain='late.onion')):   # whichever is set first
+        db.session.add(row)
+        with pytest.raises(ValueError):
+            db.session.flush()
+        db.session.rollback()
+    quiet = SiteDomain(domain='quiet.onion', scheme='http')   # no choice made: an onion row does not federate
+    db.session.add(quiet)
+    db.session.commit()
+    assert quiet.federates is False
+    with pytest.raises(ValueError):
+        quiet.federates = True   # nor is one switched on later
+    db.session.rollback()
+    onion_install = SimpleNamespace(domain='onlyonion.onion', federates=True, is_default=True)
+    refuse_a_federating_onion(onion_install)   # a site whose own SERVER_NAME is an onion federates over Tor, as before
+    assert onion_install.federates is True
