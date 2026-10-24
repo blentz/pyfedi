@@ -34,8 +34,9 @@ import pytest
 from flask import current_app
 
 from app import db
-from app.models import ActivityBatch, ActivityPubLog, PostReplyVote, PostVote
+from app.models import ActivityBatch, ActivityPubLog, PostReplyVote, PostVote, SiteDomain
 from app.shared.tasks.likes import vote_for_poll, vote_for_post, vote_for_reply
+from app.storefront import clear_domain_cache
 from tests.factories import (
     make_banned_instance, make_community, make_community_ban,
     make_community_member, make_instance, make_instance_block, make_poll,
@@ -573,6 +574,36 @@ def test_a_notif_server_publishes_to_redis_instead_of_sending(
     body = json.loads(payload)
     assert body['urls'] == [PEER_INBOX]
     assert json.loads(body['data'])['type'] == 'Announce'
+
+
+def test_a_notif_server_never_gets_an_inbox_on_one_of_our_domains(db_session, http_mock, monkeypatch):
+    """Plan C4, review M2: the piefed_notifs path goes through the hosted-domain guard as post_request does. An
+    Instance row that is not one of ours but names an inbox on a hosted domain is left out of what is published; the
+    peer's inbox is still published."""
+    published = []
+
+    class _Redis:
+        def publish(self, channel, payload):
+            published.append((channel, payload))
+
+    monkeypatch.setattr('app.redis_client', _Redis())
+    monkeypatch.setitem(current_app.config, 'NOTIF_SERVER', 'notifs.example')
+    db.session.add(SiteDomain(domain='shop.example'))
+    db.session.commit()
+    clear_domain_cache()
+
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    for domain, inbox in (('mirror.example', 'https://x@shop.example/inbox'), ('follower.example', PEER_INBOX)):
+        inst = make_instance(domain, software='lemmy')
+        inst.inbox = inbox
+        make_community_member(make_user(inst, f'member_{domain[:6]}'), s.community)
+    db.session.commit()
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+    clear_domain_cache()
+
+    assert [json.loads(payload)['urls'] for _channel, payload in published] == [[PEER_INBOX]]
 
 
 def test_no_notif_server_sends_directly(db_session, http_mock, monkeypatch):

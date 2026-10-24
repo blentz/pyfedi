@@ -1,5 +1,5 @@
 from app import celery
-from app.activitypub.signature import default_context, send_post_request, HttpSignature
+from app.activitypub.signature import default_context, publish_async_posts, send_post_request, HttpSignature
 from app.federation_urls import activity_id
 from app.local_only import refused_outbound
 from app.models import Post, PostReply, User, ActivityBatch, Community, PollChoiceVote, PollChoice, PostVote, PostReplyVote, utcnow
@@ -7,8 +7,7 @@ from app.shared.tasks import task_selector
 from app.utils import user_banned_from_community, instance_banned, get_task_session, patch_db_session
 from app.visibility import is_open
 
-from flask import current_app, json
-import app as app_pkg
+from flask import current_app
 
 """ JSON format
 {
@@ -175,11 +174,8 @@ def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
                         # Send the announcement directly
                         send_post_request(instance.inbox, announce, community.private_key, community.public_url() + '#main-key')
 
-            if len(send_async):
-                # send announce_activity via redis pub/sub to piefed_notifs service
-                app_pkg.redis_client.publish("http_posts:activity", json.dumps({'urls': [url[0] for url in send_async],
-                                                                        'headers': [url[1] for url in send_async],
-                                                                        'data': send_async[0][2].decode('utf-8')}))
+            # send announce_activity via redis pub/sub to piefed_notifs service, none for one of our domains (plan C4)
+            publish_async_posts(send_async)
         else:
             # For remote communities, select appropriate payload
             if vote_to_undo:
