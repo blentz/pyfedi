@@ -763,10 +763,11 @@ def _local_owners(file_ids) -> dict[int, set[int]]:
     return owners
 
 
-def _records_naming(path: str, file_id: int) -> tuple[list[int], list[int], set[int]]:
+def _records_naming(path: str, file_id: int, any_author: bool = False) -> tuple[list[int], list[int], set[int]]:
     """The records other than File `file_id` that name the local media file at `path` (a resolved path in the media
     folders): the Files naming it by a path only we write (`file_path`, `thumbnail_path`), the Files naming it by URL,
-    and the local authors of posts linking it (other than the post whose own image this File is). Compared by the
+    and the local authors (with `any_author`, all authors) of posts linking it (other than the post whose own image
+    this File is). Compared by the
     path each candidate's value resolves to, never by its spelling: the candidates are only narrowed by the file's
     name (a `LIKE '%<name>%'` on file's three columns and post's url and archived)."""
     name = f'%{os.path.basename(path)}%'
@@ -777,11 +778,12 @@ def _records_naming(path: str, file_id: int) -> tuple[list[int], list[int], set[
                       for value in (candidate.file_path, candidate.thumbnail_path))]
     by_url = [candidate.id for candidate in candidates
               if candidate.source_url and File.local_path_for_url(candidate.source_url) == path]
-    local_authors = select(User.id).where(User.instance_id.in_(storefront.hosted_instance_ids()))
     posts = db.session.query(Post).filter(or_(Post.url.like(name), Post.archived.like(name)),
-                                          Post.user_id.in_(local_authors),
-                                          or_(Post.image_id.is_(None), Post.image_id != file_id)).all()
-    authors = {post.user_id for post in posts
+                                          or_(Post.image_id.is_(None), Post.image_id != file_id))
+    if not any_author:
+        posts = posts.filter(Post.user_id.in_(select(User.id).where(User.instance_id.in_(
+            storefront.hosted_instance_ids()))))
+    authors = {post.user_id for post in posts.all()
                if any(value and File.local_path_for_url(value) == path for value in (post.url, post.archived))}
     return written, by_url, authors
 
@@ -805,14 +807,11 @@ def local_file_is_referenced_elsewhere(path: str, file_id: int) -> bool:
     return bool(owners & uploader)
 
 
-def other_accounts_name(path: str, file_id: int, accounts: set[int]) -> bool:
-    """Whether a local account outside `accounts` owns a record other than File `file_id` naming the local media file
-    at `path` (`_records_naming`, `_local_owners`)."""
-    written, by_url, authors = _records_naming(path, file_id)
-    owners = set(authors)
-    for owned in _local_owners(written + by_url).values():
-        owners |= owned
-    return bool(owners - accounts)
+def named_by_any_other_record(path: str, file_id: int) -> bool:
+    """Whether any record other than File `file_id` names the local media file at `path` (`_records_naming`): a
+    File of any owner, a peer's or none included, or a post by any author. A match blocks (fail closed)."""
+    written, by_url, authors = _records_naming(path, file_id, any_author=True)
+    return bool(written or by_url or authors)
 
 
 def reputation_delta(old_effect: float, new_effect: float, low_quality: bool) -> float:
@@ -1283,20 +1282,26 @@ class File(db.Model):
         row: its `user_file` link records a URL someone typed, not a file we wrote."""
         return bool(self.file_name)
 
+    def _may_remove_written(self, path: str) -> bool:
+        """Whether this record may unlink `path`, a copy the server wrote for it (`file_path`, `thumbnail_path`). A
+        record of our own upload may (`file_name`); one made before upload names were kept only when no other record
+        of any kind names the copy (`named_by_any_other_record`, fail closed)."""
+        return bool(self.file_name) or not named_by_any_other_record(os.path.realpath(path), self.id)
+
     def delete_from_disk(self, purge_cdn=True, cache_urls=None, purge=False):
         """`cache_urls`, when given, receives the URLs this delete invalidates
         instead of them being flushed here.
 
         A local file named by `source_url` is unlinked by an ordinary delete only
         when our upload code wrote it (`wrote_its_source`) and no other record
-        that owns it still names it (`local_file_is_referenced_elsewhere`). A
-        moderation or admin purge (`purge`) removes a file we wrote whatever names
-        it, and one it cannot prove we wrote (a record made before upload names
-        were kept) only when a local account owns this record and no other local
-        account's record names the file (`other_accounts_name`): abusive content
-        leaves the origin, a victim's file named by their own record stays. A
-        peer's record never removes anything, however it spells the URL. The CDN
-        copy of a local file is purged whenever its record goes.
+        that keeps it still names it (`local_file_is_referenced_elsewhere`); a
+        moderation or admin purge (`purge`) removes it whatever names it. A record
+        that cannot prove we wrote the file (a peer's, a typed URL's, one made
+        before upload names were kept) never removes it, purge or not: fail
+        closed. The copies the server wrote for a record (`file_path`,
+        `thumbnail_path`) go with it, a record made before upload names were
+        kept keeping any copy another record names (`_may_remove_written`). The
+        CDN copy of a local file is purged whenever its record goes.
 
         D1350. Deleting a post's image with `purge_cdn=False` was how every caller
         avoided one Cloudflare request per file, and the cost was that no post
@@ -1318,7 +1323,7 @@ class File(db.Model):
                 # whose files had already been removed by any other means purged
                 # nothing at all. Whether the local copy is still there says
                 # nothing about whether an edge still holds it.
-                if os.path.isfile(self.file_path):
+                if os.path.isfile(self.file_path) and self._may_remove_written(self.file_path):
                     try:
                         os.unlink(self.file_path)
                     except FileNotFoundError:
@@ -1331,7 +1336,7 @@ class File(db.Model):
                 s3_files_to_delete.append(s3_key)
                 purge_from_cache.append(self.thumbnail_path)
             else:
-                if os.path.isfile(self.thumbnail_path):  # D1349, as above
+                if os.path.isfile(self.thumbnail_path) and self._may_remove_written(self.thumbnail_path):  # D1349
                     try:
                         os.unlink(self.thumbnail_path)
                     except FileNotFoundError:
@@ -1357,12 +1362,10 @@ class File(db.Model):
                 local_path = self.local_path_for_url(self.source_url)
                 if local_path:
                     purge_from_cache.append(self.source_url)   # whoever wrote it, as at BASE: the edge refetches
-                    if self.wrote_its_source():
-                        removable = purge or not local_file_is_referenced_elsewhere(local_path, self.id)
-                    else:   # it cannot prove we wrote it: only a purge of its local owner's own file removes it
-                        owners = _local_owners([self.id]).get(self.id, set())
-                        removable = purge and bool(owners) and not other_accounts_name(local_path, self.id, owners)
-                    if removable:
+                    # A record that cannot prove we wrote the file (no `file_name`) never removes it, purge or
+                    # not: a URL someone typed can name anyone's file (fail closed)
+                    if self.wrote_its_source() and \
+                            (purge or not local_file_is_referenced_elsewhere(local_path, self.id)):
                         try:
                             os.unlink(local_path)
                         except FileNotFoundError:
