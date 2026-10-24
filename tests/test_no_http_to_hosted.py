@@ -259,3 +259,26 @@ def test_server_name_is_hosted_when_no_row_names_it(db_session):
         assert not is_hosted_uri(PEER_INBOX)
     finally:
         clear_domain_cache()
+
+
+def test_the_hosted_destinations_are_parsed_once_until_the_domain_cache_is_cleared(env, monkeypatch):
+    """Review N3: is_hosted_uri parses the URI it is asked about, not every stored domain on every call."""
+    import app.storefront as storefront
+    parsed = []
+    real = storefront._destination
+
+    def counting(url):
+        parsed.append(url)
+        return real(url)
+
+    monkeypatch.setattr(storefront, '_destination', counting)
+    clear_domain_cache()
+    for uri in (SHOP_INBOX, PEER_INBOX, ONION_INBOX):
+        is_hosted_uri(uri)
+    rows = len(storefront.domain_rows()) + 1   # and the synthesised SERVER_NAME
+    assert len(parsed) == 3 + rows
+    db.session.add(SiteDomain(domain='later.example'))
+    db.session.commit()
+    clear_domain_cache()
+    assert is_hosted_uri('https://later.example/inbox')
+    assert len(parsed) == 3 + rows + 1 + rows + 1
