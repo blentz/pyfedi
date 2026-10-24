@@ -335,10 +335,7 @@ def admin_site():
 @permission_required('change instance settings')
 def admin_domains():
     form = SiteDomainForm()
-    federation_refused = form.is_submitted() and form.federates.data   # every row added here is a second domain
-    if federation_refused:
-        flash(_('Only the main domain can federate until per-domain federation ships.'), 'error')
-    if not federation_refused and form.validate_on_submit():
+    if form.validate_on_submit():
         # The default row is locked to SERVER_NAME (spec §3.1). Nothing the form posts can set it. An install
         # that never ran the seed has no rows, and adding the first would unregister SERVER_NAME, so seed it.
         if db.session.query(SiteDomain.id).first() is None:
