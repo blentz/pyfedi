@@ -721,26 +721,47 @@ def s3_object_is_referenced_elsewhere(url, file_id=None, post_id=None):
     return db.session.query(posts.exists()).scalar()
 
 
+def _locally_owned_files(file_ids):
+    """Of the File ids given, those a local record owns: one our upload code made (`file_name`), one in a local
+    account's media library (`user_file`), a local account's avatar or cover, a local community's or feed's icon or
+    banner, or the image of a local author's post or comment. A peer's File is none of these."""
+    hosted = storefront.hosted_instance_ids()
+    local_users = select(User.id).where(User.instance_id.in_(hosted))
+    owners = [select(File.id).where(File.id.in_(file_ids), File.file_name.isnot(None)),
+              select(user_file.c.file_id).where(user_file.c.file_id.in_(file_ids)),
+              select(User.avatar_id).where(User.avatar_id.in_(file_ids), User.instance_id.in_(hosted)),
+              select(User.cover_id).where(User.cover_id.in_(file_ids), User.instance_id.in_(hosted)),
+              select(Post.image_id).where(Post.image_id.in_(file_ids), Post.user_id.in_(local_users)),
+              select(PostReply.image_id).where(PostReply.image_id.in_(file_ids), PostReply.user_id.in_(local_users))]
+    for model in (Community, Feed):
+        owners += [select(model.icon_id).where(model.icon_id.in_(file_ids), model.instance_id.in_(hosted)),
+                   select(model.image_id).where(model.image_id.in_(file_ids), model.instance_id.in_(hosted))]
+    return {row for query in owners for row in db.session.execute(query).scalars()}
+
+
 def local_file_is_referenced_elsewhere(path: str, file_id: int) -> bool:
-    """Whether a record that owns the local media file at `path` (a resolved path in the media folders), other than
-    File `file_id`, still names it: a File our upload code made (`File.wrote_its_source`) or one naming it by a path
-    only we write (`file_path`, `thumbnail_path`), or a post by a local author linking it other than the post whose
-    own image this File is. A peer's row never keeps a file of ours, and is never what decides that one may go: this
-    is retention only, so the spellings matched are the ones our own code stores (each hosted origin and the served
-    path), and a spelling it misses only lets our last record of the file remove it."""
-    stored = os.path.join('app', os.path.relpath(path, os.path.realpath('app')))
-    urls = [f'{base}{served_path(stored)}' for base in _hosted_bases()]   # the default domain's is SERVER_URL
-    ours = or_(File.file_name.isnot(None), File.id.in_(select(user_file.c.file_id)))
-    files = db.session.query(File.id).filter(File.id != file_id, or_(
-        File.file_path.in_((stored, path)), File.thumbnail_path.in_((stored, path)),
-        and_(File.source_url.in_(urls), ours)))
-    if db.session.query(files.exists()).scalar():
+    """Whether a locally owned record other than File `file_id` still names the local media file at `path` (a
+    resolved path in the media folders): a File by a path only we write (`file_path`, `thumbnail_path`), a File a
+    local record owns by its URL (`_locally_owned_files`: marked by our upload code or not, an API-set avatar or a
+    legacy thumbnail too), or a post by a local author linking it other than the post whose own image this File is.
+    A peer's row never keeps a file. Compared by the path each candidate's value resolves to, never by its spelling:
+    the candidates are only narrowed by the file's name."""
+    name = f'%{os.path.basename(path)}%'
+    candidates = db.session.query(File).filter(File.id != file_id, or_(
+        File.file_path.like(name), File.thumbnail_path.like(name), File.source_url.like(name))).all()
+    if any(value and not value.startswith('http') and os.path.realpath(value) == path
+           for candidate in candidates for value in (candidate.file_path, candidate.thumbnail_path)):
+        return True
+    named = [candidate.id for candidate in candidates
+             if candidate.source_url and File.local_path_for_url(candidate.source_url) == path]
+    if named and _locally_owned_files(named):
         return True
     local_authors = select(User.id).where(User.instance_id.in_(storefront.hosted_instance_ids()))
-    posts = db.session.query(Post.id).filter(or_(Post.url.in_(urls), Post.archived.in_(urls)),
-                                             Post.user_id.in_(local_authors),
-                                             or_(Post.image_id.is_(None), Post.image_id != file_id))
-    return db.session.query(posts.exists()).scalar()
+    posts = db.session.query(Post).filter(or_(Post.url.like(name), Post.archived.like(name)),
+                                          Post.user_id.in_(local_authors),
+                                          or_(Post.image_id.is_(None), Post.image_id != file_id)).all()
+    return any(File.local_path_for_url(value) == path for post in posts for value in (post.url, post.archived)
+               if value)
 
 
 def reputation_delta(old_effect: float, new_effect: float, low_quality: bool) -> float:
@@ -1164,7 +1185,8 @@ class File(db.Model):
         path = parsed_url.path.lower()
         return any(path.endswith(extension) for extension in common_image_extensions)
 
-    def local_path_for_url(self, url: str):
+    @staticmethod
+    def local_path_for_url(url: str):
         """The file this URL names on THIS server's disk, or None if it names none.
 
         D1324. `delete_from_disk` used to turn `source_url` into a path by string
@@ -1205,12 +1227,10 @@ class File(db.Model):
         return candidate
 
     def wrote_its_source(self) -> bool:
-        """Whether our upload code wrote the local file this record's `source_url` names: it gave the record the
-        file's name, or linked it to its uploader (`user_file`). A peer's record has neither, whatever URL it holds."""
-        if self.file_name:
-            return True
-        return self.id is not None and db.session.execute(
-            select(user_file.c.file_id).where(user_file.c.file_id == self.id).limit(1)).first() is not None
+        """Whether our upload code wrote the local file this record's `source_url` names: only our upload sites give a
+        record the file's name. A peer's record has none, whatever URL it holds, and neither has a media-library URL
+        row: its `user_file` link records a URL someone typed, not a file we wrote."""
+        return bool(self.file_name)
 
     def delete_from_disk(self, purge_cdn=True, cache_urls=None, purge=False):
         """`cache_urls`, when given, receives the URLs this delete invalidates
