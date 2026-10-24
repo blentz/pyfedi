@@ -102,11 +102,24 @@ class TestWhatAUrlIsAllowedToName:
             f'{env.server_url}/../app.evil/probe.png') is None
 
     def test_the_app_directory_itself_is_not_a_file(self, env):
-        """The root resolves to `app` exactly, which names a directory: unlinking
-        it would be an error rather than a deletion, but `local_path_for_url`
-        should not offer it either."""
-        assert File().local_path_for_url(f'{env.server_url}/../app') == \
-            os.path.realpath('app')
+        """The root resolves to `app` exactly, which names a directory, and is
+        outside the media folders: not offered."""
+        assert File().local_path_for_url(f'{env.server_url}/../app') is None
+
+    @pytest.mark.parametrize('path', [
+        '/models.py',
+        '/static/../models.py',
+        '/static/media/../../models.py',
+        '/static/media/%2e%2e/%2e%2e/models.py',
+        '/static/media/..%2f..%2fmodels.py',
+        '/static/js/piefed.js',
+        '/static/media',
+        '/static/mediaevil/probe.png',
+    ])
+    def test_a_path_inside_app_but_outside_the_media_folders(self, env, path):
+        """A peer names a post image `https://<our host>/models.py`: when the File
+        is deleted, nothing but our own media may be unlinked."""
+        assert File().local_path_for_url(f'{env.server_url}{path}') is None
 
     def test_a_path_that_stays_inside_app(self, env):
         assert File().local_path_for_url(
@@ -174,6 +187,18 @@ class TestDeletingTheFileItself:
         file = a_file(source_url=f'{env.server_url}/{relative}')
         file.delete_from_disk(purge_cdn=False)
         assert target.exists()
+
+    def test_a_source_url_naming_application_code_deletes_nothing(self, env):
+        target = os.path.join('app', 'probe_not_media.py')
+        with open(target, 'w') as handle:
+            handle.write('# do not delete me')
+        try:
+            for url in (f'{env.server_url}/probe_not_media.py', f'{env.server_url}/static/media/../../probe_not_media.py',
+                        f'{env.server_url}/static/media/%2e%2e/%2e%2e/probe_not_media.py'):
+                a_file(source_url=url).delete_from_disk(purge_cdn=False)
+                assert os.path.exists(target), url
+        finally:
+            os.unlink(target)
 
     def test_a_source_url_on_a_peer_deletes_nothing(self, env):
         path = a_media_file('probe_peer.png')

@@ -542,6 +542,7 @@ def served_path(value):
     return f'/{value[4:]}' if value.startswith('app/') else value
 
 
+MEDIA_ROOT = 'app/static/media'   # every file of ours a URL names is under it: uploads, icons, avatars, thumbnails
 MEDIA_DIRECTORY = 'app/static/media/posts'
 # The only names store_uploaded_media writes: two shard directories that are the name's first four characters
 _STORED_NAME = re.compile(r'([A-Za-z0-9]{2})/([A-Za-z0-9]{2})/([A-Za-z0-9]{15})\.(?:mp4|mov|webm|mp3|m4a|ogg)')
@@ -1161,8 +1162,11 @@ class File(db.Model):
 
         So: the host must EQUAL this server's (SERVER_NAME's, or the origin of a
         hosted domain, `is_hosted_url`), the path is unquoted before it is
-        resolved (`%2e%2e` is `..`), and the resolved path must still be inside
-        `app/`.
+        resolved (`%2e%2e` is `..`), and the resolved path must be inside the
+        media folders (`app/static/media`), where every file of ours a URL names
+        is stored. Inside `app/` was not enough: a peer naming a post image
+        `https://<our host>/models.py` had the application's own code unlinked
+        when the File was deleted.
         """
         parsed = urlparse(url)
         if parsed.hostname != current_app.config['SERVER_NAME'] and \
@@ -1171,9 +1175,9 @@ class File(db.Model):
         relative = unquote(parsed.path).lstrip('/')
         if not relative:
             return None
-        root = os.path.realpath('app')
-        candidate = os.path.realpath(os.path.join(root, relative))
-        if candidate != root and not candidate.startswith(root + os.sep):
+        media_root = os.path.realpath(MEDIA_ROOT)
+        candidate = os.path.realpath(os.path.join(os.path.realpath('app'), relative))
+        if not candidate.startswith(media_root + os.sep):
             return None
         return candidate
 
