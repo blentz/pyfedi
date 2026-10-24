@@ -1048,3 +1048,39 @@ class TestTheRetentionLookupIsBounded:
         finally:
             if os.path.exists(path):
                 os.unlink(path)
+
+
+def test_a_written_copy_gone_between_the_check_and_the_unlink_is_no_error(env, monkeypatch):
+    """Another worker may remove the copy first: the race is no error (D1349's `isfile` then `unlink`)."""
+    paths = [a_media_file('probe_longname_race_a.webp'), a_media_file('probe_longname_race_b.webp')]
+    try:
+        file = a_file(file_path=paths[0], thumbnail_path=paths[1], file_name='probe_longname_race_a.webp')
+        unlinked = []
+
+        def gone_first(path):
+            unlinked.append(path)
+            raise FileNotFoundError(path)
+        monkeypatch.setattr('app.models.os.unlink', gone_first)
+        file.delete_from_disk(purge_cdn=False)
+        assert [os.path.basename(path) for path in unlinked] == ['probe_longname_race_a.webp',
+                                                                 'probe_longname_race_b.webp']
+    finally:
+        monkeypatch.undo()
+        for path in paths:
+            if os.path.exists(path):
+                os.unlink(path)
+
+
+def test_a_url_outside_the_bucket_names_no_object(env, monkeypatch):
+    monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', 'cdn.example')
+    assert s3_object_is_referenced_elsewhere('https://peer.test/users/aa/bb/somebodys_avatar.webp') is False
+
+
+def test_a_lookup_whose_posts_reach_the_bound_is_unsure(env, monkeypatch):
+    monkeypatch.setattr('app.models.RETENTION_CANDIDATES', 2)
+    url = f'{env.server_url}/static/media/elsewhere/probe_longname_posted.png'
+    for number in range(3):
+        make_post(env.baseline.community1, env.baseline.user1, ap_id=f'{env.server_url}/post/n{number}').url = url
+    db.session.commit()
+    path = os.path.realpath('app/static/media/probe_longname_posted.png')
+    assert _records_naming(path, None)[3] is True
