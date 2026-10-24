@@ -19,7 +19,8 @@ from sqlalchemy import text
 
 from app import db
 from app.models import File, Site, s3_key_from_url
-from tests.factories import make_instance, make_post, make_user
+from app.shared.upload import process_file_delete
+from tests.factories import make_community, make_instance, make_post, make_post_reply, make_user
 
 
 @pytest.fixture
@@ -506,9 +507,10 @@ class TestAPeerNamingSomeoneElsesObject:
 
 class TestOnlyWhatWeWroteIsUnlinked:
     """A File unlinks a local file named by its `source_url` only when our upload code wrote that file: the record
-    has the name it was given (`file_name`) or the uploader's `user_file` link. `source_url` is a string a peer
-    chose, so a File from a peer never unlinks anything, however it spells the URL. Another record that owns the file
-    (one of ours, or a local author's post) keeps it, except from a moderation purge; the CDN copy goes either way."""
+    has the name it gave the file (`file_name`). `source_url` is a string a peer or a user chose (a media-library URL
+    row has a `user_file` link and is no upload), so any other File never unlinks anything, however it spells the URL,
+    purge or not. Any locally owned record naming the same path keeps it, except from a moderation purge; a peer's
+    never does. The CDN copy goes either way."""
 
     @pytest.fixture
     def owned(self, env):
@@ -532,12 +534,54 @@ class TestOnlyWhatWeWroteIsUnlinked:
         gone(a_file(source_url=url), purge=purge)
         assert os.path.exists(owned), url
 
-    def test_our_upload_with_its_uploaders_link_is_unlinked(self, env, owned):
-        file = a_file(source_url=f'{env.server_url}/static/media/probe_owned.png')
-        db.session.execute(text('INSERT INTO "user_file" (file_id, user_id, size) VALUES (:f, :u, 1)'),
-                           {'f': file.id, 'u': env.baseline.user1.id})
+    @pytest.mark.parametrize('purge', [False, True])
+    def test_a_media_library_url_row_never_unlinks_another_users_file(self, env, owned, purge):
+        """The media library's URL box records any URL a user types, with their `user_file` link: that is not a file
+        our code wrote. Pasting someone's avatar URL and deleting the row, or an admin purging that user's media, must
+        leave the owner's file."""
+        url = f'{env.server_url}/static/media/probe_owned.png'
+        victim = env.baseline.user2
+        victim.avatar = a_file(source_url=url)   # set through the API: no name of ours on it
         db.session.commit()
-        file.delete_from_disk(purge_cdn=False)
+        attacker = env.baseline.user1
+        pasted = a_file(source_url=url)
+        db.session.execute(text('INSERT INTO "user_file" (file_id, user_id, size) VALUES (:f, :u, 0)'),
+                           {'f': pasted.id, 'u': attacker.id})
+        db.session.commit()
+        process_file_delete(url, attacker.id, purge=purge)
+        assert os.path.exists(owned)
+        assert db.session.get(File, pasted.id) is None   # the row itself goes
+
+    @pytest.mark.parametrize('owner', ['avatar', 'cover', 'icon', 'banner', 'post image', 'comment image'])
+    def test_an_unmarked_local_record_keeps_the_file_however_it_spells_it(self, env, owned, owner):
+        """API-set avatars, covers, icons and banners and legacy post images and thumbnails carry no name of ours, but
+        a local account, community or post owns them: they keep the file. Matched by the path it resolves to."""
+        spelt = f'{env.server_url}/static/./media//probe_owned.png'
+        held = a_file(source_url=spelt)
+        if owner in ('avatar', 'cover'):
+            setattr(env.baseline.user2, 'avatar_id' if owner == 'avatar' else 'cover_id', held.id)
+        elif owner in ('icon', 'banner'):
+            community = make_community('localart')
+            setattr(community, 'icon_id' if owner == 'icon' else 'image_id', held.id)
+        else:   # a legacy post image or media thumbnail, or a comment's image
+            post = make_post(env.baseline.community1, env.baseline.user1, ap_id=f'{env.server_url}/post/held')
+            target = post if owner == 'post image' else make_post_reply(post, env.baseline.user1)
+            target.image_id = held.id
+        db.session.commit()
+        gone(an_upload('probe_owned.png'))
+        assert os.path.exists(owned)
+
+    @pytest.mark.parametrize('column', ['file_path', 'thumbnail_path'])
+    def test_a_path_the_server_wrote_on_another_record_keeps_the_file(self, env, owned, column):
+        a_file(**{column: 'app/static/media/./probe_owned.png'})
+        gone(an_upload('probe_owned.png'))
+        assert os.path.exists(owned)
+
+    def test_a_peers_unmarked_record_does_not_keep_our_upload(self, env, owned):
+        peer = make_user(make_instance('peer.test'), 'peerowner')
+        peer.avatar = a_file(source_url=f'{env.server_url}/static/media/probe_owned.png')
+        db.session.commit()
+        gone(an_upload('probe_owned.png'))
         assert not os.path.exists(owned)
 
     def test_our_upload_another_of_our_records_names_is_kept_but_purged_from_the_cdn(self, env, owned):
