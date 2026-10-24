@@ -787,12 +787,22 @@ def _records_naming(path: str, file_id: int) -> tuple[list[int], list[int], set[
 
 
 def local_file_is_referenced_elsewhere(path: str, file_id: int) -> bool:
-    """Whether a locally owned record other than File `file_id` still names the local media file at `path`
-    (`_records_naming`): a File by a path only we write, a File a local record owns by its URL
-    (`_locally_owned_files`: marked by our upload code or not, an API-set avatar or a legacy thumbnail too), or a
-    post by a local author linking it. A peer's row never keeps a file."""
+    """Whether a record other than File `file_id`, our upload of the local media file at `path`, keeps that file
+    (`_records_naming`): a File naming it by a path only we write, or a record of the upload's own uploader (its
+    `_local_owners`): their media-library row, avatar, cover, community's or feed's icon or banner, or their post or
+    comment image or link post. Another account's reference never keeps it: deleting your upload removes it. An
+    upload no account owns (made before its record was linked to one) is kept by any locally owned record
+    (`_locally_owned_files`, a local author's post). A peer's row never keeps a file."""
     written, by_url, authors = _records_naming(path, file_id)
-    return bool(written or authors or (by_url and _locally_owned_files(by_url)))
+    if written:
+        return True
+    uploader = _local_owners([file_id]).get(file_id, set())
+    if not uploader:
+        return bool(authors or (by_url and _locally_owned_files(by_url)))
+    owners = set(authors)
+    for owned in _local_owners(by_url).values():
+        owners |= owned
+    return bool(owners & uploader)
 
 
 def other_accounts_name(path: str, file_id: int, accounts: set[int]) -> bool:
