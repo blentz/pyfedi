@@ -45,11 +45,12 @@ from app.instance.util import bulk_follow
 from app.community.routes import do_subscribe
 from app.constants import EDITABLE_ROLE_IDS, ROLE_PERMISSIONS, REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_REVIEWING, ROLE_ADMIN
 from app.email import send_registration_approved_email
+from app.federation_urls import object_base
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, RolePermission, Domain, \
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain, instance_row_referenced
-from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, live_registration, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default
+from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, live_registration, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default, federating_base
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
@@ -1668,9 +1669,10 @@ def admin_community_edit(community_id):
             community.ap_domain = domain_authority(home)
         community.name = form.url.data
         community.title = form.title.data
-        community.description = canonicalise_text(form.description.data)
-        community.description_html = markdown_to_html(form.description.data)
-        community.rules = canonicalise_text(form.rules.data)
+        link_base = object_base(community)   # a local-only host's links go onto its federating base (plan C3)
+        community.description = canonicalise_text(form.description.data, link_base)
+        community.description_html = markdown_to_html(form.description.data, link_base=link_base)
+        community.rules = canonicalise_text(form.rules.data, link_base)
         community.nsfw = form.nsfw.data
         community.ai_generated = form.ai_generated.data
         community.banned = form.banned.data
@@ -2348,9 +2350,10 @@ def admin_users_add():
         user.title = form.user_name.data
         user.set_password(form.password.data)
         user.verification_token = random_token(16)
-        user.about = canonicalise_text(form.about.data)
+        link_base = federating_base(domain_by_id(form.site_domain.data) if form.site_domain.data else default_domain())
+        user.about = canonicalise_text(form.about.data, link_base)   # on the new account's federating base (C3)
         user.email = form.email.data
-        user.about_html = markdown_to_html(form.about.data)
+        user.about_html = markdown_to_html(form.about.data, link_base=link_base)
         user.matrix_user_id = form.matrix_user_id.data
         user.bot = form.bot.data
         user.reposter = form.reposter.data
