@@ -693,6 +693,13 @@ def canonical_link(url):
     return _moved_to(url, canonical_url())
 
 
+def link_on(url, base: str):
+    """`url` moved onto origin `base` (a hosted domain's `domain_base_url`) when it points at this site: a local file
+    named on the domain that stores or federates it (plan C3), as every host serves the same files.
+    `canonical_link` is this for the default domain."""
+    return _moved_to(url, base)
+
+
 def canonical_url() -> str:
     """The federation origin. It never varies with the request host."""
     return current_app.config['SERVER_URL']

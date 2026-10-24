@@ -562,8 +562,13 @@ def media_local_path(post) -> str | None:
     app.shared.media, so that Post.delete_dependencies can use the same rule."""
     if media_of(post) is None or not post.is_local() or not isinstance(post.url, str):
         return None
-    prefix = current_app.config['SERVER_URL'] + served_path(MEDIA_DIRECTORY) + '/'
-    name = post.url[len(prefix):] if post.url.startswith(prefix) else ''
+    name = ''
+    # the post's domain names a new upload (plan C3); one stored before that is on SERVER_URL
+    for base in (federation_base(post), current_app.config['SERVER_URL']):
+        prefix = base + served_path(MEDIA_DIRECTORY) + '/'
+        if post.url.startswith(prefix):
+            name = post.url[len(prefix):]
+            break
     match = _STORED_NAME.fullmatch(name)
     if match is None or match[1] + match[2] != match[3][:4]:
         return None
@@ -1080,12 +1085,14 @@ class File(db.Model):
     user = db.relationship('User', lazy='dynamic', secondary=user_file)
 
     @staticmethod
-    def _origin(canonical: bool) -> str:
-        """Where a local file is served from: the visitor's storefront, or with `canonical` the federation origin,
-        for what a peer receives (spec §3.4)."""
+    def _origin(canonical: bool, base: str | None = None) -> str:
+        """Where a local file is served from: `base` when given (the domain federating it, plan C3), else the
+        visitor's storefront, or with `canonical` the federation origin, for what a peer receives (spec §3.4)."""
+        if base is not None:
+            return base
         return storefront.canonical_url() if canonical else storefront.storefront_url()
 
-    def view_url(self, resize=False, canonical=False):
+    def view_url(self, resize=False, canonical=False, base=None):
         if self.source_url:
             if resize and '/pictrs/' in self.source_url and '?' not in self.source_url:
                 return f'{self.source_url}?thumbnail=1024'
@@ -1094,18 +1101,18 @@ class File(db.Model):
         elif self.file_path:
             if self.file_path.startswith('http'):
                 return self.file_path
-            return f"{self._origin(canonical)}{served_path(self.file_path)}"
+            return f"{self._origin(canonical, base)}{served_path(self.file_path)}"
         else:
             return ''
 
-    def medium_url(self, canonical=False):
+    def medium_url(self, canonical=False, base=None):
         if self.file_path is None:
-            return self.thumbnail_url(canonical)
+            return self.thumbnail_url(canonical, base)
         if self.file_path.startswith('http'):
             return self.file_path
-        return f"{self._origin(canonical)}{served_path(self.file_path)}"
+        return f"{self._origin(canonical, base)}{served_path(self.file_path)}"
 
-    def thumbnail_url(self, canonical=False):
+    def thumbnail_url(self, canonical=False, base=None):
         if self.thumbnail_path is None:
             if self.source_url:
                 return self.source_url
@@ -1115,7 +1122,7 @@ class File(db.Model):
             return self.thumbnail_path
         # image paths must include fqdn (not just starting with /) because apps need
         # to make a request from outside
-        return f"{self._origin(canonical)}{served_path(self.thumbnail_path)}"
+        return f"{self._origin(canonical, base)}{served_path(self.thumbnail_path)}"
 
     def is_image(self):
         # D1409, as `is_image_url` (app/utils.py) one round earlier: the value read here is
@@ -1152,13 +1159,14 @@ class File(db.Model):
         application user can, by naming it in a post's image url and waiting for
         the post to be deleted.
 
-        So: the host must EQUAL this server's, the path is unquoted before it is
+        So: the host must EQUAL this server's (SERVER_NAME's, or the origin of a
+        hosted domain, `is_hosted_url`), the path is unquoted before it is
         resolved (`%2e%2e` is `..`), and the resolved path must still be inside
         `app/`.
         """
         parsed = urlparse(url)
         if parsed.hostname != current_app.config['SERVER_NAME'] and \
-                parsed.netloc != current_app.config['SERVER_NAME']:
+                parsed.netloc != current_app.config['SERVER_NAME'] and not is_hosted_url(url):
             return None
         relative = unquote(parsed.path).lstrip('/')
         if not relative:
@@ -3995,7 +4003,7 @@ class Post(db.Model):
                         'icon': {
                             'type': 'Image',
                             'mediaType': guess_mime_type(emoji.url),  # or store this in DB
-                            'url': emoji.url,
+                            'url': storefront.link_on(emoji.url, federation_base(self)),   # our files: plan C3
                         },
                     })
 
@@ -4617,7 +4625,7 @@ class PostReply(db.Model):
                         'icon': {
                             'type': 'Image',
                             'mediaType': guess_mime_type(emoji.url),  # or store this in DB
-                            'url': emoji.url,
+                            'url': storefront.link_on(emoji.url, federation_base(self)),   # our files: plan C3
                         },
                     })
 

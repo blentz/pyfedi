@@ -17,7 +17,7 @@ from app import celery, db
 from app.activitypub.util import make_image_sizes, notify_about_post
 from app.constants import (MEDIA_KIND_AUDIO, MEDIA_KIND_VIDEO, NOTIF_DEFAULT, POST_STATUS_PROCESSING,
                            POST_STATUS_PUBLISHED, POST_STATUS_SCHEDULED)
-from app.models import CommunityMember, File, Notification, Post, s3_key_from_url, served_path, utcnow
+from app.models import CommunityMember, File, Notification, Post, federation_base, s3_key_from_url, served_path, utcnow
 from app.shared.ffmpeg import MediaToolError, extract_cover, extract_frame, run_ffprobe
 from app.shared.post import feature_published_post
 from app.shared.media import MEDIA_DIRECTORY, can_upload_media, media_local_path, media_of, queue_probe, with_media
@@ -231,7 +231,8 @@ def _thumbnail(post, path, kind, probe, written) -> File | None:
         image_place, (width, height) = _save_thumbnail_image(frame, written)
     finally:
         _remove(frame)
-    file = File(source_url=f"{current_app.config['SERVER_URL']}{served_path(image_place)}", width=width, height=height)
+    # on the post's domain, as its media is: a worker acts as whoever queued it, which need not be the author (C3)
+    file = File(source_url=f"{federation_base(post)}{served_path(image_place)}", width=width, height=height)
     db.session.add(file)
     db.session.flush()
     return file

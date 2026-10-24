@@ -21,7 +21,7 @@ from app.shared.tasks import task_selector
 import app.shared.community as shared_community
 from app.shared.upload import process_upload
 from app.local_names import actor_handle
-from app.storefront import canonical_link
+from app.storefront import canonical_link, default_domain
 from app.utils import authorise_api_user, feed_membership, get_request, menu_subscribed_feeds, joined_communities, \
     community_membership, gibberish, get_task_session, instance_banned, menu_instance_feeds, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, is_image_url
@@ -230,9 +230,11 @@ def store_icon_and_banner(uploaded_icon_file, uploaded_banner_file):
     """process_upload's urls for a feed form's icon and banner, None for one not given. The icon is stored first, so
     when the banner then raises -- refused as 'filetype not allowed', say -- the icon is deleted again, locally or
     from S3, before the exception goes on: the form is refused, and nothing would ever refer to it."""
-    icon_url = process_upload(uploaded_icon_file, destination='feeds') if uploaded_icon_file else None
+    # feeds are the default domain's (C1 ruling), whoever uploads their images
+    icon_url = process_upload(uploaded_icon_file, destination='feeds', owner=default_domain()) if uploaded_icon_file else None
     try:
-        banner_url = process_upload(uploaded_banner_file, destination='feeds') if uploaded_banner_file else None
+        banner_url = process_upload(uploaded_banner_file, destination='feeds', owner=default_domain()) \
+            if uploaded_banner_file else None
     except Exception:
         if icon_url:
             File(source_url=icon_url).delete_from_disk(purge_cdn=False)

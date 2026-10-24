@@ -9,8 +9,9 @@ from pillow_heif import register_heif_opener
 from sqlalchemy import text
 
 from app import db
+from app.federation_urls import object_base, owner_base
 from app.models import File, User, user_file, served_path
-from app.storefront import canonical_link
+from app.storefront import acting_domain, canonical_link, link_on
 from app.utils import gibberish, ensure_directory_exists, is_video_url, store_files_in_s3, guess_mime_type, sanitize_svg, \
     save_image_without_metadata
 
@@ -54,7 +55,10 @@ def is_refused_upload(exc: Exception) -> bool:
     return str(exc) in (UPLOAD_REFUSED, SVG_REFUSED)
 
 
-def process_upload(image_file, destination='posts', user: User | None = None):
+def process_upload(image_file, destination='posts', user: User | None = None, owner=None):
+    """Store an uploaded image and return its URL, on the domain of `owner` (an account, a community or a domain,
+    as `owner_base` takes) or else of the uploading `user`, or else of the domain acting (plan C3): the API's community
+    and account image uploads name no one, so they are the caller's."""
     # should have errored earlier if no upload, but just to be paranoid
     if not image_file or image_file.filename == '':
         raise Exception('file not uploaded')
@@ -117,7 +121,7 @@ def process_upload(image_file, destination='posts', user: User | None = None):
 
         save_image_without_metadata(img, final_place, optimize=True, **kwargs)
     file_size = os.path.getsize(final_place)
-    url = f"{current_app.config['SERVER_URL']}{served_path(final_place)}"  # D1363
+    url = f"{owner_base(owner or user or acting_domain())}{served_path(final_place)}"  # D1363
 
     # Move uploaded file to S3
     if store_files_in_s3():
@@ -158,10 +162,12 @@ def process_upload(image_file, destination='posts', user: User | None = None):
 
 
 def process_file_delete(url: str, user_id: int):
-    url = canonical_link(url)   # the media library sends back the storefront form it was shown; source_url is canonical
     if user_id:
+        # the media library sends back the storefront form it was shown; source_url is on the uploader's domain, or
+        # canonical for a file stored before plan C3
+        stored = {canonical_link(url), link_on(url, object_base(db.session.get(User, user_id)))}
         file = db.session.query(File).join(user_file).filter(user_file.c.file_id == File.id, user_file.c.user_id == user_id)\
-            .filter(File.source_url == url).first()
+            .filter(File.source_url.in_(stored)).first()
         if file:
             file.delete_from_disk()
             db.session.execute(text('DELETE FROM "user_file" WHERE file_id = :file_id'), {'file_id': file.id})

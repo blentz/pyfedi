@@ -18,6 +18,7 @@ import app.auth.util as auth_util
 from app.local_names import local_clause, local_named
 from app.local_only import without_local_only_actors
 from app.constants import *
+from app.federation_urls import owner_base
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message
 from app.models import Conversation, ChatMessage, Notification, PostReply, User, Post, Community, File, UserFlair, \
     user_file, UserExtraField, UserNote, RevokedToken, utcnow, _as_url, dummy_password_hash, verify_password_hash
@@ -27,7 +28,7 @@ import app.shared.user as shared_user
 from app.utils import authorise_api_user, in_sorted_list, user_in_restricted_country, user_access, user_notes
 from app.utils import markdown_to_html, log_login_failure
 from app.visibility import visible_to_clause
-from app.storefront import canonical_link, canonicalise_text, current_instance_id, current_storefront, domain_for_host, on_domain, storefront_link
+from app.storefront import canonicalise_text, current_instance_id, current_storefront, domain_for_host, link_on, on_domain, storefront_link
 
 
 def get_user(auth, data):
@@ -392,7 +393,7 @@ def put_user_save_user_settings(auth, data):
             avatar = None
             remove_avatar = True
         else:
-            avatar = _as_url(canonical_link(data["avatar"]), 1024)
+            avatar = _as_url(link_on(data["avatar"], owner_base(user)), 1024)   # the account's domain (C3)
             if avatar is None:
                 raise Exception('avatar must be an http:// or https:// url')
             remove_avatar = False
@@ -406,7 +407,7 @@ def put_user_save_user_settings(auth, data):
             cover = None
             remove_cover = True
         else:
-            cover = _as_url(canonical_link(data["cover"]), 1024)
+            cover = _as_url(link_on(data["cover"], owner_base(user)), 1024)
             if cover is None:
                 raise Exception('cover must be an http:// or https:// url')
             remove_cover = False

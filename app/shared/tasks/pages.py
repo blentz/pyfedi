@@ -6,7 +6,7 @@ from app.activitypub.serializers import (episode_attachment, microblog_note, pee
 from app.activitypub.signature import default_context, send_post_request
 from app.constants import POST_TYPE_LINK, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_VIDEO, \
     POST_TYPE_POLL, MICROBLOG_APPS, NOTIF_MENTION, POST_TYPE_EVENT
-from app.federation_urls import activity_id, hosted_domain_names
+from app.federation_urls import activity_id, hosted_domain_names, object_base
 from app.models import Instance, Notification, Poll, PollChoice, Post, User, UserFollower, utcnow, Event, \
     Community, more_info_link
 from app.local_only import federated_mentions
@@ -334,14 +334,9 @@ def send_post(post_id, edit=False, session=None):
     if edit:
         page['updated'] = ap_datetime(utcnow())
     if post.image_id:
-        image_url = ''
-        if post.image.source_url:
-            image_url = post.image.source_url
-        elif post.image.file_path:
-            image_url = post.image.file_path.replace('app/static/', f"{current_app.config['SERVER_URL']}/static/")
-        elif post.image.thumbnail_path:
-            image_url = post.image.thumbnail_path.replace('app/static/', f"{current_app.config['SERVER_URL']}/static/")
-        page['image'] = {'type': 'Image', 'url': image_url}
+        # a local file is named on the post's domain (plan C3): the source_url, else the file, else its thumbnail
+        base = object_base(post)
+        page['image'] = {'type': 'Image', 'url': post.image.view_url(base=base) or post.image.thumbnail_url(base=base)}
     # a post's type does not guarantee its Poll or Event row exists
     if post.type == POST_TYPE_POLL and (poll := Poll.query.filter_by(post_id=post.id).first()) is not None:
         if poll.end_poll is not None:

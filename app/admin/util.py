@@ -15,7 +15,7 @@ from app.community.routes import do_subscribe
 from app.community.util import search_for_community
 from app.constants import POST_TYPE_IMAGE
 from app.federation_urls import activity_id
-from app.storefront import acting_as_default, home_storefront, hosted_instance_ids
+from app.storefront import acting_as_default, domain_base_url, home_storefront, hosted_instance_ids
 from app.models import User, Community, Instance, CommunityMember, Post, Topic
 from app.utils import gibberish, topic_tree, get_request, store_files_in_s3, ensure_directory_exists, guess_mime_type, get_task_session, patch_db_session, sanitize_svg_bytes, \
     remote_instance_software, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, PAGE_MAX_BYTES, canonical_host
@@ -300,6 +300,8 @@ def move_community_images_to_here(community_id):
                                         response.close()
                                     continue
                 else:
+                    # the files are named on the community's domain, which the move made the default domain (C3)
+                    base = domain_base_url(db.session.get(Community, community_id).home_domain())
                     for post_id in post_ids:
                         post = db.session.get(Post, post_id)
                         if post.image.source_url and not post.image.source_url.startswith(f"{current_app.config['SERVER_URL']}"):
@@ -307,7 +309,7 @@ def move_community_images_to_here(community_id):
                                 # If it's already on this server but doesn't have SERVER_NAME in the URL, just update the URL
                                 if os.path.isfile(post.image.source_url):
                                     new_path = f"static/media/{post.image.source_url.replace('app/static/media/', '')}"
-                                    post.image.source_url = f"{current_app.config['SERVER_URL']}/{new_path}"
+                                    post.image.source_url = f"{base}/{new_path}"
                                     db.session.commit()
                             else:
                                 # Download the image to app/static/tmp, then move to app/static/media
@@ -370,7 +372,7 @@ def move_community_images_to_here(community_id):
 
                                             # Update the post image source_url
                                             new_path = f"static/media/posts/{new_filename[0:2]}/{new_filename[2:4]}/{new_filename}{file_extension}"
-                                            post.image.source_url = f"{current_app.config['SERVER_URL']}/{new_path}"
+                                            post.image.source_url = f"{base}/{new_path}"
                                             db.session.commit()
                                 except httpx.HTTPError as e:
                                     # As above: close before moving on. This handler is

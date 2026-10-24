@@ -28,8 +28,8 @@ from app.models import CommunityBlock, CommunityMember, Notification, Notificati
 from app.shared.tasks import task_selector
 from app.shared.upload import process_upload
 from app.user.utils import search_for_user
-from app.storefront import canonical_link, canonicalise_text, default_storefront, delete_memoized_everywhere, domain_authority, \
-    domain_base_url, instance_id_of, storefront_url
+from app.storefront import canonicalise_text, default_storefront, delete_memoized_everywhere, domain_authority, \
+    domain_base_url, instance_id_of, link_on, storefront_url
 from app.utils import authorise_api_user, blocked_communities, shorten_string, markdown_to_html, \
     instance_banned, community_membership, joined_communities, moderating_communities, is_image_url, \
     communities_banned_from, piefed_markdown_to_lemmy_markdown, community_moderators, add_to_modlog, \
@@ -386,9 +386,11 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
         title = input['title']
         description = canonicalise_text(input['description'])   # stored and federated: canonical, as rules are
         rules = input['rules']
-        # the client may have read them on any storefront; stored and federated, they are canonical
-        icon_url = canonical_link(input['icon_url'])
-        banner_url = canonical_link(input['banner_url'])
+        # the client may have read them on any storefront; stored and federated, they are on the community's domain
+        # (canonical for the default domain's, plan C3)
+        home_base = domain_base_url(community.home_domain())
+        icon_url = link_on(input['icon_url'], home_base)
+        banner_url = link_on(input['banner_url'], home_base)
         nsfw = input['nsfw']
         restricted_to_mods = input['restricted_to_mods']
         local_only = input['local_only']
@@ -470,8 +472,10 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
         # The API names its images by url; the web edit form replaces one only
         # when a file is uploaded, below.
         if src == SRC_API:
-            if community.icon_id and icon_url != community.icon.source_url:
-                if icon_url != community.icon.medium_url(canonical=True):
+            # a stored URL of ours sent back as it was read on another of our hosts is the same file (plan C3)
+            if community.icon_id and icon_url not in (community.icon.source_url,
+                                                      link_on(community.icon.source_url, home_base)):
+                if icon_url != community.icon.medium_url(base=home_base):
                     icon_url_changed = True
                     remove_file = db.session.get(File, community.icon_id)
                     community.icon_id = None
@@ -480,8 +484,9 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
                         db.session.delete(remove_file)
             if not community.icon_id:
                 icon_url_changed = True
-            if community.image_id and banner_url != community.image.source_url:
-                if banner_url != community.image.medium_url(canonical=True):
+            if community.image_id and banner_url not in (community.image.source_url,
+                                                         link_on(community.image.source_url, home_base)):
+                if banner_url != community.image.medium_url(base=home_base):
                     banner_url_changed = True
                     remove_file = db.session.get(File, community.image_id)
                     community.image_id = None
