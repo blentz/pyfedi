@@ -11,11 +11,14 @@ import json
 import os
 import re
 
+from unittest.mock import patch
+
 import pytest
 from PIL import Image
 from werkzeug.datastructures import FileStorage
 
 import app.api.alpha.utils.user as user_utils_module
+import app.api.alpha.utils.private_message as private_message_module
 import app.chat.util as chat_util
 import app.shared.community as community_module
 import app.shared.reply as reply_module
@@ -23,10 +26,12 @@ import app.shared.tasks.pages as pages_module
 from app import db
 from app.activitypub.util import comment_model_to_json, post_to_page
 from app.api.alpha.utils.upload import post_upload_community_image
+from app.api.alpha.utils.private_message import put_private_message
 from app.api.alpha.utils.user import put_user_save_user_settings
 from app.constants import COMMUNITY_KIND_VIDEO_CHANNEL, POST_STATUS_PUBLISHED, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, \
     POST_TYPE_LINK, POST_TYPE_VIDEO, SRC_API
-from app.models import Conversation, Emoji, File, Post, Site, media_local_path, user_file
+from app.models import Community, CommunityWikiPage, Conversation, Emoji, File, Language, Post, PostReply, Site, User, \
+    media_local_path, user_file
 from app.shared.community import edit_community
 from app.shared.media import media_of, store_uploaded_media
 from app.shared.post import edit_post
@@ -38,7 +43,9 @@ from app.shared.upload import process_file_delete, process_upload
 from app.shared.feed import store_icon_and_banner
 from app.storefront import canonicalise_links, canonicalise_text
 from app.utils import set_setting
-from tests.factories import make_community_member
+from tests.factories import grant_permission, make_community_member
+from tests.test_admin_user_administration import _add_payload, _roles
+from tests.test_community_lifecycle import _add_payload as _community_payload, able_to_create, csrf
 from tests.test_per_domain_actor_documents import site_named_hell  # noqa: F401  (fixture)
 from tests.test_per_domain_object_ids import HELL_BASE, SHOP, SHOP_BASE, a_post, a_reply, captured, no_hell, \
     sites  # noqa: F401  (fixture)
@@ -560,3 +567,95 @@ def test_an_onion_senders_message_id_is_ours_and_opens_its_conversation(app, oni
         session['_user_id'], session['_fresh'] = str(onion_rows.hal.id), True
     response = client.get(f'/private_message/{message.id}', base_url=f'https://{HELL}')
     assert response.status_code == 302 and response.headers['Location'].endswith(f'/chat/{conversation.id}')
+
+
+# --------------------------------------------------------------------------
+# the rest of the stored texts: a local-only host's links go onto the owner's federating base (ruling 3, M-a)
+# --------------------------------------------------------------------------
+
+ONION_LINK = f'http://{ONION}/post/7'
+
+
+def signed_in(app, user):
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session['_user_id'], session['_fresh'] = str(user.id), True
+    return client, csrf(app, client)
+
+
+def test_an_inline_web_reply_is_stored_on_its_authors_base(app, onion_rows, monkeypatch):
+    monkeypatch.setattr('app.post.routes.task_selector', lambda *args, **kwargs: None)
+    post = a_post(onion_rows.wares, onion_rows.sam)
+    parent = a_reply(post, onion_rows.sam)
+    client, token = signed_in(app, onion_rows.sam)
+    response = client.post(f'/post/{post.id}/comment/{parent.id}/reply_inline/abc',
+                           data={'body': f'see {ONION_LINK}', 'csrf_token': token})
+    assert response.status_code == 200, response.headers.get('Location')
+    made = PostReply.query.filter_by(parent_id=parent.id).one()
+    assert made.body == f'see {SHOP_BASE}/post/7' and no_onion(made.body_html)
+
+
+def test_a_private_message_and_its_api_edit_are_stored_on_the_senders_base(app, onion_rows, monkeypatch):
+    conversation = Conversation(user_id=onion_rows.sam.id)
+    conversation.members.append(onion_rows.sam)
+    conversation.members.append(onion_rows.hal)
+    db.session.add(conversation)
+    db.session.commit()
+    captured(monkeypatch, chat_util)
+    message = chat_util.send_message(f'see {ONION_LINK}', conversation.id, user=onion_rows.sam)
+    assert message.body == f'see {SHOP_BASE}/post/7' and no_onion(message.body_html)
+    monkeypatch.setattr(private_message_module, 'authorise_api_user', lambda auth, **kwargs: onion_rows.sam.id)
+    put_private_message('token', {'private_message_id': message.id, 'content': f'now {ONION_LINK}'})
+    db.session.refresh(message)
+    assert message.body == f'now {SHOP_BASE}/post/7' and no_onion(message.body_html)
+
+
+def test_an_admins_edit_of_a_shop_communitys_texts_is_on_the_shop(app, onion_rows):
+    db.session.add(Language(code='und', name='Undetermined'))
+    grant_permission(onion_rows.hal, 'administer all communities')
+    db.session.commit()
+    client, token = signed_in(app, onion_rows.hal)
+    data = {'csrf_token': token, 'url': 'wares', 'title': 'Wares', 'description': f'see {ONION_LINK}',
+            'rules': f'see {ONION_LINK}', 'content_retention': -1, 'topic': -1, 'default_layout': '',
+            'posting_warning': '', 'downvote_accept_mode': 0}
+    assert client.post(f'/admin/community/{onion_rows.wares.id}/edit', data=data).status_code == 302
+    db.session.refresh(onion_rows.wares)
+    assert onion_rows.wares.description == onion_rows.wares.rules == f'see {SHOP_BASE}/post/7'
+    assert no_onion(onion_rows.wares.description_html)
+
+
+def test_an_account_an_admin_adds_on_the_shop_has_its_about_on_the_shop(app, onion_rows):
+    _roles()
+    grant_permission(onion_rows.hal, 'administer all users')
+    client, token = signed_in(app, onion_rows.hal)
+    with patch('app.admin.routes.render_template', return_value='rendered'), \
+            patch('app.admin.routes.finalize_user_setup'):
+        response = client.post('/admin/users/add', content_type='multipart/form-data',
+                               data=_add_payload(token, about=f'see {ONION_LINK}', site_domain=str(onion_rows.shop.id)))
+    assert response.status_code == 302
+    added = User.query.filter_by(user_name='newbie').one()
+    assert added.about == f'see {SHOP_BASE}/post/7' and no_onion(added.about_html)
+
+
+def test_a_community_made_on_the_shop_and_its_wiki_are_on_the_shop(app, onion_rows, monkeypatch):
+    sam = able_to_create(onion_rows.sam)
+    db.session.add_all([Language(code='und', name='Undetermined'), Language(code='en', name='English')])
+    db.session.get(Site, 1).community_creation_admin_only = False
+    db.session.commit()
+    client, token = signed_in(app, sam)
+    with patch('app.community.routes.render_template', return_value='rendered'), \
+            patch('app.community.routes.task_selector'):
+        response = client.post('/community/add_local', content_type='multipart/form-data',
+                               data=_community_payload(token, url='stall', description=f'see {ONION_LINK}'))
+        assert response.status_code == 302, response.status_code
+        assert Community.query.filter_by(name='stall').first(), response.headers.get('Location')
+        stall = Community.query.filter_by(name='stall').one()
+        assert stall.description == f'see {SHOP_BASE}/post/7' and no_onion(stall.description_html)
+        wiki = {'title': 'Hours', 'slug': 'hours', 'body': f'see {ONION_LINK}', 'who_can_edit': '0',
+                'submit': 'Save', 'csrf_token': token}
+        client.post(f'/community/stall@{SHOP}/moderate/wiki/add', data=wiki)
+        page = CommunityWikiPage.query.filter_by(community_id=stall.id).one()
+        assert page.body == f'see {SHOP_BASE}/post/7' and no_onion(page.body_html)
+        client.post(f'/community/stall@{SHOP}/moderate/wiki/{page.id}/edit', data={**wiki, 'body': f'now {ONION_LINK}'})
+    db.session.refresh(page)
+    assert page.body == f'now {SHOP_BASE}/post/7' and no_onion(page.body_html)

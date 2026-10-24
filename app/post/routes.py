@@ -9,7 +9,7 @@ from random import randint
 from flask import redirect, url_for, flash, current_app, abort, request, g, make_response, jsonify
 from flask_babel import _, force_locale, gettext
 from flask_login import current_user
-from app.federation_urls import activity_id, object_base
+from app.federation_urls import activity_id, object_base, owner_base
 from app.onion import audit_field
 from furl import furl
 from sqlalchemy import text, desc, Integer, case
@@ -1191,9 +1191,10 @@ def add_reply_inline(post_id: int, comment_id: int, nonce):
         if content == '':
             return f'<div id="reply_to_{comment_id}" class="hidable"></div>'  # do nothing, just hide the form
         try:
+            base = owner_base(current_user)   # the author's federating base names the comment (plan C3)
             reply = PostReply.new(current_user, post, in_reply_to=in_reply_to,
-                                  body=piefed_markdown_to_lemmy_markdown(content),
-                                  body_html=markdown_to_html(content), notify_author=True,
+                                  body=piefed_markdown_to_lemmy_markdown(content, base),
+                                  body_html=markdown_to_html(content, link_base=base), notify_author=True,
                                   language_id=language_id, distinguished=False, answer=False)
         except PostReplyValidationError as e:
             # D1094. This was not an f-string, so the id was the literal

@@ -13,9 +13,10 @@ from app.utils import shorten_string, markdown_to_html, publish_sse_event
 
 def send_message(message: str, conversation_id: int, user: User = current_user, src=SRC_WEB) -> ChatMessage:
     conversation = db.session.get(Conversation, conversation_id)
-    message = canonicalise_text(message)   # stored and federated: a link to this site names its canonical host
+    base = owner_base(user)   # stored and federated: a local-only host's link names the sender's federating base
+    message = canonicalise_text(message, base)
     reply = ChatMessage(sender_id=user.id, conversation_id=conversation.id,
-                        body=message, body_html=markdown_to_html(message))
+                        body=message, body_html=markdown_to_html(message, link_base=base))
     conversation.updated_at = utcnow()
     db.session.add(reply)
     db.session.commit()

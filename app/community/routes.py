@@ -42,7 +42,7 @@ from app.constants import SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, POST_TYPE_LIN
     POST_TYPE_EVENT, REPORT_TYPE_COMMUNITY, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO, POST_STATUS_PUBLISHED, \
     COMMUNITY_KIND_MICROBLOGS, COMMUNITY_KIND_PODCAST
 from app.email import send_email
-from app.federation_urls import activity_id
+from app.federation_urls import activity_id, object_base
 from app.inoculation import inoculation
 from app.models import served_path, User, Community, CommunityMember, CommunityJoinRequest, CommunityBan, Post, Site, \
     File, utcnow, Report, Notification, Topic, PostReply, \
@@ -88,7 +88,7 @@ import app.shared.feed as shared_feed
 from app.utils import is_valid_xml_utf8, get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url, joined_server_views
 from app.activitypub.serializers.podcast import uses_podcast_episode
 from app.storefront import (canonicalise_text, default_storefront, delete_memoized_everywhere, domain_authority, domain_base_url,
-                            domain_for_host, hosted_instance_ids, instance_id_of, path_name, storefront_host,
+                            domain_for_host, federating_base, hosted_instance_ids, instance_id_of, path_name, storefront_host,
                             storefront_link, storefront_query_cache_key, storefront_url)
 from app.local_names import local_named, split_local_name
 from app.rss_extras import RSSFeed, PodcastChannel, itunes_image_ok
@@ -155,11 +155,13 @@ def add_local():
         home = current_user.home_domain()
         base_url = domain_base_url(home)
         community = Community(title=form.community_name.data, name=form.url.data,
-                              description=piefed_markdown_to_lemmy_markdown(form.description.data),
+                              description=piefed_markdown_to_lemmy_markdown(form.description.data,
+                                                                            federating_base(home)),
                               theme=form.theme.data,
                               nsfw=form.nsfw.data, private_key=private_key,
                               nsfl=form.nsfl.data and site.enable_nsfl is not False,  # R203: the site's switch wins
-                              public_key=public_key, description_html=markdown_to_html(form.description.data),
+                              public_key=public_key,
+                              description_html=markdown_to_html(form.description.data, link_base=federating_base(home)),
                               local_only=form.local_only.data, posting_warning=sanitise_posting_warning(form.posting_warning.data),
                               private=private, invitations=form.invitations.data,
                               show_popular=show_popular, show_all=show_all,
@@ -2506,8 +2508,9 @@ def community_wiki_add(actor):
             form = EditCommunityWikiPageForm()
             if form.validate_on_submit():
                 new_page = CommunityWikiPage(community_id=community.id, slug=form.slug.data, title=form.title.data,
-                                             body=canonicalise_text(form.body.data), who_can_edit=form.who_can_edit.data)
-                new_page.body_html = markdown_to_html(new_page.body, a_target="")
+                                             body=canonicalise_text(form.body.data, object_base(community)),
+                                             who_can_edit=form.who_can_edit.data)
+                new_page.body_html = markdown_to_html(new_page.body, a_target="", link_base=object_base(community))
                 db.session.add(new_page)
                 db.session.commit()
 
@@ -2690,8 +2693,8 @@ def community_wiki_edit(actor, page_id):
             if form.validate_on_submit():
                 page.title = form.title.data
                 page.slug = form.slug.data
-                page.body = canonicalise_text(form.body.data)
-                page.body_html = markdown_to_html(page.body, a_target="")
+                page.body = canonicalise_text(form.body.data, object_base(community))   # its federating base (C3)
+                page.body_html = markdown_to_html(page.body, a_target="", link_base=object_base(community))
                 page.who_can_edit = form.who_can_edit.data
                 page.edited_at = utcnow()
                 new_revision = CommunityWikiPageRevision(wiki_page_id=page.id, user_id=current_user.id,

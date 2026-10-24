@@ -8,6 +8,7 @@ from app.constants import NOTIF_MESSAGE, NOTIF_REPORT, REPORT_TYPE_MESSAGE, REPO
 # The module, not the names: app.chat.util reaches this file through
 # app.activitypub.signature before they are defined (import cycle: chat.util)
 import app.chat.util as chat_util
+from app.federation_urls import object_base
 from app.models import ChatMessage, Conversation, User, Notification, Report, Site
 from app.storefront import canonicalise_text
 from app.utils import authorise_api_user, markdown_to_html, user_access
@@ -205,8 +206,9 @@ def put_private_message(auth, data):
     user_id = authorise_api_user(auth)
     # User may only edit own messages
     private_message = ChatMessage.query.filter_by(sender_id=user_id, id=chat_message_id, deleted=False).one()
-    private_message.body = content = canonicalise_text(content)
-    private_message.body_html = markdown_to_html(content)
+    base = object_base(private_message)   # the sender's federating base (plan C3)
+    private_message.body = content = canonicalise_text(content, base)
+    private_message.body_html = markdown_to_html(content, link_base=base)
     db.session.commit()
 
     chat_util.update_message(private_message)
