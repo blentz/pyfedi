@@ -165,7 +165,8 @@ def process_file_delete(url: str, user_id: int, purge: bool = False):
     if user_id:
         # the media library sends back the storefront form it was shown; source_url is on the uploader's domain, or
         # canonical for a file stored before plan C3
-        stored = {canonical_link(url), link_on(url, object_base(db.session.get(User, user_id)))}
+        uploader = db.session.get(User, user_id)   # a gone account's link names the canonical spelling only
+        stored = {canonical_link(url)} | ({link_on(url, object_base(uploader))} if uploader is not None else set())
         file = db.session.query(File).join(user_file).filter(user_file.c.file_id == File.id, user_file.c.user_id == user_id)\
             .filter(File.source_url.in_(stored)).first()
         if file:
