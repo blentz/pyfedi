@@ -622,3 +622,91 @@ class TestOnlyWhatWeWroteIsUnlinked:
         an_upload('probe_owned.png').delete_from_disk(cache_urls=purged, purge=True)
         assert not os.path.exists(owned)
         assert purged == [local.url]
+
+
+class TestALegacyRecord:
+    """A record made before our upload code named its files (no `file_name`) cannot prove we wrote its file. Its CDN
+    copy is purged whenever it goes, as at BASE. A moderation purge removes the file when no other account's local row
+    names it, so abusive content leaves the origin while a victim's file named by their own row survives
+    (final-review FI1)."""
+
+    @pytest.fixture
+    def owned(self, env):
+        path = a_media_file('probe_legacy.png')
+        yield path
+        if os.path.exists(path):
+            os.unlink(path)
+
+    @pytest.fixture
+    def url(self, env):
+        return f'{env.server_url}/static/media/probe_legacy.png'
+
+    def spammers_post_image(self, env, url):
+        post = make_post(env.baseline.community1, env.baseline.user1, ap_id=f'{env.server_url}/post/abuse')
+        post.image = a_file(source_url=url)
+        db.session.commit()
+        return post.image
+
+    def test_its_cdn_copy_is_purged_when_it_goes(self, env, owned, url):
+        purged = []
+        a_file(source_url=url).delete_from_disk(cache_urls=purged)
+        assert purged == [url]
+        assert os.path.exists(owned)   # an ordinary delete cannot prove it is ours to remove
+
+    def test_a_moderation_purge_of_an_abusive_upload_removes_it_and_its_cdn_copy(self, env, owned, url):
+        image = self.spammers_post_image(env, url)
+        purged = []
+        image.delete_from_disk(cache_urls=purged, purge=True)
+        assert not os.path.exists(owned)
+        assert purged == [url]
+
+    def test_a_purge_of_a_row_naming_another_accounts_legacy_file_leaves_it(self, env, owned, url):
+        victim = env.baseline.user2
+        victim.avatar = a_file(source_url=url)
+        image = self.spammers_post_image(env, url)
+        image.delete_from_disk(purge_cdn=False, purge=True)
+        assert os.path.exists(owned)
+
+    def test_a_purge_of_a_peers_legacy_row_removes_nothing(self, env, owned, url):
+        peer = make_user(make_instance('peer.test'), 'peerspam')
+        post = make_post(env.baseline.community1, peer, ap_id='https://peer.test/post/abuse')
+        post.image = a_file(source_url=url)
+        db.session.commit()
+        post.image.delete_from_disk(purge_cdn=False, purge=True)
+        assert os.path.exists(owned)
+
+
+MIGRATION = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'migrations', 'versions',
+                         'e5b9c3d7a1f4_upload_file_names.py')
+
+
+def load_migration():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('upload_file_names_migration', MIGRATION)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_backfill_names_only_what_process_upload_recorded(env):
+    """`process_upload` records a file's size (os.path.getsize, from f627ef1f7); the media-library URL box records 0
+    (bc7bf012a). A size above 0 is proof the upload wrote the file, so it is given the name the upload gave it."""
+    migration = load_migration()
+    assert (migration.revision, migration.down_revision) == ('e5b9c3d7a1f4', 'd3a7e5c1f9b2')
+    rows = {}
+    for key, size, source_url, file_name in (
+            ('upload', 123, f'{env.server_url}/static/media/posts/ab/cd/abcdefghijklmno.png', None),
+            ('bookmark', 0, f'{env.server_url}/static/media/users/xx/yy/victimavatar.png', None),
+            ('unsized', None, f'{env.server_url}/static/media/posts/ef/gh/efghijklmnopqrs.png', None),
+            ('named', 9, f'{env.server_url}/static/media/posts/ij/kl/ijklmnopqrstuvw.png', 'kept.png')):
+        file = a_file(source_url=source_url, file_name=file_name)
+        db.session.execute(text('INSERT INTO "user_file" (file_id, user_id, size) VALUES (:f, :u, :s)'),
+                           {'f': file.id, 'u': env.baseline.user1.id, 's': size})
+        rows[key] = file.id
+    unlinked = a_file(source_url=f'{env.server_url}/static/media/posts/mn/op/mnopqrstuvwxyza.png')
+    db.session.commit()
+    migration.backfill_file_names(db.session.connection())
+    db.session.expire_all()
+    names = {key: db.session.get(File, file_id).file_name for key, file_id in rows.items()}
+    assert names == {'upload': 'abcdefghijklmno.png', 'bookmark': None, 'unsized': None, 'named': 'kept.png'}
+    assert db.session.get(File, unlinked.id).file_name is None
