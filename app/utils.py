@@ -80,7 +80,7 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
 from app.local_names import local_named
 from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, current_storefront, canonicalise_links, canonicalise_text, domain_base_url, \
     act_in_this_request, acting_as_default, acting_domain, domain_authority, \
-    boosted_order_by, boosted_top_sql, domain_by_id, hosted_instance_ids, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
+    boosted_order_by, boosted_top_sql, domain_by_id, hosted_instance_ids, is_hosted_uri, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
 from collections import Counter
 from flask import has_request_context
 import app as app_pkg
@@ -172,6 +172,10 @@ def getmtime(filename):
 # pin the worker and its memory.
 FETCH_MAX_BYTES = 1024 * 1024
 FETCH_MAX_SECONDS = 15
+# The status an ActivityPub GET of a URL on one of our own domains answers without a request (plan C4): 421
+# Misdirected Request. The object is ours already, so it is never fetched over HTTP. No caller treats 421 as
+# anything but a failed fetch: not 200 (found), 401/403 (sign and ask again), 404/410 (deleted), 429/5xx (retry).
+HOSTED_FETCH_STATUS = 421
 # The bigger caps, for the callers whose bodies are legitimately bigger.
 PAGE_MAX_BYTES = 5 * 1024 * 1024                # an HTML page; one page of a remote directory or community list
 MEDIA_MAX_BYTES = 10 * 1024 * 1024              # an image (R207's upload cap), an RSS feed, an archived post
@@ -370,12 +374,25 @@ def user_agent(domain=None) -> str:
     return f'PieFed/{current_app.config["VERSION"]}; +https://{domain_authority(domain or acting_domain())}'
 
 
+def _refused_hosted_fetch(uri, headers) -> bool:
+    """True, after an INFO line, when `uri` is on one of our own domains and `headers` ask for ActivityPub (an Accept
+    naming activity+json or ld+json): such an object is ours already and is never fetched over HTTP (plan C4). Any
+    other GET of ours, a link preview or an image, is an ordinary web fetch and goes out."""
+    accept = ' '.join(str(value) for name, value in (headers or {}).items() if str(name).lower() == 'accept')
+    if ('activity+json' in accept or 'ld+json' in accept) and is_hosted_uri(uri):
+        current_app.logger.info(f'hosted domain, not fetched: {uri}')
+        return True
+    return False
+
+
 # do a GET request to a uri, return the result. At most max_bytes of body within max_seconds (_capped_get), or
 # ResponseTooLarge, which is not retried. A transport error is not retried either: one attempt, no sleep, so no
 # request or inbox path can wait (D738/D775). Only a housekeeping Celery task passes retry=True, which sleeps 3-10 s
 # and tries once more with a doubled timeout.
 def get_request(uri, params=None, headers=None, *, max_bytes: int = FETCH_MAX_BYTES,
                 max_seconds: float = FETCH_MAX_SECONDS, retry: bool = False) -> httpx.Response:
+    if _refused_hosted_fetch(uri, headers):   # a non-200, as every caller handles a miss
+        return httpx.Response(HOSTED_FETCH_STATUS)
     if is_invalid_get_request_uri(uri):
         current_app.logger.info(f"invalid get request {uri}")
         raise httpx.HTTPError("HTTPError: invalid uri") from None
@@ -442,6 +459,8 @@ def get_request_capped(uri, max_bytes: int, headers=None, max_seconds: float = 1
     blocking lookup that neither httpx's timeouts nor the deadline interrupt, so a slow resolver can hold the call
     past max_seconds.
     No retry: callers use it for optional, best-effort fetches."""
+    if _refused_hosted_fetch(uri, headers):
+        return HOSTED_FETCH_STATUS, None
     if is_invalid_get_request_uri(uri):
         current_app.logger.info(f"invalid get request {uri}")
         raise httpx.HTTPError("HTTPError: invalid uri") from None
