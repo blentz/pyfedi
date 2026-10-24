@@ -28,7 +28,7 @@ from app.shared.media import MediaRefused, can_upload_media, episode_form_wanted
     queue_probe, store_uploaded_media, with_episode
 from app.local_only import content_local_only
 from app.onion import audit_field
-from app.storefront import link_on
+from app.storefront import is_upload_link, link_on, stored_link
 from app.shared.tasks import task_selector
 from app.shared.upload import open_uploaded_image
 from app.visibility import is_open, post_title_for
@@ -534,10 +534,10 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         else:
             event_data = None
 
-    # a link to this site pasted on another of its hosts is stored on the post's domain (canonical for the default
-    # domain's): an upload's URL an API client was shown on any storefront is the post's to federate (plan C3)
-    url = link_on(url, object_base(post))
-    if isinstance(post.url, str) and link_on(post.url, object_base(post)) == url:
+    # a file of ours an API client was shown on any storefront is the post's to federate, and the onion's host is
+    # never stored; a link to a federating domain of ours keeps the host typed (plan C3, `stored_link`)
+    url = stored_link(url, object_base(post))
+    if is_upload_link(post.url) and link_on(post.url, object_base(post)) == url:
         url = post.url   # the stored file of ours, however it was spelt when stored: a stored URL is never rewritten
 
     # WARNING: beyond this point do not use the input variable as it can be either a dict or a form object!
