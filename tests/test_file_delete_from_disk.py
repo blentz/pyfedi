@@ -18,7 +18,7 @@ from flask import current_app, g
 from sqlalchemy import text
 
 from app import db
-from app.models import File, Site, s3_key_from_url
+from app.models import File, Site, s3_key_from_url, s3_object_is_referenced_elsewhere
 from app.shared.upload import process_file_delete
 from tests.factories import make_community, make_instance, make_post, make_post_reply, make_user
 
@@ -295,13 +295,13 @@ class TestFilesKeptInS3:
         return seen[0] if seen else []
 
     def test_an_s3_file_is_handed_to_the_task(self, env, monkeypatch):
-        file = a_file(file_path='https://cdn.example/media/probe.png')
+        file = a_file(file_path='https://cdn.example/media/probe.png', file_name='probe.png')   # our upload's record
         assert self.deleted_keys(monkeypatch, file) == ['media/probe.png']
 
     def test_the_thumbnail_and_the_source_go_too(self, env, monkeypatch):
         file = a_file(file_path='https://cdn.example/media/a.png',
                       thumbnail_path='https://cdn.example/media/b.png',
-                      source_url='https://cdn.example/media/c.png')
+                      source_url='https://cdn.example/media/c.png', file_name='c.png')
         assert self.deleted_keys(monkeypatch, file) == \
             ['media/a.png', 'media/b.png', 'media/c.png']
 
@@ -462,7 +462,7 @@ class TestAPeerNamingSomeoneElsesObject:
         """The check has to refuse the peer's naming without breaking the
         legitimate delete it exists to allow: when this instance uploaded the
         original itself, this row is the only reference."""
-        file = a_file(source_url='https://cdn.example/posts/aa/bb/original.png')
+        file = a_file(source_url='https://cdn.example/posts/aa/bb/original.png', file_name='original.png')
 
         assert self.deleted_keys(monkeypatch, file) == \
             ['posts/aa/bb/original.png']
@@ -472,7 +472,7 @@ class TestAPeerNamingSomeoneElsesObject:
         it -- `s3_object_is_referenced_elsewhere` excludes the row it is asked
         about, or nothing would ever be deleted."""
         url = 'https://cdn.example/posts/aa/bb/one.png'
-        file = a_file(file_path=url, thumbnail_path=url, source_url=url)
+        file = a_file(file_path=url, thumbnail_path=url, source_url=url, file_name='one.png')
 
         assert self.deleted_keys(monkeypatch, file) == \
             ['posts/aa/bb/one.png', 'posts/aa/bb/one.png', 'posts/aa/bb/one.png']
@@ -874,3 +874,66 @@ def test_a_files_other_records_are_found_by_trigram_index(env):
         plan = '\n'.join(db.session.execute(text(f'EXPLAIN {sql}')).scalars())
         assert 'Bitmap Index Scan on ix_' in plan and '_trgm' in plan, plan
     db.session.rollback()
+
+
+
+class TestTheBucketFollowsTheDiskRule:
+    """In S3 mode a bucket object is deleted by the same rule as a local file (final re-review N-I1): a `source_url`
+    key only by our upload's record (`file_name`) and only when no other record names the same key, compared by the
+    key each value resolves to (`%61` is `a`, a query string is no part of the key), never by the stored spelling; a
+    `file_path`/`thumbnail_path` key only by a record that is ours. Otherwise only the CDN copy is purged."""
+
+    VICTIM = 'https://cdn.example/users/aa/bb/avatar.webp'
+
+    @pytest.fixture(autouse=True)
+    def in_s3(self, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', 'cdn.example')
+        monkeypatch.setattr('app.models._store_files_in_s3', lambda: True)
+
+    def deleted_keys(self, monkeypatch, file, **kwargs):
+        seen = []
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.delete_from_s3',
+            type('_Task', (), {'delay': staticmethod(lambda keys: seen.extend(keys)),
+                               '__call__': staticmethod(lambda keys: seen.extend(keys))})())
+        monkeypatch.setattr('app.models.flush_cdn_cache', lambda urls: None)
+        file.delete_from_disk(**kwargs)
+        return seen
+
+    @pytest.mark.parametrize('spelt', ['https://cdn.example/users/aa/bb/%61vatar.webp',
+                                       'https://cdn.example/users/aa/bb/avatar.webp?q=1'])
+    @pytest.mark.parametrize('purge', [False, True])
+    def test_a_peer_row_spelling_the_victims_url_deletes_no_object(self, env, monkeypatch, spelt, purge):
+        env.baseline.user2.avatar = a_file(source_url=self.VICTIM)
+        db.session.commit()
+        purged = []
+        peer = make_post(env.baseline.community1, make_user(make_instance('peer.test'), 'peers3'),
+                         ap_id='https://peer.test/post/s3')
+        peer.image = a_file(source_url=spelt)
+        db.session.commit()
+        assert self.deleted_keys(monkeypatch, peer.image, purge=purge, cache_urls=purged) == []
+        assert purged == [spelt]   # the CDN copy still goes
+
+    def test_our_upload_its_uploaders_record_names_by_another_spelling_is_kept(self, env, monkeypatch):
+        ours = a_file(source_url=self.VICTIM, file_name='avatar.webp')
+        db.session.execute(text('INSERT INTO "user_file" (file_id, user_id, size) VALUES (:f, :u, 9)'),
+                           {'f': ours.id, 'u': env.baseline.user1.id})
+        env.baseline.user1.avatar = a_file(source_url=f'{self.VICTIM}?v=2')   # the same key, by another spelling
+        db.session.commit()
+        assert self.deleted_keys(monkeypatch, ours) == []
+
+    def test_a_peers_post_naming_a_victims_key_another_way_does_not_free_it(self, env, monkeypatch):
+        """`s3_object_is_referenced_elsewhere` (a peer's video post's mirrored url) matches by key too."""
+        env.baseline.user2.avatar = a_file(source_url=self.VICTIM)
+        db.session.commit()
+        assert s3_object_is_referenced_elsewhere('https://cdn.example/users/aa/bb/%61vatar.webp?x', post_id=999)
+
+    @pytest.mark.parametrize('column', ['file_path', 'thumbnail_path'])
+    def test_an_unowned_written_key_is_not_deleted(self, env, monkeypatch, column):
+        assert self.deleted_keys(monkeypatch, a_file(**{column: self.VICTIM})) == []
+
+    def test_a_local_accounts_written_key_named_nowhere_else_is_deleted(self, env, monkeypatch):
+        file = a_file(source_url='https://elsewhere.example/a.png', file_path=self.VICTIM)
+        env.baseline.user1.avatar_id = file.id
+        db.session.commit()
+        assert self.deleted_keys(monkeypatch, file) == ['users/aa/bb/avatar.webp']
