@@ -34,7 +34,8 @@ from app.shared.tasks import media as media_tasks
 from app.shared.tasks.media import probe_media
 from app.shared.tasks.pages import send_post
 from app.shared.upload import process_file_delete, process_upload
-from app.storefront import canonicalise_links, canonicalise_text, default_domain
+from app.shared.feed import store_icon_and_banner
+from app.storefront import canonicalise_links, canonicalise_text
 from app.utils import set_setting
 from tests.factories import make_community_member
 from tests.test_per_domain_actor_documents import site_named_hell  # noqa: F401  (fixture)
@@ -102,9 +103,9 @@ def test_the_api_community_image_upload_is_the_callers_domains(app, sites, monke
 
 def test_a_feeds_upload_is_the_default_domains(app, sites):
     """Feeds are the default domain's (C1 ruling), whoever uploads their images."""
-    with request_on(app, sites.shop):
-        url = process_upload(an_image(), destination='feeds', owner=default_domain())
-    assert url.startswith(f'{HELL_BASE}/static/media/feeds/')
+    with request_on(app, sites.shop):   # acting as the shop: a plain upload here would be the shop's
+        icon, banner = store_icon_and_banner(an_image(), an_image())
+    assert icon.startswith(f'{HELL_BASE}/static/media/feeds/') and banner.startswith(f'{HELL_BASE}/static/media/feeds/')
 
 
 def test_a_shop_users_own_upload_can_be_deleted(app, sites):
