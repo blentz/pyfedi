@@ -20,7 +20,7 @@ from app.activitypub.serializers.microblog import body_hashtags
 from app.activitypub.util import find_hashtag_or_create, make_image_sizes, notify_about_post, host_of
 from app.community.util import tags_from_string_old, end_poll_date, flair_from_form, flairs_from_string
 from app.constants import *
-from app.federation_urls import object_base, owner_base
+from app.federation_urls import object_base
 from app.models import File, Notification, NotificationSubscription, Poll, PollChoice, PollChoiceVote, Post, \
     PostBookmark, PostVote, Report, Site, User, utcnow, Instance, Event, Community, CommunityFlair, \
     votes_cast_today, adjust_domain_post_count, served_path, _as_url
@@ -700,7 +700,8 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
             if final_place != original_place:
                 os.unlink(original_place)   # the upload was re-encoded under a new extension (D465)
 
-        url = f"{owner_base(user)}{served_path(final_place)}"  # D1363; on the uploader's domain (plan C3)
+        # D1363; on the post's domain, which federates it: a moderator's upload into someone else's post too (C3)
+        url = f"{object_base(post)}{served_path(final_place)}"
         uploaded_name = os.path.basename(final_place)
 
         if current_app.config['IMAGE_HASHING_ENDPOINT'] and not is_video_url(final_place):
