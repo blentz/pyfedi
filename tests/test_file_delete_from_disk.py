@@ -15,9 +15,11 @@ import os
 
 import pytest
 from flask import current_app, g
+from sqlalchemy import text
 
 from app import db
 from app.models import File, Site, s3_key_from_url
+from tests.factories import make_instance, make_post, make_user
 
 
 @pytest.fixture
@@ -37,6 +39,19 @@ def a_file(**columns):
     db.session.add(file)
     db.session.commit()
     return file
+
+
+def gone(file, **kwargs):
+    """A File deleted as its callers delete one: its files, then its row."""
+    file.delete_from_disk(purge_cdn=False, **kwargs)
+    db.session.delete(file)
+    db.session.commit()
+
+
+def an_upload(name, **columns):
+    """The record our upload code makes of a file it wrote (`process_upload`, `edit_post`): named by its URL, with
+    the name it gave the file."""
+    return a_file(source_url=f"{current_app.config['SERVER_URL']}/static/media/{name}", file_name=name, **columns)
 
 
 def a_media_file(name='probe.png', directory='app/static/media'):
@@ -174,8 +189,7 @@ class TestDeletingTheFileItself:
 
     def test_a_source_url_of_ours_is_unlinked(self, env):
         path = a_media_file('probe_source.png')
-        file = a_file(source_url=f'{env.server_url}/static/media/probe_source.png')
-        file.delete_from_disk(purge_cdn=False)
+        an_upload('probe_source.png').delete_from_disk(purge_cdn=False)
         assert not os.path.exists(path)
 
     def test_a_source_url_pointing_outside_app_deletes_nothing(self, env):
@@ -241,7 +255,7 @@ class TestWhatIsPurgedFromTheCdn:
     def test_a_source_url_of_ours_is_purged(self, env, monkeypatch):
         a_media_file('probe_purge_src.png')
         url = f'{env.server_url}/static/media/probe_purge_src.png'
-        assert self.purged(env, monkeypatch, a_file(source_url=url)) == [url]
+        assert self.purged(env, monkeypatch, an_upload('probe_purge_src.png')) == [url]
 
     def test_a_peer_s_url_is_not_purged(self, env, monkeypatch):
         """It is not ours to purge, and asking Cloudflare to drop somebody
@@ -488,3 +502,79 @@ class TestAPeerNamingSomeoneElsesObject:
         file = a_file(source_url=f'{env.server_url}/static/media/gone.png')
 
         assert self.deleted_keys(monkeypatch, file) == []
+
+
+class TestOnlyWhatWeWroteIsUnlinked:
+    """A File unlinks a local file named by its `source_url` only when our upload code wrote that file: the record
+    has the name it was given (`file_name`) or the uploader's `user_file` link. `source_url` is a string a peer
+    chose, so a File from a peer never unlinks anything, however it spells the URL. Another record that owns the file
+    (one of ours, or a local author's post) keeps it, except from a moderation purge; the CDN copy goes either way."""
+
+    @pytest.fixture
+    def owned(self, env):
+        path = a_media_file('probe_owned.png')
+        yield path
+        if os.path.exists(path):
+            os.unlink(path)
+
+    @pytest.mark.parametrize('spelt', [
+        '{base}/static/media/probe_owned.png',
+        '{upper}/static/media/probe_owned.png',
+        '{base}//static//media/probe_owned.png',
+        '{base}/static/./media/./probe_owned.png',
+        '{base}/static/media/%2e/probe_owned.png',
+        '{base}/static/media/probe%5fowned.png',
+        '{base}/static/media/x/../probe_owned.png',
+    ])
+    @pytest.mark.parametrize('purge', [False, True])
+    def test_a_peers_file_never_unlinks_ours_however_it_is_spelt(self, env, owned, spelt, purge):
+        url = spelt.format(base=env.server_url, upper=env.server_url.upper())
+        gone(a_file(source_url=url), purge=purge)
+        assert os.path.exists(owned), url
+
+    def test_our_upload_with_its_uploaders_link_is_unlinked(self, env, owned):
+        file = a_file(source_url=f'{env.server_url}/static/media/probe_owned.png')
+        db.session.execute(text('INSERT INTO "user_file" (file_id, user_id, size) VALUES (:f, :u, 1)'),
+                           {'f': file.id, 'u': env.baseline.user1.id})
+        db.session.commit()
+        file.delete_from_disk(purge_cdn=False)
+        assert not os.path.exists(owned)
+
+    def test_our_upload_another_of_our_records_names_is_kept_but_purged_from_the_cdn(self, env, owned):
+        an_upload('probe_owned.png')
+        purged = []
+        an_upload('probe_owned.png').delete_from_disk(cache_urls=purged)
+        assert os.path.exists(owned)
+        assert purged == [f'{env.server_url}/static/media/probe_owned.png']
+
+    def test_a_peers_record_naming_our_upload_does_not_keep_it(self, env, owned):
+        a_file(source_url=f'{env.server_url}/static/media/probe_owned.png')
+        an_upload('probe_owned.png').delete_from_disk(purge_cdn=False)
+        assert not os.path.exists(owned)
+
+    def test_a_local_authors_post_linking_our_upload_keeps_it_and_a_peers_does_not(self, env, owned):
+        url = f'{env.server_url}/static/media/probe_owned.png'
+        peer = make_user(make_instance('peer.test'), 'peerauthor')
+        remote = make_post(env.baseline.community1, peer, ap_id='https://peer.test/post/1')
+        remote.url = url
+        db.session.commit()
+        local = make_post(env.baseline.community1, env.baseline.user1, ap_id=f'{env.server_url}/post/linker')
+        local.url = url
+        own = an_upload('probe_owned.png')
+        db.session.commit()
+        gone(an_upload('probe_owned.png'))
+        assert os.path.exists(owned)   # the local author's post links it
+        local.image_id = own.id   # its own image: no other reference
+        db.session.commit()
+        own.delete_from_disk(purge_cdn=False)
+        assert not os.path.exists(owned)
+
+    def test_a_moderation_purge_removes_our_upload_whatever_still_names_it(self, env, owned):
+        local = make_post(env.baseline.community1, env.baseline.user1, ap_id=f'{env.server_url}/post/linker')
+        local.url = f'{env.server_url}/static/media/probe_owned.png'
+        an_upload('probe_owned.png')
+        db.session.commit()
+        purged = []
+        an_upload('probe_owned.png').delete_from_disk(cache_urls=purged, purge=True)
+        assert not os.path.exists(owned)
+        assert purged == [local.url]

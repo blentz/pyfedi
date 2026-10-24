@@ -232,7 +232,8 @@ def _thumbnail(post, path, kind, probe, written) -> File | None:
     finally:
         _remove(frame)
     # on the post's domain, as its media is: a worker acts as whoever queued it, which need not be the author (C3)
-    file = File(source_url=f"{federation_base(post)}{served_path(image_place)}", width=width, height=height)
+    file = File(source_url=f"{federation_base(post)}{served_path(image_place)}", width=width, height=height,
+                file_name=os.path.basename(image_place))   # our own file (File.wrote_its_source)
     db.session.add(file)
     db.session.flush()
     return file
