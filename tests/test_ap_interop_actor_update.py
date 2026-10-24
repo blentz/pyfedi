@@ -663,7 +663,9 @@ def _local_community_with_uploads(app, tmp_path):
     for column in ('icon', 'image'):
         path = tmp_path / f'{column}.png'
         path.write_bytes(b'png')
-        setattr(community, column, make_file(file_path=str(path)))
+        upload = make_file(file_path=str(path))
+        upload.file_name = f'{column}.png'   # save_icon_file names it
+        setattr(community, column, upload)
     db.session.commit()
     return community
 
@@ -752,6 +754,7 @@ def test_a_new_remote_icon_for_a_local_community_replaces_and_deletes_the_upload
     """Residual R3 item 1. A moderator's real new remote URL is applied, and the upload it replaces is deleted with
     its File row, as replacing it through the web edit path does. Kept, it was an orphan on disk and in the table.
     R3 fix 1: only once the new image has been fetched and the swap committed."""
+    monkeypatch.setattr('app.models.MEDIA_ROOT', str(tmp_path))   # the uploads' media folder: only it is unlinked from
     community = _local_community_with_uploads(app, tmp_path)
     community_id, icon_id, image_id = community.id, community.icon_id, community.image_id
     icon_path, image_path = community.icon.file_path, community.image.file_path

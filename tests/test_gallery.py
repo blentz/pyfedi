@@ -231,8 +231,11 @@ def test_an_update_drops_a_blocked_gallery_image(ingest, hashing):
     assert [f.source_url for f in gallery_of(post)] == [THIRD]
 
 
-def test_deleting_the_post_deletes_its_gallery(ingest, tmp_path):
+def test_deleting_the_post_deletes_its_gallery(ingest, tmp_path, monkeypatch):
+    """Its rows go and the CDN is purged. A peer post's album never unlinks a path from our disk: until 397a91156 a
+    peer could name one, and a path is no proof we wrote it (final fix wave)."""
     from app.models import post_file
+    monkeypatch.setattr('app.models.MEDIA_ROOT', str(tmp_path))   # the album's media folder: only it is unlinked from
     post = ingest(album(image(FIRST, 'a'), image(SECOND, 'b'), image(THIRD, 'c')))
     on_disk = []
     for number, file in enumerate(gallery_of(post)):
@@ -247,7 +250,7 @@ def test_deleting_the_post_deletes_its_gallery(ingest, tmp_path):
     post.delete_dependencies(cache_urls=cache_urls)
     db.session.commit()
 
-    assert not any(path.exists() for path in on_disk)
+    assert all(path.exists() for path in on_disk)   # a peer's: kept (the disk leak the ruling accepts)
     assert all(str(path) in cache_urls for path in on_disk)
     assert db.session.execute(post_file.select().where(post_file.c.post_id == post.id)).all() == []
     assert File.query.filter(File.id.in_(gallery_ids)).count() == 0
