@@ -192,7 +192,7 @@ def test_a_banned_instance_is_not_scanned(admin_client):
     assert 'is a banned instance' in ' '.join(_flashes(flashed))
 
 
-@pytest.mark.parametrize('remote_url', ['https://shop.example', 'https://SHOP.example.'])
+@pytest.mark.parametrize('remote_url', ['https://shop.example', 'https://test.piefed.local', 'https://SHOP.example.'])
 def test_one_of_our_own_domains_is_not_scanned(admin_client, remote_url):
     """Plan C4: nothing is fetched from a domain this server hosts, so a scan of one is refused with a message
     before any request. It used to be a 500: get_request answers the discovery GET with an empty 421."""

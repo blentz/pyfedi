@@ -484,7 +484,7 @@ def is_hosted_uri(uri: str | None) -> bool:
     if destination is None:
         return False
     host, port = destination
-    for row in domain_rows():
+    for row in (*domain_rows(), _synthesised_default()):   # SERVER_NAME is always ours, as in domain_for_host
         ours = _destination(f'{row.scheme}://{domain_authority(row)}')
         if ours is not None and ours[0] == host and (port == ours[1] or (ours[1] is None and port in (80, 443))):
             return True
