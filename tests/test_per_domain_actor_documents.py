@@ -9,6 +9,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
+from cachelib import SimpleCache
 from flask import g
 
 import app.shared.tasks.groups as groups_module
@@ -62,6 +63,13 @@ def shop_rows(app):
     db.session.commit()
     cache.clear()
     return shop, user, community
+
+
+@pytest.fixture
+def real_cache(app, monkeypatch):
+    """A working cache for one test: conftest's NullCache stores nothing, so a cached copy answering the wrong host
+    could not show (as tests/test_per_domain_discovery.py's)."""
+    monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
 
 
 @pytest.fixture
@@ -150,9 +158,20 @@ def test_the_shops_instance_actor_outbox_is_the_shops(app, shop_rows):
     assert json.loads(response.data)['id'] == f'{SHOP_BASE}/actor/outbox'
 
 
+@pytest.mark.parametrize('first', [HELL, SHOP])
+def test_the_application_document_is_cached_per_host(app, shop_rows, site_named_hell, real_cache, first):
+    """With a working cache (conftest's NullCache stores nothing), whichever host is asked first, the other's copy
+    is its own: hell's never answers the shop, nor the shop's hell."""
+    second = SHOP if first == HELL else HELL
+    copies = {host: served(app, '/', host=host).data for host in (first, second)}
+    assert json.loads(copies[HELL])['id'] == f'https://{HELL}/' and json.loads(copies[SHOP])['id'] == f'{SHOP_BASE}/'
+    assert_on_shop(copies[SHOP])
+    assert served(app, '/', host=first).data == copies[first] and served(app, '/', host=second).data == copies[second]
+
+
 def test_the_shops_application_document_is_the_shops(app, shop_rows, site_named_hell):
     shop = shop_rows[0]
-    hell_first = served(app, '/', host=HELL).data   # cached per host: hell's copy never answers the shop
+    hell_first = served(app, '/', host=HELL).data   # hell's first, then the shop's (per-host cache: above)
     response = served(app, '/')
     assert_on_shop(response.data)
     document = json.loads(response.data)
