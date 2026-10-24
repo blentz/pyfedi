@@ -23,7 +23,8 @@ from unittest.mock import Mock, patch
 import pytest
 
 from app import cache, db
-from app.models import BannedInstances, Community, User
+from app.models import BannedInstances, Community, SiteDomain, User
+from app.storefront import clear_domain_cache
 from app.utils import PAGE_MAX_BYTES
 from tests.factories import grant_permission, make_instance, make_user
 
@@ -189,6 +190,24 @@ def test_a_banned_instance_is_not_scanned(admin_client):
     assert response.status_code == 302
     assert get_request.call_args_list == [], 'a banned instance was contacted'
     assert 'is a banned instance' in ' '.join(_flashes(flashed))
+
+
+@pytest.mark.parametrize('remote_url', ['https://shop.example', 'https://SHOP.example.'])
+def test_one_of_our_own_domains_is_not_scanned(admin_client, remote_url):
+    """Plan C4: nothing is fetched from a domain this server hosts, so a scan of one is refused with a message
+    before any request. It used to be a 500: get_request answers the discovery GET with an empty 421."""
+    client, token = admin_client
+    db.session.add(SiteDomain(domain='shop.example'))
+    db.session.commit()
+    clear_domain_cache()
+
+    with patch('app.admin.routes.get_request') as get_request:
+        response, flashed, _render = _scan(client, token, remote_url=remote_url)
+    clear_domain_cache()
+
+    assert response.status_code == 302
+    assert get_request.call_args_list == [], 'one of our own domains was contacted'
+    assert 'is one of this server' in ' '.join(_flashes(flashed))
 
 
 def test_a_plainly_banned_instance_is_not_scanned(admin_client):

@@ -49,7 +49,7 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, SiteDomain, \
     instance_row_referenced
 from app.storefront import acting_as_default, canonicalise_text, clear_domain_cache, default_domain, domain_authority, domain_base_url, \
-    domain_by_id, federating_base, hosted_instance_ids, instance_id_of, live_registration, storefront_url
+    domain_by_id, federating_base, hosted_instance_ids, instance_id_of, is_hosted_uri, live_registration, storefront_url
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
@@ -796,6 +796,11 @@ def admin_federation_remote_scan():
         # stop.
         if instance_banned(server_domain):
             flash(_('%(url)s is a banned instance.', url=remote_url))
+            return redirect(url_for('admin.admin_federation_remote_scan'))
+
+        # plan C4: nothing is fetched from a domain this server hosts, and its communities are ours already
+        if is_hosted_uri(remote_url):
+            flash(_('%(url)s is one of this server\'s own domains.', url=remote_url))
             return redirect(url_for('admin.admin_federation_remote_scan'))
 
         # get dry run
