@@ -710,3 +710,54 @@ def test_the_backfill_names_only_what_process_upload_recorded(env):
     names = {key: db.session.get(File, file_id).file_name for key, file_id in rows.items()}
     assert names == {'upload': 'abcdefghijklmno.png', 'bookmark': None, 'unsized': None, 'named': 'kept.png'}
     assert db.session.get(File, unlinked.id).file_name is None
+
+
+class TestAnUploadIsItsUploaders:
+    """An upload we can prove we wrote is kept only by a record of its uploader's own account (or a path the server
+    wrote). Another account's bookmark, post image or link post naming it never keeps it: deleting your upload removes
+    it, as on any site (final-review FI2)."""
+
+    @pytest.fixture
+    def owned(self, env):
+        path = a_media_file('probe_mine.png')
+        yield path
+        if os.path.exists(path):
+            os.unlink(path)
+
+    @pytest.fixture
+    def upload(self, env):
+        """user1's media-library upload."""
+        file = an_upload('probe_mine.png')
+        db.session.execute(text('INSERT INTO "user_file" (file_id, user_id, size) VALUES (:f, :u, 9)'),
+                           {'f': file.id, 'u': env.baseline.user1.id})
+        db.session.commit()
+        return file
+
+    @pytest.mark.parametrize('reference', ['bookmark', 'post image', 'link post'])
+    def test_another_accounts_reference_does_not_keep_it(self, env, owned, upload, reference):
+        other = env.baseline.user2
+        url = upload.source_url
+        if reference == 'bookmark':
+            bookmark = a_file(source_url=url)
+            db.session.execute(text('INSERT INTO "user_file" (file_id, user_id, size) VALUES (:f, :u, 0)'),
+                               {'f': bookmark.id, 'u': other.id})
+        else:
+            post = make_post(env.baseline.community1, other, ap_id=f'{env.server_url}/post/theirs')
+            if reference == 'post image':
+                post.image = a_file(source_url=url)
+            else:
+                post.url = url
+        db.session.commit()
+        gone(upload)
+        assert not os.path.exists(owned)
+
+    @pytest.mark.parametrize('reference', ['avatar', 'link post'])
+    def test_its_uploaders_own_other_record_keeps_it(self, env, owned, upload, reference):
+        mine = env.baseline.user1
+        if reference == 'avatar':
+            mine.avatar = a_file(source_url=upload.source_url)
+        else:
+            make_post(env.baseline.community1, mine, ap_id=f'{env.server_url}/post/mine').url = upload.source_url
+        db.session.commit()
+        gone(upload)
+        assert os.path.exists(owned)
