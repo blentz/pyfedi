@@ -245,3 +245,17 @@ def test_publish_async_posts_leaves_out_every_hosted_inbox(env, monkeypatch, cap
         publish_async_posts([])
     assert len(published) == 1
     assert f'hosted domain, not sent: {SHOP_INBOX}' in caplog.text
+
+
+def test_server_name_is_hosted_when_no_row_names_it(db_session):
+    """SERVER_NAME's host is always served (as domain_for_host has it), even when the SiteDomain rows name only
+    other domains: a seed made under another SERVER_NAME, or SERVER_NAME changed since."""
+    db.session.add(SiteDomain(domain='shop.example'))
+    db.session.commit()
+    clear_domain_cache()
+    try:
+        assert db.session.query(SiteDomain).filter_by(domain=SERVER).count() == 0
+        assert is_hosted_uri(f'https://{SERVER}/inbox') and is_hosted_uri(SHOP_INBOX)
+        assert not is_hosted_uri(PEER_INBOX)
+    finally:
+        clear_domain_cache()
