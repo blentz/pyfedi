@@ -16,6 +16,7 @@ from PIL import Image
 from werkzeug.datastructures import FileStorage
 
 import app.api.alpha.utils.user as user_utils_module
+import app.chat.util as chat_util
 import app.shared.community as community_module
 import app.shared.reply as reply_module
 import app.shared.tasks.pages as pages_module
@@ -25,7 +26,7 @@ from app.api.alpha.utils.upload import post_upload_community_image
 from app.api.alpha.utils.user import put_user_save_user_settings
 from app.constants import COMMUNITY_KIND_VIDEO_CHANNEL, POST_STATUS_PUBLISHED, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, \
     POST_TYPE_LINK, POST_TYPE_VIDEO, SRC_API
-from app.models import Emoji, File, Post, Site, media_local_path, user_file
+from app.models import Conversation, Emoji, File, Post, Site, media_local_path, user_file
 from app.shared.community import edit_community
 from app.shared.media import media_of, store_uploaded_media
 from app.shared.post import edit_post
@@ -541,3 +542,21 @@ def test_a_communitys_description_and_rules_and_an_accounts_about_are_on_their_b
     monkeypatch.setattr(user_utils_module, 'authorise_api_user', lambda auth, return_type=None: onion_rows.sam)
     put_user_save_user_settings('token', {'bio': typed})
     assert onion_rows.sam.about == expected and no_onion(onion_rows.sam.about_html)
+
+
+def test_an_onion_senders_message_id_is_ours_and_opens_its_conversation(app, onion_rows, monkeypatch):
+    """The id is stored on the default base (a local-only domain's host is never stored); the route must still know
+    it as ours, so its reader is sent to the conversation rather than told it does not exist."""
+    conversation = Conversation(user_id=onion_rows.ollie.id)
+    conversation.members.append(onion_rows.ollie)
+    conversation.members.append(onion_rows.hal)
+    db.session.add(conversation)
+    db.session.commit()
+    captured(monkeypatch, chat_util)
+    message = chat_util.send_message('hello', conversation.id, user=onion_rows.ollie)
+    assert message.ap_id == f'{DEFAULT_BASE}/private_message/{message.id}'
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session['_user_id'], session['_fresh'] = str(onion_rows.hal.id), True
+    response = client.get(f'/private_message/{message.id}', base_url=f'https://{HELL}')
+    assert response.status_code == 302 and response.headers['Location'].endswith(f'/chat/{conversation.id}')

@@ -55,8 +55,8 @@ from app.local_only import any_domain_closed, community_local_only, federated_me
 from app.local_names import actor_handle, local_clause, split_local_name
 from app.federation_urls import activity_id, domain_site_name, federating_storefront, instance_actor_url, \
     is_federating_url, object_base, owned_elsewhere, owner_base, owner_domain
-from app.storefront import current_storefront, domain_authority, domain_base_url, domain_for_host, hosted_instance_ids, \
-    is_served_name, registration_mode_on, storefront_cache_key
+from app.storefront import current_storefront, domain_authority, domain_base_url, domain_for_host, federating_base, \
+    hosted_instance_ids, is_served_name, registration_mode_on, storefront_cache_key
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
@@ -2892,7 +2892,7 @@ def private_message_ap(message_id):
     message = db.session.get(ChatMessage, message_id)
     sender_domain = owner_domain(message) if message is not None else None
     ours = sender_domain is not None and \
-        message.ap_id == f"{domain_base_url(sender_domain)}/private_message/{message.id}"
+        message.ap_id == f"{federating_base(sender_domain)}/private_message/{message.id}"   # as chat_util names it
     if not is_activitypub_request():
         # a browser is sent on only by someone who may read the conversation; everyone else gets the AP refusal
         conversation = db.session.get(Conversation, message.conversation_id) if ours and message.conversation_id else None
