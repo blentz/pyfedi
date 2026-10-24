@@ -23,7 +23,7 @@ from functools import wraps, lru_cache
 from json import JSONDecodeError
 from time import sleep
 from typing import List, Tuple, Optional
-from urllib.parse import urlparse, parse_qs, urlencode
+from urllib.parse import urlparse, parse_qs, urlencode, urlsplit
 from zoneinfo import available_timezones
 import socket
 import os
@@ -374,12 +374,24 @@ def user_agent(domain=None) -> str:
     return f'PieFed/{current_app.config["VERSION"]}; +https://{domain_authority(domain or acting_domain())}'
 
 
+# The discovery documents a server answers about itself. A GET of one on our own host is refused whatever its Accept
+# (plan C4): WebFinger, host-meta and NodeInfo are asked of a peer, never of ourselves.
+_DISCOVERY_PATHS = ('/.well-known/webfinger', '/.well-known/host-meta', '/.well-known/nodeinfo', '/nodeinfo/')
+
+
 def _refused_hosted_fetch(uri, headers) -> bool:
-    """True, after an INFO line, when `uri` is on one of our own domains and `headers` ask for ActivityPub (an Accept
-    naming activity+json or ld+json): such an object is ours already and is never fetched over HTTP (plan C4). Any
-    other GET of ours, a link preview or an image, is an ordinary web fetch and goes out."""
+    """True, after an INFO line, when `uri` is on one of our own domains (`is_hosted_uri`) and is federation: an
+    Accept naming activity+json or ld+json, or a discovery document (_DISCOVERY_PATHS). Such a document is ours
+    already and is never fetched over HTTP (plan C4). Any other GET of ours, a link preview or an image, is an
+    ordinary web fetch and goes out."""
     accept = ' '.join(str(value) for name, value in (headers or {}).items() if str(name).lower() == 'accept')
-    if ('activity+json' in accept or 'ld+json' in accept) and is_hosted_uri(uri):
+    try:
+        path = urlsplit(uri).path.lower() if isinstance(uri, str) else ''
+    except ValueError:   # an unbalanced IPv6 bracket: refused below as any invalid uri is, with httpx.HTTPError
+        path = ''
+    federation = 'activity+json' in accept or 'ld+json' in accept or \
+        any(path == prefix.rstrip('/') or path.startswith(prefix) for prefix in _DISCOVERY_PATHS)
+    if federation and is_hosted_uri(uri):
         current_app.logger.info(f'hosted domain, not fetched: {uri}')
         return True
     return False

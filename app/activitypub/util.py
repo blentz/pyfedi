@@ -2179,7 +2179,11 @@ def webfinger_self_link_allowed(href, address: str, server: str) -> bool:
     The caller gated `server`, the LOOKED-UP host, and nothing else; the self link may point anywhere. A link on
     `server`'s own host is fetched as before. A link elsewhere is fetched only when its host passes the same
     instance gate (_federates_with) -- the ban list, or the allowlist -- so an alias cannot make this instance ask
-    a banned one for anything, even the actor canonical_handle would then refuse. No host, no fetch."""
+    a banned one for anything, even the actor canonical_handle would then refuse. No host, no fetch. A link on one of
+    our own domains is never fetched (plan C4), whatever Accept the link's type would send."""
+    if is_hosted_uri(href):
+        current_app.logger.info(f'WebFinger self link {href!r} of {address}@{server} refused: hosted domain')
+        return False
     host = host_of(href) if isinstance(href, str) else ''
     if host and (host == host_of(f'//{server}') or _federates_with(host)):
         return True

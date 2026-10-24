@@ -17,7 +17,7 @@ import respx
 
 from app import cli, db
 from app.activitypub.signature import post_request, signed_get_capped, signed_get_request
-from app.activitypub.util import fetch_object_capped
+from app.activitypub.util import fetch_object_capped, webfinger_self_link_allowed
 from app.constants import AP_FETCH_ACCEPT
 from app.models import ActivityPubLog, SendQueue, SiteDomain, utcnow
 from app.storefront import clear_domain_cache, is_hosted_uri
@@ -180,3 +180,43 @@ def test_an_html_get_request_of_a_hosted_url_still_goes_out(env, wire):
 def test_an_activitypub_get_of_a_remote_url_still_goes_out(env, wire):
     assert get_request('https://peer.example/post/1', headers={'Accept': AP_FETCH_ACCEPT}).status_code == 202
     assert wire.calls.call_count == 1
+
+
+# -- discovery documents, whatever the Accept (review fix round 1, ruling 2) ------------------------------------------
+
+DISCOVERY_URLS = ['https://shop.example/.well-known/webfinger?resource=acct:alice@shop.example',
+                  'https://x@shop.example/.well-known/host-meta', f'https://{SERVER}/.well-known/nodeinfo',
+                  'https://shop.example/nodeinfo/2.1', 'https://Shop.Example/.WELL-KNOWN/WebFinger']
+
+
+@pytest.mark.parametrize('uri', DISCOVERY_URLS)
+@pytest.mark.parametrize('headers', [None, {'Accept': 'application/jrd+json'}, {'Accept': 'application/json'}])
+def test_a_discovery_document_on_a_hosted_host_is_never_fetched(env, wire, uri, headers):
+    assert get_request(uri, headers=dict(headers) if headers else None).status_code == HOSTED_FETCH_STATUS
+    assert get_request_capped(uri, 1000, headers=headers) == (HOSTED_FETCH_STATUS, None)
+    assert wire.calls.call_count == 0
+
+
+def test_other_paths_and_remote_discovery_still_go_out(env, wire):
+    assert get_request('https://shop.example/.well-known/security.txt').status_code == 202
+    assert get_request('https://shop.example/nodeinfox').status_code == 202
+    assert get_request_capped('https://peer.example/.well-known/webfinger?resource=acct:a@peer.example', 1000)[0] \
+        == 202
+    assert wire.calls.call_count == 3
+
+
+def test_a_webfinger_self_link_on_a_hosted_host_is_never_fetched(env, monkeypatch):
+    """A peer's WebFinger answer chooses the self link and its Accept: one on our host is refused whatever its type."""
+    monkeypatch.setattr('app.activitypub.util._federates_with', lambda host: True)
+    assert webfinger_self_link_allowed('https://peer.example/u/alice', 'alice', 'peer.example')
+    assert not webfinger_self_link_allowed('https://x@shop.example/u/alice', 'alice', 'peer.example')
+    assert not webfinger_self_link_allowed('https://shop.example/u/alice', 'alice', 'shop.example')
+
+
+def test_a_uri_urlsplit_refuses_is_still_an_httpx_error(env, wire, app, monkeypatch):
+    """The guard reads the path before get_request's own validation: a URI urlsplit cannot parse is left to it."""
+    monkeypatch.setitem(app.config, 'DEBUG', False)
+    for fetch in (lambda uri: get_request(uri), lambda uri: get_request_capped(uri, 1000)):
+        with pytest.raises(httpx.HTTPError):
+            fetch('https://[shop.example/.well-known/webfinger')
+    assert wire.calls.call_count == 0
