@@ -12,6 +12,7 @@ import re
 import unicodedata
 from contextlib import contextmanager
 from contextvars import ContextVar
+from functools import lru_cache
 from typing import NamedTuple
 from urllib.parse import unquote, unquote_to_bytes, urlsplit, urlunsplit
 
@@ -133,6 +134,7 @@ def domain_rows() -> tuple[DomainInfo, ...]:
 
 def clear_domain_cache() -> None:
     cache.delete_memoized(domain_rows)
+    _hosted_destinations.cache_clear()
 
 
 def domain_for_host(host: str) -> DomainInfo | None:
@@ -484,11 +486,21 @@ def is_hosted_uri(uri: str | None) -> bool:
     if destination is None:
         return False
     host, port = destination
-    for row in (*domain_rows(), _synthesised_default()):   # SERVER_NAME is always ours, as in domain_for_host
-        ours = _destination(f'{row.scheme}://{domain_authority(row)}')
-        if ours is not None and ours[0] == host and (port == ours[1] or (ours[1] is None and port in (80, 443))):
+    default = _synthesised_default()   # SERVER_NAME is always ours, as in domain_for_host
+    for ours_host, ours_port in _hosted_destinations((*domain_rows(), default), domain_authority(default)):
+        if ours_host == host and (port == ours_port or (ours_port is None and port in (80, 443))):
             return True
     return False
+
+
+@lru_cache(maxsize=8)
+def _hosted_destinations(rows: tuple[DomainInfo, ...], default_authority: str) -> tuple[tuple[str, int | None], ...]:
+    """`_destination` of each hosted domain in `rows`, SERVER_NAME's among them, parsed once per set of rows and
+    default authority (`domain_authority` gives SERVER_NAME for the default domain, so it is in the key): the key is
+    the rows themselves, so a changed row is a new entry, never a stale answer. clear_domain_cache clears it with
+    domain_rows."""
+    found = (_destination(f'{row.scheme}://{domain_authority(row)}') for row in rows)
+    return tuple(destination for destination in found if destination is not None)
 
 
 def federating_domain_of_url(url: str | None) -> DomainInfo | None:
