@@ -3165,7 +3165,6 @@ class Post(db.Model):
             if any(blocked_phrase in variant_text for blocked_phrase in blocked_phrases_list):
                 return None
 
-        file_path = None
         alt_text = None
         gallery_images = None  # set when the album is hashed below
         # D1397 on the last operand. The loop below already refuses an element
@@ -3223,7 +3222,7 @@ class Post(db.Model):
                     if attachment['type'] == 'Image' and 'url' in attachment:
                         post.url = attachment['url']  # PixelFed, PieFed, Lemmy >= 0.19.4
                         alt_text = attachment.get("name")
-                        file_path = attachment.get("file_path")
+                        # never its `file_path`: a peer naming a path on our disk had it unlinked with the File
                         break  # the first image is the post's own; set_post_gallery keeps the rest in order
             if len(attached_images) > 1:
                 post.url = None
@@ -3294,8 +3293,6 @@ class Post(db.Model):
 
                 image = File(source_url=post.url, hash=image_hash)
                 image.alt_text = storable_alt_text(alt_text)
-                if file_path:
-                    image.file_path = file_path
                 db.session.add(image)
                 post.image = image
             elif object_type in ('Audio', 'Document'):

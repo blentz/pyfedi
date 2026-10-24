@@ -238,16 +238,15 @@ class TestAnImageAttachment:
     def _image_attachment(self, **extra):
         return {'attachment': [{'type': 'Image', 'url': self.IMAGE_URL, **extra}]}
 
-    def test_a_file_path_on_the_attachment_is_stored(self, ingest):
-        """`if file_path: image.file_path = file_path`. PieFed sends `file_path` when the image
-        is already on the receiving side's own disk -- it is the local path the resize would
-        otherwise have to produce, so without this line the same bytes are fetched again."""
-        post = ingested(ingest, self._image_attachment(
-            file_path='app/static/media/posts/ab/cd/already-here.png'))
+    @pytest.mark.parametrize('file_path', ['app/static/media/users/xx/yy/victim.png', '/etc/passwd',
+                                           'app/static/media/../../app/models.py'])
+    def test_a_file_path_on_the_attachment_is_never_stored(self, ingest, file_path):
+        """A peer's attachment named a path on our disk, which `File.delete_from_disk` unlinked when the peer then
+        deleted its post: any file the application could write. No PieFed sends it; it is never read."""
+        post = ingested(ingest, self._image_attachment(file_path=file_path))
 
         assert post.type == POST_TYPE_IMAGE
-        stored = db.session.get(File, post.image_id)
-        assert stored.file_path == 'app/static/media/posts/ab/cd/already-here.png'
+        assert db.session.get(File, post.image_id).file_path is None
 
     def test_an_attachment_with_no_file_path_stores_none(self, ingest):
         """The False side. `''` would be a path, and `File.delete_from_disk` reads this column,
