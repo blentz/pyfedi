@@ -31,6 +31,11 @@ SHOP_INBOX = 'https://shop.example/inbox'
 ONION_INBOX = 'http://abc.onion/inbox'
 PEER_INBOX = 'https://peer.example/inbox'
 HOSTED_INBOXES = [SHOP_INBOX, f'https://{SERVER}/inbox', ONION_INBOX, 'HTTPS://Shop.Example:443/u/a/inbox']
+# The host httpx connects to is ours, however the URL spells it: userinfo, the Unicode or punycode spelling of an IDN
+# sister, upper case with a trailing dot and the default port (review I1, M1)
+EGRESS_SPELLINGS = ['https://x@shop.example/u/alice', f'https://x:y@{SERVER}/inbox', 'https://bücher.example/inbox',
+                    'https://xn--caf-dma.example/inbox', 'HTTPS://SHOP.EXAMPLE.:443/']
+HOSTED_INBOXES += EGRESS_SPELLINGS
 
 _REAL_GETADDRINFO = socket.getaddrinfo
 
@@ -57,6 +62,8 @@ def env(db_session):
         db.session.add(SiteDomain(domain=SERVER, is_default=True))
     db.session.add(SiteDomain(domain='shop.example'))
     db.session.add(SiteDomain(domain='abc.onion', scheme='http', federates=False))
+    db.session.add(SiteDomain(domain='xn--bcher-kva.example'))   # an IDN sister stored as punycode
+    db.session.add(SiteDomain(domain='café.example'))            # and one stored in Unicode
     db.session.commit()
     clear_domain_cache()
     make_instance('shop.example', software='piefed')
@@ -82,7 +89,9 @@ def test_is_hosted_uri_names_every_domain_we_host_in_any_spelling(env):
     for uri in HOSTED_INBOXES + ['https://shop.example./x', 'http://ABC.onion:80/c/oc']:
         assert is_hosted_uri(uri), uri
     for uri in (PEER_INBOX, 'https://shop.example.evil/inbox', 'https://evil.shop.example/inbox',
-                'https://shop.example:8443/inbox', '//shop.example/inbox', 'ftp://shop.example/x', '', None, 12345, ['https://shop.example/inbox']):
+                'https://shop.example:8443/inbox', '//shop.example/inbox', 'ftp://shop.example/x', '', None, 12345,
+                ['https://shop.example/inbox'], 'https://shop.example@peer.example/inbox', 'https:shop.example/x',
+                'https://[shop.example/x', 'https://shop.example:abc/'):
         assert not is_hosted_uri(uri), uri
 
 
@@ -140,6 +149,14 @@ def test_signed_get_request_of_a_hosted_object_is_a_miss_without_http(env, wire)
 
 def test_signed_get_capped_of_a_hosted_object_is_a_miss_without_http(env, wire):
     assert signed_get_capped(HOSTED_OBJECT, env.hal.private_key, env.key_id, 1000) == (HOSTED_FETCH_STATUS, None)
+    assert wire.calls.call_count == 0
+
+
+@pytest.mark.parametrize('uri', EGRESS_SPELLINGS)
+def test_an_activitypub_get_of_any_spelling_of_a_hosted_host_is_a_miss_without_http(env, wire, uri):
+    assert get_request(uri, headers={'Accept': AP_FETCH_ACCEPT}).status_code == HOSTED_FETCH_STATUS
+    assert fetch_object_capped(uri) == (None, 'hosted domain')
+    assert signed_get_request(uri, env.hal.private_key, env.key_id).status_code == HOSTED_FETCH_STATUS
     assert wire.calls.call_count == 0
 
 
