@@ -15,14 +15,16 @@ import pytest
 from PIL import Image
 from werkzeug.datastructures import FileStorage
 
+import app.api.alpha.utils.user as user_utils_module
 import app.shared.community as community_module
 import app.shared.tasks.pages as pages_module
 from app import db
 from app.activitypub.util import comment_model_to_json, post_to_page
 from app.api.alpha.utils.upload import post_upload_community_image
+from app.api.alpha.utils.user import put_user_save_user_settings
 from app.constants import COMMUNITY_KIND_VIDEO_CHANNEL, POST_STATUS_PUBLISHED, POST_TYPE_IMAGE, POST_TYPE_VIDEO, \
     SRC_API
-from app.models import Emoji, File, Post, media_local_path, user_file
+from app.models import Emoji, File, Post, Site, media_local_path, user_file
 from app.shared.community import edit_community
 from app.shared.media import media_of, store_uploaded_media
 from app.shared.post import edit_post
@@ -37,7 +39,7 @@ from tests.test_per_domain_actor_documents import site_named_hell  # noqa: F401 
 from tests.test_per_domain_object_ids import HELL_BASE, SHOP, SHOP_BASE, a_post, a_reply, captured, no_hell, \
     sites  # noqa: F401  (fixture)
 from tests.test_shared_post_edit import _api_input
-from tests.two_domains import HELL, request_on, two_domains  # noqa: F401  (fixture)
+from tests.two_domains import HELL, ONION, request_on, two_domains  # noqa: F401  (fixture)
 
 pytestmark = pytest.mark.usefixtures('site', 'private_static_tree', 'site_named_hell')
 
@@ -318,3 +320,134 @@ def test_the_media_route_serves_a_file_on_the_shop_host(app, sites):
         for empty in (directory, os.path.dirname(directory)):
             if not os.listdir(empty):
                 os.rmdir(empty)
+
+
+# --------------------------------------------------------------------------
+# a local-only owner (the onion): its host is never stored (C1 I4, C2)
+# --------------------------------------------------------------------------
+
+DEFAULT_BASE = 'https://test.piefed.local'   # SERVER_URL itself: what a local-only owner's URLs are stored on
+
+
+@pytest.fixture
+def onion_rows(sites, two_domains):
+    """ollie, an onion account, and den, an onion community, beside the shop's and hell's."""
+    ollie, den = two_domains.local_user('ollie', sites.onion), two_domains.local_community('den', sites.onion)
+    ollie.private_key, ollie.public_key = sites.sam.private_key, sites.sam.public_key
+    den.kind = COMMUNITY_KIND_VIDEO_CHANNEL
+    db.session.commit()
+    make_community_member(ollie, den, is_moderator=True)
+    sites.ollie, sites.den = ollie, den
+    return sites
+
+
+def no_onion(text) -> bool:
+    return ONION not in (text if isinstance(text, str) else json.dumps(text))
+
+
+def test_an_onion_users_upload_is_stored_on_the_default_domain(app, onion_rows):
+    url = process_upload(an_image(), user=onion_rows.ollie)
+    assert re.fullmatch(rf'{DEFAULT_BASE}/static/media/posts/{NAME}\.\w+', url), url
+
+
+@pytest.mark.parametrize('where', ['hell', 'onion'])
+def test_an_onion_users_post_and_its_image_name_no_onion_host(app, onion_rows, http_mock, where):
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    post = a_post(onion_rows.pit if where == 'hell' else onion_rows.den, onion_rows.ollie)
+    assert post.ap_id.startswith(f'{DEFAULT_BASE}/'), post.ap_id
+    edit_post(_api_input(), post, POST_TYPE_IMAGE, SRC_API, user=onion_rows.ollie, uploaded_file=an_image())
+    db.session.refresh(post)
+    assert re.fullmatch(rf'{DEFAULT_BASE}/static/media/posts/{NAME}\.\w+', post.image.source_url)
+    reply = a_reply(post, onion_rows.ollie)
+    assert reply.ap_id == f'{DEFAULT_BASE}/comment/{reply.id}'
+    if where == 'hell':   # the author's own actor URL stays what C1 made it: an identity, not one of these
+        assert no_onion(post.ap_id) and no_onion({key: value for key, value in post_to_page(post).items()
+                                                   if key not in ('attributedTo', 'cc', 'to')})
+
+
+def test_an_onion_users_pasted_upload_link_is_stored_on_the_default_domain(app, onion_rows, http_mock):
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    post = a_post(onion_rows.pit, onion_rows.ollie)
+    edit_post(_api_input(url=f'http://{ONION}/static/media/posts/ab/cd/abcdefghijklmno.png'), post, POST_TYPE_IMAGE,
+              SRC_API, user=onion_rows.ollie)
+    db.session.refresh(post)
+    assert post.url == post.image.source_url == f'{DEFAULT_BASE}/static/media/posts/ab/cd/abcdefghijklmno.png'
+
+
+def test_an_onion_communitys_icon_from_the_api_is_stored_on_the_default_domain(app, onion_rows, monkeypatch):
+    monkeypatch.setattr(community_module, 'authorise_api_user', lambda auth, return_type=None: onion_rows.ollie)
+    monkeypatch.setattr(community_module, 'is_image_url', lambda url: True)
+    monkeypatch.setattr(community_module, 'make_image_sizes', lambda *args: None)
+    data = {'title': 'Den', 'description': '', 'rules': '', 'nsfw': False, 'restricted_to_mods': False,
+            'local_only': True, 'discussion_languages': [], 'question_answer': False,
+            'icon_url': f'http://{ONION}/static/media/communities/ab/cd/icon.png', 'banner_url': None}
+    edit_community(data, onion_rows.den, SRC_API, auth='token')
+    assert onion_rows.den.icon.source_url == f'{DEFAULT_BASE}/static/media/communities/ab/cd/icon.png'
+
+
+@pytest.mark.parametrize('who, base', [('ollie', DEFAULT_BASE), ('sam', SHOP_BASE), ('hal', HELL_BASE)])
+def test_an_api_avatar_and_cover_are_stored_on_the_accounts_federating_domain(app, onion_rows, monkeypatch, who, base):
+    user = getattr(onion_rows, who)
+    monkeypatch.setattr(user_utils_module, 'authorise_api_user', lambda auth, return_type=None: user)
+    monkeypatch.setattr(user_utils_module, 'make_image_sizes', lambda *args: None)
+    read_on = f'http://{ONION}'   # the client was shown them on the onion
+    put_user_save_user_settings('token', {'avatar': f'{read_on}/static/media/users/ab/cd/avatar.png',
+                                          'cover': f'{read_on}/static/media/users/ab/cd/cover.png'})
+    db.session.refresh(user)
+    assert (user.avatar.source_url, user.cover.source_url) == \
+        (f'{base}/static/media/users/ab/cd/avatar.png', f'{base}/static/media/users/ab/cd/cover.png')
+
+
+def test_an_onion_media_upload_and_its_thumbnail_are_on_the_default_domain(app, onion_rows, monkeypatch):
+    set_setting('allow_video_file_uploads', 'users')
+    for name in ('task_selector', 'notify_about_post', 'make_image_sizes'):
+        monkeypatch.setattr(media_tasks, name, lambda *args, **kwargs: None)
+    post = a_post(onion_rows.den, onion_rows.ollie)
+    post.type = POST_TYPE_VIDEO
+    assert store_uploaded_media(post, a_video(), 'video') is None
+    db.session.commit()
+    assert re.fullmatch(rf'{DEFAULT_BASE}/static/media/posts/{NAME}\.mp4', post.url), post.url
+    post_id = post.id
+    probe_media(False, post_id)
+    db.session.expire_all()
+    post = db.session.get(Post, post_id)
+    assert media_of(post)['status'] == 'ready'
+    assert re.fullmatch(rf'{DEFAULT_BASE}/static/media/posts/{NAME}\.jpg', post.image.source_url)
+
+
+@pytest.mark.parametrize('signed_in', [False, True])
+def test_hells_api_and_rss_name_no_onion_host_for_an_onion_users_content(app, onion_rows, http_mock, monkeypatch,
+                                                                         signed_in):
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    post = a_post(onion_rows.pit, onion_rows.ollie)
+    edit_post(_api_input(), post, POST_TYPE_IMAGE, SRC_API, user=onion_rows.ollie, uploaded_file=an_image())
+    ollie = onion_rows.ollie
+    ollie.avatar = File(source_url=process_upload(an_image(), destination='users', user=ollie))
+    db.session.commit()
+    client = app.test_client()
+    headers = {'Authorization': f'Bearer {onion_rows.hal.encode_jwt_token()}'} if signed_in else {}
+    if signed_in:
+        with client.session_transaction() as session:
+            session['_user_id'], session['_fresh'] = str(onion_rows.hal.id), True
+
+    def served(path):
+        response = client.get(path, headers=headers, base_url=f'https://{HELL}')
+        assert response.status_code == 200, path
+        return response
+
+    view = served(f'/api/alpha/post?id={post.id}').get_json()['post_view']
+    media = [view['post'].get(field) for field in ('url', 'thumbnail_url', 'small_thumbnail_url')] + \
+        [view['creator'].get('avatar')]
+    assert all(url and no_onion(url) for url in media), media
+    profile = client.get(f'/api/alpha/user?person_id={ollie.id}', headers=headers, base_url=f'https://{HELL}')
+    if profile.status_code == 200:   # signed in: shown; out: the onion's account is not hell's to show (400)
+        person = profile.get_json()['person_view']['person']
+        assert person['avatar'] and no_onion(person['avatar']), person
+    else:
+        assert profile.status_code == 400
+    db.session.get(Site, 1).private_instance = False   # an RSS reader reads a public instance's feeds
+    db.session.commit()
+    rss = served('/community/pit/feed').get_data(as_text=True)
+    # no URL in it names the onion (the author's handle, `ollie@<onion>`, is C1's identity, not a URL of ours)
+    assert '/static/media/posts/' in rss and f'//{ONION}' not in rss

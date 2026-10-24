@@ -406,6 +406,13 @@ def domain_base_url(info: DomainInfo) -> str:
     return f'{info.scheme}://{_authority(info)}'
 
 
+def federating_base(info: DomainInfo) -> str:
+    """The origin anything of `info`'s is named on where it is stored or federated: `domain_base_url(info)` for a
+    domain that federates, the default domain's (SERVER_URL) for a local-only one. The onion's host is never stored:
+    a page shows the stored URL on whichever host serves it (C1 I4, C2), as it did before plan C3."""
+    return domain_base_url(info if info.federates or info.is_default else default_domain())
+
+
 def domain_authority(info: DomainInfo) -> str:
     """`host[:port]` that names `info`'s owned rows as `ap_domain`; SERVER_NAME verbatim for the default domain."""
     return current_app.config['SERVER_NAME'] if info.is_default else _authority(info)

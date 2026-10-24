@@ -29,7 +29,7 @@ from app.shared.tasks import task_selector
 from app.shared.upload import process_upload
 from app.user.utils import search_for_user
 from app.storefront import canonicalise_text, default_storefront, delete_memoized_everywhere, domain_authority, \
-    domain_base_url, instance_id_of, link_on, storefront_url
+    domain_base_url, federating_base, instance_id_of, link_on, storefront_url
 from app.utils import authorise_api_user, blocked_communities, shorten_string, markdown_to_html, \
     instance_banned, community_membership, joined_communities, moderating_communities, is_image_url, \
     communities_banned_from, piefed_markdown_to_lemmy_markdown, community_moderators, add_to_modlog, \
@@ -388,7 +388,7 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
         rules = input['rules']
         # the client may have read them on any storefront; stored and federated, they are on the community's domain
         # (canonical for the default domain's, plan C3)
-        home_base = domain_base_url(community.home_domain())
+        home_base = federating_base(community.home_domain())
         icon_url = link_on(input['icon_url'], home_base)
         banner_url = link_on(input['banner_url'], home_base)
         nsfw = input['nsfw']
