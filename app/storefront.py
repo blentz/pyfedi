@@ -15,6 +15,7 @@ from contextvars import ContextVar
 from typing import NamedTuple
 from urllib.parse import unquote, unquote_to_bytes, urlsplit, urlunsplit
 
+import httpx
 import idna
 from bs4 import BeautifulSoup
 from bs4.dammit import EntitySubstitution
@@ -456,12 +457,38 @@ def domain_of_url(url: str | None) -> DomainInfo | None:
     return next((row for row in domain_rows() if _comparable(scheme, domain_authority(row)) == authority), None)
 
 
+def _destination(url: str) -> tuple[str, int | None] | None:
+    """The (host, port) httpx connects to for an http(s) `url`, as httpx itself parses it: userinfo dropped, an IDN
+    host in punycode, lower case, no trailing dot, and None for the scheme's default port. None when httpx would send
+    nothing (another scheme, no host, a URL it refuses)."""
+    try:
+        target = httpx.URL(url)
+    except (httpx.InvalidURL, ValueError):   # a bad IDN label, an unbalanced bracket
+        return None
+    host = target.raw_host.decode('ascii', 'replace').rstrip('.').lower()
+    if target.scheme not in _DEFAULT_PORTS or not host:
+        return None
+    return host, target.port
+
+
 def is_hosted_uri(uri: str | None) -> bool:
-    """Whether `uri` is on a domain this server hosts, any SiteDomain row (local-only too) or SERVER_NAME: the
-    `domain_of_url` test, its normalising included. Nothing is posted to, or fetched over ActivityPub from, such a
-    URI (plan C4): the activity or object is ours already. A value that is not a string (a peer's malformed field)
-    names nothing of ours: the caller's own validation refuses it, as before."""
-    return isinstance(uri, str) and domain_of_url(uri) is not None
+    """Whether a request to `uri` would reach this server: the host httpx connects to is one we host, any SiteDomain
+    row (local-only too) or SERVER_NAME. Nothing is posted to, or fetched over ActivityPub from, such a URI (plan C4):
+    the activity or object is ours already.
+
+    The egress test, so it asks where the request goes, not what the URL names: unlike `domain_of_url`, userinfo
+    (`https://x@shop.example/`) does not hide our host, and an IDN domain matches in either spelling. A port matches a
+    domain whose authority names that port; a domain naming none is every default port (80 or 443). A value that is
+    not a string (a peer's malformed field) names nothing of ours: the caller's own validation refuses it."""
+    destination = _destination(uri) if isinstance(uri, str) else None
+    if destination is None:
+        return False
+    host, port = destination
+    for row in domain_rows():
+        ours = _destination(f'{row.scheme}://{domain_authority(row)}')
+        if ours is not None and ours[0] == host and (port == ours[1] or (ours[1] is None and port in (80, 443))):
+            return True
+    return False
 
 
 def federating_domain_of_url(url: str | None) -> DomainInfo | None:
