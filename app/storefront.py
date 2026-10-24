@@ -456,6 +456,14 @@ def domain_of_url(url: str | None) -> DomainInfo | None:
     return next((row for row in domain_rows() if _comparable(scheme, domain_authority(row)) == authority), None)
 
 
+def is_hosted_uri(uri: str | None) -> bool:
+    """Whether `uri` is on a domain this server hosts, any SiteDomain row (local-only too) or SERVER_NAME: the
+    `domain_of_url` test, its normalising included. Nothing is posted to, or fetched over ActivityPub from, such a
+    URI (plan C4): the activity or object is ours already. A value that is not a string (a peer's malformed field)
+    names nothing of ours: the caller's own validation refuses it, as before."""
+    return isinstance(uri, str) and domain_of_url(uri) is not None
+
+
 def federating_domain_of_url(url: str | None) -> DomainInfo | None:
     """`domain_of_url`'s domain when it federates, else None. What federation code asks: a local-only domain's URL is
     never an object a peer may name, nor one we send."""

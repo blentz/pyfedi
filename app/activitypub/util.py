@@ -38,7 +38,7 @@ from app.local_names import local_named
 from app.federation_urls import MissingInstanceKey, activity_id, domain_site_name, instance_actor_public_key, \
     instance_actor_signing, is_federating_url, object_base, owner_base, owner_domain
 from app.storefront import DomainInfo, acting_domain, default_domain, domain_authority, domain_base_url, \
-    hosted_instance_ids, instance_id_of, link_on, registration_mode_on
+    hosted_instance_ids, instance_id_of, is_hosted_uri, link_on, registration_mode_on
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
@@ -6384,7 +6384,12 @@ def fetch_object_capped(uri: str, retry_delay: float = 0) -> Tuple[Union[dict, N
     Returns `(object, None)` when the answering fetch was a 200 whose body is a JSON object, and `(None, reason)`
     otherwise; a signed non-200 is refused, its body never parsed. With retry_delay, a transport error on either
     fetch sleeps that long and tries that fetch once more (remote_object_to_json's long-standing retry); without it,
-    no fetch is retried and nothing sleeps (verify_object_from_source, R-NORETRY)."""
+    no fetch is retried and nothing sleeps (verify_object_from_source, R-NORETRY). An object on one of our own
+    domains is never fetched over HTTP (plan C4): `(None, 'hosted domain')`."""
+    if is_hosted_uri(uri):
+        current_app.logger.info(f'hosted domain, not fetched: {uri}')
+        return None, 'hosted domain'
+
     def attempt(fetch):
         try:
             return fetch()

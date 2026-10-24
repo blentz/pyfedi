@@ -63,10 +63,10 @@ from app.federation_urls import MissingInstanceKey, federating_domain_of_url, in
 from app.local_only import refused_outbound
 from app.relays.refusals import record_relay_refusal
 from app.rsa_keys import RsaKeys  # noqa: F401  (re-exported: RsaKeys has always been imported from here)
-from app.storefront import acting_domain, default_domain, domain_base_url, domain_for_host, domain_rows
+from app.storefront import acting_domain, default_domain, domain_base_url, domain_for_host, domain_rows, is_hosted_uri
 from app.models import utcnow, ActivityPubLog, Community, Instance, CommunityMember, User, SendQueue, public_key_pem
-from app.utils import RequestNotSendable, ResponseTooLarge, _capped_get, _capped_request, get_request_capped, \
-    get_task_session, is_invalid_get_request_uri, user_agent
+from app.utils import HOSTED_FETCH_STATUS, RequestNotSendable, ResponseTooLarge, _capped_get, _capped_request, \
+    get_request_capped, get_task_session, is_invalid_get_request_uri, user_agent
 import app.activitypub.util as activitypub_util
 
 
@@ -118,6 +118,16 @@ def post_request(uri: str, body: dict | None, private_key: str, key_id: str,
     session = get_task_session()
     try:
         if refused_outbound(body, uri, session):   # nothing local-only leaves, nor a queued retry of it
+            return
+        if is_hosted_uri(uri):
+            # One of our own domains (plan C4): its activity was stored directly, so it is never posted to ourselves
+            # over the network, nor is a queued retry of it
+            session.add(ActivityPubLog(direction='out', result='failure',
+                                       activity_type=body.get('type', '') if isinstance(body, dict) else '',
+                                       activity_id=body.get('id') if isinstance(body, dict) else None,
+                                       activity_json=json.dumps(body),
+                                       exception_message=f'hosted domain, not sent: {uri}'))
+            session.commit()
             return
         if not isinstance(body, dict) or not body.get('id'):
             # Nothing a peer could accept: log it as a failure rather than raise with no log row (D768)
@@ -229,6 +239,10 @@ def signed_get_request(uri: str, private_key: str, key_id: str, content_type: st
     a GET has no body for content_type to describe, and the request is always signed and sent as a GET, since every
     caller asks for one and _capped_get only GETs. Raises ValueError for a URI the signer refuses, httpx.HTTPError
     on transport failure."""
+    if is_hosted_uri(uri):   # one of our own domains (plan C4): never fetched over HTTP; a non-200 like any miss
+        current_app.logger.info(f'hosted domain, not fetched: {uri}')
+        return httpx.Response(HOSTED_FETCH_STATUS)
+
     def send(signature_format: str) -> httpx.Response:
         # send_via_async: sign only; the GET itself goes through _capped_get's cap and deadline
         _uri, headers, _body = HttpSignature.signed_request(uri, None, private_key, key_id, content_type, method='get',
@@ -250,6 +264,9 @@ def signed_get_capped(uri: str, private_key: str, key_id: str, max_bytes: int,
     exception. The signature format alternates as in double_knock: the format the instance is known to accept first,
     the other exactly once on a 401 (remembered on a 2xx) -- at most two signed requests, so at most
     2 * max_seconds. Raises httpx.HTTPError on transport failure."""
+    if is_hosted_uri(uri):   # one of our own domains (plan C4): never fetched over HTTP
+        current_app.logger.info(f'hosted domain, not fetched: {uri}')
+        return HOSTED_FETCH_STATUS, None
     domain = activitypub_util.host_of(uri)
 
     def send(signature_format: str) -> tuple[int, bytes | None]:
