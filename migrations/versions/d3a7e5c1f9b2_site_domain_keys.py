@@ -21,6 +21,10 @@ depends_on = None
 # pair, as SiteDomain's before_insert hook gives a new one. A row that has a key keeps it, so running this again
 # changes nothing. The keys are made here, not by app.rsa_keys: a migration does not import the app, whose code may
 # have changed by the time it runs.
+#
+# A downgrade drops the key columns, and with them every sister domain's instance actor key. Upgrading again makes
+# each sister a NEW pair: its instance actor's key changes, and peers that cached the old public key must refetch it.
+# The default domain is untouched (Site row 1's key).
 NEEDS_KEYS = 'SELECT id FROM site_domain WHERE NOT is_default AND private_key IS NULL ORDER BY id'
 SET_KEYS = 'UPDATE site_domain SET private_key = :private_key, public_key = :public_key WHERE id = :id'
 
