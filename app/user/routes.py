@@ -19,7 +19,7 @@ import app.auth.util as auth_util
 from app.community.util import save_icon_file, save_banner_file, retrieve_mods_and_backfill, search_for_community
 from app.constants import *
 from app.email import send_verification_email
-from app.federation_urls import activity_id
+from app.federation_urls import activity_id, owner_base
 from app.ldap_utils import sync_user_to_ldap
 from app.local_only import local_only_visible, local_only_visible_rss, refuses_remote_contact, \
     remote_contact_refusal_message, user_local_only, without_local_only
@@ -324,8 +324,8 @@ def edit_profile(actor):
             # password change revokes API tokens and not just this one.
             current_user.set_password(form.password.data)
             password_updated = True
-        current_user.about = piefed_markdown_to_lemmy_markdown(form.about.data)
-        current_user.about_html = markdown_to_html(form.about.data)
+        current_user.about = piefed_markdown_to_lemmy_markdown(form.about.data, owner_base(current_user))   # C3
+        current_user.about_html = markdown_to_html(form.about.data, link_base=owner_base(current_user))
         current_user.matrix_user_id = form.matrixuserid.data
         current_user.extra_fields = []
         current_user.timezone = form.timezone.data

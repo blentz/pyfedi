@@ -559,8 +559,8 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
     post.language_id = language_id
     user.language_id = language_id
     post.title = title
-    post.body = piefed_markdown_to_lemmy_markdown(body)
-    post.body_html = markdown_to_html(post.body)
+    post.body = piefed_markdown_to_lemmy_markdown(body, object_base(post))   # the post's domain names it (C3)
+    post.body_html = markdown_to_html(post.body, link_base=object_base(post))
     post.type = type
     post.scheduled_for = scheduled_for
     post.repeat = repeat

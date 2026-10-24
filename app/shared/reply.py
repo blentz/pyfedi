@@ -8,6 +8,7 @@ from sqlalchemy.orm.exc import NoResultFound
 
 from app import db, limiter
 from app.constants import *
+from app.federation_urls import object_base, owner_base
 from app.models import Notification, NotificationSubscription, Post, PostReply, PostReplyBookmark, PostReplyVote, \
     Report, Site, User, utcnow, Instance, votes_cast_today
 from app.onion import audit_field
@@ -233,8 +234,9 @@ def make_reply(input, post, parent_id, src, auth=None):
         raise Exception('You are not permitted to comment in this community')
 
     # WEBFORM would call 'make_reply' in a try block, so any exception from 'new' would bubble-up for it to handle
-    reply = PostReply.new(user, post, in_reply_to=parent_reply, body=piefed_markdown_to_lemmy_markdown(content),
-                          body_html=markdown_to_html(content), notify_author=notify_author,
+    base = owner_base(user)   # the author's domain names the comment (plan C3)
+    reply = PostReply.new(user, post, in_reply_to=parent_reply, body=piefed_markdown_to_lemmy_markdown(content, base),
+                          body_html=markdown_to_html(content, link_base=base), notify_author=notify_author,
                           language_id=language_id, distinguished=distinguished, answer=answer)
 
     user.language_id = language_id
@@ -274,8 +276,8 @@ def edit_reply(input, reply, post, src, auth=None):
         flash(_(msg), 'error')
         return
 
-    reply.body = piefed_markdown_to_lemmy_markdown(content)
-    reply.body_html = markdown_to_html(content)
+    reply.body = piefed_markdown_to_lemmy_markdown(content, object_base(reply))
+    reply.body_html = markdown_to_html(content, link_base=object_base(reply))
     reply.notify_author = notify_author
     reply.community.last_active = utcnow()
     reply.edited_at = utcnow()

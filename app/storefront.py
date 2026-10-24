@@ -869,9 +869,19 @@ def _rebase_links(html: str, base: str, hosts: frozenset[str], render: bool, emb
     return soup.decode(formatter=_FORMATTER) if changed else html
 
 
-def canonicalise_links(html: str) -> str:
-    """`html` with every `href`/`src`/`srcset` naming any host of this site moved onto the canonical origin, for
-    content about to be stored or federated. The end of `allowlist_html`. A link of ours is also moved where it sits
+def _local_only_hosts() -> frozenset[str]:
+    """The bare hosts of ours that do not federate (the onion): the only ones stored text is rewritten from. A
+    federating domain's host (SERVER_NAME's included) names that domain's object and stays as typed (plan C3)."""
+    federating = {_bare_host(current_app.config.get('SERVER_NAME') or '')} | \
+        {normalise_host(r.domain) for r in domain_rows() if r.federates or r.is_default}
+    return _local_hosts() - federating
+
+
+def canonicalise_links(html: str, base: str | None = None) -> str:
+    """`html` with every `href`/`src`/`srcset` naming a local-only host of this site (`_local_only_hosts`) moved onto
+    `base`, the federating owner's base (the canonical origin when no owner is known), for content about to be stored
+    or federated. A sister federating domain's link keeps its host (plan C3); one on the canonical host is spelt on the
+    canonical origin. The end of `allowlist_html`. A link of ours is also moved where it sits
     inside another URL (`https://ex.com/?u=http://abc.onion/x`, `https://web.archive.org/web/1/http://abc.onion/p`)
     when it appears literally, as `canonicalise_text` moves it in text: leaving it would store the onion host, and
     the privacy invariant outranks fidelity to what the author typed. Only the host moves, never the path: an
@@ -880,9 +890,11 @@ def canonicalise_links(html: str) -> str:
     no app context (a fuzz campaign) there is no registry of hosts, so `html` comes back as it is."""
     if not has_app_context():
         return html
-    hosts = _local_hosts()
-    return _rebase_links(html, canonical_url(), hosts, render=False,
-                         embedded=hosts - {_bare_host(current_app.config.get('SERVER_NAME') or '')})
+    hosts = _local_only_hosts()
+    html = _rebase_links(html, base or canonical_url(), hosts, render=False, embedded=hosts)
+    # the canonical host's own links on the canonical origin, as before: `http://` and port spellings made SERVER_URL
+    return _rebase_links(html, canonical_url(), frozenset({_bare_host(current_app.config.get('SERVER_NAME') or '')}),
+                         render=False)
 
 
 # An http(s) or scheme-relative URL's start and authority in plain text (Markdown): not inside a word, another
@@ -909,11 +921,12 @@ def _rebase_text(text: str, base: str, hosts: frozenset[str]) -> str:
     return text if moved == text else moved
 
 
-def canonicalise_text(text: str | None) -> str | None:
-    """`text` (Markdown, a plain-text body) with every absolute http(s) or scheme-relative URL on a non-canonical host
-    of this site moved onto the canonical origin, for text about to be stored or federated: `source.content` is
-    rendered in preference to the HTML. Hosts match as `is_local_link` matches them (case, a port, a trailing dot
-    ignored); everything after the authority is kept byte for byte. Foreign hosts, the canonical host as written and
+def canonicalise_text(text: str | None, base: str | None = None) -> str | None:
+    """`text` (Markdown, a plain-text body) with every absolute http(s) or scheme-relative URL on a local-only host of
+    this site (`_local_only_hosts`) moved onto `base`, the federating owner's base (the canonical origin when no owner
+    is known), for text about to be stored or federated (a federating domain's URL keeps its host, plan C3):
+    `source.content` is rendered in preference to the HTML. Hosts match as `is_local_link` matches them (case, a port, a trailing dot
+    ignored); everything after the authority is kept byte for byte. Foreign hosts, a federating host of ours and
     text that is not a URL are left alone, and `text` itself comes back when nothing moved. Sentence punctuation
     straight after a bare host stays in the text. A URL of ours is moved wherever it appears literally in the text, inside
     inline code, a fenced block or a foreign URL (`https://ex.com/?u=http://abc.onion/x`): leaving it would store the
@@ -922,7 +935,7 @@ def canonicalise_text(text: str | None) -> str | None:
     campaign) there is no registry of hosts, so nothing moves."""
     if not text or not has_app_context():
         return text
-    return _rebase_text(text, canonical_url(), _local_hosts() - {_bare_host(current_app.config.get('SERVER_NAME') or '')})
+    return _rebase_text(text, base or canonical_url(), _local_only_hosts())
 
 
 def _on_default_storefront(storefront) -> bool:

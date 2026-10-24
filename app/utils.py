@@ -1079,7 +1079,7 @@ _SPOILER_RE = re.compile(r':{3}\s*?spoiler\s+?(?>(\S.+?)(?:\n|</p>))(.+?)(?:\n|<
                          r'|:{3}\s*?spoiler\s+?\S[\s\S]*', re.S)
 
 # sanitise HTML using an allow list
-def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
+def allowlist_html(html: str, a_target='_blank', test_env=False, link_base=None) -> str:
     # RUN THE TESTS in tests/test_allowlist_html.py whenever you alter this function, it's fragile and bugs are hard to spot.
     if html is None or html == '':
         return ''
@@ -1305,9 +1305,9 @@ def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
             if tag.name == 'table':
                 tag.attrs['class'] = 'table'
 
-    # Links to any host of this site are stored on the canonical one (spec §3.5); test_env reads no domains, like
-    # fediverse_domains above
-    return str(soup) if test_env else canonicalise_links(str(soup))
+    # Links to a local-only host of this site are stored on `link_base`, the federating owner's (the canonical one when
+    # none is given; spec §3.5, plan C3); test_env reads no domains, like fediverse_domains above
+    return str(soup) if test_env else canonicalise_links(str(soup), link_base)
 
 
 def escape_non_html_angle_brackets(text: str) -> str:
@@ -2045,13 +2045,14 @@ class _MarkdownAutolinks:
 
 # use this for Markdown irrespective of origin, as it can deal with both soft break newlines ('\n' used by PieFed) and hard break newlines ('  \n' or ' \\n')
 # ' \\n' will create <br /><br /> instead of just <br />, but hopefully that's acceptable.
-def markdown_to_html(markdown_text, anchors_new_tab=True, allow_img=True, a_target="_blank", test_env=False) -> str:
+def markdown_to_html(markdown_text, anchors_new_tab=True, allow_img=True, a_target="_blank", test_env=False,
+                     link_base=None) -> str:
     if markdown_text:
         # Cut before anything else, so no stash placeholder exists yet for the cut to split.
         if len(markdown_text) > MARKDOWN_RENDER_CAP:
             markdown_text = markdown_text[:MARKDOWN_RENDER_CAP] + '…'
         if not test_env:   # the HTML is stored and federated: its text names no other host of ours either
-            markdown_text = canonicalise_text(markdown_text)
+            markdown_text = canonicalise_text(markdown_text, link_base)
         markdown_text = limit_quote_depth(markdown_text)
 
         markdown_text = handle_reddit_spoilers(markdown_text)
@@ -2117,7 +2118,7 @@ def markdown_to_html(markdown_text, anchors_new_tab=True, allow_img=True, a_targ
         raw_html = links_with_parens(raw_html)
         raw_html = fix_www_links(raw_html)
 
-        return allowlist_html(raw_html, a_target=a_target if anchors_new_tab else '', test_env=test_env)
+        return allowlist_html(raw_html, a_target=a_target if anchors_new_tab else '', test_env=test_env, link_base=link_base)
     else:
         return ''
 
@@ -2129,12 +2130,13 @@ def markdown_to_html(markdown_text, anchors_new_tab=True, allow_img=True, a_targ
 #    a. Lemmy doesn't convert '<details><summary>' back into its '::: spoiler' format
 #    b. anything coming from another PieFed instance would get reduced with html_to_text()
 #    c. raw 'https' strings in code blocks are being converted into <a> links for HTML that Lemmy then converts back into []()
-def piefed_markdown_to_lemmy_markdown(piefed_markdown: str):
+def piefed_markdown_to_lemmy_markdown(piefed_markdown: str, link_base=None):
     """Markdown a person wrote, as it is stored and federated: soft breaks made hard (the only difference from
-    Lemmy's Markdown), and links to another host of this site moved onto the canonical origin (`canonicalise_text`)."""
+    Lemmy's Markdown), and links to a local-only host of this site moved onto `link_base`, its federating owner's
+    base, or the canonical origin when none is given (`canonicalise_text`)."""
     re_breaks = re.compile(r'(\S)(\r\n)')
     lemmy_markdown = re_breaks.sub(r'\1  \2', piefed_markdown)
-    return canonicalise_text(lemmy_markdown)
+    return canonicalise_text(lemmy_markdown, link_base)
 
 
 def markdown_to_text(markdown_text) -> str:

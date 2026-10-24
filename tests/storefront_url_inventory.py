@@ -160,10 +160,10 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/storefront.py': {
         '_authority': 1,   # SERVER_NAME verbatim is the canonical host's authority; no other host may borrow its port
         '_local_hosts': 1,   # SERVER_NAME's host is one of ours, as in is_local_host: it names no URL
+        '_local_only_hosts': 1,   # SERVER_NAME's host federates: it is never one a stored link is moved from
         '_synthesised_default': 1,
         'canonical_url': 1,
-        'canonicalise_links': 1,   # as canonicalise_text: the embedded URLs of SERVER_NAME's host stay as written
-        'canonicalise_text': 1,   # SERVER_NAME's host is left as written in text: only the other hosts move
+        'canonicalise_links': 1,   # the canonical host's own links on the canonical origin; embedded ones stay as written
         'check_default_domain': 2,
         'domain_authority': 1,   # an owned row's ap_domain on the default domain is SERVER_NAME verbatim
         'domain_base_url': 1,   # the default domain's identity origin is SERVER_URL itself

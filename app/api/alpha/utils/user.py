@@ -480,8 +480,8 @@ def put_user_save_user_settings(auth, data):
         user.hide_read_posts = True
 
     if isinstance(about, str):
-        user.about = about = canonicalise_text(about)
-        user.about_html = markdown_to_html(about)
+        user.about = about = canonicalise_text(about, owner_base(user))   # the account's federating base (C3)
+        user.about_html = markdown_to_html(about, link_base=owner_base(user))
 
     if avatar:
         if user.avatar_id:

@@ -17,22 +17,24 @@ from werkzeug.datastructures import FileStorage
 
 import app.api.alpha.utils.user as user_utils_module
 import app.shared.community as community_module
+import app.shared.reply as reply_module
 import app.shared.tasks.pages as pages_module
 from app import db
 from app.activitypub.util import comment_model_to_json, post_to_page
 from app.api.alpha.utils.upload import post_upload_community_image
 from app.api.alpha.utils.user import put_user_save_user_settings
-from app.constants import COMMUNITY_KIND_VIDEO_CHANNEL, POST_STATUS_PUBLISHED, POST_TYPE_IMAGE, POST_TYPE_LINK, \
-    POST_TYPE_VIDEO, SRC_API
+from app.constants import COMMUNITY_KIND_VIDEO_CHANNEL, POST_STATUS_PUBLISHED, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, \
+    POST_TYPE_LINK, POST_TYPE_VIDEO, SRC_API
 from app.models import Emoji, File, Post, Site, media_local_path, user_file
 from app.shared.community import edit_community
 from app.shared.media import media_of, store_uploaded_media
 from app.shared.post import edit_post
+from app.shared.reply import edit_reply, make_reply
 from app.shared.tasks import media as media_tasks
 from app.shared.tasks.media import probe_media
 from app.shared.tasks.pages import send_post
 from app.shared.upload import process_file_delete, process_upload
-from app.storefront import default_domain
+from app.storefront import canonicalise_links, canonicalise_text, default_domain
 from app.utils import set_setting
 from tests.factories import make_community_member
 from tests.test_per_domain_actor_documents import site_named_hell  # noqa: F401  (fixture)
@@ -484,3 +486,57 @@ def test_hells_api_and_rss_name_no_onion_host_for_an_onion_users_content(app, on
     rss = served('/community/pit/feed').get_data(as_text=True)
     # no URL in it names the onion (the author's handle, `ollie@<onion>`, is C1's identity, not a URL of ours)
     assert '/static/media/posts/' in rss and f'//{ONION}' not in rss
+
+
+# --------------------------------------------------------------------------
+# links in text: only a local-only host is rewritten, onto the author's federating base (ruling 3)
+# --------------------------------------------------------------------------
+
+def test_canonicalisation_rewrites_only_a_local_only_host(app, onion_rows):
+    text = f'see {SHOP_BASE}/post/5, {HELL_BASE}/post/6 and http://{ONION}/post/7'
+    html = f'<p><a href="{SHOP_BASE}/post/5">a</a><a href="{HELL_BASE}/post/6">b</a><a href="http://{ONION}/post/7">c</a></p>'
+    for base in (SHOP_BASE, DEFAULT_BASE):
+        assert canonicalise_text(text, base) == f'see {SHOP_BASE}/post/5, {HELL_BASE}/post/6 and {base}/post/7'
+        assert canonicalise_links(html, base) == html.replace(f'http://{ONION}', base)
+    assert canonicalise_text(text) == canonicalise_text(text, DEFAULT_BASE)   # no owner known: the default's
+
+
+@pytest.mark.parametrize('author, base', [('sam', SHOP_BASE), ('hal', HELL_BASE), ('ollie', DEFAULT_BASE)])
+def test_a_body_is_stored_with_its_onion_links_on_the_authors_federating_base(app, onion_rows, author, base):
+    user = getattr(onion_rows, author)
+    post = a_post(onion_rows.wares if author == 'sam' else onion_rows.pit, user)
+    body = f'mine {SHOP_BASE}/post/5 theirs {HELL_BASE}/post/6 hidden http://{ONION}/post/7'
+    edit_post(_api_input(body=body), post, POST_TYPE_ARTICLE, SRC_API, user=user)
+    db.session.refresh(post)
+    assert post.body == f'mine {SHOP_BASE}/post/5 theirs {HELL_BASE}/post/6 hidden {base}/post/7'
+    assert f'href="{SHOP_BASE}/post/5"' in post.body_html and f'href="{HELL_BASE}/post/6"' in post.body_html
+    assert f'href="{base}/post/7"' in post.body_html and no_onion(post.body_html)
+
+
+def test_a_reply_and_its_edit_are_stored_on_the_authors_federating_base(app, onion_rows, monkeypatch):
+    monkeypatch.setattr(reply_module, 'authorise_api_user', lambda auth, **kwargs: onion_rows.sam)
+    monkeypatch.setattr(reply_module, 'task_selector', lambda *args, **kwargs: None)
+    post = a_post(onion_rows.wares, onion_rows.sam)
+    body = f'see {HELL_BASE}/post/6 and http://{ONION}/post/7'
+    _, reply = make_reply({'body': body, 'notify_author': False, 'language_id': None}, post, None, SRC_API, auth='token')
+    expected = f'see {HELL_BASE}/post/6 and {SHOP_BASE}/post/7'
+    assert reply.body == expected and f'href="{SHOP_BASE}/post/7"' in reply.body_html and no_onion(reply.body_html)
+    edit_reply({'body': body + '!', 'notify_author': False, 'language_id': None, 'distinguished': False}, reply, post,
+               SRC_API, auth='token')
+    assert reply.body == expected + '!' and no_onion(reply.body_html)
+
+
+def test_a_communitys_description_and_rules_and_an_accounts_about_are_on_their_base(app, onion_rows, monkeypatch):
+    make_community_member(onion_rows.sam, onion_rows.wares, is_moderator=True)
+    monkeypatch.setattr(community_module, 'authorise_api_user', lambda auth, return_type=None: onion_rows.sam)
+    typed = f'see http://{ONION}/post/7 and {HELL_BASE}/post/6'
+    data = {'title': 'Wares', 'description': typed, 'rules': typed, 'nsfw': False, 'restricted_to_mods': False,
+            'local_only': False, 'discussion_languages': [], 'question_answer': False, 'icon_url': None,
+            'banner_url': None}
+    edit_community(data, onion_rows.wares, SRC_API, auth='token')
+    expected = f'see {SHOP_BASE}/post/7 and {HELL_BASE}/post/6'
+    assert (onion_rows.wares.description, onion_rows.wares.rules) == (expected, expected)
+    assert no_onion(onion_rows.wares.description_html)
+    monkeypatch.setattr(user_utils_module, 'authorise_api_user', lambda auth, return_type=None: onion_rows.sam)
+    put_user_save_user_settings('token', {'bio': typed})
+    assert onion_rows.sam.about == expected and no_onion(onion_rows.sam.about_html)

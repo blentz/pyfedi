@@ -20,6 +20,7 @@ from app.community.forms import EditCommunityForm
 from app.community.util import community_theme_list, save_banner_file, save_icon_file
 from app.constants import *
 from app.email import send_email
+from app.federation_urls import object_base
 from app.local_only import community_local_only, user_local_only
 from app.local_names import local_named
 from app.models import CommunityBlock, CommunityMember, Notification, NotificationSubscription, User, Conversation, \
@@ -382,9 +383,10 @@ def _refuse_community_settings_the_form_would_not_offer(settings):
 
 def edit_community(input, community, src, auth=None, uploaded_icon_file=None, uploaded_banner_file=None, from_scratch=False):
     settings = {}
+    link_base = object_base(community)   # a local-only host in its texts is stored on its federating base (plan C3)
     if src == SRC_API:
         title = input['title']
-        description = canonicalise_text(input['description'])   # stored and federated: canonical, as rules are
+        description = canonicalise_text(input['description'], link_base)   # stored and federated, as rules are
         rules = input['rules']
         # the client may have read them on any storefront; stored and federated, they are on the community's domain
         # (canonical for the default domain's, plan C3)
@@ -414,14 +416,14 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
         settings = {key: input[key] for key in COMMUNITY_SETTINGS if key in input}
         _refuse_community_settings_the_form_would_not_offer(settings)
 
-        description_html = markdown_to_html(description)
+        description_html = markdown_to_html(description, link_base=link_base)
 
     elif not from_scratch:
         # The web edit form (community_edit). D641: the route used to set all
         # of this itself.
         title = input.title.data
-        description = piefed_markdown_to_lemmy_markdown(input.description.data)
-        description_html = markdown_to_html(input.description.data, anchors_new_tab=False)
+        description = piefed_markdown_to_lemmy_markdown(input.description.data, link_base)
+        description_html = markdown_to_html(input.description.data, anchors_new_tab=False, link_base=link_base)
         rules = community.rules
         icon_url = banner_url = None
         nsfw = input.nsfw.data
@@ -441,7 +443,7 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
     else:
         # make_community's create form.
         title = input.community_name.data
-        description = piefed_markdown_to_lemmy_markdown(input.description.data)
+        description = piefed_markdown_to_lemmy_markdown(input.description.data, link_base)
         rules = input.rules.data
         icon_url = process_upload(uploaded_icon_file, destination='communities') if uploaded_icon_file else None
         banner_url = process_upload(uploaded_banner_file, destination='communities') if uploaded_banner_file else None
@@ -451,7 +453,7 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
         discussion_languages = input.languages.data
         question_answer = input.question_answer.data
         user = current_user
-        description_html = markdown_to_html(description)
+        description_html = markdown_to_html(description, link_base=link_base)
 
     icon_url_changed = banner_url_changed = False
 
@@ -540,7 +542,7 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
 
     community.title = title
     community.description = description
-    community.rules = canonicalise_text(rules)
+    community.rules = canonicalise_text(rules, link_base)
     community.nsfw = nsfw
     community.description_html = description_html
     community.restricted_to_mods = restricted_to_mods
