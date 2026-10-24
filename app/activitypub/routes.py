@@ -22,7 +22,7 @@ from app.activitypub import bp
 from app.onion import audit_field
 from app.activitypub.actor import find_actor_by_url
 from app.activitypub.entitlement import PRIVATE_HEADERS, actor_document, addressees_of, audience_entitles, signed_requester_actor
-from app.activitypub.signature import POST_REQUIRED, HttpSignature, signed_at, VerificationError, VerificationFormatError, default_context, LDSignature, \
+from app.activitypub.signature import POST_REQUIRED, HttpSignature, publish_async_posts, signed_at, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request, verify_with_key_refresh, request_key_id
 from app.activitypub.util import MEDIA_OBJECT_TYPES, follow_answer_inbox, MEDIA_URL_KIND, media_url_from, activity_dedupe_key, community_actor_data, refresh_community_profile_task, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
     post_to_activity, post_count_collections, comment_count_collections, find_actor_or_create_cached, find_liked_object, \
@@ -2562,11 +2562,8 @@ def announce_activity_to_followers(community: Community, creator: User, activity
                     else:
                         send_to_remote_instance_fast(instance.inbox, community.private_key, community.ap_profile_id, announce_activity)
 
-    if len(send_async):
-        # send announce_activity via redis pub/sub to piefed_notifs service
-        app_pkg.redis_client.publish("http_posts:activity", json.dumps({'urls': [url[0] for url in send_async],
-                                                                'headers': [url[1] for url in send_async],
-                                                                'data': send_async[0][2].decode('utf-8')}))
+    # send announce_activity via redis pub/sub to piefed_notifs service, none for one of our domains (plan C4)
+    publish_async_posts(send_async)
 
 
 @bp.route('/c/<actor>/outbox', methods=['GET'])

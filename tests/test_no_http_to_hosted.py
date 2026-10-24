@@ -16,7 +16,7 @@ import pytest
 import respx
 
 from app import cli, db
-from app.activitypub.signature import post_request, signed_get_capped, signed_get_request
+from app.activitypub.signature import post_request, publish_async_posts, signed_get_capped, signed_get_request
 from app.activitypub.util import fetch_object_capped, webfinger_self_link_allowed
 from app.constants import AP_FETCH_ACCEPT
 from app.models import ActivityPubLog, SendQueue, SiteDomain, utcnow
@@ -220,3 +220,24 @@ def test_a_uri_urlsplit_refuses_is_still_an_httpx_error(env, wire, app, monkeypa
         with pytest.raises(httpx.HTTPError):
             fetch('https://[shop.example/.well-known/webfinger')
     assert wire.calls.call_count == 0
+
+
+# -- the piefed_notifs path (review M2) -------------------------------------------------------------------------------
+
+def test_publish_async_posts_leaves_out_every_hosted_inbox(env, monkeypatch, caplog):
+    published = []
+
+    class _Redis:
+        def publish(self, channel, payload):
+            published.append((channel, json.loads(payload)))
+
+    monkeypatch.setattr('app.redis_client', _Redis())
+    data = json.dumps(_like()).encode()
+    publish_async_posts([('https://x@shop.example/inbox', {'h': 'shop'}, data), (PEER_INBOX, {'h': 'peer'}, data)])
+    assert published == [('http_posts:activity', {'urls': [PEER_INBOX], 'headers': [{'h': 'peer'}],
+                                                  'data': data.decode()})]
+    with caplog.at_level(logging.INFO):
+        publish_async_posts([(SHOP_INBOX, {}, data)])
+        publish_async_posts([])
+    assert len(published) == 1
+    assert f'hosted domain, not sent: {SHOP_INBOX}' in caplog.text

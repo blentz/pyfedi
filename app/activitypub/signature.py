@@ -111,6 +111,23 @@ def send_post_request(uri: str, body: dict | None, private_key: str, key_id: str
         return True
 
 
+def publish_async_posts(signed: list) -> None:
+    """Hand `signed` deliveries, each HttpSignature.signed_request(..., send_via_async=True)'s (url, headers, body)
+    for one activity, to the piefed_notifs service over Redis, which POSTs them without retry. A delivery to one of
+    our own domains is left out after an INFO line, as post_request refuses one (plan C4); nothing is published when
+    none is left."""
+    deliveries = []
+    for delivery in signed:
+        if is_hosted_uri(delivery[0]):
+            current_app.logger.info(f'hosted domain, not sent: {delivery[0]}')
+        else:
+            deliveries.append(delivery)
+    if deliveries:
+        app_pkg.redis_client.publish("http_posts:activity", json.dumps({'urls': [url for url, _, _ in deliveries],
+                                                                        'headers': [h for _, h, _ in deliveries],
+                                                                        'data': deliveries[0][2].decode('utf-8')}))
+
+
 @celery.task
 def post_request(uri: str, body: dict | None, private_key: str, key_id: str,
                  content_type: str = "application/activity+json",
