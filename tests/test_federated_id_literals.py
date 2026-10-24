@@ -23,6 +23,7 @@ upload's stored URL and a local file's federated URL, on the owner's domain). Ne
 sweep pass; build it with `activity_id`, `owner_base` or `object_base`.
 """
 import ast
+import functools
 import re
 
 from tests.app_source import APP, app_trees
@@ -181,12 +182,16 @@ def _findings(node, aliases) -> int:
     return count
 
 
-def server_built_ids() -> list[tuple[str, str, int]]:
-    """(path, enclosing function, line) for every federated id built from SERVER_URL or SERVER_NAME under app/."""
+@functools.cache
+def server_built_ids() -> tuple[tuple[str, str, int], ...]:
+    """(path, enclosing function, line) for every federated id built from SERVER_URL or SERVER_NAME under app/. The
+    sweep is the same for every test here, so it runs once (it was three times, about 3 s each)."""
     found = []
-    for path, _source, tree in app_trees():
+    for path, source, tree in app_trees():
         relative = str(path.relative_to(APP.parent))
         if relative.startswith('app/migrations/'):   # a migration is history: it ran against the rows of its day
+            continue
+        if not any(key in source for key in _CONFIG_KEYS):   # every finding starts at a read of one of them
             continue
 
         def visit(node, scope, aliases):
@@ -201,7 +206,7 @@ def server_built_ids() -> list[tuple[str, str, int]]:
                 visit(child, inner, inner_aliases)
 
         visit(tree, '', _aliases(tree))
-    return sorted(found)
+    return tuple(sorted(found))
 
 
 def _counts() -> dict[tuple[str, str], int]:
