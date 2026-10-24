@@ -661,10 +661,10 @@ def _local_community_with_uploads(app, tmp_path):
     community = make_community(host=app.config['SERVER_NAME'])
     community.ap_followers_url = None
     for column in ('icon', 'image'):
-        path = tmp_path / f'{column}.png'
+        path = tmp_path / f'{column}_longname.png'
         path.write_bytes(b'png')
         upload = make_file(file_path=str(path))
-        upload.file_name = f'{column}.png'   # save_icon_file names it
+        upload.file_name = f'{column}_longname.png'   # save_icon_file names it
         setattr(community, column, upload)
     db.session.commit()
     return community

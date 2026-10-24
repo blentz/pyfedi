@@ -570,7 +570,7 @@ class TestOldImageTeardown:
         s = _seed(url='https://example.com/clip.mp4')
         target = chdir_upload / 'app' / 'static' / 'media' / 'posts' / 'ab' / 'cd'
         target.mkdir(parents=True)
-        on_disk = target / 'old.png'
+        on_disk = target / 'old_image_longname.png'   # a stem as long as ours: a shorter one is never removed
         Image.new('RGB', (8, 8), (1, 2, 3)).save(on_disk, format='PNG')
         old = File(source_url='https://example.com/old.png',
                    file_path=str(on_disk.relative_to(chdir_upload)))

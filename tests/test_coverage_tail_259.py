@@ -238,12 +238,12 @@ class TestWhatADeletedVideoPostRemoves:
         post = make_post(s3_on.community, s3_on.author,
                          ap_id='https://test.piefed.local/v/1')
         post.type = POST_TYPE_VIDEO
-        post.url = 'https://cdn.example/videos/ab/cd/clip.mp4'
+        post.url = 'https://cdn.example/videos/ab/cd/clip_longname.mp4'
         db.session.commit()
 
         asked = self._delete(s3_on, post)
 
-        assert asked == [['videos/ab/cd/clip.mp4']]
+        assert asked == [['videos/ab/cd/clip_longname.mp4']]
 
     def test_a_video_post_with_no_url_asks_for_nothing(self, s3_on):
         """`and self.url`. A video post whose url never arrived has no object to delete, and
@@ -288,7 +288,7 @@ class TestWhatADeletedVideoPostRemoves:
         post = make_post(env.community, env.author,
                          ap_id='https://test.piefed.local/v/4')
         post.type = POST_TYPE_VIDEO
-        post.url = 'https://cdn.example/videos/ab/cd/clip.mp4'
+        post.url = 'https://cdn.example/videos/ab/cd/clip_longname.mp4'
         db.session.commit()
 
         assert self._delete(env, post) == []

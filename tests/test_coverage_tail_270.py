@@ -133,7 +133,7 @@ class TestWhenAPostsVideoIsDeletedFromTheBucket:
         post = make_post(env.community, env.author,
                          ap_id=f'https://test.piefed.local/v/{suffix}')
         post.type = POST_TYPE_VIDEO
-        post.url = 'https://cdn.example/videos/ab/cd/clip.mp4'
+        post.url = 'https://cdn.example/videos/ab/cd/clip_longname.mp4'
         db.session.commit()
         return post
 
@@ -146,7 +146,7 @@ class TestWhenAPostsVideoIsDeletedFromTheBucket:
                    side_effect=lambda keys: deleted.append(keys)):
             post.delete_dependencies()
 
-        assert deleted == [['videos/ab/cd/clip.mp4']]
+        assert deleted == [['videos/ab/cd/clip_longname.mp4']]
 
     def test_the_delete_is_queued_otherwise(self, in_s3, monkeypatch):
         monkeypatch.setattr(in_s3.app, 'debug', False, raising=False)
@@ -164,7 +164,7 @@ class TestWhenAPostsVideoIsDeletedFromTheBucket:
         with patch('app.shared.tasks.maintenance.delete_from_s3', Task()):
             post.delete_dependencies()
 
-        assert queued == [['videos/ab/cd/clip.mp4']]
+        assert queued == [['videos/ab/cd/clip_longname.mp4']]
 
     def test_an_archived_posts_json_is_deleted_inline_under_debug(self, in_s3, monkeypatch):
         """The second copy, for `Post.archived`. Same shape, separate lines -- and an archive left

@@ -18,7 +18,7 @@ from flask import current_app, g
 from sqlalchemy import text
 
 from app import db
-from app.models import File, Site, s3_key_from_url, s3_object_is_referenced_elsewhere
+from app.models import File, Site, _records_naming, s3_key_from_url, s3_object_is_referenced_elsewhere
 from app.shared.upload import process_file_delete
 from tests.factories import make_community, make_instance, make_post, make_post_reply, make_user
 
@@ -70,12 +70,12 @@ class TestWhatAUrlIsAllowedToName:
 
     def test_a_url_on_this_server(self, env):
         path = File().local_path_for_url(
-            f'{env.server_url}/static/media/probe.png')
-        assert path == os.path.realpath('app/static/media/probe.png')
+            f'{env.server_url}/static/media/probe_longname.png')
+        assert path == os.path.realpath('app/static/media/probe_longname.png')
 
     def test_a_url_on_another_server(self, env):
         assert File().local_path_for_url(
-            'https://peer.test/static/media/probe.png') is None
+            'https://peer.test/static/media/probe_longname.png') is None
 
     def test_a_host_that_merely_contains_this_one(self, env):
         """The old test was `SERVER_NAME in url`, which this passes."""
@@ -146,8 +146,8 @@ class TestWhatAUrlIsAllowedToName:
         """`/static/../static/media/x.png` resolves inside app, so it is allowed
         -- the test is where it LANDS, not whether it contains a `..`."""
         assert File().local_path_for_url(
-            f'{env.server_url}/static/../static/media/probe.png') == \
-            os.path.realpath('app/static/media/probe.png')
+            f'{env.server_url}/static/../static/media/probe_longname.png') == \
+            os.path.realpath('app/static/media/probe_longname.png')
 
     def test_no_path_at_all(self, env):
         assert File().local_path_for_url(env.server_url) is None
@@ -165,37 +165,37 @@ class TestWhatAUrlIsAllowedToName:
 
 class TestDeletingTheFileItself:
     def test_a_local_file_path_is_unlinked(self, env):
-        path = a_media_file('probe_local.png')
-        file = a_file(file_path=path, file_name='probe_local.png')   # our upload's record (save_icon_file)
+        path = a_media_file('probe_longname_local.png')
+        file = a_file(file_path=path, file_name='probe_longname_local.png')   # our upload's record (save_icon_file)
         file.delete_from_disk(purge_cdn=False)
         assert not os.path.exists(path)
 
     def test_a_thumbnail_is_unlinked_too(self, env):
-        path = a_media_file('probe_thumb.png')
-        file = a_file(thumbnail_path=path, file_name='probe_thumb.png')
+        path = a_media_file('probe_longname_thumb.png')
+        file = a_file(thumbnail_path=path, file_name='probe_longname_thumb.png')
         file.delete_from_disk(purge_cdn=False)
         assert not os.path.exists(path)
 
     def test_both_at_once(self, env):
-        first = a_media_file('probe_both_1.png')
-        second = a_media_file('probe_both_2.png')
-        file = a_file(file_path=first, thumbnail_path=second, file_name='probe_both_1.png')
+        first = a_media_file('probe_longname_both_1.png')
+        second = a_media_file('probe_longname_both_2.png')
+        file = a_file(file_path=first, thumbnail_path=second, file_name='probe_longname_both_1.png')
         file.delete_from_disk(purge_cdn=False)
         assert not os.path.exists(first)
         assert not os.path.exists(second)
 
     def test_a_file_that_is_already_gone(self, env):
-        file = a_file(file_path='app/static/media/probe_absent.png')
+        file = a_file(file_path='app/static/media/probe_longname_absent.png')
         file.delete_from_disk(purge_cdn=False)
 
     def test_a_source_url_of_ours_is_unlinked(self, env):
-        path = a_media_file('probe_source.png')
-        an_upload('probe_source.png').delete_from_disk(purge_cdn=False)
+        path = a_media_file('probe_longname_source.png')
+        an_upload('probe_longname_source.png').delete_from_disk(purge_cdn=False)
         assert not os.path.exists(path)
 
     def test_a_source_url_pointing_outside_app_deletes_nothing(self, env):
         """D1324, the defect itself. Measured before the repair: this deleted
-        `/tmp/probe_delete_target`, a file no part of PieFed owns."""
+        `/tmp/probe_longname_delete_target`, a file no part of PieFed owns."""
         target = env.tmp_path / 'target'
         target.write_text('do not delete me')
         relative = os.path.relpath(str(target), os.path.realpath('app'))
@@ -204,21 +204,22 @@ class TestDeletingTheFileItself:
         assert target.exists()
 
     def test_a_source_url_naming_application_code_deletes_nothing(self, env):
-        target = os.path.join('app', 'probe_not_media.py')
+        target = os.path.join('app', 'probe_longname_not_media.py')
         with open(target, 'w') as handle:
             handle.write('# do not delete me')
         try:
-            for url in (f'{env.server_url}/probe_not_media.py', f'{env.server_url}/static/media/../../probe_not_media.py',
-                        f'{env.server_url}/static/media/%2e%2e/%2e%2e/probe_not_media.py'):
+            for url in (f'{env.server_url}/probe_longname_not_media.py',
+                        f'{env.server_url}/static/media/../../probe_longname_not_media.py',
+                        f'{env.server_url}/static/media/%2e%2e/%2e%2e/probe_longname_not_media.py'):
                 a_file(source_url=url).delete_from_disk(purge_cdn=False)
                 assert os.path.exists(target), url
         finally:
             os.unlink(target)
 
     def test_a_source_url_on_a_peer_deletes_nothing(self, env):
-        path = a_media_file('probe_peer.png')
+        path = a_media_file('probe_longname_peer.png')
         try:
-            file = a_file(source_url='https://peer.test/static/media/probe_peer.png')
+            file = a_file(source_url='https://peer.test/static/media/probe_longname_peer.png')
             file.delete_from_disk(purge_cdn=False)
             assert os.path.exists(path)
         finally:
@@ -226,9 +227,9 @@ class TestDeletingTheFileItself:
                 os.unlink(path)
 
     def test_a_source_url_that_is_not_http_is_left_alone(self, env):
-        path = a_media_file('probe_bare.png')
+        path = a_media_file('probe_longname_bare.png')
         try:
-            file = a_file(source_url='app/static/media/probe_bare.png')
+            file = a_file(source_url='app/static/media/probe_longname_bare.png')
             file.delete_from_disk(purge_cdn=False)
             assert os.path.exists(path)
         finally:
@@ -248,20 +249,20 @@ class TestWhatIsPurgedFromTheCdn:
         return seen[0] if seen else []
 
     def test_a_local_file_is_purged_by_its_url(self, env, monkeypatch):
-        path = a_media_file('probe_purge.png')
-        file = a_file(file_path=path, file_name='probe_purge.png')
+        path = a_media_file('probe_longname_purge.png')
+        file = a_file(file_path=path, file_name='probe_longname_purge.png')
         assert self.purged(env, monkeypatch, file) == \
-            [f'{env.server_url}/static/media/probe_purge.png']
+            [f'{env.server_url}/static/media/probe_longname_purge.png']
 
     def test_a_source_url_of_ours_is_purged(self, env, monkeypatch):
-        a_media_file('probe_purge_src.png')
-        url = f'{env.server_url}/static/media/probe_purge_src.png'
-        assert self.purged(env, monkeypatch, an_upload('probe_purge_src.png')) == [url]
+        a_media_file('probe_longname_purge_src.png')
+        url = f'{env.server_url}/static/media/probe_longname_purge_src.png'
+        assert self.purged(env, monkeypatch, an_upload('probe_longname_purge_src.png')) == [url]
 
     def test_a_peer_s_url_is_not_purged(self, env, monkeypatch):
         """It is not ours to purge, and asking Cloudflare to drop somebody
         else's url is a request that can only fail."""
-        file = a_file(source_url='https://peer.test/media/probe.png')
+        file = a_file(source_url='https://peer.test/media/probe_longname.png')
         assert self.purged(env, monkeypatch, file) == []
 
     def test_a_traversing_url_is_not_purged_either(self, env, monkeypatch):
@@ -269,8 +270,8 @@ class TestWhatIsPurgedFromTheCdn:
         assert self.purged(env, monkeypatch, file) == []
 
     def test_nothing_is_purged_when_the_caller_says_not_to(self, env, monkeypatch):
-        path = a_media_file('probe_nopurge.png')
-        file = a_file(file_path=path, file_name='probe_nopurge.png')
+        path = a_media_file('probe_longname_nopurge.png')
+        file = a_file(file_path=path, file_name='probe_longname_nopurge.png')
         seen = []
         monkeypatch.setattr('app.models.flush_cdn_cache',
                             lambda urls: seen.append(urls))
@@ -295,18 +296,19 @@ class TestFilesKeptInS3:
         return seen[0] if seen else []
 
     def test_an_s3_file_is_handed_to_the_task(self, env, monkeypatch):
-        file = a_file(file_path='https://cdn.example/media/probe.png', file_name='probe.png')   # our upload's record
-        assert self.deleted_keys(monkeypatch, file) == ['media/probe.png']
+        file = a_file(file_path='https://cdn.example/media/probe_longname.png',
+                      file_name='probe_longname.png')   # our upload's record
+        assert self.deleted_keys(monkeypatch, file) == ['media/probe_longname.png']
 
     def test_the_thumbnail_and_the_source_go_too(self, env, monkeypatch):
-        file = a_file(file_path='https://cdn.example/media/a.png',
-                      thumbnail_path='https://cdn.example/media/b.png',
-                      source_url='https://cdn.example/media/c.png', file_name='c.png')
+        file = a_file(file_path='https://cdn.example/media/aaaaaaaaaaaa.png',
+                      thumbnail_path='https://cdn.example/media/bbbbbbbbbbbb.png',
+                      source_url='https://cdn.example/media/cccccccccccc.png', file_name='cccccccccccc.png')
         assert self.deleted_keys(monkeypatch, file) == \
-            ['media/a.png', 'media/b.png', 'media/c.png']
+            ['media/aaaaaaaaaaaa.png', 'media/bbbbbbbbbbbb.png', 'media/cccccccccccc.png']
 
     def test_a_url_on_another_host_is_not_treated_as_s3(self, env, monkeypatch):
-        file = a_file(file_path='https://peer.test/media/probe.png')
+        file = a_file(file_path='https://peer.test/media/probe_longname.png')
         assert self.deleted_keys(monkeypatch, file) == []
 
 
@@ -333,7 +335,7 @@ class TestTheKeyAUrlNames:
         """Measured before the repair: the whole URL went to `delete_objects` as
         a key, because `startswith` matched and `replace` then found nothing to
         replace."""
-        assert s3_key_from_url('https://cdn.example.evil.test/media/a.png') is None
+        assert s3_key_from_url('https://cdn.example.evil.test/media/aaaaaaaaaaaa.png') is None
 
     def test_a_host_that_merely_contains_ours(self):
         assert s3_key_from_url('https://evil.test/cdn.example/a.png') is None
@@ -360,12 +362,12 @@ class TestTheKeyAUrlNames:
         assert s3_key_from_url('https://cdn.example') is None
 
     def test_a_query_string_is_not_part_of_the_key(self):
-        assert s3_key_from_url('https://cdn.example/media/a.png?v=2') == 'media/a.png'
+        assert s3_key_from_url('https://cdn.example/media/aaaaaaaaaaaa.png?v=2') == 'media/aaaaaaaaaaaa.png'
 
-    @pytest.mark.parametrize('url', ['ftp://cdn.example/media/a.png',
+    @pytest.mark.parametrize('url', ['ftp://cdn.example/media/aaaaaaaaaaaa.png',
                                      'file:///etc/passwd',
                                      'not a url', '', None, 5, [],
-                                     'https://peer.test/media/a.png'])
+                                     'https://peer.test/media/aaaaaaaaaaaa.png'])
     def test_what_names_no_object_of_ours(self, url):
         assert s3_key_from_url(url) is None
 
@@ -373,17 +375,17 @@ class TestTheKeyAUrlNames:
         """This instance publishes `https://{S3_PUBLIC_URL}/...`, but a peer that
         echoes the same object back over http is naming the same object, and the
         delete is equally legitimate."""
-        assert s3_key_from_url('http://cdn.example/media/a.png') == 'media/a.png'
+        assert s3_key_from_url('http://cdn.example/media/aaaaaaaaaaaa.png') == 'media/aaaaaaaaaaaa.png'
 
     def test_the_host_is_matched_without_regard_to_case(self):
         """A host is case-insensitive, so a peer echoing our own URL back in
         another case is naming the same object -- and whether that object was
         this row's is a separate question, asked separately."""
-        assert s3_key_from_url('https://CDN.Example/media/a.png') == 'media/a.png'
+        assert s3_key_from_url('https://CDN.Example/media/aaaaaaaaaaaa.png') == 'media/aaaaaaaaaaaa.png'
 
     def test_the_key_keeps_its_case(self):
         """An S3 key IS case-sensitive, so the path must not be folded with the
-        host: `Media/A.PNG` and `media/a.png` are two objects."""
+        host: `Media/A.PNG` and `media/aaaaaaaaaaaa.png` are two objects."""
         assert s3_key_from_url('https://cdn.example/Media/A.PNG') == 'Media/A.PNG'
 
     def test_a_public_url_carrying_a_path_prefix(self, monkeypatch):
@@ -391,18 +393,18 @@ class TestTheKeyAUrlNames:
         put a path in it. Then the prefix belongs to the bucket, not the key."""
         monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', 'cdn.example/bucket')
 
-        assert s3_key_from_url('https://cdn.example/bucket/media/a.png') == 'media/a.png'
-        assert s3_key_from_url('https://cdn.example/other/media/a.png') is None
+        assert s3_key_from_url('https://cdn.example/bucket/media/aaaaaaaaaaaa.png') == 'media/aaaaaaaaaaaa.png'
+        assert s3_key_from_url('https://cdn.example/other/media/aaaaaaaaaaaa.png') is None
         assert s3_key_from_url('https://cdn.example/bucketing/a.png') is None
         assert s3_key_from_url('https://cdn.example/bucket/') is None
 
     def test_no_public_url_configured(self, monkeypatch):
-        """An instance not using S3 has this empty, and `https:///media/a.png`
+        """An instance not using S3 has this empty, and `https:///media/aaaaaaaaaaaa.png`
         must not read as an object of ours."""
         monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', '')
 
-        assert s3_key_from_url('https:///media/a.png') is None
-        assert s3_key_from_url('https://cdn.example/media/a.png') is None
+        assert s3_key_from_url('https:///media/aaaaaaaaaaaa.png') is None
+        assert s3_key_from_url('https://cdn.example/media/aaaaaaaaaaaa.png') is None
 
 
 class TestAPeerNamingSomeoneElsesObject:
@@ -410,7 +412,7 @@ class TestAPeerNamingSomeoneElsesObject:
 
     `source_url` arrives from a peer. Measured before the repair, with
     `S3_PUBLIC_URL = cdn.example`: a File whose `source_url` was
-    `https://cdn.example/users/victim/avatar.webp` sent exactly that key to
+    `https://cdn.example/users/victim/avatar_of_the_victim.webp` sent exactly that key to
     `delete_objects` -- a remote instance deleting any object in this instance's
     bucket by naming it as its post's image and waiting for the post to be
     deleted.
@@ -436,7 +438,7 @@ class TestAPeerNamingSomeoneElsesObject:
         return seen[0] if seen else []
 
     def test_an_avatar_another_file_row_still_uses(self, env, monkeypatch):
-        victim = 'https://cdn.example/users/aa/bb/avatar.webp'
+        victim = 'https://cdn.example/users/aa/bb/avatar_of_the_victim.webp'
         a_file(file_path=victim)
         peers_post_image = a_file(source_url=victim)
 
@@ -444,7 +446,7 @@ class TestAPeerNamingSomeoneElsesObject:
 
     @pytest.mark.parametrize('column', ['file_path', 'thumbnail_path', 'source_url'])
     def test_whichever_column_the_other_row_uses(self, env, monkeypatch, column):
-        victim = 'https://cdn.example/users/aa/bb/avatar.webp'
+        victim = 'https://cdn.example/users/aa/bb/avatar_of_the_victim.webp'
         a_file(**{column: victim})
         peers_post_image = a_file(source_url=victim)
 
@@ -462,20 +464,20 @@ class TestAPeerNamingSomeoneElsesObject:
         """The check has to refuse the peer's naming without breaking the
         legitimate delete it exists to allow: when this instance uploaded the
         original itself, this row is the only reference."""
-        file = a_file(source_url='https://cdn.example/posts/aa/bb/original.png', file_name='original.png')
+        file = a_file(source_url='https://cdn.example/posts/aa/bb/original_upload.png', file_name='original_upload.png')
 
         assert self.deleted_keys(monkeypatch, file) == \
-            ['posts/aa/bb/original.png']
+            ['posts/aa/bb/original_upload.png']
 
     def test_the_rows_own_other_columns_do_not_block_it(self, env, monkeypatch):
         """A File whose three columns all name the same object must still delete
         it -- `s3_object_is_referenced_elsewhere` excludes the row it is asked
         about, or nothing would ever be deleted."""
-        url = 'https://cdn.example/posts/aa/bb/one.png'
-        file = a_file(file_path=url, thumbnail_path=url, source_url=url, file_name='one.png')
+        url = 'https://cdn.example/posts/aa/bb/one_of_three_x.png'
+        file = a_file(file_path=url, thumbnail_path=url, source_url=url, file_name='one_of_three_x.png')
 
         assert self.deleted_keys(monkeypatch, file) == \
-            ['posts/aa/bb/one.png', 'posts/aa/bb/one.png', 'posts/aa/bb/one.png']
+            ['posts/aa/bb/one_of_three_x.png', 'posts/aa/bb/one_of_three_x.png', 'posts/aa/bb/one_of_three_x.png']
 
     @pytest.mark.parametrize('source_url', [
         'https://cdn.example/../../secret.png',
@@ -493,7 +495,7 @@ class TestAPeerNamingSomeoneElsesObject:
         the configured public URL would be handed to `delete_from_s3` on an
         instance that has no S3 credentials at all."""
         monkeypatch.setattr('app.models._store_files_in_s3', lambda: False)
-        file = a_file(source_url='https://cdn.example/posts/aa/bb/original.png')
+        file = a_file(source_url='https://cdn.example/posts/aa/bb/original_upload.png')
 
         assert self.deleted_keys(monkeypatch, file) == []
 
@@ -514,19 +516,19 @@ class TestOnlyWhatWeWroteIsUnlinked:
 
     @pytest.fixture
     def owned(self, env):
-        path = a_media_file('probe_owned.png')
+        path = a_media_file('probe_longname_owned.png')
         yield path
         if os.path.exists(path):
             os.unlink(path)
 
     @pytest.mark.parametrize('spelt', [
-        '{base}/static/media/probe_owned.png',
-        '{upper}/static/media/probe_owned.png',
-        '{base}//static//media/probe_owned.png',
-        '{base}/static/./media/./probe_owned.png',
-        '{base}/static/media/%2e/probe_owned.png',
+        '{base}/static/media/probe_longname_owned.png',
+        '{upper}/static/media/probe_longname_owned.png',
+        '{base}//static//media/probe_longname_owned.png',
+        '{base}/static/./media/./probe_longname_owned.png',
+        '{base}/static/media/%2e/probe_longname_owned.png',
         '{base}/static/media/probe%5fowned.png',
-        '{base}/static/media/x/../probe_owned.png',
+        '{base}/static/media/x/../probe_longname_owned.png',
     ])
     @pytest.mark.parametrize('purge', [False, True])
     def test_a_peers_file_never_unlinks_ours_however_it_is_spelt(self, env, owned, spelt, purge):
@@ -539,7 +541,7 @@ class TestOnlyWhatWeWroteIsUnlinked:
         """The media library's URL box records any URL a user types, with their `user_file` link: that is not a file
         our code wrote. Pasting someone's avatar URL and deleting the row, or an admin purging that user's media, must
         leave the owner's file."""
-        url = f'{env.server_url}/static/media/probe_owned.png'
+        url = f'{env.server_url}/static/media/probe_longname_owned.png'
         victim = env.baseline.user2
         victim.avatar = a_file(source_url=url)   # set through the API: no name of ours on it
         db.session.commit()
@@ -556,7 +558,7 @@ class TestOnlyWhatWeWroteIsUnlinked:
     def test_an_unmarked_local_record_keeps_the_file_however_it_spells_it(self, env, owned, owner):
         """API-set avatars, covers, icons and banners and legacy post images and thumbnails carry no name of ours, but
         a local account, community or post owns them: they keep the file. Matched by the path it resolves to."""
-        spelt = f'{env.server_url}/static/./media//probe_owned.png'
+        spelt = f'{env.server_url}/static/./media//probe_longname_owned.png'
         held = a_file(source_url=spelt)
         if owner in ('avatar', 'cover'):
             setattr(env.baseline.user2, 'avatar_id' if owner == 'avatar' else 'cover_id', held.id)
@@ -568,45 +570,45 @@ class TestOnlyWhatWeWroteIsUnlinked:
             target = post if owner == 'post image' else make_post_reply(post, env.baseline.user1)
             target.image_id = held.id
         db.session.commit()
-        gone(an_upload('probe_owned.png'))
+        gone(an_upload('probe_longname_owned.png'))
         assert os.path.exists(owned)
 
     @pytest.mark.parametrize('column', ['file_path', 'thumbnail_path'])
     def test_a_path_the_server_wrote_on_another_record_keeps_the_file(self, env, owned, column):
-        a_file(**{column: 'app/static/media/./probe_owned.png'})
-        gone(an_upload('probe_owned.png'))
+        a_file(**{column: 'app/static/media/./probe_longname_owned.png'})
+        gone(an_upload('probe_longname_owned.png'))
         assert os.path.exists(owned)
 
     def test_a_peers_unmarked_record_does_not_keep_our_upload(self, env, owned):
         peer = make_user(make_instance('peer.test'), 'peerowner')
-        peer.avatar = a_file(source_url=f'{env.server_url}/static/media/probe_owned.png')
+        peer.avatar = a_file(source_url=f'{env.server_url}/static/media/probe_longname_owned.png')
         db.session.commit()
-        gone(an_upload('probe_owned.png'))
+        gone(an_upload('probe_longname_owned.png'))
         assert not os.path.exists(owned)
 
     def test_our_upload_another_of_our_records_names_is_kept_but_purged_from_the_cdn(self, env, owned):
-        an_upload('probe_owned.png')
+        an_upload('probe_longname_owned.png')
         purged = []
-        an_upload('probe_owned.png').delete_from_disk(cache_urls=purged)
+        an_upload('probe_longname_owned.png').delete_from_disk(cache_urls=purged)
         assert os.path.exists(owned)
-        assert purged == [f'{env.server_url}/static/media/probe_owned.png']
+        assert purged == [f'{env.server_url}/static/media/probe_longname_owned.png']
 
     def test_a_peers_record_naming_our_upload_does_not_keep_it(self, env, owned):
-        a_file(source_url=f'{env.server_url}/static/media/probe_owned.png')
-        an_upload('probe_owned.png').delete_from_disk(purge_cdn=False)
+        a_file(source_url=f'{env.server_url}/static/media/probe_longname_owned.png')
+        an_upload('probe_longname_owned.png').delete_from_disk(purge_cdn=False)
         assert not os.path.exists(owned)
 
     def test_a_local_authors_post_linking_our_upload_keeps_it_and_a_peers_does_not(self, env, owned):
-        url = f'{env.server_url}/static/media/probe_owned.png'
+        url = f'{env.server_url}/static/media/probe_longname_owned.png'
         peer = make_user(make_instance('peer.test'), 'peerauthor')
         remote = make_post(env.baseline.community1, peer, ap_id='https://peer.test/post/1')
         remote.url = url
         db.session.commit()
         local = make_post(env.baseline.community1, env.baseline.user1, ap_id=f'{env.server_url}/post/linker')
         local.url = url
-        own = an_upload('probe_owned.png')
+        own = an_upload('probe_longname_owned.png')
         db.session.commit()
-        gone(an_upload('probe_owned.png'))
+        gone(an_upload('probe_longname_owned.png'))
         assert os.path.exists(owned)   # the local author's post links it
         local.image_id = own.id   # its own image: no other reference
         db.session.commit()
@@ -615,11 +617,11 @@ class TestOnlyWhatWeWroteIsUnlinked:
 
     def test_a_moderation_purge_removes_our_upload_whatever_still_names_it(self, env, owned):
         local = make_post(env.baseline.community1, env.baseline.user1, ap_id=f'{env.server_url}/post/linker')
-        local.url = f'{env.server_url}/static/media/probe_owned.png'
-        an_upload('probe_owned.png')
+        local.url = f'{env.server_url}/static/media/probe_longname_owned.png'
+        an_upload('probe_longname_owned.png')
         db.session.commit()
         purged = []
-        an_upload('probe_owned.png').delete_from_disk(cache_urls=purged, purge=True)
+        an_upload('probe_longname_owned.png').delete_from_disk(cache_urls=purged, purge=True)
         assert not os.path.exists(owned)
         assert purged == [local.url]
 
@@ -632,14 +634,14 @@ class TestALegacyRecord:
 
     @pytest.fixture
     def owned(self, env):
-        path = a_media_file('probe_legacy.png')
+        path = a_media_file('probe_longname_legacy.png')
         yield path
         if os.path.exists(path):
             os.unlink(path)
 
     @pytest.fixture
     def url(self, env):
-        return f'{env.server_url}/static/media/probe_legacy.png'
+        return f'{env.server_url}/static/media/probe_longname_legacy.png'
 
     def post_image(self, env, author, **columns):
         post = make_post(env.baseline.community1, author, ap_id=f'{env.server_url}/post/{author.user_name}')
@@ -677,24 +679,24 @@ class TestALegacyRecord:
 
     @pytest.mark.parametrize('column', ['file_path', 'thumbnail_path'])
     def test_a_copy_the_server_wrote_and_nothing_else_names_goes_on_purge(self, env, column):
-        copy = a_media_file('probe_copy.webp')
+        copy = a_media_file('probe_longname_copy.webp')
         image = self.post_image(env, env.baseline.user1, source_url=f'{env.server_url}/static/media/gone.png',
-                                **{column: 'app/static/media/probe_copy.webp'})
+                                **{column: 'app/static/media/probe_longname_copy.webp'})
         image.delete_from_disk(purge_cdn=False, purge=True)
         assert not os.path.exists(copy)
 
     @pytest.mark.parametrize('other', ['ownerless url', 'peer post link'])
     def test_a_copy_another_record_names_is_kept(self, env, other):
-        copy = a_media_file('probe_copy.webp')
+        copy = a_media_file('probe_longname_copy.webp')
         try:
-            copy_url = f'{env.server_url}/static/media/probe_copy.webp'
+            copy_url = f'{env.server_url}/static/media/probe_longname_copy.webp'
             if other == 'ownerless url':
                 a_file(source_url=copy_url)
             else:
                 peer = make_user(make_instance('peer.test'), 'peerlinker')
                 make_post(env.baseline.community1, peer, ap_id='https://peer.test/post/link').url = copy_url
                 db.session.commit()
-            image = self.post_image(env, env.baseline.user1, file_path='app/static/media/probe_copy.webp')
+            image = self.post_image(env, env.baseline.user1, file_path='app/static/media/probe_longname_copy.webp')
             image.delete_from_disk(purge_cdn=False, purge=True)
             assert os.path.exists(copy)
         finally:
@@ -745,7 +747,7 @@ class TestAnUploadIsItsUploaders:
 
     @pytest.fixture
     def owned(self, env):
-        path = a_media_file('probe_mine.png')
+        path = a_media_file('probe_longname_mine.png')
         yield path
         if os.path.exists(path):
             os.unlink(path)
@@ -753,7 +755,7 @@ class TestAnUploadIsItsUploaders:
     @pytest.fixture
     def upload(self, env):
         """user1's media-library upload."""
-        file = an_upload('probe_mine.png')
+        file = an_upload('probe_longname_mine.png')
         db.session.execute(text('INSERT INTO "user_file" (file_id, user_id, size) VALUES (:f, :u, 9)'),
                            {'f': file.id, 'u': env.baseline.user1.id})
         db.session.commit()
@@ -799,14 +801,14 @@ class TestWhatAWrittenPathMayRemove:
         target = env.tmp_path / 'outside.txt'
         target.write_text('do not delete me')
         relative = os.path.join('app', os.path.relpath(str(target), os.path.realpath('app')))
-        inside_app = os.path.join('app', 'probe_not_media.txt')
+        inside_app = os.path.join('app', 'probe_longname_not_media.txt')
         with open(inside_app, 'w') as handle:
             handle.write('do not delete me')
-        link = os.path.join('app/static/media', 'probe_link.png')
+        link = os.path.join('app/static/media', 'probe_longname_link.png')
         os.makedirs('app/static/media', exist_ok=True)
         os.symlink(str(target), link)
         try:
-            for path in (str(target), relative, inside_app, 'app/static/media/../probe_not_media.txt', link):
+            for path in (str(target), relative, inside_app, 'app/static/media/../probe_longname_not_media.txt', link):
                 a_file(file_path=path, thumbnail_path=path, file_name='ours.png').delete_from_disk(purge_cdn=False)
             assert target.exists() and os.path.exists(inside_app) and os.path.lexists(link)
         finally:
@@ -815,7 +817,7 @@ class TestWhatAWrittenPathMayRemove:
 
     @pytest.mark.parametrize('column', ['file_path', 'thumbnail_path'])
     def test_a_peer_posts_file_never_unlinks_a_path(self, env, column):
-        path = a_media_file('probe_named.png')
+        path = a_media_file('probe_longname_named.png')
         try:
             peer = make_user(make_instance('peer.test'), 'peerpath')
             post = make_post(env.baseline.community1, peer, ap_id='https://peer.test/post/path')
@@ -828,7 +830,7 @@ class TestWhatAWrittenPathMayRemove:
                 os.unlink(path)
 
     def test_an_ownerless_unnamed_record_never_unlinks_a_path(self, env):
-        path = a_media_file('probe_orphan.png')
+        path = a_media_file('probe_longname_orphan.png')
         try:
             a_file(file_path=path).delete_from_disk(purge_cdn=False, purge=True)
             assert os.path.exists(path)
@@ -838,12 +840,13 @@ class TestWhatAWrittenPathMayRemove:
 
     @pytest.mark.parametrize('owner', ['avatar', 'post image'])
     def test_a_local_owners_record_unlinks_its_written_copy(self, env, owner):
-        path = a_media_file('probe_resized.webp')
+        path = a_media_file('probe_longname_resized.webp')
         file = a_file(source_url='https://elsewhere.example/a.png', file_path=path)
         if owner == 'avatar':
             env.baseline.user1.avatar_id = file.id
         else:
-            make_post(env.baseline.community1, env.baseline.user1, ap_id=f'{env.server_url}/post/own').image_id = file.id
+            own = make_post(env.baseline.community1, env.baseline.user1, ap_id=f'{env.server_url}/post/own')
+            own.image_id = file.id
         db.session.commit()
         file.delete_from_disk(purge_cdn=False)
         assert not os.path.exists(path)
@@ -883,7 +886,7 @@ class TestTheBucketFollowsTheDiskRule:
     key each value resolves to (`%61` is `a`, a query string is no part of the key), never by the stored spelling; a
     `file_path`/`thumbnail_path` key only by a record that is ours. Otherwise only the CDN copy is purged."""
 
-    VICTIM = 'https://cdn.example/users/aa/bb/avatar.webp'
+    VICTIM = 'https://cdn.example/users/aa/bb/avatar_of_the_victim.webp'
 
     @pytest.fixture(autouse=True)
     def in_s3(self, monkeypatch):
@@ -900,8 +903,8 @@ class TestTheBucketFollowsTheDiskRule:
         file.delete_from_disk(**kwargs)
         return seen
 
-    @pytest.mark.parametrize('spelt', ['https://cdn.example/users/aa/bb/%61vatar.webp',
-                                       'https://cdn.example/users/aa/bb/avatar.webp?q=1'])
+    @pytest.mark.parametrize('spelt', ['https://cdn.example/users/aa/bb/%61vatar_of_the_victim.webp',
+                                       'https://cdn.example/users/aa/bb/avatar_of_the_victim.webp?q=1'])
     @pytest.mark.parametrize('purge', [False, True])
     def test_a_peer_row_spelling_the_victims_url_deletes_no_object(self, env, monkeypatch, spelt, purge):
         env.baseline.user2.avatar = a_file(source_url=self.VICTIM)
@@ -915,7 +918,7 @@ class TestTheBucketFollowsTheDiskRule:
         assert purged == [spelt]   # the CDN copy still goes
 
     def test_our_upload_its_uploaders_record_names_by_another_spelling_is_kept(self, env, monkeypatch):
-        ours = a_file(source_url=self.VICTIM, file_name='avatar.webp')
+        ours = a_file(source_url=self.VICTIM, file_name='avatar_of_the_victim.webp')
         db.session.execute(text('INSERT INTO "user_file" (file_id, user_id, size) VALUES (:f, :u, 9)'),
                            {'f': ours.id, 'u': env.baseline.user1.id})
         env.baseline.user1.avatar = a_file(source_url=f'{self.VICTIM}?v=2')   # the same key, by another spelling
@@ -926,7 +929,8 @@ class TestTheBucketFollowsTheDiskRule:
         """`s3_object_is_referenced_elsewhere` (a peer's video post's mirrored url) matches by key too."""
         env.baseline.user2.avatar = a_file(source_url=self.VICTIM)
         db.session.commit()
-        assert s3_object_is_referenced_elsewhere('https://cdn.example/users/aa/bb/%61vatar.webp?x', post_id=999)
+        assert s3_object_is_referenced_elsewhere('https://cdn.example/users/aa/bb/%61vatar_of_the_victim.webp?x',
+                                                 post_id=999)
 
     @pytest.mark.parametrize('column', ['file_path', 'thumbnail_path'])
     def test_an_unowned_written_key_is_not_deleted(self, env, monkeypatch, column):
@@ -936,20 +940,20 @@ class TestTheBucketFollowsTheDiskRule:
         file = a_file(source_url='https://elsewhere.example/a.png', file_path=self.VICTIM)
         env.baseline.user1.avatar_id = file.id
         db.session.commit()
-        assert self.deleted_keys(monkeypatch, file) == ['users/aa/bb/avatar.webp']
+        assert self.deleted_keys(monkeypatch, file) == ['users/aa/bb/avatar_of_the_victim.webp']
 
 
 def test_a_delete_that_fails_closed_logs_the_file_it_left(env, caplog):
     """Final re-review N-M3. A moderation purge blanks the record of a legacy original it may not unlink, so the
     path is logged: an admin can find and remove an abusive original by hand."""
     import logging
-    path = a_media_file('probe_left.png')
-    copy = a_media_file('probe_left_copy.webp')
+    path = a_media_file('probe_longname_left.png')
+    copy = a_media_file('probe_longname_left_copy.webp')
     try:
         peer = make_user(make_instance('peer.test'), 'peerleft')
         post = make_post(env.baseline.community1, peer, ap_id='https://peer.test/post/left')
-        post.image = a_file(source_url=f'{env.server_url}/static/media/probe_left.png',
-                            file_path='app/static/media/probe_left_copy.webp')
+        post.image = a_file(source_url=f'{env.server_url}/static/media/probe_longname_left.png',
+                            file_path='app/static/media/probe_longname_left_copy.webp')
         db.session.commit()
         with caplog.at_level(logging.INFO):
             post.image.delete_from_disk(purge_cdn=False, purge=True)
@@ -975,24 +979,71 @@ class TestALocalPostsAlbum:
         return image
 
     def test_its_written_copy_is_removed_with_it(self, env):
-        copy = a_media_file('probe_album_copy.webp')
+        copy = a_media_file('probe_longname_album_copy.webp')
         try:
             self.album_image(env, source_url='https://elsewhere.example/a.png',
-                             file_path='app/static/media/probe_album_copy.webp').delete_from_disk(purge_cdn=False)
+                             file_path='app/static/media/probe_longname_album_copy.webp'
+                             ).delete_from_disk(purge_cdn=False)
             assert not os.path.exists(copy)
         finally:
             if os.path.exists(copy):
                 os.unlink(copy)
 
     def test_it_keeps_its_authors_upload(self, env):
-        path = a_media_file('probe_album_upload.png')
+        path = a_media_file('probe_longname_album_upload.png')
         try:
-            upload = an_upload('probe_album_upload.png')
+            upload = an_upload('probe_longname_album_upload.png')
             db.session.execute(text('INSERT INTO "user_file" (file_id, user_id, size) VALUES (:f, :u, 9)'),
                                {'f': upload.id, 'u': env.baseline.user1.id})
             db.session.commit()
             self.album_image(env, source_url=upload.source_url)
             gone(upload)
+            assert os.path.exists(path)
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+
+class TestTheRetentionLookupIsBounded:
+    """Security review (DoS): `LIKE '%<name>%'` with a peer-chosen name like `a` matches most of file and post. A name
+    whose stem is shorter than 12 characters (ours are 15) is never looked up and its file never unlinked; each
+    candidate select reads only the columns it needs and at most a bounded number of rows, and a lookup that reaches
+    the bound fails closed (the file is kept)."""
+
+    def test_a_short_name_is_never_looked_up_nor_unlinked(self, env):
+        from sqlalchemy import event
+        path = a_media_file('a.png')
+        statements = []
+
+        def seen(conn, cursor, statement, *args):
+            statements.append(statement)
+        try:
+            ours = an_upload('a.png')
+            purged = []
+            event.listen(db.engine, 'before_cursor_execute', seen)
+            try:
+                written, by_url, authors, unsure = _records_naming(os.path.realpath(path), ours.id)
+                ours.delete_from_disk(cache_urls=purged)
+                ours.delete_from_disk(cache_urls=purged, purge=True)
+            finally:
+                event.remove(db.engine, 'before_cursor_execute', seen)
+            assert unsure and not (written or by_url or authors)
+            assert not any('LIKE' in statement for statement in statements)
+            assert os.path.exists(path)
+            assert purged == [ours.source_url] * 2   # the CDN copy still goes
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def test_a_lookup_that_reaches_its_bound_keeps_the_file(self, env, monkeypatch):
+        monkeypatch.setattr('app.models.RETENTION_CANDIDATES', 3)
+        path = a_media_file('probe_longname_bounded_x.png')
+        try:
+            for number in range(4):   # name the same file name in other folders: candidates that do not resolve
+                a_file(source_url=f'{env.server_url}/static/media/other{number}/probe_longname_bounded_x.png')
+            ours = an_upload('probe_longname_bounded_x.png')
+            assert _records_naming(os.path.realpath(path), ours.id)[3] is True
+            gone(ours)
             assert os.path.exists(path)
         finally:
             if os.path.exists(path):
