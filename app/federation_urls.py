@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from app import db
 from app.storefront import DomainInfo, current_storefront, default_domain, domain_authority, domain_base_url, \
-    hosted_instance_ids
+    federating_base, hosted_instance_ids
 # Defined in app.storefront, which app.models can import (this module imports app.models); named here too, as the
 # helpers every federation decision uses
 from app.storefront import domain_of_url, federating_domain_of_url, is_federating_url  # noqa: F401
@@ -49,12 +49,13 @@ def owner_domain(obj) -> DomainInfo | None:
 
 
 def owner_base(obj) -> str:
-    """The origin `obj`'s owner names it by (`domain_base_url`): SERVER_URL itself for the default domain.
-    ValueError when no hosted domain owns it."""
+    """The origin `obj`'s owner names it by (`federating_base`): SERVER_URL itself for the default domain, and for a
+    local-only domain's (the onion's), whose host is never stored or federated. ValueError when no hosted domain owns
+    it."""
     domain = owner_domain(obj)
     if domain is None:
         raise ValueError(f'{type(obj).__name__} is not federated from a domain of ours')
-    return domain_base_url(domain)
+    return federating_base(domain)
 
 
 def naming_domain(obj) -> DomainInfo | None:
@@ -74,7 +75,7 @@ def object_base(obj) -> str:
     if isinstance(obj, (models.Post, models.PostReply)):
         return models.federation_base(obj)
     domain = naming_domain(obj)
-    return domain_base_url(domain if domain is not None else default_domain())
+    return federating_base(domain if domain is not None else default_domain())
 
 
 def owned_elsewhere(obj) -> bool:
