@@ -74,6 +74,14 @@ hell.cloud {
 	import piefed_routes
 }
 
+# A second federating domain (deploy/DEPLOY_GUIDE.md, "Adding a federating domain"). Add the domain in the admin
+# Domains form first, point its DNS here, then uncomment this block, replace shop.example, and reload Caddy. It
+# gets the same routing as hell.cloud and no Onion-Location header: that header names the onion site of hell.cloud.
+# shop.example {
+# 	request_header -X-PieFed-Via
+# 	import piefed_routes
+# }
+
 # The onion storefront. Reached only by the pyfedi_tor container over pf_network (port 8081 is not published).
 # http:// keeps Caddy from asking Let's Encrypt for a certificate it cannot get. The app trusts the marker only
 # from Caddy's static IP (ONION_PROXY_IP).

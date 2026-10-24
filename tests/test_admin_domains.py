@@ -64,16 +64,34 @@ def test_add_domain(app):
     assert domain_for_host('abc.onion') is not None
 
 
-def test_a_second_domain_that_federates_is_refused(app):
-    """F8: until per-domain federation ships (plan C) only the main domain federates. A second domain added with
-    federation on would hand out actor ids nothing serves, and the federation lock would then freeze it."""
+def test_the_form_adds_a_second_federating_domain_with_its_keys_and_instance_row(app):
+    """Ship dark (C3): the form takes federates=True for a non-default domain. The row gets its own key pair
+    (never the default's) and its own instance row."""
+    default = _default_row()
+    client = app.test_client()
+    login(client, _admin())
+    response = client.post('/admin/domains', data=_form(csrf(app, client), domain='shop.example',
+                                                        scheme='https', federates='y', registration='anyone'))
+    assert response.status_code == 302
+    row = db.session.query(SiteDomain).filter_by(domain='shop.example').one()
+    assert (row.federates, row.is_default) == (True, False)
+    assert row.public_key.startswith('-----BEGIN PUBLIC KEY-----')
+    assert row.private_key.startswith('-----BEGIN PRIVATE KEY-----')
+    assert row.public_key != default.public_key
+    assert db.session.get(Instance, row.instance_id).domain == 'shop.example'
+    assert row.instance_id != default.instance_id
+
+
+def test_the_federation_lock_still_refuses_flipping_a_form_made_domain_with_owners(app):
     _default_row()
     client = app.test_client()
     login(client, _admin())
-    response = client.post('/admin/domains', data=_form(csrf(app, client), federates='y'))
-    assert response.status_code == 200
-    assert 'Only the main domain can federate until per-domain federation ships.' in response.get_data(as_text=True)
-    assert _domains() == {current_app.config['SERVER_NAME']}
+    client.post('/admin/domains', data=_form(csrf(app, client), domain='shop.example', federates='y'))
+    row = db.session.query(SiteDomain).filter_by(domain='shop.example').one()
+    make_user(db.session.get(Instance, row.instance_id), 'shopper', local=True).site_domain_id = row.id
+    db.session.commit()
+    with pytest.raises(ValueError):
+        row.federates = False
 
 
 def test_the_federates_box_starts_unticked(app):

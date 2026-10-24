@@ -134,3 +134,37 @@ def test_a_cached_file_evicted_before_caddy_serves_it_is_not_kept_by_the_browser
     block = accel_block()
     assert '@present file {rp.header.X-Accel-Redirect}' in block
     assert 'header @present Cache-Control "public, max-age=604800, immutable"' in block
+
+
+def site_block_directives(address, lines):
+    """The directives directly inside `<address> {`, comments ignored."""
+    start = lines.index(f'{address} {{')
+    body = []
+    for line in lines[start + 1:]:
+        if line == '}':
+            return body
+        body.append(line)
+
+
+def test_the_federating_domain_template_routes_like_the_main_block_once_uncommented():
+    raw = CADDYFILE.read_text().splitlines()
+    live = [line.split('#', 1)[0].strip() for line in raw]
+    main = site_block_directives('hell.cloud', live)
+
+    template = []
+    in_template = False
+    for line in raw:
+        if line.startswith('# shop.example {'):
+            in_template = True
+        if in_template:
+            template.append(line[2:].split('#', 1)[0].strip())
+            if line == '# }':
+                break
+    assert template, 'expected a commented shop.example block'
+    uncommented = site_block_directives('shop.example', template)
+
+    assert 'import piefed_routes' in uncommented and 'import piefed_routes' in main
+    assert not any(d.startswith('header Onion-Location') for d in uncommented)
+    assert any(d.startswith('header Onion-Location') for d in main)
+    assert 'request_header -X-PieFed-Via' in uncommented
+    assert [d for d in main if not d.startswith('header Onion-Location') and d] == [d for d in uncommented if d]
