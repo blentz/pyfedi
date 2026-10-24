@@ -847,3 +847,30 @@ class TestWhatAWrittenPathMayRemove:
         db.session.commit()
         file.delete_from_disk(purge_cdn=False)
         assert not os.path.exists(path)
+
+
+def test_a_files_other_records_are_found_by_trigram_index(env):
+    """`_records_naming` asks `LIKE '%<name>%'` of file's three path columns and post's url and archived: a leading
+    wildcard no btree serves, so on prod both were sequential scans (~400 ms a delete). pg_trgm GIN indexes serve it
+    (migration f7c2a4e9b1d3). Here: they exist with gin_trgm_ops, and the planner can use them for the exact query
+    the model builds (sequential scans priced out, as a tiny test table would never pick an index on cost; prod's plan
+    is checked after deploy)."""
+    from sqlalchemy import or_
+    from sqlalchemy.dialects import postgresql
+    from app.models import Post
+    definitions = dict(db.session.execute(text(
+        "SELECT indexname, indexdef FROM pg_indexes WHERE indexname LIKE '%\\_trgm'")).all())
+    for name, column in (('ix_file_file_path_trgm', 'file_path'), ('ix_file_thumbnail_path_trgm', 'thumbnail_path'),
+                         ('ix_file_source_url_trgm', 'source_url'), ('ix_post_url_trgm', 'url'),
+                         ('ix_post_archived_trgm', 'archived')):
+        assert 'USING gin' in definitions[name] and f'{column} gin_trgm_ops' in definitions[name], name
+    name = '%abcdefghijklmno.png%'
+    queries = (db.session.query(File.id).filter(File.id != 1, or_(
+                   File.file_path.like(name), File.thumbnail_path.like(name), File.source_url.like(name))),
+               db.session.query(Post.id).filter(or_(Post.url.like(name), Post.archived.like(name))))
+    db.session.execute(text('SET LOCAL enable_seqscan = off'))
+    for query in queries:
+        sql = str(query.statement.compile(dialect=postgresql.dialect(), compile_kwargs={'literal_binds': True}))
+        plan = '\n'.join(db.session.execute(text(f'EXPLAIN {sql}')).scalars())
+        assert 'Bitmap Index Scan on ix_' in plan and '_trgm' in plan, plan
+    db.session.rollback()
