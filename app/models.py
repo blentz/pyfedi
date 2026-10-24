@@ -692,7 +692,7 @@ def s3_key_from_url(url):
 
 
 def s3_object_is_referenced_elsewhere(url, file_id=None, post_id=None):
-    """Whether any row other than this one still points at `url`.
+    """Whether any row other than this one still names the bucket object `url` names.
 
     D1343. Two separate reasons the caller needs this, both measured:
 
@@ -703,22 +703,17 @@ def s3_object_is_referenced_elsewhere(url, file_id=None, post_id=None):
       named by up to ten Post rows, and deleting one of them must not take the
       file the other nine still play.
 
-    Matching is by the URL as stored. Two spellings of one key (a different
-    escaping, say) read as two objects here, which errs towards keeping a file
-    that could have been removed rather than removing one that is still in use.
+    Matched by the key each row's value resolves to (`s3_key_from_url`: `%61` is
+    `a`, a query string is no part of a key), not by the stored spelling: a peer
+    spelling a victim's URL another way named another "object" to an exact match,
+    and had the victim's deleted (final re-review N-I1). Candidates are narrowed by
+    the key's last segment, which our own rows store as written.
     """
-    files = db.session.query(File.id).filter(or_(File.file_path == url,
-                                                 File.thumbnail_path == url,
-                                                 File.source_url == url))
-    if file_id is not None:
-        files = files.filter(File.id != file_id)
-    if db.session.query(files.exists()).scalar():
-        return True
-    posts = db.session.query(Post.id).filter(or_(Post.url == url,
-                                                 Post.archived == url))
-    if post_id is not None:
-        posts = posts.filter(Post.id != post_id)
-    return db.session.query(posts.exists()).scalar()
+    key = s3_key_from_url(url)
+    if key is None:
+        return False
+    written, by_url, authors = _records_naming(key, file_id, any_author=True, in_s3=True, post_id=post_id)
+    return bool(written or by_url or authors)
 
 
 def _locally_owned_files(file_ids):
@@ -765,39 +760,50 @@ def _local_owners(file_ids) -> dict[int, set[int]]:
     return owners
 
 
-def _records_naming(path: str, file_id: int, any_author: bool = False) -> tuple[list[int], list[int], set[int]]:
+def _records_naming(path: str, file_id: int | None, any_author: bool = False, in_s3: bool = False,
+                    post_id: int | None = None) -> tuple[list[int], list[int], set[int]]:
     """The records other than File `file_id` that name the local media file at `path` (a resolved path in the media
-    folders): the Files naming it by a path only we write (`file_path`, `thumbnail_path`), the Files naming it by URL,
-    and the local authors (with `any_author`, all authors) of posts linking it (other than the post whose own image
-    this File is). Compared by the
-    path each candidate's value resolves to, never by its spelling: the candidates are only narrowed by the file's
-    name (a `LIKE '%<name>%'` on file's three columns and post's url and archived)."""
+    folders), or with `in_s3` the bucket object `path` is the key of: the Files naming it by a path only we write
+    (`file_path`, `thumbnail_path`), the Files naming it by URL, and the local authors (with `any_author`, all
+    authors) of posts linking it (other than the post whose own image this File is, and post `post_id`). Compared by
+    the path or key each candidate's value resolves to, never by its spelling: the candidates are only narrowed by
+    the file's name (a `LIKE '%<name>%'` on file's three columns and post's url and archived)."""
+    if in_s3:
+        def resolves(value, written=False):
+            return s3_key_from_url(value) == path
+    else:
+        def resolves(value, written=False):
+            if written:
+                return not value.startswith('http') and os.path.realpath(value) == path
+            return File.local_path_for_url(value) == path
     name = f'%{os.path.basename(path)}%'
     candidates = db.session.query(File).filter(File.id != file_id, or_(
         File.file_path.like(name), File.thumbnail_path.like(name), File.source_url.like(name))).all()
     written = [candidate.id for candidate in candidates
-               if any(value and not value.startswith('http') and os.path.realpath(value) == path
-                      for value in (candidate.file_path, candidate.thumbnail_path))]
-    by_url = [candidate.id for candidate in candidates
-              if candidate.source_url and File.local_path_for_url(candidate.source_url) == path]
+               if any(value and resolves(value, written=True) for value in (candidate.file_path,
+                                                                            candidate.thumbnail_path))]
+    by_url = [candidate.id for candidate in candidates if candidate.source_url and resolves(candidate.source_url)]
     posts = db.session.query(Post).filter(or_(Post.url.like(name), Post.archived.like(name)),
                                           or_(Post.image_id.is_(None), Post.image_id != file_id))
+    if post_id is not None:
+        posts = posts.filter(Post.id != post_id)
     if not any_author:
         posts = posts.filter(Post.user_id.in_(select(User.id).where(User.instance_id.in_(
             storefront.hosted_instance_ids()))))
     authors = {post.user_id for post in posts.all()
-               if any(value and File.local_path_for_url(value) == path for value in (post.url, post.archived))}
+               if any(value and resolves(value) for value in (post.url, post.archived))}
     return written, by_url, authors
 
 
-def local_file_is_referenced_elsewhere(path: str, file_id: int) -> bool:
+def local_file_is_referenced_elsewhere(path: str, file_id: int, in_s3: bool = False) -> bool:
     """Whether a record other than File `file_id`, our upload of the local media file at `path`, keeps that file
     (`_records_naming`): a File naming it by a path only we write, or a record of the upload's own uploader (its
     `_local_owners`): their media-library row, avatar, cover, community's or feed's icon or banner, or their post or
     comment image or link post. Another account's reference never keeps it: deleting your upload removes it. An
     upload no account owns (made before its record was linked to one) is kept by any locally owned record
-    (`_locally_owned_files`, a local author's post). A peer's row never keeps a file."""
-    written, by_url, authors = _records_naming(path, file_id)
+    (`_locally_owned_files`, a local author's post). A peer's row never keeps a file. With `in_s3`, `path` is the
+    bucket key of our upload, and the same rule holds for the bucket."""
+    written, by_url, authors = _records_naming(path, file_id, in_s3=in_s3)
     if written:
         return True
     uploader = _local_owners([file_id]).get(file_id, set())
@@ -809,10 +815,11 @@ def local_file_is_referenced_elsewhere(path: str, file_id: int) -> bool:
     return bool(owners & uploader)
 
 
-def named_by_any_other_record(path: str, file_id: int) -> bool:
-    """Whether any record other than File `file_id` names the local media file at `path` (`_records_naming`): a
-    File of any owner, a peer's or none included, or a post by any author. A match blocks (fail closed)."""
-    written, by_url, authors = _records_naming(path, file_id, any_author=True)
+def named_by_any_other_record(path: str, file_id: int, in_s3: bool = False) -> bool:
+    """Whether any record other than File `file_id` names the local media file at `path` (with `in_s3`, the bucket
+    object of that key) (`_records_naming`): a File of any owner, a peer's or none included, or a post by any author.
+    A match blocks (fail closed)."""
+    written, by_url, authors = _records_naming(path, file_id, any_author=True, in_s3=in_s3)
     return bool(written or by_url or authors)
 
 
@@ -1293,7 +1300,7 @@ class File(db.Model):
         resolved = os.path.realpath(value)
         return resolved if resolved.startswith(os.path.realpath(MEDIA_ROOT) + os.sep) else None
 
-    def _may_remove_written(self, path: str) -> bool:
+    def _may_remove_written(self, path: str, in_s3: bool = False) -> bool:
         """Whether this record may unlink `path` (resolved, in the media folders), its `file_path` or
         `thumbnail_path`. Our upload's record may (`file_name`). Any other only when a local account, community or
         feed owns it (`_local_owners`) and no other record of any kind names the path (`named_by_any_other_record`,
@@ -1302,7 +1309,7 @@ class File(db.Model):
         if self.file_name:
             return True
         return self.id is not None and bool(_local_owners([self.id])) and \
-            not named_by_any_other_record(path, self.id)
+            not named_by_any_other_record(path, self.id, in_s3=in_s3)
 
     def delete_from_disk(self, purge_cdn=True, cache_urls=None, purge=False):
         """`cache_urls`, when given, receives the URLs this delete invalidates
@@ -1329,8 +1336,9 @@ class File(db.Model):
         s3_files_to_delete = []
         if self.file_path:
             s3_key = s3_key_from_url(self.file_path) if _store_files_in_s3() else None
-            if s3_key:
-                s3_files_to_delete.append(s3_key)
+            if s3_key:   # the bucket follows the disk's rule: only a record that is ours removes it (N-I1)
+                if self._may_remove_written(s3_key, in_s3=True):
+                    s3_files_to_delete.append(s3_key)
                 purge_from_cache.append(self.file_path)
             else:
                 # D1349. The purge used to live inside `if os.path.isfile(...)`, so
@@ -1350,7 +1358,8 @@ class File(db.Model):
         if self.thumbnail_path:
             s3_key = s3_key_from_url(self.thumbnail_path) if _store_files_in_s3() else None
             if s3_key:
-                s3_files_to_delete.append(s3_key)
+                if self._may_remove_written(s3_key, in_s3=True):
+                    s3_files_to_delete.append(s3_key)
                 purge_from_cache.append(self.thumbnail_path)
             else:
                 written = self._in_the_media_folders(self.thumbnail_path)
@@ -1368,11 +1377,11 @@ class File(db.Model):
             # (D1343). The on-disk branch below is D1324's repair of the same
             # field.
             s3_key = s3_key_from_url(self.source_url) if _store_files_in_s3() else None
-            if s3_key:
-                if not s3_object_is_referenced_elsewhere(self.source_url,
-                                                         file_id=self.id):
+            if s3_key:   # as on disk (N-I1): only our upload's record, and only while nothing keeps the object
+                if self.wrote_its_source() and \
+                        (purge or not local_file_is_referenced_elsewhere(s3_key, self.id, in_s3=True)):
                     s3_files_to_delete.append(s3_key)
-                    purge_from_cache.append(self.source_url)
+                purge_from_cache.append(self.source_url)
             elif self.source_url.startswith('http'):
                 # `local_path_for_url` answers None for anything that is not a
                 # file of ours (D1324), and only a record our upload code made may
