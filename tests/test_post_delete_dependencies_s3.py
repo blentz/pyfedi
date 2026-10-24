@@ -58,16 +58,16 @@ def a_video_post(baseline, url, **columns):
 
 class TestTheMirroredVideo:
     def test_the_key_and_not_the_url_reaches_the_task(self, env, deleted_keys):
-        """The whole of the leak: `['https://cdn.example/posts/aa/bb/clip.mp4']`
+        """The whole of the leak: `['https://cdn.example/posts/aa/bb/clip_longname.mp4']`
         was measured going to `delete_objects` as a key."""
-        post = a_video_post(env.baseline, 'https://cdn.example/posts/aa/bb/clip.mp4')
+        post = a_video_post(env.baseline, 'https://cdn.example/posts/aa/bb/clip_longname.mp4')
 
         post.delete_dependencies()
 
-        assert deleted_keys == ['posts/aa/bb/clip.mp4']
+        assert deleted_keys == ['posts/aa/bb/clip_longname.mp4']
 
     def test_a_cross_post_still_playing_it_keeps_it(self, env, deleted_keys):
-        url = 'https://cdn.example/posts/aa/bb/clip.mp4'
+        url = 'https://cdn.example/posts/aa/bb/clip_longname.mp4'
         first = a_video_post(env.baseline, url)
         a_video_post(env.baseline, url)
 
@@ -78,7 +78,7 @@ class TestTheMirroredVideo:
     def test_the_last_row_naming_it_does_delete_it(self, env, deleted_keys):
         """The other side of the cross-post rule: once nothing else points at the
         object, the file goes. Otherwise the fix for one leak would be another."""
-        url = 'https://cdn.example/posts/aa/bb/clip.mp4'
+        url = 'https://cdn.example/posts/aa/bb/clip_longname.mp4'
         first = a_video_post(env.baseline, url)
         second = a_video_post(env.baseline, url)
         db.session.delete(first)
@@ -86,10 +86,10 @@ class TestTheMirroredVideo:
 
         second.delete_dependencies()
 
-        assert deleted_keys == ['posts/aa/bb/clip.mp4']
+        assert deleted_keys == ['posts/aa/bb/clip_longname.mp4']
 
     def test_a_file_row_still_pointing_at_it_keeps_it(self, env, deleted_keys):
-        url = 'https://cdn.example/posts/aa/bb/clip.mp4'
+        url = 'https://cdn.example/posts/aa/bb/clip_longname.mp4'
         db.session.add(File(source_url=url))
         db.session.commit()
         post = a_video_post(env.baseline, url)
@@ -103,7 +103,7 @@ class TestTheMirroredVideo:
         'https://cdn.example/%2e%2e/secret.mp4',
         'https://cdn.example/',
         'https://cdn.example.evil.test/clip.mp4',
-        'https://peer.test/posts/aa/bb/clip.mp4',
+        'https://peer.test/posts/aa/bb/clip_longname.mp4',
         None,
     ])
     def test_a_url_that_names_no_object_of_ours(self, env, deleted_keys, url):
@@ -117,7 +117,7 @@ class TestTheMirroredVideo:
         """The branch is `type == POST_TYPE_VIDEO`: an image post whose url
         happens to be in the bucket is not the video mirror, and its File row is
         what owns anything there."""
-        post = a_video_post(env.baseline, 'https://cdn.example/posts/aa/bb/clip.mp4')
+        post = a_video_post(env.baseline, 'https://cdn.example/posts/aa/bb/clip_longname.mp4')
         post.type = POST_TYPE_VIDEO + 1
         db.session.commit()
 
@@ -127,7 +127,7 @@ class TestTheMirroredVideo:
 
     def test_an_instance_not_using_s3(self, env, deleted_keys, monkeypatch):
         monkeypatch.setattr('app.models._store_files_in_s3', lambda: False)
-        post = a_video_post(env.baseline, 'https://cdn.example/posts/aa/bb/clip.mp4')
+        post = a_video_post(env.baseline, 'https://cdn.example/posts/aa/bb/clip_longname.mp4')
 
         post.delete_dependencies()
 

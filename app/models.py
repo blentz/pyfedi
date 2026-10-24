@@ -712,8 +712,8 @@ def s3_object_is_referenced_elsewhere(url, file_id=None, post_id=None):
     key = s3_key_from_url(url)
     if key is None:
         return False
-    written, by_url, authors = _records_naming(key, file_id, any_author=True, in_s3=True, post_id=post_id)
-    return bool(written or by_url or authors)
+    written, by_url, authors, unsure = _records_naming(key, file_id, any_author=True, in_s3=True, post_id=post_id)
+    return bool(unsure or written or by_url or authors)
 
 
 def _locally_owned_files(file_ids):
@@ -760,14 +760,31 @@ def _local_owners(file_ids) -> dict[int, set[int]]:
     return owners
 
 
+# The retention lookup's bounds (security review, DoS). A name is looked up only when its stem has at least
+# NAME_STEM_MIN characters: ours have 15 (gibberish), and a peer naming `.../a` would otherwise LIKE '%a%' across
+# file and post. Each candidate select reads at most RETENTION_CANDIDATES rows; one that reaches it is unsure, which
+# keeps the file (fail closed).
+NAME_STEM_MIN = 12
+RETENTION_CANDIDATES = 200
+
+
+def _too_vague(path: str) -> bool:
+    """Whether `path`'s name is too short to be ours or to be looked up (`NAME_STEM_MIN`): its file is never removed."""
+    return len(os.path.splitext(os.path.basename(path))[0]) < NAME_STEM_MIN
+
+
 def _records_naming(path: str, file_id: int | None, any_author: bool = False, in_s3: bool = False,
-                    post_id: int | None = None) -> tuple[list[int], list[int], set[int]]:
+                    post_id: int | None = None) -> tuple[list[int], list[int], set[int], bool]:
     """The records other than File `file_id` that name the local media file at `path` (a resolved path in the media
     folders), or with `in_s3` the bucket object `path` is the key of: the Files naming it by a path only we write
     (`file_path`, `thumbnail_path`), the Files naming it by URL, and the local authors (with `any_author`, all
     authors) of posts linking it (other than the post whose own image this File is, and post `post_id`). Compared by
     the path or key each candidate's value resolves to, never by its spelling: the candidates are only narrowed by
-    the file's name (a `LIKE '%<name>%'` on file's three columns and post's url and archived)."""
+    the file's name (a `LIKE '%<name>%'` on file's three columns and post's url and archived). The last value is
+    `unsure`: the name is too vague to look up (`_too_vague`, nothing is queried) or a select reached its bound
+    (`RETENTION_CANDIDATES`); a caller then keeps the file."""
+    if _too_vague(path):
+        return [], [], set(), True
     if in_s3:
         def resolves(value, written=False):
             return s3_key_from_url(value) == path
@@ -777,22 +794,28 @@ def _records_naming(path: str, file_id: int | None, any_author: bool = False, in
                 return not value.startswith('http') and os.path.realpath(value) == path
             return File.local_path_for_url(value) == path
     name = f'%{os.path.basename(path)}%'
-    candidates = db.session.query(File).filter(File.id != file_id, or_(
-        File.file_path.like(name), File.thumbnail_path.like(name), File.source_url.like(name))).all()
+    candidates = db.session.query(File.id, File.file_path, File.thumbnail_path, File.source_url).filter(
+        File.id != file_id, or_(File.file_path.like(name), File.thumbnail_path.like(name),
+                                File.source_url.like(name))).limit(RETENTION_CANDIDATES + 1).all()
+    if len(candidates) > RETENTION_CANDIDATES:
+        return [], [], set(), True
     written = [candidate.id for candidate in candidates
                if any(value and resolves(value, written=True) for value in (candidate.file_path,
                                                                             candidate.thumbnail_path))]
     by_url = [candidate.id for candidate in candidates if candidate.source_url and resolves(candidate.source_url)]
-    posts = db.session.query(Post).filter(or_(Post.url.like(name), Post.archived.like(name)),
-                                          or_(Post.image_id.is_(None), Post.image_id != file_id))
+    posts = db.session.query(Post.user_id, Post.url, Post.archived).filter(
+        or_(Post.url.like(name), Post.archived.like(name)), or_(Post.image_id.is_(None), Post.image_id != file_id))
     if post_id is not None:
         posts = posts.filter(Post.id != post_id)
     if not any_author:
         posts = posts.filter(Post.user_id.in_(select(User.id).where(User.instance_id.in_(
             storefront.hosted_instance_ids()))))
-    authors = {post.user_id for post in posts.all()
+    posts = posts.limit(RETENTION_CANDIDATES + 1).all()
+    if len(posts) > RETENTION_CANDIDATES:
+        return written, by_url, set(), True
+    authors = {post.user_id for post in posts
                if any(value and resolves(value) for value in (post.url, post.archived))}
-    return written, by_url, authors
+    return written, by_url, authors, False
 
 
 def local_file_is_referenced_elsewhere(path: str, file_id: int, in_s3: bool = False) -> bool:
@@ -803,8 +826,8 @@ def local_file_is_referenced_elsewhere(path: str, file_id: int, in_s3: bool = Fa
     upload no account owns (made before its record was linked to one) is kept by any locally owned record
     (`_locally_owned_files`, a local author's post). A peer's row never keeps a file. With `in_s3`, `path` is the
     bucket key of our upload, and the same rule holds for the bucket."""
-    written, by_url, authors = _records_naming(path, file_id, in_s3=in_s3)
-    if written:
+    written, by_url, authors, unsure = _records_naming(path, file_id, in_s3=in_s3)
+    if unsure or written:
         return True
     uploader = _local_owners([file_id]).get(file_id, set())
     if not uploader:
@@ -819,8 +842,8 @@ def named_by_any_other_record(path: str, file_id: int, in_s3: bool = False) -> b
     """Whether any record other than File `file_id` names the local media file at `path` (with `in_s3`, the bucket
     object of that key) (`_records_naming`): a File of any owner, a peer's or none included, or a post by any author.
     A match blocks (fail closed)."""
-    written, by_url, authors = _records_naming(path, file_id, any_author=True, in_s3=in_s3)
-    return bool(written or by_url or authors)
+    written, by_url, authors, unsure = _records_naming(path, file_id, any_author=True, in_s3=in_s3)
+    return bool(unsure or written or by_url or authors)
 
 
 def reputation_delta(old_effect: float, new_effect: float, low_quality: bool) -> float:
@@ -1306,6 +1329,8 @@ class File(db.Model):
         feed owns it (`_local_owners`) and no other record of any kind names the path (`named_by_any_other_record`,
         fail closed). A peer post's File never does: until 397a91156 a peer's attachment could set `file_path`, and a
         path on our disk, even one shaped like our thumbnailer's, is no proof that we wrote it."""
+        if _too_vague(path):
+            return False
         if self.file_name:
             return True
         return self.id is not None and bool(_local_owners([self.id])) and \
@@ -1390,7 +1415,7 @@ class File(db.Model):
             # field.
             s3_key = s3_key_from_url(self.source_url) if _store_files_in_s3() else None
             if s3_key:   # as on disk (N-I1): only our upload's record, and only while nothing keeps the object
-                if self.wrote_its_source() and \
+                if self.wrote_its_source() and not _too_vague(s3_key) and \
                         (purge or not local_file_is_referenced_elsewhere(s3_key, self.id, in_s3=True)):
                     s3_files_to_delete.append(s3_key)
                 purge_from_cache.append(self.source_url)
@@ -1403,7 +1428,7 @@ class File(db.Model):
                     purge_from_cache.append(self.source_url)   # whoever wrote it, as at BASE: the edge refetches
                     # A record that cannot prove we wrote the file (no `file_name`) never removes it, purge or
                     # not: a URL someone typed can name anyone's file (fail closed)
-                    if self.wrote_its_source():
+                    if self.wrote_its_source() and not _too_vague(local_path):
                         if purge or not local_file_is_referenced_elsewhere(local_path, self.id):
                             try:
                                 os.unlink(local_path)

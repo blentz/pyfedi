@@ -74,9 +74,9 @@ def url_for(env, path):
     return path.replace('app/', f'{env.server}/')
 
 
-UPLOAD = 'app/static/media/users/zz/zz/upload.webp'
-AVATAR = 'app/static/media/users/zz/zz/avatar.webp'
-POSTIMG = 'app/static/media/posts/zz/zz/postimg.webp'
+UPLOAD = 'app/static/media/users/zz/zz/upload_longname.webp'
+AVATAR = 'app/static/media/users/zz/zz/avatar_longname.webp'
+POSTIMG = 'app/static/media/posts/zz/zz/postimg_longname.webp'
 
 
 class TestABannedUsersUploads:
@@ -265,7 +265,7 @@ class TestAFileAlreadyGoneFromDisk:
 
     def test_a_file_that_is_there_is_purged_and_unlinked(self, env):
         file = a_file(UPLOAD)
-        file.file_name = 'upload.webp'   # our upload's record: only a record that is ours unlinks a path (C3)
+        file.file_name = 'upload_longname.webp'   # our upload's record: only a record that is ours unlinks a path (C3)
         db.session.commit()
         try:
             file.delete_from_disk()
@@ -321,13 +321,13 @@ class TestAFileAlreadyGoneFromDisk:
                             type('_Task', (), {
                                 'delay': staticmethod(lambda keys: None),
                                 '__call__': staticmethod(lambda keys: None)})())
-        file = File(file_path='https://cdn.example/posts/zz/zz/a.webp')
+        file = File(file_path='https://cdn.example/posts/zz/zz/aaaa_longname.webp')
         db.session.add(file)
         db.session.commit()
 
         file.delete_from_disk()
 
-        assert env.purged == ['https://cdn.example/posts/zz/zz/a.webp']
+        assert env.purged == ['https://cdn.example/posts/zz/zz/aaaa_longname.webp']
 
 
 class TestAPostsImageAtTheEdge:
@@ -381,7 +381,7 @@ class TestAPostsImageAtTheEdge:
         post = self.a_post_with_an_image(env)
         reply = db.session.get(PostReply, env.baseline.reply1.id)
         assert reply.post_id == post.id
-        reply_image = 'app/static/media/posts/zz/zz/replyimg.webp'
+        reply_image = 'app/static/media/posts/zz/zz/replyimg_longname.webp'
         reply.image_id = a_file(reply_image).id
         db.session.commit()
         try:
@@ -396,7 +396,7 @@ class TestAPostsImageAtTheEdge:
         from app.models import PostReply
 
         reply = db.session.get(PostReply, env.baseline.reply1.id)
-        reply_image = 'app/static/media/posts/zz/zz/replyimg.webp'
+        reply_image = 'app/static/media/posts/zz/zz/replyimg_longname.webp'
         reply.image_id = a_file(reply_image).id
         db.session.commit()
         try:
@@ -413,7 +413,7 @@ class TestAPostsImageAtTheEdge:
 
         assert env.purged == []
 
-    SECOND_IMAGE = 'app/static/media/posts/zz/zz/second.webp'
+    SECOND_IMAGE = 'app/static/media/posts/zz/zz/second_longname.webp'
 
     def two_posts_with_images(self, env):
         """Two, deliberately. A caller that batches and a caller that lets each

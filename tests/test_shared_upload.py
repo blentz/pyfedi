@@ -648,12 +648,12 @@ class TestProcessFileDelete:
             before = files_under(MEDIA_ROOT)
             directory = 'app/static/media/posts/xx/yy'
             os.makedirs(directory, exist_ok=True)
-            disk_path = os.path.join(directory, 'doesexist.png')
+            disk_path = os.path.join(directory, 'doesexist_longname.png')
             with open(disk_path, 'wb') as fh:
                 fh.write(b'not really a png, just needs to exist on disk')
             assert os.path.isfile(disk_path)
 
-            source_url = f"{app.config['SERVER_URL']}/static/media/posts/xx/yy/doesexist.png"
+            source_url = f"{app.config['SERVER_URL']}/static/media/posts/xx/yy/doesexist_longname.png"
             file_row = File(source_url=source_url, file_path=disk_path)
             db.session.add(file_row)
             db.session.commit()
