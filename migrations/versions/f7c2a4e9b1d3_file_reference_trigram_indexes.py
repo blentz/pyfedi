@@ -6,6 +6,7 @@ Create Date: 2026-10-24 16:00:00.000000
 
 """
 from alembic import op
+import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
@@ -28,10 +29,24 @@ INDEXES = (
 )
 
 
+def drop_invalid_leftover(name, table):
+    """An interrupted CREATE INDEX CONCURRENTLY (a deploy timeout, a cancelled lock wait) leaves an INVALID index of
+    its name behind, which the planner never uses and which `IF NOT EXISTS` takes for the index: the rerun would
+    stamp this revision with the sequential scans back. Drop it so the rerun builds the index again. Offline (--sql)
+    there is no database to ask. (As f4b8d2a6c1e7's: a migration cannot import another.)"""
+    if op.get_context().as_sql:
+        return
+    invalid = op.get_bind().execute(sa.text('SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid '
+                                            'WHERE c.relname = :name AND NOT i.indisvalid'), {'name': name}).scalar()
+    if invalid:
+        op.drop_index(name, table_name=table, postgresql_concurrently=True)
+
+
 def upgrade():
-    op.execute('CREATE EXTENSION IF NOT EXISTS pg_trgm')
     with op.get_context().autocommit_block():
+        op.execute('CREATE EXTENSION IF NOT EXISTS pg_trgm')
         for name, table, column in INDEXES:
+            drop_invalid_leftover(name, table)
             op.execute(f'CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON "{table}" USING gin ({column} gin_trgm_ops)')
 
 
