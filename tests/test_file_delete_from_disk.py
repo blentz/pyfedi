@@ -961,3 +961,39 @@ def test_a_delete_that_fails_closed_logs_the_file_it_left(env, caplog):
         for leftover in (path, copy):
             if os.path.exists(leftover):
                 os.unlink(leftover)
+
+
+class TestALocalPostsAlbum:
+    """Final re-review N-M4: an image of a local author's album (`post_file`) is that author's, by `_local_owners`."""
+
+    def album_image(self, env, **columns):
+        from app.models import post_file
+        post = make_post(env.baseline.community1, env.baseline.user1, ap_id=f'{env.server_url}/post/album')
+        image = a_file(**columns)
+        db.session.execute(post_file.insert().values(post_id=post.id, file_id=image.id, weight=0))
+        db.session.commit()
+        return image
+
+    def test_its_written_copy_is_removed_with_it(self, env):
+        copy = a_media_file('probe_album_copy.webp')
+        try:
+            self.album_image(env, source_url='https://elsewhere.example/a.png',
+                             file_path='app/static/media/probe_album_copy.webp').delete_from_disk(purge_cdn=False)
+            assert not os.path.exists(copy)
+        finally:
+            if os.path.exists(copy):
+                os.unlink(copy)
+
+    def test_it_keeps_its_authors_upload(self, env):
+        path = a_media_file('probe_album_upload.png')
+        try:
+            upload = an_upload('probe_album_upload.png')
+            db.session.execute(text('INSERT INTO "user_file" (file_id, user_id, size) VALUES (:f, :u, 9)'),
+                               {'f': upload.id, 'u': env.baseline.user1.id})
+            db.session.commit()
+            self.album_image(env, source_url=upload.source_url)
+            gone(upload)
+            assert os.path.exists(path)
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
