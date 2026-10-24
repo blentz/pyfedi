@@ -186,7 +186,10 @@ def test_an_activitypub_get_of_a_remote_url_still_goes_out(env, wire):
 
 DISCOVERY_URLS = ['https://shop.example/.well-known/webfinger?resource=acct:alice@shop.example',
                   'https://x@shop.example/.well-known/host-meta', f'https://{SERVER}/.well-known/nodeinfo',
-                  'https://shop.example/nodeinfo/2.1', 'https://Shop.Example/.WELL-KNOWN/WebFinger']
+                  'https://shop.example/nodeinfo/2.1', 'https://Shop.Example/.WELL-KNOWN/WebFinger',
+                  # the path our routes answer, however it is spelled: percent-encoded or with a dot segment (N1)
+                  'https://shop.example/%6eodeinfo/2.0', 'https://shop.example/%2Ewell-known/webfinger',
+                  'https://shop.example/x/../nodeinfo/2.0', 'https://shop.example/.well-known/x-nodeinfo2']
 
 
 @pytest.mark.parametrize('uri', DISCOVERY_URLS)
@@ -214,11 +217,12 @@ def test_a_webfinger_self_link_on_a_hosted_host_is_never_fetched(env, monkeypatc
 
 
 def test_a_uri_urlsplit_refuses_is_still_an_httpx_error(env, wire, app, monkeypatch):
-    """The guard reads the path before get_request's own validation: a URI urlsplit cannot parse is left to it."""
+    """The guard reads the path before get_request's own validation: a URI httpx cannot parse is left to it."""
     monkeypatch.setitem(app.config, 'DEBUG', False)
     for fetch in (lambda uri: get_request(uri), lambda uri: get_request_capped(uri, 1000)):
-        with pytest.raises(httpx.HTTPError):
-            fetch('https://[shop.example/.well-known/webfinger')
+        for uri in ('https://[shop.example/.well-known/webfinger', 'https://shop.example:abc/.well-known/webfinger'):
+            with pytest.raises(httpx.HTTPError):
+                fetch(uri)
     assert wire.calls.call_count == 0
 
 

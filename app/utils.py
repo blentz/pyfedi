@@ -23,7 +23,7 @@ from functools import wraps, lru_cache
 from json import JSONDecodeError
 from time import sleep
 from typing import List, Tuple, Optional
-from urllib.parse import urlparse, parse_qs, urlencode, urlsplit
+from urllib.parse import urlparse, parse_qs, urlencode
 from zoneinfo import available_timezones
 import socket
 import os
@@ -376,7 +376,8 @@ def user_agent(domain=None) -> str:
 
 # The discovery documents a server answers about itself. A GET of one on our own host is refused whatever its Accept
 # (plan C4): WebFinger, host-meta and NodeInfo are asked of a peer, never of ourselves.
-_DISCOVERY_PATHS = ('/.well-known/webfinger', '/.well-known/host-meta', '/.well-known/nodeinfo', '/nodeinfo/')
+_DISCOVERY_PATHS = ('/.well-known/webfinger', '/.well-known/host-meta', '/.well-known/nodeinfo',
+                    '/.well-known/x-nodeinfo2', '/nodeinfo/')
 
 
 def _refused_hosted_fetch(uri, headers) -> bool:
@@ -385,9 +386,9 @@ def _refused_hosted_fetch(uri, headers) -> bool:
     already and is never fetched over HTTP (plan C4). Any other GET of ours, a link preview or an image, is an
     ordinary web fetch and goes out."""
     accept = ' '.join(str(value) for name, value in (headers or {}).items() if str(name).lower() == 'accept')
-    try:
-        path = urlsplit(uri).path.lower() if isinstance(uri, str) else ''
-    except ValueError:   # an unbalanced IPv6 bracket: refused below as any invalid uri is, with httpx.HTTPError
+    try:   # the path as our routes read it: httpx's, percent-decoded and with dot segments resolved
+        path = httpx.URL(uri).path.lower() if isinstance(uri, str) else ''
+    except (httpx.InvalidURL, ValueError):   # left to get_request's own validation, which raises httpx.HTTPError
         path = ''
     federation = 'activity+json' in accept or 'ld+json' in accept or \
         any(path == prefix.rstrip('/') or path.startswith(prefix) for prefix in _DISCOVERY_PATHS)
