@@ -739,29 +739,70 @@ def _locally_owned_files(file_ids):
     return {row for query in owners for row in db.session.execute(query).scalars()}
 
 
-def local_file_is_referenced_elsewhere(path: str, file_id: int) -> bool:
-    """Whether a locally owned record other than File `file_id` still names the local media file at `path` (a
-    resolved path in the media folders): a File by a path only we write (`file_path`, `thumbnail_path`), a File a
-    local record owns by its URL (`_locally_owned_files`: marked by our upload code or not, an API-set avatar or a
-    legacy thumbnail too), or a post by a local author linking it other than the post whose own image this File is.
-    A peer's row never keeps a file. Compared by the path each candidate's value resolves to, never by its spelling:
-    the candidates are only narrowed by the file's name."""
+def _local_owners(file_ids) -> dict[int, set[int]]:
+    """The local accounts that own each of the File ids given: the uploader of a media-library row (`user_file`), the
+    account whose avatar or cover it is, the owner of the local community or feed whose icon or banner it is, and the
+    local author of the post or comment whose image it is. A peer's File has none."""
+    hosted = storefront.hosted_instance_ids()
+    local_users = select(User.id).where(User.instance_id.in_(hosted))
+    pairs = [select(user_file.c.file_id, user_file.c.user_id).where(user_file.c.file_id.in_(file_ids),
+                                                                    user_file.c.user_id.in_(local_users)),
+             select(User.avatar_id, User.id).where(User.avatar_id.in_(file_ids), User.instance_id.in_(hosted)),
+             select(User.cover_id, User.id).where(User.cover_id.in_(file_ids), User.instance_id.in_(hosted)),
+             select(Post.image_id, Post.user_id).where(Post.image_id.in_(file_ids), Post.user_id.in_(local_users)),
+             select(PostReply.image_id, PostReply.user_id).where(PostReply.image_id.in_(file_ids),
+                                                                 PostReply.user_id.in_(local_users))]
+    for model in (Community, Feed):
+        pairs += [select(column, model.user_id).where(column.in_(file_ids), model.instance_id.in_(hosted))
+                  for column in (model.icon_id, model.image_id)]
+    owners = {}
+    for query in pairs:
+        for owned, owner in db.session.execute(query).all():
+            if owner is not None:
+                owners.setdefault(owned, set()).add(owner)
+    return owners
+
+
+def _records_naming(path: str, file_id: int) -> tuple[list[int], list[int], set[int]]:
+    """The records other than File `file_id` that name the local media file at `path` (a resolved path in the media
+    folders): the Files naming it by a path only we write (`file_path`, `thumbnail_path`), the Files naming it by URL,
+    and the local authors of posts linking it (other than the post whose own image this File is). Compared by the
+    path each candidate's value resolves to, never by its spelling: the candidates are only narrowed by the file's
+    name (a `LIKE '%<name>%'` on file's three columns and post's url and archived)."""
     name = f'%{os.path.basename(path)}%'
     candidates = db.session.query(File).filter(File.id != file_id, or_(
         File.file_path.like(name), File.thumbnail_path.like(name), File.source_url.like(name))).all()
-    if any(value and not value.startswith('http') and os.path.realpath(value) == path
-           for candidate in candidates for value in (candidate.file_path, candidate.thumbnail_path)):
-        return True
-    named = [candidate.id for candidate in candidates
-             if candidate.source_url and File.local_path_for_url(candidate.source_url) == path]
-    if named and _locally_owned_files(named):
-        return True
+    written = [candidate.id for candidate in candidates
+               if any(value and not value.startswith('http') and os.path.realpath(value) == path
+                      for value in (candidate.file_path, candidate.thumbnail_path))]
+    by_url = [candidate.id for candidate in candidates
+              if candidate.source_url and File.local_path_for_url(candidate.source_url) == path]
     local_authors = select(User.id).where(User.instance_id.in_(storefront.hosted_instance_ids()))
     posts = db.session.query(Post).filter(or_(Post.url.like(name), Post.archived.like(name)),
                                           Post.user_id.in_(local_authors),
                                           or_(Post.image_id.is_(None), Post.image_id != file_id)).all()
-    return any(File.local_path_for_url(value) == path for post in posts for value in (post.url, post.archived)
-               if value)
+    authors = {post.user_id for post in posts
+               if any(value and File.local_path_for_url(value) == path for value in (post.url, post.archived))}
+    return written, by_url, authors
+
+
+def local_file_is_referenced_elsewhere(path: str, file_id: int) -> bool:
+    """Whether a locally owned record other than File `file_id` still names the local media file at `path`
+    (`_records_naming`): a File by a path only we write, a File a local record owns by its URL
+    (`_locally_owned_files`: marked by our upload code or not, an API-set avatar or a legacy thumbnail too), or a
+    post by a local author linking it. A peer's row never keeps a file."""
+    written, by_url, authors = _records_naming(path, file_id)
+    return bool(written or authors or (by_url and _locally_owned_files(by_url)))
+
+
+def other_accounts_name(path: str, file_id: int, accounts: set[int]) -> bool:
+    """Whether a local account outside `accounts` owns a record other than File `file_id` naming the local media file
+    at `path` (`_records_naming`, `_local_owners`)."""
+    written, by_url, authors = _records_naming(path, file_id)
+    owners = set(authors)
+    for owned in _local_owners(written + by_url).values():
+        owners |= owned
+    return bool(owners - accounts)
 
 
 def reputation_delta(old_effect: float, new_effect: float, low_quality: bool) -> float:
@@ -1236,11 +1277,16 @@ class File(db.Model):
         """`cache_urls`, when given, receives the URLs this delete invalidates
         instead of them being flushed here.
 
-        A local file named by `source_url` is unlinked only when our upload code
-        wrote it (`wrote_its_source`): a peer's record never removes a file,
-        however it spells the URL. Another record that owns the file keeps it
-        (`local_file_is_referenced_elsewhere`), unless `purge`: a moderation or
-        admin purge always removes it. Its CDN copy is purged either way.
+        A local file named by `source_url` is unlinked by an ordinary delete only
+        when our upload code wrote it (`wrote_its_source`) and no other record
+        that owns it still names it (`local_file_is_referenced_elsewhere`). A
+        moderation or admin purge (`purge`) removes a file we wrote whatever names
+        it, and one it cannot prove we wrote (a record made before upload names
+        were kept) only when a local account owns this record and no other local
+        account's record names the file (`other_accounts_name`): abusive content
+        leaves the origin, a victim's file named by their own record stays. A
+        peer's record never removes anything, however it spells the URL. The CDN
+        copy of a local file is purged whenever its record goes.
 
         D1350. Deleting a post's image with `purge_cdn=False` was how every caller
         avoided one Cloudflare request per file, and the cost was that no post
@@ -1299,13 +1345,18 @@ class File(db.Model):
                 # file of ours (D1324), and only a record our upload code made may
                 # remove the file: a peer can name someone else's.
                 local_path = self.local_path_for_url(self.source_url)
-                if local_path and self.wrote_its_source():
-                    if purge or not local_file_is_referenced_elsewhere(local_path, self.id):
+                if local_path:
+                    purge_from_cache.append(self.source_url)   # whoever wrote it, as at BASE: the edge refetches
+                    if self.wrote_its_source():
+                        removable = purge or not local_file_is_referenced_elsewhere(local_path, self.id)
+                    else:   # it cannot prove we wrote it: only a purge of its local owner's own file removes it
+                        owners = _local_owners([self.id]).get(self.id, set())
+                        removable = purge and bool(owners) and not other_accounts_name(local_path, self.id, owners)
+                    if removable:
                         try:
                             os.unlink(local_path)
                         except FileNotFoundError:
                             ...
-                    purge_from_cache.append(self.source_url)
 
         if len(s3_files_to_delete) > 0:
             from app.shared.tasks.maintenance import delete_from_s3  # cycle: app.shared.tasks.maintenance imports from this module
