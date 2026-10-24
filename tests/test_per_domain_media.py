@@ -130,6 +130,17 @@ def test_a_shop_posts_uploaded_image_is_the_shops_and_federates_on_the_shop(app,
     assert page_sent(sent)['attachment'][0]['url'] == post.image.source_url
 
 
+def test_an_image_a_hell_admin_uploads_into_a_shop_post_is_the_posts(app, sites, http_mock):
+    """A moderator's or admin's upload while editing someone else's post is the post's: the shop post federates it
+    (ruling 4), so it is stored on the shop."""
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    post = a_post(sites.wares, sites.sam)
+    edit_post(_api_input(), post, POST_TYPE_IMAGE, SRC_API, user=sites.hal, uploaded_file=an_image())
+    db.session.refresh(post)
+    assert re.fullmatch(rf'{SHOP_BASE}/static/media/posts/{NAME}\.\w+', post.image.source_url)
+    assert no_hell(post_to_page(post))
+
+
 def test_a_hell_posts_uploaded_image_is_unchanged(app, sites, http_mock):
     http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
     post = a_post(sites.pit, sites.hal)

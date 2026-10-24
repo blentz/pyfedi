@@ -26,7 +26,7 @@ from app.models import File, Notification, NotificationSubscription, Poll, PollC
     ap_parse_datetime, PollChoiceVote, adjust_domain_post_count, served_path, _as_url
 from app.shared.media import MediaRefused, can_upload_media, media_kind_for, media_of, queue_probe, \
     store_uploaded_media, episode_form_wanted, with_episode
-from app.federation_urls import object_base, owner_base
+from app.federation_urls import object_base
 from app.local_only import content_local_only
 from app.onion import audit_field
 from app.storefront import link_on
@@ -722,7 +722,8 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
             if final_place != original_place:
                 os.unlink(original_place)   # the upload was re-encoded under a new extension (D465)
 
-        url = f"{owner_base(user)}{served_path(final_place)}"  # D1363; on the uploader's domain (plan C3)
+        # D1363; on the post's domain, which federates it: a moderator's upload into someone else's post too (C3)
+        url = f"{object_base(post)}{served_path(final_place)}"
         uploaded_name = os.path.basename(final_place)
 
         if current_app.config['IMAGE_HASHING_ENDPOINT'] and not is_video_url(final_place):
