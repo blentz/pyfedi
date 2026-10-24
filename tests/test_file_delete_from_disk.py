@@ -625,10 +625,10 @@ class TestOnlyWhatWeWroteIsUnlinked:
 
 
 class TestALegacyRecord:
-    """A record made before our upload code named its files (no `file_name`) cannot prove we wrote its file. Its CDN
-    copy is purged whenever it goes, as at BASE. A moderation purge removes the file when no other account's local row
-    names it, so abusive content leaves the origin while a victim's file named by their own row survives
-    (final-review FI1)."""
+    """A record made before our upload code named its files (no `file_name`) cannot prove we wrote the file its
+    `source_url` names: that file is never unlinked through it, purge or not (fail closed). Its CDN copy is purged
+    whenever it goes, as at BASE. The copies the server itself wrote for it (`file_path`, `thumbnail_path`) go, unless
+    any other record of any kind names them (final-review FI1, controller ruling)."""
 
     @pytest.fixture
     def owned(self, env):
@@ -641,9 +641,9 @@ class TestALegacyRecord:
     def url(self, env):
         return f'{env.server_url}/static/media/probe_legacy.png'
 
-    def spammers_post_image(self, env, url):
-        post = make_post(env.baseline.community1, env.baseline.user1, ap_id=f'{env.server_url}/post/abuse')
-        post.image = a_file(source_url=url)
+    def post_image(self, env, author, **columns):
+        post = make_post(env.baseline.community1, author, ap_id=f'{env.server_url}/post/{author.user_name}')
+        post.image = a_file(**columns)
         db.session.commit()
         return post.image
 
@@ -651,29 +651,55 @@ class TestALegacyRecord:
         purged = []
         a_file(source_url=url).delete_from_disk(cache_urls=purged)
         assert purged == [url]
-        assert os.path.exists(owned)   # an ordinary delete cannot prove it is ours to remove
+        assert os.path.exists(owned)
 
-    def test_a_moderation_purge_of_an_abusive_upload_removes_it_and_its_cdn_copy(self, env, owned, url):
-        image = self.spammers_post_image(env, url)
+    @pytest.mark.parametrize('purge', [False, True])
+    def test_its_source_is_never_unlinked_but_its_cdn_copy_is_purged(self, env, owned, url, purge):
         purged = []
-        image.delete_from_disk(cache_urls=purged, purge=True)
-        assert not os.path.exists(owned)
+        self.post_image(env, env.baseline.user1, source_url=url).delete_from_disk(cache_urls=purged, purge=purge)
+        assert os.path.exists(owned)
         assert purged == [url]
 
-    def test_a_purge_of_a_row_naming_another_accounts_legacy_file_leaves_it(self, env, owned, url):
-        victim = env.baseline.user2
-        victim.avatar = a_file(source_url=url)
-        image = self.spammers_post_image(env, url)
-        image.delete_from_disk(purge_cdn=False, purge=True)
+    @pytest.mark.parametrize('naming', ['ownerless', 'peer'])
+    def test_purging_an_attackers_row_naming_a_victims_legacy_file_leaves_it(self, env, owned, url, naming):
+        """B pastes A's file's URL into B's media library and is purged by an admin. A's own row naming it may have no
+        owner we can resolve, or a peer's: either way A's file stays."""
+        if naming == 'ownerless':
+            a_file(source_url=url)
+        else:
+            self.post_image(env, make_user(make_instance('peer.test'), 'peerowner'), source_url=url)
+        pasted = a_file(source_url=url)
+        db.session.execute(text('INSERT INTO "user_file" (file_id, user_id, size) VALUES (:f, :u, 0)'),
+                           {'f': pasted.id, 'u': env.baseline.user2.id})
+        db.session.commit()
+        process_file_delete(url, env.baseline.user2.id, purge=True)
         assert os.path.exists(owned)
 
-    def test_a_purge_of_a_peers_legacy_row_removes_nothing(self, env, owned, url):
-        peer = make_user(make_instance('peer.test'), 'peerspam')
-        post = make_post(env.baseline.community1, peer, ap_id='https://peer.test/post/abuse')
-        post.image = a_file(source_url=url)
-        db.session.commit()
-        post.image.delete_from_disk(purge_cdn=False, purge=True)
-        assert os.path.exists(owned)
+    @pytest.mark.parametrize('column', ['file_path', 'thumbnail_path'])
+    def test_a_copy_the_server_wrote_and_nothing_else_names_goes_on_purge(self, env, column):
+        copy = a_media_file('probe_copy.webp')
+        image = self.post_image(env, env.baseline.user1, source_url=f'{env.server_url}/static/media/gone.png',
+                                **{column: 'app/static/media/probe_copy.webp'})
+        image.delete_from_disk(purge_cdn=False, purge=True)
+        assert not os.path.exists(copy)
+
+    @pytest.mark.parametrize('other', ['ownerless url', 'peer post link'])
+    def test_a_copy_another_record_names_is_kept(self, env, other):
+        copy = a_media_file('probe_copy.webp')
+        try:
+            copy_url = f'{env.server_url}/static/media/probe_copy.webp'
+            if other == 'ownerless url':
+                a_file(source_url=copy_url)
+            else:
+                peer = make_user(make_instance('peer.test'), 'peerlinker')
+                make_post(env.baseline.community1, peer, ap_id='https://peer.test/post/link').url = copy_url
+                db.session.commit()
+            image = self.post_image(env, env.baseline.user1, file_path='app/static/media/probe_copy.webp')
+            image.delete_from_disk(purge_cdn=False, purge=True)
+            assert os.path.exists(copy)
+        finally:
+            if os.path.exists(copy):
+                os.unlink(copy)
 
 
 MIGRATION = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'migrations', 'versions',
