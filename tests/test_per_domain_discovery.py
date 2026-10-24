@@ -15,7 +15,7 @@ from flask import g
 import app.api.alpha.routes as alpha_routes
 from app import cache, db
 from app.api.alpha.views import site_view
-from app.models import BannedInstances, Instance, Site, SiteDomain
+from app.models import BannedInstances, Emoji, Instance, Site, SiteDomain
 from app.storefront import clear_domain_cache, domain_for_host
 from app.utils import get_setting
 from tests.factories import make_post
@@ -183,6 +183,20 @@ def test_the_shops_lemmy_site_document_is_the_shops(app, shop_rows):
     counts = document['site_view']['counts']
     assert (counts['users'], counts['posts'], counts['comments'], counts['communities']) == (1, 1, 0, 1)
     assert document['admins'] == []   # hell's admin is hell's account: the shop names none of hell's
+
+
+def test_the_shops_custom_emojis_are_served_on_the_shop(app):
+    """Emoji are the site's, shared by every domain (row 1 by ruling); the same files are served on each host, so a
+    sister domain names them on itself (plan C3, task 6). Another server's emoji stay its own."""
+    db.session.add(Emoji(token=':gold:', url=f'https://{HELL}/static/media/emoji/gold.png', category='shiny',
+                         instance_id=1))
+    db.session.add(Emoji(token=':far:', url='https://peer.example/emoji/far.png', instance_id=1))
+    db.session.commit()
+    emojis = {emoji['custom_emoji']['shortcode']: emoji['custom_emoji']['image_url']
+              for emoji in json.loads(shop_body(app, '/api/v3/site'))['custom_emojis']}
+    assert emojis == {'gold': f'{SHOP_BASE}/static/media/emoji/gold.png', 'far': 'https://peer.example/emoji/far.png'}
+    hell = json.loads(get(app, '/api/v3/site', host=HELL).data)['custom_emojis']
+    assert hell[0]['custom_emoji']['image_url'] == f'https://{HELL}/static/media/emoji/gold.png'
 
 
 def test_the_alpha_site_view_names_the_shop(app, shop_rows):

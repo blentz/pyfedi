@@ -39,7 +39,7 @@ from app.local_names import local_named
 from app.federation_urls import MissingInstanceKey, activity_id, domain_site_name, instance_actor_public_key, \
     instance_actor_signing, is_federating_url, object_base, owner_base, owner_domain
 from app.storefront import DomainInfo, acting_domain, default_domain, domain_authority, domain_base_url, \
-    hosted_instance_ids, instance_id_of, registration_mode_on
+    hosted_instance_ids, instance_id_of, link_on, registration_mode_on
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
@@ -462,7 +462,7 @@ def post_to_page(post: Post):
     elif (post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO or post.type == POST_TYPE_EVENT) and post.url is not None:
         activity_data["attachment"] = [{"href": post.url, "type": "Link"}]
     if post.image_id is not None:
-        activity_data["image"] = {"url": post.image.view_url(canonical=True), "type": "Image"}
+        activity_data["image"] = {"url": post.image.view_url(base=object_base(post)), "type": "Image"}   # plan C3
         if post.type == POST_TYPE_IMAGE:
             activity_data['attachment'] = [{'type': 'Image',
                                             'url': post.image.source_url,
@@ -6290,7 +6290,8 @@ def lemmy_site_data(domain: DomainInfo):
         })
     data['discussion_languages'] = discussion_languages
 
-    # Custom emojis (only local instance emojis)
+    # Custom emojis (only local instance emojis). They are the site's, every domain's (row 1), and every host serves
+    # the same files, so a sister domain names ours on itself (plan C3)
     local_emojis = Emoji.query.filter_by(instance_id=1).all()
     for emoji in local_emojis:
         # Extract shortcode from token (remove colons if present)
@@ -6305,7 +6306,7 @@ def lemmy_site_data(domain: DomainInfo):
         emoji_data = {
             "custom_emoji": {
                 "shortcode": shortcode,
-                "image_url": emoji.url,
+                "image_url": link_on(emoji.url, base),
                 "category": emoji.category if emoji.category else ""
             },
             "keywords": keywords

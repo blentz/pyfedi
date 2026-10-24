@@ -42,7 +42,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'admin_topics_export': 1,
     },
     'app/admin/util.py': {
-        'move_community_images_to_here': 4,
+        'move_community_images_to_here': 2,
     },
     'app/api/alpha/utils/community.py': {
         'get_community': 1,
@@ -139,11 +139,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'form_communities_to_ids': 1,
         'make_feed': 2,
     },
-    'app/shared/media.py': {
-        'store_uploaded_media': 1,
-    },
     'app/shared/post.py': {
-        'edit_post': 1,
         'report_post': 1,
     },
     'app/shared/reply.py': {
@@ -152,17 +148,11 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/shared/tasks/maintenance.py': {
         'add_remote_community_from_post': 1,
     },
-    'app/shared/tasks/media.py': {
-        '_thumbnail': 1,
-    },
     'app/shared/tasks/notes.py': {
         'send_reply': 2,
     },
     'app/shared/tasks/pages.py': {
-        'send_post': 4,
-    },
-    'app/shared/upload.py': {
-        'process_upload': 1,
+        'send_post': 2,
     },
     'app/shared/user.py': {
         'bot_challenge_user': 1,

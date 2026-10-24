@@ -16,11 +16,11 @@ This sweep finds, in app/ Python (by AST), a URL built on SERVER_URL or SERVER_N
 - an argument of a signing or sending call (`send_post_request`, `signed_get_request` and the rest);
 - the value of a `Link` header set with `headers.add`/`headers.set` (an ActivityPub alternate names an id).
 
-A site that is meant to stay is in ALLOWED with the count of its findings under each of REASONS that applies. The entries of a later
-task are removed by that task (Task 4's, WebFinger, NodeInfo and the site documents, are gone, and Task 5's, the
-instance-level keyId and the User-Agent, which name the acting domain through `instance_actor_signing` and
-`utils.user_agent`): `media: Task 6`. Never add a federated id to make the sweep pass; build it with `activity_id`,
-`owner_base` or `object_base`.
+A site that is meant to stay is in ALLOWED with the count of its findings under each of REASONS that applies. The entries of the
+later tasks are gone: Task 4's (WebFinger, NodeInfo and the site documents), Task 5's (the instance-level keyId and the
+User-Agent, which name the acting domain through `instance_actor_signing` and `utils.user_agent`) and Task 6's (a new
+upload's stored URL and a local file's federated URL, on the owner's domain). Never add a federated id to make the
+sweep pass; build it with `activity_id`, `owner_base` or `object_base`.
 """
 import ast
 import re
@@ -30,8 +30,7 @@ from tests.app_source import APP, app_trees
 RENDERED = 'rendered link'
 RELAYS = 'default-only by ruling: relays'
 FEEDS = 'default-only by ruling: feeds'
-TASK_6 = 'media: Task 6'
-REASONS = (RENDERED, RELAYS, FEEDS, TASK_6)
+REASONS = (RENDERED, RELAYS, FEEDS)
 
 ALLOWED = {
     # (path under the repo, enclosing function): {reason: findings in it}
@@ -47,7 +46,7 @@ ALLOWED = {
     ('app/shared/post.py', 'report_post'): {RENDERED: 1},
     ('app/shared/reply.py', 'report_reply'): {RENDERED: 1},
     ('app/shared/tasks/notes.py', 'send_reply'): {RENDERED: 1},
-    ('app/shared/tasks/pages.py', 'send_post'): {RENDERED: 1, TASK_6: 2},
+    ('app/shared/tasks/pages.py', 'send_post'): {RENDERED: 1},
     # relays are subscribed by the default domain only (spec), so their activities are its instance actor's
     ('app/relays/subscribe.py', 'remove_relay'): {RELAYS: 1},
     ('app/relays/subscribe.py', 'send_follow_accept'): {RELAYS: 1},
@@ -59,12 +58,6 @@ ALLOWED = {
     ('app/shared/feed.py', 'announce_feed_add_remove_to_subscribers'): {FEEDS: 2},
     ('app/shared/feed.py', 'edit_feed'): {FEEDS: 3},
     ('app/shared/feed.py', 'make_feed'): {FEEDS: 3},
-    # Task 6: a new upload's stored URL, and a local file's federated URL, on the owner's domain
-    ('app/admin/util.py', 'move_community_images_to_here'): {TASK_6: 2},
-    ('app/shared/media.py', 'store_uploaded_media'): {TASK_6: 1},
-    ('app/shared/post.py', 'edit_post'): {TASK_6: 1},
-    ('app/shared/tasks/media.py', '_thumbnail'): {TASK_6: 1},
-    ('app/shared/upload.py', 'process_upload'): {TASK_6: 1},
 }
 
 _CONFIG_KEYS = frozenset(('SERVER_URL', 'SERVER_NAME'))

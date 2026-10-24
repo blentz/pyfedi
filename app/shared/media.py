@@ -3,11 +3,9 @@ import os
 import shutil
 import uuid
 
-from flask import current_app
-
 from app.constants import (COMMUNITY_KIND_PODCAST, COMMUNITY_KIND_VIDEO_CHANNEL, MEDIA_KIND_AUDIO,
                            MEDIA_KIND_VIDEO, POST_STATUS_PROCESSING)
-from app.models import MEDIA_DIRECTORY, media_local_path, media_of, served_path  # noqa: F401  (re-exported)
+from app.models import MEDIA_DIRECTORY, federation_base, media_local_path, media_of, served_path  # noqa: F401  (re-exported)
 from app.shared.tasks import task_selector
 from app.utils import can_upload_audio, can_upload_video, ensure_directory_exists, get_setting, gibberish
 
@@ -124,7 +122,7 @@ def store_uploaded_media(post, uploaded_file, kind) -> str | None:
     with open(path, 'wb') as out:
         shutil.copyfileobj(stream, out, COPY_CHUNK)
     post.stored_media_path = path   # not a column: make_post removes exactly this file if the create then fails
-    post.url = f"{current_app.config['SERVER_URL']}{served_path(path)}"
+    post.url = f"{federation_base(post)}{served_path(path)}"   # on the uploader's (the author's) domain, plan C3
     post.status = POST_STATUS_PROCESSING
     with_media(post, status='processing', uuid=str(uuid.uuid4()), mime=mime, bytes=size)
     if kind == MEDIA_KIND_AUDIO:
