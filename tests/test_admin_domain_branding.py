@@ -445,6 +445,9 @@ OFFSITE = [
     pytest.param({'about': f'Hello ![a cat]({ELSEWHERE}/b.png)'}, 'about', f'{ELSEWHERE}/b.png', id='about markdown'),
     pytest.param({'additional_css': f'</style><img src="{ELSEWHERE}/c.png">'}, 'additional_css', f'{ELSEWHERE}/c.png',
                  id='markup in the css'),
+    # the tagline is written as HTML on every page that shows it
+    pytest.param({'description': f'Hi <meta http-equiv="refresh" content="0;url={ELSEWHERE}/go">'}, 'description',
+                 f'{ELSEWHERE}/go', id='tagline'),
 ]
 
 
@@ -512,6 +515,20 @@ def test_site_settings_offsite_warns(admin, domains):
     assert db.session.get(Site, 1).sidebar == f'![s]({ELSEWHERE}/s.png)'   # saved
     [warning] = [message for category, message in flashes(admin) if category == 'warning']
     assert f'{ELSEWHERE}/s.png' in warning and f'{ELSEWHERE}/b.png' in warning
+
+
+def test_a_site_tagline_offsite_warns(admin, domains):
+    client, token = admin
+    forget_login()
+    with patch('app.admin.routes.render_template', return_value='rendered'):
+        response = client.post('/admin/site', content_type='multipart/form-data', data={
+            'name': 'The First Site', 'description': f'Hi <img src="{ELSEWHERE}/t.png">', 'about': '', 'sidebar': '',
+            'legal_information': '', 'tos_url': '', 'announcement': '', 'contact_email': 'admin@example.org',
+            'submit': 'Save', 'csrf_token': token, 'icon': (b'', '')})
+    assert response.status_code == 200
+    assert db.session.get(Site, 1).description == f'Hi <img src="{ELSEWHERE}/t.png">'   # saved, as written
+    [warning] = [message for category, message in flashes(admin) if category == 'warning']
+    assert f'{ELSEWHERE}/t.png' in warning
 
 
 def test_site_settings_without_offsite_references_do_not_warn(admin, domains):

@@ -123,6 +123,7 @@ def test_onion_safe_drops_each_offsite_reference_and_logs_it(app, caplog):
     branding = branding_with(
         logo=f'{ELSEWHERE}/logo.svg', logo_180='/static/media/180.png', logo_152=f'{ELSEWHERE}/152.png',
         logo_32='//elsewhere.example.org/32.png', logo_16=f'{ELSEWHERE}/16.png',
+        description=f'Welcome <meta http-equiv="refresh" content="0;url={ELSEWHERE}/go"> <img src="{ELSEWHERE}/d.png">',
         additional_css=f'@import "{ELSEWHERE}/x.css";\n.own {{ background: url(/static/own.png) }}\n'
                        f'.far {{ background: url({ELSEWHERE}/far.png) }}',
         sidebar=f'![far]({ELSEWHERE}/side.png) sidebar text',
@@ -135,17 +136,19 @@ def test_onion_safe_drops_each_offsite_reference_and_logs_it(app, caplog):
     assert (safe.logo, safe.logo_180, safe.logo_152, safe.logo_32, safe.logo_16) == \
         ('', '/static/media/180.png', '', '', '')
     assert safe.additional_css == '@import "";\n.own { background: url(/static/own.png) }\n.far { background: url() }'
+    # The tagline is written as HTML on every page that shows it, so it is scanned as HTML
+    assert safe.description == 'Welcome <meta http-equiv="refresh"/> <img/>'
     assert safe.sidebar == branding.sidebar   # Markdown is the page's description text: text is no fetch
     assert safe.sidebar_html == f'<p>sidebar text <img alt="far"/> <a href="{ELSEWHERE}/l">link</a></p>'
     assert safe.about_html == '<p style="background: url()">about</p><img src="/static/own.png"/>' \
                               '<style>.s { background: url() }</style>'
-    assert offsite_references(css=safe.additional_css, html=safe.sidebar_html + safe.about_html,
-                              urls=safe[1:7], own_host=ONION) == []
-    assert (safe.name, safe.description, safe.default_theme) == (branding.name, branding.description,
-                                                                branding.default_theme)
+    assert offsite_references(css=safe.additional_css, html=safe.description + safe.sidebar_html + safe.about_html,
+                              urls=safe[2:7], own_host=ONION) == []
+    assert (safe.name, safe.default_theme) == (branding.name, branding.default_theme)
     dropped = [record.getMessage() for record in caplog.records if record.levelno == logging.INFO]
     for field, reference in [('logo', f'{ELSEWHERE}/logo.svg'), ('logo_152', f'{ELSEWHERE}/152.png'),
                              ('logo_32', '//elsewhere.example.org/32.png'), ('logo_16', f'{ELSEWHERE}/16.png'),
+                             ('description', f'{ELSEWHERE}/go'), ('description', f'{ELSEWHERE}/d.png'),
                              ('additional_css', f'{ELSEWHERE}/x.css'), ('additional_css', f'{ELSEWHERE}/far.png'),
                              ('sidebar_html', f'{ELSEWHERE}/side.png'), ('about_html', f'{ELSEWHERE}/bg.png'),
                              ('about_html', f'{ELSEWHERE}/two.png'), ('about_html', f'{ELSEWHERE}/s.png')]:
@@ -348,6 +351,19 @@ def test_inherited_offsite_image_is_stripped_on_onion_only(app, onion_site, capl
         assert app.jinja_env.globals['current_branding']().logo == ''
     with default_request(app):
         assert current_branding().sidebar_html == site.sidebar_html
+
+
+def test_an_inherited_tagline_that_leaves_the_onion_is_stripped_on_the_onion_only(app, onion_site):
+    """The tagline is HTML on the home page (`|safe`): a refresh in it would send the onion's visitor to clearnet, which
+    no CSP directive stops."""
+    site = db.session.get(Site, 1)
+    site.description = f'Welcome <meta http-equiv="refresh" content="0;url={ELSEWHERE}/go">'
+    db.session.commit()
+    clear_domain_cache()
+    onion_home = visit(app, '/').get_data(as_text=True)
+    assert 'Welcome' in onion_home
+    assert f'{ELSEWHERE}/go' not in onion_home
+    assert site.description in visit(app, '/', onion=False).get_data(as_text=True)   # the first domain's, as written
 
 
 def test_the_onions_own_offsite_value_is_stripped_too(app, onion_site):

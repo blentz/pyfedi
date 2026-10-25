@@ -84,7 +84,8 @@ def _style_kept_open(branding: Branding) -> Branding:
 # quoted or not, and every string, which covers `@import "x"` and `image-set("x" 1x)`; escapes are undone.
 
 _URL_FIELDS = ('logo', 'logo_180', 'logo_152', 'logo_32', 'logo_16')
-_HTML_FIELDS = ('sidebar_html', 'about_html')
+# The tagline is HTML too: every page that shows it writes it `|safe`, as Site's always was
+_HTML_FIELDS = ('description', 'sidebar_html', 'about_html')
 # What a browser loads as soon as it parses the element, without the visitor following anything: never an `a`'s href
 _LOADING_ATTRS = frozenset({'src', 'poster', 'data', 'background', 'xlink:href'})
 _LOADING_HREF_TAGS = frozenset({'base', 'image', 'use', 'feimage'})   # tag names as html.parser lower-cases them
