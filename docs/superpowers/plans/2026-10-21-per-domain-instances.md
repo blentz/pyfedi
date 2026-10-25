@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- hell.cloud's actor, instance actor, WebFinger and community documents stay byte-identical (only `updated` may change). NodeInfo counts may change (they will now count row 1 only).
+- The first domain's actor, instance actor, WebFinger and community documents stay byte-identical (only `updated` may change). NodeInfo counts may change (they will now count row 1 only).
 - The default domain keeps instance row 1. Remote rows are untouched.
 - A sister instance row never gets an `inbox`/`shared_inbox`, and no delivery, polling, dormancy or failure bookkeeping ever targets a hosted instance id.
 - A local-only domain's instance row is invisible on every other storefront and in every federated list or API: lists omit it, `/instance/<its domain>` 404s. On its own storefront it shows as a sister (owner ruling 2026-10-21). Federating sisters are never listed as "federated".
@@ -23,11 +23,11 @@
 
 ## Review Focus
 
-1. A celery task or CLI command (no request): `current_instance_id()` is the default domain's row 1, so every R-site behaves exactly as today on hell.cloud.
-2. A user blocks the onion's instance on hell.cloud: onion content disappears from their feeds; their own (hell) content never does, and their own instance can't be blocked from any storefront.
-3. An onion community post with a hot ranking a little below a hell.cloud post: on the onion it ranks above it; on hell.cloud below it.
-4. Delivery fan-out for a hell.cloud post with a follower on the onion: no outbound HTTP to the onion row (it has no inbox), and no failure counter moves.
-5. The anonymous `/instances` page and `/api/v3/federated_instances` on hell.cloud never contain the onion hostname.
+1. A celery task or CLI command (no request): `current_instance_id()` is the default domain's row 1, so every R-site behaves exactly as today on the first domain.
+2. A user blocks the onion's instance on the first domain: onion content disappears from their feeds; their own (hell) content never does, and their own instance can't be blocked from any storefront.
+3. An onion community post with a hot ranking a little below a first-domain post: on the onion it ranks above it; on the first domain below it.
+4. Delivery fan-out for a first-domain post with a follower on the onion: no outbound HTTP to the onion row (it has no inbox), and no failure counter moves.
+5. The anonymous `/instances` page and `/api/v3/federated_instances` on the first domain never contain the onion hostname.
 
 ---
 
@@ -58,7 +58,7 @@
 ### Task 3: "Hosted here" sites use hosted_instance_ids
 
 **Files:** the recon's S1b H-table sites: visibility.py:96/108; models.py:870, 1621, 2581, 5745; admin/util.py:65; user/routes.py:1319; shared/tasks/blocks.py:162, deletes.py:275, pages.py:153/195/478, maintenance.py:354-390 (retention: hosted = local cutoff), :458, :552; activitypub/routes.py:458, 2484/2516; api/alpha/views.py:1521; instance/routes.py:103; utils.py:7255; main/routes.py:709 (modlog trusted) and :801 (sitemap, see ruling below); cli.py:1504/1506; templates post/post.html:12, user/show_profile.html:16, user/show_upvoted.html:16 (indexable meta: hosted AND not local-only); community/routes.py:2177/2179 and admin/routes.py:2462/2464 (report local/remote filter); Report.is_local (models.py:5202); report creation `source_instance_id=1` sites (set the reporter's own instance). `utils.py:5807` JOINED_SERVER_SQL and `find_microblogging_community` stay row 1 (the microblogs community is the default domain's).
-- Sitemap ruling: the sitemap lists the request domain's posts (`current_instance_id()`), so hell.cloud's is unchanged.
+- Sitemap ruling: the sitemap lists the request domain's posts (`current_instance_id()`), so the first domain's is unchanged.
 - Create the gate `tests/test_instance_id_literals.py`, modelled on tests/test_local_name_lookups.py: an AST/template scan of app/ that flags any comparison or assignment of an instance id to the literal 1 (`instance_id == 1`, `!= 1`, `Instance.id != 1`, `get(Instance, 1)`, `filter_by(id=1)` on Instance, SQL text `instance_id = 1`), with an allowlist where each entry names its reason (`row 1 is the default domain's: <why>`), plus a stale-entry test. Task 4's and Task 5's sites are allowlisted with reason `request-domain site, Task 4` / `blocking site, Task 5` and removed by those tasks.
 - Tests by effect: fan-out for a hell post with an onion follower makes no HTTP (`no_http`) and moves no failure counter; `/api/v3/federated_instances` and alpha `federated_instances_view` exclude every hosted row; retention keeps a sister's post on the local cutoff; an onion user's report reads as local.
 - Commit: `fix: our other domains count as hosted here for delivery, moderation and federation lists (C2)`.
@@ -93,5 +93,5 @@
 
 - [ ] Before the push: save the identity set to `~/backups/<date>-identity/before/` (DEPLOY_GUIDE §11), plus `select id, domain, inbox from instance where id = 1 or domain in (select domain from site_domain)` and the onion's user/community/post counts by instance_id.
 - [ ] After autodeploy: identity `cmp` (only `updated`, NodeInfo counts differ); the onion has its own instance row with no inbox and its rows moved to it; 0 tracebacks in web/celery/beat/background/notifs over 10 min; anonymous `/instances` on hell has no onion hostname.
-- [ ] Owner: on the onion while logged in, the home hot feed shows onion posts lifted; blocking hell.cloud's instance from an onion account hides hell posts.
+- [ ] Owner: on the onion while logged in, the home hot feed shows onion posts lifted; blocking the first domain's instance from an onion account hides hell posts.
 - [ ] Update DEPLOY_GUIDE §11 (sister instance rows, blocking, ranking) and the memory `onion-storefront-track`.

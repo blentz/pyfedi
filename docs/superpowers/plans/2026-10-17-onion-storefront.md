@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** PieFed answers on several registered domains, keeps each visitor on the storefront they arrived on, and hell.cloud gets a Tor onion service that is fast, abuse-resistant and never leaks clearnet URLs.
+**Goal:** PieFed answers on several registered domains, keeps each visitor on the storefront they arrived on, and the first domain gets a Tor onion service that is fast, abuse-resistant and never leaks clearnet URLs.
 
 **Architecture:** A `site_domain` table and a per-request `g.storefront` decide every presentation URL. Federation keeps using the canonical `SERVER_URL`. A response-level link rewriter is the safety net for stored HTML. Onion traffic is marked by Caddy and trusted only from Caddy's pinned address, and it gets per-session rate limits, proof-of-work and per-account login delays instead of IP rules. The deploy adds a single-onion `tor` container, a Caddy onion listener and fail2ban jails.
 
@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Federation identity never varies by request host. ActivityPub IDs, `keyId`, WebFinger and NodeInfo use `current_app.config['SERVER_URL']` / `SERVER_NAME` (§2 anti-goals).
-- An onion page must not reference `https://hell.cloud` in any `href`, `src`, `srcset`, `action`, `content`, `Location` or SSE URL (§2).
+- An onion page must not reference `https://example.org` in any `href`, `src`, `srcset`, `action`, `content`, `Location` or SSE URL (§2).
 - Clearnet behaviour is unchanged unless a task says otherwise.
 - Inline imports only if technically unavoidable. Break cycles by moving code (memory `inline-imports-rule`).
 - TDD: failing test first. One commit per task. Run tests with `./run_tests.sh <path> -v`, never from `/tmp` scripts (memory `gates-live-in-repo`).
@@ -34,8 +34,8 @@
 
 ## Review Focus
 
-1. **Host header variants**: `HELL.CLOUD`, `hell.cloud.`, `x.onion:80` should all resolve to the same storefront. Test in Task 2.
-2. **Stored-link variants**: `http://hell.cloud/…`, `//hell.cloud/…`, `https://HELL.CLOUD/…`, and `srcset` lists should be canonicalised on save and rewritten on render. Tests in Task 6.
+1. **Host header variants**: `EXAMPLE.ORG`, `example.org.`, `x.onion:80` should all resolve to the same storefront. Test in Task 2.
+2. **Stored-link variants**: `http://example.org/…`, `//example.org/…`, `https://EXAMPLE.ORG/…`, and `srcset` lists should be canonicalised on save and rewritten on render. Tests in Task 6.
 3. **POST-redirect-GET on the onion**: a form POST whose view redirects to an absolute `SERVER_URL` URL should send a `Location` on the onion host. Test in Task 6.
 4. **Password-reset or verification email requested over the onion**: the link should use the onion host, because it was sent during the request. Test in Task 4b.
 5. **Signed ActivityPub inbox POST arriving on the onion host** (a Tor-capable remote server): it should be accepted. Signature verification should use the request's own Host, and stored IDs stay canonical. Test in Task 4a.
@@ -339,18 +339,18 @@
 - [ ] **Step 4: Run.** Expect PASS.
 - [ ] **Step 5: Commit** `feat: failed logins are logged with the client IP for fail2ban`
 
-## Phase C: Tor deploy for hell.cloud (spec §4)
+## Phase C: Tor deploy for the first domain (spec §4)
 
-The owner pushes Phases A and B to `hell.cloud` first. Wait for autodeploy, then check: `curl -sI https://hell.cloud/` gives 200, a post page renders, and `journalctl -u pyfedi-web --since -10min | grep -c Traceback` is 0. Do not start Phase C until clearnet is confirmed unchanged.
+The owner pushes Phases A and B to the deploy branch first. Wait for autodeploy, then check: `curl -sI https://example.org/` gives 200, a post page renders, and `journalctl -u pyfedi-web --since -10min | grep -c Traceback` is 0. Do not start Phase C until clearnet is confirmed unchanged.
 
 ### Task 12: Pinned network and a static Caddy IP
 
 **Files (local-only):** `deploy/quadlet/pyfedi.network`, `deploy/quadlet/pyfedi-caddy.container`. Server: `.env.docker` and the regenerated `.env.quadlet`.
 
 - [ ] **Step 1:** On the server, run `podman network inspect pf_network`. Record the current subnet.
-- [ ] **Step 2:** Add `Subnet=<that subnet>` and `Gateway=` to `pyfedi.network`, so the change does not move other containers. Add `IP=<subnet>.250` to `pyfedi-caddy.container`. Add `ONION_PROXY_IP=<subnet>.250` to `.env.docker` and regenerate `.env.quadlet` (memory `hellcloud-quadlet-deploy`).
+- [ ] **Step 2:** Add `Subnet=<that subnet>` and `Gateway=` to `pyfedi.network`, so the change does not move other containers. Add `IP=<subnet>.250` to `pyfedi-caddy.container`. Add `ONION_PROXY_IP=<subnet>.250` to `.env.docker` and regenerate `.env.quadlet` (memory `first-domain-quadlet-deploy`).
 - [ ] **Step 3:** Back up, install, `systemctl daemon-reload`, and restart the stack in the documented order.
-- [ ] **Step 4: Verify.** `podman inspect pyfedi_caddy --format '{{.NetworkSettings.Networks}}'` shows `.250`. `podman exec piefed_app1 printenv ONION_PROXY_IP` matches. hell.cloud gives 200.
+- [ ] **Step 4: Verify.** `podman inspect pyfedi_caddy --format '{{.NetworkSettings.Networks}}'` shows `.250`. `podman exec piefed_app1 printenv ONION_PROXY_IP` matches. The first domain gives 200.
 
 ### Task 13: Tor container, key volume, key backup
 
@@ -367,14 +367,14 @@ The owner pushes Phases A and B to `hell.cloud` first. Wait for autodeploy, then
 
 **Files:** `Caddyfile` (tracked in the repo, and deployed from the checkout).
 
-- [ ] **Step 1:** Move the hell.cloud block's body into a snippet `(piefed_routes)`. Keep `encode`, `request_body max_size 510MiB`, both SSE `handle` blocks and the `reverse_proxy web:5000` retry. Keep every existing comment, moved with its directive.
-- [ ] **Step 2:** In `hell.cloud { … }`, add `request_header -X-PieFed-Via`, `header Onion-Location http://<onion>{uri}` and `import piefed_routes`.
+- [ ] **Step 1:** Move the example.org block's body into a snippet `(piefed_routes)`. Keep `encode`, `request_body max_size 510MiB`, both SSE `handle` blocks and the `reverse_proxy web:5000` retry. Keep every existing comment, moved with its directive.
+- [ ] **Step 2:** In `example.org { … }`, add `request_header -X-PieFed-Via`, `header Onion-Location http://<onion>{uri}` and `import piefed_routes`.
 - [ ] **Step 3:** Add `http://<onion>:8081 { request_header X-PieFed-Via onion; import piefed_routes }`.
 - [ ] **Step 4: Validate.** `podman run --rm -v ./Caddyfile:/etc/caddy/Caddyfile:z docker.io/library/caddy:2 caddy validate --config /etc/caddy/Caddyfile` passes.
 - [ ] **Step 5: Commit** `deploy: Caddy serves the onion storefront and advertises it with Onion-Location`. The owner pushes it. After the deploy, restart `pyfedi-caddy` only if autodeploy did not.
 - [ ] **Step 6: Verify.**
-  - `curl -sI https://hell.cloud/ | grep -i onion-location`.
-  - `curl -s -H 'X-PieFed-Via: onion' https://hell.cloud/` is treated as clearnet: the login page has no `pow_token`.
+  - `curl -sI https://example.org/ | grep -i onion-location`.
+  - `curl -s -H 'X-PieFed-Via: onion' https://example.org/` is treated as clearnet: the login page has no `pow_token`.
   - From inside the tor container, `curl -s http://pyfedi_caddy:8081/` returns the onion-host page.
 
 ### Task 15: fail2ban jails
@@ -393,7 +393,7 @@ The owner pushes Phases A and B to `hell.cloud` first. Wait for autodeploy, then
   - `ignoreip = 127.0.0.1/8 ::1 <pf_network subnet>`.
   - Ban action: one that works on DNATed podman traffic. Try `banaction = nftables[type=multiport]` with the chain set to netavark's forward path, or `firewallcmd-rich-rules` on the `FORWARD` hook. Keep whichever passes Step 4.
 - [ ] **Step 4: Prove the ban.**
-  - From an outside host the owner names, check that `curl -sI https://hell.cloud/` works.
+  - From an outside host the owner names, check that `curl -sI https://example.org/` works.
   - Run `fail2ban-client set pyfedi-login banip <that IP>` and check that the curl now times out.
   - Run `unbanip` and check that it works again.
   - Record the result.
@@ -408,12 +408,12 @@ The owner pushes Phases A and B to `hell.cloud` first. Wait for autodeploy, then
   - Register (PoW visible), or log in with a test account.
   - Post with an image upload.
   - Receive a live notification from a second account.
-  - Pass: the network panel shows zero requests to `hell.cloud`.
+  - Pass: the network panel shows zero requests to `example.org`.
 - [ ] **Step 2:** Repeat the login at the "Safest" security level. Pass: the wait step works.
-- [ ] **Step 3:** Open `https://hell.cloud` in Tor Browser. Pass: the ".onion available" prompt appears.
+- [ ] **Step 3:** Open `https://example.org` in Tor Browser. Pass: the ".onion available" prompt appears.
 - [ ] **Step 4:** Add an onion section to `DEPLOY_GUIDE.md`:
   - the address
   - the key backup path, and how to restore it (stop `pyfedi-tor`, decrypt into the volume's `hs_pyfedi/`, `chown` to tor, `chmod 600`, start)
   - the `ONION_PROXY_IP` dependency on Caddy's static IP
   - the jail list
-- [ ] **Step 5:** Update memory `hellcloud-quadlet-deploy` with the new units, volume, key backup and jails.
+- [ ] **Step 5:** Update memory `first-domain-quadlet-deploy` with the new units, volume, key backup and jails.

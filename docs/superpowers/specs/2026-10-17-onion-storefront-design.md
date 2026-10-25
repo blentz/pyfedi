@@ -1,16 +1,16 @@
-# Onion storefront: multi-domain PieFed and a Tor onion service for hell.cloud
+# Onion storefront: multi-domain PieFed and a Tor onion service for the first domain
 
 Date: 2026-10-17. Status: design, awaiting owner approval.
 
 ## 1. Intent
 
-hell.cloud should be reachable on the Tor network as well as the clearnet, for readers and posters who
+The first domain should be reachable on the Tor network as well as the clearnet, for readers and posters who
 want privacy. A visitor who arrives on the onion address must stay on it: every link, redirect, image,
 form and stream they meet uses the onion host.
 
 The owner's longer aim is wider than one onion. PieFed becomes **one aggregate community behind several
 uniquely branded storefronts**. Each storefront is a domain with its own users and identity
-(`alice@<onion>` is a different person from `alice@hell.cloud`, permanently). All storefronts share one
+(`alice@<onion>` is a different person from `alice@example.org`, permanently). All storefronts share one
 database, the same communities, posts, local feed and moderation, without the cost of separate instances.
 
 This document designs the first two of five projects in full and records what is already decided about
@@ -19,20 +19,20 @@ the other three.
 | # | Project | This document |
 |---|---------|---------------|
 | 1 | Domain registry + host-aware URLs | full design |
-| 2 | Tor deploy for hell.cloud | full design |
+| 2 | Tor deploy for the first domain | full design |
 | 3 | Per-domain identity (multitenancy) | decided rulings only |
 | 4 | Per-domain branding | decided rulings only |
 | 5 | Logging minimisation across the deploy | decided rulings only |
 
-Projects 1 and 2 together deliver a working onion storefront for existing hell.cloud users. Accounts
-created through the onion during that window are ordinary hell.cloud accounts. See §6.
+Projects 1 and 2 together deliver a working onion storefront for existing first-domain users. Accounts
+created through the onion during that window are ordinary first-domain accounts. See §6.
 
 ## 2. Goals, non-goals, anti-goals
 
 Goals
 - The site answers on every domain the admin registers. The storefront is chosen per request.
 - A visitor never meets a URL for a different storefront than the one they are on.
-- hell.cloud keeps federating exactly as today. Its ActivityPub identity does not change.
+- The first domain keeps federating exactly as today. Its ActivityPub identity does not change.
 - The onion is fast, survives restarts and redeploys, and keeps the same address forever.
 - Abuse arriving over Tor cannot lock honest onion users out.
 
@@ -42,10 +42,10 @@ Non-goals (for projects 1–2)
 - Per-domain branding: project 4.
 - Reducing what the deploy logs: project 5. Projects 1–2 add the logging that fail2ban needs, and
   project 5 decides retention.
-- Hiding where the hell.cloud server is. Its IP is public on the clearnet.
+- Hiding where the first-domain server is. Its IP is public on the clearnet.
 
 Anti-goals (a failure even if everything "works")
-- An onion page that loads anything from `https://hell.cloud` (links, images, scripts, redirects,
+- An onion page that loads anything from `https://example.org` (links, images, scripts, redirects,
   `<link rel=canonical>`, OpenGraph tags, SSE). That breaks the privacy promise.
 - An ActivityPub ID, signature `keyId` or WebFinger answer that changes because of the host a request
   arrived on. Remote servers would see duplicate actors or reject signatures.
@@ -139,7 +139,7 @@ allow-list of the canonical helpers.
 ### 3.4a Cache keys
 
 The app has 107 `@cache.cached` / `@cache.memoize` uses. Flask-Caching's default view key is the request
-path only, so a page cached on hell.cloud would be served on the onion. Every presentation-cache key gains
+path only, so a page cached on the first domain would be served on the onion. Every presentation-cache key gains
 the storefront host, e.g. through a shared `key_prefix` / `make_cache_key` that adds `g.storefront.domain`.
 Memoized functions that return presentation URLs either take the host as an argument or return
 host-relative values. A test renders the same cached page on two hosts and checks each gets its own host.
@@ -147,7 +147,7 @@ host-relative values. A test renders the same cached page on two hosts and check
 ### 3.5 Rewriting stored content
 
 Post, comment, sidebar and profile HTML is stored rendered (`body_html`) and contains absolute links to
-`https://hell.cloud/...` that users pasted. At render time, a Jinja filter rewrites `href`/`src`
+`https://example.org/...` that users pasted. At render time, a Jinja filter rewrites `href`/`src`
 attributes whose host is **any registered domain** to the current storefront's scheme and host. It
 rewrites attributes only, never text. It runs on the already-sanitised HTML, so it adds no new markup
 paths. (Owner's intent: onion visitors stay on the onion. The approach is Claude's call.)
@@ -169,7 +169,7 @@ needed. (Claude's call.)
   **Spike first**: confirm in current Tor Browser that a `Secure` cookie set over `http://<onion>` is
   stored and sent back. If it is not, set the `Secure` flag per request (true when
   `g.storefront.scheme == 'https'` or `is_onion`) rather than globally.
-- `HTTP_PROTOCOL=mixed` (an upstream feature) is not used on hell.cloud. Per-domain `scheme` replaces
+- `HTTP_PROTOCOL=mixed` (an upstream feature) is not used on the first domain. Per-domain `scheme` replaces
   it for this purpose. Keep `mixed` working for upstream users: it maps to the default row's scheme for
   presentation and https for federation, as it does today.
 - CSRF tokens are session-bound, so they work unchanged.
@@ -199,7 +199,7 @@ the `user.ip_address` column. Over the onion, the "client IP" is the Tor contain
     proof-of-work (§4.4) makes cycling sessions expensive. Owner ruling: per-session limits plus Tor PoW.
     Requests with no session cookie: see §3.7a.
   - Login also has a per-**target-account** limit on onion attempts only. Its counter is separate from
-    clearnet, so an onion attacker cannot lock Alice out on hell.cloud. Tripping it adds a growing delay
+    clearnet, so an onion attacker cannot lock Alice out on the first domain. Tripping it adds a growing delay
     (doubling, capped), never a hard block. It covers web, API and mobile-app login. (Claude's call.)
 - Clearnet behaviour is unchanged.
 
@@ -245,10 +245,10 @@ onion requests only. Clearnet is unchanged.
   either.
 - Lint-style test: no direct `SERVER_URL`/`SERVER_NAME` reads outside the allow-list.
 
-## 4. Project 2: Tor deploy for hell.cloud
+## 4. Project 2: Tor deploy for the first domain
 
 Deploy sources live in the local-only `deploy/quadlet/` and `deploy/systemd/` (git-ignored, see
-`hellcloud-quadlet-deploy` memory). Units are installed over ssh as `rocky@hell.cloud`. Back up the unit
+`first-domain-quadlet-deploy` memory). Units are installed over ssh as `rocky@example.org`. Back up the unit
 files and the Caddyfile to `~/backups` before editing.
 
 ### 4.1 Tor container
@@ -273,7 +273,7 @@ files and the Caddyfile to `~/backups` before editing.
 - Volume `pyfedi-tor-data.volume` holds `hs_pyfedi/`. It must persist: losing
   `hs_ed25519_secret_key` loses the address for good.
 - Back up `hs_ed25519_secret_key` once, age-encrypted to the same recipient as the DB dumps (the owner
-  holds `~/hellcloud-restore.key`), to `~/backups/tor/`. Never leave a plaintext copy outside the
+  holds `~/first-domain-restore.key`), to `~/backups/tor/`. Never leave a plaintext copy outside the
   volume.
 - The onion hostname goes into the `site_domain` table through the admin UI (project 1). It is also
   recorded in `deploy/DEPLOY_GUIDE.md`.
@@ -281,12 +281,12 @@ files and the Caddyfile to `~/backups` before editing.
 ### 4.3 Caddy
 
 - A new site block `http://<onion>:8081` (internal only, not in `PublishPort`) with the same handlers
-  as `hell.cloud`: SSE `handle` blocks, `request_body max_size 510MiB`, the `lb_try_duration` retry,
+  as `example.org`: SSE `handle` blocks, `request_body max_size 510MiB`, the `lb_try_duration` retry,
   `encode`. Factor the shared handlers into a Caddy snippet `(piefed_routes)` imported by both blocks,
   so they cannot drift.
-- The onion block sets `request_header X-PieFed-Via onion`. The `hell.cloud` block does
+- The onion block sets `request_header X-PieFed-Via onion`. The `example.org` block does
   `request_header -X-PieFed-Via` (strip).
-- The `hell.cloud` block adds `header Onion-Location http://<onion>{uri}`.
+- The `example.org` block adds `header Onion-Location http://<onion>{uri}`.
 - Caddy must not try to get a certificate for the onion. A `http://` site address avoids ACME.
 - `pyfedi-caddy.container`: no new published ports. Tor reaches 8081 over `pyfedi.network`.
 
@@ -329,14 +329,14 @@ Prod runs fail2ban with only an `sshd` jail.
 2. Build and start `pyfedi-tor`. Read the hostname, back up the key, add the domain row in admin.
 3. Update the Caddyfile and restart Caddy.
 4. From Tor Browser: browse, log in, post, upload an image, receive a live notification. Check the
-   network panel shows no request to `hell.cloud`.
+   network panel shows no request to `example.org`.
 5. Enable the fail2ban jails. Run a test ban from an outside IP and confirm it blocks 443.
 6. Update `deploy/DEPLOY_GUIDE.md`: the onion address, the backup location, how to restore the key.
 
 ## 5. Constraints
 
 - The prod host has 7.6 GB RAM, about 2 GB free, and no swap. tor uses roughly 50–100 MB, which is fine.
-- Deploys are automatic from GitHub branch `hell.cloud`. Pushing is the owner's job.
+- Deploys are automatic from the deploy branch on GitHub. Pushing is the owner's job.
 - pgdata is on LUKS. A reboot needs the owner to unlock it, and that is unchanged.
 - Inline imports only if technically unavoidable (owner rule).
 - TDD and one commit per logical change (owner workflow).
@@ -350,11 +350,11 @@ Prod runs fail2ban with only an `sshd` jail.
   only reachable by Tor-capable servers.
 - `registration` is enforced per domain: anyone / staff+admin / admin-only.
 - Any user can log in on any storefront. A bare username resolves to the storefront's own domain.
-  Other domains' users type the full handle (`bob@hell.cloud`). Claude's call.
+  Other domains' users type the full handle (`bob@example.org`). Claude's call.
 - Out-of-request content (emails, push) uses the recipient's home domain.
 - Open: what federation does for a domain with `federates` off. Its users could be local-only, or
   federate under the default domain.
-- Accounts created through the onion during projects 1–2 are hell.cloud accounts. Project 3 must decide
+- Accounts created through the onion during projects 1–2 are first-domain accounts. Project 3 must decide
   whether to offer them a move.
 
 **Project 4, branding**: per-domain site name, logo, colours, custom CSS and sidebar.

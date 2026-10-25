@@ -276,4 +276,4 @@ Behaviour:
   - The same page on clearnet is unchanged.
   - 0 tracebacks.
   - The owner repeats the Tor Browser HAR check: 0 requests to any host but the onion.
-- [ ] **Step 4:** Update DEPLOY_GUIDE §11 (cache dir, settings, timer, queue) and the `hellcloud-quadlet-deploy` memory.
+- [ ] **Step 4:** Update DEPLOY_GUIDE §11 (cache dir, settings, timer, queue) and the `first-domain-quadlet-deploy` memory.

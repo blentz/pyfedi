@@ -18,7 +18,7 @@ community search cannot find them. The community search on `/search` redirects t
 - Searching "microblogs" lists every available server view. Searching part of a host (for example
   "infosec") finds that server's view.
 
-Success: on hell.cloud, `/communities?search=microblogs` lists `microblogs@infosec.exchange`,
+Success: on the first domain, `/communities?search=microblogs` lists `microblogs@infosec.exchange`,
 `microblogs@mastodon.social` and the other servers with stored microblogs, each linking to its view.
 `/communities` sorted by posts places each view among the communities by its post count.
 

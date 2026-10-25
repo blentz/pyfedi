@@ -5,27 +5,27 @@ Date: 2026-10-19. Project 3 of `docs/superpowers/specs/2026-10-17-onion-storefro
 
 ## 1. Intent
 
-hell.cloud will soon add more hell.* domains, and it already serves the onion. Today every domain is a storefront
-for the one hell.cloud identity: an account is a hell.cloud account wherever it logs in. The owner wants each domain
+The first domain will soon add more hell.* domains, and it already serves the onion. Today every domain is a storefront
+for the one first-domain identity: an account is a first-domain account wherever it logs in. The owner wants each domain
 to be its own instance to the people on it and to the fediverse, while all of them share one server, one database
 and one set of site settings.
 
 The onion is the special case. Nobody signs up there. Its main use is people from the other domains logging in
-privately as themselves (`wakko@hell.cloud`). Admins may also add accounts that live only on the onion. Those are
+privately as themselves (`wakko@example.org`). Admins may also add accounts that live only on the onion. Those are
 local-only: nothing they do leaves this server. And nothing records that anyone used the onion.
 
 ## 2. Goals, non-goals, anti-goals
 
 Goals (owner rulings 2026-10-19 unless marked)
 - **Each domain is its own identity space.** An account and a community belong to exactly one domain, permanently.
-  `wakko@hell.cloud` and `wakko@hell.foo` can be two different people (§6, decided 2026-10-17).
+  `wakko@example.org` and `wakko@hell.foo` can be two different people (§6, decided 2026-10-17).
 - **Per-domain federation.** A domain with `federates` on publishes its own actors under its own host:
   `https://hell.foo/u/alice`, `!art@hell.foo`, its own WebFinger, NodeInfo, instance actor and shared inbox. To the
   fediverse each domain is a separate instance.
 - **Federation-off domains are local-only.** Their accounts' posts, comments, votes and follows never leave this
   server. Their actors are not published (§3.4).
 - **Login on any storefront.** A bare username means the account on the domain being logged in on: a bare `wakko`
-  on the onion is the onion's wakko, and hell.cloud's wakko types `wakko@hell.cloud`. A logged-in user acts as their
+  on the onion is the onion's wakko, and the first domain's wakko types `wakko@example.org`. A logged-in user acts as their
   home identity whatever storefront they browse.
 - **The onion takes no sign-ups.** Admins add accounts to it directly.
 - **Each domain browses as its own instance.** It shows everything public, but filtering and ranking treat that
@@ -42,7 +42,7 @@ Non-goals
 - Per-domain admins or moderators. The site's admins administer every domain.
 - Per-domain branding (project 4) and log retention beyond the access-log flag (project 5).
 - Moving an account or community between domains. Accounts created through the onion during projects 1–2 are
-  hell.cloud accounts and stay so; the server keeps no record of which they are, by design.
+  first-domain accounts and stay so; the server keeps no record of which they are, by design.
 - Accounts on other fediverse servers logging in here. Only the domains this server hosts.
 - Remote servers learning that the domains share a server. Not hidden, not advertised: they share an IP.
 
@@ -52,7 +52,7 @@ Kept as they are (owner rulings 2026-10-19)
 - IP and country are already blank for onion requests (`audit_field`, `get_ip_address`), and IP bans skip them.
 
 Anti-goals (a failure even if it "works")
-- **hell.cloud's identity changes.** Any existing `ap_profile_id`, actor key, `keyId`, WebFinger answer or inbox URL
+- **The first domain's identity changes.** Any existing `ap_profile_id`, actor key, `keyId`, WebFinger answer or inbox URL
   that differs after this project. Remote servers would see duplicates or reject signatures.
 - **Local-only content leaves the server**, by any path: delivery, an outbox page, a featured collection, a
   relay, a remote fetch of its URL, a reply or vote that references it.
@@ -66,7 +66,7 @@ Anti-goals (a failure even if it "works")
 
 ### 3.1 Ownership
 - Each local user and community gets the domain it belongs to (a `site_domain` row). Every existing local row
-  belongs to the default domain (hell.cloud). Remote rows have none. (Claude's call on the shape: a foreign key on
+  belongs to the default domain (the first domain). Remote rows have none. (Claude's call on the shape: a foreign key on
   `user` and `community`.)
 - A local name is unique within its domain, case-insensitively, not across domains. Remote rows are unaffected.
   Prod has no local user or community names that differ only in case (checked 2026-10-19), so the index can be
@@ -100,12 +100,12 @@ Anti-goals (a failure even if it "works")
   `SERVER_NAME` or the request host. Existing stored IDs are not rewritten.
 - Each federating domain answers WebFinger (`acct:name@domain`, only its own accounts and communities), host-meta,
   NodeInfo (its own counts, software PieFed) and its own instance actor. Each instance actor has its own key pair,
-  stored with its domain row. hell.cloud's instance actor keeps its current key.
+  stored with its domain row. The first domain's instance actor keeps its current key.
 - Each domain's shared inbox receives activities for its own actors. One server, one database: an inbound activity
   is stored once however many of our domains' actors it addresses.
 - Outbound: an activity is signed with its actor's key and its `keyId` is the actor's own ID, on the actor's domain.
   Instance-level activities (relay subscriptions, instance-actor fetches) use the domain's instance actor.
-- **Between sister domains, no HTTP.** A hell.foo user commenting on a hell.cloud post is stored directly. Remote
+- **Between sister domains, no HTTP.** A hell.foo user commenting on a first-domain post is stored directly. Remote
   followers of either side get the activity from the originating domain's actor, exactly as if the sister had
   received it over the network. (Owner: "locally pseudo-federated".)
 - Relays stay subscribed by the default domain only. Relayed content lands in the shared database, so every domain
@@ -114,7 +114,7 @@ Anti-goals (a failure even if it "works")
   the domain row are the owner's steps.
 
 ### 3.4 Local-only domains (federates off)
-- Their accounts' posts and comments stay on this server, in any community, including a hell.cloud or a remote one.
+- Their accounts' posts and comments stay on this server, in any community, including one on the first domain or a remote one.
   Local users see them; no other server does.
 - **Local-only is stamped when the content is made**, on each post, comment, vote and follow, not worked out later
   from `site_domain.federates`. Everything posted in a local-only community is local-only, whoever posts it.
@@ -123,7 +123,7 @@ Anti-goals (a failure even if it "works")
   `federates`, so nothing held back is ever published by surprise and no remote follower is stranded. (Owner ruling
   2026-10-19.)
 - **Only logged-in users see local-only content.** Anonymous web pages, RSS, sitemaps, link previews (OpenGraph,
-  oEmbed) and anonymous API calls leave it out, so it stays on this server against scrapers too. hell.cloud is a
+  oEmbed) and anonymous API calls leave it out, so it stays on this server against scrapers too. The first domain is a
   private instance today, so this bites only when a domain is public. (Owner ruling 2026-10-19.)
 - A local-only account never appears in federated output: it cannot own or moderate a federating community, a
   mention of it goes out as plain text without the actor link, and federated member counts leave it out.
@@ -147,7 +147,7 @@ Anti-goals (a failure even if it "works")
 
 ### 3.6 Existing data and deploy
 - One migration adds the ownership columns and backfills every local user and community to the default domain,
-  plus per-domain unique indexes. hell.cloud's rows, IDs and keys are unchanged.
+  plus per-domain unique indexes. The first domain's rows, IDs and keys are unchanged.
 - Adding a hell.* domain is an admin row plus a Caddy site block plus DNS. The deploy guide gets the steps.
 
 ### 3.7 Access logging (owner ruling 2026-10-19)
@@ -163,7 +163,7 @@ Anti-goals (a failure even if it "works")
 - TDD, one commit per logical change, 100% changed-line and branch coverage, gates run from repo tools, slow tests
   are bugs. Inline imports only if technically unavoidable.
 - Fuzz harness contract: no DB, no network in campaigns. Any fuzz target reaching the per-domain resolution stubs it.
-- Federation regressions are tested against hell.cloud's real stored shapes: an existing actor's ID, key and
+- Federation regressions are tested against the first domain's real stored shapes: an existing actor's ID, key and
   WebFinger answer are byte-identical before and after.
 - Deploy: owner pushes; the migration runs through autodeploy (age-encrypted dump first). Caddyfile is tracked;
   fail2ban, env and quadlet changes are local-only `deploy/` sources.
@@ -172,9 +172,9 @@ Anti-goals (a failure even if it "works")
 - How the ownership resolution is cached per request, and the exact column and index names.
 - The ranking weights between own, sister and remote content.
 - The order of work. A sensible split is: (a) ownership, login and registration, the onion local-only rules and the
-  badge, with hell.cloud as the only federating domain; (b) per-domain federation for a second domain; (c) the
+  badge, with the first domain as the only federating domain; (b) per-domain federation for a second domain; (c) the
   access-log flag and the fail2ban lines, which stand alone and can go first.
 - Test layout. Tests must include: a bare and a full-handle login on two domains with the same name; a local-only
   account's post in a remote community producing no outbound delivery; WebFinger and actor 404s for a local-only
-  account; hell.cloud's actor document and WebFinger byte-identical; a sister-domain reply stored without HTTP and
+  account; the first domain's actor document and WebFinger byte-identical; a sister-domain reply stored without HTTP and
   delivered to a remote follower signed by the right domain.

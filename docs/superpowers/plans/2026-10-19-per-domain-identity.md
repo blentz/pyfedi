@@ -4,7 +4,7 @@
 
 **Goal:** Every local account and community belongs to one hosted domain, logins resolve per domain, the onion takes no sign-ups, and accounts and content on a federation-off domain never leave the server, with a "Local" badge.
 
-**Architecture:** One migration adds `site_domain_id` to `user` and `community` and `local_only` to `post` and `post_reply`, backfilling every local row to the default domain. New code lives in `app/local_only.py` (who and what is local-only, and the one outbound guard every delivery passes). hell.cloud stays the only federating domain. Per-domain federation for a second domain is plan C, written after this lands.
+**Architecture:** One migration adds `site_domain_id` to `user` and `community` and `local_only` to `post` and `post_reply`, backfilling every local row to the default domain. New code lives in `app/local_only.py` (who and what is local-only, and the one outbound guard every delivery passes). The first domain stays the only federating domain. Per-domain federation for a second domain is plan C, written after this lands.
 
 **Tech Stack:** Flask, SQLAlchemy + Alembic (Postgres 17), Celery, Jinja, pytest via `./run_tests.sh`.
 
@@ -12,10 +12,10 @@
 
 ## Global Constraints
 
-- **hell.cloud's identity is byte-identical:** every existing `ap_profile_id`, `ap_public_url`, `ap_inbox_url`, key, actor document, WebFinger answer and NodeInfo shape for default-domain rows is unchanged. New default-domain rows get exactly the URLs they get today (`SERVER_URL`-based).
+- **The first domain's identity is byte-identical:** every existing `ap_profile_id`, `ap_public_url`, `ap_inbox_url`, key, actor document, WebFinger answer and NodeInfo shape for default-domain rows is unchanged. New default-domain rows get exactly the URLs they get today (`SERVER_URL`-based).
 - A local name is unique per domain, case-insensitively; remote rows (`ap_id IS NOT NULL`) are unaffected. Prod has no case duplicates (checked 2026-10-19).
 - A bare login name resolves only in the storefront's domain; `name@domain` only in that hosted domain; an unhosted or unknown domain fails exactly like a wrong password (same message, same `log_login_failure`). Email login resolves site-wide as today.
-- Post and comment object IDs stay where they are built today in this plan. **Ruling** — spec §3.1 puts them on the author's home domain; that only matters for a second federating domain, so plan C moves them, and a local-only object's ID never leaves the server anyway — cost if wrong: onion objects keep hell.cloud-host IDs until plan C.
+- Post and comment object IDs stay where they are built today in this plan. **Ruling** — spec §3.1 puts them on the author's home domain; that only matters for a second federating domain, so plan C moves them, and a local-only object's ID never leaves the server anyway — cost if wrong: onion objects keep first-domain-host IDs until plan C.
 - Local-only = the owning domain has `federates` False. Local-only content is stamped at creation (`local_only` True) and never recomputed.
 - Votes and follows are not stamped: they are local-only exactly when their actor is, and the actor's domain cannot change (Task 5 locks it). **Ruling** — spec §3.4 says "stamped on each … vote and follow"; deriving them from the immutable actor domain is equivalent and needs no columns — cost if wrong: two boolean columns added later.
 - Nothing local-only reaches another server: no delivery, no AP GET (404), no WebFinger, no NodeInfo count, no outbox or featured entry, no mention `href`, no moderator listing.
@@ -26,9 +26,9 @@
 
 ## Review Focus
 
-1. A remote server fetching a hell.cloud post whose comment thread holds a local-only reply: the replies collection and context omit it (no onion URL in any AP response).
-2. A hell.cloud user's post mentioning `@x` where `x` is an onion account: the post federates, the mention goes out as plain text, and the onion account gets no delivery.
-3. Two accounts `wakko` on hell.cloud and on the onion with different passwords: each password works only for its own login form/handle, and a passkey or NNTP login reaches the right one.
+1. A remote server fetching a first-domain post whose comment thread holds a local-only reply: the replies collection and context omit it (no onion URL in any AP response).
+2. A first-domain user's post mentioning `@x` where `x` is an onion account: the post federates, the mention goes out as plain text, and the onion account gets no delivery.
+3. Two accounts `wakko` on the first domain and on the onion with different passwords: each password works only for its own login form/handle, and a passkey or NNTP login reaches the right one.
 4. A federating user replying, voting and boosting on local-only content: all stored, none sent, and the federating community's Announce of that reply never goes out.
 5. Deleting an onion account or post: no Delete is sent (the guard refuses it like any other local-only activity).
 
@@ -87,7 +87,7 @@ def test_an_admin_added_onion_user_gets_onion_urls(app, db_session, admin_client
 def test_a_default_domain_user_gets_exactly_todays_urls(app, db_session):
     # finalize_user_setup on a default-domain user -> ap_profile_id == f"{SERVER_URL}/u/{name}" (byte-equal)
 def test_a_community_belongs_to_its_creators_home_domain(app, db_session):
-    # hell.cloud user creating a community while on the onion storefront -> site_domain_id == default id,
+    # first-domain user creating a community while on the onion storefront -> site_domain_id == default id,
     # ap_profile_id on SERVER_URL; an onion user creating one -> onion id and onion URLs
 def test_ldap_and_oauth_users_belong_to_the_default_domain(...): ...
 ```
@@ -110,7 +110,7 @@ def test_ldap_and_oauth_users_belong_to_the_default_domain(...): ...
 
 ```python
 def test_a_bare_name_on_the_onion_is_the_onion_account(...)
-def test_a_full_handle_on_the_onion_reaches_the_hell_cloud_account(...)   # 'wakko@<default domain>'
+def test_a_full_handle_on_the_onion_reaches_the_first_domain_account(...)   # 'wakko@<default domain>'
 def test_a_full_handle_for_an_unhosted_domain_fails_like_a_wrong_password(...)   # same flash, one log line
 def test_an_email_logs_in_on_any_storefront(...)
 def test_passkey_options_and_verify_resolve_per_domain(...)
@@ -172,11 +172,11 @@ def test_adding_a_user_to_a_staff_row_allows_staff(...)
 - [ ] **Step 1: Failing tests**
 
 ```python
-def test_an_onion_users_post_in_a_hell_cloud_community_is_local_only(...)
+def test_an_onion_users_post_in_a_first_domain_community_is_local_only(...)
 def test_an_onion_users_post_in_a_remote_community_is_local_only(...)   # memes@lemmy.world row
-def test_a_hell_cloud_users_post_in_an_onion_community_is_local_only(...)
-def test_a_hell_cloud_users_reply_to_local_only_content_is_local_only(...)   # Review Focus 4
-def test_a_hell_cloud_users_post_in_a_hell_cloud_community_is_not(...)
+def test_a_first_domain_users_post_in_an_onion_community_is_local_only(...)
+def test_a_first_domain_users_reply_to_local_only_content_is_local_only(...)   # Review Focus 4
+def test_a_first_domain_users_post_in_a_first_domain_community_is_not(...)
 def test_the_stamp_is_not_recomputed(...)   # changing nothing later flips it; there is no recompute path
 ```
 
@@ -201,7 +201,7 @@ def test_a_federating_communitys_announce_of_a_local_only_reply_is_not_sent(...)
 def test_a_mention_of_an_onion_user_goes_out_as_plain_text(...)             # Review Focus 2: no Mention tag,
     # no recipient inbox, the post itself is sent
 def test_a_queued_retry_of_a_local_only_activity_is_dropped(...)
-def test_a_hell_cloud_post_in_a_hell_cloud_community_is_sent_unchanged(...) # body byte-equal to today
+def test_a_first_domain_post_in_a_first_domain_community_is_sent_unchanged(...) # body byte-equal to today
 ```
 
 - [ ] **Step 2–4:** `./run_tests.sh tests/test_local_only_outbound.py tests/test_shared_tasks*.py tests/test_signature*.py -q`; FAIL then PASS.
@@ -227,7 +227,7 @@ def test_outbox_and_featured_omit_local_only_posts(...)
 def test_nodeinfo_counts_leave_local_only_rows_out(...)
 def test_a_federating_communitys_moderators_and_counts_leave_local_only_members_out(...)
 def test_a_local_only_account_cannot_be_made_moderator_of_a_federating_community(...)
-def test_hell_cloud_actor_and_webfinger_are_byte_identical(...)   # snapshot of today's JSON for a seeded user
+def test_first_domain_actor_and_webfinger_are_byte_identical(...)   # snapshot of today's JSON for a seeded user
 ```
 
 - [ ] **Step 2–4:** `./run_tests.sh tests/test_local_only_invisible.py tests/test_ap_routes*.py tests/test_webfinger*.py tests/test_nodeinfo*.py -q`; FAIL then PASS.
@@ -275,14 +275,14 @@ def test_hell_cloud_actor_and_webfinger_are_byte_identical(...)   # snapshot of 
 **Interfaces:**
 - Produces: `home_storefront(user: User)` context manager in `app/storefront.py`, the same mechanics as `default_storefront()` with `g.storefront = user.home_domain()`. Each call site that mails a specific user switches to it; `default_storefront()` stays for mail with no single recipient account.
 
-- [ ] **Step 1: Failing tests:** an approval email to an onion account links to the onion; to a hell.cloud account sent from an onion request links to hell.cloud (the I1 guarantee still holds for clearnet recipients); a newsletter renders per recipient.
+- [ ] **Step 1: Failing tests:** an approval email to an onion account links to the onion; to a first-domain account sent from an onion request links to the first domain (the I1 guarantee still holds for clearnet recipients); a newsletter renders per recipient.
 - [ ] **Step 2–4:** `./run_tests.sh tests/test_mail_home_domain.py tests/test_onion_third_party.py -q`; FAIL then PASS. Update the docstring of `default_storefront` to say ruling I1 is replaced by recipient home domains.
 - [ ] **Step 5: Commit** `feat: mail to an account links to its home domain`
 
 ### Task 13: Deploy and verify (controller, after the owner pushes)
 
-- [ ] **Step 1 (before the push):** on the server, save `curl -s -H 'Accept: application/activity+json' https://hell.cloud/u/<a real account>`, its WebFinger answer, `/c/<a real community>` and `/nodeinfo/2.1` to `~/backups/<date>-identity/before/`.
+- [ ] **Step 1 (before the push):** on the server, save `curl -s -H 'Accept: application/activity+json' https://example.org/u/<a real account>`, its WebFinger answer, `/c/<a real community>` and `/nodeinfo/2.1` to `~/backups/<date>-identity/before/`.
 - [ ] **Step 2:** after autodeploy, the same four, and `diff` against before: identical (NodeInfo counts may differ only by activity since; compare the shape and `software`).
-- [ ] **Step 3:** confirm the onion row (`site_domain` id 2) has `federates` False and `registration` `admin`; onion `/auth/register` refuses; logging in on the onion as `wakko@hell.cloud` works; an admin-added onion test account's WebFinger is 404 from clearnet.
+- [ ] **Step 3:** confirm the onion row (`site_domain` id 2) has `federates` False and `registration` `admin`; onion `/auth/register` refuses; logging in on the onion as `wakko@example.org` works; an admin-added onion test account's WebFinger is 404 from clearnet.
 - [ ] **Step 4:** 0 tracebacks in `pyfedi-web`, `pyfedi-celery`, `pyfedi-celery-background` for 10 min.
 - [ ] **Step 5:** update memories (`onion-storefront-track`) and DEPLOY_GUIDE §11 (adding onion accounts, the federation lock).

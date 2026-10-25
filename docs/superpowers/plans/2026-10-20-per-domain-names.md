@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A local name is unique per domain, not site-wide: `wakko@hell.cloud` and `wakko@<onion>` can be two accounts, and every lookup of a local user or community by name finds the one on the right domain.
+**Goal:** A local name is unique per domain, not site-wide: `wakko@example.org` and `wakko@<onion>` can be two accounts, and every lookup of a local user or community by name finds the one on the right domain.
 
 **Architecture:** A new `app/local_names.py` turns a name or `name@host` into (name, domain) and gives the one SQL clause for "the local row of this model with this name on this domain". Every bare-name lookup moves onto it. Links to a local user or community carry `@domain` when that domain is not the storefront's, both in links the app builds and in stored HTML that the storefront rebases. Only then do the creation checks go per domain: the order means no two rows can share a name until every lookup can tell them apart.
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **hell.cloud is byte-identical:** every page, link, actor document, WebFinger answer and redirect for a default-domain user or community on the default storefront is unchanged. A link only gains `@domain` when the row's domain differs from the storefront's.
+- **The first domain is byte-identical:** every page, link, actor document, WebFinger answer and redirect for a default-domain user or community on the default storefront is unchanged. A link only gains `@domain` when the row's domain differs from the storefront's.
 - A bare name means the request's storefront domain (`current_storefront()`; the default domain outside a request). `name@host` means that host's domain when the host is one this site hosts (`domain_for_host`); any other host is remote, as today.
 - Names compare case-insensitively (`func.lower`), hosts via `normalise_host`.
 - A hosted `name@host` that matches no row is a miss (404 / None), never a fetch.
@@ -24,11 +24,11 @@
 
 ## Review Focus
 
-1. A post stored with `<a href="https://hell.cloud/u/bob">` shown on the onion, where both domains have a `bob`: the link goes to hell.cloud's bob (`/u/bob@hell.cloud`), not the onion's.
-2. On the onion, hell.cloud's bob's profile at `/u/bob@hell.cloud`: its follow, block and note buttons act on hell.cloud's bob.
-3. `/u/BOB@HELL.CLOUD` and `/c/Art@Hell.Cloud` resolve like their lower-case forms.
+1. A post stored with `<a href="https://example.org/u/bob">` shown on the onion, where both domains have a `bob`: the link goes to the first domain's bob (`/u/bob@example.org`), not the onion's.
+2. On the onion, the first domain's bob's profile at `/u/bob@example.org`: its follow, block and note buttons act on the first domain's bob.
+3. `/u/BOB@EXAMPLE.ORG` and `/c/Art@Example.Org` resolve like their lower-case forms.
 4. `/u/x@<hosted host>` with no such account: 404 and no HTTP request. `/u/x@mastodon.social` works as today.
-5. A notification email to an onion account, rendered in Celery, links the onion's users as bare names and hell.cloud's with `@hell.cloud`.
+5. A notification email to an onion account, rendered in Celery, links the onion's users as bare names and the first domain's with `@example.org`.
 
 Each line's test is in the owning task (Tasks 2, 4, 3, 3, 2).
 
@@ -131,7 +131,7 @@ def test_an_onion_recipients_email_links_by_their_domain(app, two_domains):
 
 **Interfaces:**
 - Consumes: `split_local_name`, `local_named` (Task 1).
-- Produces: every route above resolves `<actor>` with `split_local_name`, and then `local_named` plus its existing filters. A `None` split (unhosted handle) keeps today's remote path. WebFinger `acct:name@host` looks the name up on `domain_for_host(host)`. The `SERVER_URL` `ap_profile_id` fallbacks (`:496` and others) stay as they are, so hell.cloud rows keep matching.
+- Produces: every route above resolves `<actor>` with `split_local_name`, and then `local_named` plus its existing filters. A `None` split (unhosted handle) keeps today's remote path. WebFinger `acct:name@host` looks the name up on `domain_for_host(host)`. The `SERVER_URL` `ap_profile_id` fallbacks (`:496` and others) stay as they are, so first-domain rows keep matching.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -223,7 +223,7 @@ def test_a_new_local_row_never_has_a_null_domain(app, two_domains):             
 
 ### Task 6: Deploy and verify (controller, after the owner pushes)
 
-- [ ] **Step 1 (before the push):** save the hell.cloud identity set to `~/backups/<date>-identity/before/`, as plan B Task 13 did (DEPLOY_GUIDE §11, "Check after a deploy that touches identity").
+- [ ] **Step 1 (before the push):** save the first-domain identity set to `~/backups/<date>-identity/before/`, as plan B Task 13 did (DEPLOY_GUIDE §11, "Check after a deploy that touches identity").
 - [ ] **Step 2:** after the autodeploy, fetch the same set and `cmp`. Only `updated` and NodeInfo counts may differ. Check for 0 tracebacks in the three app units over 10 min.
-- [ ] **Step 3:** on the onion, as a logged-in hell.cloud user, open a post holding a hell.cloud profile link. It goes to `/u/<name>@hell.cloud`.
-- [ ] **Step 4:** update DEPLOY_GUIDE §11 "Accounts on the onion": names are per domain, and an admin may reuse a hell.cloud name for an onion account. Update the memory `onion-storefront-track`.
+- [ ] **Step 3:** on the onion, as a logged-in first-domain user, open a post holding a first-domain profile link. It goes to `/u/<name>@example.org`.
+- [ ] **Step 4:** update DEPLOY_GUIDE §11 "Accounts on the onion": names are per domain, and an admin may reuse a first-domain name for an onion account. Update the memory `onion-storefront-track`.

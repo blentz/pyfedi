@@ -2,16 +2,16 @@
 
 Date: 2026-10-12. Track: tier C of `docs/superpowers/specs/2026-10-10-ap-gaps-roadmap.md`
 ("`contentMap`/`nameMap`/`summaryMap` with more than one language"), widened by the owner to a self-hosted
-LibreTranslate container for hell.cloud.
+LibreTranslate container for the first domain.
 
 ## Goal
 
 A post or comment that arrives with the same text in several languages shows each viewer the language they read,
-and the existing translate buttons work on hell.cloud against a LibreTranslate the instance runs itself.
+and the existing translate buttons work on the first domain against a LibreTranslate the instance runs itself.
 
 Today only the first key of `contentMap` is read, and only as the item's language; the body always comes from
 `content`, so a map whose first key is not the language of `content` mislabels the item, and every other variant
-is dropped. `nameMap` and `summaryMap` are ignored. hell.cloud has no `TRANSLATE_ENDPOINT`, so no translate
+is dropped. `nameMap` and `summaryMap` are ignored. The first domain has no `TRANSLATE_ENDPOINT`, so no translate
 button shows.
 
 Out of scope: sending multi-language objects (local authors cannot write variants), machine translation at
@@ -98,7 +98,7 @@ ingest, choosing a variant by `read_language_ids`, searching inside variants, tr
 `language_variants` (object or null) is added read-only to the alpha API post view and comment view schemas;
 null for a deleted item, as C2 does for `quote_ap_id`.
 
-## LibreTranslate container (hell.cloud)
+## LibreTranslate container (the first domain)
 
 `deploy/` is local-only (git-ignored); these files live there and the owner installs them per `DEPLOY_GUIDE.md`.
 
