@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 from furl import furl
 
 from app import db, celery, cache
-from app.branding import offsite_references
+from app.branding import ends_inside_tag, offsite_references
 from app.discovery import sync as discovery_sync
 from app.visibility import visible_to_clause
 from app.local_only import domain_has_owners, user_local_only
@@ -501,10 +501,19 @@ def admin_domain_branding(domain_id):
         kept_logos = [] if replacing or branding is None else [getattr(branding, field) or '' for field in LOGO_FIELDS]
         found = offsite_by_field(row.domain, values['additional_css'], sidebar_html, about_html, kept_logos,
                                  values['description'])
-        if found and row.is_onion:
+        # A field that ends inside a tag is finished by whatever the page writes after it, which nothing here can
+        # check: the onion's pages would drop it (app/branding.py), so the onion refuses it
+        unfinished = [field for field, text in (('description', values['description']),
+                                                ('additional_css', values['additional_css']),
+                                                ('sidebar', sidebar_html), ('about', about_html))
+                      if row.is_onion and field not in found and ends_inside_tag(text)]
+        if (found or unfinished) and row.is_onion:
             # The onion never loads anything off the onion (spec §3.4): refused, and nothing written
             for field, references in found.items():
                 getattr(form, field).errors.append(_('Off the onion: %(references)s', references=', '.join(references)))
+            for field in unfinished:
+                getattr(form, field).errors.append(_('This ends inside an unfinished tag, which the onion cannot '
+                                                     'check. Finish or remove the tag.'))
         else:
             logos = save_logo_upload(upload, LOGO_MEDIA) if uploading else dict.fromkeys(LOGO_FIELDS, '')
             if branding is None:
