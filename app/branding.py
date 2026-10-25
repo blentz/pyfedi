@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from functools import lru_cache
+import re
 from typing import NamedTuple
 
 from bs4 import BeautifulSoup
@@ -112,6 +113,22 @@ def _scan_css(css: str, own_host: str) -> tuple[str, list[str]]:
     return (''.join(out) + text[last:] if found else css), found
 
 
+# SVG presentation attributes that paint, clip or filter with url(...): read as CSS
+_CSS_ATTRS = frozenset({'style', 'fill', 'stroke', 'mask', 'filter', 'clip-path', 'marker-start', 'marker-mid',
+                        'marker-end', 'cursor'})
+_SRCSET_ATTRS = frozenset({'srcset', 'imagesrcset'})
+# A refresh's content (HTML "shared declarative refresh steps"): a time, a separator, `url=` optionally, the URL
+# optionally quoted. Every part is optional, so it always matches.
+_REFRESH = re.compile(r'\s*[\d.]*\s*[;,]?\s*(?:url\s*=\s*)?(["\']?)([^"\']*)', re.IGNORECASE)
+
+
+def _refresh_url(tag, name: str, value: str) -> list[str]:
+    """The URL a `<meta http-equiv=refresh>` sends the browser to, as a one-item list; [] for any other attribute."""
+    if tag.name != 'meta' or name != 'content' or tag.get('http-equiv', '').lower() != 'refresh':
+        return []
+    return [_REFRESH.match(value)[2].strip()]
+
+
 def _loads_href(tag) -> bool:
     if tag.name == 'link':
         return bool(_LOADING_RELS & set(tag.get('rel', '').lower().split()))
@@ -120,14 +137,14 @@ def _loads_href(tag) -> bool:
 
 def _scan_attribute(tag, name: str, value: str, own_host: str) -> tuple[str | None, list[str]]:
     """An attribute's value with its off-site loads gone (None: drop the attribute), and those URLs."""
-    if name == 'style':
+    if name in _CSS_ATTRS:
         return _scan_css(value, own_host)
-    if name == 'srcset':
+    if name in _SRCSET_ATTRS:
         urls = [value[start:end] for start, end in storefront._srcset_urls(value)]
     elif name in _LOADING_ATTRS or (name == 'href' and _loads_href(tag)):
         urls = [value]
     else:
-        return value, []
+        urls = _refresh_url(tag, name, value)
     return None, [url for url in urls if _offsite(url, own_host)]
 
 
@@ -153,11 +170,18 @@ def _scan_html(html: str, own_host: str) -> tuple[str, list[str]]:
     return (soup.decode(formatter=storefront._FORMATTER) if found else html), found
 
 
+def onion_url(domain: storefront.DomainInfo, url: str) -> str:
+    """`url` as `domain`'s pages may name it: '' when `domain` is the onion and `url` is off it, else `url`. For a
+    URL read from somewhere other than `current_branding()` (the manifest's inherited icons)."""
+    return '' if domain.is_onion and _offsite(url, storefront.normalise_host(domain.domain)) else url
+
+
 def offsite_references(css: str = '', html: str = '', urls: Iterable[str] = (), own_host: str = '') -> list[str]:
     """Every reference a browser would fetch from a host other than `own_host`, once each, in order: in `css`, its
     `url(...)` and `@import` targets; in `html`, what loads by itself (`src`, `srcset`, `poster`, `data`, `background`,
-    the href of a stylesheet, icon or resource-hint `<link>`, inline `style` and `<style>`), never a plain link or a
-    canonical or alternate `<link>`; and each of `urls`. With no `own_host`, every
+    the href of a stylesheet, icon or resource-hint `<link>`, `imagesrcset`, inline `style`, `<style>`, SVG paint
+    and clip `url()`s, a `<meta http-equiv=refresh>` target), never a plain link or a canonical or alternate `<link>`;
+    and each of `urls`. With no `own_host`, every
     reference that names a host."""
     own_host = storefront.normalise_host(own_host)
     found = _scan_css(css, own_host)[1] + _scan_html(html, own_host)[1] + \
@@ -187,7 +211,7 @@ def onion_safe(branding: Branding, own_host: str) -> Branding:
         changes['additional_css'] = ''
         dropped += [('additional_css', url) for url in markup]
     for field, url in dropped:
-        current_app.logger.info('branding: %s dropped from %s on %s: off-site on the onion', url, field, own_host)
+        current_app.logger.info('branding: %s dropped from %s on %s: off-site on the onion', url, field, host)
     return branding._replace(**changes) if changes else branding
 
 

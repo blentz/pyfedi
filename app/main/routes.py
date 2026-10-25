@@ -15,7 +15,7 @@ from sqlalchemy.orm import joinedload
 from ua_parser import parse as uaparse
 
 from app import db, cache, limiter, plugins
-from app.branding import current_branding, own_value
+from app.branding import current_branding, onion_url, own_value
 from app.activitypub.util import users_total, active_month, local_posts, local_communities, \
     lemmy_site_data, is_activitypub_request, find_microblogging_community
 from app.discovery import KIND_COMMUNITY
@@ -1424,8 +1424,8 @@ def static_manifest():
     # or 192 copy, so its largest PNG, or the logo itself for an SVG upload, which stores no sized copies
     domain = current_storefront()
     own_icon = own_value(domain, 'logo_180') or own_value(domain, 'logo')
-    logo_512 = own_icon or get_setting('logo_512', '')
-    logo_192 = own_icon or get_setting('logo_192', '')
+    logo_512 = onion_url(domain, own_icon or get_setting('logo_512', ''))   # the onion's never off the onion
+    logo_192 = onion_url(domain, own_icon or get_setting('logo_192', ''))
     
     # Update the icons array
     for icon in manifest.get('icons', []):

@@ -39,14 +39,17 @@ MEDIA_UPLOAD_SLACK = 1024 * 1024   # the form fields around the file (A13.2)
 
 # strict-dynamic allows scripts dynamically added by nonce-validated scripts (needed for htmx)
 SCRIPT_POLICY = "script-src 'self' 'nonce-{nonce}' 'strict-dynamic'; object-src 'none'; base-uri 'none';"
-# The onion's backstop (per-domain branding spec §3.4): a page loads its images, fonts, styles, media and connections
-# from the onion alone. data: and blob: name bytes already in the page or the browser (the captcha image, a file
-# chosen for upload shown before it is sent), never a host. Inline style is allowed: templates and htmx write style
-# attributes, which no nonce can cover, and inline CSS can only fetch through url() and @import, which img-src,
-# font-src and style-src still hold to the onion. Remote media reaches the page through the onion media proxy.
-ONION_POLICY = SCRIPT_POLICY + " img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline';" \
-                               " connect-src 'self'; media-src 'self';"
-
+# The onion's backstop (per-domain branding spec §3.4): a page loads its images, fonts, styles, media, frames and
+# connections, and anything else default-src covers, from the onion alone. data: and blob: name bytes already in the
+# page or the browser (the captcha image, a file chosen for upload shown before it is sent), never a host. Inline style
+# is allowed: templates and htmx write style attributes, which no nonce can cover, and inline CSS can only fetch
+# through url() and @import, which img-src, font-src and style-src still hold to the onion. Remote media reaches the
+# page through the onion media proxy, a remote iframe becomes a placeholder and a link (storefront._proxy_remote).
+_ONION_LOADS = " img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline';" \
+               " connect-src 'self'; media-src 'self'; frame-src 'self';"
+ONION_POLICY = "default-src 'self'; " + SCRIPT_POLICY + _ONION_LOADS
+# A response made before before_request made the nonce (a rate-limit page, require_onion_session's answers, OPTIONS)
+ONION_POLICY_WITHOUT_NONCE = "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none';" + _ONION_LOADS
 
 def viewer_can_view(obj) -> bool:
     """can_view for the request's viewer, for templates that show one object inside another (R1)."""
@@ -291,14 +294,17 @@ def register_request_hooks(app):
                 response.headers.add('Link', f'<{storefront_url()}/rsl.xml>; rel="license"; type="application/rsl+xml"')
             onion = current_storefront().is_onion   # every onion page has the policy, a registration page too
             if onion or 'auth/register' not in request.path:
-                if hasattr(g, 'nonce') and "api/alpha/swagger" not in request.path:
+                if "api/alpha/swagger" not in request.path:
                     # Don't set CSP header for htmx fragment requests - they use parent page's CSP
                     is_htmx = request.headers.get('HX-Request') == 'true'
                     if not is_htmx and response.status_code != 304:
-                        if onion or current_user.is_authenticated:
-                            # setdefault: a view's own policy (the onion media proxy's sandbox) stands
-                            response.headers.setdefault('Content-Security-Policy',
-                                                        (ONION_POLICY if onion else SCRIPT_POLICY).format(nonce=g.nonce))
+                        nonce = g.get('nonce')
+                        # setdefault: a view's own policy (the onion media proxy's sandbox) stands
+                        if onion:
+                            response.headers.setdefault('Content-Security-Policy', ONION_POLICY.format(nonce=nonce)
+                                                        if nonce else ONION_POLICY_WITHOUT_NONCE)
+                        elif nonce and current_user.is_authenticated:
+                            response.headers.setdefault('Content-Security-Policy', SCRIPT_POLICY.format(nonce=nonce))
                 if current_app.config['HTTP_PROTOCOL'] == 'https':
                     response.headers['Strict-Transport-Security'] = 'max-age=63072000; includeSubDomains; preload'
                 response.headers['X-Content-Type-Options'] = 'nosniff'
