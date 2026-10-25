@@ -33,6 +33,7 @@ from sqlalchemy.orm import object_session as sa_object_session
 
 from app import db, cache, celery, plugins
 from app.activitypub.signature import signed_get_capped, signed_get_request, send_post_request, default_context, RsaKeys
+from app.branding import own_value
 from app.constants import *
 from app.local_only import federating_clause, federating_sql
 from app.local_names import local_named
@@ -6212,10 +6213,11 @@ def process_announce_of_uri(request_json, community, id, store_ap_json) -> Union
 def lemmy_site_data(domain: DomainInfo):
     """The Lemmy site document `domain` answers /api/v3/site with: its URLs, its name (`domain_site_name`), its
     instance actor's key, its own counts and the admins and staff whose accounts are on it. The description, sidebar
-    and settings are the site's, shared by every domain."""
+    and icon are a sister domain's own where it set them (per-domain branding, spec §3.3), else the site's; the
+    settings are the site's, shared by every domain."""
     site = g.site
     base = domain_base_url(domain)
-    logo = site.logo if site.logo else '/static/images/piefed_logo_icon_t_75.png'
+    logo = own_value(domain, 'logo') or (site.logo if site.logo else '/static/images/piefed_logo_icon_t_75.png')
     registration_mode = registration_mode_on(domain, site)   # C3: this domain's own
     if registration_mode == 'RequireApplication' or registration_mode == 'Open':  # spammers crawl /api/v3/site looking for open instances
         registration_mode = 'RequireApplication'                                  # so never identify ourselves as open
@@ -6224,12 +6226,12 @@ def lemmy_site_data(domain: DomainInfo):
             "site": {
                 "id": 1,
                 "name": domain_site_name(domain, site),
-                "sidebar": site.sidebar,
+                "sidebar": own_value(domain, 'sidebar') or site.sidebar,
                 "published": site.created_at.isoformat(),
                 "updated": site.updated.isoformat(),
                 "icon": f"{base}{logo}",
                 "banner": "",
-                "description": site.description,
+                "description": own_value(domain, 'description') or site.description,
                 "actor_id": f"{base}/",
                 "last_refreshed_at": site.updated.isoformat(),
                 "inbox_url": f"{base}/inbox",

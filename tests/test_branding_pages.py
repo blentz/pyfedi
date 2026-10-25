@@ -208,14 +208,14 @@ def test_unknown_stored_theme_falls_back(app, branded):
 
 
 def test_no_template_reads_site_branding_directly():
-    """A ratchet: pages read `branding` (or `current_branding()` in a macro file), the domain's, never `g.site`'s or the
-    bare `site` value's branding fields. Emails are not pages: they are named by the recipient's home domain (Task 3),
-    so app/templates/email/ is the one exemption."""
+    """A ratchet: pages and emails read `branding` (or `current_branding()` in a macro file), the domain's, never
+    `g.site`'s or the bare `site` value's branding fields. An email renders under the recipient's home domain (Task 3),
+    so its `branding` is that domain's."""
     fields = 'name|description|logo|logo_180|logo_152|logo_32|logo_16|default_theme|additional_css|sidebar|' \
              'sidebar_html|about|about_html'
     pattern = re.compile(rf'(?<![\w.])(g\.)?site\.({fields})\b')   # g.site and the bare `site` context value
     hits = [f'{path.relative_to(TEMPLATES)}:{number}: {line.strip()}'
-            for path in sorted(TEMPLATES.rglob('*')) if path.is_file() and 'email' not in path.parts
+            for path in sorted(TEMPLATES.rglob('*')) if path.is_file()
             for number, line in enumerate(path.read_text(errors='replace').splitlines(), 1) if pattern.search(line)]
     assert hits == []
 

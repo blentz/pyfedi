@@ -1,4 +1,4 @@
-<p><a href="{{ site_url }}/"><img src="{{ site_url }}{{ g.site.logo if g.site.logo else '/static/images/piefed_logo_icon_t_75.png' }}" style="max-width: 100%; margin-bottom: 20px;" width="50" height="50" alt="PieFed logo" /></a></p><p>Hello {{ recipient.display_name() }},</p>
+<p><a href="{{ site_url }}/"><img src="{{ site_url }}{{ branding.logo if branding.logo else '/static/images/piefed_logo_icon_t_75.png' }}" style="max-width: 100%; margin-bottom: 20px;" width="50" height="50" alt="PieFed logo" /></a></p><p>Hello {{ recipient.display_name() }},</p>
 {{ content|safe }}
 <p>&nbsp;</p>
 {% if recipient.verification_token %}
