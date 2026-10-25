@@ -484,7 +484,7 @@ def test_editing_keeps_the_communities_that_were_not_sent(app, env):
 
 def test_editing_keeps_another_domains_community_not_its_namesake(app, env):
     """The rebuilt list names a local community by its own domain: written as `name@<the feed's domain>`, an onion
-    community in a first-domain feed was swapped for hell's namesake (plan C1)."""
+    community in a first-domain feed was swapped for the first domain's namesake (plan C1)."""
     owner, stranger, public, private = env
     if db.session.query(SiteDomain).filter_by(is_default=True).first() is None:
         db.session.add(SiteDomain(domain='test.piefed.local', scheme='https', is_default=True))
@@ -492,7 +492,7 @@ def test_editing_keeps_another_domains_community_not_its_namesake(app, env):
     db.session.add(onion)
     db.session.commit()
     clear_domain_cache()
-    hell_art = make_community('art')
+    first_art = make_community('art')
     onion_art = make_community('art', host='abc.onion')
     onion_art.site_domain_id = onion.id
     db.session.commit()
@@ -505,7 +505,7 @@ def test_editing_keeps_another_domains_community_not_its_namesake(app, env):
 
     kept = {fi.community_id for fi in FeedItem.query.filter_by(feed_id=public.id)}
     assert onion_art.id in kept
-    assert hell_art.id not in kept
+    assert first_art.id not in kept
 
 
 def test_a_stranger_may_not_edit_a_feed(app, env):

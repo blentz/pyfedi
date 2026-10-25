@@ -34,7 +34,7 @@ from tests.factories import (a_keypair, make_conversation, make_instance, make_p
                              make_post_reply_vote, make_post_vote, make_site, make_user)
 from tests.test_per_domain_ap_routes import SHOP, get as ap_get, onion_proxy, twins  # noqa: F401
 from tests.test_per_domain_html_routes import Visitor
-from tests.two_domains import HELL, ONION, no_http, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, no_http, two_domains  # noqa: F401
 
 PEER = 'peer.example'
 
@@ -45,7 +45,7 @@ def sisters(app, two_domains):
 
     The onion's row is given what a peer's has, an inbox and a nodeinfo URL, so only its being hosted keeps it out:
     a row that federated once, or a field set by mistake, must not put it back on a peer list."""
-    hell, onion = two_domains.domains
+    first, onion = two_domains.domains
     onion_row = db.session.get(Instance, onion.instance_id)
     onion_row.inbox = f'http://{ONION}/inbox'
     onion_row.nodeinfo_href = f'http://{ONION}/nodeinfo/2.0'
@@ -54,22 +54,22 @@ def sisters(app, two_domains):
     peer.inbox = f'https://{PEER}/inbox'
     peer.nodeinfo_href = f'https://{PEER}/nodeinfo/2.0'
     db.session.commit()
-    hell_user = two_domains.local_user('hellion', hell)
+    first_user = two_domains.local_user('firstling', first)
     onion_user = two_domains.local_user('onionist', onion)
     peer_user = make_user(peer, 'visitor')
-    hell_community = two_domains.local_community('art', hell)
-    return hell, onion, onion_row, peer, hell_user, onion_user, peer_user, hell_community
+    first_community = two_domains.local_community('art', first)
+    return first, onion, onion_row, peer, first_user, onion_user, peer_user, first_community
 
 
 def test_the_onion_row_is_hosted(app, sisters):
-    hell, onion, onion_row, peer, *_ = sisters
+    first, onion, onion_row, peer, *_ = sisters
     assert onion_row.id != 1 and onion_row.id != peer.id
 
 
 # --- peer lists ------------------------------------------------------------------------------------------------------
 
 def test_the_lemmy_federated_instances_api_names_no_hosted_domain(app, sisters):
-    body = app.test_client().get('/api/v3/federated_instances', base_url=f'https://{HELL}').get_data(as_text=True)
+    body = app.test_client().get('/api/v3/federated_instances', base_url=f'https://{FIRST}').get_data(as_text=True)
     assert PEER in body
     assert ONION not in body
 
@@ -81,7 +81,7 @@ def test_the_alpha_federated_instances_view_names_no_hosted_domain(app, sisters)
 
 
 def test_the_alpha_instance_chooser_trusts_no_hosted_domain(app, sisters):
-    hell, onion, onion_row, peer, *_ = sisters
+    first, onion, onion_row, peer, *_ = sisters
     make_site()
     g.site = db.session.get(Site, 1)
     onion_row.trusted = peer.trusted = True   # an admin can tick "trusted" on any row
@@ -89,14 +89,14 @@ def test_the_alpha_instance_chooser_trusts_no_hosted_domain(app, sisters):
     assert site_instance_chooser_view()['trusts'] == [PEER]
 
 
-def test_hells_home_sidebar_names_no_hosted_domain(app, sisters):
+def test_first_domains_home_sidebar_names_no_hosted_domain(app, sisters):
     """The "new instances" card lists live piefed peers, newest first. The onion's row is the newest, and is given
     the lowercase software every peer's nodeinfo stores."""
-    hell, onion, onion_row, peer, *_ = sisters
+    first, onion, onion_row, peer, *_ = sisters
     make_site().private_instance = False
     onion_row.software = 'piefed'
     db.session.commit()
-    body = app.test_client().get('/', base_url=f'https://{HELL}').get_data(as_text=True)
+    body = app.test_client().get('/', base_url=f'https://{FIRST}').get_data(as_text=True)
     assert PEER in body
     assert ONION not in body
 
@@ -115,37 +115,37 @@ def test_the_instances_federated_filter_names_no_hosted_domain(app, sisters):
 
 
 def test_who_follows_a_community_or_user_is_never_a_hosted_instance(app, sisters):
-    hell, onion, onion_row, peer, hell_user, onion_user, peer_user, hell_community = sisters
+    first, onion, onion_row, peer, first_user, onion_user, peer_user, first_community = sisters
     for member in (onion_user, peer_user):
-        db.session.add(CommunityMember(user_id=member.id, community_id=hell_community.id))
-        db.session.add(UserFollower(local_user_id=hell_user.id, remote_user_id=member.id, is_inward=True,
+        db.session.add(CommunityMember(user_id=member.id, community_id=first_community.id))
+        db.session.add(UserFollower(local_user_id=first_user.id, remote_user_id=member.id, is_inward=True,
                                     is_accepted=True))
     db.session.commit()
 
-    assert hell_community.following_instances() == [peer]
-    assert hell_community.following_instances(include_dormant=True, mod_hosts_only=False) == [peer]
-    assert hell_user.following_instances() == [peer]
-    assert follower_instances(hell_user) == [peer]
+    assert first_community.following_instances() == [peer]
+    assert first_community.following_instances(include_dormant=True, mod_hosts_only=False) == [peer]
+    assert first_user.following_instances() == [peer]
+    assert follower_instances(first_user) == [peer]
 
 
 def test_a_conversations_instances_are_never_hosted(app, sisters):
-    hell, onion, onion_row, peer, hell_user, onion_user, peer_user, _ = sisters
-    conversation = make_conversation(hell_user, onion_user)
+    first, onion, onion_row, peer, first_user, onion_user, peer_user, _ = sisters
+    conversation = make_conversation(first_user, onion_user)
     conversation.members.append(peer_user)
     db.session.commit()
     assert conversation.instances() == [peer]
 
 
 def test_a_followers_only_reply_to_an_onion_author_adds_no_instance(app, sisters):
-    hell, onion, onion_row, peer, hell_user, onion_user, peer_user, hell_community = sisters
-    post = make_post(hell_community, onion_user, None)
-    reply = make_post_reply(post, hell_user)
+    first, onion, onion_row, peer, first_user, onion_user, peer_user, first_community = sisters
+    post = make_post(first_community, onion_user, None)
+    reply = make_post_reply(post, first_user)
     assert followers_only_reply_instances(reply) == []
 
 
 def test_a_feeds_following_instances_are_never_hosted(app, sisters):
-    hell, onion, onion_row, peer, hell_user, onion_user, peer_user, _ = sisters
-    feed = Feed(user_id=hell_user.id, title='f', name='f', machine_name='f', public=True)
+    first, onion, onion_row, peer, first_user, onion_user, peer_user, _ = sisters
+    feed = Feed(user_id=first_user.id, title='f', name='f', machine_name='f', public=True)
     db.session.add(feed)
     db.session.commit()
     for member in (onion_user, peer_user):
@@ -170,19 +170,19 @@ def sent(monkeypatch):
     return inboxes
 
 
-def test_a_hell_post_with_an_onion_follower_goes_to_the_peer_only(app, sisters, no_http):
+def test_a_first_post_with_an_onion_follower_goes_to_the_peer_only(app, sisters, no_http):
     """The real send path runs (Celery is eager): post_request signs and POSTs through httpx, which respx answers.
     The onion's inbox has a route that would answer 500, a refusal post_request books against the destination, so
     selecting the onion's row shows as a call to that route and as a failure logged to its inbox."""
-    hell, onion, onion_row, peer, hell_user, onion_user, peer_user, hell_community = sisters
-    hell_user.private_key, hell_user.public_key = a_keypair()
-    hell_community.private_key, hell_community.public_key = a_keypair()
+    first, onion, onion_row, peer, first_user, onion_user, peer_user, first_community = sisters
+    first_user.private_key, first_user.public_key = a_keypair()
+    first_community.private_key, first_community.public_key = a_keypair()
     for member in (onion_user, peer_user):
-        db.session.add(CommunityMember(user_id=member.id, community_id=hell_community.id))
-        db.session.add(UserFollower(local_user_id=hell_user.id, remote_user_id=member.id, is_inward=True,
+        db.session.add(CommunityMember(user_id=member.id, community_id=first_community.id))
+        db.session.add(UserFollower(local_user_id=first_user.id, remote_user_id=member.id, is_inward=True,
                                     is_accepted=True))
     db.session.commit()
-    post = make_post(hell_community, hell_user, None)
+    post = make_post(first_community, first_user, None)
 
     with respx.mock(assert_all_called=False) as router:
         to_peer = router.post(f'https://{PEER}/inbox').respond(202)
@@ -198,16 +198,16 @@ def test_a_hell_post_with_an_onion_follower_goes_to_the_peer_only(app, sisters, 
 
 
 def test_a_flag_from_an_onion_author_is_not_sent_to_the_onion(app, sisters, sent):
-    hell, onion, onion_row, peer, hell_user, onion_user, peer_user, hell_community = sisters
-    hell_community.private_key, hell_community.public_key = a_keypair()
+    first, onion, onion_row, peer, first_user, onion_user, peer_user, first_community = sisters
+    first_community.private_key, first_community.public_key = a_keypair()
     db.session.commit()
-    activity = {'id': f'https://{HELL}/flag/1', 'type': 'Flag', 'actor': hell_user.ap_profile_id}
+    activity = {'id': f'https://{FIRST}/flag/1', 'type': 'Flag', 'actor': first_user.ap_profile_id}
 
-    announce_activity_to_followers(hell_community, hell_user, activity, is_flag=True,
+    announce_activity_to_followers(first_community, first_user, activity, is_flag=True,
                                    admin_instance_id=onion_row.id)
     assert sent == []
 
-    announce_activity_to_followers(hell_community, hell_user, activity, is_flag=True, admin_instance_id=peer.id)
+    announce_activity_to_followers(first_community, first_user, activity, is_flag=True, admin_instance_id=peer.id)
     assert sent == [f'https://{PEER}/inbox']
 
 
@@ -227,7 +227,7 @@ def polled(monkeypatch):
 
 
 def test_the_healthy_instance_monitor_never_polls_a_hosted_row(app, sisters, polled):
-    hell, onion, onion_row, peer, *_ = sisters
+    first, onion, onion_row, peer, *_ = sisters
     monitor_healthy_instances()
     assert any(PEER in url for url in polled)
     assert not [url for url in polled if ONION in url]
@@ -236,7 +236,7 @@ def test_the_healthy_instance_monitor_never_polls_a_hosted_row(app, sisters, pol
 
 
 def test_the_dormant_recheck_never_polls_a_hosted_row(app, sisters, polled):
-    hell, onion, onion_row, peer, *_ = sisters
+    first, onion, onion_row, peer, *_ = sisters
     for row in (onion_row, peer):
         row.dormant = True
         row.start_trying_again = utcnow() + timedelta(days=1)
@@ -251,13 +251,13 @@ def test_the_dormant_recheck_never_polls_a_hosted_row(app, sisters, polled):
 # --- retention --------------------------------------------------------------------------------------------------------
 
 def test_a_sister_domains_votes_keep_the_local_cutoff(app, sisters, monkeypatch):
-    hell, onion, onion_row, peer, hell_user, onion_user, peer_user, hell_community = sisters
+    first, onion, onion_row, peer, first_user, onion_user, peer_user, first_community = sisters
     monkeypatch.setitem(app.config, 'KEEP_LOCAL_VOTE_DATA_TIME', 12)
     monkeypatch.setitem(app.config, 'KEEP_REMOTE_VOTE_DATA_TIME', 1)
-    post = make_post(hell_community, hell_user, None)
-    reply = make_post_reply(post, hell_user)
+    post = make_post(first_community, first_user, None)
+    reply = make_post_reply(post, first_user)
     stamp = utcnow() - timedelta(days=28 * 2)
-    for voter in (hell_user, onion_user, peer_user):
+    for voter in (first_user, onion_user, peer_user):
         make_post_vote(voter, post, 1.0).created_at = stamp
         make_post_reply_vote(voter, reply, 1.0).created_at = stamp
     db.session.commit()
@@ -266,16 +266,16 @@ def test_a_sister_domains_votes_keep_the_local_cutoff(app, sisters, monkeypatch)
 
     kept = {table: set(db.session.execute(db.text(f'SELECT user_id FROM {table}')).scalars())
             for table in ('post_vote', 'post_reply_vote')}
-    assert kept == {'post_vote': {hell_user.id, onion_user.id}, 'post_reply_vote': {hell_user.id, onion_user.id}}
+    assert kept == {'post_vote': {first_user.id, onion_user.id}, 'post_reply_vote': {first_user.id, onion_user.id}}
 
 
 # --- moderation -------------------------------------------------------------------------------------------------------
 
 def test_an_onion_users_report_reads_as_local(app, sisters):
-    hell, onion, onion_row, peer, hell_user, onion_user, peer_user, _ = sisters
+    first, onion, onion_row, peer, first_user, onion_user, peer_user, _ = sisters
     g.admin_ids = []
-    conversation = make_conversation(hell_user, onion_user)
-    message = ChatMessage(sender_id=hell_user.id, recipient_id=onion_user.id, body='hi',
+    conversation = make_conversation(first_user, onion_user)
+    message = ChatMessage(sender_id=first_user.id, recipient_id=onion_user.id, body='hi',
                           conversation_id=conversation.id)
     db.session.add(message)
     db.session.commit()
@@ -290,7 +290,7 @@ def test_an_onion_users_report_reads_as_local(app, sisters):
 
 
 def test_report_is_local_for_every_hosted_row(app, sisters):
-    hell, onion, onion_row, peer, *_ = sisters
+    first, onion, onion_row, peer, *_ = sisters
     assert Report(source_instance_id=1).is_local()
     assert Report(source_instance_id=onion_row.id).is_local()
     assert not Report(source_instance_id=peer.id).is_local()
@@ -303,18 +303,18 @@ def test_report_is_local_for_every_hosted_row(app, sisters):
 # --- the microblogs community's server views -------------------------------------------------------------------------
 
 def test_an_onion_post_in_the_microblogs_community_is_no_server_view(app, sisters, monkeypatch):
-    hell, onion, onion_row, peer, hell_user, onion_user, peer_user, hell_community = sisters
+    first, onion, onion_row, peer, first_user, onion_user, peer_user, first_community = sisters
     monkeypatch.setattr(live, 'is_local_microblogs', lambda community: True)
     monkeypatch.setattr(live, 'server_view_actor', lambda instance_id: f'view-{instance_id}')
     monkeypatch.setattr(live, 'server_view_instance', lambda host: host)
-    onion_post = make_post(hell_community, onion_user, None)
-    peer_post = make_post(hell_community, peer_user, f'https://{PEER}/p/1')
+    onion_post = make_post(first_community, onion_user, None)
+    peer_post = make_post(first_community, peer_user, f'https://{PEER}/p/1')
 
-    assert post_community_link(onion_post) == hell_community.link()
+    assert post_community_link(onion_post) == first_community.link()
     assert post_community_link(peer_post) == f'view-{peer.id}'
-    assert f'instance:{onion_row.id}' not in live_feed_keys(onion_post, hell_community, backfill=False)
-    assert f'instance:{peer.id}' in live_feed_keys(peer_post, hell_community, backfill=False)
-    assert [host for host, _count in busiest_microblog_servers(hell_community.id)] == [PEER]
+    assert f'instance:{onion_row.id}' not in live_feed_keys(onion_post, first_community, backfill=False)
+    assert f'instance:{peer.id}' in live_feed_keys(peer_post, first_community, backfill=False)
+    assert [host for host, _count in busiest_microblog_servers(first_community.id)] == [PEER]
 
 
 # --- a federating sister: its own sitemap, and its indexable pages ---------------------------------------------------
@@ -323,21 +323,21 @@ def test_an_onion_post_in_the_microblogs_community_is_no_server_view(app, sister
 def shop(app, twins, site):
     """`twins`' federating shop.example (tests/test_per_domain_ap_routes.py), with an indexable post on it and one
     on the first domain."""
-    hell_bob, hell_art, onion_bob, onion_art, shop_bob, shop_art = twins
+    first_bob, first_art, onion_bob, onion_art, shop_bob, shop_art = twins
     site.private_instance = False
-    for user in (hell_bob, shop_bob):
+    for user in (first_bob, shop_bob):
         user.indexable = user.searchable = True
     db.session.commit()
-    return make_post(hell_art, hell_bob, None, title='Hell news'), make_post(shop_art, shop_bob, None, title='Shop news')
+    return make_post(first_art, first_bob, None, title='First news'), make_post(shop_art, shop_bob, None, title='Shop news')
 
 
-@pytest.mark.parametrize('host, listed', [(HELL, 0), (SHOP, 1)])
+@pytest.mark.parametrize('host, listed', [(FIRST, 0), (SHOP, 1)])
 def test_the_sitemap_lists_the_request_domains_own_posts(app, shop, host, listed):
     body = ap_get(app, '/sitemap.xml', host=host, headers={}).get_data(as_text=True)
     assert [f'/post/{post.id}</loc>' in body for post in shop] == [index == listed for index in range(2)]
 
 
-@pytest.mark.parametrize('host', [HELL, SHOP])
+@pytest.mark.parametrize('host', [FIRST, SHOP])
 def test_a_hosted_profile_carries_its_schema_org_metadata(app, shop, host):
     body = ap_get(app, '/u/bob', host=host, headers={'Accept': 'text/html'}).get_data(as_text=True)
     assert 'application/ld+json' in body
@@ -350,7 +350,7 @@ def test_a_hosted_post_carries_its_schema_org_metadata(app, shop):
 
 
 def test_a_local_only_profile_carries_no_schema_org_metadata(app, two_domains, site):
-    hell, onion = two_domains.domains
+    first, onion = two_domains.domains
     user = two_domains.local_user('hidden', onion)
     user.indexable = user.searchable = True
     user.private_key = 'a key'   # an approved account, signed in: a logged-out visitor is not shown the page at all
@@ -363,21 +363,21 @@ def test_a_local_only_profile_carries_no_schema_org_metadata(app, two_domains, s
 
 def test_moving_post_images_to_s3_takes_every_hosted_domains_first(app, sisters, s3_bucket, monkeypatch):
     """`flask move-post-images-to-s3` moves local images before remote ones; an onion post's image is local."""
-    hell, onion, onion_row, peer, hell_user, onion_user, peer_user, hell_community = sisters
+    first, onion, onion_row, peer, first_user, onion_user, peer_user, first_community = sisters
     moved = []
     monkeypatch.setattr(cli, 'move_file_to_s3', lambda file_id, s3: moved.append(file_id))
     for key, value in (('S3_REGION', 'us-east-1'), ('S3_ENDPOINT', None)):   # the s3_bucket fixture's moto S3
         monkeypatch.setitem(app.config, key, value)
     images = {}
-    for name, author in (('peer', peer_user), ('hell', hell_user), ('onion', onion_user)):
+    for name, author in (('peer', peer_user), ('first', first_user), ('onion', onion_user)):
         image = File(file_path=f'app/static/media/posts/{name}.jpg')
         db.session.add(image)
         db.session.commit()
-        make_post(hell_community, author, None).image_id = images.setdefault(name, image.id)
+        make_post(first_community, author, None).image_id = images.setdefault(name, image.id)
     db.session.commit()
 
     cli.register(app)   # pyfedi.py registers the commands; the test app has none
     result = app.test_cli_runner().invoke(args=['move-post-images-to-s3'])
 
     assert result.exit_code == 0, result.output
-    assert moved == [images['onion'], images['hell'], images['peer']]   # newest first within each kind
+    assert moved == [images['onion'], images['first'], images['peer']]   # newest first within each kind

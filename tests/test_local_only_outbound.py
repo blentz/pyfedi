@@ -76,8 +76,8 @@ def env(db_session):
     ozzy.site_domain_id = onion.id
     _onion_actor(ozzy, 'u')
     remote = make_user(peer, 'rem')
-    hell = make_community('hell')
-    hell.private_key, hell.public_key = hal.private_key, hal.public_key
+    first = make_community('first')
+    first.private_key, first.public_key = hal.private_key, hal.public_key
     oc = make_community('oc')
     oc.site_domain_id = onion.id
     oc.private_key, oc.public_key = hal.private_key, hal.public_key
@@ -87,9 +87,9 @@ def env(db_session):
     away.instance_id = peer.id
     away.ap_inbox_url = 'https://peer.example/c/away/inbox'
     db.session.commit()
-    for community in (hell, oc, away):
+    for community in (first, oc, away):
         make_community_member(remote, community)
-    yield SimpleNamespace(local=local, peer=peer, onion=onion, hal=hal, ozzy=ozzy, remote=remote, hell=hell, oc=oc,
+    yield SimpleNamespace(local=local, peer=peer, onion=onion, hal=hal, ozzy=ozzy, remote=remote, first=first, oc=oc,
                           away=away)
     clear_domain_cache()
 
@@ -134,7 +134,7 @@ def test_a_reply_vote_and_boost_on_local_only_content_send_nothing(env, wire):
     """A federating user's reply to an onion post in a federating community is stamped local-only and goes nowhere,
     nor does a vote on it, nor a boost (an Announce naming it; piefed has no user boost sender, so it is sent as
     any activity would be)."""
-    post = _post(env.hell, env.ozzy, local_only=True)
+    post = _post(env.first, env.ozzy, local_only=True)
     reply = _reply(post, env.hal, local_only=True)
     send_reply(reply.id, None, session=db.session)
     vote_for_post(None, env.hal.id, post.id, None, 'upvote')
@@ -146,30 +146,30 @@ def test_a_reply_vote_and_boost_on_local_only_content_send_nothing(env, wire):
 
 
 def test_a_federating_communitys_announce_of_a_local_only_reply_is_not_sent(env, wire, monkeypatch, app):
-    post = _post(env.hell, env.ozzy, local_only=True)
+    post = _post(env.first, env.ozzy, local_only=True)
     reply = _reply(post, env.remote)
     note = {'id': f'https://peer.example/comment/{reply.id}', 'type': 'Note', 'attributedTo': env.remote.public_url(),
             'inReplyTo': post.ap_id, 'content': 'hi'}
     create = {'id': 'https://peer.example/activities/create/1', 'type': 'Create',
               'actor': env.remote.public_url(), 'object': note}
-    announce_activity_to_followers(env.hell, env.remote, create)            # the fast path
+    announce_activity_to_followers(env.first, env.remote, create)            # the fast path
     other = make_instance('other.example', software='piefed')
     other.inbox = 'https://other.example/inbox'
-    make_community_member(make_user(other, 'pf'), env.hell)
-    announce_activity_to_followers(env.hell, env.remote, create, can_batch=True)   # the batch
+    make_community_member(make_user(other, 'pf'), env.first)
+    announce_activity_to_followers(env.first, env.remote, create, can_batch=True)   # the batch
     published = []
     monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'x')
     monkeypatch.setattr('app.redis_client', SimpleNamespace(publish=lambda *a: published.append(a)))
     like = {'id': 'https://peer.example/activities/like/1', 'type': 'Like', 'actor': env.remote.public_url(),
             'object': post.ap_id}
-    announce_activity_to_followers(env.hell, env.remote, like)                # the notification server
+    announce_activity_to_followers(env.first, env.remote, like)                # the notification server
     assert _sent(wire) == [] and published == [] and db.session.query(ActivityBatch).count() == 0
 
 
 # -- Review Focus 2 ---------------------------------------------------------------------------------------------------
 
 def test_a_mention_of_an_onion_user_goes_out_as_plain_text(env, wire):
-    post = _post(env.hell, env.hal, body='hello @ozzy@abc.onion')
+    post = _post(env.first, env.hal, body='hello @ozzy@abc.onion')
     send_post(post.id, session=db.session)
     sent = _sent(wire)
     assert [url for url, _ in sent] == [PEER_INBOX]
@@ -187,7 +187,7 @@ def test_federated_mentions_drops_local_only_users(env):
 # -- retries ----------------------------------------------------------------------------------------------------------
 
 def test_a_queued_retry_of_a_local_only_activity_is_dropped(env, wire, app, monkeypatch):
-    post = _post(env.hell, env.ozzy, local_only=True)
+    post = _post(env.first, env.ozzy, local_only=True)
     like = {'id': f'{SERVER}/activities/like/1', 'type': 'Like', 'actor': env.hal.public_url(), 'object': post.ap_id}
     from_onion = {'id': f'{SERVER}/activities/follow/1', 'type': 'Follow', 'actor': env.ozzy.public_url(),
                   'object': 'https://peer.example/c/away'}
@@ -211,7 +211,7 @@ def test_a_queued_retry_of_a_local_only_activity_is_dropped(env, wire, app, monk
 def test_a_first_domain_post_in_a_first_domain_community_is_sent_unchanged(env, wire, monkeypatch):
     """The body that leaves is byte-for-byte the one sent with the guard and the mention filter switched off."""
     monkeypatch.setattr('app.utils.gibberish', lambda *a: 'fixed')   # where activity_id reads it
-    post = _post(env.hell, env.hal, body='plain words')
+    post = _post(env.first, env.hal, body='plain words')
     send_post(post.id, session=db.session)
     guarded = _sent(wire)
     monkeypatch.setattr('app.local_only.outbound_refusal', lambda body, session=None: None)
@@ -246,9 +246,9 @@ def test_an_onion_url_in_any_guarded_field_is_refused(env):
 
 
 def test_local_only_rows_are_refused_in_every_url_form(env):
-    post = _post(env.hell, env.hal, local_only=True)
-    reply = _reply(_post(env.hell, env.hal), env.hal, local_only=True)
-    for url in (f'{SERVER}/post/{post.id}', f'{SERVER}/post/{post.id}/replies', f'{SERVER}/c/hell/p/{post.id}/slug',
+    post = _post(env.first, env.hal, local_only=True)
+    reply = _reply(_post(env.first, env.hal), env.hal, local_only=True)
+    for url in (f'{SERVER}/post/{post.id}', f'{SERVER}/post/{post.id}/replies', f'{SERVER}/c/first/p/{post.id}/slug',
                 f'{SERVER}/comment/{reply.id}', f'{SERVER}/post/{reply.post_id}/comment/{reply.id}',
                 f'{SERVER}/comment/' + ''.join(f'%{ord(digit):02X}' for digit in str(reply.id)),
                 f'https://TEST.piefed.local./post/{post.id}'):
@@ -256,7 +256,7 @@ def test_local_only_rows_are_refused_in_every_url_form(env):
 
 
 def test_ordinary_content_is_not_refused_and_costs_one_query_per_table(env, monkeypatch):
-    post = _post(env.hell, env.hal)
+    post = _post(env.first, env.hal)
     reply = _reply(post, env.hal)
     body = {'id': f'{SERVER}/activities/x', 'actor': env.hal.public_url(),
             'object': [{'id': post.ap_id}, {'id': reply.ap_id, 'inReplyTo': post.ap_id}, {'id': f'{SERVER}/post/99'}]}
@@ -295,7 +295,7 @@ def test_an_id_beyond_the_database_range_is_not_refused_on_that_basis(env):
 
 
 def test_a_post_quoting_a_local_only_post_is_refused(env):
-    quoted = _post(env.hell, env.ozzy, local_only=True)
+    quoted = _post(env.first, env.ozzy, local_only=True)
     for key in ('quote', 'quoteUrl', 'quoteUri', '_misskey_quote', 'interactionTarget', 'interactingObject',
                 'instrument'):
         body = {'id': f'{SERVER}/activities/create/1', 'type': 'Create', 'actor': env.hal.public_url(),

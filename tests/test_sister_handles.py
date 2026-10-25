@@ -31,10 +31,10 @@ def _site_in_g(app):
 
 @pytest.mark.parametrize('suffix', ['', '/', '/?x=1'])
 def test_resolving_a_sisters_community_url_finds_the_sisters_den(env, wire, suffix):
-    found = get_resolve_object(None, {'q': f'https://{SHOP}/c/den{suffix}'}, user_id=env.hell_alice.id)
+    found = get_resolve_object(None, {'q': f'https://{SHOP}/c/den{suffix}'}, user_id=env.first_alice.id)
     assert found['community']['community']['id'] == env.shop_den.id
-    found = get_resolve_object(None, {'q': f'https://{SERVER}/c/den{suffix}'}, user_id=env.hell_alice.id)
-    assert found['community']['community']['id'] == env.hell_den.id
+    found = get_resolve_object(None, {'q': f'https://{SERVER}/c/den{suffix}'}, user_id=env.first_alice.id)
+    assert found['community']['community']['id'] == env.first_den.id
     assert wire.calls.call_count == 0
 
 
@@ -42,7 +42,7 @@ def test_resolving_a_sisters_community_url_finds_the_sisters_den(env, wire, suff
 def test_resolving_a_malformed_url_is_a_400_never_a_500(env, wire, app, monkeypatch, query):
     monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')
     response = app.test_client().get('/api/alpha/resolve_object', query_string={'q': query},
-                                     headers=auth(env.hell_alice))
+                                     headers=auth(env.first_alice))
     assert response.status_code == 400
     assert wire.calls.call_count == 0
 
@@ -51,8 +51,8 @@ def test_a_bare_community_name_means_the_acting_domain(env, wire):
     with acting_for(domain_for_host(SHOP)):
         assert get_community(None, {'name': 'den'})['community_view']['community']['id'] == env.shop_den.id
         assert form_communities_to_ids('den') == {env.shop_den.id}
-    assert get_community(None, {'name': 'den'})['community_view']['community']['id'] == env.hell_den.id
-    assert form_communities_to_ids('!den') == {env.hell_den.id}
+    assert get_community(None, {'name': 'den'})['community_view']['community']['id'] == env.first_den.id
+    assert form_communities_to_ids('!den') == {env.first_den.id}
     assert wire.calls.call_count == 0
 
 
@@ -61,13 +61,13 @@ def test_our_own_domains_pass_a_closed_allowlist(env, wire):
     assert AllowedInstances.query.count() == 0
     assert validate_remote_actor(f'https://{SHOP}/u/alice') is True
     env.shop_alice.ap_profile_id = f'https://{SHOP}/u/alice'   # the fixture's accounts carry none
-    env.hell_alice.ap_profile_id = f'https://{SERVER}/u/alice'
+    env.first_alice.ap_profile_id = f'https://{SERVER}/u/alice'
     db.session.commit()
     assert find_actor_or_create(f'https://{SHOP}/u/alice') is env.shop_alice
-    assert find_actor_or_create(f'https://{SERVER}/u/alice') is env.hell_alice
+    assert find_actor_or_create(f'https://{SERVER}/u/alice') is env.first_alice
     assert validate_remote_actor(f'https://{SHOP}/u/alice') is True
     assert search_for_community(f'!den@{SHOP}') is env.shop_den
-    assert search_for_community(f'!den@{SERVER}') is env.hell_den
+    assert search_for_community(f'!den@{SERVER}') is env.first_den
     assert wire.calls.call_count == 0
 
 
@@ -149,7 +149,7 @@ def test_a_domain_with_an_explicit_port_is_exempt_only_on_that_port(env, wire, a
     set_setting('use_allowlist', True)
     try:
         assert validate_remote_actor(f'https://{SERVER}:8443/u/alice') is True
-        assert search_for_community(f'!den@{SERVER}:8443') is env.hell_den
+        assert search_for_community(f'!den@{SERVER}:8443') is env.first_den
         for other in (SERVER, f'{SERVER}:443', f'{SERVER}:9000'):
             assert validate_remote_actor(f'https://{other}/u/alice') is False, other
             assert search_for_community(f'!den@{other}') is None, other
@@ -162,7 +162,7 @@ def test_a_domain_with_an_explicit_port_is_exempt_only_on_that_port(env, wire, a
 def test_a_banned_own_host_still_resolves_in_every_gate(env, wire, host):
     db.session.add(BannedInstances(domain=host))
     db.session.commit()
-    den = env.shop_den if host == SHOP else env.hell_den
+    den = env.shop_den if host == SHOP else env.first_den
     assert validate_remote_actor(f'https://{host}/u/alice') is True
     assert search_for_community(f'!den@{host}') is den
     assert search_for_feed(f'~reads@{host}') is env.feed

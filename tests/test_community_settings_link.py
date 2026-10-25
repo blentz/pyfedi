@@ -3,7 +3,7 @@ import pytest
 
 from tests.factories import make_community_member
 from tests.test_per_domain_html_routes import signed_in, world  # noqa: F401
-from tests.two_domains import HELL, two_domains  # noqa: F401
+from tests.two_domains import FIRST, two_domains  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -20,15 +20,15 @@ def settings_link(app, art, name, two_domains, moderator, theme):
     person.private_key = 'a key'
     person.theme = theme
     make_community_member(person, art, is_moderator=moderator)
-    page = signed_in(app, person, HELL).get('/c/art').get_data(as_text=True)
+    page = signed_in(app, person, FIRST).get('/c/art').get_data(as_text=True)
     return SETTINGS_LINKS[theme].format(id=art.id) in page
 
 
 @pytest.mark.parametrize('theme', sorted(SETTINGS_LINKS))
 def test_a_moderator_who_is_not_the_owner_sees_the_settings_link(app, world, two_domains, theme):
-    assert settings_link(app, world.art[HELL], 'themod', two_domains, True, theme) is True
+    assert settings_link(app, world.art[FIRST], 'themod', two_domains, True, theme) is True
 
 
 @pytest.mark.parametrize('theme', sorted(SETTINGS_LINKS))
 def test_a_plain_member_does_not_see_the_settings_link(app, world, two_domains, theme):
-    assert settings_link(app, world.art[HELL], 'justmember', two_domains, False, theme) is False
+    assert settings_link(app, world.art[FIRST], 'justmember', two_domains, False, theme) is False

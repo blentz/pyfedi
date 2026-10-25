@@ -159,7 +159,7 @@ def test_migration_seeds_from_env(db_session, seed_schema, mode, registration):
 
 
 @pytest.mark.parametrize('server_name,domain', [('127.0.0.1:5000', '127.0.0.1'), ('[::1]:5000', '::1'),
-                                                 ('Hell.Onion.', 'hell.onion'), (None, 'localhost')])
+                                                 ('Sister.Onion.', 'sister.onion'), (None, 'localhost')])
 def test_migration_seeds_the_bare_host(db_session, seed_schema, server_name, domain):
     load_migration().seed_default(db.session.connection(), {'SERVER_NAME': server_name, 'HTTP_PROTOCOL': 'http'})
     db.session.commit()

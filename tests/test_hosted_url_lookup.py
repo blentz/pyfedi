@@ -49,8 +49,8 @@ def wire(monkeypatch):
 @pytest.fixture
 def env(db_session):
     """The first domain (SERVER_NAME) and shop.example, each with an alice and a den: local names are unique per domain
-    (C1), so the same name on both is two rows. A shop post in shop's den with a hell reply, a site-wide feed, and a
-    legacy hell post whose ap_id is a URL no path form matches."""
+    (C1), so the same name on both is two rows. A shop post in shop's den with a first-domain reply, a site-wide feed, and a
+    legacy first-domain post whose ap_id is a URL no path form matches."""
     local = make_instance(SERVER, software='piefed')
     if db.session.query(SiteDomain).filter_by(is_default=True).first() is None:
         db.session.add(SiteDomain(domain=SERVER, is_default=True))
@@ -60,19 +60,19 @@ def env(db_session):
     clear_domain_cache()
     shop = make_instance(SHOP, software='piefed')
     peer = make_instance('peer.example', software='lemmy')
-    hell_alice = make_user(local, 'alice', local=True)   # id 1: make_community's owner
+    first_alice = make_user(local, 'alice', local=True)   # id 1: make_community's owner
     shop_alice = make_user(shop, 'alice', local=True)
     shop_alice.site_domain_id = shop_row.id
-    hell_den = make_community('den')
+    first_den = make_community('den')
     shop_den = make_community('den', host=SHOP)
     shop_den.site_domain_id, shop_den.instance_id = shop_row.id, shop.id
     db.session.commit()
     post = make_post(shop_den, shop_alice, None, title='a shop post')
-    legacy = make_post(hell_den, hell_alice, f'https://{SERVER}/p/legacy', title='a legacy post')
-    reply = make_post_reply(post, hell_alice)
+    legacy = make_post(first_den, first_alice, f'https://{SERVER}/p/legacy', title='a legacy post')
+    reply = make_post_reply(post, first_alice)
     feed = make_local_feed('reads')
-    yield SimpleNamespace(local=local, shop=shop, peer=peer, shop_row=shop_row, hell_alice=hell_alice,
-                          shop_alice=shop_alice, hell_den=hell_den, shop_den=shop_den, post=post, legacy=legacy,
+    yield SimpleNamespace(local=local, shop=shop, peer=peer, shop_row=shop_row, first_alice=first_alice,
+                          shop_alice=shop_alice, first_den=first_den, shop_den=shop_den, post=post, legacy=legacy,
                           reply=reply, feed=feed)
     clear_domain_cache()
 
@@ -93,11 +93,11 @@ def test_every_path_form_resolves_to_its_row_on_either_domain(env, wire):
         f'https://{SHOP}/comment/{r}': env.reply,
         f'https://{SERVER}/comment/{r}': env.reply,
         f'https://{SHOP}/u/alice': env.shop_alice,
-        f'https://{SERVER}/u/alice': env.hell_alice,
+        f'https://{SERVER}/u/alice': env.first_alice,
         f'https://{SHOP}/u/Alice/': env.shop_alice,
         f'https://{SERVER}/u/alice@{SHOP}': env.shop_alice,   # a handle in the path names its own domain's row
         f'https://{SHOP}/c/Den': env.shop_den,
-        f'https://{SERVER}/c/Den': env.hell_den,
+        f'https://{SERVER}/c/Den': env.first_den,
         f'https://{SHOP}/c/den': env.shop_den,                # its stored ap_profile_id
         f'https://{SERVER}/f/reads': env.feed,
         f'https://{SHOP}/f/Reads': env.feed,                  # feeds are named site-wide
@@ -169,10 +169,10 @@ def test_a_hosted_url_that_is_no_post_is_none_without_a_fetch(env, wire, monkeyp
 
 
 def post_as_alice(app, env, path, data):
-    """POST `data` to `path` as hell's alice, with a valid CSRF token."""
+    """POST `data` to `path` as the first domain's alice, with a valid CSRF token."""
     client = app.test_client()
     with client.session_transaction() as sess:
-        sess['_user_id'] = str(env.hell_alice.id)
+        sess['_user_id'] = str(env.first_alice.id)
         sess['_fresh'] = True
     with app.test_request_context():
         g.pop('csrf_token', None)   # flask-wtf keeps a token on g, which outlives one request in the test's context
@@ -184,7 +184,7 @@ def post_as_alice(app, env, path, data):
 
 
 def search_for(app, env, address):
-    """The retrieve_remote_post page's answer to `address`, asked by hell's alice."""
+    """The retrieve_remote_post page's answer to `address`, asked by the first domain's alice."""
     response = post_as_alice(app, env, '/retrieve_remote_post', {'address': address})
     assert response.status_code == 200
     return response.get_data(as_text=True)
@@ -290,7 +290,7 @@ def test_the_discovery_view_never_opens_a_hosted_post(app, env, wire):
 def booster(env):
     remote = make_user(env.peer, 'booster')
     remote.ap_fetched_at = utcnow()   # fresh: its own profile is not refreshed over HTTP mid-test
-    make_follow(env.hell_alice, remote)
+    make_follow(env.first_alice, remote)
     return remote
 
 
@@ -377,10 +377,10 @@ def test_an_empty_local_community_is_never_backfilled_over_http(env, wire, fetch
 
 
 def test_an_empty_local_community_added_to_a_feed_is_not_fetched(env, wire, fetches):
-    _with_collections(env.hell_den, SERVER)
-    env.hell_den.post_count = 0
+    _with_collections(env.first_den, SERVER)
+    env.first_den.post_count = 0
     env.feed.num_communities = 1
-    make_feed_item(env.feed, env.hell_den)
+    make_feed_item(env.feed, env.first_den)
     db.session.commit()
     initialise_new_communities(env.feed)
     assert fetches == [] and wire.calls.call_count == 0
@@ -404,7 +404,7 @@ def test_an_empty_local_community_imported_in_settings_is_not_fetched(app, env, 
     redis = SimpleNamespace(get=lambda key: json.dumps({'followed_communities': [f'https://{SHOP}/c/quiet']}),
                             delete=lambda key: None)
     monkeypatch.setattr('app.redis_client', redis, raising=False)
-    import_settings_task(env.hell_alice.id, 'a-redis-key')
+    import_settings_task(env.first_alice.id, 'a-redis-key')
     assert backfilled == [quiet.id]
     assert fetches == [] and wire.calls.call_count == 0
 
@@ -451,7 +451,7 @@ def test_a_credit_naming_a_sister_account_is_that_account(env, wire, actor_fetch
     db.session.add(UserExtraField(user_id=env.shop_alice.id, label='podcast', text=PODCAST.ap_profile_id))
     db.session.commit()
     assert credits.verified_credit_user(f'https://{SHOP}/u/alice', PODCAST) == env.shop_alice.id
-    assert credits.verified_credit_user(f'https://{SERVER}/u/alice', PODCAST) is None   # hell's alice: no link
+    assert credits.verified_credit_user(f'https://{SERVER}/u/alice', PODCAST) is None   # The first domain's alice: no link
     assert actor_fetches == [] and wire.calls.call_count == 0
 
 

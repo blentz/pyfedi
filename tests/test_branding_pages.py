@@ -24,14 +24,14 @@ from app.storefront import clear_domain_cache
 from app.utils import current_theme
 from tests.conftest import forget_login
 from tests.factories import grant_permission
-from tests.two_domains import HELL, ONION, onion_request, two_domains  # noqa: F401  (a fixture)
+from tests.two_domains import FIRST, ONION, onion_request, two_domains  # noqa: F401  (a fixture)
 
 pytestmark = pytest.mark.usefixtures('site')
 
 GOLDEN = Path(__file__).parent / 'golden' / 'branding'
 TEMPLATES = Path(__file__).parent.parent / 'app' / 'templates'
 PROXY = '10.89.0.2'
-DEFAULT_BASE = f'https://{HELL}'
+DEFAULT_BASE = f'https://{FIRST}'
 ONION_HEADERS = {'X-PieFed-Via': 'onion', 'X-Forwarded-For': '10.89.0.7'}
 CREATED = datetime(2025, 3, 4, 5, 6, 7)
 

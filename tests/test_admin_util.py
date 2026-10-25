@@ -98,13 +98,13 @@ class TestDeletingAnAccount:
         """C4: an account in a first-domain and a shop.example community leaves both with no Leave, no delivery and no
         'empty uri' or 'hosted domain' failure row; both memberships are gone."""
         Instance.query.update({Instance.inbox: None})   # the account's own Delete goes nowhere either
-        hell = make_community('firstcommunity')
+        first = make_community('firstcommunity')
         shop = make_community('shopcommunity', host='shop.example')
         user = make_user(env.baseline.instance_local, 'leaver', local=True, with_keys=True)
-        make_community_member(user, hell)
+        make_community_member(user, first)
         make_community_member(user, shop)
-        user_id, community_ids = user.id, [hell.id, shop.id]
-        assert hell.is_local() and shop.is_local()
+        user_id, community_ids = user.id, [first.id, shop.id]
+        assert first.is_local() and shop.is_local()
         with patch('app.activitypub.signature.post_request') as post:
             unsubscribe_from_everything_then_delete_task(user_id)
         assert post.call_count == 0 and post.delay.call_count == 0

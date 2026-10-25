@@ -1,7 +1,7 @@
 """Each federating domain answers WebFinger, host-meta, NodeInfo and the site documents for itself (plan C3, task 4).
 
 shop.example federates beside the first domain and holds a goldie and a goldart of its own (`shop_rows`). Owner ruling:
-nothing a sister domain publishes names the first domain, so with Site.name what prod's is ('the first domain', `site_named_hell`)
+nothing a sister domain publishes names the first domain, so with Site.name what prod's is ('the first domain', `site_named_first`)
 no shop body holds the first domain's host at all: the shop's site name is its own domain. WebFinger answers only for a row
 on the domain the request came in on, NodeInfo counts only that domain's accounts and content, and every cached copy is
 keyed by the host, so neither domain is ever answered with the other's. the first domain's own documents stay their golden
@@ -21,10 +21,10 @@ from app.utils import get_setting
 from tests.factories import make_post
 from tests.test_c3_golden_documents import AP, DISCOVERY_PATHS, SHOP, golden_copy, golden_site  # noqa: F401  (fixture)
 from tests.test_onion_guard_limits import PROXY, a_session, onion_get
-from tests.test_per_domain_actor_documents import SHOP_BASE, shop_rows, site_named_hell  # noqa: F401  (fixtures)
-from tests.two_domains import HELL, ONION, request_on, two_domains  # noqa: F401  (fixture)
+from tests.test_per_domain_actor_documents import SHOP_BASE, shop_rows, site_named_first  # noqa: F401  (fixtures)
+from tests.two_domains import FIRST, ONION, request_on, two_domains  # noqa: F401  (fixture)
 
-pytestmark = pytest.mark.usefixtures('golden_site', 'shop_rows', 'site_named_hell')
+pytestmark = pytest.mark.usefixtures('golden_site', 'shop_rows', 'site_named_first')
 
 
 @pytest.fixture(autouse=True)
@@ -46,7 +46,7 @@ def get(app, path, host=SHOP):
 def shop_body(app, path) -> bytes:
     response = get(app, path)
     assert response.status_code == 200, path
-    assert HELL.encode() not in response.data   # the first domain's host is nowhere in the shop's answer
+    assert FIRST.encode() not in response.data   # the first domain's host is nowhere in the shop's answer
     return response.data
 
 
@@ -93,12 +93,12 @@ def test_the_shops_instance_actor_answers_webfinger_for_the_shop(app):
 
 
 @pytest.mark.parametrize('host, resource', [
-    (HELL, f'acct:goldie@{SHOP}'), (HELL, f'acct:goldart@{SHOP}'), (HELL, f'{SHOP_BASE}/u/goldie'),
-    (HELL, f'acct:{SHOP}@{SHOP}'),
-    (SHOP, f'acct:goldie@{HELL}'), (SHOP, f'acct:goldart@{HELL}'), (SHOP, f'https://{HELL}/u/goldie'),
-    (SHOP, f'acct:{HELL}@{HELL}'), (SHOP, f'acct:{SHOP}@{HELL}'), (HELL, f'acct:{HELL}@{SHOP}'),
+    (FIRST, f'acct:goldie@{SHOP}'), (FIRST, f'acct:goldart@{SHOP}'), (FIRST, f'{SHOP_BASE}/u/goldie'),
+    (FIRST, f'acct:{SHOP}@{SHOP}'),
+    (SHOP, f'acct:goldie@{FIRST}'), (SHOP, f'acct:goldart@{FIRST}'), (SHOP, f'https://{FIRST}/u/goldie'),
+    (SHOP, f'acct:{FIRST}@{FIRST}'), (SHOP, f'acct:{SHOP}@{FIRST}'), (FIRST, f'acct:{FIRST}@{SHOP}'),
     # feeds stay on the default domain (C1 ruling): the shop has none, whatever its name
-    (SHOP, f'acct:~goldfeed@{SHOP}'), (SHOP, f'acct:goldfeed@{SHOP}'), (SHOP, f'acct:~goldfeed@{HELL}'),
+    (SHOP, f'acct:~goldfeed@{SHOP}'), (SHOP, f'acct:goldfeed@{SHOP}'), (SHOP, f'acct:~goldfeed@{FIRST}'),
 ])
 def test_webfinger_answers_only_for_a_row_on_the_domain_asked(app, host, resource):
     """A resource on another of our domains is that domain's to answer: asked of this one it is a 404, as an unknown
@@ -106,21 +106,21 @@ def test_webfinger_answers_only_for_a_row_on_the_domain_asked(app, host, resourc
     assert get(app, webfinger(resource), host=host).status_code == 404
 
 
-@pytest.mark.parametrize('resource', [f'acct:goldie@{HELL}', f'acct:goldie@{SHOP}', f'acct:{ONION}@{ONION}',
+@pytest.mark.parametrize('resource', [f'acct:goldie@{FIRST}', f'acct:goldie@{SHOP}', f'acct:{ONION}@{ONION}',
                                       f'acct:goldie@{ONION}'])
 def test_the_onion_answers_no_webfinger(app, two_domains, resource):
     two_domains.local_user('goldie', two_domains.domains[1])
     client = app.test_client()
     a_session(client)
     assert onion_get(client, webfinger(resource), headers={}).status_code == 404
-    assert get(app, webfinger(resource), host=HELL).status_code == (200 if HELL in resource else 404)
+    assert get(app, webfinger(resource), host=FIRST).status_code == (200 if FIRST in resource else 404)
 
 
 @pytest.mark.usefixtures('real_cache')
-@pytest.mark.parametrize('first, second', [(SHOP, HELL), (HELL, SHOP)])
+@pytest.mark.parametrize('first, second', [(SHOP, FIRST), (FIRST, SHOP)])
 def test_a_webfinger_answer_is_remembered_per_host(app, first, second):
     """The same resource asked of both hosts: each host's own answer, whichever is asked first (Review Focus 3)."""
-    expected = {SHOP: 200, HELL: 404}
+    expected = {SHOP: 200, FIRST: 404}
     for host in (first, second, first):
         assert get(app, webfinger(f'acct:goldie@{SHOP}'), host=host).status_code == expected[host], host
 
@@ -143,7 +143,7 @@ def test_the_shops_nodeinfo_index_links_the_shops_nodeinfo(app):
 
 @pytest.fixture
 def shop_post(app, golden_site, shop_rows):
-    """A post by the shop's goldie: the shop's post count differs from hell's."""
+    """A post by the shop's goldie: the shop's post count differs from the first domain's."""
     shop, user, community = shop_rows
     make_post(community, user, f'{SHOP_BASE}/post/1')
     cache.clear()
@@ -153,11 +153,11 @@ def shop_post(app, golden_site, shop_rows):
 @pytest.mark.parametrize('path', ['/nodeinfo/2.0', '/nodeinfo/2.1', '/nodeinfo/2.0.json', '/nodeinfo/2.1.json'])
 def test_nodeinfo_counts_each_domains_own_accounts_and_content(app, path):
     shop = json.loads(shop_body(app, path))['usage']
-    hell = json.loads(get(app, path, host=HELL).data)['usage']
+    first = json.loads(get(app, path, host=FIRST).data)['usage']
     assert shop == {'users': {'total': 1, 'activeHalfyear': 1, 'activeMonth': 1}, 'localPosts': 1,
                     'localComments': 0}
-    # hell counts its own goldie only, not the shop's as well (it counted every federating domain's before Task 4)
-    assert hell == {'users': {'total': 1, 'activeHalfyear': 1, 'activeMonth': 1}, 'localPosts': 0,
+    # the first domain counts its own goldie only, not the shop's as well (it counted every federating domain's before Task 4)
+    assert first == {'users': {'total': 1, 'activeHalfyear': 1, 'activeMonth': 1}, 'localPosts': 0,
                     'localComments': 0}
 
 
@@ -166,7 +166,7 @@ def test_the_shops_mastodon_instance_document_is_the_shops(app):
     assert json.loads(shop_body(app, '/api/v1/instance')) == {
         'title': SHOP, 'uri': SHOP, 'stats': {'user_count': 1, 'status_count': 1, 'domain_count': 1},
         'registrations': False, 'approval_required': False}
-    assert json.loads(get(app, '/api/v1/instance', host=HELL).data)['stats']['status_count'] == 0
+    assert json.loads(get(app, '/api/v1/instance', host=FIRST).data)['stats']['status_count'] == 0
 
 
 @pytest.mark.usefixtures('shop_post')
@@ -182,21 +182,21 @@ def test_the_shops_lemmy_site_document_is_the_shops(app, shop_rows):
     assert site['description'] == 'Fixed for the golden copies'   # the description is shared
     counts = document['site_view']['counts']
     assert (counts['users'], counts['posts'], counts['comments'], counts['communities']) == (1, 1, 0, 1)
-    assert document['admins'] == []   # hell's admin is hell's account: the shop names none of hell's
+    assert document['admins'] == []   # The first domain's admin is the first domain's account: the shop names none of the first domain's
 
 
 def test_the_shops_custom_emojis_are_served_on_the_shop(app):
     """Emoji are the site's, shared by every domain (row 1 by ruling); the same files are served on each host, so a
     sister domain names them on itself (plan C3, task 6). Another server's emoji stay its own."""
-    db.session.add(Emoji(token=':gold:', url=f'https://{HELL}/static/media/emoji/gold.png', category='shiny',
+    db.session.add(Emoji(token=':gold:', url=f'https://{FIRST}/static/media/emoji/gold.png', category='shiny',
                          instance_id=1))
     db.session.add(Emoji(token=':far:', url='https://peer.example/emoji/far.png', instance_id=1))
     db.session.commit()
     emojis = {emoji['custom_emoji']['shortcode']: emoji['custom_emoji']['image_url']
               for emoji in json.loads(shop_body(app, '/api/v3/site'))['custom_emojis']}
     assert emojis == {'gold': f'{SHOP_BASE}/static/media/emoji/gold.png', 'far': 'https://peer.example/emoji/far.png'}
-    hell = json.loads(get(app, '/api/v3/site', host=HELL).data)['custom_emojis']
-    assert hell[0]['custom_emoji']['image_url'] == f'https://{HELL}/static/media/emoji/gold.png'
+    first = json.loads(get(app, '/api/v3/site', host=FIRST).data)['custom_emojis']
+    assert first[0]['custom_emoji']['image_url'] == f'https://{FIRST}/static/media/emoji/gold.png'
 
 
 def test_the_alpha_site_view_names_the_shop(app, shop_rows):
@@ -206,10 +206,10 @@ def test_the_alpha_site_view_names_the_shop(app, shop_rows):
     assert site['name'] == SHOP
     assert site['actor_id'] == f'{SHOP_BASE}/'
     assert site['icon'] == f'{SHOP_BASE}/static/images/piefed_logo_icon_t_75.png'
-    with request_on(app, domain_for_host(HELL)):
+    with request_on(app, domain_for_host(FIRST)):
         g.site = db.session.get(Site, 1)
-        hell_site = site_view(None)['site']
-    assert (hell_site['name'], hell_site['actor_id']) == (HELL, f'https://{HELL}/')
+        first_site = site_view(None)['site']
+    assert (first_site['name'], first_site['actor_id']) == (FIRST, f'https://{FIRST}/')
 
 
 CACHED = ['/.well-known/host-meta', '/.well-known/host-meta.json', '/.well-known/nodeinfo', '/nodeinfo/2.0',
@@ -222,12 +222,12 @@ CACHED = ['/.well-known/host-meta', '/.well-known/host-meta.json', '/.well-known
 def test_each_host_gets_its_own_cached_copy(app, path, shop_first):
     """Review Focus 3: two hosts in a row each get their own body, in either order, and again from the cache."""
     bodies = {}
-    for host in ((SHOP, HELL) if shop_first else (HELL, SHOP)) * 2:
+    for host in ((SHOP, FIRST) if shop_first else (FIRST, SHOP)) * 2:
         response = get(app, path, host=host)
         assert response.status_code == 200, (host, path)
         assert bodies.setdefault(host, response.data) == response.data
-    assert HELL.encode() not in bodies[SHOP]
-    assert SHOP.encode() not in bodies[HELL]
+    assert FIRST.encode() not in bodies[SHOP]
+    assert SHOP.encode() not in bodies[FIRST]
 
 
 @pytest.mark.usefixtures('real_cache')
@@ -237,19 +237,19 @@ def test_the_onion_answers_no_discovery_document(app, path):
     client = app.test_client()
     a_session(client)
     assert onion_get(client, path, headers={}).status_code == 404
-    assert get(app, path, host=HELL).status_code == 200   # and the 404 is not hell's cached answer
+    assert get(app, path, host=FIRST).status_code == 200   # and the 404 is not the first domain's cached answer
 
 
 @pytest.mark.parametrize('name, path', sorted(DISCOVERY_PATHS.items()))
-def test_hells_discovery_documents_stay_their_golden_copies_beside_the_shops(app, name, path):
-    """hell's answers are unchanged by the shop's goldie and goldart (the counts are hell's own: one account), with
+def test_first_domains_discovery_documents_stay_their_golden_copies_beside_the_shops(app, name, path):
+    """The first domain's answers are unchanged by the shop's goldie and goldart (the counts are the first domain's own: one account), with
     the site named as the golden copies were captured."""
     db.session.get(Site, 1).name = 'Golden Site'
     db.session.commit()
     cache.clear()
     if 'goldfeed' not in path:   # the shop has no feed
-        shop_body(app, path.replace(HELL, SHOP))   # the shop's answer, cached first
-    response = get(app, path, host=HELL)
+        shop_body(app, path.replace(FIRST, SHOP))   # the shop's answer, cached first
+    response = get(app, path, host=FIRST)
     assert response.status_code == 200
     assert response.data == golden_copy(name)
 
@@ -274,26 +274,26 @@ def alpha_get(app, path, host):
 
 @pytest.mark.usefixtures('alpha_api')
 def test_the_shops_alpha_site_documents_name_only_the_shop(app, two_domains, shop_rows):
-    """I1: the shop names none of hell's admins, and counts its own accounts (two, hell has one)."""
+    """I1: the shop names none of the first domain's admins, and counts its own accounts (two, the first domain has one)."""
     two_domains.local_user('extra', shop_rows[0])
     site = alpha_get(app, '/api/alpha/site', SHOP)
-    assert HELL.encode() not in site.data
+    assert FIRST.encode() not in site.data
     assert site.get_json()['admins'] == []
     assert (site.get_json()['site']['name'], site.get_json()['site']['user_count']) == (SHOP, 2)
     chooser = alpha_get(app, '/api/alpha/site/instance_chooser', SHOP)
-    assert HELL.encode() not in chooser.data
+    assert FIRST.encode() not in chooser.data
     assert (chooser.get_json()['name'], chooser.get_json()['mau']) == (SHOP, 2)
-    # hell's are as they were: its own admin, name and counts
-    hell_site = alpha_get(app, '/api/alpha/site', HELL).get_json()
-    assert [admin['person']['actor_id'] for admin in hell_site['admins']] == [f'https://{HELL}/u/goldie']
-    assert (hell_site['site']['name'], hell_site['site']['user_count']) == (HELL, 1)
-    hell_chooser = alpha_get(app, '/api/alpha/site/instance_chooser', HELL).get_json()
-    assert (hell_chooser['name'], hell_chooser['mau']) == (HELL, 1)
+    # The first domain's are as they were: its own admin, name and counts
+    first_site = alpha_get(app, '/api/alpha/site', FIRST).get_json()
+    assert [admin['person']['actor_id'] for admin in first_site['admins']] == [f'https://{FIRST}/u/goldie']
+    assert (first_site['site']['name'], first_site['site']['user_count']) == (FIRST, 1)
+    first_chooser = alpha_get(app, '/api/alpha/site/instance_chooser', FIRST).get_json()
+    assert (first_chooser['name'], first_chooser['mau']) == (FIRST, 1)
 
 
 @pytest.fixture
 def shop_admin_only(app, golden_site, shop_rows):
-    """Sign-up open on hell (Site.registration_mode), the shop's accounts made by an admin only."""
+    """Sign-up open on the first domain (Site.registration_mode), the shop's accounts made by an admin only."""
     db.session.get(Site, 1).registration_mode = 'RequireApplication'
     db.session.get(SiteDomain, shop_rows[0].id).registration = 'admin'
     db.session.commit()
@@ -303,16 +303,16 @@ def shop_admin_only(app, golden_site, shop_rows):
 
 @pytest.mark.usefixtures('shop_admin_only')
 def test_a_shop_that_takes_no_sign_ups_says_so(app):
-    """I2: the domain's own registration, not the Site row's: hell is open (by application), the shop is closed."""
+    """I2: the domain's own registration, not the Site row's: the first domain is open (by application), the shop is closed."""
     for path in ('/nodeinfo/2.0', '/nodeinfo/2.1'):
         assert json.loads(shop_body(app, path))['openRegistrations'] is False
-        assert json.loads(get(app, path, host=HELL).data)['openRegistrations'] is True
+        assert json.loads(get(app, path, host=FIRST).data)['openRegistrations'] is True
     shop = json.loads(shop_body(app, '/api/v1/instance'))
     assert (shop['registrations'], shop['approval_required']) == (False, False)
-    hell = json.loads(get(app, '/api/v1/instance', host=HELL).data)
-    assert (hell['registrations'], hell['approval_required']) == (True, True)
+    first = json.loads(get(app, '/api/v1/instance', host=FIRST).data)
+    assert (first['registrations'], first['approval_required']) == (True, True)
     assert json.loads(shop_body(app, '/api/v3/site'))['site_view']['local_site']['registration_mode'] == 'Closed'
-    assert json.loads(get(app, '/api/v3/site', host=HELL).data)['site_view']['local_site']['registration_mode'] == \
+    assert json.loads(get(app, '/api/v3/site', host=FIRST).data)['site_view']['local_site']['registration_mode'] == \
         'RequireApplication'
 
 
@@ -322,7 +322,7 @@ def test_a_shop_that_takes_no_sign_ups_says_so(app):
 def test_the_site_lists_are_cached_per_host(app, path, shop_first):
     """M2: each host keeps its own cached copy. A ban made after the first host's copy was cached shows on the
     second host, whose copy is made after it, and not on the first, whose copy is still the cached one."""
-    first, second = (SHOP, HELL) if shop_first else (HELL, SHOP)
+    first, second = (SHOP, FIRST) if shop_first else (FIRST, SHOP)
     before = get(app, path, host=first)
     assert before.status_code == 200
     db.session.add(Instance(domain='banned.example', software='lemmy'))
@@ -332,24 +332,24 @@ def test_the_site_lists_are_cached_per_host(app, path, shop_first):
     assert get(app, path, host=first).data == before.data
 
 
-def test_the_feeds_document_is_hells_only(app):
+def test_the_feeds_document_is_first_domains_only(app):
     """M4: /feeds as ActivityPub is the default domain's site document: another domain answers it 404."""
     assert app.test_client().get('/feeds', headers=AP, base_url=SHOP_BASE).status_code == 404
-    hell = app.test_client().get('/feeds', headers=AP, base_url=f'https://{HELL}')
-    assert hell.status_code == 200 and json.loads(hell.data)['site_view']['site']['actor_id'] == f'https://{HELL}/'
+    first = app.test_client().get('/feeds', headers=AP, base_url=f'https://{FIRST}')
+    assert first.status_code == 200 and json.loads(first.data)['site_view']['site']['actor_id'] == f'https://{FIRST}/'
 
 
 @pytest.mark.usefixtures('real_cache')
 @pytest.mark.parametrize('path', ['/api/v1/instance/domain_blocks', '/api/v3/federated_instances'])
-@pytest.mark.parametrize('hell_first', [True, False])
-def test_the_onion_serves_no_block_or_peer_list(app, path, hell_first):
+@pytest.mark.parametrize('first_first', [True, False])
+def test_the_onion_serves_no_block_or_peer_list(app, path, first_first):
     """The onion federates with no one, so it lists no server's blocks or peers: 404, whichever host is asked first,
-    and hell's cached copy never answers it."""
+    and the first domain's cached copy never answers it."""
     client = app.test_client()
     a_session(client)
-    for host in ((HELL, ONION) if hell_first else (ONION, HELL)) * 2:
+    for host in ((FIRST, ONION) if first_first else (ONION, FIRST)) * 2:
         if host == ONION:
             assert onion_get(client, path, headers={}).status_code == 404
         else:
-            assert get(app, path, host=HELL).status_code == 200
+            assert get(app, path, host=FIRST).status_code == 200
     assert get(app, path, host=SHOP).status_code == 200

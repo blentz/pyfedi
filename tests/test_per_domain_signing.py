@@ -30,17 +30,17 @@ from app.storefront import acting_domain, acting_for, clear_domain_cache, domain
 from app.user.utils import search_for_user
 from app.utils import authorise_api_user, user_agent
 from tests.factories import a_keypair, inbox_activity, make_community, make_instance, make_site, make_user
-from tests.two_domains import HELL, ONION, request_on, two_domains  # noqa: F401 -- two_domains is a fixture
+from tests.two_domains import FIRST, ONION, request_on, two_domains  # noqa: F401 -- two_domains is a fixture
 
 SHOP = 'shop.example'
 REMOTE = 'https://remote.example'
 ACTOR_URL = f'{REMOTE}/u/carol'
 # Golden: what the first domain has always sent (SERVER_NAME is test.piefed.local), before and after C3
-HELL_KEY_ID = 'https://test.piefed.local/actor#main-key'
+FIRST_KEY_ID = 'https://test.piefed.local/actor#main-key'
 SHOP_KEY_ID = 'https://shop.example/actor#main-key'
 
 
-def hell_ua(app):
+def first_ua(app):
     return f"PieFed/{app.config['VERSION']}; +https://test.piefed.local"
 
 
@@ -58,15 +58,15 @@ def _signing_site():
 
 class Domains:
     def __init__(self, two):
-        hell, onion = two.domains
+        first, onion = two.domains
         db.session.add(SiteDomain(domain=SHOP, scheme='https', federates=True))   # its instance key is made on insert
         db.session.commit()
         clear_domain_cache()
-        self.hell, self.onion, self.shop = hell, onion, domain_for_host(SHOP)
-        self.hell_user = two.local_user('hellbob', hell)
+        self.first, self.onion, self.shop = first, onion, domain_for_host(SHOP)
+        self.first_user = two.local_user('firstbob', first)
         self.shop_user = two.local_user('shopbob', self.shop)
         self.onion_user = two.local_user('onionbob', onion)
-        for user in (self.hell_user, self.shop_user, self.onion_user):
+        for user in (self.first_user, self.shop_user, self.onion_user):
             user.private_key, user.public_key = a_keypair()
         db.session.commit()
 
@@ -122,8 +122,8 @@ def _fetch_object():
 
 
 @pytest.mark.parametrize('fetch', [_fetch_actor, _fetch_object], ids=['actor', 'object'])
-@pytest.mark.parametrize('who, key_id, ua', [('shop_user', SHOP_KEY_ID, shop_ua), ('hell_user', HELL_KEY_ID, hell_ua),
-                                             ('onion_user', HELL_KEY_ID, hell_ua), (None, HELL_KEY_ID, hell_ua)])
+@pytest.mark.parametrize('who, key_id, ua', [('shop_user', SHOP_KEY_ID, shop_ua), ('first_user', FIRST_KEY_ID, first_ua),
+                                             ('onion_user', FIRST_KEY_ID, first_ua), (None, FIRST_KEY_ID, first_ua)])
 def test_a_signed_fetch_is_the_acting_accounts_domains(app, domains, router, fetch, who, key_id, ua):
     """A shop account's fetch is signed by the shop's instance actor and names the shop, both the unsigned first try
     and the signed one. A first-domain account's, an onion account's (the onion is local-only: it names nothing) and
@@ -145,7 +145,7 @@ def test_with_no_request_the_default_domain_signs(app, domains, router):
     route = _unsigned_then_signed(router, ACTOR_URL, ACTOR_DOCUMENT)
     assert _fetch_actor() == ACTOR_DOCUMENT
     signed = route.calls[-1].request
-    assert _key_id(signed) == HELL_KEY_ID and signed.headers['User-Agent'] == hell_ua(app)
+    assert _key_id(signed) == FIRST_KEY_ID and signed.headers['User-Agent'] == first_ua(app)
 
 
 def test_a_shop_accounts_search_is_signed_by_the_shop(app, domains, router):
@@ -178,7 +178,7 @@ def test_a_search_with_no_instance_key_fetches_nothing_signed(app, domains, rout
 def test_an_api_caller_acts_as_its_domain(app, domains):
     """A client app's call (authorise_api_user) is the account's, as a signed-in browser's is."""
     with app.test_request_context():
-        assert acting_domain() == domains.hell
+        assert acting_domain() == domains.first
         authorise_api_user(f'Bearer {domains.shop_user.encode_jwt_token()}')
         assert acting_domain() == domains.shop
         assert user_agent() == shop_ua(app)
@@ -187,10 +187,10 @@ def test_an_api_caller_acts_as_its_domain(app, domains):
 def test_an_acting_for_block_wins_and_a_local_only_domain_acts_as_the_default(app, domains):
     with app.test_request_context():
         login_user(domains.shop_user)
-        with acting_for(domains.hell):
-            assert acting_domain() == domains.hell
+        with acting_for(domains.first):
+            assert acting_domain() == domains.first
         with acting_for(domains.onion):   # the onion makes no request named by it
-            assert acting_domain() == domains.hell
+            assert acting_domain() == domains.first
         assert acting_domain() == domains.shop
 
 
@@ -210,13 +210,13 @@ def test_a_relay_subscription_is_the_default_domains_whoever_adds_it(app, domain
     finally:
         context.pop()
     assert db.session.get(Relay, relay.id).actor_id == RELAY_ACTOR
-    assert fetched.calls.last.request.headers['User-Agent'] == hell_ua(app)
+    assert fetched.calls.last.request.headers['User-Agent'] == first_ua(app)
     follow = followed.calls.last.request
-    assert _key_id(follow) == HELL_KEY_ID and follow.headers['User-Agent'] == hell_ua(app)
+    assert _key_id(follow) == FIRST_KEY_ID and follow.headers['User-Agent'] == first_ua(app)
     assert json.loads(follow.content)['actor'] == 'https://test.piefed.local/actor'
 
 
-@pytest.mark.parametrize('who, ua', [('shop_user', shop_ua), ('hell_user', hell_ua)])
+@pytest.mark.parametrize('who, ua', [('shop_user', shop_ua), ('first_user', first_ua)])
 def test_an_accounts_own_delivery_names_its_domain(app, domains, router, who, ua):
     """A delivery signed by an account's own key names the signer's domain, whoever is signed in: the User-Agent
     and the keyId never disagree."""
@@ -224,7 +224,7 @@ def test_an_accounts_own_delivery_names_its_domain(app, domains, router, who, ua
     inbox = router.post(f'{REMOTE}/inbox').respond(202)
     activity = {'id': f'{user.public_url()}/activities/like/1', 'type': 'Like', 'actor': user.public_url(),
                 'object': f'{REMOTE}/post/1'}
-    context = _as(app, domains.hell_user if who == 'shop_user' else domains.shop_user)
+    context = _as(app, domains.first_user if who == 'shop_user' else domains.shop_user)
     try:
         send_post_request(f'{REMOTE}/inbox', activity, user.private_key, f'{user.public_url()}#main-key')
     finally:
@@ -289,7 +289,7 @@ LOCAL_CONTENT = 'Activity about local content which is already present'
 
 @pytest.mark.parametrize('actor_url, ours', [
     ('https://shop.example/u/shopbob', True),
-    ('https://test.piefed.local/u/hellbob', True),
+    ('https://test.piefed.local/u/firstbob', True),
     ('https://shop.example.evil/u/shopbob', False),
     ('http://abc.onion/u/onionbob', False),
 ])
@@ -336,7 +336,7 @@ def _follow_of(local_user, sender):
 
 
 @pytest.mark.usefixtures('redis_double')
-@pytest.mark.parametrize('host, accepted', [(SHOP, True), (HELL, True), (ONION, False), (f'{SHOP}.evil', False)])
+@pytest.mark.parametrize('host, accepted', [(SHOP, True), (FIRST, True), (ONION, False), (f'{SHOP}.evil', False)])
 def test_a_signature_for_a_federating_host_verifies_and_one_for_the_onion_does_not(app, domains, signing_peer,
                                                                                     monkeypatch, host, accepted):
     """R-HOSTPIN per federating domain: a peer signs for the domain it posts to. The onion is local-only, no server
@@ -383,10 +383,10 @@ def test_a_create_sent_to_both_domains_inboxes_is_processed_once(app, domains, s
     dispatched = []
     monkeypatch.setattr('app.activitypub.routes.process_inbox_request', lambda *a, **kw: dispatched.append(a))
     note = {'id': f'{signing_peer.ap_profile_id}/notes/1', 'type': 'Note', 'attributedTo': signing_peer.ap_profile_id,
-            'to': [domains.shop_user.public_url(), domains.hell_user.public_url()], 'content': 'hello both'}
+            'to': [domains.shop_user.public_url(), domains.first_user.public_url()], 'content': 'hello both'}
     activity = inbox_activity(signing_peer, activity_type='Create', object=note, to=note['to'])
     responses = []
-    for host in (SHOP, HELL):
+    for host in (SHOP, FIRST):
         _uri, headers, body = HttpSignature.signed_request(f'https://{host}/inbox', dict(activity),
                                                            signing_peer.private_key,
                                                            f'{signing_peer.ap_profile_id}#main-key', send_via_async=True)
@@ -403,18 +403,18 @@ def test_a_create_sent_to_both_domains_inboxes_is_processed_once(app, domains, s
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize('host, key_id, ua', [(SHOP, SHOP_KEY_ID, shop_ua), (HELL, HELL_KEY_ID, hell_ua),
-                                              (ONION, HELL_KEY_ID, hell_ua)])
+@pytest.mark.parametrize('host, key_id, ua', [(SHOP, SHOP_KEY_ID, shop_ua), (FIRST, FIRST_KEY_ID, first_ua),
+                                              (ONION, FIRST_KEY_ID, first_ua)])
 def test_an_anonymous_request_acts_as_the_federating_storefront_it_came_in_on(app, domains, host, key_id, ua):
     """Ruling (a): with no account acting, a request on a federating sister domain acts as that domain (an inbox
     POST to shop.example is shop's to answer); the onion, local-only, acts as the default."""
     with request_on(app, domain_for_host(host)):
-        assert acting_domain().domain == (SHOP if host == SHOP else HELL)
+        assert acting_domain().domain == (SHOP if host == SHOP else FIRST)
         assert user_agent() == ua(app)
 
 
 @pytest.mark.usefixtures('redis_double')
-@pytest.mark.parametrize('host, key_id, ua', [(SHOP, SHOP_KEY_ID, shop_ua), (HELL, HELL_KEY_ID, hell_ua)])
+@pytest.mark.parametrize('host, key_id, ua', [(SHOP, SHOP_KEY_ID, shop_ua), (FIRST, FIRST_KEY_ID, first_ua)])
 def test_a_rotated_keys_refetch_is_signed_by_the_inbox_it_was_delivered_to(app, domains, signing_peer, router,
                                                                          monkeypatch, host, key_id, ua):
     """A signer whose stored key is stale delivers to shop.example's inbox: the one refetch of its actor is the
@@ -459,7 +459,7 @@ def test_an_api_callers_domain_does_not_outlive_its_request(app, domains):
             authorise_api_user(f'Bearer {domains.shop_user.encode_jwt_token()}')
             assert acting_domain() == domains.shop
         with app.test_request_context():
-            assert acting_domain() == domains.hell
+            assert acting_domain() == domains.first
 
 
 def test_the_discovery_credits_sign_nothing_with_no_instance_key(app, domains):
