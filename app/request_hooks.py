@@ -21,7 +21,7 @@ from app.models import Site, utcnow
 from app.onion import is_onion_request
 from app.onion_guard import require_onion_session, resolve_onion_api_rate_key
 from app.local_only import user_local_only
-from app.storefront import check_default_domain, hosted_instance_ids, is_local_link, resolve_storefront, \
+from app.storefront import check_default_domain, current_storefront, hosted_instance_ids, is_local_link, resolve_storefront, \
     rewrite_response_for_storefront, storefront_host, storefront_link, storefront_url
 from app.shared.media import can_upload_media, media_kind_for, media_of, upload_byte_limit
 from app.utils import can_moderate, getmtime, gibberish, shorten_string, shorten_url, digits, user_access, community_membership, joined_server_views, \
@@ -36,6 +36,16 @@ from app.variants import shown, switch_url
 from app.visibility import can_view
 
 MEDIA_UPLOAD_SLACK = 1024 * 1024   # the form fields around the file (A13.2)
+
+# strict-dynamic allows scripts dynamically added by nonce-validated scripts (needed for htmx)
+SCRIPT_POLICY = "script-src 'self' 'nonce-{nonce}' 'strict-dynamic'; object-src 'none'; base-uri 'none';"
+# The onion's backstop (per-domain branding spec §3.4): a page loads its images, fonts, styles, media and connections
+# from the onion alone. data: and blob: name bytes already in the page or the browser (the captcha image, a file
+# chosen for upload shown before it is sent), never a host. Inline style is allowed: templates and htmx write style
+# attributes, which no nonce can cover, and inline CSS can only fetch through url() and @import, which img-src,
+# font-src and style-src still hold to the onion. Remote media reaches the page through the onion media proxy.
+ONION_POLICY = SCRIPT_POLICY + " img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline';" \
+                               " connect-src 'self'; media-src 'self';"
 
 
 def viewer_can_view(obj) -> bool:
@@ -279,15 +289,16 @@ def register_request_hooks(app):
         else:
             if not current_app.config['ALLOW_AI_CRAWLERS']:
                 response.headers.add('Link', f'<{storefront_url()}/rsl.xml>; rel="license"; type="application/rsl+xml"')
-            if 'auth/register' not in request.path:
+            onion = current_storefront().is_onion   # every onion page has the policy, a registration page too
+            if onion or 'auth/register' not in request.path:
                 if hasattr(g, 'nonce') and "api/alpha/swagger" not in request.path:
                     # Don't set CSP header for htmx fragment requests - they use parent page's CSP
                     is_htmx = request.headers.get('HX-Request') == 'true'
                     if not is_htmx and response.status_code != 304:
-                        # strict-dynamic allows scripts dynamically added by nonce-validated scripts (needed for htmx)
-                        if current_user.is_authenticated:
+                        if onion or current_user.is_authenticated:
                             # setdefault: a view's own policy (the onion media proxy's sandbox) stands
-                            response.headers.setdefault('Content-Security-Policy', f"script-src 'self' 'nonce-{g.nonce}' 'strict-dynamic'; object-src 'none'; base-uri 'none';")
+                            response.headers.setdefault('Content-Security-Policy',
+                                                        (ONION_POLICY if onion else SCRIPT_POLICY).format(nonce=g.nonce))
                 if current_app.config['HTTP_PROTOCOL'] == 'https':
                     response.headers['Strict-Transport-Security'] = 'max-age=63072000; includeSubDomains; preload'
                 response.headers['X-Content-Type-Options'] = 'nosniff'
