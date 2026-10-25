@@ -756,6 +756,18 @@ def admin_federation_preload():
                            roles_with=roles_with('change instance settings'))
 
 
+def _json_document(resp) -> dict | None:
+    """The JSON object a remote answered with, or None for any other status or body (an empty 421, an HTML error
+    page, a list): the remote scan reads a server it does not trust, and its odd answer is a message, not a 500."""
+    if resp.status_code != 200:
+        return None
+    try:
+        document = json.loads(resp.text)
+    except ValueError:
+        return None
+    return document if isinstance(document, dict) else None
+
+
 @bp.route('/federation/remote_scan', methods=['GET', 'POST'])
 @login_required
 @permission_required('change instance settings')
@@ -815,7 +827,10 @@ def admin_federation_remote_scan():
 
         # get the nodeinfo
         resp = get_request(f'{remote_url}/.well-known/nodeinfo')
-        nodeinfo_dict = json.loads(resp.text)
+        nodeinfo_dict = _json_document(resp)
+        if nodeinfo_dict is None:
+            flash(_('%(url)s did not answer with a nodeinfo document.', url=remote_url))
+            return redirect(url_for('admin.admin_federation_remote_scan'))
 
         # check the ['links'] for instanceinfo url
         schema2p0 = "http://nodeinfo.diaspora.software/ns/schema/2.0"
@@ -836,8 +851,12 @@ def admin_federation_remote_scan():
             return redirect(url_for('admin.admin_federation_remote_scan'))
 
         # get the instanceinfo
+        # The remote chooses this href: one on our own domains gets the hosted-fetch guard's empty 421 (plan C4)
         resp = get_request(remote_instanceinfo_url)
-        instanceinfo_dict = json.loads(resp.text)
+        instanceinfo_dict = _json_document(resp)
+        if instanceinfo_dict is None:
+            flash(_('%(url)s did not answer with a nodeinfo document.', url=remote_url))
+            return redirect(url_for('admin.admin_federation_remote_scan'))
 
         # determine the instance software
         instance_software_name = instanceinfo_dict['software']['name']
