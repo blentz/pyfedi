@@ -43,7 +43,8 @@ ONION_VALUES = dict(name='Onion Branded', description='The onion tagline', logo=
                     logo_180='/static/media/onion_180.png', logo_152='/static/media/onion_152.png',
                     logo_32='/static/media/onion_32.png', logo_16='/static/media/onion_16.png',
                     default_theme='forest', additional_css='.onion-own { color: purple; }',
-                    sidebar_html='<p>The onion sidebar</p>', about_html='<p>The onion about</p>')
+                    sidebar='The onion sidebar', sidebar_html='<p>The onion sidebar</p>',
+                    about_html='<p>The onion about</p>')
 
 PAGES = {'index.html': '/', 'about.html': '/about', 'community.html': '/c/goldart',
          'keyboard_shortcuts.html': '/keyboard_shortcuts'}
@@ -148,6 +149,7 @@ def test_onion_header_title_logo_sidebar_about_css_are_its_own(app, branded):
         assert f'/static/media/{icon}' in home
     assert '.onion-own { color: purple; }' in home
     assert '<p>The onion sidebar</p>' in home
+    assert '<meta name="description" content="The onion sidebar" />' in home   # from its own Markdown sidebar
     assert 'About Onion Branded' in home
     assert '<strong>The onion tagline</strong>' in home
     about = page(app, '/about', onion=True)

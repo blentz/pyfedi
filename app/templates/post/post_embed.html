@@ -59,7 +59,7 @@
         {% if description -%}
             <meta name="description" content="{{ description }}" />
         {% else -%}
-            <meta name="description" content="{{ html_to_text(g.site.sidebar) }}" />
+            <meta name="description" content="{{ html_to_text(branding.sidebar) }}" />
         {% endif -%}
         <meta name="robots" content="noindex">
       {% if branding.additional_css -%}

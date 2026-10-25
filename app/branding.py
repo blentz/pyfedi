@@ -24,6 +24,7 @@ class Branding(NamedTuple):
     logo_16: str
     default_theme: str
     additional_css: str
+    sidebar: str   # the Markdown sidebar_html is made from: page descriptions are its text
     sidebar_html: str
     about_html: str
 
