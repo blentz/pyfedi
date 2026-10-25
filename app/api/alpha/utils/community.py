@@ -10,7 +10,7 @@ from app.api.alpha.views import community_view, user_view, post_view, cached_mod
 from app.community.util import search_for_community
 from app.constants import *
 from app.local_only import without_local_only_actors
-from app.storefront import current_storefront, domain_boost_expr, on_domain
+from app.storefront import acting_domain, current_storefront, domain_authority, domain_boost_expr, on_domain
 from app.models import Community, CommunityMember, User, CommunityBan, Notification, CommunityJoinRequest, \
     NotificationSubscription, Post, CommunityFlair, Feed, utcnow
 # The module, not the names: app.shared.community reaches this file through a blueprint
@@ -226,7 +226,7 @@ def get_community(auth, data):
         # reach.
         community = data['name']
         if '@' not in community:
-            community = f"{community}@{current_app.config['SERVER_NAME']}"
+            community = f"{community}@{domain_authority(acting_domain())}"
 
     user_id = authorise_api_user(auth) if auth else None
 

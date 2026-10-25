@@ -21,7 +21,7 @@ from app.shared.tasks import task_selector
 import app.shared.community as shared_community
 from app.shared.upload import process_upload
 from app.local_names import actor_handle
-from app.storefront import canonical_link, default_domain
+from app.storefront import acting_domain, canonical_link, default_domain, domain_authority
 from app.utils import authorise_api_user, feed_membership, get_request, menu_subscribed_feeds, joined_communities, \
     community_membership, gibberish, get_task_session, instance_banned, menu_instance_feeds, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, is_image_url
@@ -881,7 +881,7 @@ def form_communities_to_ids(form_communities: str) -> set:
         if not community_ap_id.startswith('!'):
             community_ap_id = '!' + community_ap_id
         if not '@' in community_ap_id:
-            community_ap_id = community_ap_id + '@' + current_app.config['SERVER_NAME']
+            community_ap_id = community_ap_id + '@' + domain_authority(acting_domain())
         community = search_for_community(community_ap_id.strip())
         if community:
             result.add(community.id)
