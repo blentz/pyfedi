@@ -21,8 +21,8 @@ from app.models import Site, utcnow
 from app.onion import is_onion_request
 from app.onion_guard import require_onion_session, resolve_onion_api_rate_key
 from app.local_only import user_local_only
-from app.storefront import check_default_domain, current_storefront, hosted_instance_ids, is_local_link, resolve_storefront, \
-    rewrite_response_for_storefront, storefront_host, storefront_link, storefront_url
+from app.storefront import adopt_host_storefront, check_default_domain, current_storefront, hosted_instance_ids, \
+    is_local_link, resolve_storefront, rewrite_response_for_storefront, storefront_host, storefront_link, storefront_url
 from app.shared.media import can_upload_media, media_kind_for, media_of, upload_byte_limit
 from app.utils import can_moderate, getmtime, gibberish, shorten_string, shorten_url, digits, user_access, community_membership, joined_server_views, \
     can_upvote, can_downvote, shorten_number, ap_datetime, current_theme, community_link_to_href, \
@@ -48,7 +48,8 @@ SCRIPT_POLICY = "script-src 'self' 'nonce-{nonce}' 'strict-dynamic'; object-src 
 _ONION_LOADS = " img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline';" \
                " connect-src 'self'; media-src 'self'; frame-src 'self';"
 ONION_POLICY = "default-src 'self'; " + SCRIPT_POLICY + _ONION_LOADS
-# A response made before before_request made the nonce (a rate-limit page, require_onion_session's answers, OPTIONS)
+# A response made before before_request made the nonce (a limit Flask-Limiter checks in its own before_request,
+# require_onion_session's answers, OPTIONS)
 ONION_POLICY_WITHOUT_NONCE = "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none';" + _ONION_LOADS
 
 def viewer_can_view(obj) -> bool:
@@ -247,6 +248,8 @@ def register_request_hooks(app):
 
     @app.after_request
     def after_request(response):
+        # First, before anything reads the storefront: this hook runs before rewrite_response_for_storefront
+        adopt_host_storefront()
         # Add CORS headers to all responses
         response.headers['Access-Control-Allow-Origin'] = current_app.config.get('CORS_ALLOW_ORIGIN', '*')
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
