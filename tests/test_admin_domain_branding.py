@@ -496,6 +496,8 @@ OFFSITE = [
     # the tagline is written as HTML on every page that shows it
     pytest.param({'description': f'Hi <meta http-equiv="refresh" content="0;url={ELSEWHERE}/go">'}, 'description',
                  f'{ELSEWHERE}/go', id='tagline'),
+    pytest.param({'description': f'Hi <img src="{ELSEWHERE}/t.png'}, 'description', f'{ELSEWHERE}/t.png',
+                 id='tagline ending inside a tag'),
 ]
 
 

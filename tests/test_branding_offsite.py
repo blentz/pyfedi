@@ -353,6 +353,51 @@ def test_inherited_offsite_image_is_stripped_on_onion_only(app, onion_site, capl
         assert current_branding().sidebar_html == site.sidebar_html
 
 
+# A field that ends inside a tag is finished by whatever markup the page writes after it (found by the
+# branding_onion_safe fuzz target): the browser then loads what the finished tag names
+UNFINISHED = [
+    pytest.param(f'Hi <meta http-equiv="refresh" content="0;url={ELSEWHERE}/go" ', f'{ELSEWHERE}/go', id='tag'),
+    pytest.param(f'Hi <img src="{ELSEWHERE}/i.png', f'{ELSEWHERE}/i.png', id='quoted value'),
+    pytest.param(f"Hi <img src='{ELSEWHERE}/i.png", f'{ELSEWHERE}/i.png', id='single-quoted value'),
+    pytest.param(f'Hi <img src={ELSEWHERE}/i.png', f'{ELSEWHERE}/i.png', id='bare value'),
+]
+
+
+@pytest.mark.parametrize('html, reference', UNFINISHED)
+def test_an_unfinished_tag_is_scanned_as_the_page_finishes_it(app, html, reference):
+    assert any(found.startswith(reference) for found in offsite_references(html=html, own_host=ONION))
+
+
+@pytest.mark.parametrize('html, reference', UNFINISHED)
+def test_onion_safe_drops_a_field_that_ends_inside_a_tag_which_loads(app, caplog, html, reference):
+    branding = branding_with(description=html, sidebar_html=html, about_html=html)
+    with caplog.at_level(logging.INFO, logger=app.logger.name):
+        safe = onion_safe(branding, ONION)
+    assert (safe.description, safe.sidebar_html, safe.about_html) == ('', '', '')
+    assert any(reference in record.getMessage() for record in caplog.records)
+
+
+def test_onion_safe_drops_css_holding_an_unfinished_tag_which_loads(app):
+    """As the save does (CSS is checked as HTML too): markup in the CSS is read finished as well."""
+    branding = branding_with(additional_css=f'.a {{ content: "<p style=\'background:url({ELSEWHERE}/c.png)" }}')
+    assert onion_safe(branding, ONION).additional_css == ''
+
+
+def test_an_unfinished_tag_that_loads_nothing_is_left_as_written(app):
+    branding = branding_with(description=f'Hi <a href="{ELSEWHERE}/l', sidebar_html='<p>1 < 2</p>',
+                             about_html='<p>About <img src="/static/own.png')
+    assert onion_safe(branding, ONION) is branding
+
+
+def test_an_inherited_tagline_ending_inside_a_tag_never_reaches_the_onion(app, onion_site):
+    site = db.session.get(Site, 1)
+    site.description = f'Welcome <meta http-equiv="refresh" content="0;url={ELSEWHERE}/go" '
+    db.session.commit()
+    clear_domain_cache()
+    assert f'{ELSEWHERE}/go' not in visit(app, '/').get_data(as_text=True)
+    assert site.description in visit(app, '/', onion=False).get_data(as_text=True)
+
+
 def test_an_inherited_tagline_that_leaves_the_onion_is_stripped_on_the_onion_only(app, onion_site):
     """The tagline is HTML on the home page (`|safe`): a refresh in it would send the onion's visitor to clearnet, which
     no CSP directive stops."""
