@@ -92,6 +92,8 @@ def purge_user_then_delete_task(user_id, flush):
 def unsubscribe_from_community(community, user):
     if community.instance.gone_forever or community.instance.dormant:
         return
+    if community.is_local():
+        return   # one of our own domains: its membership row goes, no Leave is sent to ourselves
     if not user.is_local():
         return   # a remote account follows from its own server: no Follow of ours to undo
 

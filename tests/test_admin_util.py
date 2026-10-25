@@ -94,6 +94,14 @@ class TestDeletingAnAccount:
         assert send.call_count == 1
         assert send.call_args.args[1]['type'] == 'Delete'
 
+    def test_a_local_community_membership_is_dropped_without_any_request(self, env):
+        member_id, community_id = env.member.id, env.community.id
+        with patch('app.admin.util.send_post_request') as send:
+            unsubscribe_from_everything_then_delete_task(member_id)
+        left = [call.args[1]['object']['object'] for call in send.call_args_list if call.args[1]['type'] == 'Undo']
+        assert env.community.public_url() not in left
+        assert CommunityMember.query.filter_by(user_id=member_id, community_id=community_id).count() == 0
+
     def test_a_remote_account_is_not(self, env):
         remote = env.baseline.instance_remote
         remote.inbox = 'https://remote.test/inbox'
@@ -157,6 +165,12 @@ class TestLeavingACommunityOnTheWayOut:
             unsubscribe_from_community(remote_community, env.member)
         assert send.call_args.args[1]['type'] == 'Undo'
         assert send.call_args.args[1]['object']['type'] == 'Follow'
+
+    def test_a_local_community_is_left_without_a_leave(self, env):
+        assert env.community.is_local()
+        with patch('app.admin.util.send_post_request') as send:
+            unsubscribe_from_community(env.community, env.member)
+        assert send.call_count == 0
 
     def test_an_instance_that_is_gone_is_not_written_to(self, env,
                                                         remote_community):

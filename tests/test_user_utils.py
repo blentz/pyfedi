@@ -412,6 +412,14 @@ class TestUnsubscribingFromACommunity:
         assert activity['object']['object'] == remote_community.public_url()
         assert activity['actor'] == user.public_url()
 
+    def test_a_local_community_is_left_without_a_leave(self, env):
+        local_community = make_community('hellcloud')
+        local_community.ap_id = None
+        db.session.commit()
+        with patch('app.user.utils.send_post_request') as send:
+            unsubscribe_from_community(local_community, env.baseline.user2)
+        assert send.call_count == 0
+
     def test_an_instance_that_is_gone_is_not_written_to(self, env,
                                                         remote_community):
         remote_community.instance.gone_forever = True

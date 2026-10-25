@@ -48,10 +48,12 @@ import tempfile
 from types import SimpleNamespace
 
 import pytest
+import respx
 
 from app import db
 from app.constants import NOTIF_REPORT
-from app.models import ActivityPubLog, File, Notification, UserFollower
+from app.models import ActivityPubLog, File, Notification, SiteDomain, UserFollower
+from app.storefront import clear_domain_cache
 from app.shared.tasks.deletes import (
     delete_community, delete_pm, delete_post, delete_posts_with_blocked_images,
     delete_reply, restore_community, restore_pm, restore_post, restore_reply,
@@ -1344,3 +1346,38 @@ def test_the_blocked_image_batch_removes_every_album_image_from_disk(db_session,
         for path in paths:
             if os.path.isfile(path):
                 os.remove(path)
+
+
+@pytest.fixture
+def lenient_http():
+    """http_mock without assert_all_called: a route here is one that must NOT be hit."""
+    with respx.mock(assert_all_called=False) as router:
+        yield router
+
+
+def test_a_delete_reaches_the_authors_remote_followers_and_never_who_the_author_follows(db_session, lenient_http):
+    """C4: the author's own follower fan-out joined UserFollower in both directions, so a Delete went to the
+    instance of someone the author follows, and to a sister domain's follower."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    db.session.add(SiteDomain(domain='shop.example'))
+    db.session.commit()
+    clear_domain_cache()
+    followed_home = make_instance('followed.example', software='lemmy')
+    followed_home.inbox = 'https://followed.example/inbox'
+    follower_home = make_instance('fan.example', software='lemmy')
+    follower_home.inbox = 'https://fan.example/inbox'
+    sister = make_instance('shop.example', software='piefed')
+    sister.inbox = 'https://shop.example/inbox'
+    make_follow(s.user, make_user(followed_home, 'followed'), is_inward=False)
+    make_follow(s.user, make_user(follower_home, 'fan'), is_inward=True)
+    make_follow(s.user, make_user(sister, 'sisterfan'), is_inward=True)
+    db.session.commit()
+    fan = lenient_http.post('https://fan.example/inbox').respond(200, json={})
+    lenient_http.post('https://followed.example/inbox').respond(200, json={})
+    delete_post(None, s.user.id, s.post.id)
+    clear_domain_cache()
+
+    assert len(fan.calls) == 1 and _sent_activity(fan)['type'] == 'Delete'
+    assert _delivered_inboxes(fan) == {'https://fan.example/inbox'}
+    assert {str(call.request.url) for call in lenient_http.calls} == {'https://fan.example/inbox'}

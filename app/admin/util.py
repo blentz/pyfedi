@@ -80,6 +80,8 @@ def unsubscribe_from_everything_then_delete_task(user_id):
 def unsubscribe_from_community(community, user):
     if community.instance.gone_forever:
         return
+    if community.is_local():
+        return   # one of our own domains: its membership row goes, no Leave is sent to ourselves
     if not user.is_local():
         return   # a remote account follows from its own server: no Follow of ours to undo
 
