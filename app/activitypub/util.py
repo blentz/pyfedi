@@ -69,7 +69,7 @@ import app.activitypub.serializers.podcast as podcast_serializer   # likewise
 import urllib.parse
 from app.utils import random_chars, site_language_id, is_hex_color, save_image_without_metadata, \
     refuse_over_remote_thumbnail_cap
-from app.visibility import OPEN_VISIBILITIES, can_view, is_open, post_title_for
+from app.visibility import OPEN_VISIBILITIES, can_view, is_open, post_served_to_any_peer, post_title_for
 from app.mentions import stored_mentioned_users
 from app.discovery.podcast import ensure_podcast_community, podcast_twin_named_by_other
 from app.interop.workarounds import is_castopod_podcast
@@ -6627,7 +6627,8 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
         return post
     if is_hosted_uri(uri):   # one of our own domains: the post is in the database or nowhere, never fetched (C4)
         found = local_object_for_url(uri)
-        return found if isinstance(found, Post) else None
+        # and found only if our own post route would have served it to the fetch this replaces
+        return found if isinstance(found, Post) and post_served_to_any_peer(found) else None
 
     # Hosts, not authorities (D24), as in create_resolved_object: an empty host is refused at the gate below
     # rather than compared, because host_of degrades what urlparse rejects to '' and '' == '' is True.

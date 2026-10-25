@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 import respx
-from flask import session as flask_session
+from flask import g, session as flask_session
 from flask_wtf.csrf import generate_csrf
 
 import app.federation_urls as federation_urls
@@ -19,7 +19,7 @@ import app.shared.tasks.maintenance as maintenance
 from app import db
 from app.activitypub.util import process_microblog_announce, resolve_remote_post_from_search
 from app.community.util import retrieve_mods_and_backfill
-from app.constants import APLOG_ANNOUNCE, APLOG_IGNORED
+from app.constants import APLOG_ANNOUNCE, APLOG_IGNORED, POST_STATUS_REVIEWING, VISIBILITY_DIRECT, VISIBILITY_FOLLOWERS
 from app.discovery import backfill, credits, sync
 from app.discovery.filters import host_is_excluded
 from app.feed.util import initialise_new_communities
@@ -158,20 +158,84 @@ def test_a_hosted_url_that_is_no_post_is_none_without_a_fetch(env, wire, monkeyp
     assert fetched == [] and wire.calls.call_count == 0
 
 
-def test_search_for_a_sister_post_url_shows_the_post(app, env, wire):
+def search_for(app, env, address):
+    """The retrieve_remote_post page's answer to `address`, asked by hell's alice."""
     client = app.test_client()
     with client.session_transaction() as sess:
         sess['_user_id'] = str(env.hell_alice.id)
         sess['_fresh'] = True
     with app.test_request_context():
+        g.pop('csrf_token', None)   # flask-wtf keeps a token on g, which outlives one request in the test's context
         token = generate_csrf()
         raw = flask_session['csrf_token']
     with client.session_transaction() as sess:
         sess['csrf_token'] = raw
-    response = client.post('/retrieve_remote_post',
-                           data={'address': f'https://{SHOP}/c/den/p/{env.post.id}/slug', 'csrf_token': token})
+    response = client.post('/retrieve_remote_post', data={'address': address, 'csrf_token': token})
     assert response.status_code == 200
-    assert 'a shop post' in response.get_data(as_text=True)
+    return response.get_data(as_text=True)
+
+
+def test_search_for_a_sister_post_url_shows_the_post(app, env, wire):
+    page = search_for(app, env, f'https://{SHOP}/c/den/p/{env.post.id}/slug')
+    assert 'a shop post' in page and 'Post not found.' not in page
+    assert wire.calls.call_count == 0
+
+
+def _deleted(env):
+    env.post.deleted = True
+
+
+def _followers_only(env):
+    env.post.visibility = VISIBILITY_FOLLOWERS
+
+
+def _direct(env):
+    env.post.visibility = VISIBILITY_DIRECT
+
+
+def _private_community(env):
+    env.shop_den.private = True
+
+
+def _local_only_community(env):
+    env.shop_den.local_only = True
+
+
+def _local_only_post(env):
+    env.post.local_only = True
+
+
+def _unpublished(env):
+    env.post.status = POST_STATUS_REVIEWING
+
+
+@pytest.mark.parametrize('hide', [_deleted, _followers_only, _direct, _private_community, _local_only_community,
+                                  _local_only_post, _unpublished])
+def test_a_hosted_post_no_peer_may_fetch_is_not_found_by_url(app, env, wire, hide):
+    """Our ActivityPub post route serves none of these to a peer, so a search by its URL, which before C4 fetched
+    that route, finds nothing either (security review of dbbb74c91)."""
+    hide(env)
+    db.session.commit()
+    for url in (f'https://{SHOP}/post/{env.post.id}', f'https://{SERVER}/c/den/p/{env.post.id}/slug'):
+        page = search_for(app, env, url)
+        assert 'Post not found.' in page and 'a shop post' not in page, url
+        assert resolve_remote_post_from_search(url) is None
+    assert wire.calls.call_count == 0
+
+
+def test_the_discovery_view_never_opens_a_hosted_post(app, env, wire, monkeypatch):
+    """The discovery view resolves wider-network results only: a hosted URL is refused before any lookup (a 400 for
+    a host the video cleaner refuses, else the excluded-host redirect back to the search)."""
+    env.post.visibility = VISIBILITY_FOLLOWERS
+    db.session.commit()
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', False)
+    client = app.test_client()
+    with client.session_transaction() as sess:
+        sess['_user_id'] = str(env.hell_alice.id)
+        sess['_fresh'] = True
+    response = client.post('/discovery/video/resolve', data={'url': f'https://{SHOP}/post/{env.post.id}'})
+    assert response.status_code in (302, 400)
+    assert f'/post/{env.post.id}' not in response.headers.get('Location', '')
     assert wire.calls.call_count == 0
 
 

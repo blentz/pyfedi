@@ -70,7 +70,7 @@ from app.models import User, Community, CommunityJoinRequest, CommunityMember, A
 # app.activitypub.signature before they are defined (import cycle: post.routes)
 import app.post.routes as post_routes
 from app.visibility import OPEN_VISIBILITIES, followers_only_addressing, is_open, listable_clause, post_title_for, \
-    visible_to_clause
+    post_withheld_from_peers, visible_to_clause
 from app.shared.tasks import task_selector
 # The module, not the names: app.shared.tasks.pages reaches this file through
 # app.activitypub.signature before they are defined (import cycle: shared.tasks.pages)
@@ -2926,10 +2926,11 @@ def post_ap_refusal(post: Post):
 
     Visibility is checked before deletion so a Tombstone never confirms that a post existed somewhere the caller
     may not see."""
-    if post.local_only or owned_elsewhere(post):
-        abort(404)   # a local-only post does not exist to other servers, another of our domains' not on this one
-    if post.community.local_only or post.community.private or post.status < POST_STATUS_PUBLISHED:
-        abort(403)
+    if owned_elsewhere(post):
+        abort(404)   # another of our domains' post is not on this one
+    withheld = post_withheld_from_peers(post)   # a local-only post does not exist to other servers (404)
+    if withheld is not None:
+        abort(withheld)
     if post.visibility not in OPEN_VISIBILITIES and not followers_entitled(post):
         abort(404)
     if post.deleted:
