@@ -248,7 +248,7 @@ onion requests only. Clearnet is unchanged.
 ## 4. Project 2: Tor deploy for the first domain
 
 Deploy sources live in the local-only `deploy/quadlet/` and `deploy/systemd/` (git-ignored, see
-`first-domain-quadlet-deploy` memory). Units are installed over ssh as `rocky@example.org`. Back up the unit
+`first-domain-quadlet-deploy` memory). Units are installed over ssh as `rocky@<first-domain>`. Back up the unit
 files and the Caddyfile to `~/backups` before editing.
 
 ### 4.1 Tor container
@@ -273,7 +273,7 @@ files and the Caddyfile to `~/backups` before editing.
 - Volume `pyfedi-tor-data.volume` holds `hs_pyfedi/`. It must persist: losing
   `hs_ed25519_secret_key` loses the address for good.
 - Back up `hs_ed25519_secret_key` once, age-encrypted to the same recipient as the DB dumps (the owner
-  holds `~/first-domain-restore.key`), to `~/backups/tor/`. Never leave a plaintext copy outside the
+  holds the restore key file in rocky's home; its exact name is in `deploy/DEPLOY_GUIDE.md`), to `~/backups/tor/`. Never leave a plaintext copy outside the
   volume.
 - The onion hostname goes into the `site_domain` table through the admin UI (project 1). It is also
   recorded in `deploy/DEPLOY_GUIDE.md`.
@@ -281,12 +281,12 @@ files and the Caddyfile to `~/backups` before editing.
 ### 4.3 Caddy
 
 - A new site block `http://<onion>:8081` (internal only, not in `PublishPort`) with the same handlers
-  as `example.org`: SSE `handle` blocks, `request_body max_size 510MiB`, the `lb_try_duration` retry,
+  as `<first-domain>`: SSE `handle` blocks, `request_body max_size 510MiB`, the `lb_try_duration` retry,
   `encode`. Factor the shared handlers into a Caddy snippet `(piefed_routes)` imported by both blocks,
   so they cannot drift.
-- The onion block sets `request_header X-PieFed-Via onion`. The `example.org` block does
+- The onion block sets `request_header X-PieFed-Via onion`. The `<first-domain>` block does
   `request_header -X-PieFed-Via` (strip).
-- The `example.org` block adds `header Onion-Location http://<onion>{uri}`.
+- The `<first-domain>` block adds `header Onion-Location http://<onion>{uri}`.
 - Caddy must not try to get a certificate for the onion. A `http://` site address avoids ACME.
 - `pyfedi-caddy.container`: no new published ports. Tor reaches 8081 over `pyfedi.network`.
 
@@ -329,7 +329,7 @@ Prod runs fail2ban with only an `sshd` jail.
 2. Build and start `pyfedi-tor`. Read the hostname, back up the key, add the domain row in admin.
 3. Update the Caddyfile and restart Caddy.
 4. From Tor Browser: browse, log in, post, upload an image, receive a live notification. Check the
-   network panel shows no request to `example.org`.
+   network panel shows no request to `<first-domain>`.
 5. Enable the fail2ban jails. Run a test ban from an outside IP and confirm it blocks 443.
 6. Update `deploy/DEPLOY_GUIDE.md`: the onion address, the backup location, how to restore the key.
 

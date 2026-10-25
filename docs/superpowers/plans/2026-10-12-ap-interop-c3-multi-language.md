@@ -1205,7 +1205,7 @@ In `deploy/quadlet/pyfedi-web.container` `[Unit]`: add `Wants=pyfedi-libretransl
   - What it is for (the translate buttons) and that the site keeps running when it is down (`Wants=`, not `Requires=`).
   - `.env.docker` additions, then regenerate `.env.quadlet` as section 6 says:
     `LT_LOAD_ONLY=en,es,fr,de,pt,it,ja,nl,pl,zh`, `TRANSLATE_ENDPOINT=http://libretranslate:5000`, `TRANSLATE_KEY=`.
-  - Install: `scp deploy/quadlet/pyfedi-libretranslate.container deploy/quadlet/pyfedi-libretranslate-data.volume deploy/quadlet/pyfedi-web.container rocky@example.org:` then the same `sudo install -m 644 -o root -g root ... /etc/containers/systemd/ && sudo restorecon ... && sudo systemctl daemon-reload` pattern as the existing web-unit section, then `sudo systemctl start pyfedi-libretranslate` and `sudo systemctl restart pyfedi-web`.
+  - Install: `scp deploy/quadlet/pyfedi-libretranslate.container deploy/quadlet/pyfedi-libretranslate-data.volume deploy/quadlet/pyfedi-web.container rocky@<first-domain>:` then the same `sudo install -m 644 -o root -g root ... /etc/containers/systemd/ && sudo restorecon ... && sudo systemctl daemon-reload` pattern as the existing web-unit section, then `sudo systemctl start pyfedi-libretranslate` and `sudo systemctl restart pyfedi-web`.
   - First start downloads the models into the volume (minutes); check with `sudo podman logs -f pyfedi_libretranslate` and `curl -s http://127.0.0.1:...` is not available (no published port): use `sudo podman exec piefed_app1 curl -s http://libretranslate:5000/languages`.
   - Memory: roughly 1–2 GB with the default list; changing `LT_LOAD_ONLY` then `sudo systemctl restart pyfedi-libretranslate`.
   - The autodeploy timer does not restart it.

@@ -142,7 +142,7 @@ git commit -m "feat: the gunicorn access log is off unless ACCESS_LOG turns it o
 - Modify: `deploy/DEPLOY_GUIDE.md` §11 fail2ban table, and the relay-diagnosis note that needs `ACCESS_LOG=1`
 
 - [ ] **Step 1:** Set `failregex = auth: register attempt ip=<ADDR>$` and `failregex = scan: probe refused ip=<ADDR>$`, keeping `journalmatch`, `datepattern` and `ignoreregex` as they are (as `pyfedi-login.conf` does).
-- [ ] **Step 2:** On the server, back up `/etc/fail2ban/filter.d/pyfedi-{register,scan}.conf` to `~/backups/<date>-access-log/`, install the new filters, and check each with `sudo fail2ban-regex systemd-journal /etc/fail2ban/filter.d/<name>.conf` after one `curl -s -o /dev/null https://example.org/.env` and one register POST from the server. Expected: 1 matched line each, 0 for `ip=onion`.
+- [ ] **Step 2:** On the server, back up `/etc/fail2ban/filter.d/pyfedi-{register,scan}.conf` to `~/backups/<date>-access-log/`, install the new filters, and check each with `sudo fail2ban-regex systemd-journal /etc/fail2ban/filter.d/<name>.conf` after one `curl -s -o /dev/null https://<first-domain>/.env` and one register POST from the server. Expected: 1 matched line each, 0 for `ip=onion`.
 - [ ] **Step 3:** `sudo systemctl reload fail2ban`; `sudo fail2ban-client status pyfedi-register pyfedi-scan` shows both jails active.
 - [ ] **Step 4:** After the autodeploy restart, `sudo journalctl -u pyfedi-web --since -5min -o cat | grep -c '" [0-9][0-9][0-9] '` is 0 (no access lines).
 - [ ] **Step 5:** Update DEPLOY_GUIDE §11 (jail table: matches the two new lines) and the memories `first-domain-quadlet-deploy` and `relay-delivery-diagnosis` (access lines need `ACCESS_LOG=1` in `.env.docker`, regenerate `.env.quadlet`, restart web).

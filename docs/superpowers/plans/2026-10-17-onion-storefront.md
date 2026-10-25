@@ -341,7 +341,7 @@
 
 ## Phase C: Tor deploy for the first domain (spec §4)
 
-The owner pushes Phases A and B to the deploy branch first. Wait for autodeploy, then check: `curl -sI https://example.org/` gives 200, a post page renders, and `journalctl -u pyfedi-web --since -10min | grep -c Traceback` is 0. Do not start Phase C until clearnet is confirmed unchanged.
+The owner pushes Phases A and B to the deploy branch first. Wait for autodeploy, then check: `curl -sI https://<first-domain>/` gives 200, a post page renders, and `journalctl -u pyfedi-web --since -10min | grep -c Traceback` is 0. Do not start Phase C until clearnet is confirmed unchanged.
 
 ### Task 12: Pinned network and a static Caddy IP
 
@@ -367,14 +367,14 @@ The owner pushes Phases A and B to the deploy branch first. Wait for autodeploy,
 
 **Files:** `Caddyfile` (tracked in the repo, and deployed from the checkout).
 
-- [ ] **Step 1:** Move the example.org block's body into a snippet `(piefed_routes)`. Keep `encode`, `request_body max_size 510MiB`, both SSE `handle` blocks and the `reverse_proxy web:5000` retry. Keep every existing comment, moved with its directive.
-- [ ] **Step 2:** In `example.org { … }`, add `request_header -X-PieFed-Via`, `header Onion-Location http://<onion>{uri}` and `import piefed_routes`.
+- [ ] **Step 1:** Move the `<first-domain>` block's body into a snippet `(piefed_routes)`. Keep `encode`, `request_body max_size 510MiB`, both SSE `handle` blocks and the `reverse_proxy web:5000` retry. Keep every existing comment, moved with its directive.
+- [ ] **Step 2:** In `<first-domain> { … }`, add `request_header -X-PieFed-Via`, `header Onion-Location http://<onion>{uri}` and `import piefed_routes`.
 - [ ] **Step 3:** Add `http://<onion>:8081 { request_header X-PieFed-Via onion; import piefed_routes }`.
 - [ ] **Step 4: Validate.** `podman run --rm -v ./Caddyfile:/etc/caddy/Caddyfile:z docker.io/library/caddy:2 caddy validate --config /etc/caddy/Caddyfile` passes.
 - [ ] **Step 5: Commit** `deploy: Caddy serves the onion storefront and advertises it with Onion-Location`. The owner pushes it. After the deploy, restart `pyfedi-caddy` only if autodeploy did not.
 - [ ] **Step 6: Verify.**
-  - `curl -sI https://example.org/ | grep -i onion-location`.
-  - `curl -s -H 'X-PieFed-Via: onion' https://example.org/` is treated as clearnet: the login page has no `pow_token`.
+  - `curl -sI https://<first-domain>/ | grep -i onion-location`.
+  - `curl -s -H 'X-PieFed-Via: onion' https://<first-domain>/` is treated as clearnet: the login page has no `pow_token`.
   - From inside the tor container, `curl -s http://pyfedi_caddy:8081/` returns the onion-host page.
 
 ### Task 15: fail2ban jails
@@ -393,7 +393,7 @@ The owner pushes Phases A and B to the deploy branch first. Wait for autodeploy,
   - `ignoreip = 127.0.0.1/8 ::1 <pf_network subnet>`.
   - Ban action: one that works on DNATed podman traffic. Try `banaction = nftables[type=multiport]` with the chain set to netavark's forward path, or `firewallcmd-rich-rules` on the `FORWARD` hook. Keep whichever passes Step 4.
 - [ ] **Step 4: Prove the ban.**
-  - From an outside host the owner names, check that `curl -sI https://example.org/` works.
+  - From an outside host the owner names, check that `curl -sI https://<first-domain>/` works.
   - Run `fail2ban-client set pyfedi-login banip <that IP>` and check that the curl now times out.
   - Run `unbanip` and check that it works again.
   - Record the result.
@@ -408,9 +408,9 @@ The owner pushes Phases A and B to the deploy branch first. Wait for autodeploy,
   - Register (PoW visible), or log in with a test account.
   - Post with an image upload.
   - Receive a live notification from a second account.
-  - Pass: the network panel shows zero requests to `example.org`.
+  - Pass: the network panel shows zero requests to `<first-domain>`.
 - [ ] **Step 2:** Repeat the login at the "Safest" security level. Pass: the wait step works.
-- [ ] **Step 3:** Open `https://example.org` in Tor Browser. Pass: the ".onion available" prompt appears.
+- [ ] **Step 3:** Open `https://<first-domain>` in Tor Browser. Pass: the ".onion available" prompt appears.
 - [ ] **Step 4:** Add an onion section to `DEPLOY_GUIDE.md`:
   - the address
   - the key backup path, and how to restore it (stop `pyfedi-tor`, decrypt into the volume's `hs_pyfedi/`, `chown` to tor, `chmod 600`, start)
