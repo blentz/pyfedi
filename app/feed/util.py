@@ -48,14 +48,14 @@ def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False)
             return None
         name, server = parts
 
+        if is_local_host(server):   # one of ours: never fetched (it would be a self-request), and never banned (C4)
+            already_exists = Feed.query.filter_by(name=name, ap_id=None).first()
+            return already_exists
+
         banned = BannedInstances.query.filter_by(domain=server).first()
         if banned:
             reason = f" Reason: {banned.reason}" if banned.reason is not None else ''
             raise Exception(f"{server} is blocked.{reason}")  # todo: create custom exception class hierarchy
-
-        if is_local_host(server):   # one of ours: never fetched (it would be a self-request)
-            already_exists = Feed.query.filter_by(name=name, ap_id=None).first()
-            return already_exists
 
         already_exists = Feed.query.filter_by(ap_id=address[1:]).first()
         if already_exists:
