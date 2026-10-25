@@ -238,6 +238,42 @@ def test_a_hosted_post_no_peer_may_fetch_is_not_found_by_url(app, env, wire, hid
     assert wire.calls.call_count == 0
 
 
+@pytest.mark.parametrize('hide', [_deleted, _followers_only, _private_community])
+def test_a_hosted_post_no_peer_may_fetch_is_not_found_by_its_stored_url(app, env, wire, hide):
+    """A post on one of our domains stores its canonical URL as ap_id, so `Post.get_by_ap_id` finds that spelling
+    before the hosted branch runs. It is gated the same way: the stored URL and any other spelling of it agree."""
+    stored = f'https://{SHOP}/post/{env.post.id}'
+    env.post.ap_id = stored
+    hide(env)
+    db.session.commit()
+    page = search_for(app, env, stored)
+    assert 'Post not found.' in page and 'a shop post' not in page
+    assert resolve_remote_post_from_search(stored) is None
+    assert wire.calls.call_count == 0
+
+
+def test_a_public_hosted_post_is_found_by_its_stored_url(app, env, wire):
+    stored = f'https://{SHOP}/post/{env.post.id}'
+    env.post.ap_id = stored
+    db.session.commit()
+    page = search_for(app, env, stored)
+    assert 'a shop post' in page and 'Post not found.' not in page
+    assert resolve_remote_post_from_search(stored) is env.post
+    assert wire.calls.call_count == 0
+
+
+def test_a_remote_post_found_by_its_stored_url_is_returned_as_before(env, wire):
+    """Only our own posts are gated: a remote post already stored is the peer's to serve, and is returned as it was."""
+    remote_den = make_community('remote_den', host='peer.example')
+    remote_den.ap_id = 'https://peer.example/c/remote_den'
+    author = make_user(env.peer, 'author')
+    post = make_post(remote_den, author, 'https://peer.example/post/7', title='a peer post')
+    post.deleted = True
+    db.session.commit()
+    assert resolve_remote_post_from_search('https://peer.example/post/7') is post
+    assert wire.calls.call_count == 0
+
+
 def test_the_discovery_view_never_opens_a_hosted_post(app, env, wire):
     """The discovery view resolves wider-network results only: a hosted URL is an excluded host, sent back to the
     search with a warning before any lookup."""
