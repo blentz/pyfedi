@@ -1,4 +1,4 @@
-"""hell.cloud's ActivityPub documents, byte for byte (plan C3, task 2): what the default domain serves does not change
+"""the first domain's ActivityPub documents, byte for byte (plan C3, task 2): what the default domain serves does not change
 while its sister domains learn to name themselves.
 
 Each golden copy in tests/golden/c3/ was captured from the code before C3 touched these documents (BASE b94132dda),
@@ -36,7 +36,7 @@ def pem(label: str) -> str:
 
 @pytest.fixture
 def golden_site(app, two_domains):
-    """hell.cloud's site, account, community and feed, all on fixed values, with shop.example federating beside it."""
+    """the first domain's site, account, community and feed, all on fixed values, with shop.example federating beside it."""
     db.session.add(Site(name='Golden Site', description='Fixed for the golden copies', blocked_phrases='',
                         public_key=pem('SITE'), created_at=CREATED, updated=UPDATED))
     db.session.add(SiteDomain(domain=SHOP, scheme='https', federates=True))
@@ -147,7 +147,7 @@ def test_hells_actor_documents_link_to_hells_page(app, path, link):
     assert served(app, path).headers['Link'] == f'{link}; rel="alternate"; type="text/html"'
 
 
-# hell.cloud's discovery documents (plan C3, task 4): WebFinger, host-meta, NodeInfo and the site documents, captured
+# the first domain's discovery documents (plan C3, task 4): WebFinger, host-meta, NodeInfo and the site documents, captured
 # from the code before Task 4 made them per domain (BASE b49a5ca83). Only the release is a placeholder. The fixture
 # fixes every count (one account, no posts or comments, one community), and Task 4's count change (hell counts only
 # its own accounts) does not show here, as no other domain has an account in this fixture.

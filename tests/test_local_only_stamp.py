@@ -51,7 +51,7 @@ def _reply(env, author, post, parent=None):
                          language_id=None, distinguished=False, answer=False)
 
 
-def test_an_onion_users_post_in_a_hell_cloud_community_is_local_only(env):
+def test_an_onion_users_post_in_a_first_domain_community_is_local_only(env):
     env.author.site_domain_id = env.onion.id
     assert _post(env, env.community).local_only is True
 
@@ -62,15 +62,15 @@ def test_an_onion_users_post_in_a_remote_community_is_local_only(env):
     assert _post(env, env.remote_community).local_only is True
 
 
-def test_a_hell_cloud_users_post_in_an_onion_community_is_local_only(env):
+def test_a_first_domain_users_post_in_an_onion_community_is_local_only(env):
     assert _post(env, env.onion_community).local_only is True
 
 
-def test_a_hell_cloud_users_post_in_a_hell_cloud_community_is_not(env):
+def test_a_first_domain_users_post_in_a_first_domain_community_is_not(env):
     assert _post(env, env.community).local_only is False
 
 
-def test_a_hell_cloud_users_reply_to_local_only_content_is_local_only(env):
+def test_a_first_domain_users_reply_to_local_only_content_is_local_only(env):
     post = make_post(env.community, env.author, 'https://local.example/p/9')
     post.local_only = True
     db.session.commit()
@@ -86,13 +86,13 @@ def test_a_reply_to_a_local_only_reply_is_local_only(env):
     assert _reply(env, env.author, post, parent).local_only is True
 
 
-def test_an_onion_users_reply_in_a_hell_cloud_community_is_local_only(env):
+def test_an_onion_users_reply_in_a_first_domain_community_is_local_only(env):
     post = make_post(env.community, env.author, 'https://local.example/p/9')
     env.author.site_domain_id = env.onion.id
     assert _reply(env, env.author, post).local_only is True
 
 
-def test_a_hell_cloud_users_reply_to_ordinary_content_is_not(env):
+def test_a_first_domain_users_reply_to_ordinary_content_is_not(env):
     post = make_post(env.community, env.author, 'https://local.example/p/9')
     assert _reply(env, env.author, post).local_only is False
 

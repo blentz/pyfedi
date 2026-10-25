@@ -2,9 +2,9 @@
 
 Each federating domain is a separate ActivityPub server, and what a row federates is named on its owner's domain
 (`app.federation_urls`): a post or comment on its author's, an activity on its actor's, an account or community on its
-own. SERVER_URL and SERVER_NAME name the default domain only, so a string built from them names hell.cloud whatever
-the row's owner is, and a sister domain's activity would carry hell.cloud's name (owner ruling: nothing a sister
-domain federates names hell.cloud). For the default domain the helpers return exactly the string SERVER_URL made.
+own. SERVER_URL and SERVER_NAME name the default domain only, so a string built from them names the first domain whatever
+the row's owner is, and a sister domain's activity would carry the first domain's name (owner ruling: nothing a sister
+domain federates names the first domain). For the default domain the helpers return exactly the string SERVER_URL made.
 
 This sweep finds, in app/ Python (by AST), a URL built on SERVER_URL or SERVER_NAME (an f-string, a `+` or a
 `.replace()` whose origin is one of them, first or after `://`, directly or through a local alias such as

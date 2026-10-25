@@ -1,4 +1,4 @@
-"""Pages and API calls find a local name on its own domain (plan C1, task 4). `bob` and `art` are on hell.cloud and on
+"""Pages and API calls find a local name on its own domain (plan C1, task 4). `bob` and `art` are on the first domain and on
 the onion. Each test gives the two rows different, observable effects (a block, a follow, a note, a membership, a
 password, a modlog entry) and checks which row changed, from both storefronts: a lookup that ignores the domain picks
 one row for both, so it acts on the wrong one on one of them."""
@@ -155,7 +155,7 @@ def test_a_lookup_of_a_hosted_name_names_that_domain_or_is_404(app, world, kind,
         response = client.get(f'/{kind}/lookup/{row}/{other(host)}')
         assert response.headers['Location'] == f'/{model_path}/{row}@{other(host)}'
         response = client.get(f'/{kind}/lookup/{row}/{host}')
-        assert response.headers['Location'] == f'/{model_path}/{row}'   # hell.cloud's own redirect, unchanged
+        assert response.headers['Location'] == f'/{model_path}/{row}'   # the first domain's own redirect, unchanged
         assert client.get(f'/{kind}/lookup/nobody/{other(host)}').status_code == 404
 
 
@@ -193,7 +193,7 @@ def test_the_modlog_filters_by_the_domains_account(app, world, host, field):
     assert listed(f'bob@{other(host)}') == {other(host)}
 
 
-def test_the_modlog_shows_a_default_domain_handle_as_its_bare_name_on_hell_cloud(app, world):
+def test_the_modlog_shows_a_default_domain_handle_as_its_bare_name_on_the_first_domain(app, world):
     text = signed_in(app, world.viewers[HELL], HELL).get(f'/modlog?suspect_user_name=bob@{HELL}').get_data(as_text=True)
     assert 'value="bob"' in text
     text = signed_in(app, world.viewers[ONION], ONION).get(f'/modlog?suspect_user_name=bob@{HELL}').get_data(as_text=True)

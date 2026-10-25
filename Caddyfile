@@ -5,7 +5,7 @@
 # Encrypt rate limits (5 certs per domain per week).
 {
 	# Let's Encrypt sends expiry and problem notices here. CHANGE THIS.
-	email admin@hell.cloud
+	email {$ACME_EMAIL}
 }
 
 # Shared by the clearnet and onion sites, so their handlers cannot drift apart.
@@ -66,7 +66,7 @@
 	}
 }
 
-hell.cloud {
+{$PIEFED_DOMAIN} {
 	# Only the onion site below may mark a request as onion; a client cannot forge the marker here.
 	request_header -X-PieFed-Via
 	# Tor Browser offers the onion address to visitors of the clearnet site.
@@ -76,7 +76,7 @@ hell.cloud {
 
 # A second federating domain (deploy/DEPLOY_GUIDE.md, "Adding a federating domain"). Add the domain in the admin
 # Domains form first, point its DNS here, then uncomment this block, replace shop.example, and reload Caddy. It
-# gets the same routing as hell.cloud and no Onion-Location header: that header names the onion site of hell.cloud.
+# gets the same routing as the first domain and no Onion-Location header: that header names the onion site of the first domain.
 # shop.example {
 # 	request_header -X-PieFed-Via
 # 	import piefed_routes
@@ -91,6 +91,6 @@ http://gnzxnayrrmwidxmnmhibwzazwkssf7wkl7i2dpx2izof54yz4am5qzad.onion:8081 {
 }
 
 # Uncomment to also answer on www and redirect to the apex.
-# www.hell.cloud {
-# 	redir https://hell.cloud{uri} permanent
+# www.{$PIEFED_DOMAIN} {
+# 	redir https://{$PIEFED_DOMAIN}{uri} permanent
 # }

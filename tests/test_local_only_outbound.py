@@ -208,7 +208,7 @@ def test_a_queued_retry_of_a_local_only_activity_is_dropped(env, wire, app, monk
 
 # -- what is not local-only is untouched ------------------------------------------------------------------------------
 
-def test_a_hell_cloud_post_in_a_hell_cloud_community_is_sent_unchanged(env, wire, monkeypatch):
+def test_a_first_domain_post_in_a_first_domain_community_is_sent_unchanged(env, wire, monkeypatch):
     """The body that leaves is byte-for-byte the one sent with the guard and the mention filter switched off."""
     monkeypatch.setattr('app.utils.gibberish', lambda *a: 'fixed')   # where activity_id reads it
     post = _post(env.hell, env.hal, body='plain words')

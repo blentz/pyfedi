@@ -2,7 +2,7 @@
 
 `storefront.acting_domain()` names the domain an instance-level request is made as: in a web or API request, the
 acting account's or the storefront's. A worker has no request, so without this every fetch a task made named the
-default domain (hell.cloud), whoever caused it, and a task run inline (DEBUG, `send_async=False`) named another
+default domain (the first domain), whoever caused it, and a task run inline (DEBUG, `send_async=False`) named another
 domain than the same task queued. Here the domain is stamped into each task's message headers when it is queued and
 entered for the task's run: `ActingTask` is every task's class (`Celery(task_cls=...)`), so every `delay` and
 `apply_async`, eager or not, carries it; `task_prerun` enters `acting_for` it and `task_postrun`, sent even when the

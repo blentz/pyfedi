@@ -1,7 +1,7 @@
 """A Follow from the instance actor that a peer refuses outright marks its sync row, instead of leaving it
 "Waiting for an answer" for a week (interop D24 proactive sync).
 
-hell.cloud, 2026-10-07: of ~1,500 Follows, 96 got a 401 and 19 a 403 from peers that could not verify the
+The first domain, 2026-10-07: of ~1,500 Follows, 96 got a 401 and 19 a 403 from peers that could not verify the
 signature, and the status table showed them all as waiting. A 5xx is retried by the send queue and a transport
 failure is transient, so neither is final."""
 import uuid

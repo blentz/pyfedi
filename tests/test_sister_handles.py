@@ -1,6 +1,6 @@
 """A sister's names resolve on the sister, and our own domains pass the allowlist (plan C4 task 4).
 
-hell.cloud (SERVER_NAME) and shop.example share one database and each has its own `den` (C1). A name written without a
+The first domain (SERVER_NAME) and shop.example share one database and each has its own `den` (C1). A name written without a
 host means the domain acting, a URL means the domain it is on, and a host of ours never needs the instance allowlist
 or ban list to be let through: only remote hosts do. No test here may reach the HTTP layer.
 """

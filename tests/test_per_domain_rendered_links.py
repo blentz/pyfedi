@@ -1,6 +1,6 @@
 """The links and redirects a page builds name the row it shows, from either storefront (plan C1, final fix wave).
 
-`bob` and `art` are on hell.cloud and on the onion (`world`, from test_per_domain_html_routes). Each test reads a URL
+`bob` and `art` are on the first domain and on the onion (`world`, from test_per_domain_html_routes). Each test reads a URL
 the app built, from the page or the redirect, and follows it: a link built from the bare name names the storefront's
 own namesake, so following it acts on, or shows, the wrong row on one of the two storefronts."""
 import glob
@@ -83,7 +83,7 @@ def titled(world):
 
 @pytest.mark.parametrize('reporter_host', [ONION, HELL])
 def test_a_report_about_the_onions_bob_links_to_the_onions_bob_on_hell(app, titled, reporter_host):
-    """Important 3. A report written on either storefront about the onion's bob: the admin queue on hell.cloud links
+    """Important 3. A report written on either storefront about the onion's bob: the admin queue on the first domain links
     to the onion's bob, not hell's namesake. (Written on the onion, a storefront-relative spelling stores it bare.)"""
     world = titled
     client = signed_in(app, world.viewers[reporter_host], reporter_host)
@@ -108,7 +108,7 @@ def test_a_follow_notification_from_the_onions_bob_links_to_the_onions_bob(app, 
 
 
 def test_a_stored_name_is_the_same_on_every_storefront(app, world):
-    """Bare on the default domain (hell.cloud's stored data stays byte-identical), `name@domain` on another."""
+    """Bare on the default domain (the first domain's stored data stays byte-identical), `name@domain` on another."""
     for request_on in (default_request, onion_request):
         with request_on(app):
             assert world.bob[HELL].stored_link() == 'bob'
@@ -145,7 +145,7 @@ def community_shown(app, world, host, path) -> set[str]:
 
 
 def test_creating_a_community_on_the_onion_lands_on_the_new_community(app, world, two_domains):
-    """A hell.cloud account creating on the onion makes a hell.cloud community: the redirect names hell.cloud."""
+    """A first-domain account creating on the onion makes a first-domain community: the redirect names the first domain."""
     creator = world.viewers[HELL]
     able_to_create(creator)
     two_domains.local_community('fresh', two_domains.domains[1]).title = 'Onion fresh'

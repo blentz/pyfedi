@@ -20,7 +20,7 @@ pytestmark = pytest.mark.usefixtures('site')
 
 @pytest.fixture
 def crowd(app, two_domains):  # noqa: F811
-    """101 active accounts on hell.cloud's row and 103 on the onion's, so each domain's home page shows its counts
+    """101 active accounts on the first domain's row and 103 on the onion's, so each domain's home page shows its counts
     (they show above 100 monthly users) and either one's number tells which accounts it counted."""
     hell, onion = two_domains.domains
     now = utcnow()

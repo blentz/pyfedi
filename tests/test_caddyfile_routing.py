@@ -13,11 +13,23 @@ import fastapi_server
 
 CADDYFILE = pathlib.Path(__file__).resolve().parent.parent / 'Caddyfile'
 
+# The Caddyfile names its host and ACME email as {$PIEFED_DOMAIN} and {$ACME_EMAIL}; Caddy fills them from the
+# environment when it loads the file, and these tests do the same with test values.
+ENV = {'PIEFED_DOMAIN': 'piefed.example', 'ACME_EMAIL': 'admin@piefed.example'}
+
+
+def caddyfile_lines():
+    """The Caddyfile's lines with its {$NAME} placeholders replaced by the test values."""
+    text = CADDYFILE.read_text()
+    for name, value in ENV.items():
+        text = text.replace('{$' + name + '}', value)
+    return text.splitlines()
+
 
 def handled_paths():
     """The path matchers of every `handle <path> {` block, comments ignored."""
     paths = []
-    for line in CADDYFILE.read_text().splitlines():
+    for line in caddyfile_lines():
         line = line.split('#', 1)[0].strip()
         match = re.match(r'^handle\s+(/\S*)\s*\{$', line)
         if match:
@@ -64,7 +76,7 @@ def test_the_live_stream_is_proxied_to_fastapi():
 def web_proxy_block():
     """The directives directly inside the `reverse_proxy web:5000 { ... }` block, comments ignored. Nested
     blocks (the `handle_response` that serves cached onion media) are skipped."""
-    lines = [line.split('#', 1)[0].strip() for line in CADDYFILE.read_text().splitlines()]
+    lines = [line.split('#', 1)[0].strip() for line in caddyfile_lines()]
     start = lines.index('reverse_proxy web:5000 {')
     top_level, depth = [], 1
     for line in lines[start + 1:]:
@@ -94,7 +106,7 @@ def test_requests_wait_for_the_app_while_it_restarts():
 
 def accel_block():
     """The directives of the `handle_response @accel { ... }` block that serves cached onion media, comments ignored."""
-    lines = [line.split('#', 1)[0].strip() for line in CADDYFILE.read_text().splitlines()]
+    lines = [line.split('#', 1)[0].strip() for line in caddyfile_lines()]
     start = lines.index('handle_response @accel {')
     return lines[start + 1:lines.index('}', start)]
 
@@ -147,9 +159,9 @@ def site_block_directives(address, lines):
 
 
 def test_the_federating_domain_template_routes_like_the_main_block_once_uncommented():
-    raw = CADDYFILE.read_text().splitlines()
+    raw = caddyfile_lines()
     live = [line.split('#', 1)[0].strip() for line in raw]
-    main = site_block_directives('hell.cloud', live)
+    main = site_block_directives(ENV['PIEFED_DOMAIN'], live)
 
     template = []
     in_template = False

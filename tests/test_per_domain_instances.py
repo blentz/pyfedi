@@ -260,7 +260,7 @@ def test_the_upgrade_gives_the_domain_a_new_instance_row_and_moves_its_rows(app,
                                            'gone_forever, trusted, silenced, popular FROM instance WHERE id = :id'),
                                       {'id': onion_instance}).one()
             assert tuple(made) == (ONION, 'PieFed', None, None, 0, False, False, False, False, True)
-            # Row 1 holds hell.cloud's own users, communities and content: the default takes it all the same.
+            # Row 1 holds the first domain's own users, communities and content: the default takes it all the same.
             assert connection.execute(text('SELECT count(*) FROM "user" WHERE instance_id = 1')).scalar() > 0
             assert connection.execute(text('SELECT instance_id FROM site_domain WHERE is_default')).scalar() == 1
         finally:
@@ -566,7 +566,7 @@ def test_an_onion_users_community_post_and_reply_carry_the_onion_instance(app, d
 
 
 def test_a_clearnet_users_post_and_reply_keep_the_default_instance(app, db_session, site, domains):
-    """hell.cloud unchanged (plan C2 final wave): a clearnet account's post and reply are on row 1, in its own
+    """The first domain unchanged (plan C2 final wave): a clearnet account's post and reply are on row 1, in its own
     community and in the onion's alike, since a post's row is its author's."""
     default, onion = domains
     client, token = _admin_adding(app)

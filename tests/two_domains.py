@@ -1,6 +1,6 @@
-"""A site hosting two domains, hell.cloud's default and an onion, for tests of per-domain names (plan C1).
+"""A site hosting two domains, the first domain's default and an onion, for tests of per-domain names (plan C1).
 
-`two_domains` yields a `TwoDomains`: the two `DomainInfo` rows, hell.cloud's instance row (the onion has its own, made
+`two_domains` yields a `TwoDomains`: the two `DomainInfo` rows, the first domain's instance row (the onion has its own, made
 with its domain row: `domains[1].instance_id`), and factories that insert a local user or community straight into a
 domain, on that domain's instance row (creation refuses a name another domain holds until C1's Task 5, and a test of
 the helpers needs the duplicate to exist). `onion_request` and `default_request` run a request context addressed to a
@@ -52,7 +52,7 @@ def default_request(app):
 
 
 def register_local_only_onion() -> str:
-    """hell.cloud's default row and the local-only onion, with no fixture: for a test that needs only a URL the onion
+    """the first domain's default row and the local-only onion, with no fixture: for a test that needs only a URL the onion
     names (an "is it ours" guard that refuses it). Returns the onion's origin."""
     if db.session.query(SiteDomain).filter_by(is_default=True).first() is None:
         db.session.add(SiteDomain(domain=HELL, scheme='https', is_default=True))

@@ -413,7 +413,7 @@ class TestUnsubscribingFromACommunity:
         assert activity['actor'] == user.public_url()
 
     def test_a_local_community_is_left_without_a_leave(self, env):
-        local_community = make_community('hellcloud')
+        local_community = make_community('firstcommunity')
         local_community.ap_id = None
         db.session.commit()
         with patch('app.user.utils.send_post_request') as send:

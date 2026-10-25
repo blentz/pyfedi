@@ -26,9 +26,9 @@ AP = {'Accept': 'application/activity+json'}
 
 @pytest.fixture
 def world(app, db_session):
-    """hell.cloud (the default domain) and an onion that does not federate, each with an account and a community.
+    """The first domain (the default domain) and an onion that does not federate, each with an account and a community.
 
-    alice and bob are hell.cloud accounts; onionite is the onion's. `clearnet` is hell.cloud's community, `hidden`
+    alice and bob are the first domain accounts; onionite is the onion's. `clearnet` is the first domain's community, `hidden`
     the onion's. alice owns both communities."""
     make_instance(app.config['SERVER_NAME'])   # the local instance, id 1
     default = db.session.query(SiteDomain).filter_by(is_default=True).first()
@@ -93,10 +93,10 @@ def test_a_local_only_account_is_404_to_webfinger_and_activitypub(app, world):
         assert _get(app, path, host='abc.onion').status_code == 404, path
     assert app.test_client().head('/u/onionite', headers=AP).status_code == 404
     for path in ('/u/onionite@abc.onion', '/u/onionite@abc.onion/outbox', '/u/onionite@abc.onion/followers'):
-        assert _get(app, path).status_code == 404, path   # named from hell.cloud: still local-only
+        assert _get(app, path).status_code == 404, path   # named from the first domain: still local-only
     assert _webfinger(app, 'acct:onionite@abc.onion').status_code == 404
     assert _webfinger(app, f"acct:onionite@{app.config['SERVER_NAME']}").status_code == 404
-    # hell.cloud's own account is served as before
+    # the first domain's own account is served as before
     assert _get(app, '/u/alice').status_code == 200
     assert _webfinger(app, f"acct:alice@{app.config['SERVER_NAME']}").status_code == 200
 
@@ -107,7 +107,7 @@ def test_a_local_only_community_is_404_too(app, world):
         assert _get(app, path).status_code == 404, path
         assert _get(app, path, host='abc.onion').status_code == 404, path
     for path in ('/c/hidden@abc.onion', '/c/hidden@abc.onion/outbox', '/c/hidden@abc.onion/followers'):
-        assert _get(app, path).status_code == 404, path   # named from hell.cloud: still local-only
+        assert _get(app, path).status_code == 404, path   # named from the first domain: still local-only
     assert _webfinger(app, 'acct:hidden@abc.onion').status_code == 404
     assert _get(app, '/c/clearnet').status_code == 200
 
@@ -227,7 +227,7 @@ def test_a_local_only_account_cannot_be_made_moderator_of_a_federating_community
     with app.app_context(), app.test_request_context():
         with pytest.raises(Exception, match='local_only_moderator'):
             shared_community.add_mod_to_community(world.clearnet.id, world.onionite.id, SRC_API, auth='token')
-        # the onion's own community may have it, and a hell.cloud account may moderate hell.cloud's
+        # the onion's own community may have it, and a first-domain account may moderate the first domain's
         shared_community.add_mod_to_community(world.hidden.id, world.onionite.id, SRC_API, auth='token')
         shared_community.add_mod_to_community(world.clearnet.id, world.bob.id, SRC_API, auth='token')
     assert not CommunityMember.query.filter_by(community_id=world.clearnet.id, user_id=world.onionite.id).count()
@@ -362,7 +362,7 @@ def test_a_logged_in_browser_still_sees_local_only_pages(app, world, monkeypatch
     post = _post(app, world.hidden, world.onionite, local_only=True)
     client = app.test_client()
     login(client, world.alice)
-    for path in ('/u/onionite@abc.onion', '/c/hidden@abc.onion', f'/post/{post.id}'):   # named from hell.cloud
+    for path in ('/u/onionite@abc.onion', '/c/hidden@abc.onion', f'/post/{post.id}'):   # named from the first domain
         assert client.get(path, headers={'Accept': 'text/html'}).status_code == 200, path
 
 
@@ -428,8 +428,8 @@ NEWS_MODERATORS = (b'{"@context":["https://www.w3.org/ns/activitystreams","https
     b'ollection"}\n')
 
 
-def test_hell_cloud_actor_and_webfinger_are_byte_identical(app, world):
-    """A snapshot of the documents taken on the code before this task: an account and a community of hell.cloud
+def test_first_domain_actor_and_webfinger_are_byte_identical(app, world):
+    """A snapshot of the documents taken on the code before this task: an account and a community of the first domain
     (the default domain) are served exactly as they were."""
     _snapshot_world(app, world)
     server = app.config['SERVER_NAME']

@@ -1,9 +1,9 @@
 """An account's or community's ActivityPub document names its own domain (plan C3, task 2).
 
-shop.example federates beside hell.cloud. Owner ruling: nothing a sister domain federates names hell.cloud, so every
+shop.example federates beside the first domain. Owner ruling: nothing a sister domain federates names the first domain, so every
 URL in a shop account's or community's document, its collections, the Group Update it sends and the shop's instance
-actor is on shop.example, and none of those bodies holds hell.cloud's host (the test app's SERVER_NAME) at all.
-hell.cloud's own documents are pinned byte for byte in tests/test_c3_golden_documents.py. The onion never federates,
+actor is on shop.example, and none of those bodies holds the first domain's host (the test app's SERVER_NAME) at all.
+The first domain's own documents are pinned byte for byte in tests/test_c3_golden_documents.py. The onion never federates,
 so its instance actor answers no other server."""
 import json
 from unittest.mock import MagicMock, patch
@@ -74,8 +74,8 @@ def real_cache(app, monkeypatch):
 
 @pytest.fixture
 def site_named_hell(app):
-    """Site row 1 named as prod's is (Site.name 'hell.cloud'), so a document that copies the site name onto a sister
-    domain names hell.cloud and the full-body check sees it."""
+    """Site row 1 named as prod's is (Site.name 'the first domain'), so a document that copies the site name onto a sister
+    domain names the first domain and the full-body check sees it."""
     db.session.get(Site, 1).name = HELL
     db.session.commit()
     cache.clear()
@@ -88,7 +88,7 @@ def served(app, path, host=SHOP):
 
 
 def assert_on_shop(body: bytes):
-    assert HELL.encode() not in body   # hell.cloud's host is nowhere in the document, in any field
+    assert HELL.encode() not in body   # the first domain's host is nowhere in the document, in any field
 
 
 def on_shop(url: str) -> bool:

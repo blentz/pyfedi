@@ -541,7 +541,7 @@ def user_profile(actor):
             else:
                 return ''
         if is_activitypub_request():
-            home = owner_domain(user)   # a sister domain's account names none of hell.cloud's URLs
+            home = owner_domain(user)   # a sister domain's account names none of the first domain's URLs
             base = domain_base_url(home)
             actor_data = {"@context": default_context(),
                           "type": "Person" if not user.bot else "Service",

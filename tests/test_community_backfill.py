@@ -148,7 +148,7 @@ class TestAPeertubeChannel:
 
 
 class TestOneEntryThatBreaksTheSession:
-    """hell.cloud, 2026-10-05: a PeerTube video whose announce id outgrew its column failed at flush inside
+    """The first domain, 2026-10-05: a PeerTube video whose announce id outgrew its column failed at flush inside
     create_post, which swallowed the error and returned None. The session was left needing a rollback, so the next
     entry's first query raised PendingRollbackError and ended the whole backfill with nothing stored."""
 

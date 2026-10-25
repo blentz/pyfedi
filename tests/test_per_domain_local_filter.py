@@ -1,6 +1,6 @@
 """The Local filter means the domain the visitor is browsing (per-domain identity, plan B task 10, spec §3.1/§3.5).
 
-hell.cloud's Local lists exactly what it listed before storefronts; the onion's lists only the onion's communities.
+The first domain's Local lists exactly what it listed before storefronts; the onion's lists only the onion's communities.
 `on_domain` also accepts NULL on the default domain, and a remote community's `site_domain_id` is NULL as well, so the
 remote community in every scene here is what pins that the old "is local" test is kept beside the domain test."""
 import re
@@ -32,7 +32,7 @@ ONION_HEADERS = {'X-PieFed-Via': 'onion', 'X-Forwarded-For': '10.89.0.7'}
 
 @pytest.fixture
 def scene(app, world, monkeypatch):  # noqa: F811
-    """`world`'s hell.cloud community `clearnet` and onion community `hidden`, plus a remote community `remote`
+    """`world`'s the first domain community `clearnet` and onion community `hidden`, plus a remote community `remote`
     (no domain stamped, as every remote row is). Each holds one post and one reply, titled for the community."""
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
     db.session.get(Site, 1).private_instance = False   # anonymous visitors reach the pages

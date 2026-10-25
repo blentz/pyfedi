@@ -27,7 +27,7 @@ from tests.factories import make_instance, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
 
-SERVER = 'test.piefed.local'   # SERVER_NAME: hell.cloud in production
+SERVER = 'test.piefed.local'   # SERVER_NAME: The first domain in production
 SHOP_INBOX = 'https://shop.example/inbox'
 ONION_INBOX = 'http://abc.onion/inbox'
 PEER_INBOX = 'https://peer.example/inbox'

@@ -1,6 +1,6 @@
 """No bare-name lookup of a local user or community is left unscoped (plan C1, task 4).
 
-Local names are unique per domain (spec 2026-10-19 §3.1): `bob` on hell.cloud and `bob` on the onion are two
+Local names are unique per domain (spec 2026-10-19 §3.1): `bob` on the first domain and `bob` on the onion are two
 accounts, so a lookup by name alone finds whichever row the database returns first. Every local lookup goes through
 `app/local_names.py` (`split_local_name` + `local_named`). This sweep finds the spellings of a name lookup that
 bypass it: `User.user_name ==`, `func.lower(User.user_name)`, `Community.name ==`, `func.lower(Community.name)`, and a

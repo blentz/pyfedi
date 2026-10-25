@@ -95,10 +95,10 @@ class TestDeletingAnAccount:
         assert send.call_args.args[1]['type'] == 'Delete'
 
     def test_leaving_local_communities_of_two_domains_sends_nothing(self, env):
-        """C4: an account in a hell.cloud and a shop.example community leaves both with no Leave, no delivery and no
+        """C4: an account in a first-domain and a shop.example community leaves both with no Leave, no delivery and no
         'empty uri' or 'hosted domain' failure row; both memberships are gone."""
         Instance.query.update({Instance.inbox: None})   # the account's own Delete goes nowhere either
-        hell = make_community('hellcloud')
+        hell = make_community('firstcommunity')
         shop = make_community('shopcommunity', host='shop.example')
         user = make_user(env.baseline.instance_local, 'leaver', local=True, with_keys=True)
         make_community_member(user, hell)

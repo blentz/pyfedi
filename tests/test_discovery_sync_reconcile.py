@@ -364,7 +364,7 @@ def test_refollowed_counts_only_follows_that_were_sent(db_session, fed, monkeypa
 
 
 def test_one_run_adds_at_most_fifty_communities_across_all_hosts(db_session, fed):
-    """The per-host ramp bounds one host, not the run: hell.cloud's first sync added ~1000 communities across
+    """The per-host ramp bounds one host, not the run: the first domain's first sync added ~1000 communities across
     hundreds of hosts, and their backfills buried the instance's inbox under ~17,000 queued tasks."""
     set_setting('discovery_sync_per_host', 1)
     for index in range(60):

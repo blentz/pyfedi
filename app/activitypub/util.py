@@ -1089,7 +1089,7 @@ def served_by_us(url: str, file) -> bool:
 def community_actor_data(community: Community) -> dict:
     """The ActivityPub actor document of LOCAL `community`, as community_profile serves it and as its re-announce of
     a moderator's Group Update carries it (final review M1)."""
-    base = owner_base(community)   # its home domain's, never hell.cloud's for a sister domain's community
+    base = owner_base(community)   # its home domain's, never the first domain's for a sister domain's community
     actor = community.ap_profile_id.rsplit('/', 1)[-1]   # the canonical name community_profile looked it up by
     actor_data = {"@context": default_context(),
                   "type": "Group",

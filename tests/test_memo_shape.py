@@ -61,7 +61,7 @@ def _short_pickle(value, fields: int) -> bytes:
 @pytest.mark.parametrize('key, fields', [(_old_key, 6), (_v2_key, 7)])
 def test_an_older_shorter_domain_rows_entry_is_never_read(db_session, real_cache, caplog, key, fields):
     """6 fields before plan C1 (no `id`), 7 before C2 (no `instance_id`)."""
-    old = (DomainInfo('hell.cloud', 'https', True, 'anyone', True, False, 1, 1),)
+    old = (DomainInfo('example.org', 'https', True, 'anyone', True, False, 1, 1),)
     real_cache._cache[key(domain_rows)] = (time.time() + 300, _short_pickle(old, fields))
     with caplog.at_level(logging.ERROR):
         rows = domain_rows()

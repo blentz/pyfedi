@@ -1,11 +1,11 @@
 """The URLs a federating domain names what it federates by, and the key its instance actor signs with (plan C3).
 
 Each federating domain is a separate ActivityPub server. What a row federates is named on its owner's domain, never on
-the storefront the request came in on: a Celery task has no request, and a hell.cloud user's post read on a sister
-domain is still hell.cloud's. Nothing a sister domain federates names hell.cloud (owner ruling).
+the storefront the request came in on: a Celery task has no request, and a first-domain user's post read on a sister
+domain is still the first domain's. Nothing a sister domain federates names the first domain (owner ruling).
 
 For the default domain every helper returns exactly the string PieFed has always built from SERVER_URL, and its
-instance actor signs with Site row 1's key, so hell.cloud's federation does not change by a byte.
+instance actor signs with Site row 1's key, so the first domain's federation does not change by a byte.
 """
 from __future__ import annotations
 

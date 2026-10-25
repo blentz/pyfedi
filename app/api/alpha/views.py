@@ -1416,7 +1416,7 @@ def advertised_registration_mode() -> str:
 
 def described_domain() -> DomainInfo:
     """The domain the site documents describe: a federating storefront itself (plan C3), so nothing a sister domain
-    publishes names hell.cloud; a local-only one (the onion) the default domain's site, as before."""
+    publishes names the first domain; a local-only one (the onion) the default domain's site, as before."""
     return current_storefront() if current_storefront().federates else default_domain()
 
 

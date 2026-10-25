@@ -1,7 +1,7 @@
 """The profile and community pages of a local-only actor do not advertise an ActivityPub id (final fix F4).
 
 The id 404s to every other server, so the alternate only tells a scraper the account or community is local-only,
-and on hell.cloud names the onion. The post page already leaves it out for a local-only post.
+and on the first domain names the onion. The post page already leaves it out for a local-only post.
 """
 import pytest
 
@@ -24,7 +24,7 @@ def public(app, world):
     return world
 
 
-@pytest.mark.parametrize('path', ['/u/onionite@abc.onion', '/c/hidden@abc.onion'])   # the onion's, named from hell.cloud
+@pytest.mark.parametrize('path', ['/u/onionite@abc.onion', '/c/hidden@abc.onion'])   # the onion's, named from the first domain
 def test_a_local_only_actor_page_has_no_activitypub_alternate(app, public, path):
     """Signed in: a logged-out visitor is not shown the page at all (owner ruling 2026-10-21)."""
     client = app.test_client()

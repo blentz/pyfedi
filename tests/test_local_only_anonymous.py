@@ -50,7 +50,7 @@ def _content(post_or_reply, text):
 
 @pytest.fixture
 def scene(app, world, monkeypatch):
-    """On a public instance: hell.cloud's `clearnet` community, in a topic and a public feed, holding a public post
+    """On a public instance: the first domain's `clearnet` community, in a topic and a public feed, holding a public post
     and a local-only one (same tag, same link domain), and on the public post an ordinary reply and a local-only one.
     alice has an RSS token."""
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the post page renders form.csrf_token()
@@ -829,7 +829,7 @@ def test_an_archive_from_before_local_only_content_works_out_which_replies_are(a
         return {'id': reply_id, 'body': f'body {reply_id}', 'author_id': author, 'replies': list(replies), **extra}
     world = scene.world
     archived = [
-        entry(901, world.alice.id, [entry(902, world.alice.id)]),           # hell.cloud: open
+        entry(901, world.alice.id, [entry(902, world.alice.id)]),           # the first domain: open
         entry(903, world.onionite.id, [entry(904, world.alice.id)]),        # local-only author; a reply under it
         entry(905, 999_999),                                                 # no such author
         entry(906, None),                                                    # no author at all

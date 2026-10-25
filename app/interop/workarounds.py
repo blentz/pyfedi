@@ -20,7 +20,7 @@ NODEINFO_TIMEOUT = 5                 # seconds for the whole read: it runs on th
 FAILED_READ_TTL = 24 * 60 * 60       # a host whose nodeinfo failed is not asked again for a day
 # Directories that list one platform's servers only (SepiaSearch: PeerTube; index.castopod.org: Castopod), so a host
 # they list runs that software. Read when nodeinfo cannot be: many Castopod servers answer neither nodeinfo nor
-# NodeInfo2, and their podcasts then never got a community (hell.cloud, 2026-10-07: 126 in one sync).
+# NodeInfo2, and their podcasts then never got a community (the first domain, 2026-10-07: 126 in one sync).
 DIRECTORY_SOFTWARE = ('castopod', 'peertube')
 
 

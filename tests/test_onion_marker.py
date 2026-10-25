@@ -78,7 +78,7 @@ def test_the_proxy_without_the_header_is_clearnet(app, site):
 
 @pytest.mark.parametrize('host, onion', [
     ('test.piefed.local', False),
-    ('hell.cloud', False),
+    ('example.org', False),
     ('abc.onion.evil.example', False),
     ('onion', False),
     ('[::1]:80', False),

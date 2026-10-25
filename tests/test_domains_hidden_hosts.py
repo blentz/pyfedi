@@ -18,7 +18,7 @@ pytestmark = pytest.mark.usefixtures('site')
 
 @pytest.fixture
 def links(scene):  # noqa: F811
-    """The onion's post links to the onion, and a hell.cloud post to an ordinary site, each filed under its host."""
+    """The onion's post links to the onion, and a first-domain post to an ordinary site, each filed under its host."""
     onion_host, ordinary = Domain(name=ONION, post_count=1), Domain(name='example.com', post_count=1)
     db.session.add_all([onion_host, ordinary])
     db.session.flush()
