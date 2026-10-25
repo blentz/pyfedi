@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A second federating domain is a complete, separate ActivityPub server to the fediverse: its actors, objects, activities, keys, discovery documents, inbox and media all live on its own domain, and nothing it federates names hell.cloud.
+**Goal:** A second federating domain is a complete, separate ActivityPub server to the fediverse: its actors, objects, activities, keys, discovery documents, inbox and media all live on its own domain, and nothing it federates names the first domain.
 
-**Architecture:** Every federated URL is built from its *owner's* domain, never from `SERVER_URL`/`SERVER_NAME` or the request host. One module, `app/federation_urls.py`, owns the rules: `owner_domain(obj)` (user/community → its `site_domain_id`; post/reply/PM/vote → its author's; feed → the default), `owner_base(obj)`, `activity_id(verb, owner)`, and the instance actor's URL and key per domain. hell.cloud's outputs come out byte-identical because the default domain's base is `SERVER_URL` exactly (C1's `domain_base_url`). A source-scan gate forbids new `SERVER_URL`/`SERVER_NAME` in federated-id construction.
+**Architecture:** Every federated URL is built from its *owner's* domain, never from `SERVER_URL`/`SERVER_NAME` or the request host. One module, `app/federation_urls.py`, owns the rules: `owner_domain(obj)` (user/community → its `site_domain_id`; post/reply/PM/vote → its author's; feed → the default), `owner_base(obj)`, `activity_id(verb, owner)`, and the instance actor's URL and key per domain. The first domain's outputs come out byte-identical because the default domain's base is `SERVER_URL` exactly (C1's `domain_base_url`). A source-scan gate forbids new `SERVER_URL`/`SERVER_NAME` in federated-id construction.
 
 **Tech Stack:** Flask, SQLAlchemy/Postgres, Alembic, Celery, cryptography (RSA keys), pytest (`./run_tests.sh`).
 
@@ -12,9 +12,9 @@
 
 ## Global Constraints
 
-- Owner ruling 2026-10-22 ("Own domain only"): everything a sister domain's actors and content send or publish uses its own domain — actor and object ids, activity ids, inbox/sharedInbox, keys and keyId, media URLs, User-Agent, site info (NodeInfo, `/api/v1/instance`, `/api/v3/site`). Nothing it federates names hell.cloud.
+- Owner ruling 2026-10-22 ("Own domain only"): everything a sister domain's actors and content send or publish uses its own domain — actor and object ids, activity ids, inbox/sharedInbox, keys and keyId, media URLs, User-Agent, site info (NodeInfo, `/api/v1/instance`, `/api/v3/site`). Nothing it federates names the first domain.
 - Owner ruling 2026-10-22 ("Ship dark"): no live second domain yet. The Domains form starts accepting `federates=True` for a non-default domain; live checks happen when the owner adds one.
-- hell.cloud byte-identical: its actor, instance actor (`/actor`, `/`), WebFinger, host-meta, community, user and feed documents, and the shape of every id it emits are unchanged; NodeInfo may differ only in counts. Existing stored ids are never rewritten.
+- The first domain byte-identical: its actor, instance actor (`/actor`, `/`), WebFinger, host-meta, community, user and feed documents, and the shape of every id it emits are unchanged; NodeInfo may differ only in counts. Existing stored ids are never rewritten.
 - A post's or comment's object id is on its author's home domain, whatever community it is in (spec §3.1); a fetch of `/post/N` or `/comment/N` through another of our domains redirects to that id.
 - The default domain's instance actor keeps `Site` row 1's key pair; every other federating domain gets its own pair, made when the row is created (Task 1 migration backfills existing rows).
 - Feeds stay on the default domain (global names, ruled in C1).
@@ -25,11 +25,11 @@
 
 ## Review Focus
 
-1. A hell.cloud user replies in a shop.example community: the reply id is on hell.cloud, signed by the user's hell.cloud key; the community's Announce is on shop.example, signed by the community's key, with a shop.example activity id.
+1. A first-domain user replies in a shop.example community: the reply id is on the first domain, signed by the user's first-domain key; the community's Announce is on shop.example, signed by the community's key, with a shop.example activity id.
 2. A Celery task sends a shop.example user's activity: activity id, keyId, User-Agent and any embedded URLs are all shop.example.
-3. Two requests for `/.well-known/nodeinfo`, `/nodeinfo/2.1`, `/.well-known/host-meta` and a WebFinger resource on hell.cloud and on shop.example in a row: each host gets its own body (no cache bleed).
-4. A remote server fetches `https://shop.example/post/N` for a hell.cloud user's post: 302 to the hell.cloud id; and `https://hell.cloud/post/M` for a shop.example post: 302 to shop.example.
-5. An inbound activity whose target is a shop.example object is matched (the "is it ours" tests accept every federating hosted domain), stored once, and a Create for a hell.cloud post sent to both domains' inboxes is processed once.
+3. Two requests for `/.well-known/nodeinfo`, `/nodeinfo/2.1`, `/.well-known/host-meta` and a WebFinger resource on the first domain and on shop.example in a row: each host gets its own body (no cache bleed).
+4. A remote server fetches `https://shop.example/post/N` for a first-domain user's post: 302 to the first-domain id; and `https://example.org/post/M` for a shop.example post: 302 to shop.example.
+5. An inbound activity whose target is a shop.example object is matched (the "is it ours" tests accept every federating hosted domain), stored once, and a Create for a first-domain post sent to both domains' inboxes is processed once.
 
 ---
 
@@ -49,7 +49,7 @@
 ### Task 2: Actor and collection documents name their own domain
 
 **Files:** `app/activitypub/util.py:1087-1155` (`community_actor_data` hard-codes `https://{SERVER_NAME}/c/...` and sharedInbox), `app/activitypub/routes.py:545-578` (user doc `sharedInbox`, `attributionDomains`, icon/image URLs), `:635` `community_collection_id`, `:3773-3834` and `:3958/:3994` (feed docs stay default — verify, allowlist), `app/shared/tasks/groups.py:65-109` (Group Update), `app/main/routes.py:1294-1362` (`/` Application, `/actor`, `/actor/outbox` answer for the request's domain: id, key, name; the default unchanged); model fallbacks `app/models.py:1554/1558, 2313/2317, 2161, 2504` (owner's base); creation paths still on SERVER_URL: `app/cli.py:298-300, 1259-1261`, `app/dev/routes.py:49-52`, `app/admin/routes.py:1661-1667, 2697-2702` (owner's domain; feeds default).
-- Tests: for a shop.example user and community, every URL in the actor document (id, inbox, outbox, followers, following, featured, moderators, sharedInbox, publicKey id/owner, icon, image, url, attributionDomains) is on shop.example; hell.cloud's documents compare byte-for-byte to a stored golden copy (add golden-copy tests for `/u/<user>`, `/c/<community>`, `/actor`, `/` — capture them from the current code first, before any change); `/actor` on shop.example has shop's key.
+- Tests: for a shop.example user and community, every URL in the actor document (id, inbox, outbox, followers, following, featured, moderators, sharedInbox, publicKey id/owner, icon, image, url, attributionDomains) is on shop.example; the first domain's documents compare byte-for-byte to a stored golden copy (add golden-copy tests for `/u/<user>`, `/c/<community>`, `/actor`, `/` — capture them from the current code first, before any change); `/actor` on shop.example has shop's key.
 - Commit: `feat: an account's or community's ActivityPub document names its own domain (C3)`.
 
 ### Task 3: Object and activity ids live on the owner's domain
@@ -61,7 +61,7 @@
 
 ### Task 4: Discovery answers per domain
 
-**Files:** `app/activitypub/routes.py:145-280` (WebFinger: drop the C1/C2 default-only check at `:210-214`; subject `acct:{name}@{row's domain}`; only rows on the request's own domain — a shop.example resource asked of hell.cloud 404s, and vice versa; the instance-actor JRD per domain; local-only domains still 404; memo key includes the request host), `:280-378` (`/.well-known/nodeinfo`, `/nodeinfo/2.0`, `/2.1`: hrefs and counts for the request's domain — users, posts, comments on that domain's instance; caches keyed by host), `:291-310` host-meta (per host, cached per host), `:381` `/api/v1/instance` (`uri`), `:449` `/api/v3/site` and `app/activitypub/util.py:6196-6201`, `app/api/alpha/views.py:1423` (site `actor_id`/`inbox_url`/icon per domain).
+**Files:** `app/activitypub/routes.py:145-280` (WebFinger: drop the C1/C2 default-only check at `:210-214`; subject `acct:{name}@{row's domain}`; only rows on the request's own domain — a shop.example resource asked of the first domain 404s, and vice versa; the instance-actor JRD per domain; local-only domains still 404; memo key includes the request host), `:280-378` (`/.well-known/nodeinfo`, `/nodeinfo/2.0`, `/2.1`: hrefs and counts for the request's domain — users, posts, comments on that domain's instance; caches keyed by host), `:291-310` host-meta (per host, cached per host), `:381` `/api/v1/instance` (`uri`), `:449` `/api/v3/site` and `app/activitypub/util.py:6196-6201`, `app/api/alpha/views.py:1423` (site `actor_id`/`inbox_url`/icon per domain).
 - Remove the gate's `discovery: Task 4` entries.
 - Tests: Review Focus 3 (no cache bleed, both orders); WebFinger for shop.example's own user and community answers with shop subject and links, hell's answers byte-identical to the golden copy, cross-domain resources 404, onion 404; NodeInfo counts per domain; replace `test_webfinger_answers_only_for_the_default_domain` with the per-domain rule (list the test change in the report).
 - Commit: `feat: each federating domain answers WebFinger, host-meta and NodeInfo for itself (C3)`.
@@ -75,19 +75,19 @@
 
 ### Task 6: Media URLs on the owner's domain
 
-**Files:** `app/shared/media.py:127`, `app/shared/upload.py:120`, `app/shared/post.py:697`, `app/shared/tasks/media.py:234` (stored `File.source_url` for new uploads = uploader's domain base + served path); federated icon/image/attachment URLs built at serialize time for local files use the owner's base (`app/models.py:1105-1180` File helpers as needed). Existing stored URLs are not rewritten (they stay hell.cloud). Caddy already serves the same routes on every site block (piefed_routes), so the URL resolves on any federating domain.
+**Files:** `app/shared/media.py:127`, `app/shared/upload.py:120`, `app/shared/post.py:697`, `app/shared/tasks/media.py:234` (stored `File.source_url` for new uploads = uploader's domain base + served path); federated icon/image/attachment URLs built at serialize time for local files use the owner's base (`app/models.py:1105-1180` File helpers as needed). Existing stored URLs are not rewritten (they stay the first domain). Caddy already serves the same routes on every site block (piefed_routes), so the URL resolves on any federating domain.
 - Remove the gate's `media: Task 6` entries.
 - Tests: a shop user's upload stores a shop URL and the post's federated attachment names shop; a hell upload unchanged; the media route answers on the shop host (app-level).
 - Commit: `feat: a domain's uploads are linked on that domain (C3)`.
 
 ### Task 7: The admin can add a federating domain
 
-**Files:** `app/admin/routes.py:331-352` (drop the refusal of `federates=True` for non-default rows; the C2 lock on `federates` once a domain has owners stays), `Caddyfile` (a commented, ready-to-copy site block for a federating domain using `import piefed_routes`, no `Onion-Location`), `tests/test_caddyfile_routing.py` (the template parses and routes like hell.cloud's block when uncommented — test the text), `deploy/DEPLOY_GUIDE.md` "Adding a federating domain" (DNS, domain row, Caddy block, reload, first checks: WebFinger, `/actor`, NodeInfo, follow from a remote account) — `deploy/` is local-only.
+**Files:** `app/admin/routes.py:331-352` (drop the refusal of `federates=True` for non-default rows; the C2 lock on `federates` once a domain has owners stays), `Caddyfile` (a commented, ready-to-copy site block for a federating domain using `import piefed_routes`, no `Onion-Location`), `tests/test_caddyfile_routing.py` (the template parses and routes like the first domain's block when uncommented — test the text), `deploy/DEPLOY_GUIDE.md` "Adding a federating domain" (DNS, domain row, Caddy block, reload, first checks: WebFinger, `/actor`, NodeInfo, follow from a remote account) — `deploy/` is local-only.
 - Tests: the form creates a federating non-default domain with its key pair and instance row; the lock still refuses flipping `federates` on a domain with owners.
 - Commit: `feat: an admin can add a second federating domain (C3)`.
 
 ### Task 8: Deploy dark and verify (controller)
 
 - [ ] Before the push: identity before-set on prod (`/u/wakko`, WebFinger, `/c/microblogs`, `/actor`, `/`, `/.well-known/host-meta`, `/.well-known/nodeinfo`, `/nodeinfo/2.1`) to `~/backups/<date>-identity/before/`.
-- [ ] After autodeploy: `cmp` — only `updated` and NodeInfo counts differ; the migration gave no key to the default row and a key to the onion row (every non-default row gets one, in case a domain with no owners is switched to federate), and the onion's `/actor` still answers no other server; 0 tracebacks over 10 min in all app units; one hell.cloud post federates to a remote follower as before (check the outbound log / a remote copy).
+- [ ] After autodeploy: `cmp` — only `updated` and NodeInfo counts differ; the migration gave no key to the default row and a key to the onion row (every non-default row gets one, in case a domain with no owners is switched to federate), and the onion's `/actor` still answers no other server; 0 tracebacks over 10 min in all app units; one first-domain post federates to a remote follower as before (check the outbound log / a remote copy).
 - [ ] Update DEPLOY_GUIDE §11 and the memory `onion-storefront-track`; note the live second-domain checks owed when the owner adds one.

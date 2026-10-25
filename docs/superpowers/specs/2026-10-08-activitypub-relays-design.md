@@ -5,7 +5,7 @@ Status: design approved in session (2026-10-08). Fork-only work. It follows the 
 
 ## Problem
 
-The Live views work, but they are quiet. Measured on hell.cloud on 2026-10-08 at 02:36Z:
+The Live views work, but they are quiet. Measured on the first domain on 2026-10-08 at 02:36Z:
 
 | Feed | Posts in the last hour |
 |---|---|
@@ -20,7 +20,7 @@ Lemmy community re-announcing and SMTP.
 
 ## Goals
 
-- An admin can subscribe hell.cloud to relays of both common styles:
+- An admin can subscribe the first domain to relays of both common styles:
   - **Mastodon-style** relays, which forward the author's own LD-signed activity.
   - **LitePub/Pleroma-style** relays, including FediBuzz hashtag and instance relays. These send an
     `Announce` of a post URI as the relay.
@@ -28,12 +28,12 @@ Lemmy community re-announcing and SMTP.
   `/c/microblogs` and its Live view.
 - Storage stays bounded: relayed posts nobody here engaged with expire after N days.
 
-**Success:** with one busy relay subscribed, hell.cloud receives tens to hundreds of public posts a
+**Success:** with one busy relay subscribed, the first domain receives tens to hundreds of public posts a
 minute, and they stream into `/c/microblogs` Live. With no relays subscribed, behavior is unchanged.
 
 **Non-goals:**
 - per-user relay subscriptions
-- running hell.cloud as a relay for others
+- running the first domain as a relay for others
 - fetching unknown reply threads
 - relayed boosts
 - letting microblog posts into the home All/Local/Popular/Media tabs (`MICROBLOG_GATE` is unchanged)
@@ -44,7 +44,7 @@ minute, and they stream into `/c/microblogs` Live. With no relays subscribed, be
 1. **Styles:** both Mastodon-style and LitePub-style relays.
 2. **Kept content:** top-level posts only.
    - A relayed toot with no community goes to `/c/microblogs`.
-   - A relayed post addressed to a community hell.cloud already has goes to that community.
+   - A relayed post addressed to a community the first domain already has goes to that community.
    - A post addressed to an unknown community is dropped. Relays never create communities.
    - A relayed reply is kept only if its parent is already stored.
    - Relayed boosts are dropped.
@@ -363,5 +363,5 @@ Cases:
   2. Observe the Accept.
   3. Observe relayed posts arriving in `/c/microblogs` Live.
 
-  A local stack at `127.0.0.1` cannot receive deliveries from internet relays. Doing this on hell.cloud
+  A local stack at `127.0.0.1` cannot receive deliveries from internet relays. Doing this on the first domain
   needs the owner's go-ahead at that point.

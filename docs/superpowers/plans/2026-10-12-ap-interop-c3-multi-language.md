@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** An inbound post or comment that carries several languages in `contentMap`/`nameMap`/`summaryMap` keeps every variant and shows each viewer the one for their locale; hell.cloud runs its own LibreTranslate so the translate buttons work.
+**Goal:** An inbound post or comment that carries several languages in `contentMap`/`nameMap`/`summaryMap` keeps every variant and shows each viewer the one for their locale; the first domain runs its own LibreTranslate so the translate buttons work.
 
 **Architecture:** One reader (`language_variants_from`) turns the maps into a default language code plus a dict of non-default variants, stored in a nullable JSONB column `language_variants` on `post` and `post_reply`; a second (`object_language`) picks the item's `Language` from that code, replacing the four "first key of `contentMap`" sites. A new module `app/variants.py` chooses the variant for the viewer (`?lang=` first, then the locale's primary subtag) and exposes it to templates as the Jinja global `shown(item)`. The LibreTranslate container is a quadlet unit in the git-ignored `deploy/` directory, installed by the owner.
 
@@ -1205,7 +1205,7 @@ In `deploy/quadlet/pyfedi-web.container` `[Unit]`: add `Wants=pyfedi-libretransl
   - What it is for (the translate buttons) and that the site keeps running when it is down (`Wants=`, not `Requires=`).
   - `.env.docker` additions, then regenerate `.env.quadlet` as section 6 says:
     `LT_LOAD_ONLY=en,es,fr,de,pt,it,ja,nl,pl,zh`, `TRANSLATE_ENDPOINT=http://libretranslate:5000`, `TRANSLATE_KEY=`.
-  - Install: `scp deploy/quadlet/pyfedi-libretranslate.container deploy/quadlet/pyfedi-libretranslate-data.volume deploy/quadlet/pyfedi-web.container rocky@hell.cloud:` then the same `sudo install -m 644 -o root -g root ... /etc/containers/systemd/ && sudo restorecon ... && sudo systemctl daemon-reload` pattern as the existing web-unit section, then `sudo systemctl start pyfedi-libretranslate` and `sudo systemctl restart pyfedi-web`.
+  - Install: `scp deploy/quadlet/pyfedi-libretranslate.container deploy/quadlet/pyfedi-libretranslate-data.volume deploy/quadlet/pyfedi-web.container rocky@example.org:` then the same `sudo install -m 644 -o root -g root ... /etc/containers/systemd/ && sudo restorecon ... && sudo systemctl daemon-reload` pattern as the existing web-unit section, then `sudo systemctl start pyfedi-libretranslate` and `sudo systemctl restart pyfedi-web`.
   - First start downloads the models into the volume (minutes); check with `sudo podman logs -f pyfedi_libretranslate` and `curl -s http://127.0.0.1:...` is not available (no published port): use `sudo podman exec piefed_app1 curl -s http://libretranslate:5000/languages`.
   - Memory: roughly 1–2 GB with the default list; changing `LT_LOAD_ONLY` then `sudo systemctl restart pyfedi-libretranslate`.
   - The autodeploy timer does not restart it.

@@ -80,7 +80,7 @@ Anti-goals (a failure even if it "works")
   carry script and further fetches. (Claude's call.)
 - Size caps per file (Claude's call, admin settings): images 20 MiB, video/audio 500 MiB (the upload limit).
 - No cookies are sent, and no `Referer`. The User-Agent is the normal PieFed one, the same as federation fetches.
-  Remote servers see hell.cloud's IP, as they already do for federation. They never see a Tor exit or a visitor.
+  Remote servers see the first domain's IP, as they already do for federation. They never see a Tor exit or a visitor.
 - **Images: fetched in the request** on a cache miss, with a 15 s deadline, but **at most 2 in-request fills at
   once** across all workers (a Redis semaphore). A miss beyond that is queued to Celery like video and answers 503,
   so one cold page of 29 images cannot hold the site's 8 request slots. (Claude's call.)

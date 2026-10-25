@@ -5,7 +5,7 @@ Status: design approved in conversation; spec awaiting owner review
 
 ## 1. Goal
 
-A user on Mastodon, PeerTube or Castopod follows a hell.cloud user or community and
+A user on Mastodon, PeerTube or Castopod follows a first-domain user or community and
 sees its content in their own app as if a native account had posted it:
 
 | Local content | Remote target | Native display means |
@@ -20,7 +20,7 @@ Replies, likes and boosts from those apps come back into the post's PieFed threa
 
 - R1. Success means native display in the remote app (not only reachability by link or search).
 - R2. Verification runs against local containers of each target app, not public servers.
-- R3. Only video files uploaded to hell.cloud federate as PeerTube `Video`. Link-only video
+- R3. Only video files uploaded to the first domain federate as PeerTube `Video`. Link-only video
   posts (YouTube, remote `.mp4` URLs) keep federating as today (`Page` + `Link`).
 - R4. A local podcast is a community of kind `podcast`. Each post carrying uploaded audio is
   one episode, and the community actor is the podcast.
@@ -839,13 +839,13 @@ Anonymous visitors get 403 for remote videos of a host the instance does not fol
 (`server/core/middlewares/validators/videos/videos.ts:298-305`); this is PeerTube's default and applies to any
 remote video.
 
-Production check (2026-10-15): `https://hell.cloud/static/media/posts/...` is served by gunicorn behind Caddy
+Production check (2026-10-15): `https://example.org/static/media/posts/...` is served by gunicorn behind Caddy
 (`server: gunicorn`, `via: 1.1 Caddy`), not by S3 or a Caddy file server. It answers with
 `access-control-allow-origin: *` and `accept-ranges: bytes`, and a `Range` request gets 206. In Chromium
 (Playwright MCP) on `https://example.com`, a `mode: 'cors'` fetch with `Range: bytes=0-1023` returned 206 and
 1024 bytes, and an image loaded with `crossOrigin = 'anonymous'` drew to a canvas that stayed readable. The
 header comes from the global `after_request` hook (`app/request_hooks.py:149`), so it covers every Flask-served
-media type, including video. hell.cloud has no local video yet, so a video file was not loaded.
+media type, including video. The first domain has no local video yet, so a video file was not loaded.
 
 ### 11.4 Inbound
 

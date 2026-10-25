@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let an admin subscribe hell.cloud to Mastodon-style and LitePub/FediBuzz-style ActivityPub relays. Relayed public top-level posts land in `/c/microblogs` (and its Live view) and expire unless someone engages with them.
+**Goal:** Let an admin subscribe the first domain to Mastodon-style and LitePub/FediBuzz-style ActivityPub relays. Relayed public top-level posts land in `/c/microblogs` (and its Live view) and expire unless someone engages with them.
 
 **Architecture:**
 - **New package:** `app/relays/` holds the code: context, subscribe, inbound, expiry, admin views, forms and CLI.
@@ -1295,7 +1295,7 @@ Expected: all three commands succeed.
 - [ ] **Step 5: Real federation (verification, not a gate; needs the owner's go-ahead)**
 
 A local stack at `127.0.0.1` cannot receive deliveries from internet relays. Report that Steps 1-4 are done, and ask the owner whether to:
-- deploy the branch to hell.cloud;
+- deploy the branch to the first domain;
 - subscribe it to one Mastodon-style relay and one FediBuzz tag relay with `flask relays add <url>`;
 - watch `/admin/federation/relays` for `accepted`, and `/c/microblogs?sort=live` for relayed posts.
 

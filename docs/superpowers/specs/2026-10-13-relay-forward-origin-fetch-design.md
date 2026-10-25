@@ -15,7 +15,7 @@ against the activity actor's key (`verify_with_key_refresh(request, actor, POST_
   not verify, is answered **400** (`Could not verify HTTP signature: Signature mismatch` /
   `Could not verify LD signature: …`). `relay_for_forwarded(request)` is consulted only after the fallback succeeds.
 
-Measured on hell.cloud, 2026-10-11..13:
+Measured on the first domain, 2026-10-11..13:
 
 - relay.toot.io (933 subscribers): 20,666 POSTs answered 200, 5,366 answered 400 in 48 h — about 20 % of its
   deliveries, and their content, are lost.
