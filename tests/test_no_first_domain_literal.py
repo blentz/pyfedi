@@ -2,10 +2,11 @@
 
 The repository must work for any operator's domain, so the first domain's host
 is written nowhere in it. Writing it here would defeat the point, so this file
-holds only the SHA-256 of the host. Every host-like token on every line of every
-tracked file is hashed, and so is every dot-suffix of it (`www.<host>` hashes
-`www.<host>`, `<host>`, and the top-level label), so a sub-host or an e-mail
-address on the domain is caught too.
+holds only the SHA-256 of the host. In every host-like token on every line of
+every tracked file, every candidate that starts and ends at a `.`/`-` boundary
+(or at the token's own start or end) and has the host's length is hashed, so a
+sub-host (`www.<host>`), an e-mail address on the domain, or the host inside a
+longer token (`x-<host>-y`) is caught too.
 
 A hit is reported as `path:line`. Tracked files are listed with `git ls-files`;
 if git cannot run, the guard fails rather than skipping.
