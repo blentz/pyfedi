@@ -55,6 +55,29 @@ def test_blank_fields_inherit_per_field(two_domains, site_values):
     assert own_branding(onion).name == 'Onion name'
 
 
+ICON_FIELDS = ('logo_180', 'logo_152', 'logo_32', 'logo_16')
+
+
+def test_an_own_logo_takes_its_icon_sizes_from_its_own_row_only(two_domains, site_values):
+    """A domain with a logo of its own never shows it beside the first domain's icons: each icon size is its own, and
+    a blank one is PieFed's default (the page's fallback), as the manifest's icons are. An SVG upload stores no sizes."""
+    _default, onion = two_domains.domains
+    set_branding(onion, logo='/static/media/logo_Own01.svg', logo_180='', logo_152=None, logo_32='', logo_16='')
+    effective = branding_for(onion)
+    assert effective.logo == '/static/media/logo_Own01.svg'
+    assert [getattr(effective, field) for field in ICON_FIELDS] == ['', '', '', '']
+    set_branding(onion, logo_180='/static/media/logo_Own01_180.png')
+    assert branding_for(onion).logo_180 == '/static/media/logo_Own01_180.png'
+    assert branding_for(onion).logo_32 == ''
+
+
+def test_a_domain_with_no_logo_of_its_own_inherits_each_icon_size(two_domains, site_values):
+    _default, onion = two_domains.domains
+    set_branding(onion, logo='', logo_32='own32.png')
+    assert [getattr(branding_for(onion), field) for field in ICON_FIELDS] == \
+        [site_values['logo_180'], site_values['logo_152'], 'own32.png', site_values['logo_16']]
+
+
 def test_a_domain_with_no_row_is_the_site(two_domains, site_values):
     assert branding_for(two_domains.domains[1])._asdict() == site_values
 

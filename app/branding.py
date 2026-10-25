@@ -48,11 +48,24 @@ def own_value(domain: storefront.DomainInfo, field: str) -> str:
     return (getattr(row, field) if row is not None else None) or ''
 
 
+# A logo's sized copies: a domain with a logo of its own shows only its own (spec §5, how a blank logo falls back)
+_ICON_FIELDS = frozenset({'logo_180', 'logo_152', 'logo_32', 'logo_16'})
+
+
 @cache.memoize(timeout=300, make_name=shaped_memo_name)
 def _effective(site_domain_id: int | None, is_default: bool) -> Branding:
+    """Each field the row sets, else Site's. A row with its own `logo` takes its icon sizes from itself alone: a
+    blank size is PieFed's default, as the manifest's icons are, never the first domain's icon beside the domain's
+    logo."""
     site = db.session.get(models.Site, 1)
     row = None if is_default else db.session.get(models.DomainBranding, site_domain_id)
-    return Branding(*(getattr(row, field, None) or getattr(site, field) or '' for field in Branding._fields))
+    own_logo = bool(getattr(row, 'logo', None))
+
+    def value(field):
+        if own_logo and field in _ICON_FIELDS:
+            return getattr(row, field) or ''
+        return getattr(row, field, None) or getattr(site, field) or ''
+    return Branding(*(value(field) for field in Branding._fields))
 
 
 def branding_for(domain: storefront.DomainInfo) -> Branding:
