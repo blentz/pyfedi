@@ -301,11 +301,13 @@ def remove_superseded_logos(paths: list[str | None]) -> None:
 
 
 def offsite_by_field(own_host: str, css: str = '', sidebar_html: str = '', about_html: str = '',
-                     logos: list[str] = ()) -> dict[str, list[str]]:
+                     logos: list[str] = (), description: str = '') -> dict[str, list[str]]:
     """Each branding form field with an off-site reference (spec §3.4), and its references. The sidebar and About are
-    checked as the HTML made from their Markdown: a Markdown image is not HTML, the HTML it becomes loads. CSS is checked
-    as HTML too, for markup that would load were its style element ever closed (app/branding.py)."""
-    found = {'additional_css': offsite_references(css=css, html=css, own_host=own_host),
+    checked as the HTML made from their Markdown: a Markdown image is not HTML, the HTML it becomes loads. The tagline
+    is checked as HTML: pages write it as it is stored. CSS is checked as HTML too, for markup that would load were its
+    style element ever closed (app/branding.py)."""
+    found = {'description': offsite_references(html=description, own_host=own_host),
+             'additional_css': offsite_references(css=css, html=css, own_host=own_host),
              'sidebar': offsite_references(html=sidebar_html, own_host=own_host),
              'about': offsite_references(html=about_html, own_host=own_host),
              'logo': offsite_references(urls=logos, own_host=own_host)}
@@ -393,7 +395,7 @@ def admin_site():
         set_setting('announcement_html', markdown_to_html(form.announcement.data, anchors_new_tab=False, a_target=""))
         flash(_('Settings saved.'))
         flash_offsite_warning(offsite_by_field(default_domain().domain, sidebar_html=site.sidebar_html,
-                                               about_html=site.about_html))
+                                               about_html=site.about_html, description=site.description or ''))
     elif request.method == 'GET':
         form.name.data = site.name
         form.description.data = site.description
@@ -478,7 +480,8 @@ def admin_domain_branding(domain_id):
         replacing = uploading or form.remove_logo.data
         # The logo the row keeps when it is not replaced. A new upload is this site's own media: never off-site.
         kept_logos = [] if replacing or branding is None else [getattr(branding, field) or '' for field in LOGO_FIELDS]
-        found = offsite_by_field(row.domain, values['additional_css'], sidebar_html, about_html, kept_logos)
+        found = offsite_by_field(row.domain, values['additional_css'], sidebar_html, about_html, kept_logos,
+                                 values['description'])
         if found and row.is_onion:
             # The onion never loads anything off the onion (spec §3.4): refused, and nothing written
             for field, references in found.items():
