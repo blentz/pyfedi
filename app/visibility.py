@@ -87,10 +87,14 @@ def is_open(obj) -> bool:
 
 def post_withheld_from_peers(post) -> int | None:
     """The status our ActivityPub post routes refuse `post` with, whoever asks: 404 for a local-only post, 403 for
-    one in a local-only or private community or not yet published. None when they go on to their other checks."""
+    one in a local-only or private community or not yet published. None when they go on to their other checks.
+    community_id is nullable: a post with no community is withheld by none."""
     if post.local_only:
         return 404
-    if post.community.local_only or post.community.private or post.status < POST_STATUS_PUBLISHED:
+    community = post.community
+    if community is not None and (community.local_only or community.private):
+        return 403
+    if post.status < POST_STATUS_PUBLISHED:
         return 403
     return None
 
@@ -99,7 +103,8 @@ def post_served_to_any_peer(post) -> bool:
     """Whether our ActivityPub post route serves `post` to a peer that proves nothing about itself: not withheld
     (`post_withheld_from_peers`), public or unlisted, and not deleted (a deleted one is a Tombstone). A post on one of
     our domains found by URL is shown only then, as it was when that URL was fetched from our own route (plan C4)."""
-    return post_withheld_from_peers(post) is None and post.visibility in OPEN_VISIBILITIES and not post.deleted
+    # visibility is NOT NULL, so None is only an unflushed row: is_open counts it open, as can_view does
+    return post_withheld_from_peers(post) is None and is_open(post) and not post.deleted
 
 
 def follower_instances(user) -> list:
