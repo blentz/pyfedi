@@ -435,6 +435,46 @@ def test_a_path_the_form_names_is_never_removed(admin, domains, media):
     assert {'logo_Formy.png', 'logo_Formy_180.png'} <= media_files(media)
 
 
+def delete_domain(admin, domain):
+    client, token = admin
+    forget_login()
+    return client.post(f'/admin/domains/{domain.id}/delete', data={'csrf_token': token})
+
+
+def test_deleting_a_domain_removes_its_logo_files(admin, domains, media):
+    save(admin, domains['shop'], logo=(io.BytesIO(png()), 'shop.png'))
+    shops = media_files(media)
+    assert len(shops) == 7
+    save(admin, domains['onion'], logo=(io.BytesIO(png()), 'onion.png'))
+    onions = media_files(media) - shops
+    write_media(media, 'logo_Site1.png')
+    site = db.session.get(Site, 1)
+    site.logo = '/static/media/logo_Site1.png'
+    db.session.commit()
+    assert delete_domain(admin, domains['shop']).status_code == 302
+    assert db.session.get(SiteDomain, domains['shop'].id) is None
+    assert media_files(media) == onions | {'logo_Site1.png'}   # the other domain's and Site's stay
+
+
+def test_deleting_a_domain_never_removes_a_file_something_else_names(admin, domains, media):
+    """The same guards as a replaced logo: a file Site names, a symlink, a name no upload gives, all stay."""
+    write_media(media, 'logo_Site1.png', 'logo_Site1_32.png')
+    (media / 'logo_Link1.png').symlink_to(media / 'logo_Site1_32.png')
+    own_logo(domains['shop'], logo='/static/media/logo_Site1.png', logo_32='/static/media/logo_Link1.png',
+             logo_16='/static/media/../media/logo_Site1_32.png')
+    site = db.session.get(Site, 1)
+    site.logo = '/static/media/logo_Site1.png'
+    db.session.commit()
+    assert delete_domain(admin, domains['shop']).status_code == 302
+    assert media_files(media) == {'logo_Site1.png', 'logo_Site1_32.png', 'logo_Link1.png'}
+
+
+def test_deleting_a_domain_with_no_branding_removes_nothing(admin, domains, media):
+    write_media(media, 'logo_Site1.png')
+    assert delete_domain(admin, domains['shop']).status_code == 302
+    assert media_files(media) == {'logo_Site1.png'}
+
+
 def test_a_previous_file_already_gone_is_no_error(admin, domains, media):
     own_logo(domains['shop'], logo='/static/media/logo_Gone1.png', logo_180='/static/media/logo_Gone1_180.png')
     write_media(media, 'logo_Gone1_180.png')

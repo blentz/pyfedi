@@ -448,11 +448,15 @@ def admin_domains_delete(domain_id):
                 'deleted.'), 'error')
     else:
         instance_id = row.instance_id
+        # Its branding row goes with it: the files its logo upload wrote go once nothing names them
+        branding = db.session.get(DomainBranding, row.id)
+        logos = [getattr(branding, field) for field in LOGO_FIELDS] if branding is not None else []
         db.session.delete(row)
         db.session.flush()
         db.session.query(Instance).filter(Instance.id == instance_id).delete(synchronize_session='fetch')
         db.session.commit()
         clear_domain_cache()
+        remove_superseded_logos(logos)
         flash(_('Domain deleted.'))
     return redirect(url_for('admin.admin_domains'))
 
