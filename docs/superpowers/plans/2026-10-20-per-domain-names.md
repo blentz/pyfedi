@@ -47,34 +47,34 @@ Each line's test is in the owning task (Tasks 2, 4, 3, 3, 2).
   - `split_local_name(raw: str) -> tuple[str, DomainInfo] | None`: strips white space and one leading `@` or `!`. A bare `name` gives `(name, current_storefront())`. `name@host` gives `(name, domain_for_host(host))` when the host is hosted. It gives None for an unhosted host, an empty name or more than one `@`.
   - `local_named(model, name: str, domain: DomainInfo)`: a SQLAlchemy clause for `model` in (`User`, `Community`): lower-case name equal (`User.user_name`, `Community.name`), `ap_id IS NULL`, `on_domain(domain, model)`.
   - `local_path_name(obj) -> str`: `obj.user_name` / `obj.name` when `obj.home_domain()` (both `User` and `Community` have it) is the current storefront's domain, else `f'{name}@{domain.domain}'`.
-  - The fixture `two_domains(app, db_session)` yields `(hell, onion)` as `DomainInfo` plus a factory `local_user(name, domain)` / `local_community(name, domain)` that inserts the row directly (creation refuses the duplicate until Task 5).
+  - The fixture `two_domains(app, db_session)` yields `(first, onion)` as `DomainInfo` plus a factory `local_user(name, domain)` / `local_community(name, domain)` that inserts the row directly (creation refuses the duplicate until Task 5).
 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
 @pytest.mark.parametrize('raw', ['bob', ' bob ', '@bob'])
 def test_a_bare_name_is_on_the_storefront(app, two_domains, raw):
-    hell, onion = two_domains.domains
+    first, onion = two_domains.domains
     with onion_request(app):                       # helper from tests/two_domains.py: g.storefront = onion
         assert split_local_name(raw) == ('bob', onion)
 
-@pytest.mark.parametrize('raw,name', [(f'bob@{HELL.upper()}', 'bob'), (f'@Bob@{HELL}', 'Bob'), (f'!bob@{HELL}', 'bob')])
+@pytest.mark.parametrize('raw,name', [(f'bob@{FIRST.upper()}', 'bob'), (f'@Bob@{FIRST}', 'Bob'), (f'!bob@{FIRST}', 'bob')])
 def test_a_hosted_handle_is_on_its_hosts_domain(app, two_domains, raw, name):
-    hell, onion = two_domains.domains
+    first, onion = two_domains.domains
     with onion_request(app):
-        assert split_local_name(raw) == (name, hell)      # the name as typed, less its prefix
+        assert split_local_name(raw) == (name, first)      # the name as typed, less its prefix
 
 @pytest.mark.parametrize('raw', ['bob@mastodon.social', '', '@', 'a@b@c'])
 def test_anything_else_is_none(app, two_domains, raw): assert split_local_name(raw) is None
 
 def test_local_named_finds_only_that_domains_row(app, two_domains):
-    hell, onion = two_domains.domains
-    hb, ob = two_domains.local_user('bob', hell), two_domains.local_user('bob', onion)
+    first, onion = two_domains.domains
+    hb, ob = two_domains.local_user('bob', first), two_domains.local_user('bob', onion)
     assert User.query.filter(local_named(User, 'BOB', onion)).all() == [ob]
-    assert User.query.filter(local_named(User, 'bob', hell)).all() == [hb]
+    assert User.query.filter(local_named(User, 'bob', first)).all() == [hb]
 
 def test_local_path_name_qualifies_only_off_its_own_domain(app, two_domains):
-    # hell's bob on hell -> 'bob'; on the onion -> 'bob@<hell host>'; onion's bob on hell -> 'bob@<onion host>'
+    # The first domain's bob on the first domain -> 'bob'; on the onion -> 'bob@<first host>'; onion's bob on the first domain -> 'bob@<onion host>'
 ```
 
 - [ ] **Step 2: Run to verify failure** — `./run_tests.sh tests/test_local_names.py -q`; expected: FAIL, `ModuleNotFoundError: app.local_names`.
@@ -96,19 +96,19 @@ def test_local_path_name_qualifies_only_off_its_own_domain(app, two_domains):
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-def test_links_on_the_default_storefront_are_unchanged(app, two_domains):   # hell's bob -> 'bob'; lemmy_link 'bob@<hell>'
-def test_on_the_onion_a_hell_account_links_with_its_domain(app, two_domains):  # hell's bob.link() == 'bob@<hell>'
-def test_on_hell_an_onion_community_links_with_its_domain(app, two_domains):   # onion's art.link() == 'art@<onion>'
+def test_links_on_the_default_storefront_are_unchanged(app, two_domains):   # The first domain's bob -> 'bob'; lemmy_link 'bob@<first>'
+def test_on_the_onion_a_first_account_links_with_its_domain(app, two_domains):  # The first domain's bob.link() == 'bob@<first>'
+def test_on_first_an_onion_community_links_with_its_domain(app, two_domains):   # onion's art.link() == 'art@<onion>'
 
-def test_a_stored_hell_profile_link_on_the_onion_keeps_its_account(app, two_domains):
-    html = f'<a href="https://{HELL}/u/bob">bob</a> <a href="https://{HELL}/c/art?x=1#y">art</a> <a href="https://{HELL}/post/5">p</a>'
+def test_a_stored_first_profile_link_on_the_onion_keeps_its_account(app, two_domains):
+    html = f'<a href="https://{FIRST}/u/bob">bob</a> <a href="https://{FIRST}/c/art?x=1#y">art</a> <a href="https://{FIRST}/post/5">p</a>'
     with onion_request(app):
         out = storefront_html(html)
-    assert f'http://{ONION}/u/bob@{HELL}"' in out and f'http://{ONION}/c/art@{HELL}?x=1#y"' in out
+    assert f'http://{ONION}/u/bob@{FIRST}"' in out and f'http://{ONION}/c/art@{FIRST}?x=1#y"' in out
     assert f'http://{ONION}/post/5"' in out
 
 def test_an_onion_recipients_email_links_by_their_domain(app, two_domains):
-    # under home_storefront(onion account) (plan B pin), outside a request: an onion user links bare, a hell user with @<hell>
+    # under home_storefront(onion account) (plan B pin), outside a request: an onion user links bare, a first-domain user with @<first>
 ```
 
 - [ ] **Step 2: Run to verify failure** — `./run_tests.sh tests/test_per_domain_links.py -q`; FAIL.
@@ -137,14 +137,14 @@ def test_an_onion_recipients_email_links_by_their_domain(app, two_domains):
 
 ```python
 @pytest.mark.parametrize('path', ['/u/bob', '/u/bob/outbox', '/u/bob/followers', '/c/art', '/c/art/outbox', '/c/art/featured'])
-def test_hell_ap_documents_name_hells_row(app, two_domains, path):
-    # AP GET on the hell host: the document's id is hell's row's, never the onion's (two_domains has bob and art on both)
+def test_first_ap_documents_name_first_domains_row(app, two_domains, path):
+    # AP GET on the first-domain host: the document's id is the first domain's row's, never the onion's (two_domains has bob and art on both)
 
 def test_webfinger_answers_for_the_hosts_own_account(app, two_domains):
-    # acct:bob@<hell> -> hell bob's self link; byte-identical to the answer with no onion bob present
+    # acct:bob@<first> -> the first domain bob's self link; byte-identical to the answer with no onion bob present
 
 def test_a_hosted_handle_with_no_account_is_404_and_fetches_nothing(app, two_domains, no_http):   # /u/nobody@<onion>
-def test_an_uppercase_handle_resolves(app, two_domains):   # /u/BOB@<HELL> HTML on the onion -> hell's bob
+def test_an_uppercase_handle_resolves(app, two_domains):   # /u/BOB@<FIRST> HTML on the onion -> the first domain's bob
 ```
 
 `no_http` is the `requests` recorder in `tests/test_resolve_object_domains.py`, moved into `tests/two_domains.py`.
@@ -172,8 +172,8 @@ def test_an_uppercase_handle_resolves(app, two_domains):   # /u/BOB@<HELL> HTML 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-def test_on_the_onion_a_hell_profiles_buttons_act_on_hells_account(app, two_domains, onion_login):
-    # logged in on the onion, POST /u/bob@<hell>/block blocks hell's bob; POST /u/bob/block blocks the onion's bob
+def test_on_the_onion_a_first_profiles_buttons_act_on_first_domains_account(app, two_domains, onion_login):
+    # logged in on the onion, POST /u/bob@<first>/block blocks the first domain's bob; POST /u/bob/block blocks the onion's bob
 
 def test_api_login_with_a_bare_name_is_the_storefronts_account(app, two_domains):    # different passwords per bob
 def test_api_login_with_an_unhosted_handle_fails_like_a_wrong_password(app, two_domains):
@@ -208,8 +208,8 @@ def test_no_bare_name_lookup_is_left_unscoped():          # tests/test_local_nam
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-def test_an_admin_can_add_an_onion_bob_when_hell_has_one(app, two_domains, admin_login):   # admin add-user, domain = onion
-def test_registering_hell_bob_works_when_only_the_onion_has_a_bob(app, two_domains):      # public registration on hell; the onion's bob was admin-added
+def test_an_admin_can_add_an_onion_bob_when_first_has_one(app, two_domains, admin_login):   # admin add-user, domain = onion
+def test_registering_first_bob_works_when_only_the_onion_has_a_bob(app, two_domains):      # public registration on the first domain; the onion's bob was admin-added
 def test_a_name_is_still_refused_on_its_own_domain(app, two_domains):                        # every path above, same domain -> refused
 def test_a_community_name_on_one_domain_does_not_block_the_other(app, two_domains):
 def test_a_feed_name_is_still_global(app, two_domains):

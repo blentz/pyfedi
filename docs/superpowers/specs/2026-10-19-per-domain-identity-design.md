@@ -5,7 +5,7 @@ Date: 2026-10-19. Project 3 of `docs/superpowers/specs/2026-10-17-onion-storefro
 
 ## 1. Intent
 
-The first domain will soon add more hell.* domains, and it already serves the onion. Today every domain is a storefront
+The first domain will soon add more sister domains, and it already serves the onion. Today every domain is a storefront
 for the one first-domain identity: an account is a first-domain account wherever it logs in. The owner wants each domain
 to be its own instance to the people on it and to the fediverse, while all of them share one server, one database
 and one set of site settings.
@@ -18,9 +18,9 @@ local-only: nothing they do leaves this server. And nothing records that anyone 
 
 Goals (owner rulings 2026-10-19 unless marked)
 - **Each domain is its own identity space.** An account and a community belong to exactly one domain, permanently.
-  `wakko@example.org` and `wakko@hell.foo` can be two different people (§6, decided 2026-10-17).
+  `wakko@example.org` and `wakko@sister.example` can be two different people (§6, decided 2026-10-17).
 - **Per-domain federation.** A domain with `federates` on publishes its own actors under its own host:
-  `https://hell.foo/u/alice`, `!art@hell.foo`, its own WebFinger, NodeInfo, instance actor and shared inbox. To the
+  `https://sister.example/u/alice`, `!art@sister.example`, its own WebFinger, NodeInfo, instance actor and shared inbox. To the
   fediverse each domain is a separate instance.
 - **Federation-off domains are local-only.** Their accounts' posts, comments, votes and follows never leave this
   server. Their actors are not published (§3.4).
@@ -105,7 +105,7 @@ Anti-goals (a failure even if it "works")
   is stored once however many of our domains' actors it addresses.
 - Outbound: an activity is signed with its actor's key and its `keyId` is the actor's own ID, on the actor's domain.
   Instance-level activities (relay subscriptions, instance-actor fetches) use the domain's instance actor.
-- **Between sister domains, no HTTP.** A hell.foo user commenting on a first-domain post is stored directly. Remote
+- **Between sister domains, no HTTP.** A sister.example user commenting on a first-domain post is stored directly. Remote
   followers of either side get the activity from the originating domain's actor, exactly as if the sister had
   received it over the network. (Owner: "locally pseudo-federated".)
 - Relays stay subscribed by the default domain only. Relayed content lands in the shared database, so every domain
@@ -148,7 +148,7 @@ Anti-goals (a failure even if it "works")
 ### 3.6 Existing data and deploy
 - One migration adds the ownership columns and backfills every local user and community to the default domain,
   plus per-domain unique indexes. The first domain's rows, IDs and keys are unchanged.
-- Adding a hell.* domain is an admin row plus a Caddy site block plus DNS. The deploy guide gets the steps.
+- Adding a sister domain is an admin row plus a Caddy site block plus DNS. The deploy guide gets the steps.
 
 ### 3.7 Access logging (owner ruling 2026-10-19)
 - The gunicorn access log is off unless a config flag turns it on (Claude's call: an environment variable in
