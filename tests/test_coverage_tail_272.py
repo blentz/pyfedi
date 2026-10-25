@@ -229,6 +229,7 @@ class TestWhenTheBackfillFails:
 
         # PERM-5: the moderators collection is read only from the community's own host
         env.community.ap_profile_id = 'https://peer.example/c/x'
+        env.community.ap_id = 'x@peer.example'   # a remote community: a local one is never backfilled (plan C4)
         env.community.ap_moderators_url = 'https://peer.example/c/x/moderators'
         db.session.commit()
 
@@ -254,6 +255,7 @@ class TestWhenTheBackfillFails:
         db.session.commit()
         # PERM-5: attributedTo moderators must be on the community's own host
         env.community.ap_profile_id = 'https://peer.example/c/x'
+        env.community.ap_id = 'x@peer.example'   # a remote community: a local one is never backfilled (plan C4)
         env.community.ap_moderators_url = None
         db.session.commit()
         actors = iter([first, second])

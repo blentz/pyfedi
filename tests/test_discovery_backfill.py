@@ -89,6 +89,7 @@ def test_the_backfill_task_reads_the_actor_and_runs_the_community_backfill(app, 
     make_user(make_instance('world.example', software='piefed'), 'zqfounder', local=True)   # community.user_id 1
     community = make_community('zqbackfill', host='tube.example')
     community.ap_profile_id = 'https://tube.example/video-channels/zqbackfill'
+    community.ap_id = 'zqbackfill@tube.example'   # a remote community: a local one is never backfilled (plan C4)
     db.session.commit()
     actor = {'id': community.ap_profile_id, 'type': 'Group', 'attributedTo': [{'type': 'Person', 'id': 'x'}]}
     fetched, ran = [], []
@@ -136,6 +137,7 @@ def test_a_queued_backfill_is_in_progress_until_the_task_ends(app, db_session, s
 def test_a_failing_backfill_still_ends_the_in_progress_state(app, db_session, site, real_cache, monkeypatch):
     make_user(make_instance('world.example', software='piefed'), 'zqfounder', local=True)
     community = make_community('zqbackfill', host='tube.example')
+    community.ap_id = 'zqbackfill@tube.example'   # a remote community: a local one is never backfilled (plan C4)
     db.session.commit()
     monkeypatch.setattr(backfill.backfill_discovered_community, 'delay', lambda community_id: None)
     monkeypatch.setattr(backfill, 'remote_object_to_json', lambda uri: None)

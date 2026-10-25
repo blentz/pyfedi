@@ -838,6 +838,7 @@ class TestModeratorsFromAttributedTo:
         instance = make_instance(PEER, software='lemmy')
         make_user(instance, 'community_owner')
         community = make_community(host=PEER)
+        community.ap_id = f'microblogs@{PEER}'   # a remote community: a local one is never backfilled (plan C4)
         community.ap_moderators_url = None
         community.ap_outbox_url = None
         alice = make_user(instance, 'alice')
@@ -944,6 +945,7 @@ class TestTheModeratorsCollection:
         instance = make_instance(PEER, software='lemmy')
         make_user(instance, 'community_owner')
         community = make_community(host=PEER)
+        community.ap_id = f'microblogs@{PEER}'   # a remote community: a local one is never backfilled (plan C4)
         community.ap_moderators_url = f'https://{PEER}/c/books/moderators'
         community.ap_outbox_url = None
         alice = make_user(instance, 'alice')

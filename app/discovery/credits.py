@@ -20,10 +20,9 @@ from app.activitypub.signature import HttpSignature
 from app.constants import AP_FETCH_ACCEPT
 from app.discovery.filters import ascii_host, clean_https_url, clean_name, url_is_excluded
 from app.discovery.podcast import podcast_community_for
-from app.local_names import local_named
-from app.federation_urls import MissingInstanceKey, instance_actor_signing
+from app.federation_urls import MissingInstanceKey, instance_actor_signing, local_object_for_url
 from app.models import Post, User
-from app.storefront import acting_as_default, default_domain
+from app.storefront import acting_as_default, default_domain, is_hosted_uri
 from app.utils import get_request_capped, get_task_session, patch_db_session
 
 MAX_FEED_BYTES = 2 * 1024 * 1024
@@ -289,14 +288,12 @@ def credit_vouches(user_id, podcast) -> bool:
 
 
 def _known_user(href: str):
-    """The User a credit's href already names: a remote account by actor id or profile URL, a local one by /u/name.
-    A profile URL is self-declared, so it names an account only on the host that serves the account's actor id."""
-    parts = urlsplit(href)
-    if (parts.hostname or '').lower() == current_app.config['SERVER_NAME'].lower():
-        local = re.fullmatch(r'/u/([A-Za-z0-9_]+)/?', parts.path)
-        if local is None:
-            return None
-        return db.session.query(User).filter(local_named(User, local.group(1), default_domain())).first()
+    """The User a credit's href already names: a remote account by actor id or profile URL; on one of our own
+    domains, the account `local_object_for_url` finds (/u/name on that domain, or a stored actor URL). A profile URL
+    is self-declared, so it names an account only on the host that serves the account's actor id."""
+    if is_hosted_uri(href):   # one of our own domains: read from the database, never fetched (plan C4)
+        found = local_object_for_url(href)
+        return found if isinstance(found, User) else None
     user = db.session.query(User).filter(User.ap_profile_id == href.lower()).first()
     if user is not None:
         return user
@@ -366,7 +363,7 @@ def verified_credit_user(href, podcast, wanted: set | None = None) -> int | None
             return known.id
         if known.ap_id is None:   # a local account: nothing remote to read
             return None
-    elif (urlsplit(href).hostname or '').lower() == current_app.config['SERVER_NAME'].lower():
+    elif is_hosted_uri(href):   # a URL of ours that names no account here: nothing to fetch
         return None
     if not ap_util.activitypub_actor.validate_remote_actor(href):   # banned or non-allowlisted hosts are not fetched
         return None

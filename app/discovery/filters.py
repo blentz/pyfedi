@@ -10,6 +10,7 @@ from flask import current_app
 
 from app import cache, db
 from app.models import Domain
+from app.storefront import is_local_host
 from app.utils import canonical_host, get_setting, instance_allowed, instance_banned, retrieve_peertube_block_list, \
     url_is_storable
 
@@ -53,10 +54,11 @@ def banned_domain_names() -> frozenset:
 
 
 def host_is_excluded(host: str, isolated: frozenset, banned_domains: frozenset | None = None) -> bool:
-    """True for an empty, isolated, banned or non-allowlisted host, or a banned Domain. `banned_domains`, when
-    given, is banned_domain_names() read up front; without it the Domain table is asked for this host alone.
-    An IPv6 literal is compared in canonical_host's spelling, the one Domain names hold it in."""
-    if not host:
+    """True for an empty, isolated, banned or non-allowlisted host, a banned Domain, or one of our own domains,
+    which discovery never fetches or follows (plan C4). `banned_domains`, when given, is banned_domain_names() read
+    up front; without it the Domain table is asked for this host alone. An IPv6 literal is compared in
+    canonical_host's spelling, the one Domain names hold it in."""
+    if not host or is_local_host(host):
         return True
     host = canonical_host(host.strip().lower())
     if host in isolated or instance_banned(host):

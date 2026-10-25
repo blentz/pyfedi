@@ -10,10 +10,11 @@ from app.activitypub.util import (claim_activity, release_activity, create_resol
                                   log_incoming_ap, remote_object_to_json)
 from app.constants import APLOG_ANNOUNCE, APLOG_CREATE, APLOG_DUPLICATE, APLOG_FAILURE, APLOG_FOLLOW, APLOG_IGNORED, APLOG_NOTYPE, APLOG_SUCCESS
 from app.discovery.instance_answers import instance_actor_url
+from app.federation_urls import local_object_for_url
 from app.models import Community, Post, PostReply, Relay, utcnow
 from app.relays import RELAY_ACCEPTED, RELAY_PENDING, RELAY_REFUSED, relay_context
 from app.relays import subscribe as relay_subscribe
-from app.storefront import acting_as_default
+from app.storefront import acting_as_default, is_hosted_uri
 from app.utils import get_task_session, instance_banned, patch_db_session
 
 
@@ -283,6 +284,11 @@ def process_relayed_announce(relay_id, object_uri):
     try:
         with patch_db_session(session):
             if _exists(object_uri):   # an item already stored is never modified by a relay
+                return
+            if is_hosted_uri(object_uri):   # ours: in the database or nowhere, never fetched from ourselves (C4)
+                if local_object_for_url(object_uri) is None:
+                    log_incoming_ap(object_uri, APLOG_ANNOUNCE, APLOG_IGNORED, None,
+                                    'relayed object on a domain of ours, not here')
                 return
             post_data = remote_object_to_json(object_uri, retry_delay=0)   # inbox processing (D775)
             if not post_data:

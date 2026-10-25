@@ -25,6 +25,7 @@ def founder(db_session):
 def channel(db_session):
     community = make_community('zqchan', host='tube.example')
     community.ap_profile_id = 'https://tube.example/video-channels/zqchan'
+    community.ap_id = 'zqchan@tube.example'   # a remote community: a local one is never backfilled (plan C4)
     community.ap_outbox_url = OUTBOX
     db.session.commit()
     return community

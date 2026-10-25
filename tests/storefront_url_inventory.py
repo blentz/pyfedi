@@ -70,10 +70,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/community/server_view_list.py': {
         'server_view_select': 1,
     },
-    'app/discovery/credits.py': {
-        '_known_user': 1,
-        'verified_credit_user': 1,
-    },
     'app/discovery/instance_answers.py': {
         'instance_actor_url': 1,
     },
