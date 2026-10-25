@@ -107,7 +107,7 @@
         {% if post and not post.deleted and not post.local_only -%}{# a link preview is fetched anonymously: 404 #}
             <link rel="alternate" type="application/json+oembed" href="{{ url_for('post.post_oembed', post_id=post.id, _external=True) }}" title="{{ post.title }}" />
         {% endif -%}
-      {% if preconnect and not low_bandwidth -%}
+      {% if preconnect and not low_bandwidth and not (g.storefront and g.storefront.is_onion) -%}{# never another host from the onion #}
         <link rel="preconnect" href='{{ preconnect }}'>
       {% endif -%}
       {% if config["S3_PUBLIC_URL"] and not low_bandwidth and not (g.storefront and g.storefront.is_onion) -%}
