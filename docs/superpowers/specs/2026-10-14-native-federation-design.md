@@ -839,7 +839,7 @@ Anonymous visitors get 403 for remote videos of a host the instance does not fol
 (`server/core/middlewares/validators/videos/videos.ts:298-305`); this is PeerTube's default and applies to any
 remote video.
 
-Production check (2026-10-15): `https://example.org/static/media/posts/...` is served by gunicorn behind Caddy
+Production check (2026-10-15): `https://<first-domain>/static/media/posts/...` is served by gunicorn behind Caddy
 (`server: gunicorn`, `via: 1.1 Caddy`), not by S3 or a Caddy file server. It answers with
 `access-control-allow-origin: *` and `accept-ranges: bytes`, and a `Range` request gets 206. In Chromium
 (Playwright MCP) on `https://example.com`, a `mode: 'cors'` fetch with `Range: bytes=0-1023` returned 206 and

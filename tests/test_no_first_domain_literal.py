@@ -16,13 +16,12 @@ import re
 import subprocess
 
 FIRST_DOMAIN_SHA256 = '040a5614839e2e53449dd77f5c05b010dd08baf2e435663d3f6aa6fb657d1594'
+# The host's length. Only a candidate of exactly this length can hash to it, so a candidate of any other
+# length is not hashed, and a long run costs one check per label instead of one per substring.
+FIRST_DOMAIN_LENGTH = 10
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HOST_LIKE = re.compile(r'[a-z0-9.-]+\.[a-z]{2,}')
-# A DNS name is at most 253 characters. HOST_LIKE backtracks quadratically over a long run of host
-# characters with no ".xx" in it (a base64 blob, an SVG path, a rule of dashes), so a run is tried only
-# when a host could fit in it.
-LONGEST_HOST = 253
+LABEL = re.compile(r'[a-z0-9]+')
 # Files are scanned as bytes: every byte that cannot be in a host name becomes a space, so `split()`
 # yields the runs of host characters. That is the one C-speed pass over 12 MB that keeps the guard
 # under its time budget; matching in Python text costs about three times as much. Upper case is
@@ -41,29 +40,42 @@ def tracked_paths(root):
     return [path.decode('utf-8', errors='surrogateescape') for path in listing.split(b'\0') if path]
 
 
+def candidates(run, length):
+    """The substrings of `run`, `length` long, that could be the host name.
+
+    A candidate starts at the run start or right after a '.' or '-', ends at the run end or right before
+    a '.' or '-', and holds a dot. So the host is found wherever it sits in a run, however long the run
+    (`--host`, `x-host`, `host-foo`, a rule of dashes with the host in it). A name that merely ends in
+    the host, with no boundary before it, is not one.
+    """
+    for label in LABEL.finditer(run):
+        start = label.start()
+        end = start + length
+        if end <= len(run) and (end == len(run) or run[end] in '.-') and '.' in run[start:end]:
+            yield run[start:end]
+
+
+def run_names_host(run, target_hash, length):
+    """True when a candidate in `run` hashes to target_hash."""
+    return any(hashlib.sha256(candidate.encode()).hexdigest() == target_hash for candidate in candidates(run, length))
+
+
 class Verdicts:
     """Which runs name the host. A run is hashed once, however many files repeat it."""
 
-    def __init__(self, target_hash):
+    def __init__(self, target_hash, length):
         self.target_hash = target_hash
+        self.length = length
         self.seen = set()
         self.named = set()
 
     def naming(self, runs):
         """The members of `runs` that name the host."""
         for run in runs.difference(self.seen):
-            if b'.' in run and run_names_host(run.decode('ascii'), self.target_hash):
+            if b'.' in run and run_names_host(run.decode('ascii'), self.target_hash, self.length):
                 self.named.add(run)
         self.seen |= runs
         return runs & self.named
-
-
-def run_names_host(run, target_hash):
-    """True when a host-like token in `run`, or any dot-suffix of one, hashes to target_hash."""
-    return len(run) <= LONGEST_HOST and any(
-        hashlib.sha256('.'.join(labels[start:]).encode()).hexdigest() == target_hash
-        for labels in (token.split('.') for token in HOST_LIKE.findall(run))
-        for start in range(len(labels)))
 
 
 def hit_lines(raw, verdicts):
@@ -75,21 +87,32 @@ def hit_lines(raw, verdicts):
             if not named.isdisjoint(runs_of(line))]
 
 
-def scan(root, paths, target_hash):
-    """`path:line` for every line of every regular file in `paths` that names the host."""
-    verdicts = Verdicts(target_hash)
+def scan(root, paths, target_hash, length):
+    """`path:line` for every line of every tracked file in `paths` that names the host.
+
+    A symlink is scanned by its link text. A path that is neither a symlink nor present is reported,
+    never skipped; a directory (a submodule) holds no tracked bytes of its own and is passed over.
+    """
+    verdicts = Verdicts(target_hash, length)
     hits = []
     for path in paths:
         full = os.path.join(root, path)
-        if os.path.islink(full) or not os.path.isfile(full):
+        if os.path.islink(full):
+            raw = os.fsencode(os.readlink(full))
+        elif not os.path.exists(full):
+            hits.append(f'{path}: tracked but missing')
             continue
-        with open(full, 'rb') as handle:
-            hits.extend(f'{path}:{number}' for number in hit_lines(handle.read(), verdicts))
+        elif not os.path.isfile(full):
+            continue
+        else:
+            with open(full, 'rb') as handle:
+                raw = handle.read()
+        hits.extend(f'{path}:{number}' for number in hit_lines(raw, verdicts))
     return hits
 
 
 def test_no_tracked_file_names_the_first_domain():
-    hits = scan(REPO_ROOT, tracked_paths(REPO_ROOT), FIRST_DOMAIN_SHA256)
+    hits = scan(REPO_ROOT, tracked_paths(REPO_ROOT), FIRST_DOMAIN_SHA256, FIRST_DOMAIN_LENGTH)
     assert not hits, 'the first domain is named at:\n' + '\n'.join(hits)
 
 
@@ -99,24 +122,35 @@ def test_the_matcher_finds_a_host_its_sub_hosts_and_mixed_case(tmp_path):
     (tmp_path / 'dirty.txt').write_text('ok\nvisit SUB.Example.ORG/x today\nmail me@example.org.\n')
     (tmp_path / 'binary.bin').write_bytes(b'\xff\xfe example.org \x00')
     (tmp_path / 'folder').mkdir()
-    (tmp_path / 'link').symlink_to(tmp_path / 'folder')
-    paths = ['clean.txt', 'dirty.txt', 'binary.bin', 'folder', 'link', 'missing.txt']
-    assert scan(str(tmp_path), paths, fixture_hash) == ['dirty.txt:2', 'dirty.txt:3', 'binary.bin:1']
+    (tmp_path / 'dirlink').symlink_to(tmp_path / 'folder')
+    (tmp_path / 'textlink').symlink_to('sub.example.org')
+    (tmp_path / 'cleanlink').symlink_to('clean.txt')
+    paths = ['clean.txt', 'dirty.txt', 'binary.bin', 'folder', 'dirlink', 'textlink', 'cleanlink']
+    assert scan(str(tmp_path), paths, fixture_hash, 11) == ['dirty.txt:2', 'dirty.txt:3', 'binary.bin:1', 'textlink:1']
+
+
+def test_a_tracked_path_missing_from_the_working_tree_is_reported(tmp_path):
+    fixture_hash = hashlib.sha256(b'example.org').hexdigest()
+    (tmp_path / 'dangling').symlink_to('nowhere')
+    assert scan(str(tmp_path), ['gone.txt', 'dangling'], fixture_hash, 11) == ['gone.txt: tracked but missing']
+
+
+def test_the_host_is_found_wherever_it_sits_in_a_run():
+    fixture_hash = hashlib.sha256(b'example.org').hexdigest()
+    named = [b'--sub.example.org', b'x-example.org', b'example.org-foo', b'-example.org-',
+             b'-.' * 200 + b'example.org', b'example.org' + b'.-' * 200, b'a.' * 300 + b'example.org.' + b'b.' * 300]
+    for line in named:
+        assert hit_lines(line, Verdicts(fixture_hash, 11)) == [1], line[:30]
+    for line in [b'notexample.org', b'example.com', b'x' * 400 + b'example.org', b'-.' * 200]:
+        assert hit_lines(line, Verdicts(fixture_hash, 11)) == [], line[:30]
 
 
 def test_a_token_is_hashed_once():
-    verdicts = Verdicts(hashlib.sha256(b'example.org').hexdigest())
+    verdicts = Verdicts(hashlib.sha256(b'example.org').hexdigest(), 11)
     assert hit_lines(b'a.example.org\na.example.org\n', verdicts) == [1, 2]
     assert verdicts.seen == {b'a.example.org'}
     assert hit_lines(b'a.example.org\n', verdicts) == [1]
     assert verdicts.seen == {b'a.example.org'}
-
-
-def test_a_run_too_long_to_be_a_host_is_skipped_but_its_neighbours_are_not():
-    fixture_hash = hashlib.sha256(b'example.org').hexdigest()
-    line = b'x' * 300 + b'.example.org example.org'
-    assert run_names_host('x' * 300 + '.example.org', fixture_hash) is False
-    assert hit_lines(line, Verdicts(fixture_hash)) == [1]
 
 
 def test_tracked_paths_lists_the_repository_files():

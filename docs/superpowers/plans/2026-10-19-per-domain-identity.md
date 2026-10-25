@@ -281,7 +281,7 @@ def test_first_domain_actor_and_webfinger_are_byte_identical(...)   # snapshot o
 
 ### Task 13: Deploy and verify (controller, after the owner pushes)
 
-- [ ] **Step 1 (before the push):** on the server, save `curl -s -H 'Accept: application/activity+json' https://example.org/u/<a real account>`, its WebFinger answer, `/c/<a real community>` and `/nodeinfo/2.1` to `~/backups/<date>-identity/before/`.
+- [ ] **Step 1 (before the push):** on the server, save `curl -s -H 'Accept: application/activity+json' https://<first-domain>/u/<a real account>`, its WebFinger answer, `/c/<a real community>` and `/nodeinfo/2.1` to `~/backups/<date>-identity/before/`.
 - [ ] **Step 2:** after autodeploy, the same four, and `diff` against before: identical (NodeInfo counts may differ only by activity since; compare the shape and `software`).
 - [ ] **Step 3:** confirm the onion row (`site_domain` id 2) has `federates` False and `registration` `admin`; onion `/auth/register` refuses; logging in on the onion as `wakko@example.org` works; an admin-added onion test account's WebFinger is 404 from clearnet.
 - [ ] **Step 4:** 0 tracebacks in `pyfedi-web`, `pyfedi-celery`, `pyfedi-celery-background` for 10 min.
