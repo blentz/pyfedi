@@ -14,7 +14,7 @@ from sqlalchemy import and_, exists, inspect as sa_inspect, or_
 from sqlalchemy.orm import aliased
 
 from app import db
-from app.constants import VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC, VISIBILITY_UNLISTED
+from app.constants import POST_STATUS_PUBLISHED, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC, VISIBILITY_UNLISTED
 from app.local_only import federating_clause
 from app.models import Community, Instance, ModLog, Post, PostReply, User, UserFollower
 from app.storefront import hosted_instance_ids
@@ -83,6 +83,23 @@ def is_open(obj) -> bool:
     with no `visibility` (a user, a community) counts as open, as a NULL value does in `can_view`."""
     visibility = getattr(obj, 'visibility', None)
     return visibility is None or visibility in OPEN_VISIBILITIES
+
+
+def post_withheld_from_peers(post) -> int | None:
+    """The status our ActivityPub post routes refuse `post` with, whoever asks: 404 for a local-only post, 403 for
+    one in a local-only or private community or not yet published. None when they go on to their other checks."""
+    if post.local_only:
+        return 404
+    if post.community.local_only or post.community.private or post.status < POST_STATUS_PUBLISHED:
+        return 403
+    return None
+
+
+def post_served_to_any_peer(post) -> bool:
+    """Whether our ActivityPub post route serves `post` to a peer that proves nothing about itself: not withheld
+    (`post_withheld_from_peers`), public or unlisted, and not deleted (a deleted one is a Tombstone). A post on one of
+    our domains found by URL is shown only then, as it was when that URL was fetched from our own route (plan C4)."""
+    return post_withheld_from_peers(post) is None and post.visibility in OPEN_VISIBILITIES and not post.deleted
 
 
 def follower_instances(user) -> list:
