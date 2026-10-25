@@ -493,6 +493,15 @@ def is_hosted_uri(uri: str | None) -> bool:
     return False
 
 
+def is_hosted_server(server: str | None) -> bool:
+    """Whether a server named as `host[:port]` (a netloc, or a handle's domain) is ours to the allowlist and ban list:
+    the one rule those gates use (plan C4). Ours by both tests: `is_local_host` reads the authority as named, so
+    userinfo or a path, query or fragment character is never ours, and `is_hosted_uri` adds the egress port rule, so
+    a domain naming no port is ours with none, 80 or 443 and an explicit port only with itself. A port none of our
+    domains names is not ours: the lists govern it as any remote server, so a handle cannot pick a port of our host."""
+    return is_local_host(server) and is_hosted_uri(f'https://{server}')
+
+
 @lru_cache(maxsize=8)
 def _hosted_destinations(rows: tuple[DomainInfo, ...], default_authority: str) -> tuple[tuple[str, int | None], ...]:
     """`_destination` of each hosted domain in `rows`, SERVER_NAME's among them, parsed once per set of rows and

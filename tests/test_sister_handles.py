@@ -16,7 +16,7 @@ from app.community.util import search_for_community
 from app.feed.util import search_for_feed
 from app.models import AllowedInstances, BannedInstances, Site
 from app.shared.feed import form_communities_to_ids
-from app.storefront import acting_for, domain_for_host
+from app.storefront import acting_for, clear_domain_cache, domain_for_host
 from app.utils import set_setting
 from tests.test_actor_handles import auth
 from tests.test_hosted_url_lookup import SERVER, SHOP, env, wire  # noqa: F401 (fixtures)
@@ -112,14 +112,50 @@ def test_a_community_server_that_is_no_authority_gets_no_exemption(env, wire, se
     assert wire.calls.call_count == 0
 
 
-def test_a_port_on_one_of_our_hosts_is_still_ours(env, wire):
-    """As domain_for_host reads a host: the port is ignored, so shop.example:8443 is the shop.example row. The
-    exemption and the hosted branch then agree, and the den resolves from the database."""
+@pytest.mark.parametrize('server', [SHOP, f'{SHOP}:443', f'{SHOP}:80', SHOP.upper()])
+def test_our_host_on_a_port_it_answers_is_exempt(env, wire, server):
+    """The egress port rule: a domain naming no port is ours with none, 80 or 443."""
     set_setting('use_allowlist', True)
-    assert search_for_community(f'!den@{SHOP}:8443') is env.shop_den
-    assert validate_remote_actor(f'https://{SHOP}:8443/u/alice') is True
+    assert validate_remote_actor(f'https://{server}/u/alice') is True
+    assert search_for_community(f'!den@{server}') is env.shop_den
+    assert wire.calls.call_count == 0
+
+
+def test_a_port_none_of_our_domains_names_is_not_ours_to_the_allowlist(env, wire):
+    """Controller ruling: shop.example:8443 is not exempt, so a closed allowlist refuses it like any remote server,
+    and nothing is fetched (a hostile handle cannot make us fetch our own host on a port it chose)."""
+    set_setting('use_allowlist', True)
+    assert validate_remote_actor(f'https://{SHOP}:8443/u/alice') is False
+    assert search_for_community(f'!den@{SHOP}:8443') is None
     assert validate_remote_actor('https://peer.example:8443/u/bob') is False
     assert wire.calls.call_count == 0
+
+
+def test_a_port_none_of_our_domains_names_is_on_the_ban_list_like_any_server(env, wire):
+    db.session.add(BannedInstances(domain=f'{SHOP}:8443'))
+    db.session.commit()
+    assert validate_remote_actor(f'https://{SHOP}:8443/u/alice') is False
+    assert search_for_community(f'!den@{SHOP}:8443') is None
+    with pytest.raises(Exception, match='blocked'):
+        search_for_feed(f'~reads@{SHOP}:8443')
+    assert search_for_feed(f'~reads@{SHOP}') is env.feed
+    assert wire.calls.call_count == 0
+
+
+def test_a_domain_with_an_explicit_port_is_exempt_only_on_that_port(env, wire, app, monkeypatch):
+    """SERVER_NAME is the one authority that may carry a port (a dev install on host:port)."""
+    monkeypatch.setitem(app.config, 'SERVER_NAME', f'{SERVER}:8443')
+    clear_domain_cache()
+    set_setting('use_allowlist', True)
+    try:
+        assert validate_remote_actor(f'https://{SERVER}:8443/u/alice') is True
+        assert search_for_community(f'!den@{SERVER}:8443') is env.hell_den
+        for other in (SERVER, f'{SERVER}:443', f'{SERVER}:9000'):
+            assert validate_remote_actor(f'https://{other}/u/alice') is False, other
+            assert search_for_community(f'!den@{other}') is None, other
+        assert wire.calls.call_count == 0
+    finally:
+        clear_domain_cache()
 
 
 @pytest.mark.parametrize('host', [SHOP, SERVER])
