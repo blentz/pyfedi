@@ -20,9 +20,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from flask import session
+from flask import request, session
 from sqlalchemy import event
 from werkzeug.datastructures import Headers
+from werkzeug.exceptions import TooManyRequests
 from werkzeug.security import generate_password_hash
 
 import app as app_pkg
@@ -37,6 +38,7 @@ from app.onion_guard import (ACCOUNT_FAILURE_KEY, COOKIE_CHECK, LOGIN_FAILURE_TT
                              ONION_SESSION_EXEMPT, TYPED_FAILURE_KEY, clear_onion_login_failures,
                              onion_session_missing, OnionLoginGate, reserve_onion_login_attempt,
                              resolve_onion_api_rate_key, same_url)
+from app.request_hooks import ONION_POLICY, ONION_POLICY_WITHOUT_NONCE
 from app.storefront import clear_domain_cache
 from tests.conftest import TestConfig
 from tests.factories import make_instance, make_user
@@ -1097,3 +1099,64 @@ def test_verify_password_hash_is_total(app):
     assert models.verify_password_hash(probe.password_hash, ' a good password ') == (True, False)
     assert models.verify_password_hash(probe.password_hash, None) == (False, False)   # not a string: no match
     assert models.verify_password_hash('not a hash', 'x') == (False, False)
+
+
+
+def test_an_onion_429_has_the_onion_policy_and_is_an_onion_response(limits):
+    """A real 429: /auth/login's limit, which Flask-Limiter checks as the view is called, once every before_request has
+    run. It has the onion's policy, with the request's own nonce, and is rewritten for the onion. A clearnet 429 is the
+    first domain's, with no policy, as before."""
+    client = limits.test_client()
+    a_session(client)
+    rewritten = []
+
+    def recording(body, storefront):
+        rewritten.append(storefront.domain)
+        return body
+
+    def fresh(get):
+        with limits.app_context():   # a request of its own, as in production: nothing in g from the one before
+            return get()
+    with patch('app.storefront.rewrite_links', side_effect=recording):
+        refused = [fresh(lambda: onion_get(client, '/auth/login')) for _ in range(11)][10]
+    assert refused.status_code == 429
+    nonce = re.search(r"'nonce-([^']+)'", refused.headers['Content-Security-Policy'])[1]
+    assert refused.headers['Content-Security-Policy'] == ONION_POLICY.format(nonce=nonce)
+    assert rewritten[-1] == 'abc.onion'
+    clearnet = limits.test_client()
+    refused = [fresh(lambda: clearnet.get('/auth/login', base_url=CLEARNET_URL)) for _ in range(11)][10]
+    assert refused.status_code == 429
+    assert 'Content-Security-Policy' not in refused.headers
+
+
+@pytest.fixture
+def refused_first(limits):
+    """A limit Flask-Limiter checks in its own before_request (a default, application or blueprint limit: this app sets
+    none today), which runs before `resolve_storefront`: the 429 is made with no storefront resolved and no nonce."""
+    def over_the_limit():
+        if request.path == '/auth/login':
+            raise TooManyRequests()
+    limits.before_request_funcs[None].insert(0, over_the_limit)
+    try:
+        yield limits
+    finally:
+        limits.before_request_funcs[None].remove(over_the_limit)
+
+
+def test_a_429_made_before_the_storefront_is_resolved_is_still_the_onions(refused_first):
+    rewritten = []
+
+    def recording(body, storefront):
+        rewritten.append(storefront.domain)
+        return body
+    with refused_first.app_context(), patch('app.storefront.rewrite_links', side_effect=recording):
+        refused = onion_get(refused_first.test_client(), '/auth/login')
+    assert refused.status_code == 429
+    assert refused.headers['Content-Security-Policy'] == ONION_POLICY_WITHOUT_NONCE
+    assert rewritten == ['abc.onion']
+    with refused_first.app_context():
+        clearnet = refused_first.test_client().get('/auth/login', base_url=CLEARNET_URL)
+    assert clearnet.status_code == 429
+    assert 'Content-Security-Policy' not in clearnet.headers
+    with refused_first.app_context():   # an unregistered host is still refused as one, never given a storefront
+        assert refused_first.test_client().get('/auth/login', base_url='https://unknown.example.org').status_code == 429

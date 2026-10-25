@@ -1493,6 +1493,17 @@ def rewrite_response_for_storefront(response: Response) -> Response:
     return response
 
 
+def adopt_host_storefront() -> None:
+    """For a response made before `resolve_storefront` ran (a limit Flask-Limiter checks in its own before_request,
+    registered first): `g.storefront` from the Host header, so the after_request hooks treat it as the request's
+    domain's, the onion's policy and rewriting included. An unregistered host stays unresolved: it is the default
+    domain's, as it was."""
+    if 'storefront' not in g:
+        storefront = domain_for_host(request.host)
+        if storefront is not None:
+            g.storefront = storefront
+
+
 HEALTH_ENDPOINTS = frozenset({'main.health', 'main.health2'})   # probes name localhost or an internal hostname
 
 
