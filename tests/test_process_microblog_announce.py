@@ -1,5 +1,12 @@
+from types import SimpleNamespace
+
 import pytest
 
+from app import db
+from app.activitypub.util import process_microblog_announce
+from app.constants import POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING
+from app.models import PostBoost
+from app.visibility import post_served_to_any_peer, post_withheld_from_peers
 from tests.factories import make_community, make_follow, make_instance, make_post, make_site, make_user
 
 
@@ -611,3 +618,45 @@ def test_a_fetched_followers_only_note_is_not_boosted(db_session, fetch_spy, fol
     assert process_microblog_announce(announce(followed_booster.ap_public_url, note_uri), 'a8', False) is None
     assert PostBoost.query.count() == 0
     assert log_spy[-1][2] == 'Boosted post is not public'
+
+
+# -- one gate for a boost by URL (C4 final review M2, P1) --------------------------------------------------------------
+
+def _bare_post(**fields):
+    """Just the columns the peer-visibility helpers read: a public, published post with no community."""
+    return SimpleNamespace(**{'local_only': False, 'community': None, 'status': POST_STATUS_PUBLISHED,
+                              'visibility': 'public', 'deleted': False, **fields})
+
+
+def test_a_post_with_no_community_is_not_withheld_by_a_community():
+    """community_id is nullable: no community withholds nothing, and the post's own reasons still count."""
+    assert post_withheld_from_peers(_bare_post()) is None
+    assert post_withheld_from_peers(_bare_post(status=POST_STATUS_REVIEWING)) == 403
+    assert post_withheld_from_peers(_bare_post(local_only=True)) == 404
+    assert post_served_to_any_peer(_bare_post())
+
+
+def test_a_post_with_no_visibility_counts_as_open_to_peers():
+    """The column is NOT NULL, so None is only a row not yet flushed; it is open, as is_open and can_view read it."""
+    assert post_served_to_any_peer(_bare_post(visibility=None))
+    assert not post_served_to_any_peer(_bare_post(visibility=None, deleted=True))
+
+
+def test_a_boost_of_a_post_with_no_community_is_recorded_not_raised(db_session, fetch_spy, log_spy):
+    _, booster, post = _local_microblogger_and_follower()
+    post.community_id = None
+    db.session.commit()
+
+    result = process_microblog_announce(announce(booster.ap_public_url, post.ap_id), 'n1', False)
+
+    assert result is not None and result.id == post.id
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 1
+
+
+def test_the_boost_gate_is_the_shared_peer_visibility_helper(db_session, fetch_spy, log_spy, monkeypatch):
+    """A post the helper says no peer is served is not boosted, whatever the reason: one definition, not two."""
+    _, booster, post = _local_microblogger_and_follower()
+    monkeypatch.setattr('app.activitypub.util.post_served_to_any_peer', lambda p: False)
+
+    assert process_microblog_announce(announce(booster.ap_public_url, post.ap_id), 'g1', False) is None
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 0

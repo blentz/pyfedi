@@ -6060,6 +6060,18 @@ def is_top_level(post_data: dict) -> bool:
     return not post_data.get('inReplyTo')
 
 
+def _unserved_boost_reason(post) -> str:
+    """Why a boost of `post` is refused, for the log only: `post_served_to_any_peer` has already said no."""
+    community = post.community
+    if community is not None and (community.private or community.local_only):
+        return 'Boosted post belongs to a private or local_only community'
+    if post_withheld_from_peers(post) is not None:   # local-only or unpublished: our post route refuses it
+        return 'Boosted post is not served to other servers'
+    if post.deleted:
+        return 'Boosted post is deleted'
+    return 'Boosted post is not public'
+
+
 def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, None]:
     """Ingest a boost of a microblog post from an account a local user follows.
 
@@ -6107,21 +6119,11 @@ def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, N
         # (invite-only) or local_only community the announcer was never a member
         # of. Refuse before recording rather than trusting the community's own
         # federation gate, which this path never goes through.
-        community = post.community
-        if community and (community.private or community.local_only):
-            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json,
-                            'Boosted post belongs to a private or local_only community')
-            return None
-        if post_withheld_from_peers(post) is not None:   # local-only or unpublished: our post route refuses it
-            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Boosted post is not served to other servers')
-            return None
-        if post.deleted:
-            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Boosted post is deleted')
-            return None
-        # Only a public or unlisted post is boosted (spec 2026-10-14 §10 A12). can_view is no test here: it admits
-        # the author and the users the post Mentions, and a boost of a followers-only post would widen its audience.
-        if not is_open(post):
-            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Boosted post is not public')
+        # Only a post our post route serves to any peer is boosted: not withheld, not deleted, and public or unlisted
+        # (spec 2026-10-14 §10 A12). can_view is no test here: it admits the author and the users the post Mentions,
+        # and a boost of a followers-only post would widen its audience. The helper decides; the log names why.
+        if not post_served_to_any_peer(post):
+            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, _unserved_boost_reason(post))
             return None
         # A block outlives the follow it was made after: the accepted UserFollower row is still there
         if post.author.has_blocked_user(announcer.id) or post.author.has_blocked_instance(announcer.instance_id):
