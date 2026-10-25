@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Spec §3.3: "A hell.foo user commenting on a first-domain post is stored directly. Remote followers of either side get the activity from the originating domain's actor, exactly as if the sister had received it over the network."
+- Spec §3.3: "A sister.example user commenting on a first-domain post is stored directly. Remote followers of either side get the activity from the originating domain's actor, exactly as if the sister had received it over the network."
 - "Exactly as if over the network" (Claude's call, from upstream PieFed): a PieFed user's comment goes to the community (whose Announce reaches the community's followers), mentioned/parent authors, and — only for followers-only replies — the author's followers. C4 keeps that fan-out; it does not add the author's followers for public comments.
 - Hosted = every SiteDomain row (federating or local-only) plus SERVER_NAME: `storefront.domain_of_url(url) is not None`.
 - C3 rulings stand: own domain only; 404 for an AP fetch of something another of our domains owns; local-only domains answer no other server; relays subscribed by the default domain only.

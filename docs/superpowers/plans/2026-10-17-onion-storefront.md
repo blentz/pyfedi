@@ -93,7 +93,7 @@
 - [ ] **Step 1: Write failing tests**
   - `test_unknown_host_is_421`: `client.get('/', headers={'Host': 'evil.example'})` gives status 421, a body with no HTML, and no `Location`.
   - `test_known_alias_resolves`: with an onion row, `GET /` on Host `abc.onion` gives 200, and inside `app.test_request_context(base_url='http://abc.onion')`, `storefront_url() == 'http://abc.onion'`.
-  - `test_host_variants` (Review Focus 1): `HELL`-style upper case, trailing dot, and `:80` all give 200 and the same `g.storefront.domain`.
+  - `test_host_variants` (Review Focus 1): `FIRST`-style upper case, trailing dot, and `:80` all give 200 and the same `g.storefront.domain`.
   - `test_url_for_external_follows_host`: in a request on `abc.onion`, `url_for('main.index', _external=True)` starts with `http://abc.onion/`. Outside a request, under `app.app_context()`, it starts with `https://test.piefed.local/`. If Flask 3.1 pins it to `SERVER_NAME`, make it follow the host by setting `request.url_root`-based adapters, not by removing `SERVER_NAME`. Record which mechanism worked in the commit message.
   - `test_static_and_inbox_on_alias`: `GET /static/...` and `POST /inbox` on Host `abc.onion` are not 421.
 - [ ] **Step 2: Run.** Expect FAIL.
