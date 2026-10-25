@@ -5809,6 +5809,27 @@ def refuse_a_federating_onion(target) -> None:
             raise ValueError(ONION_NEVER_FEDERATES)
 
 
+
+class DomainBranding(db.Model):
+    """What a domain sets of its own branding. NULL or '' in a column inherits Site row 1's value (app.branding)."""
+    __tablename__ = 'domain_branding'
+    site_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id', name='fk_domain_branding_site_domain_id',
+                                                         ondelete='CASCADE'), primary_key=True)
+    name = db.Column(db.String(256))
+    description = db.Column(db.String(256))
+    logo = db.Column(db.String(40))
+    logo_180 = db.Column(db.String(40))
+    logo_152 = db.Column(db.String(40))
+    logo_32 = db.Column(db.String(40))
+    logo_16 = db.Column(db.String(40))
+    default_theme = db.Column(db.String(20))
+    additional_css = db.Column(db.Text)
+    sidebar = db.Column(db.Text)
+    sidebar_html = db.Column(db.Text)
+    about = db.Column(db.Text)
+    about_html = db.Column(db.Text)
+
+
 class InstanceInUse(ValueError):
     """A new domain would take over an instance row that is not ours to take."""
 
