@@ -215,21 +215,16 @@ def script_nonces_and_handlers(body: str):
     return {tag.get('nonce') for tag in scripts}, handlers, sse
 
 
-# Off-site loads an onion page makes today outside branding, which no CSP directive can stop: reported, not allowed.
-# A post page names its link in `<link rel="preconnect">` (app/post/routes.py, base.html), so the browser opens a
-# connection to the remote host of the post's URL. Pinned so the day it is fixed this list must shrink.
-KNOWN_OUTSIDE_BRANDING = {'/post/{post}': [REMOTE_IMAGE]}
-
-
-def assert_policy_holds(app, response, known=(), own_host=ONION):
+def assert_policy_holds(app, response, own_host=ONION):
     """Every fetch the page makes satisfies the onion's policy: nothing off the onion (the scanner, whose own tests
-    are above) beyond the `known` loads outside branding, a nonce on every script (strict-dynamic ignores 'self'), no
-    inline event handler (script-src has no 'unsafe-inline'), and live updates on the onion."""
+    are above; a `<link rel=preconnect>` too, which no CSP directive governs), a nonce on every script
+    (strict-dynamic ignores 'self'), no inline event handler (script-src has no 'unsafe-inline'), and live updates on
+    the onion."""
     assert response.status_code == 200, response.headers.get('Location')
     nonce = re.fullmatch(r"script-src 'self' 'nonce-([^']+)' .*", response.headers['Content-Security-Policy'])[1]
     assert response.headers['Content-Security-Policy'] == ONION_POLICY.format(nonce=nonce)
     body = response.get_data(as_text=True)
-    assert offsite_references(html=body, own_host=own_host) == list(known)
+    assert offsite_references(html=body, own_host=own_host) == []
     nonces, handlers, sse = script_nonces_and_handlers(body)
     assert nonces == {nonce}
     assert handlers == []
@@ -249,7 +244,7 @@ def test_onion_key_pages_load_nothing_the_policy_refuses(app, onion_site, monkey
     # A browser holds the session cookie a login page gave it. Search is session-first on the onion, and its own
     # cookieless round trip sets no cookie for a logged-out visitor (reported: not branding's)
     visit(app, '/auth/login', client=client)
-    assert_policy_holds(app, visit(app, path.format(post=post.id), client=client), KNOWN_OUTSIDE_BRANDING.get(path, ()))
+    assert_policy_holds(app, visit(app, path.format(post=post.id), client=client))
 
 
 @pytest.mark.parametrize('path', ['/home/live/all', f'/c/onionart@{HELL}', '/post/{post}', f'/u/faraway@{REMOTE_HOST}',
@@ -259,8 +254,7 @@ def test_onion_key_pages_signed_in_load_nothing_the_policy_refuses(app, onion_si
     monkeypatch.setitem(app.config, 'NOTIF_SERVER', f'https://{HELL}')   # as deployed: the first domain's origin
     domains, post = onion_site
     reader = domains.local_user('reader', domains.domains[1])
-    body = assert_policy_holds(app, visit(app, path.format(post=post.id), user=reader),
-                               KNOWN_OUTSIDE_BRANDING.get(path, ()))
+    body = assert_policy_holds(app, visit(app, path.format(post=post.id), user=reader))
     if path == '/home/live/all':
         assert f'data-sse-url="http://{ONION}/live/stream' in body   # live updates stay on the onion
 
@@ -289,7 +283,7 @@ def test_onion_csp_keeps_proxied_remote_media_working(app, onion_site, tmp_path)
     the proxy's own sandbox policy (set by the view) still stands."""
     _domains, post = onion_site
     response = visit(app, f'/post/{post.id}')
-    body = assert_policy_holds(app, response, KNOWN_OUTSIDE_BRANDING['/post/{post}'])
+    body = assert_policy_holds(app, response)
     proxied = proxy_url(REMOTE_IMAGE)
     assert f'src="{proxied}"' in body
     assert REMOTE_HOST not in ' '.join(re.findall(r'(?:src|srcset|poster)="([^"]*)"', body))
@@ -403,3 +397,11 @@ def test_a_users_own_css_is_left_as_written(app, onion_site):
     db.session.commit()
     body = visit(app, '/', onion=False, user=reader).get_data(as_text=True)
     assert reader.additional_css in body
+
+
+def test_an_onion_post_page_preconnects_to_no_other_host(app, onion_site):
+    """A post page asks the browser to pre-connect to its link's host on the first domain; on the onion it does not."""
+    _domains, post = onion_site
+    preconnect = f"<link rel=\"preconnect\" href='{REMOTE_IMAGE}'>"
+    assert preconnect in visit(app, f'/post/{post.id}', onion=False).get_data(as_text=True)
+    assert 'rel="preconnect"' not in visit(app, f'/post/{post.id}').get_data(as_text=True)
