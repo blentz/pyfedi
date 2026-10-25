@@ -1,0 +1,13 @@
+Web IBM VGA 8x16 (web_ibm_vga_8x16.woff), shipped unmodified.
+
+Ultimate Oldschool PC Font Pack by VileR, int10h.org, CC BY-SA 4.0
+https://int10h.org/oldschool-pc-fonts/
+
+The font files in this pack are licensed under the Creative Commons
+Attribution-ShareAlike 4.0 International License (CC BY-SA 4.0).
+Full licence: https://creativecommons.org/licenses/by-sa/4.0/legalcode
+Licence statement: https://int10h.org/oldschool-pc-fonts/readme/#legal_stuff
+
+You may share and adapt the fonts for any purpose, provided you give
+appropriate credit and distribute adaptations under a compatible licence.
+No warranties are given.
