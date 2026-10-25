@@ -1360,6 +1360,8 @@ def test_a_delete_reaches_the_authors_remote_followers_and_never_who_the_author_
     instance of someone the author follows, and to a sister domain's follower."""
     s = _seed(with_keys=True)
     _make_deliverable(s)
+    community_follower = _follower(s, lenient_http, inbox='https://community-fan.example/inbox',
+                                   domain='community-fan.example')[0]
     db.session.add(SiteDomain(domain='shop.example'))
     db.session.commit()
     clear_domain_cache()
@@ -1379,5 +1381,6 @@ def test_a_delete_reaches_the_authors_remote_followers_and_never_who_the_author_
     clear_domain_cache()
 
     assert len(fan.calls) == 1 and _sent_activity(fan)['type'] == 'Delete'
-    assert _delivered_inboxes(fan) == {'https://fan.example/inbox'}
-    assert {str(call.request.url) for call in lenient_http.calls} == {'https://fan.example/inbox'}
+    assert _sent_activity(community_follower)['type'] == 'Announce'   # the community's followers still get it
+    assert {str(call.request.url) for call in lenient_http.calls} == {
+        'https://fan.example/inbox', 'https://community-fan.example/inbox'}
