@@ -353,3 +353,53 @@ def test_the_onions_own_offsite_value_is_stripped_too(app, onion_site):
     with onion_request(app):
         assert (current_branding().logo_32, current_branding().about_html) == ('', '<p>about <img/></p>')
     assert f'{ELSEWHERE}/a.png' not in visit(app, '/about').get_data(as_text=True)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Review I1: a domain's custom CSS is written inside <style>, so it must never close that element
+
+BREAKOUTS = [
+    '</style><link rel=preconnect href=https://evil.example/><style>',
+    '</STYLE ><meta http-equiv=refresh content=0;url=https://evil.example/><style>',
+    '</style><iframe src=https://evil.example/x></iframe>',
+]
+
+
+def elements_from(body: str) -> list:
+    """The link, meta and iframe elements a browser would build from `body` that name the payload's host."""
+    soup = BeautifulSoup(body, 'html.parser')
+    return [tag for tag in soup.find_all(['link', 'meta', 'iframe']) if 'evil.example' in str(tag.attrs)]
+
+
+@pytest.mark.parametrize('payload', BREAKOUTS)
+@pytest.mark.parametrize('onion', [True, False])
+def test_custom_css_can_never_close_its_style_block(app, onion_site, payload, onion):
+    site = db.session.get(Site, 1)
+    site.additional_css = f'.a {{ color: red }} {payload} .b {{ color: blue }}'
+    db.session.commit()
+    clear_domain_cache()
+    body = visit(app, '/', onion=onion).get_data(as_text=True)
+    assert elements_from(body) == []
+    if '.a { color: red }' in body:   # the onion may drop the field whole
+        block = body[body.index('.a { color: red }'):]
+        assert '.b { color: blue }' in block[:block.lower().index('</style')]   # one style block, never closed early
+    if not onion:
+        assert '<\\/' in body   # CSS reads \/ as /: the first domain's CSS is otherwise as written
+
+
+def test_onion_safe_drops_css_that_holds_markup_which_loads(app, caplog):
+    branding = branding_with(additional_css=f'.a {{ color: red }} <link rel=preconnect href={ELSEWHERE}/>')
+    with caplog.at_level(logging.INFO, logger=app.logger.name):
+        assert onion_safe(branding, ONION).additional_css == ''
+    assert any(f'{ELSEWHERE}/' in record.getMessage() for record in caplog.records)
+    kept = branding_with(additional_css='.a > .b { color: red }')
+    assert onion_safe(kept, ONION) is kept
+
+
+def test_a_users_own_css_is_left_as_written(app, onion_site):
+    domains, _post = onion_site
+    reader = domains.local_user('cssreader', domains.domains[0])
+    reader.additional_css = '.mine { color: red } </style><p>mine</p><style>'
+    db.session.commit()
+    body = visit(app, '/', onion=False, user=reader).get_data(as_text=True)
+    assert reader.additional_css in body
