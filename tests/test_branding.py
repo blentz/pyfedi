@@ -110,18 +110,33 @@ def test_deleting_a_domain_deletes_its_branding(two_domains, site_values):
     assert db.session.get(DomainBranding, onion.id) is None
 
 
-def test_migration_creates_and_drops_the_table(db_session):
-    path = next(Path(__file__).parent.parent.glob('migrations/versions/*_domain_branding.py'))
-    spec = importlib.util.spec_from_file_location('domain_branding_migration', path)
+def load_migration(pattern):
+    path = next(Path(__file__).parent.parent.glob(f'migrations/versions/{pattern}'))
+    spec = importlib.util.spec_from_file_location(path.stem, path)
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
+    return migration
+
+
+def test_migration_creates_and_drops_the_table(db_session):
+    """The table, then its icon columns (Task 5), each dropped and made again in revision order: the database is left
+    as `flask db upgrade` made it."""
+    migration = load_migration('*_domain_branding.py')
+    icons = load_migration('*_domain_branding_icons.py')
     db.session.commit()
+
+    def columns():
+        return {column['name'] for column in inspect(db.session.connection()).get_columns('domain_branding')}
     try:
         with Operations.context(MigrationContext.configure(db.session.connection())):
+            icons.downgrade()
+            assert {'logo_192', 'logo_512'}.isdisjoint(columns())
             migration.downgrade()
             assert not inspect(db.session.connection()).has_table('domain_branding')
             migration.upgrade()
             assert inspect(db.session.connection()).has_table('domain_branding')
+            icons.upgrade()
+            assert {'logo_192', 'logo_512'} <= columns()
         db.session.commit()
     finally:
         db.session.rollback()

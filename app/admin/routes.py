@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 from furl import furl
 
 from app import db, celery, cache
+from app.branding import offsite_references
 from app.discovery import sync as discovery_sync
 from app.visibility import visible_to_clause
 from app.local_only import domain_has_owners, user_local_only
@@ -31,7 +32,7 @@ from app.admin.forms import FederationForm, SiteMiscForm, SiteProfileForm, EditC
     EditTopicForm, SendNewsletterForm, AddUserForm, PreLoadCommunitiesForm, ImportExportBannedListsForm, \
     EditInstanceForm, RemoteInstanceScanForm, MoveCommunityForm, EditBlockedImageForm, AddBlockedImageForm, \
     CmsPageForm, CreateOfflineInstanceForm, InstanceChooserForm, CloseInstanceForm, EmojiForm, TopicImportForm, \
-    MastodonDirectoryScanForm, SiteDomainForm
+    MastodonDirectoryScanForm, SiteDomainForm, DomainBrandingForm
 from flask_wtf import FlaskForm
 from app.admin.util import ban_list_entries, unsubscribe_from_everything_then_delete, unsubscribe_from_community, send_newsletter, \
     topics_for_form, move_community_images_to_here, switch_to_unsilenced, switch_to_silenced, serialize_topic_tree, \
@@ -47,7 +48,7 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, RolePermission, Domain, \
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, SiteDomain, \
-    instance_row_referenced
+    instance_row_referenced, DomainBranding
 from app.storefront import acting_as_default, canonicalise_text, clear_domain_cache, default_domain, domain_authority, domain_base_url, \
     domain_by_id, federating_base, hosted_instance_ids, instance_id_of, is_hosted_uri, live_registration, storefront_url
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
@@ -142,6 +143,159 @@ def admin_home():
                            translation_languages=translation_languages)
 
 
+# The logo files an upload makes, as `save_logo_upload` names them. Site keeps the first five on its row and the last two
+# in the settings of the same names; a domain keeps all seven on its DomainBranding row.
+SITE_LOGO_FIELDS = ('logo', 'logo_180', 'logo_152', 'logo_32', 'logo_16')
+LOGO_FIELDS = SITE_LOGO_FIELDS + ('logo_192', 'logo_512')
+LOGO_MEDIA = 'app/static/media'
+# What the domain branding form edits besides the logo
+BRANDING_TEXT_FIELDS = ('name', 'description', 'default_theme', 'additional_css', 'sidebar', 'about')
+# Every name `save_logo_upload` gives a file: logo_, five characters of gibberish, a size suffix or none, an image
+# extension in whatever case it was uploaded in
+_UPLOADED_LOGO = re.compile(r'/static/media/logo_[0-9A-Za-z]{5}(_(100|180|152|32|16|192|512))?\.(png|jpe?g|webp|svg)',
+                            re.IGNORECASE)
+
+
+def save_logo_upload(upload, directory: str) -> dict[str, str]:
+    """Store an uploaded logo in `directory` (the served media directory, app/static/media) and make its sized PNG
+    copies. Returns the URL path of each file, by field: the five Site keeps on its row, then `logo_192` and `logo_512`,
+    the PWA manifest's icons. An SVG is stored as uploaded, once sanitized, with no copies: every other field is ''.
+
+    Removes nothing a logo already occupies: the caller does, once the replacement is assigned. An upload this will not
+    take (not one of the image types, an SVG that cannot be sanitized, an image Pillow cannot decode) is a 400, with
+    nothing of it left on disk."""
+    allowed_extensions = ['.jpg', '.jpeg', '.png', '.webp', '.svg']  # D918: no GIF site icons
+    file_ext = os.path.splitext(upload.filename)[1]
+    if file_ext.lower() not in allowed_extensions:
+        abort(400)
+    ensure_directory_exists(directory)
+
+    # Save logo file
+    base_filename = f'logo_{gibberish(5)}'
+    upload.save(f'{directory}/{base_filename}{file_ext}')
+
+    # An SVG that cannot be sanitized is rejected. The '.svg' branch
+    # below stores the file as uploaded -- no Pillow re-encode -- and
+    # serves it from this site's own origin as the site logo, on every
+    # page. sanitize_svg has already destroyed the file by the time it
+    # returns False, and abort(400) is what the extension check above
+    # does with an upload this route will not accept.
+    #
+    # The predicate is .lower() because allowed_extensions is checked
+    # with .lower() and the form's FileAllowed lowercases too, so '.SVG'
+    # reaches here and must be sanitized like any other SVG.
+    if file_ext.lower() == '.svg' and not sanitize_svg(f'{directory}/{base_filename}{file_ext}'):
+        abort(400)
+
+    # Decode the upload BEFORE anything is destroyed or derived from
+    # it. .load() and not .verify(): verify() reads headers only, and a
+    # truncated image passes it and then raises inside thumbnail()
+    # further down -- past the point where the superseded files have
+    # been removed. An upload that cannot be decoded is a 400 with its
+    # bytes deleted, which is what the extension check above already
+    # does with an upload this route will not accept.
+    if file_ext.lower() != '.svg':
+        try:
+            Image.open(f'{directory}/{base_filename}{file_ext}').load()
+        except Exception:
+            os.unlink(f'{directory}/{base_filename}{file_ext}')
+            abort(400)
+
+    # .lower(), like the sanitize guard above and like every other
+    # '.svg' predicate in the repository. Without it a '.SVG' upload --
+    # which allowed_extensions and the form's FileAllowed both accept,
+    # because both lowercase -- was sanitized as an SVG and then handed
+    # to Image.open, raising and leaving the file in the served media
+    # root with nothing to remove it.
+    if file_ext.lower() == '.svg':
+        # For SVG uploads, clear all logo fields and settings
+        return {'logo': f'/static/media/{base_filename}{file_ext}', 'logo_180': '', 'logo_152': '', 'logo_32': '',
+                'logo_16': '', 'logo_512': '', 'logo_192': ''}
+
+    # For non-SVG uploads, create PNG thumbnails for PWA compatibility
+    logos = {}
+    img = Image.open(f'{directory}/{base_filename}{file_ext}')
+    if img.width > 100:
+        img.thumbnail((100, 100))
+        img.save(f'{directory}/{base_filename}_100.png')
+        logos['logo'] = f'/static/media/{base_filename}_100.png'
+        delete_original = True
+    else:
+        img.save(f'{directory}/{base_filename}.png')
+        logos['logo'] = f'/static/media/{base_filename}.png'
+        # Only when the original is a DIFFERENT file. This arm
+        # writes <base>.png, which for a .png upload is the
+        # uploaded file itself -- so an unconditional delete here
+        # unlinked the logo it had just stored, and a site icon of
+        # 100px or less (the common case) became a 404 on every
+        # page. A .jpg or .webp source is a different path and is
+        # still removed.
+        delete_original = (f'{directory}/{base_filename}.png' !=
+                           f'{directory}/{base_filename}{file_ext}')
+
+    # Save multiple copies of the logo - different sizes, all as PNG
+    # Create 512x512 and 192x192 versions too, which Site keeps in settings
+    for field, size in (('logo_180', 180), ('logo_152', 152), ('logo_32', 32), ('logo_16', 16), ('logo_512', 512),
+                        ('logo_192', 192)):
+        img = Image.open(f'{directory}/{base_filename}{file_ext}')
+        img.thumbnail((size, size))
+        img.save(f'{directory}/{base_filename}_{size}.png')
+        logos[field] = f'/static/media/{base_filename}_{size}.png'
+
+    if delete_original:
+        os.unlink(f'{directory}/{base_filename}{file_ext}')
+    return logos
+
+
+def _logo_paths_in_use() -> set[str]:
+    """The real path of every logo file something names: Site's logo fields and icon settings, and every domain's row."""
+    site = db.session.get(Site, 1)
+    paths = [getattr(site, field, None) for field in SITE_LOGO_FIELDS] + \
+        [get_setting('logo_192', ''), get_setting('logo_512', '')] + \
+        [getattr(row, field) for row in db.session.query(DomainBranding) for field in LOGO_FIELDS]
+    return {os.path.realpath(f'app{path}') for path in paths if path}
+
+
+def remove_superseded_logos(paths: list[str | None]) -> None:
+    """Unlink the files a domain's replaced or cleared logo named, once the row no longer names them. `paths` are
+    the row's stored values, never anything a form posted. A file goes only when this domain's own upload wrote it:
+    - its name is one `save_logo_upload` gives;
+    - with every symlink and `..` resolved, it is directly inside the media directory;
+    - nothing else names it: not Site's logo fields or its logo_192/logo_512 settings, not any domain's row (this one,
+      as saved, included).
+    Anything else is left where it is, and logged."""
+    media = os.path.realpath(LOGO_MEDIA)
+    in_use = _logo_paths_in_use()
+    for path in paths:
+        if not path:
+            continue
+        real = os.path.realpath(f'app{path}')
+        if not _UPLOADED_LOGO.fullmatch(path) or os.path.dirname(real) != media or real in in_use:
+            current_app.logger.info('branding: %s not removed: not a file this domain\'s logo upload alone wrote', path)
+        elif os.path.isfile(real):
+            os.unlink(real)
+
+
+def offsite_by_field(own_host: str, css: str = '', sidebar_html: str = '', about_html: str = '',
+                     logos: list[str] = ()) -> dict[str, list[str]]:
+    """Each branding form field with an off-site reference (spec §3.4), and its references. The sidebar and About are
+    checked as the HTML made from their Markdown: a Markdown image is not HTML, the HTML it becomes loads. CSS is checked
+    as HTML too, for markup that would load were its style element ever closed (app/branding.py)."""
+    found = {'additional_css': offsite_references(css=css, html=css, own_host=own_host),
+             'sidebar': offsite_references(html=sidebar_html, own_host=own_host),
+             'about': offsite_references(html=about_html, own_host=own_host),
+             'logo': offsite_references(urls=logos, own_host=own_host)}
+    return {field: references for field, references in found.items() if references}
+
+
+def flash_offsite_warning(found: dict[str, list[str]]) -> None:
+    """Advise, off the onion, that a saved branding loads from another site (spec §3.4): nothing is refused."""
+    if found:
+        references = list(dict.fromkeys(reference for field in found.values() for reference in field))
+        flash(_("Saved, but visitors' browsers will load these from another site: %(references)s",
+                references=', '.join(references)), 'warning')
+
+
 @bp.route('/site', methods=['GET', 'POST'])
 @login_required
 @permission_required('change instance settings')
@@ -184,13 +338,6 @@ def admin_site():
         # shape as D1047, fixed once in app/user/routes.py.
         uploaded_icon = request.files.get('icon')
         if uploaded_icon and uploaded_icon.filename != '':
-            allowed_extensions = ['.jpg', '.jpeg', '.png', '.webp', '.svg']  # D918: no GIF site icons
-            file_ext = os.path.splitext(uploaded_icon.filename)[1]
-            if file_ext.lower() not in allowed_extensions:
-                abort(400)
-            directory = 'app/static/media'
-            ensure_directory_exists(directory)
-
             # The files the current logo occupies, captured but NOT yet
             # removed. Unlinking them here -- which is what this did -- meant
             # that any failure below destroyed the site's existing logo while
@@ -204,120 +351,25 @@ def admin_site():
                            site.logo_16, get_setting('logo_512', ''),
                            get_setting('logo_192', '')) if path]
 
-            # Save logo file
-            base_filename = f'logo_{gibberish(5)}'
-            uploaded_icon.save(f'{directory}/{base_filename}{file_ext}')
-
-            # An SVG that cannot be sanitized is rejected. The '.svg' branch
-            # below stores the file as uploaded -- no Pillow re-encode -- and
-            # serves it from this site's own origin as the site logo, on every
-            # page. sanitize_svg has already destroyed the file by the time it
-            # returns False, and abort(400) is what the extension check above
-            # does with an upload this route will not accept.
-            #
-            # The predicate is .lower() because allowed_extensions is checked
-            # with .lower() and the form's FileAllowed lowercases too, so '.SVG'
-            # reaches here and must be sanitized like any other SVG.
-            if file_ext.lower() == '.svg' and not sanitize_svg(f'{directory}/{base_filename}{file_ext}'):
-                abort(400)
-
-            # Decode the upload BEFORE anything is destroyed or derived from
-            # it. .load() and not .verify(): verify() reads headers only, and a
-            # truncated image passes it and then raises inside thumbnail()
-            # further down -- past the point where the superseded files have
-            # been removed. An upload that cannot be decoded is a 400 with its
-            # bytes deleted, which is what the extension check above already
-            # does with an upload this route will not accept.
-            if file_ext.lower() != '.svg':
-                try:
-                    Image.open(f'{directory}/{base_filename}{file_ext}').load()
-                except Exception:
-                    os.unlink(f'{directory}/{base_filename}{file_ext}')
-                    abort(400)
-
-            # .lower(), like the sanitize guard above and like every other
-            # '.svg' predicate in the repository. Without it a '.SVG' upload --
-            # which allowed_extensions and the form's FileAllowed both accept,
-            # because both lowercase -- was sanitized as an SVG and then handed
-            # to Image.open, raising and leaving the file in the served media
-            # root with nothing to remove it.
-            if file_ext.lower() == '.svg':
-                # For SVG uploads, clear all logo fields and settings
-                site.logo = f'/static/media/{base_filename}{file_ext}'
-                site.logo_180 = ''
-                site.logo_152 = ''
-                site.logo_32 = ''
-                site.logo_16 = ''
-                set_setting('logo_512', '')
-                set_setting('logo_192', '')
-                delete_original = False
-            else:
-                # For non-SVG uploads, create PNG thumbnails for PWA compatibility
-                img = Image.open(f'{directory}/{base_filename}{file_ext}')
-                if img.width > 100:
-                    img.thumbnail((100, 100))
-                    img.save(f'{directory}/{base_filename}_100.png')
-                    site.logo = f'/static/media/{base_filename}_100.png'
-                    delete_original = True
-                else:
-                    img.save(f'{directory}/{base_filename}.png')
-                    site.logo = f'/static/media/{base_filename}.png'
-                    # Only when the original is a DIFFERENT file. This arm
-                    # writes <base>.png, which for a .png upload is the
-                    # uploaded file itself -- so an unconditional delete here
-                    # unlinked the logo it had just stored, and a site icon of
-                    # 100px or less (the common case) became a 404 on every
-                    # page. A .jpg or .webp source is a different path and is
-                    # still removed.
-                    delete_original = (f'{directory}/{base_filename}.png' !=
-                                       f'{directory}/{base_filename}{file_ext}')
-
-                # Save multiple copies of the logo - different sizes, all as PNG
-                img = Image.open(f'{directory}/{base_filename}{file_ext}')
-                img.thumbnail((180, 180))
-                img.save(f'{directory}/{base_filename}_180.png')
-                site.logo_180 = f'/static/media/{base_filename}_180.png'
-
-                img = Image.open(f'{directory}/{base_filename}{file_ext}')
-                img.thumbnail((152, 152))
-                img.save(f'{directory}/{base_filename}_152.png')
-                site.logo_152 = f'/static/media/{base_filename}_152.png'
-
-                img = Image.open(f'{directory}/{base_filename}{file_ext}')
-                img.thumbnail((32, 32))
-                img.save(f'{directory}/{base_filename}_32.png')
-                site.logo_32 = f'/static/media/{base_filename}_32.png'
-
-                img = Image.open(f'{directory}/{base_filename}{file_ext}')
-                img.thumbnail((16, 16))
-                img.save(f'{directory}/{base_filename}_16.png')
-                site.logo_16 = f'/static/media/{base_filename}_16.png'
-
-                # Create 512x512 and 192x192 versions using settings
-                img = Image.open(f'{directory}/{base_filename}{file_ext}')
-                img.thumbnail((512, 512))
-                img.save(f'{directory}/{base_filename}_512.png')
-                set_setting('logo_512', f'/static/media/{base_filename}_512.png')
-
-                img = Image.open(f'{directory}/{base_filename}{file_ext}')
-                img.thumbnail((192, 192))
-                img.save(f'{directory}/{base_filename}_192.png')
-                set_setting('logo_192', f'/static/media/{base_filename}_192.png')
-
-            if delete_original:
-                os.unlink(f'app/static/media/{base_filename}{file_ext}')
+            logos = save_logo_upload(uploaded_icon, 'app/static/media')
+            for field in SITE_LOGO_FIELDS:
+                setattr(site, field, logos[field])
+            # Site keeps its 512x512 and 192x192 versions in settings
+            set_setting('logo_512', logos['logo_512'])
+            set_setting('logo_192', logos['logo_192'])
 
             # Only now, with the replacement processed and assigned.
             for superseded_path in superseded:
                 if os.path.isfile(superseded_path):
                     os.unlink(superseded_path)
-
         db.session.commit()
         cache.delete_memoized(get_site_as_dict)
         clear_domain_cache()   # the first domain's branding is Site row 1's, memoised (app/branding.py)
         set_setting('announcement', form.announcement.data)
         set_setting('announcement_html', markdown_to_html(form.announcement.data, anchors_new_tab=False, a_target=""))
         flash(_('Settings saved.'))
+        flash_offsite_warning(offsite_by_field(default_domain().domain, sidebar_html=site.sidebar_html,
+                                               about_html=site.about_html))
     elif request.method == 'GET':
         form.name.data = site.name
         form.description.data = site.description
@@ -377,6 +429,61 @@ def admin_domains_delete(domain_id):
         clear_domain_cache()
         flash(_('Domain deleted.'))
     return redirect(url_for('admin.admin_domains'))
+
+
+@bp.route('/domains/<int:domain_id>/branding', methods=['GET', 'POST'])
+@login_required
+def admin_domain_branding(domain_id):
+    """A sister domain's own branding (spec §3.5). The first domain's is Site row 1's, edited at the site settings."""
+    if not user_access('change instance settings', current_user.get_id()):
+        abort(403)
+    row = db.session.get(SiteDomain, domain_id) or abort(404)
+    if row.is_default:
+        return redirect(url_for('admin.admin_site'))
+    branding = db.session.get(DomainBranding, row.id)
+    form = DomainBrandingForm()
+    form.default_theme.choices = [('', _('The site default'))] + theme_list()
+    if form.validate_on_submit():
+        # A field the post leaves out is blank, as an emptied one is: it inherits
+        values = {field: getattr(form, field).data or '' for field in BRANDING_TEXT_FIELDS}
+        # Each Markdown source is written with the HTML made from it, never one without the other
+        sidebar_html = markdown_to_html(values['sidebar'], a_target="") if values['sidebar'] else ''
+        about_html = markdown_to_html(values['about'], a_target="") if values['about'] else ''
+        upload = request.files.get('logo')
+        uploading = bool(upload and upload.filename)
+        replacing = uploading or form.remove_logo.data
+        # The logo the row keeps when it is not replaced. A new upload is this site's own media: never off-site.
+        kept_logos = [] if replacing or branding is None else [getattr(branding, field) or '' for field in LOGO_FIELDS]
+        found = offsite_by_field(row.domain, values['additional_css'], sidebar_html, about_html, kept_logos)
+        if found and row.is_onion:
+            # The onion never loads anything off the onion (spec §3.4): refused, and nothing written
+            for field, references in found.items():
+                getattr(form, field).errors.append(_('Off the onion: %(references)s', references=', '.join(references)))
+        else:
+            logos = save_logo_upload(upload, LOGO_MEDIA) if uploading else dict.fromkeys(LOGO_FIELDS, '')
+            if branding is None:
+                branding = DomainBranding(site_domain_id=row.id)
+                db.session.add(branding)
+            superseded = []
+            if replacing:
+                superseded = [getattr(branding, field) for field in LOGO_FIELDS]
+                for field in LOGO_FIELDS:
+                    setattr(branding, field, logos[field])
+            for field, value in values.items():
+                setattr(branding, field, value)
+            branding.sidebar_html = sidebar_html
+            branding.about_html = about_html
+            db.session.commit()
+            clear_domain_cache()   # branding is memoised per domain (app/branding.py)
+            remove_superseded_logos(superseded)
+            flash(_('Branding saved.'))
+            flash_offsite_warning(found)
+            return redirect(url_for('admin.admin_domain_branding', domain_id=row.id))
+    elif request.method == 'GET' and branding is not None:
+        for field in BRANDING_TEXT_FIELDS:
+            getattr(form, field).data = getattr(branding, field) or ''
+    return render_template('admin/domain_branding.html', title=_('Branding: %(domain)s', domain=row.domain),
+                           form=form, row=row, logo=branding.logo if branding is not None else '')
 
 
 @bp.route('/misc', methods=['GET', 'POST'])
@@ -459,6 +566,7 @@ def admin_misc():
         if form.onion_media_av_max_mb.data is not None:
             set_setting('onion_media_av_max_bytes', form.onion_media_av_max_mb.data * 1048576)
         flash(_('Settings saved.'))
+        flash_offsite_warning(offsite_by_field(default_domain().domain, css=site.additional_css or ''))
     elif request.method == 'GET':
         form.enable_downvotes.data = site.enable_downvotes
         form.enable_gif_reply_rep_decrease.data = site.enable_gif_reply_rep_decrease

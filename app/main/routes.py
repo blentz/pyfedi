@@ -1420,12 +1420,16 @@ def static_manifest():
     manifest['name'] = branding.name if branding.name else 'PieFed'
     manifest['description'] = branding.description
 
-    # Update icons to use custom logos with fallbacks. A sister domain's own logo is its icon: a domain keeps no 512
-    # or 192 copy, so its largest PNG, or the logo itself for an SVG upload, which stores no sized copies
+    # Update icons to use custom logos with fallbacks. A sister domain with a logo of its own has its own icons, which
+    # its logo upload made (app/admin/routes.py). An SVG upload makes none, as the site's does, and so has PieFed's,
+    # never the SVG under a PNG type, nor the first domain's icons beside the domain's own logo.
     domain = current_storefront()
-    own_icon = own_value(domain, 'logo_180') or own_value(domain, 'logo')
-    logo_512 = onion_url(domain, own_icon or get_setting('logo_512', ''))   # the onion's never off the onion
-    logo_192 = onion_url(domain, own_icon or get_setting('logo_192', ''))
+    if own_value(domain, 'logo'):
+        logo_512, logo_192 = own_value(domain, 'logo_512'), own_value(domain, 'logo_192')
+    else:
+        logo_512, logo_192 = get_setting('logo_512', ''), get_setting('logo_192', '')
+    logo_512 = onion_url(domain, logo_512)   # the onion's never off the onion
+    logo_192 = onion_url(domain, logo_192)
     
     # Update the icons array
     for icon in manifest.get('icons', []):

@@ -5822,6 +5822,8 @@ class DomainBranding(db.Model):
     logo_152 = db.Column(db.String(40))
     logo_32 = db.Column(db.String(40))
     logo_16 = db.Column(db.String(40))
+    logo_192 = db.Column(db.String(40))   # the PWA manifest's icons: Site keeps its own in settings of these names
+    logo_512 = db.Column(db.String(40))
     default_theme = db.Column(db.String(20))
     additional_css = db.Column(db.Text)
     sidebar = db.Column(db.Text)

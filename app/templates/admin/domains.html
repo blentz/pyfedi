@@ -47,6 +47,7 @@
                         <td>{{ row.registration }}</td>
                         <td>
                             {% if not row.is_default %}
+                            <a href="{{ url_for('admin.admin_domain_branding', domain_id=row.id) }}">{{ _('Branding') }}</a> |
                             <a href="#" data-url="{{ url_for('admin.admin_domains_delete', domain_id=row.id) }}" class="confirm_first send_post">{{ _('Delete') }}</a>
                             {% endif %}
                         </td>

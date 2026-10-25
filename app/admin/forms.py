@@ -36,6 +36,20 @@ class SiteProfileForm(FlaskForm):
     submit = SubmitField(_l('Save'))
 
 
+class DomainBrandingForm(FlaskForm):
+    """A sister domain's own branding. A blank field inherits the first domain's value (app/branding.py). The logo has no
+    FileAllowed: an upload the route will not take is a 400 (`save_logo_upload`), not a form error."""
+    name = StringField(_l('Site Name'), validators=[Length(max=256)])
+    description = StringField(_l('Tagline'), validators=[Length(max=256)])
+    logo = FileField(_l('Logo'), render_kw={'accept': 'image/*'})
+    remove_logo = BooleanField(_l("Remove this domain's logo"))
+    default_theme = SelectField(_l('Default theme'), choices=[], render_kw={'class': 'form-select'})
+    additional_css = TextAreaField(_l('Additional CSS'))
+    sidebar = TextAreaField(_l('Sidebar'))
+    about = TextAreaField(_l('About'))
+    submit = SubmitField(_l('Save'))
+
+
 class SiteMiscForm(FlaskForm):
     enable_downvotes = BooleanField(_l('Enable downvotes'))
     enable_gif_reply_rep_decrease = BooleanField(_l('Ignore comments that are just a gif reaction'))

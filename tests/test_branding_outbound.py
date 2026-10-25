@@ -37,6 +37,7 @@ pytestmark = pytest.mark.usefixtures('golden_site', 'shop_rows', 'site_named_hel
 SHOP_OWN = dict(name='Shop Branded', description='The shop tagline', logo='/static/media/shop_100.png',
                 logo_180='/static/media/shop_180.png', logo_152='/static/media/shop_152.png',
                 logo_32='/static/media/shop_32.png', logo_16='/static/media/shop_16.png',
+                logo_192='/static/media/shop_192.png', logo_512='/static/media/shop_512.png',
                 sidebar='The shop *sidebar*', sidebar_html='<p>The shop <em>sidebar</em></p>',
                 about='The shop about', about_html='<p>The shop about</p>')
 BLANK = dict.fromkeys(SHOP_OWN, '')
@@ -252,7 +253,7 @@ def test_manifest_is_per_host(app, shop_rows):
     shop_document = manifest(app, SHOP)
     assert shop_document['id'] == SHOP_BASE
     assert (shop_document['name'], shop_document['description']) == ('Shop Branded', 'The shop tagline')
-    assert icons(shop_document) == {'192x192': '/static/media/shop_180.png', '512x512': '/static/media/shop_180.png'}
+    assert icons(shop_document) == {'192x192': '/static/media/shop_192.png', '512x512': '/static/media/shop_512.png'}
     hell_document = manifest(app, HELL)
     assert hell_document == hell_before
     assert (hell_document['name'], hell_document['description']) == (HELL, 'Fixed for the golden copies')
@@ -260,10 +261,12 @@ def test_manifest_is_per_host(app, shop_rows):
                                     '512x512': '/static/images/piefed_logo_icon_t_512.png'}
 
 
-def test_a_sister_with_only_an_svg_logo_uses_it_as_its_manifest_icon(app, shop_rows):
-    """An SVG upload stores no sized PNGs (app/admin/routes.py): the logo itself is the icon."""
+def test_a_sister_with_only_an_svg_logo_has_piefeds_manifest_icons(app, shop_rows):
+    """An SVG upload stores no sized PNGs (app/admin/routes.py), as the site's does: the manifest never names the SVG
+    under its PNG type, and never shows the first domain's icons beside the domain's own logo (Task 5)."""
     brand(shop_rows[0], logo='/static/media/shop.svg')
-    assert icons(manifest(app, SHOP)) == {'192x192': '/static/media/shop.svg', '512x512': '/static/media/shop.svg'}
+    assert icons(manifest(app, SHOP)) == {'192x192': '/static/images/piefed_logo_icon_t_192.png',
+                                          '512x512': '/static/images/piefed_logo_icon_t_512.png'}
 
 
 def test_a_sister_with_no_own_values_has_todays_manifest(app, shop_rows):
