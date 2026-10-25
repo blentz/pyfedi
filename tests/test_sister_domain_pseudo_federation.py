@@ -20,6 +20,7 @@ import pytest
 from flask import g, request
 from flask_login import login_user
 
+import app as app_pkg
 from app import cache, db
 from app.activitypub.signature import POST_REQUIRED, HttpSignature
 from app.activitypub.signature_errors import KeyMismatchError
@@ -133,8 +134,13 @@ def _the_announce(wire, inbox, community):  # noqa: F811
 
 def test_a_shop_users_reply_on_a_hell_post_is_stored_and_announced_by_hells_community(app, world, wire,
                                                                                     monkeypatch):  # noqa: F811
+    # sam has a remote follower: a public comment goes to the community, not to the author's followers (plan rule,
+    # upstream PieFed), so their inbox gets nothing
+    make_follow(world.sam, make_user(_peer('masto.example', 'mastodon'), 'max'), is_inward=True)
+
     reply = _reply(app, world.sam, world.shop, world.hello)
 
+    assert MASTO_INBOX not in [url for url, *_ in _sent(wire)]
     stored = db.session.get(PostReply, reply.id)
     assert stored is not None and stored.post_id == world.hello.id and stored.user_id == world.sam.id
     assert stored.ap_id.startswith(f'{SHOP_BASE}/')
@@ -206,6 +212,52 @@ def test_a_shop_users_vote_on_a_hell_post_is_stored_and_announced_by_hells_commu
     assert like['actor'] == f'{SHOP_BASE}/u/sam'
     assert like['id'].startswith(f'{SHOP_BASE}/')
     assert like['object'] == world.hello.public_url()
+
+
+@pytest.fixture
+def notifs(app, monkeypatch):
+    """The piefed_notifs channel switched on: what `redis_client.publish` was handed, as (channel, decoded payload)."""
+    published = []
+    monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'https://notifs.example')
+    monkeypatch.setattr(app_pkg.redis_client, 'publish',
+                        lambda channel, payload: published.append((channel, json.loads(payload))))
+    return published
+
+
+def test_with_the_notifs_channel_a_shop_users_vote_is_published_for_the_peer_and_never_for_a_hosted_inbox(
+        app, world, wire, notifs, monkeypatch):  # noqa: F811
+    """A vote on a local community goes through piefed_notifs (likes.py send_vote) when NOTIF_SERVER is set: the
+    second channel out of the server. A stale peer row whose inbox names shop.example follows pit too, the one way a
+    hosted inbox reaches the fan-out (hosted Instance rows are filtered and carry none): it is never published,
+    and the remote follower's delivery is, as the community's Announce."""
+    stale = make_instance('mirror.example', software='lemmy')
+    stale.inbox = 'https://Shop.Example/inbox'
+    make_community_member(make_user(stale, 'mira'), world.pit)
+
+    _act(app, world.shop, world.sam,
+         lambda: vote_for_post(world.hello.id, 'upvote', True, None, SRC_API, auth=bearer(world.sam)))
+
+    assert wire.calls.call_count == 0   # nothing over httpx: the votes went to the channel
+    urls = [url for _, payload in notifs for url in payload['urls']]
+    assert [url for url in urls if is_hosted_uri(url)] == []
+    assert urls == [PEER_INBOX]
+    (channel, payload), = notifs
+    assert channel == 'http_posts:activity'
+    announce = json.loads(payload['data'])
+    assert announce['type'] == 'Announce' and announce['actor'] == world.pit.public_url()
+    assert announce['object']['type'] == 'Like' and announce['object']['actor'] == f'{SHOP_BASE}/u/sam'
+
+
+def test_with_the_notifs_channel_a_reply_still_goes_over_http_and_never_to_a_hosted_inbox(
+        app, world, wire, notifs, monkeypatch):  # noqa: F811
+    """Only votes use the channel (likes.py is publish_async_posts' one outbound caller): a reply is still sent by
+    post_request, to the peer alone, with NOTIF_SERVER set."""
+    _reply(app, world.sam, world.shop, world.hello)
+
+    assert notifs == []
+    _nothing_hosted(wire)
+    _, sent_request = _the_announce(wire, PEER_INBOX, world.pit)
+    assert _verifies_at(monkeypatch, app, sent_request, world.pit.public_key) is True
 
 
 # -- a post -----------------------------------------------------------------------------------------------------------
