@@ -18,7 +18,7 @@ from app.discovery.podcast import podcast_community_for
 from app.federation_urls import instance_actor_signing
 from app.models import User, Community, Feed
 from app.local_names import local_named
-from app.storefront import acting_domain, current_storefront, domain_for_host, is_local_host
+from app.storefront import acting_domain, current_storefront, domain_for_host, is_hosted_server
 from app.utils import utcnow, get_setting, actor_contains_blocked_words, actor_profile_contains_blocked_words, \
     instance_banned, low_value_reposters, instance_allowed
 
@@ -78,9 +78,9 @@ def validate_remote_actor(actor_url, actor=None, allow_banned=False):
         return False
 
     # Check if instance is allowed/banned. One of our own domains is neither: the allowlist and ban list govern the
-    # servers we federate with, and we are not one of them (plan C4). Ours by is_local_host, the rule every such gate
-    # uses: the authority as named, so userinfo is never ours, and its port is ignored as domain_for_host ignores it
-    if not is_local_host(server):
+    # servers we federate with, and we are not one of them (plan C4). Ours by is_hosted_server, the rule every such
+    # gate uses: the authority as named (userinfo is never ours) on a port one of our domains answers
+    if not is_hosted_server(server):
         if get_setting('use_allowlist', False):
             if not instance_allowed(server):
                 return False

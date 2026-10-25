@@ -33,7 +33,7 @@ from app.models import Community, File, PostReply, Post, utcnow, CommunityMember
     Instance, User, Tag, CommunityFlair, CommunityThemeAllowed, markdown_source, \
     language_from_ap, _as_url
 from app.local_names import local_named, named_by_actor
-from app.storefront import domain_for_host
+from app.storefront import domain_for_host, is_hosted_server
 from app.utils import get_request, gibberish, ensure_directory_exists, ap_datetime, instance_banned, get_task_session, \
     store_files_in_s3, guess_mime_type, patch_db_session, instance_allowed, get_setting, scale_gif, theme_list, \
     save_image_without_metadata, \
@@ -97,9 +97,9 @@ def search_for_community(address: str, allow_fetch: bool = True, retry: bool = F
 
         hosted = domain_for_host(server)
         # One of ours is neither allowed nor banned: those lists govern the servers we federate with (plan C4). Ours
-        # by the rule is_local_host states (domain_for_host of the authority as named), so the gate and the branch
-        # below never disagree
-        if hosted is None:
+        # by is_hosted_server, the one rule those gates use. A port none of our domains names passes the lists as any
+        # server; if they let it through, the hosted branch below still answers from the database, never by a fetch
+        if not is_hosted_server(server):
             if get_setting('use_allowlist') and not instance_allowed(server):
                 return None
             if instance_banned(server):
