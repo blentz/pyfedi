@@ -121,6 +121,7 @@ def register_request_hooks(app):
     app.jinja_env.globals['show_explore'] = show_explore
     app.jinja_env.globals['in_sorted_list'] = in_sorted_list
     app.jinja_env.globals['theme'] = current_theme
+    app.jinja_env.globals['current_branding'] = current_branding   # for macro files, which see no context values
     app.jinja_env.globals['file_exists'] = os.path.exists
     app.jinja_env.globals['first_paragraph'] = first_paragraph
     app.jinja_env.globals['ngettext'] = ngettext
