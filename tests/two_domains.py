@@ -21,7 +21,7 @@ from app.models import Community, SiteDomain, User
 from app.storefront import DomainInfo, clear_domain_cache, domain_for_host
 from tests.factories import make_instance, make_user
 
-HELL = 'test.piefed.local'      # the test app's SERVER_NAME
+FIRST = 'test.piefed.local'      # the test app's SERVER_NAME
 ONION = 'abc.onion'
 
 
@@ -47,7 +47,7 @@ def onion_request(app):
 
 @contextmanager
 def default_request(app):
-    with request_on(app, domain_for_host(HELL)):
+    with request_on(app, domain_for_host(FIRST)):
         yield
 
 
@@ -55,7 +55,7 @@ def register_local_only_onion() -> str:
     """the first domain's default row and the local-only onion, with no fixture: for a test that needs only a URL the onion
     names (an "is it ours" guard that refuses it). Returns the onion's origin."""
     if db.session.query(SiteDomain).filter_by(is_default=True).first() is None:
-        db.session.add(SiteDomain(domain=HELL, scheme='https', is_default=True))
+        db.session.add(SiteDomain(domain=FIRST, scheme='https', is_default=True))
     db.session.add(SiteDomain(domain=ONION, scheme='http', federates=False))
     db.session.commit()
     clear_domain_cache()
@@ -64,9 +64,9 @@ def register_local_only_onion() -> str:
 
 @pytest.fixture
 def two_domains(app, db_session):
-    instance = make_instance(HELL, software='piefed')
+    instance = make_instance(FIRST, software='piefed')
     if db.session.query(SiteDomain).filter_by(is_default=True).first() is None:
-        db.session.add(SiteDomain(domain=HELL, scheme='https', is_default=True))
+        db.session.add(SiteDomain(domain=FIRST, scheme='https', is_default=True))
     db.session.add(SiteDomain(domain=ONION, scheme='http', federates=False))
     db.session.commit()
     clear_domain_cache()
@@ -92,7 +92,7 @@ def two_domains(app, db_session):
         db.session.commit()
         return community
 
-    yield TwoDomains((domain_for_host(HELL), domain_for_host(ONION)), instance, local_user, local_community)
+    yield TwoDomains((domain_for_host(FIRST), domain_for_host(ONION)), instance, local_user, local_community)
     clear_domain_cache()
 
 

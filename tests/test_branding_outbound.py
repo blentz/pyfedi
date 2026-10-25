@@ -10,7 +10,7 @@ Task 3; spec §3.3).
   byte (tests/test_c3_golden_documents.py), and a sister never names the first domain.
 
 shop.example federates beside the first domain (`golden_site`, `shop_rows`); Site row 1 is named as the first
-domain's host (`site_named_hell`), so a document that copies the site's name onto the shop shows in its body."""
+domain's host (`site_named_first`), so a document that copies the site's name onto the shop shows in its body."""
 import json
 from datetime import timedelta
 from unittest.mock import patch
@@ -28,11 +28,11 @@ from app.models import DomainBranding, Notification, Site, User
 from app.storefront import clear_domain_cache, domain_for_host
 from app.utils import utcnow
 from tests.test_c3_golden_documents import AP, DISCOVERY_PATHS, GOLDEN_PATHS, SHOP, golden_copy, golden_site  # noqa: F401
-from tests.test_per_domain_actor_documents import SHOP_BASE, shop_rows, site_named_hell  # noqa: F401  (fixtures)
+from tests.test_per_domain_actor_documents import SHOP_BASE, shop_rows, site_named_first  # noqa: F401  (fixtures)
 from tests.test_per_domain_discovery import alpha_api, alpha_get  # noqa: F401  (a fixture)
-from tests.two_domains import HELL, two_domains  # noqa: F401  (a fixture)
+from tests.two_domains import FIRST, two_domains  # noqa: F401  (a fixture)
 
-pytestmark = pytest.mark.usefixtures('golden_site', 'shop_rows', 'site_named_hell')
+pytestmark = pytest.mark.usefixtures('golden_site', 'shop_rows', 'site_named_first')
 
 SHOP_OWN = dict(name='Shop Branded', description='The shop tagline', logo='/static/media/shop_100.png',
                 logo_180='/static/media/shop_180.png', logo_152='/static/media/shop_152.png',
@@ -89,19 +89,19 @@ def test_email_sender_names_recipients_home_domain(app, shop_rows, send_mail):
     """Review Focus 4: the From name and the logo are the recipient's home domain's, in a call with no request
     context and no g.site; the first domain's account is named by Site."""
     shop, shop_user, _ = shop_rows
-    hell_user = db.session.query(User).filter_by(site_domain_id=domain_for_host(HELL).id).one()
+    first_user = db.session.query(User).filter_by(site_domain_id=domain_for_host(FIRST).id).one()
     brand(shop, **SHOP_OWN)
     mail_from = current_app.config['MAIL_FROM']
     sent = {}
-    for user in (shop_user, hell_user):
+    for user in (shop_user, first_user):
         celery_style()
         with patch('app.email.send_email') as send:
             send_mail(user)
         sent[user.id] = send.call_args.kwargs
     assert sent[shop_user.id]['sender'] == f'Shop Branded <{mail_from}>'
     assert '/static/media/shop_100.png' in sent[shop_user.id]['html_body']
-    assert sent[hell_user.id]['sender'] == f'{HELL} <{mail_from}>'
-    assert '/static/media/site_100.png' in sent[hell_user.id]['html_body']
+    assert sent[first_user.id]['sender'] == f'{FIRST} <{mail_from}>'
+    assert '/static/media/site_100.png' in sent[first_user.id]['html_body']
 
 
 @pytest.mark.usefixtures('mail_site')
@@ -112,7 +112,7 @@ def test_a_sister_with_no_own_name_sends_as_site(app, shop_rows):
     celery_style()
     with patch('app.email.send_email') as send:
         send_verification_email(shop_user)
-    assert send.call_args.kwargs['sender'] == f'{HELL} <{current_app.config["MAIL_FROM"]}>'
+    assert send.call_args.kwargs['sender'] == f'{FIRST} <{current_app.config["MAIL_FROM"]}>'
     assert '/static/media/site_100.png' in send.call_args.kwargs['html_body']
 
 
@@ -133,14 +133,14 @@ def test_mail_to_no_account_is_the_first_domains(app, shop_rows):
     """A topic suggestion goes to the admins, not to an account: the first domain's name and logo."""
     shop, shop_user, community = shop_rows
     brand(shop, **SHOP_OWN)
-    assert mail_name() == HELL
+    assert mail_name() == FIRST
     assert mail_name(shop_user) == 'Shop Branded'
     celery_style()
     with patch('app.email.send_email') as send:
         send_topic_suggestion([community], shop_user, 'admin@example.org', 'A subject', 'Gardening')
     kwargs = send.call_args.kwargs
-    assert kwargs['sender'] == f'{HELL} <{current_app.config["MAIL_FROM"]}>'
-    assert kwargs['text_body'].startswith(f'Hi {HELL} Admin!')
+    assert kwargs['sender'] == f'{FIRST} <{current_app.config["MAIL_FROM"]}>'
+    assert kwargs['text_body'].startswith(f'Hi {FIRST} Admin!')
     assert '/static/media/site_100.png' in kwargs['html_body'] and 'shop_100' not in kwargs['html_body']
 
 
@@ -164,14 +164,14 @@ def test_a_topic_suggestion_is_titled_by_the_first_domain(app, shop_rows):
         response = client.post('/topics/new', base_url=SHOP_BASE,
                                data={'topic_name': 'Gardening', 'communities_for_topic': 'a', 'csrf_token': token})
     assert response.status_code == 302
-    assert send.call_args.args[3] == f'New topic suggestion from {HELL}'
+    assert send.call_args.args[3] == f'New topic suggestion from {FIRST}'
 
 
 @pytest.mark.usefixtures('mail_site')
 def test_a_newsletter_is_from_each_readers_home_domain(app, shop_rows):
     shop, shop_user, _ = shop_rows
-    hell_user = db.session.query(User).filter_by(site_domain_id=domain_for_host(HELL).id).one()
-    for user in (shop_user, hell_user):
+    first_user = db.session.query(User).filter_by(site_domain_id=domain_for_host(FIRST).id).one()
+    for user in (shop_user, first_user):
         user.newsletter = True
     db.session.commit()
     brand(shop, **SHOP_OWN)
@@ -180,7 +180,7 @@ def test_a_newsletter_is_from_each_readers_home_domain(app, shop_rows):
     form.body_text = type('Field', (), {'data': 'hello'})()
     form.body_html = type('Field', (), {'data': '<p>hello</p>'})()
     form.test = type('Field', (), {'data': False})()
-    with app.test_request_context(base_url=f'https://{HELL}'):
+    with app.test_request_context(base_url=f'https://{FIRST}'):
         app.preprocess_request()
         with patch('app.admin.util.send_email') as send:
             send_newsletter(form)
@@ -188,16 +188,16 @@ def test_a_newsletter_is_from_each_readers_home_domain(app, shop_rows):
     mail_from = current_app.config['MAIL_FROM']
     assert by_recipient[shop_user.email]['sender'] == f'Shop Branded <{mail_from}>'
     assert '/static/media/shop_100.png' in by_recipient[shop_user.email]['html_body']
-    assert by_recipient[hell_user.email]['sender'] == f'{HELL} <{mail_from}>'
-    assert '/static/media/site_100.png' in by_recipient[hell_user.email]['html_body']
+    assert by_recipient[first_user.email]['sender'] == f'{FIRST} <{mail_from}>'
+    assert '/static/media/site_100.png' in by_recipient[first_user.email]['html_body']
 
 
 @pytest.mark.usefixtures('mail_site')
 def test_the_missed_notifications_mail_is_from_each_accounts_home_domain(app, shop_rows):
     """A cron job: no request, no g.site."""
     shop, shop_user, _ = shop_rows
-    hell_user = db.session.query(User).filter_by(site_domain_id=domain_for_host(HELL).id).one()
-    for user in (shop_user, hell_user):
+    first_user = db.session.query(User).filter_by(site_domain_id=domain_for_host(FIRST).id).one()
+    for user in (shop_user, first_user):
         user.email_unread = True
         user.email_unread_sent = False
         user.last_seen = utcnow() - timedelta(days=2)
@@ -214,7 +214,7 @@ def test_the_missed_notifications_mail_is_from_each_accounts_home_domain(app, sh
     mail_from = current_app.config['MAIL_FROM']
     assert sent[shop_user.email]['sender'] == f'Shop Branded <{mail_from}>'
     assert '/static/media/shop_100.png' in sent[shop_user.email]['html_body']
-    assert sent[hell_user.email]['sender'] == f'{HELL} <{mail_from}>'
+    assert sent[first_user.email]['sender'] == f'{FIRST} <{mail_from}>'
 
 
 @pytest.mark.parametrize('logged_in', [True, False])
@@ -229,7 +229,7 @@ def test_the_test_email_is_from_the_callers_home_domain(app, shop_rows, monkeypa
             session['_fresh'] = True
     with patch('app.main.routes.send_email') as send:
         client.get('/test_email?email=x@example.org', base_url=SHOP_BASE)
-    name = 'Shop Branded' if logged_in else HELL
+    name = 'Shop Branded' if logged_in else FIRST
     assert send.call_args.kwargs['sender'] == f'{name} <{current_app.config["MAIL_FROM"]}>'
 
 
@@ -246,18 +246,18 @@ def icons(document) -> dict:
 
 def test_manifest_is_per_host(app, shop_rows):
     shop = shop_rows[0]
-    hell_before = manifest(app, HELL)
+    first_before = manifest(app, FIRST)
     shop_before = manifest(app, SHOP)
-    assert (shop_before['name'], shop_before['description']) == (HELL, 'Fixed for the golden copies')   # as today
+    assert (shop_before['name'], shop_before['description']) == (FIRST, 'Fixed for the golden copies')   # as today
     brand(shop, **SHOP_OWN)
     shop_document = manifest(app, SHOP)
     assert shop_document['id'] == SHOP_BASE
     assert (shop_document['name'], shop_document['description']) == ('Shop Branded', 'The shop tagline')
     assert icons(shop_document) == {'192x192': '/static/media/shop_192.png', '512x512': '/static/media/shop_512.png'}
-    hell_document = manifest(app, HELL)
-    assert hell_document == hell_before
-    assert (hell_document['name'], hell_document['description']) == (HELL, 'Fixed for the golden copies')
-    assert icons(hell_document) == {'192x192': '/static/images/piefed_logo_icon_t_192.png',
+    first_document = manifest(app, FIRST)
+    assert first_document == first_before
+    assert (first_document['name'], first_document['description']) == (FIRST, 'Fixed for the golden copies')
+    assert icons(first_document) == {'192x192': '/static/images/piefed_logo_icon_t_192.png',
                                     '512x512': '/static/images/piefed_logo_icon_t_512.png'}
 
 
@@ -297,7 +297,7 @@ def test_sister_with_own_name_publishes_it_in_nodeinfo_actor_api(app, shop_rows)
     brand(shop_rows[0], **SHOP_OWN)
     bodies = documents(app)
     for path, body in bodies.items():
-        assert HELL.encode() not in body, path   # a sister never names the first domain
+        assert FIRST.encode() not in body, path   # a sister never names the first domain
     assert json.loads(bodies['/api/v1/instance'])['title'] == 'Shop Branded'
 
     lemmy = json.loads(bodies['/api/v3/site'])['site_view']['site']
@@ -371,6 +371,6 @@ def test_first_domain_documents_unchanged(app, two_domains, shop_rows, name, pat
     db.session.commit()
     brand(shop_rows[0], **SHOP_OWN)
     brand(two_domains.domains[0], **SHOP_OWN)
-    response = app.test_client().get(path, headers=headers, base_url=f'https://{HELL}')
+    response = app.test_client().get(path, headers=headers, base_url=f'https://{FIRST}')
     assert response.status_code == 200
     assert response.data == golden_copy(name)

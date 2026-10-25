@@ -19,7 +19,7 @@ from tests.factories import make_post, make_post_reply
 from tests.test_community_lifecycle import _add_payload as add_payload
 from tests.test_community_lifecycle import able_to_create
 from tests.test_per_domain_html_routes import BASE, other, signed_in, world  # noqa: F401
-from tests.two_domains import HELL, ONION, default_request, onion_request, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, default_request, onion_request, two_domains  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -35,7 +35,7 @@ def blocked(viewer) -> set[int]:
     return {b.blocked_id for b in UserBlock.query.filter_by(blocker_id=viewer.id)}
 
 
-@pytest.mark.parametrize('host', [ONION, HELL])
+@pytest.mark.parametrize('host', [ONION, FIRST])
 def test_the_profiles_block_and_unblock_buttons_act_on_the_profiles_account(app, world, host):
     """Critical 1: on one storefront, the other domain's bob's profile blocks and unblocks that bob."""
     viewer, theirs = world.viewers[host], world.bob[other(host)]
@@ -50,7 +50,7 @@ def test_the_profiles_block_and_unblock_buttons_act_on_the_profiles_account(app,
     assert blocked(viewer) == set()
 
 
-@pytest.mark.parametrize('host', [ONION, HELL])
+@pytest.mark.parametrize('host', [ONION, FIRST])
 def test_the_block_lists_unblock_button_unblocks_that_account(app, world, host, monkeypatch):
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the page renders its form's token
     viewer, theirs = world.viewers[host], world.bob[other(host)]
@@ -81,10 +81,10 @@ def titled(world):
     return world
 
 
-@pytest.mark.parametrize('reporter_host', [ONION, HELL])
-def test_a_report_about_the_onions_bob_links_to_the_onions_bob_on_hell(app, titled, reporter_host):
+@pytest.mark.parametrize('reporter_host', [ONION, FIRST])
+def test_a_report_about_the_onions_bob_links_to_the_onions_bob_on_first(app, titled, reporter_host):
     """Important 3. A report written on either storefront about the onion's bob: the admin queue on the first domain links
-    to the onion's bob, not hell's namesake. (Written on the onion, a storefront-relative spelling stores it bare.)"""
+    to the onion's bob, not the first domain's namesake. (Written on the onion, a storefront-relative spelling stores it bare.)"""
     world = titled
     client = signed_in(app, world.viewers[reporter_host], reporter_host)
     target = 'bob' if reporter_host == ONION else f'bob@{ONION}'
@@ -93,33 +93,33 @@ def test_a_report_about_the_onions_bob_links_to_the_onions_bob_on_hell(app, titl
     with default_request(app):
         html = render_template('admin/reports/user_report.html', report=report)
     suspect, reporter = profile_links(html)
-    assert shows(app, world, HELL, suspect) == {ONION}
+    assert shows(app, world, FIRST, suspect) == {ONION}
     assert reporter == f'/u/{world.viewers[reporter_host].stored_link()}'
 
 
 def test_a_follow_notification_from_the_onions_bob_links_to_the_onions_bob(app, titled):
     world = titled
-    watcher = world.viewers[HELL]
+    watcher = world.viewers[FIRST]
     follower = signed_in(app, world.bob[ONION], ONION)
-    assert follower.post(f'/u/{watcher.user_name}@{HELL}/follow').status_code in (200, 302)
-    page = signed_in(app, watcher, HELL).get('/notifications').get_data(as_text=True)
+    assert follower.post(f'/u/{watcher.user_name}@{FIRST}/follow').status_code in (200, 302)
+    page = signed_in(app, watcher, FIRST).get('/notifications').get_data(as_text=True)
     [link] = [href for href in profile_links(page) if href.startswith('/u/bob')]
-    assert shows(app, world, HELL, link) == {ONION}
+    assert shows(app, world, FIRST, link) == {ONION}
 
 
 def test_a_stored_name_is_the_same_on_every_storefront(app, world):
     """Bare on the default domain (the first domain's stored data stays byte-identical), `name@domain` on another."""
     for request_on in (default_request, onion_request):
         with request_on(app):
-            assert world.bob[HELL].stored_link() == 'bob'
+            assert world.bob[FIRST].stored_link() == 'bob'
             assert world.bob[ONION].stored_link() == f'bob@{ONION}'
-            assert world.art[HELL].stored_link() == 'art'
+            assert world.art[FIRST].stored_link() == 'art'
             assert world.art[ONION].stored_link() == f'art@{ONION}'
 
 
 def test_an_archived_reply_by_the_onions_bob_links_to_the_onions_bob(app, world):
     """An archive keeps the author's name; the author it is read back into links by the domain the archive kept."""
-    post = make_post(world.art[HELL], world.viewers[HELL], f'https://{HELL}/post/archived')
+    post = make_post(world.art[FIRST], world.viewers[FIRST], f'https://{FIRST}/post/archived')
     post.body, post.body_html = 'x' * 300, '<p>archived</p>'
     make_post_reply(post, world.bob[ONION], body='a reply from the onion')
     post.reply_count = 1
@@ -146,7 +146,7 @@ def community_shown(app, world, host, path) -> set[str]:
 
 def test_creating_a_community_on_the_onion_lands_on_the_new_community(app, world, two_domains):
     """A first-domain account creating on the onion makes a first-domain community: the redirect names the first domain."""
-    creator = world.viewers[HELL]
+    creator = world.viewers[FIRST]
     able_to_create(creator)
     two_domains.local_community('fresh', two_domains.domains[1]).title = 'Onion fresh'
     db.session.add_all([Language(code='und', name='Undetermined'), Language(code='en', name='English')])
@@ -155,15 +155,15 @@ def test_creating_a_community_on_the_onion_lands_on_the_new_community(app, world
     visitor = signed_in(app, creator, ONION)
     with patch('app.community.routes.task_selector'):
         response = visitor.client.post('/community/add_local', base_url=visitor.base,
-                                       data=add_payload(visitor.token, url='fresh', community_name='Hell fresh'),
+                                       data=add_payload(visitor.token, url='fresh', community_name='First fresh'),
                                        content_type='multipart/form-data')
-    made = Community.query.filter_by(title='Hell fresh').one()
+    made = Community.query.filter_by(title='First fresh').one()
     assert made.site_domain_id == two_domains.domains[0].id
     page = visitor.get(response.headers['Location']).get_data(as_text=True)
-    assert 'Hell fresh' in page and 'Onion fresh' not in page
+    assert 'First fresh' in page and 'Onion fresh' not in page
 
 
-@pytest.mark.parametrize('host', [ONION, HELL])
+@pytest.mark.parametrize('host', [ONION, FIRST])
 def test_a_profiles_pagination_stays_on_the_profiles_account(app, titled, host):
     world = titled
     theirs = other(host)
@@ -175,7 +175,7 @@ def test_a_profiles_pagination_stays_on_the_profiles_account(app, titled, host):
     assert shows(app, world, host, back) == {theirs}
 
 
-@pytest.mark.parametrize('host', [ONION, HELL])
+@pytest.mark.parametrize('host', [ONION, FIRST])
 def test_deleting_a_post_returns_to_its_own_community(app, world, host):
     author = world.viewers[host]
     post = make_post(world.art[other(host)], author, f'{BASE[host]}/post/to-delete', title='doomed')
@@ -186,7 +186,7 @@ def test_deleting_a_post_returns_to_its_own_community(app, world, host):
     assert community_shown(app, world, host, response.headers['Location']) == {other(host)}
 
 
-@pytest.mark.parametrize('host', [ONION, HELL])
+@pytest.mark.parametrize('host', [ONION, FIRST])
 def test_the_block_lists_community_link_names_that_domains_community(app, world, host, monkeypatch):
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the page renders its form's token
     viewer = world.viewers[host]
@@ -208,7 +208,7 @@ def test_the_posting_pattern_counts_only_this_accounts_posts(app, world):
 
     def posts_per_hour(path):
         with patch('app.user.routes.render_template', return_value='rendered') as render:
-            signed_in(app, world.viewers[HELL], HELL).get(path)
+            signed_in(app, world.viewers[FIRST], FIRST).get(path)
         return render.call_args.kwargs['posting_pattern_values']
 
     assert posts_per_hour('/u/bob') == [0] * 24
@@ -220,6 +220,6 @@ def test_a_communitys_alternate_link_is_lower_case_whatever_its_stored_name(app,
     capitals (one made through the API)."""
     two_domains.local_community('Art', two_domains.domains[0])
     response = app.test_client().get('/c/ART', headers={'Accept': 'application/activity+json'},
-                                     base_url=f'https://{HELL}')
+                                     base_url=f'https://{FIRST}')
     assert response.status_code == 200
-    assert response.headers['Link'] == f'<https://{HELL}/c/art>; rel="alternate"; type="text/html"'
+    assert response.headers['Link'] == f'<https://{FIRST}/c/art>; rel="alternate"; type="text/html"'

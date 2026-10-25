@@ -337,7 +337,7 @@ def test_storefront_html_passes_none(app, onion):
         context.pop()
 
 
-# A bare name on the onion is the onion's own (plan C1): hell's rows are named by their handle there
+# A bare name on the onion is the onion's own (plan C1): the first domain's rows are named by their handle there
 @pytest.mark.parametrize('path', ['/index/feed', '/d/{domain}/feed', '/tag/pics/feed', f'/u/author@{CANONICAL}/feed',
                                   f'/community/general@{CANONICAL}/feed'])
 def test_feed_item_bodies_on_storefront(app, world, path):

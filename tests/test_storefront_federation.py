@@ -282,7 +282,7 @@ def test_the_back_button_shows_for_a_referrer_on_any_storefront(app, onion, refe
     ('/feed/lookup/news/abc.onion', '/f/news'),
 ])
 def test_a_lookup_on_a_registered_domain_is_local(app, onion, path, location):
-    """Plan C1: a local name is the domain's own row, so the redirect names the onion's, never hell's namesake."""
+    """Plan C1: a local name is the domain's own row, so the redirect names the onion's, never the first domain's namesake."""
     make_site()
     onion_id = SiteDomain.query.filter_by(domain=ALIAS).one().id
     _local_user('bob').site_domain_id = onion_id

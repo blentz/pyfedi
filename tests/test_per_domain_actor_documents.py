@@ -21,7 +21,7 @@ from tests.factories import a_keypair, grant_permission, make_user
 from tests.test_dev_tools import csrf
 from tests.test_c3_golden_documents import AP, CREATED, SHOP, UPDATED, golden_site, pem  # noqa: F401  (fixture)
 from tests.test_onion_guard_limits import PROXY, a_session, onion_get
-from tests.two_domains import HELL, two_domains  # noqa: F401  (fixture)
+from tests.two_domains import FIRST, two_domains  # noqa: F401  (fixture)
 
 pytestmark = pytest.mark.usefixtures('golden_site')
 
@@ -35,7 +35,7 @@ def onion_proxy(app, monkeypatch):
 
 @pytest.fixture
 def shop_rows(app):
-    """goldie and goldart again, on shop.example: the same names as hell's, so a lookup or URL that ignores the
+    """goldie and goldart again, on shop.example: the same names as the first domain's, so a lookup or URL that ignores the
     domain shows."""
     shop = domain_for_host(SHOP)
     avatar, cover = File(file_path='app/static/media/users/sh/op/avatar.webp'), \
@@ -73,10 +73,10 @@ def real_cache(app, monkeypatch):
 
 
 @pytest.fixture
-def site_named_hell(app):
+def site_named_first(app):
     """Site row 1 named as prod's is (Site.name 'the first domain'), so a document that copies the site name onto a sister
     domain names the first domain and the full-body check sees it."""
-    db.session.get(Site, 1).name = HELL
+    db.session.get(Site, 1).name = FIRST
     db.session.commit()
     cache.clear()
 
@@ -88,7 +88,7 @@ def served(app, path, host=SHOP):
 
 
 def assert_on_shop(body: bytes):
-    assert HELL.encode() not in body   # the first domain's host is nowhere in the document, in any field
+    assert FIRST.encode() not in body   # the first domain's host is nowhere in the document, in any field
 
 
 def on_shop(url: str) -> bool:
@@ -136,7 +136,7 @@ def test_a_shop_collection_names_only_shop(app, shop_rows, path):
     assert json.loads(response.data)['id'] == f'{SHOP_BASE}{path}'
 
 
-def test_the_shops_instance_actor_is_the_shops(app, shop_rows, site_named_hell):
+def test_the_shops_instance_actor_is_the_shops(app, shop_rows, site_named_first):
     shop = shop_rows[0]
     response = served(app, '/actor')
     assert_on_shop(response.data)
@@ -158,20 +158,20 @@ def test_the_shops_instance_actor_outbox_is_the_shops(app, shop_rows):
     assert json.loads(response.data)['id'] == f'{SHOP_BASE}/actor/outbox'
 
 
-@pytest.mark.parametrize('first', [HELL, SHOP])
-def test_the_application_document_is_cached_per_host(app, shop_rows, site_named_hell, real_cache, first):
+@pytest.mark.parametrize('first', [FIRST, SHOP])
+def test_the_application_document_is_cached_per_host(app, shop_rows, site_named_first, real_cache, first):
     """With a working cache (conftest's NullCache stores nothing), whichever host is asked first, the other's copy
-    is its own: hell's never answers the shop, nor the shop's hell."""
-    second = SHOP if first == HELL else HELL
+    is its own: the first domain's never answers the shop, nor the shop's first."""
+    second = SHOP if first == FIRST else FIRST
     copies = {host: served(app, '/', host=host).data for host in (first, second)}
-    assert json.loads(copies[HELL])['id'] == f'https://{HELL}/' and json.loads(copies[SHOP])['id'] == f'{SHOP_BASE}/'
+    assert json.loads(copies[FIRST])['id'] == f'https://{FIRST}/' and json.loads(copies[SHOP])['id'] == f'{SHOP_BASE}/'
     assert_on_shop(copies[SHOP])
     assert served(app, '/', host=first).data == copies[first] and served(app, '/', host=second).data == copies[second]
 
 
-def test_the_shops_application_document_is_the_shops(app, shop_rows, site_named_hell):
+def test_the_shops_application_document_is_the_shops(app, shop_rows, site_named_first):
     shop = shop_rows[0]
-    hell_first = served(app, '/', host=HELL).data   # hell's first, then the shop's (per-host cache: above)
+    first_first = served(app, '/', host=FIRST).data   # The first domain's first, then the shop's (per-host cache: above)
     response = served(app, '/')
     assert_on_shop(response.data)
     document = json.loads(response.data)
@@ -183,7 +183,7 @@ def test_the_shops_application_document_is_the_shops(app, shop_rows, site_named_
     assert document['publicKey'] == {'id': f'{SHOP_BASE}/#main-key', 'owner': f'{SHOP_BASE}/',
                                      'publicKeyPem': db.session.get(SiteDomain, shop.id).public_key}
     assert document['publicKey']['publicKeyPem']
-    assert served(app, '/', host=HELL).data == hell_first   # and the shop's never answers hell
+    assert served(app, '/', host=FIRST).data == first_first   # and the shop's never answers the first domain
 
 
 @pytest.mark.parametrize('path', ['/actor', '/actor/outbox', '/'])
@@ -193,10 +193,10 @@ def test_the_onions_instance_actor_answers_no_other_server(app, path):
     assert onion_get(client, path, headers=AP).status_code == 404
 
 
-def test_hells_feed_is_hells_and_unknown_to_the_shop(app, shop_rows):
+def test_first_domains_feed_is_first_domains_and_unknown_to_the_shop(app, shop_rows):
     """A feed has no domain of its own: its owner is the default domain (Task 1's owner_domain). Fetched through the
     shop it is another of our domains' object, so the shop answers the 404 of an unknown one (owner ruling, Task 3)."""
-    assert json.loads(served(app, '/f/goldfeed', host=HELL).data)['id'] == f'https://{HELL}/f/goldfeed'
+    assert json.loads(served(app, '/f/goldfeed', host=FIRST).data)['id'] == f'https://{FIRST}/f/goldfeed'
     assert app.test_client().get('/f/goldfeed', headers=AP, base_url=SHOP_BASE).status_code == 404
 
 
@@ -221,7 +221,7 @@ def test_the_group_update_names_the_shop(app, shop_rows, monkeypatch):
 
     [(inbox, announce, (_, key_id))] = sent
     assert inbox == 'https://peer.example/inbox'
-    assert HELL not in json.dumps(announce)
+    assert FIRST not in json.dumps(announce)
     assert key_id == f'{SHOP_BASE}/c/goldart#main-key'
     assert announce['id'].startswith(f'{SHOP_BASE}/activities/announce/')
     update, group = announce['object'], announce['object']['object']
@@ -277,7 +277,7 @@ def test_a_shop_rows_fallback_urls_are_the_shops(app, shop_rows):
     assert community.public_url() == f'{SHOP_BASE}/c/goldart'
 
 
-def test_a_hell_rows_fallback_urls_are_unchanged(app):
+def test_a_first_rows_fallback_urls_are_unchanged(app):
     user = User.query.filter_by(user_name='goldie', site_domain_id=default_domain().id).one()
     user.ap_profile_id = user.ap_public_url = user.ap_domain = None
     community = Community.query.filter_by(name='goldart', site_domain_id=default_domain().id).one()
@@ -285,7 +285,7 @@ def test_a_hell_rows_fallback_urls_are_unchanged(app):
     db.session.commit()
     server_url = app.config['SERVER_URL']
     assert (user.profile_id(), user.public_url()) == (f'{server_url}/u/goldie', f'{server_url}/u/goldie')
-    assert (user.instance_domain(), user.mention_tag()) == (HELL, f'@goldie@{HELL}')
+    assert (user.instance_domain(), user.mention_tag()) == (FIRST, f'@goldie@{FIRST}')
     assert (community.profile_id(), community.public_url()) == (f'{server_url}/c/goldart',
                                                                 f'{server_url}/c/goldart')
 
@@ -397,4 +397,4 @@ def test_an_admin_move_makes_a_default_domain_community(app):
     base = f"{app.config['SERVER_URL']}/c/moved"
     assert (community.ap_profile_id, community.ap_public_url, community.ap_followers_url) == \
         (base, base, f'{base}/followers')
-    assert (community.ap_domain, community.site_domain_id) == (HELL, default_domain().id)
+    assert (community.ap_domain, community.site_domain_id) == (FIRST, default_domain().id)

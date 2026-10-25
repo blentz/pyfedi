@@ -35,12 +35,12 @@ from tests.test_no_http_to_hosted import wire  # noqa: F401 -- fixture
 from tests.test_per_domain_object_ids import _keyed, a_post
 from tests.test_per_domain_signing import _key_id
 from tests.test_shared_post_edit import _api_input
-from tests.two_domains import HELL, request_on, two_domains  # noqa: F401 -- fixture
+from tests.two_domains import FIRST, request_on, two_domains  # noqa: F401 -- fixture
 
 pytestmark = pytest.mark.usefixtures('site')
 
 SHOP = 'shop.example'
-HELL_BASE, SHOP_BASE = f'https://{HELL}', f'https://{SHOP}'
+FIRST_BASE, SHOP_BASE = f'https://{FIRST}', f'https://{SHOP}'
 PEER_INBOX = 'https://peer.example/inbox'
 PIEFED_INBOX = 'https://pf.example/inbox'
 MASTO_INBOX = 'https://masto.example/inbox'
@@ -58,13 +58,13 @@ def world(app, two_domains):  # noqa: F811 -- two_domains is the imported fixtur
     """hal on the first domain and sam on shop.example, a community on each (pit on the first domain, wares on shop.example), each
     with its own key, and rem on peer.example (Lemmy) following both. hal's post in pit and sam's post in wares, each
     author subscribed to replies as make_post leaves them."""
-    hell = two_domains.domains[0]
+    first = two_domains.domains[0]
     db.session.add(SiteDomain(domain=SHOP, scheme='https', federates=True))
     db.session.commit()
     clear_domain_cache()
     shop = domain_for_host(SHOP)
-    hal, sam = two_domains.local_user('hal', hell), two_domains.local_user('sam', shop)
-    pit, wares = two_domains.local_community('pit', hell), two_domains.local_community('wares', shop)
+    hal, sam = two_domains.local_user('hal', first), two_domains.local_user('sam', shop)
+    pit, wares = two_domains.local_community('pit', first), two_domains.local_community('wares', shop)
     for row, kind in ((hal, 'u'), (sam, 'u'), (pit, 'c'), (wares, 'c')):
         _keyed(row, kind)
     rem = make_user(_peer('peer.example', 'lemmy'), 'rem')
@@ -74,7 +74,7 @@ def world(app, two_domains):  # noqa: F811 -- two_domains is the imported fixtur
     for author, post in ((hal, hello), (sam, wares_post)):
         make_notification_subscription(author, post.id, NOTIF_POST)
     cache.clear()
-    yield SimpleNamespace(hell=hell, shop=shop, hal=hal, sam=sam, pit=pit, wares=wares, rem=rem, hello=hello,
+    yield SimpleNamespace(first=first, shop=shop, hal=hal, sam=sam, pit=pit, wares=wares, rem=rem, hello=hello,
                           wares_post=wares_post)
     clear_domain_cache()
 
@@ -132,7 +132,7 @@ def _the_announce(wire, inbox, community):  # noqa: F811
 
 # -- a reply ----------------------------------------------------------------------------------------------------------
 
-def test_a_shop_users_reply_on_a_hell_post_is_stored_and_announced_by_hells_community(app, world, wire,
+def test_a_shop_users_reply_on_a_first_post_is_stored_and_announced_by_first_domains_community(app, world, wire,
                                                                                     monkeypatch):  # noqa: F811
     # sam has a remote follower: a public comment goes to the community, not to the author's followers (plan rule,
     # upstream PieFed), so their inbox gets nothing
@@ -162,13 +162,13 @@ def test_a_shop_users_reply_on_a_hell_post_is_stored_and_announced_by_hells_comm
     assert notification.targets['comment_id'] == reply.id
 
 
-def test_a_hell_users_reply_in_a_shop_community_is_announced_by_the_shops_community(app, world, wire,
+def test_a_first_users_reply_in_a_shop_community_is_announced_by_the_shops_community(app, world, wire,
                                                                                    monkeypatch):  # noqa: F811
     """The mirror: the community, not the replier, decides which domain Announces."""
-    reply = _reply(app, world.hal, world.hell, world.wares_post)
+    reply = _reply(app, world.hal, world.first, world.wares_post)
 
     stored = db.session.get(PostReply, reply.id)
-    assert stored.ap_id.startswith(f'{HELL_BASE}/')
+    assert stored.ap_id.startswith(f'{FIRST_BASE}/')
     _nothing_hosted(wire)
 
     announce, sent_request = _the_announce(wire, PEER_INBOX, world.wares)
@@ -176,8 +176,8 @@ def test_a_hell_users_reply_in_a_shop_community_is_announced_by_the_shops_commun
     assert _verifies_at(monkeypatch, app, sent_request, world.wares.public_key) is True
     create = announce['object']
     assert create['type'] == 'Create'
-    assert create['actor'] == f'{HELL_BASE}/u/hal'
-    assert create['id'].startswith(f'{HELL_BASE}/')
+    assert create['actor'] == f'{FIRST_BASE}/u/hal'
+    assert create['id'].startswith(f'{FIRST_BASE}/')
     assert create['object']['id'] == stored.ap_id
 
     notification = db.session.query(Notification).filter_by(user_id=world.sam.id).one()
@@ -194,7 +194,7 @@ def test_the_announce_does_not_verify_under_the_repliers_key(app, world, wire, m
 
 # -- a vote -----------------------------------------------------------------------------------------------------------
 
-def test_a_shop_users_vote_on_a_hell_post_is_stored_and_announced_by_hells_community(app, world, wire,
+def test_a_shop_users_vote_on_a_first_post_is_stored_and_announced_by_first_domains_community(app, world, wire,
                                                                                    monkeypatch):  # noqa: F811
     before = db.session.get(Post, world.hello.id).up_votes or 0
     _act(app, world.shop, world.sam,
@@ -262,7 +262,7 @@ def test_with_the_notifs_channel_a_reply_still_goes_over_http_and_never_to_a_hos
 
 # -- a post -----------------------------------------------------------------------------------------------------------
 
-def test_a_shop_users_post_in_a_hell_community_reaches_community_and_author_followers(app, world, wire,
+def test_a_shop_users_post_in_a_first_community_reaches_community_and_author_followers(app, world, wire,
                                                                                      monkeypatch):  # noqa: F811
     """pages.py send_post: the community's followers and the author's piefed/mbin followers get the community's
     Announce; any other follower (Mastodon here) the author's own Create."""
@@ -285,7 +285,7 @@ def test_a_shop_users_post_in_a_hell_community_reaches_community_and_author_foll
     for inbox in (PEER_INBOX, PIEFED_INBOX):
         body, key_id, sent_request = by_inbox[inbox]
         assert body['type'] == 'Announce' and body['actor'] == world.pit.public_url()
-        assert body['id'].startswith(f'{HELL_BASE}/')
+        assert body['id'].startswith(f'{FIRST_BASE}/')
         assert key_id == f'{world.pit.public_url()}#main-key'
         assert _verifies_at(monkeypatch, app, sent_request, world.pit.public_key) is True
         assert body['object']['type'] == 'Create'

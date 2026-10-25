@@ -20,7 +20,7 @@ from app.storefront import clear_domain_cache
 from app.utils import set_setting
 from tests.conftest import forget_login
 from tests.factories import make_instance, make_post, make_user
-from tests.two_domains import HELL, ONION, default_request, onion_request, two_domains  # noqa: F401  (a fixture)
+from tests.two_domains import FIRST, ONION, default_request, onion_request, two_domains  # noqa: F401  (a fixture)
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -171,7 +171,7 @@ def test_onion_safe_returns_on_site_branding_unchanged(app, caplog):
 def visit(app, path, onion=True, user=None, client=None):
     forget_login()   # each visit is its own caller
     client = client or app.test_client()
-    base = f'http://{ONION}' if onion else f'https://{HELL}'
+    base = f'http://{ONION}' if onion else f'https://{FIRST}'
     if user is not None:
         with client.session_transaction(base_url=base) as session:
             session['_user_id'] = str(user.id)
@@ -247,7 +247,7 @@ def assert_policy_holds(app, response, own_host=ONION):
     return body
 
 
-PAGES = ['/', f'/c/onionart@{HELL}', '/post/{post}', f'/u/faraway@{REMOTE_HOST}', '/search?q=cat', '/auth/login',
+PAGES = ['/', f'/c/onionart@{FIRST}', '/post/{post}', f'/u/faraway@{REMOTE_HOST}', '/search?q=cat', '/auth/login',
          '/auth/register']
 
 
@@ -262,11 +262,11 @@ def test_onion_key_pages_load_nothing_the_policy_refuses(app, onion_site, monkey
     assert_policy_holds(app, visit(app, path.format(post=post.id), client=client))
 
 
-@pytest.mark.parametrize('path', ['/home/live/all', f'/c/onionart@{HELL}', '/post/{post}', f'/u/faraway@{REMOTE_HOST}',
+@pytest.mark.parametrize('path', ['/home/live/all', f'/c/onionart@{FIRST}', '/post/{post}', f'/u/faraway@{REMOTE_HOST}',
                                   '/search?q=cat'])
 def test_onion_key_pages_signed_in_load_nothing_the_policy_refuses(app, onion_site, monkeypatch, path):
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # a post's reply form renders a token
-    monkeypatch.setitem(app.config, 'NOTIF_SERVER', f'https://{HELL}')   # as deployed: the first domain's origin
+    monkeypatch.setitem(app.config, 'NOTIF_SERVER', f'https://{FIRST}')   # as deployed: the first domain's origin
     domains, post = onion_site
     reader = domains.local_user('reader', domains.domains[1])
     body = assert_policy_holds(app, visit(app, path.format(post=post.id), user=reader))
@@ -578,10 +578,10 @@ def test_a_clearnet_response_without_a_nonce_has_no_policy(app, onion_site):
     domains, _post = onion_site
     reader = domains.local_user('noncereader', domains.domains[0])
     client = app.test_client()
-    with client.session_transaction(base_url=f'https://{HELL}') as session:
+    with client.session_transaction(base_url=f'https://{FIRST}') as session:
         session['_user_id'] = str(reader.id)
         session['_fresh'] = True
     forget_login()
     g.pop('nonce', None)
-    response = client.options('/', base_url=f'https://{HELL}')
+    response = client.options('/', base_url=f'https://{FIRST}')
     assert 'Content-Security-Policy' not in response.headers

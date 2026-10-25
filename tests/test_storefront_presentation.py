@@ -170,7 +170,7 @@ def test_post_ap_json_image_is_canonical(app, world):
 def test_feed_on_storefront(app, onion, episode_post):
     db.session.get(Site, 1).private_instance = False
     db.session.commit()
-    response = on_onion(app).get(f'/community/pod@{CANONICAL}/feed', headers={'Host': ONION})   # hell's, by handle (C1)
+    response = on_onion(app).get(f'/community/pod@{CANONICAL}/feed', headers={'Host': ONION})   # The first domain's, by handle (C1)
     assert response.status_code == 200
     channel = ET.fromstring(response.data).find('channel')
     assert urlsplit(channel.findtext('link')).hostname == ONION
@@ -179,7 +179,7 @@ def test_feed_on_storefront(app, onion, episode_post):
     assert urlsplit(item.find('enclosure').get('url')).hostname == ONION
 
 
-# A bare name on the onion is the onion's own (plan C1): hell's rows are named by their handle there
+# A bare name on the onion is the onion's own (plan C1): the first domain's rows are named by their handle there
 @pytest.mark.parametrize('path', ['/index/feed', '/d/{domain}/feed', '/tag/pics/feed', f'/u/author@{CANONICAL}/feed',
                                   f'/community/general@{CANONICAL}/feed'])
 def test_other_feeds_link_to_the_storefront(app, world, path):

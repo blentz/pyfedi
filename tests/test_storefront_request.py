@@ -41,15 +41,15 @@ def test_known_alias_resolves(app, onion):
         assert storefront_url() == 'http://abc.onion'
 
 
-@pytest.mark.parametrize('host', ['HELL.onion', 'hell.onion.', 'hell.onion:80', 'Hell.Onion.:80'])
+@pytest.mark.parametrize('host', ['SISTER.onion', 'sister.onion.', 'sister.onion:80', 'Sister.Onion.:80'])
 def test_host_variants(app, db_session, site, host):
-    db.session.add(SiteDomain(domain='hell.onion', scheme='http'))
+    db.session.add(SiteDomain(domain='sister.onion', scheme='http'))
     db.session.commit()
     clear_domain_cache()
     try:
         with app.test_client() as client:
             assert client.get('/robots.txt', headers={'Host': host}).status_code == 200
-            assert g.storefront.domain == 'hell.onion'
+            assert g.storefront.domain == 'sister.onion'
     finally:
         clear_domain_cache()
 
@@ -158,7 +158,7 @@ def test_alias_urls_carry_no_port(app, onion):
         assert storefront_url() == 'http://abc.onion'
 
 
-@pytest.mark.parametrize('host,bare', [('HELL.onion.:80', 'hell.onion'), ('[::1]:5000', '::1'), ('[::1]', '::1'),
+@pytest.mark.parametrize('host,bare', [('SISTER.onion.:80', 'sister.onion'), ('[::1]:5000', '::1'), ('[::1]', '::1'),
                                        ('[::1', ''), ('::1', '::1'), ('', '')])
 def test_normalise_host(host, bare):
     assert normalise_host(host) == bare

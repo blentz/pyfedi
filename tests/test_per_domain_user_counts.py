@@ -22,9 +22,9 @@ pytestmark = pytest.mark.usefixtures('site')
 def crowd(app, two_domains):  # noqa: F811
     """101 active accounts on the first domain's row and 103 on the onion's, so each domain's home page shows its counts
     (they show above 100 monthly users) and either one's number tells which accounts it counted."""
-    hell, onion = two_domains.domains
+    first, onion = two_domains.domains
     now = utcnow()
-    for domain, count in ((hell, 101), (onion, 103)):
+    for domain, count in ((first, 101), (onion, 103)):
         db.session.add_all(User(user_name=f'{domain.domain[0]}crowd{n}', email=f'{n}@{domain.domain}', verified=True,
                                 banned=False, deleted=False, last_seen=now, instance_id=domain.instance_id,
                                 site_domain_id=domain.id, ap_profile_id=f'{domain.scheme}://{domain.domain}/u/x{n}')
@@ -40,10 +40,10 @@ def counted(domain):
 
 @pytest.mark.parametrize('on', [0, 1])
 def test_the_site_api_and_the_instance_chooser_count_only_the_default_domains_accounts(app, crowd, on):
-    hell = crowd.domains[0]
+    first = crowd.domains[0]
     with request_on(app, crowd.domains[on]):
         g.site, g.admin_ids = db.session.get(Site, 1), []
-        assert site_view(None)['site']['user_count'] == counted(hell) == 101
+        assert site_view(None)['site']['user_count'] == counted(first) == 101
         assert site_instance_chooser_view()['mau'] == 101
 
 

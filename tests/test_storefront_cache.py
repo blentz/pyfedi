@@ -88,7 +88,7 @@ def get(app, path, host):
     return response.get_data(as_text=True)
 
 
-# hell's rows by their handle, which names them on either host (plan C1: a bare name is the storefront's own)
+# The first domain's rows by their handle, which names them on either host (plan C1: a bare name is the storefront's own)
 PRESENTATION_VIEWS = ['/sitemap.xml', f'/community/general@{CANONICAL}/feed', f'/community/general@{CANONICAL}/feed?limit=5',
                       f'/u/author@{CANONICAL}/feed', '/topic/pictures.rss']
 
@@ -99,7 +99,7 @@ def test_cached_view_per_host(app, world, path, first, second):
     get(app, path, first)
     body = get(app, path, second)
     # a sitemap lists its own domain's posts (plan C2 task 3), and every onion post is local-only, so the onion's is
-    # empty: that it is not hell's cached entry is the `<loc>` check below
+    # empty: that it is not the first domain's cached entry is the `<loc>` check below
     if not (path == '/sitemap.xml' and second == ONION):
         assert f'{ORIGINS[second]}/' in body
     if second == CANONICAL:

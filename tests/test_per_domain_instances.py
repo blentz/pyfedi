@@ -35,7 +35,7 @@ from tests.test_shared_community_lifecycle import _api_input, _seed_und_language
 from tests.test_shared_post_edit import _api_input as _api_input_post
 from tests.test_admin_domains import _admin, _form
 from tests.test_admin_site_profile import csrf, login
-from tests.two_domains import HELL, ONION, default_request, onion_request, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, default_request, onion_request, two_domains  # noqa: F401
 
 MIGRATION = Path(__file__).resolve().parent.parent / 'migrations' / 'versions' / 'c8f4d2a6b9e1_per_domain_instance.py'
 
@@ -56,16 +56,16 @@ def real_cache(app, monkeypatch):
 
 
 def test_the_default_domain_keeps_instance_one(app, db_session, two_domains):
-    hell, onion = two_domains.domains
+    first, onion = two_domains.domains
     assert db.session.query(SiteDomain).filter_by(is_default=True).one().instance_id == 1
-    assert (hell.instance_id, instance_id_of(hell), instance_id_of(default_domain())) == (1, 1, 1)
+    assert (first.instance_id, instance_id_of(first), instance_id_of(default_domain())) == (1, 1, 1)
     assert instance_id_of(onion) not in (None, 1)
 
 
 def test_the_default_row_is_instance_one_even_when_another_row_has_its_domain_spelt_otherwise(app, db_session):
-    make_instance(HELL, software='piefed')
-    make_instance(HELL.upper())   # a sparse row find_instance_id could have made from a mixed-case host
-    db.session.add(SiteDomain(domain=HELL, is_default=True))
+    make_instance(FIRST, software='piefed')
+    make_instance(FIRST.upper())   # a sparse row find_instance_id could have made from a mixed-case host
+    db.session.add(SiteDomain(domain=FIRST, is_default=True))
     db.session.commit()
     clear_domain_cache()
     assert default_domain().instance_id == 1
@@ -121,7 +121,7 @@ def test_adding_a_domain_reuses_an_instance_row_already_named_for_it(app, db_ses
 
 
 def test_hosted_instance_ids_are_every_domains_row(app, db_session, two_domains):
-    hell, onion = two_domains.domains
+    first, onion = two_domains.domains
     assert hosted_instance_ids() == frozenset({1, onion.instance_id})
     db.session.add(SiteDomain(domain='shop.example', federates=False))
     db.session.commit()
@@ -132,7 +132,7 @@ def test_hosted_instance_ids_are_every_domains_row(app, db_session, two_domains)
 
 
 def test_hosted_instance_ids_are_cached_with_the_domain_rows(app, db_session, two_domains, real_cache):
-    hell, onion = two_domains.domains
+    first, onion = two_domains.domains
     clear_domain_cache()
     before = hosted_instance_ids()
     db.session.add(SiteDomain(domain='shop.example', federates=False))
@@ -143,7 +143,7 @@ def test_hosted_instance_ids_are_cached_with_the_domain_rows(app, db_session, tw
 
 
 def test_current_instance_id_follows_the_storefront_and_is_one_outside_a_request(app, db_session, two_domains):
-    hell, onion = two_domains.domains
+    first, onion = two_domains.domains
     assert current_instance_id() == 1
     with onion_request(app):
         assert current_instance_id() == onion.instance_id
@@ -152,11 +152,11 @@ def test_current_instance_id_follows_the_storefront_and_is_one_outside_a_request
 
 
 def test_local_rows_on_the_onion_carry_its_instance(app, db_session, two_domains):
-    hell, onion = two_domains.domains
+    first, onion = two_domains.domains
     assert two_domains.local_user('anna', onion).instance_id == onion.instance_id
     assert two_domains.local_community('cave', onion).instance_id == onion.instance_id
-    assert two_domains.local_user('anna', hell).instance_id == 1
-    assert two_domains.local_community('cave', hell).instance_id == 1
+    assert two_domains.local_user('anna', first).instance_id == 1
+    assert two_domains.local_community('cave', first).instance_id == 1
 
 
 # --- the migration ---
@@ -185,33 +185,33 @@ def _instance_ids(connection, table, ids):
 @pytest.fixture
 def pre_c2(app, db_session):
     """The rows as plan C1 left them: every local row on instance 1, a sister domain, and a peer's rows."""
-    hell_instance = make_instance(HELL, software='piefed')
+    first_instance = make_instance(FIRST, software='piefed')
     peer = make_instance('peer.example')
-    owner = make_user(hell_instance, 'owner', local=True)    # user 1, make_community's owner
-    db.session.add(SiteDomain(domain=HELL, is_default=True))
+    owner = make_user(first_instance, 'owner', local=True)    # user 1, make_community's owner
+    db.session.add(SiteDomain(domain=FIRST, is_default=True))
     db.session.add(SiteDomain(domain=ONION, scheme='http', federates=False))
     db.session.commit()
     clear_domain_cache()
-    hell, onion = domain_for_host(HELL), domain_for_host(ONION)
-    owner.site_domain_id = hell.id
-    hell_community = make_community('hellish')
-    hell_community.site_domain_id = hell.id
+    first, onion = domain_for_host(FIRST), domain_for_host(ONION)
+    owner.site_domain_id = first.id
+    first_community = make_community('firstish')
+    first_community.site_domain_id = first.id
     onion_community = make_community('cave', host=ONION)
     onion_community.site_domain_id = onion.id
-    onion_user = make_user(hell_instance, 'anna', local=True)
+    onion_user = make_user(first_instance, 'anna', local=True)
     onion_user.site_domain_id = onion.id
     remote_user = make_user(peer, 'remote')
     db.session.commit()
-    hell_post = make_post(hell_community, owner, ap_id='https://test.piefed.local/post/1')
+    first_post = make_post(first_community, owner, ap_id='https://test.piefed.local/post/1')
     rows = {
-        'user': {'hell': owner.id, 'onion': onion_user.id, 'remote': remote_user.id},
-        'community': {'hell': hell_community.id, 'onion': onion_community.id},
-        'post': {'hell': hell_post.id,
+        'user': {'first': owner.id, 'onion': onion_user.id, 'remote': remote_user.id},
+        'community': {'first': first_community.id, 'onion': onion_community.id},
+        'post': {'first': first_post.id,
                  'onion': make_post(onion_community, onion_user, ap_id='http://abc.onion/post/2').id,
-                 'remote': make_post(hell_community, remote_user, ap_id='https://peer.example/p/1').id,
-                 'onion_by_hell': make_post(onion_community, owner, ap_id='https://test.piefed.local/post/4').id},
-        'post_reply': {'hell': make_post_reply(hell_post, owner).id, 'onion': make_post_reply(hell_post, onion_user).id,
-                       'remote': make_post_reply(hell_post, remote_user).id},
+                 'remote': make_post(first_community, remote_user, ap_id='https://peer.example/p/1').id,
+                 'onion_by_first': make_post(onion_community, owner, ap_id='https://test.piefed.local/post/4').id},
+        'post_reply': {'first': make_post_reply(first_post, owner).id, 'onion': make_post_reply(first_post, onion_user).id,
+                       'remote': make_post_reply(first_post, remote_user).id},
     }
     for table in ('user', 'community', 'post', 'post_reply'):
         db.session.execute(text(f'UPDATE "{table}" SET instance_id = 1 WHERE id = ANY(:ids) AND instance_id <> :peer'),
@@ -282,11 +282,11 @@ def test_the_upgrade_reuses_an_instance_row_named_for_the_domain(app, pre_c2):
             reused = connection.execute(text('SELECT software, inbox, shared_inbox FROM instance WHERE id = :id'),
                                         {'id': existing}).one()
             count = connection.execute(text('SELECT count(*) FROM instance WHERE domain = :d'), {'d': ONION}).scalar()
-            hell_row = connection.execute(text('SELECT domain FROM instance WHERE id = 1')).scalar()
+            first_row = connection.execute(text('SELECT domain FROM instance WHERE id = 1')).scalar()
         finally:
             transaction.rollback()
     assert onion_instance == existing
-    assert (tuple(reused), count, hell_row) == (('PieFed', None, None), 1, HELL)
+    assert (tuple(reused), count, first_row) == (('PieFed', None, None), 1, FIRST)
     _assert_moved(rows, peer_id, onion_instance, upgraded, downgraded)
 
 
@@ -300,7 +300,7 @@ def test_on_a_database_without_row_one_the_default_gets_a_row_of_its_own(app, db
             with Operations.context(MigrationContext.configure(connection)):
                 migration.downgrade()
                 connection.execute(text("INSERT INTO site_domain (domain, scheme, is_default) "
-                                        "VALUES (:d, 'https', true)"), {'d': HELL})
+                                        "VALUES (:d, 'https', true)"), {'d': FIRST})
                 migration.upgrade()
             made = connection.execute(text('SELECT d.instance_id, i.domain, i.software, i.inbox FROM site_domain d '
                                            'JOIN instance i ON i.id = d.instance_id')).one()
@@ -308,7 +308,7 @@ def test_on_a_database_without_row_one_the_default_gets_a_row_of_its_own(app, db
             transaction.rollback()
     # The instance table is empty and its sequence fresh (db_session resets it), so the new row is row 1, as init-db's
     # would be.
-    assert tuple(made) == (1, HELL, 'PieFed', None)
+    assert tuple(made) == (1, FIRST, 'PieFed', None)
 
 
 # --- an instance row a new domain may not take over (fix round 1, I1) ---
@@ -337,7 +337,7 @@ def test_the_domains_form_refuses_a_server_this_site_federates_with(app, db_sess
 def test_the_domains_form_refuses_the_main_instance_rows_domain(app, db_session, site):
     """SERVER_NAME changed since init-db: row 1 still carries the old name, which is not the default's to give."""
     make_instance('old.example', software='piefed')
-    db.session.add(SiteDomain(domain=HELL, is_default=True))
+    db.session.add(SiteDomain(domain=FIRST, is_default=True))
     db.session.commit()
     client = app.test_client()
     login(client, _admin())
@@ -348,7 +348,7 @@ def test_the_domains_form_refuses_the_main_instance_rows_domain(app, db_session,
 
 @pytest.mark.parametrize('content', ['user', 'community', 'post', 'post_reply'])
 def test_a_domain_row_never_takes_over_a_server_with_content(app, db_session, content):
-    local = make_instance(HELL, software='piefed')
+    local = make_instance(FIRST, software='piefed')
     owner = make_user(local, 'owner', local=True)
     peer = make_instance(ONION)
     if content == 'user':
@@ -372,7 +372,7 @@ def test_a_domain_row_never_takes_over_a_server_with_content(app, db_session, co
 
 def test_a_domain_row_never_takes_over_row_one(app, db_session):
     make_instance('old.example', software='piefed')
-    db.session.add(SiteDomain(domain=HELL, is_default=True))
+    db.session.add(SiteDomain(domain=FIRST, is_default=True))
     db.session.commit()
     db.session.add(SiteDomain(domain='OLD.example'.lower(), federates=False))
     with pytest.raises(InstanceInUse, match='old.example'):
@@ -381,17 +381,17 @@ def test_a_domain_row_never_takes_over_row_one(app, db_session):
 
 
 def test_the_default_takes_row_one_full_of_its_own_content(app, db_session):
-    local = make_instance(HELL, software='piefed')
+    local = make_instance(FIRST, software='piefed')
     make_user(local, 'owner', local=True)
-    make_community('hellish')
-    db.session.add(SiteDomain(domain=HELL, is_default=True))
+    make_community('firstish')
+    db.session.add(SiteDomain(domain=FIRST, is_default=True))
     db.session.commit()
     assert db.session.query(SiteDomain).one().instance_id == 1
 
 
 def test_a_domain_row_takes_the_exactly_spelt_row_first(app, db_session):
     """find_instance_id looks a host up by its exact spelling: that row is the one that must become hosted."""
-    make_instance(HELL, software='piefed')
+    make_instance(FIRST, software='piefed')
     mixed = make_instance(ONION.upper())
     exact = make_instance(ONION)
     db.session.add(SiteDomain(domain=ONION, federates=False))
@@ -464,7 +464,7 @@ def test_the_downgrade_leaves_remote_rows_on_a_sister_row_alone(app, pre_c2):
 # --- a hosted row never gets an inbox back ---
 
 def test_the_instance_profile_task_leaves_a_hosted_row_alone(app, db_session):
-    make_instance(HELL, software='piefed')
+    make_instance(FIRST, software='piefed')
     db.session.add(SiteDomain(domain='faraway.test', federates=False))
     db.session.commit()
     clear_domain_cache()
@@ -587,7 +587,7 @@ def test_a_clearnet_users_post_and_reply_keep_the_default_instance(app, db_sessi
     _, reply = make_reply({'body': 'hi', 'notify_author': False, 'language_id': None}, post, None, SRC_API,
                           auth=bearer(clearfan))
     _, onion_post = make_post_through(_api_input_post(), hidden, POST_TYPE_ARTICLE, SRC_API, auth=bearer(torfan))
-    _, onion_reply = make_reply({'body': 'from hell', 'notify_author': False, 'language_id': None}, onion_post, None,
+    _, onion_reply = make_reply({'body': 'from first', 'notify_author': False, 'language_id': None}, onion_post, None,
                                 SRC_API, auth=bearer(clearfan))
     assert (post.instance_id, reply.instance_id, onion_reply.instance_id) == (1, 1, 1)
     assert onion_post.instance_id == onion.instance_id

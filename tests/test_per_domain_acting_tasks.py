@@ -35,9 +35,9 @@ from app.shared.tasks.pages import make_post
 from app.storefront import acting_domain, acting_for, clear_domain_cache, domain_for_host
 from app.utils import download_defeds_worker
 from tests.factories import inbox_activity, make_community, make_instance, make_user
-from tests.test_per_domain_signing import ACTOR_URL, HELL_KEY_ID, REMOTE, SHOP, SHOP_KEY_ID, _key_id, \
-    _signing_site, hell_ua, shop_ua
-from tests.two_domains import HELL, request_on, two_domains  # noqa: F401 -- two_domains is a fixture
+from tests.test_per_domain_signing import ACTOR_URL, FIRST_KEY_ID, REMOTE, SHOP, SHOP_KEY_ID, _key_id, \
+    _signing_site, first_ua, shop_ua
+from tests.two_domains import FIRST, request_on, two_domains  # noqa: F401 -- two_domains is a fixture
 
 
 class Domains:
@@ -45,9 +45,9 @@ class Domains:
         db.session.add(SiteDomain(domain=SHOP, scheme='https', federates=True))
         db.session.commit()
         clear_domain_cache()
-        self.hell, self.onion = two.domains
+        self.first, self.onion = two.domains
         self.shop = domain_for_host(SHOP)
-        self.hell_user = two.local_user('hellbob', self.hell)
+        self.first_user = two.local_user('firstbob', self.first)
         self.shop_user = two.local_user('shopbob', self.shop)
         self.remote = make_user(make_instance('remote.example'), 'carol')
         self.remote.ap_public_url = ACTOR_URL
@@ -90,7 +90,7 @@ def _signed_in(app, user):
     return context
 
 
-@pytest.mark.parametrize('who, ua', [('shop_user', shop_ua), ('hell_user', hell_ua), (None, hell_ua)])
+@pytest.mark.parametrize('who, ua', [('shop_user', shop_ua), ('first_user', first_ua), (None, first_ua)])
 def test_a_queued_profile_refresh_names_the_domain_that_queued_it(app, domains, router, queued, who, ua):
     """A shop account's page queues a refresh of a remote profile: the worker's fetch is the shop's."""
     fetched = router.get(ACTOR_URL).respond(404)
@@ -101,10 +101,10 @@ def test_a_queued_profile_refresh_names_the_domain_that_queued_it(app, domains, 
         context.pop()
     [entry] = queued
     assert entry[3]['headers'][ACTING_HEADER] == (domains.shop.id if who == 'shop_user' else None)
-    assert acting_domain() == domains.hell   # nothing outside the task acts as the shop
+    assert acting_domain() == domains.first   # nothing outside the task acts as the shop
     run(entry)
     assert fetched.calls.last.request.headers['User-Agent'] == ua(app)
-    assert acting_domain() == domains.hell and not _runs
+    assert acting_domain() == domains.first and not _runs
 
 
 def test_two_tasks_in_a_row_do_not_carry_a_domain_over(app, domains, router, queued):
@@ -115,10 +115,10 @@ def test_two_tasks_in_a_row_do_not_carry_a_domain_over(app, domains, router, que
     finally:
         context.pop()
     refresh_user_profile(domains.remote.id)   # queued by nobody: housekeeping
-    shop_task, hell_task = queued
+    shop_task, first_task = queued
     run(shop_task)
-    run(hell_task)
-    assert [call.request.headers['User-Agent'] for call in fetched.calls] == [shop_ua(app), hell_ua(app)]
+    run(first_task)
+    assert [call.request.headers['User-Agent'] for call in fetched.calls] == [shop_ua(app), first_ua(app)]
 
 
 def test_a_failing_task_leaves_no_domain_behind(app, domains, queued):
@@ -129,7 +129,7 @@ def test_a_failing_task_leaves_no_domain_behind(app, domains, queued):
         context.pop()
     with pytest.raises(AttributeError):
         run(queued[0])
-    assert acting_domain() == domains.hell and not _runs
+    assert acting_domain() == domains.first and not _runs
 
 
 def _shop_post_mentioning_dave(domains):
@@ -181,24 +181,24 @@ def test_a_shop_posts_mention_lookup_is_the_shops_inline_and_queued_alike(app, d
     assert _seen(webfinger, actor) == expected
 
 
-def test_a_hell_posts_mention_lookup_is_hells(app, domains, router, queued, monkeypatch):
+def test_a_first_posts_mention_lookup_is_first_domains(app, domains, router, queued, monkeypatch):
     monkeypatch.setattr('app.user.utils.time.sleep', lambda seconds: None)
     post = _shop_post_mentioning_dave(domains)
-    post.user_id = domains.hell_user.id
-    post.instance_id = domains.hell.instance_id
+    post.user_id = domains.first_user.id
+    post.instance_id = domains.first.instance_id
     db.session.commit()
     webfinger, actor = _mention_lookup_routes(router)
-    context = _signed_in(app, domains.hell_user)
+    context = _signed_in(app, domains.first_user)
     try:
         task_selector('make_post', send_async=True, post_id=post.id)
     finally:
         context.pop()
     run(queued[0])
-    assert _seen(webfinger, actor) == (hell_ua(app), hell_ua(app), hell_ua(app), HELL_KEY_ID)
+    assert _seen(webfinger, actor) == (first_ua(app), first_ua(app), first_ua(app), FIRST_KEY_ID)
 
 
 @pytest.mark.usefixtures('redis_double')
-@pytest.mark.parametrize('host', [SHOP, HELL])
+@pytest.mark.parametrize('host', [SHOP, FIRST])
 def test_an_activity_queued_from_a_sister_inbox_is_processed_as_that_domain(app, domains, signing_peer, queued,
                                                                            monkeypatch, host):
     """The inbox queues process_inbox_request; queued from shop.example's inbox, its fetches are the shop's."""
@@ -217,7 +217,7 @@ def test_the_discovery_credits_stay_the_defaults_inside_a_shop_task(app, domains
     feed = router.get('https://podcast.example/feed.xml').respond(404)
     with acting_for(domains.shop):
         assert fetch_feed('https://podcast.example/feed.xml') is None
-    assert feed.calls.last.request.headers['User-Agent'] == hell_ua(app)
+    assert feed.calls.last.request.headers['User-Agent'] == first_ua(app)
 
 
 def test_a_task_queued_with_no_app_context_is_the_defaults(app, domains):
@@ -306,9 +306,9 @@ def test_an_instance_level_task_a_shop_admin_queues_is_the_defaults(app, domains
     with contextlib.suppress(_Stop):   # a task that records its failures (the sync poll) does not re-raise it
         run(entry)
     unsigned, signed = (call.request for call in route.calls)   # the probe ran: two fetches
-    assert unsigned.headers['User-Agent'] == signed.headers['User-Agent'] == hell_ua(app)   # ...the work hell's
-    assert _key_id(signed) == HELL_KEY_ID
-    assert acting_domain() == domains.hell and not _runs
+    assert unsigned.headers['User-Agent'] == signed.headers['User-Agent'] == first_ua(app)   # ...the work the first domain's
+    assert _key_id(signed) == FIRST_KEY_ID
+    assert acting_domain() == domains.first and not _runs
 
 
 def test_a_relayed_announce_queued_from_a_shop_inbox_is_fetched_as_the_default(app, domains, router, queued):
@@ -323,5 +323,5 @@ def test_a_relayed_announce_queued_from_a_shop_inbox_is_fetched_as_the_default(a
     assert entry[3]['headers'][ACTING_HEADER] == domains.shop.id
     run(entry)
     unsigned, signed = (call.request for call in route.calls)
-    assert unsigned.headers['User-Agent'] == signed.headers['User-Agent'] == hell_ua(app)
-    assert _key_id(signed) == HELL_KEY_ID
+    assert unsigned.headers['User-Agent'] == signed.headers['User-Agent'] == first_ua(app)
+    assert _key_id(signed) == FIRST_KEY_ID

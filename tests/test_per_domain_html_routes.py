@@ -17,23 +17,23 @@ from app.models import Community, CommunityBlock, CommunityMember, ModLog, Site,
 from app.mentions import stored_user
 from tests.factories import bearer, make_local_feed, make_post
 from tests.test_onion_guard_limits import cheap_hashes  # noqa: F401
-from tests.two_domains import HELL, ONION, default_request, no_http, onion_request, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, default_request, no_http, onion_request, two_domains  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
 
-BASE = {HELL: f'https://{HELL}', ONION: f'http://{ONION}'}
+BASE = {FIRST: f'https://{FIRST}', ONION: f'http://{ONION}'}
 
 
 @pytest.fixture
 def world(app, two_domains, monkeypatch):
-    """Onion rows first, so the heap does not hand hell's row to an unscoped lookup by accident of order."""
-    hell, onion = two_domains.domains
+    """Onion rows first, so the heap does not hand the first domain's row to an unscoped lookup by accident of order."""
+    first, onion = two_domains.domains
     onion_bob, onion_art = two_domains.local_user('bob', onion), two_domains.local_community('art', onion)
-    hell_bob, hell_art = two_domains.local_user('bob', hell), two_domains.local_community('art', hell)
-    onion_art.title, hell_art.title = 'Onion art', 'Hell art'
+    first_bob, first_art = two_domains.local_user('bob', first), two_domains.local_community('art', first)
+    onion_art.title, first_art.title = 'Onion art', 'First art'
     onion_bob.set_password('onion password')
-    hell_bob.set_password('hell password')
-    viewers = {ONION: two_domains.local_user('viewer', onion), HELL: two_domains.local_user('watcher', hell)}
+    first_bob.set_password('first password')
+    viewers = {ONION: two_domains.local_user('viewer', onion), FIRST: two_domains.local_user('watcher', first)}
     for viewer in viewers.values():
         viewer.private_key = 'a key'   # an approved account (approval_required)
     db.session.get(Site, 1).private_instance = False   # the RSS feeds answer
@@ -41,8 +41,8 @@ def world(app, two_domains, monkeypatch):
     db.session.commit()
     sent = []
     monkeypatch.setattr('app.community.routes.send_post_request', lambda *args, **kwargs: sent.append(args))
-    bob = {HELL: hell_bob, ONION: onion_bob}
-    art = {HELL: hell_art, ONION: onion_art}
+    bob = {FIRST: first_bob, ONION: onion_bob}
+    art = {FIRST: first_art, ONION: onion_art}
     return SimpleNamespace(bob=bob, art=art, viewers=viewers, sent=sent)
 
 
@@ -72,7 +72,7 @@ def signed_in(app, user, host):
 
 
 def other(host):
-    return ONION if host == HELL else HELL
+    return ONION if host == FIRST else FIRST
 
 
 EFFECTS = {
@@ -82,9 +82,9 @@ EFFECTS = {
 }
 
 
-@pytest.mark.parametrize('host', [ONION, HELL])
+@pytest.mark.parametrize('host', [ONION, FIRST])
 @pytest.mark.parametrize('action', sorted(EFFECTS))
-def test_on_the_onion_a_hell_profiles_buttons_act_on_hells_account(app, world, host, action):
+def test_on_the_onion_a_first_profiles_buttons_act_on_first_domains_account(app, world, host, action):
     """A bare name is the storefront's own bob, a handle the other domain's, whichever storefront the button is on."""
     effect, form = EFFECTS[action]
     viewer = world.viewers[host]
@@ -97,7 +97,7 @@ def test_on_the_onion_a_hell_profiles_buttons_act_on_hells_account(app, world, h
     assert effect(viewer) == {world.bob[host].id, world.bob[other(host)].id}
 
 
-@pytest.mark.parametrize('host', [ONION, HELL])
+@pytest.mark.parametrize('host', [ONION, FIRST])
 def test_unblocking_by_handle_unblocks_that_domains_account(app, world, host):
     viewer = world.viewers[host]
     for bob in world.bob.values():
@@ -108,7 +108,7 @@ def test_unblocking_by_handle_unblocks_that_domains_account(app, world, host):
     assert {b.blocked_id for b in UserBlock.query.filter_by(blocker_id=viewer.id)} == {world.bob[host].id}
 
 
-@pytest.mark.parametrize('host', [ONION, HELL])
+@pytest.mark.parametrize('host', [ONION, FIRST])
 def test_joining_and_leaving_by_name_or_handle_is_that_domains_community(app, world, host):
     viewer = world.viewers[host]
     client = signed_in(app, viewer, host)
@@ -125,7 +125,7 @@ def test_joining_and_leaving_by_name_or_handle_is_that_domains_community(app, wo
     assert world.sent == []   # a hosted community is joined and left here, never by a Follow sent to ourselves
 
 
-@pytest.mark.parametrize('host', [ONION, HELL])
+@pytest.mark.parametrize('host', [ONION, FIRST])
 def test_a_communitys_feed_is_that_domains(app, world, host):
     cache.clear()
     world.viewers[host].rss_token = 'viewer-rss-token'   # a feed reader's: the onion's community is local-only
@@ -137,7 +137,7 @@ def test_a_communitys_feed_is_that_domains(app, world, host):
     assert world.art[other(host)].title in theirs and world.art[host].title not in theirs
 
 
-@pytest.mark.parametrize('host', [ONION, HELL])
+@pytest.mark.parametrize('host', [ONION, FIRST])
 def test_the_block_settings_forms_take_a_bare_name_as_the_storefronts(app, world, host):
     viewer = world.viewers[host]
     client = signed_in(app, viewer, host)
@@ -150,7 +150,7 @@ def test_the_block_settings_forms_take_a_bare_name_as_the_storefronts(app, world
 @pytest.mark.parametrize('kind, row, model_path', [('community', 'art', 'c'), ('user', 'bob', 'u')])
 def test_a_lookup_of_a_hosted_name_names_that_domain_or_is_404(app, world, kind, row, model_path):
     """Signed in: a hosted miss is 404, never a redirect to the bare name, which on this storefront is another row."""
-    for host in (HELL, ONION):
+    for host in (FIRST, ONION):
         client = signed_in(app, world.viewers[host], host)
         response = client.get(f'/{kind}/lookup/{row}/{other(host)}')
         assert response.headers['Location'] == f'/{model_path}/{row}@{other(host)}'
@@ -159,23 +159,23 @@ def test_a_lookup_of_a_hosted_name_names_that_domain_or_is_404(app, world, kind,
         assert client.get(f'/{kind}/lookup/nobody/{other(host)}').status_code == 404
 
 
-@pytest.mark.parametrize('path', [f'/u/nobody@{ONION}', f'/c/nobody@{ONION}', f'/u/nobody@{HELL}'])
+@pytest.mark.parametrize('path', [f'/u/nobody@{ONION}', f'/c/nobody@{ONION}', f'/u/nobody@{FIRST}'])
 def test_a_signed_in_miss_on_a_hosted_handle_is_404_and_fetches_nothing(app, world, no_http, path):
     """Only a signed-in visitor reaches search_for_user and search_for_community, the lookups that fetch a remote
     handle: a hosted one is in the database or nowhere, so a miss is 404 with nothing fetched."""
-    response = signed_in(app, world.viewers[HELL], HELL).get(path, follow_redirects=True)
+    response = signed_in(app, world.viewers[FIRST], FIRST).get(path, follow_redirects=True)
     assert response.status_code == 404
     assert no_http == []
 
 
 def test_a_signed_in_miss_on_a_hosted_community_handle_ends_in_404(app, world):
-    client = signed_in(app, world.viewers[HELL], HELL)
+    client = signed_in(app, world.viewers[FIRST], FIRST)
     response = client.get(f'/c/nobody@{ONION}', follow_redirects=True)
     assert response.status_code == 404
     assert [step.headers['Location'] for step in response.history] == [f'/community/lookup/nobody/{ONION}']
 
 
-@pytest.mark.parametrize('host', [ONION, HELL])
+@pytest.mark.parametrize('host', [ONION, FIRST])
 @pytest.mark.parametrize('field', ['user_name', 'suspect_user_name'])
 def test_the_modlog_filters_by_the_domains_account(app, world, host, field):
     for domain, bob in world.bob.items():
@@ -187,17 +187,17 @@ def test_the_modlog_filters_by_the_domains_account(app, world, host, field):
 
     def listed(name):
         text = client.get(f'/modlog?{field}={name}').get_data(as_text=True)
-        return {domain for domain in (HELL, ONION) if f'entry-{domain}' in text}
+        return {domain for domain in (FIRST, ONION) if f'entry-{domain}' in text}
 
     assert listed('bob') == {host}
     assert listed(f'bob@{other(host)}') == {other(host)}
 
 
 def test_the_modlog_shows_a_default_domain_handle_as_its_bare_name_on_the_first_domain(app, world):
-    text = signed_in(app, world.viewers[HELL], HELL).get(f'/modlog?suspect_user_name=bob@{HELL}').get_data(as_text=True)
+    text = signed_in(app, world.viewers[FIRST], FIRST).get(f'/modlog?suspect_user_name=bob@{FIRST}').get_data(as_text=True)
     assert 'value="bob"' in text
-    text = signed_in(app, world.viewers[ONION], ONION).get(f'/modlog?suspect_user_name=bob@{HELL}').get_data(as_text=True)
-    assert f'value="bob@{HELL}"' in text
+    text = signed_in(app, world.viewers[ONION], ONION).get(f'/modlog?suspect_user_name=bob@{FIRST}').get_data(as_text=True)
+    assert f'value="bob@{FIRST}"' in text
 
 
 def verify(name, password):
@@ -210,13 +210,13 @@ def verify(name, password):
 @pytest.mark.usefixtures('cheap_hashes')
 def test_api_login_with_a_bare_name_is_the_storefronts_account(app, world):
     with default_request(app):
-        assert verify('bob', 'hell password') == {}
+        assert verify('bob', 'first password') == {}
         assert verify('bob', 'onion password') == 'refused'
         assert verify(f'bob@{ONION}', 'onion password') == {}
     with onion_request(app):
         assert verify('BOB', 'onion password') == {}
-        assert verify('bob', 'hell password') == 'refused'
-        assert verify(f'bob@{HELL}', 'hell password') == {}
+        assert verify('bob', 'first password') == 'refused'
+        assert verify(f'bob@{FIRST}', 'first password') == {}
 
 
 @pytest.mark.usefixtures('cheap_hashes')
@@ -229,12 +229,12 @@ def test_api_login_with_an_unhosted_handle_fails_like_a_wrong_password(app, worl
 
     wrong_password = failure('bob', 'onion password')
     assert wrong_password[0] == 'refused' and len(wrong_password[1]) == 1
-    assert failure('bob@elsewhere.example', 'hell password') == wrong_password
-    assert failure(f'nobody@{ONION}', 'hell password') == wrong_password
+    assert failure('bob@elsewhere.example', 'first password') == wrong_password
+    assert failure(f'nobody@{ONION}', 'first password') == wrong_password
 
 
 def test_the_api_finds_a_person_on_the_storefronts_domain(app, world):
-    for request_on, host in ((default_request, HELL), (onion_request, ONION)):
+    for request_on, host in ((default_request, FIRST), (onion_request, ONION)):
         for name, owner in (('bob', host), (f'bob@{other(host)}', other(host))):
             data = {'username': name}
             with request_on(app):   # signed in: a logged-out caller is not shown the onion's account at all
@@ -247,7 +247,7 @@ def test_a_bare_mention_name_is_the_storefronts_account(app, world):
         assert stored_user('bob') == world.bob[ONION]
         assert stored_user('Bob') is None   # case as typed, as this lookup always matched it
     with default_request(app):
-        assert stored_user('bob') == world.bob[HELL]
+        assert stored_user('bob') == world.bob[FIRST]
 
 
 @pytest.mark.parametrize('lister', [get_post_list, get_post_list2])
@@ -255,7 +255,7 @@ def test_the_api_lists_a_bare_community_names_posts_on_the_storefronts_domain(ap
     for host, art in world.art.items():
         make_post(art, world.bob[host], f'{BASE[host]}/post/{host}', title=f'posted on {host}')
     db.session.commit()
-    for request_on, host in ((default_request, HELL), (onion_request, ONION)):
+    for request_on, host in ((default_request, FIRST), (onion_request, ONION)):
         for name, owner in (('art', host), (f'art@{other(host)}', other(host))):
             with request_on(app):
                 g.admin_ids = []
@@ -265,24 +265,24 @@ def test_the_api_lists_a_bare_community_names_posts_on_the_storefronts_domain(ap
 
 def test_a_feeds_auto_follow_outside_a_request_joins_the_communitys_own_domain(app, world):
     """The worker that joins a feed's communities has no storefront: the queued name says which domain."""
-    viewer = world.viewers[HELL]
+    viewer = world.viewers[FIRST]
     viewer.feed_auto_follow = True
-    feed = make_local_feed(name='hellfeed')
+    feed = make_local_feed(name='firstfeed')
     feed.user_id = viewer.id
     db.session.commit()
-    onion_art, hell_art, viewer_id = world.art[ONION].id, world.art[HELL].id, viewer.id
+    onion_art, first_art, viewer_id = world.art[ONION].id, world.art[FIRST].id, viewer.id
     _feed_add_community(onion_art, 0, feed.id, viewer_id)
     joined = {m.community_id for m in CommunityMember.query.filter_by(user_id=viewer_id)}
-    assert joined == {onion_art} and hell_art not in joined
+    assert joined == {onion_art} and first_art not in joined
 
 
 def test_a_handle_names_the_rows_own_domain(app, world):
     assert actor_handle(world.art[ONION]) == f'art@{ONION}'
-    assert actor_handle(world.bob[HELL]) == f'bob@{HELL}'
+    assert actor_handle(world.bob[FIRST]) == f'bob@{FIRST}'
     assert actor_handle(Community(name='far', ap_id='far@remote.example')) == 'far@remote.example'
 
 
-@pytest.mark.parametrize('host', [ONION, HELL])
+@pytest.mark.parametrize('host', [ONION, FIRST])
 def test_the_profile_pages_show_the_named_domains_row(app, world, host):
     """Task 3's HTML pages, checked here by effect: /u/<actor> and /c/<actor> show the row the name means."""
     for domain, bob in world.bob.items():

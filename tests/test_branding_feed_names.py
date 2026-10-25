@@ -13,13 +13,13 @@ from app.models import Domain, DomainBranding, Feed, Site, Tag, Topic
 from app.storefront import clear_domain_cache
 from tests.factories import make_post
 from tests.test_c3_golden_documents import golden_site  # noqa: F401  (fixtures)
-from tests.test_per_domain_actor_documents import SHOP_BASE, shop_rows, site_named_hell  # noqa: F401
-from tests.two_domains import HELL, two_domains  # noqa: F401  (a fixture)
+from tests.test_per_domain_actor_documents import SHOP_BASE, shop_rows, site_named_first  # noqa: F401
+from tests.two_domains import FIRST, two_domains  # noqa: F401  (a fixture)
 
 SHOP = 'shop.example'
 SITE_NAME = 'First Domain Site'
 
-pytestmark = pytest.mark.usefixtures('golden_site', 'shop_rows', 'site_named_hell')
+pytestmark = pytest.mark.usefixtures('golden_site', 'shop_rows', 'site_named_first')
 
 
 @pytest.fixture
@@ -64,7 +64,7 @@ def feed_title(app, path, host):
 
 def expected(template, name, host=SHOP):
     """The title `template` makes with the site name `name`; the first domain's community and account have other names."""
-    if host == HELL:
+    if host == FIRST:
         template = template.replace('Shop art', 'Golden art').replace('Shop goldie', 'Goldie')
     return f'{name} - {template}' if template == 'Local' else template.format(name)
 
@@ -82,7 +82,7 @@ def test_a_sister_with_its_own_name_titles_its_feeds_with_it(app, rows, shop_row
 
 @pytest.mark.parametrize('path, template', FEEDS)
 def test_the_first_domains_feed_titles_are_still_the_site_name(app, rows, path, template):
-    assert feed_title(app, path, HELL) == expected(template, SITE_NAME, HELL)
+    assert feed_title(app, path, FIRST) == expected(template, SITE_NAME, FIRST)
 
 
 def provider_name(app, post, host):
@@ -101,4 +101,4 @@ def test_oembed_on_a_sister_with_its_own_name_names_it(app, rows, shop_rows):
 
 
 def test_oembed_on_the_first_domain_is_the_site_name(app, rows):
-    assert provider_name(app, rows, HELL) == SITE_NAME
+    assert provider_name(app, rows, FIRST) == SITE_NAME

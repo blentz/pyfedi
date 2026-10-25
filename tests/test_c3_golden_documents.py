@@ -19,7 +19,7 @@ from flask import current_app
 from app import cache, db
 from app.models import Community, CommunityMember, Feed, File, Language, Site, SiteDomain, User, UserExtraField
 from app.storefront import clear_domain_cache, domain_for_host
-from tests.two_domains import HELL, two_domains  # noqa: F401
+from tests.two_domains import FIRST, two_domains  # noqa: F401
 
 GOLDEN = Path(__file__).parent / 'golden' / 'c3'
 AP = {'Accept': 'application/activity+json'}
@@ -42,8 +42,8 @@ def golden_site(app, two_domains):
     db.session.add(SiteDomain(domain=SHOP, scheme='https', federates=True))
     db.session.commit()
     clear_domain_cache()
-    hell = domain_for_host(HELL)
-    base = f'https://{HELL}'
+    first = domain_for_host(FIRST)
+    base = f'https://{FIRST}'
 
     avatar, cover = File(file_path='app/static/media/users/go/ld/avatar.webp'), \
         File(thumbnail_path='app/static/media/users/go/ld/cover.webp')
@@ -54,8 +54,8 @@ def golden_site(app, two_domains):
     db.session.add_all([avatar, cover, icon, banner, feed_icon, feed_banner])
     db.session.flush()
 
-    user = User(user_name='goldie', title='Goldie', email='goldie@example.com', instance_id=hell.instance_id,
-                site_domain_id=hell.id, verified=True, banned=False, public_key=pem('USER'), created=CREATED,
+    user = User(user_name='goldie', title='Goldie', email='goldie@example.com', instance_id=first.instance_id,
+                site_domain_id=first.id, verified=True, banned=False, public_key=pem('USER'), created=CREATED,
                 about='About *goldie*', about_html='<p>About <em>goldie</em></p>', matrix_user_id='@goldie:matrix.org',
                 ap_profile_id=f'{base}/u/goldie', ap_public_url=f'{base}/u/goldie',
                 ap_inbox_url=f'{base}/u/goldie/inbox', avatar_id=avatar.id, cover_id=cover.id)
@@ -66,11 +66,11 @@ def golden_site(app, two_domains):
     english = Language(code='en', name='English')
     community = Community(name='goldart', title='Golden art', description='About *art*',
                           description_html='<p>About <em>art</em></p>', posting_warning='Be kind',
-                          instance_id=hell.instance_id, site_domain_id=hell.id, user_id=user.id,
+                          instance_id=first.instance_id, site_domain_id=first.id, user_id=user.id,
                           public_key=pem('COMMUNITY'), created_at=CREATED, last_active=UPDATED,
                           ap_profile_id=f'{base}/c/goldart', ap_public_url=f'{base}/c/goldart',
                           ap_followers_url=f'{base}/c/goldart/followers',
-                          ap_moderators_url=f'{base}/c/goldart/moderators', ap_domain=HELL,
+                          ap_moderators_url=f'{base}/c/goldart/moderators', ap_domain=FIRST,
                           subscriptions_count=1, local_only=False, nsfw=False, icon_id=icon.id, image_id=banner.id)
     community.languages.append(english)
     db.session.add(community)
@@ -79,7 +79,7 @@ def golden_site(app, two_domains):
 
     db.session.add(Feed(name='goldfeed', title='Golden feed', description='About *feeds*',
                         description_html='<p>About <em>feeds</em></p>', public=True, user_id=user.id,
-                        instance_id=hell.instance_id, public_key=pem('FEED'), created_at=CREATED, last_edit=UPDATED,
+                        instance_id=first.instance_id, public_key=pem('FEED'), created_at=CREATED, last_edit=UPDATED,
                         ap_profile_id=f'{base}/f/goldfeed', ap_public_url=f'{base}/f/goldfeed',
                         icon_id=feed_icon.id, image_id=feed_banner.id))
     db.session.commit()
@@ -108,7 +108,7 @@ def capture(golden: Path, body: bytes) -> None:
     pytest.fail(f'captured {golden}; review it and run again')
 
 
-def served(app, path: str, host: str = HELL):
+def served(app, path: str, host: str = FIRST):
     response = app.test_client().get(path, headers=AP, base_url=f'https://{host}')
     assert response.status_code == 200, path
     return response
@@ -131,7 +131,7 @@ GOLDEN_PATHS = {
 
 @pytest.mark.usefixtures('golden_site')
 @pytest.mark.parametrize('name, path', sorted(GOLDEN_PATHS.items()))
-def test_hells_document_is_its_golden_copy(app, name, path):
+def test_first_domains_document_is_its_golden_copy(app, name, path):
     body = served(app, path).data
     if not (GOLDEN / name).exists():
         capture(GOLDEN / name, body)
@@ -140,16 +140,16 @@ def test_hells_document_is_its_golden_copy(app, name, path):
 
 
 @pytest.mark.usefixtures('golden_site')
-@pytest.mark.parametrize('path, link', [('/u/goldie', f'<https://{HELL}/u/goldie>'),
-                                        ('/c/goldart', f'<https://{HELL}/c/goldart>'),
-                                        ('/f/goldfeed', f'<https://{HELL}/f/goldfeed>')])
-def test_hells_actor_documents_link_to_hells_page(app, path, link):
+@pytest.mark.parametrize('path, link', [('/u/goldie', f'<https://{FIRST}/u/goldie>'),
+                                        ('/c/goldart', f'<https://{FIRST}/c/goldart>'),
+                                        ('/f/goldfeed', f'<https://{FIRST}/f/goldfeed>')])
+def test_first_domains_actor_documents_link_to_first_domains_page(app, path, link):
     assert served(app, path).headers['Link'] == f'{link}; rel="alternate"; type="text/html"'
 
 
 # the first domain's discovery documents (plan C3, task 4): WebFinger, host-meta, NodeInfo and the site documents, captured
 # from the code before Task 4 made them per domain (BASE b49a5ca83). Only the release is a placeholder. The fixture
-# fixes every count (one account, no posts or comments, one community), and Task 4's count change (hell counts only
+# fixes every count (one account, no posts or comments, one community), and Task 4's count change (the first domain counts only
 # its own accounts) does not show here, as no other domain has an account in this fixture.
 DISCOVERY_PATHS = {
     'host_meta.xml': '/.well-known/host-meta',
@@ -157,10 +157,10 @@ DISCOVERY_PATHS = {
     'nodeinfo_index.json': '/.well-known/nodeinfo',
     'nodeinfo_2.0.json': '/nodeinfo/2.0',
     'nodeinfo_2.1.json': '/nodeinfo/2.1',
-    'webfinger_user.json': f'/.well-known/webfinger?resource=acct:goldie@{HELL}',
-    'webfinger_community.json': f'/.well-known/webfinger?resource=acct:goldart@{HELL}',
-    'webfinger_feed.json': f'/.well-known/webfinger?resource=acct:~goldfeed@{HELL}',
-    'webfinger_instance_actor.json': f'/.well-known/webfinger?resource=acct:{HELL}@{HELL}',
+    'webfinger_user.json': f'/.well-known/webfinger?resource=acct:goldie@{FIRST}',
+    'webfinger_community.json': f'/.well-known/webfinger?resource=acct:goldart@{FIRST}',
+    'webfinger_feed.json': f'/.well-known/webfinger?resource=acct:~goldfeed@{FIRST}',
+    'webfinger_instance_actor.json': f'/.well-known/webfinger?resource=acct:{FIRST}@{FIRST}',
     'api_v1_instance.json': '/api/v1/instance',
     'api_v3_site.json': '/api/v3/site',
 }
@@ -168,8 +168,8 @@ DISCOVERY_PATHS = {
 
 @pytest.mark.usefixtures('golden_site')
 @pytest.mark.parametrize('name, path', sorted(DISCOVERY_PATHS.items()))
-def test_hells_discovery_document_is_its_golden_copy(app, name, path):
-    response = app.test_client().get(path, base_url=f'https://{HELL}')
+def test_first_domains_discovery_document_is_its_golden_copy(app, name, path):
+    response = app.test_client().get(path, base_url=f'https://{FIRST}')
     assert response.status_code == 200, path
     if not (GOLDEN / name).exists():
         capture(GOLDEN / name, response.data)
@@ -181,6 +181,6 @@ def test_hells_discovery_document_is_its_golden_copy(app, name, path):
 def test_a_release_bump_changes_no_golden_copy(app, monkeypatch, name):
     """The copies pin the documents' structure and identity, not the release: VERSION is a placeholder in them."""
     monkeypatch.setitem(app.config, 'VERSION', '99.0.0')
-    response = app.test_client().get(DISCOVERY_PATHS[name], base_url=f'https://{HELL}')
+    response = app.test_client().get(DISCOVERY_PATHS[name], base_url=f'https://{FIRST}')
     assert b'"99.0.0"' in response.data
     assert response.data == golden_copy(name)

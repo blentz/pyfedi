@@ -11,7 +11,7 @@ from app.models import Domain, Post, SiteDomain
 from app.storefront import clear_domain_cache, host_hidden_here, host_not_hidden_clause
 from tests.test_instance_visible_here import get, scene  # noqa: F401 -- scene is a fixture
 from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
-from tests.two_domains import HELL, ONION, default_request, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, default_request, two_domains  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -29,9 +29,9 @@ def links(scene):  # noqa: F811
 
 @pytest.mark.parametrize('signed_in', [False, True])
 @pytest.mark.parametrize('query', ['', '?search=onion'])
-def test_hells_domain_list_names_no_onion_host(app, links, signed_in, query):
+def test_first_domains_domain_list_names_no_onion_host(app, links, signed_in, query):
     scene, onion_host, ordinary = links
-    body = get(app, f'/domains{query}', user=scene.hell_bob if signed_in else None).get_data(as_text=True)
+    body = get(app, f'/domains{query}', user=scene.first_bob if signed_in else None).get_data(as_text=True)
     assert ONION not in body
     if not query:
         assert 'example.com' in body
@@ -39,19 +39,19 @@ def test_hells_domain_list_names_no_onion_host(app, links, signed_in, query):
 
 @pytest.mark.parametrize('signed_in', [False, True])
 @pytest.mark.parametrize('path', ['/d/{name}', '/d/{id}', '/d/{name}/feed', '/d/{id}/feed'])
-def test_hells_onion_host_page_is_not_found(app, links, signed_in, path):
+def test_first_domains_onion_host_page_is_not_found(app, links, signed_in, path):
     scene, onion_host, ordinary = links
-    user = scene.hell_bob if signed_in else None
+    user = scene.first_bob if signed_in else None
     assert get(app, path.format(name=ONION, id=onion_host.id), user=user).status_code == 404
     assert get(app, path.format(name='example.com', id=ordinary.id), user=user).status_code == 200
 
 
-def test_hells_banned_domain_list_names_no_onion_host(app, links):
-    """/domains/banned filters as /domains does: a banned onion host stays off hell's list."""
+def test_first_domains_banned_domain_list_names_no_onion_host(app, links):
+    """/domains/banned filters as /domains does: a banned onion host stays off the first domain's list."""
     scene, onion_host, ordinary = links
     onion_host.banned = ordinary.banned = True
     db.session.commit()
-    body = get(app, '/domains/banned', user=scene.hell_bob).get_data(as_text=True)
+    body = get(app, '/domains/banned', user=scene.first_bob).get_data(as_text=True)
     assert ONION not in body and 'example.com' in body
 
 
@@ -84,10 +84,10 @@ def listed(app, host, user):
 
 
 @pytest.mark.parametrize('signed_in', [False, True])
-def test_no_spelling_of_the_onion_host_is_listed_or_shown_on_hell(app, spellings, signed_in):
+def test_no_spelling_of_the_onion_host_is_listed_or_shown_on_first(app, spellings, signed_in):
     scene, rows = spellings
-    user = scene.hell_bob if signed_in else None
-    assert listed(app, HELL, user) == set(UNRELATED)
+    user = scene.first_bob if signed_in else None
+    assert listed(app, FIRST, user) == set(UNRELATED)
     for name in VARIANTS:
         assert get(app, f'/d/{rows[name].id}', user=user).status_code == 404, name
         assert get(app, f'/d/{rows[name].id}/feed', user=user).status_code == 404, name

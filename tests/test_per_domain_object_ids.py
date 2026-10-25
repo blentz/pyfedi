@@ -43,12 +43,12 @@ from app.storefront import clear_domain_cache, domain_for_host
 from tests.factories import a_keypair, make_community, make_community_member, make_instance, make_post, \
     make_post_reply, make_user
 from tests.test_onion_guard_limits import PROXY, a_session, onion_get
-from tests.two_domains import HELL, ONION, request_on, two_domains  # noqa: F401  (fixture)
+from tests.two_domains import FIRST, ONION, request_on, two_domains  # noqa: F401  (fixture)
 
 pytestmark = pytest.mark.usefixtures('site')
 
 SHOP = 'shop.example'
-HELL_BASE, SHOP_BASE = f'https://{HELL}', f'https://{SHOP}'
+FIRST_BASE, SHOP_BASE = f'https://{FIRST}', f'https://{SHOP}'
 AP = {'Accept': 'application/activity+json'}
 TOKEN = r'[0-9A-Za-z]{15}'
 
@@ -69,13 +69,13 @@ def _keyed(row, kind):
 def sites(app, two_domains):
     """hal on the first domain, sam on shop.example, a community on each (pit, wares), a peer following both, and rem on
     the peer."""
-    hell, onion = two_domains.domains
+    first, onion = two_domains.domains
     db.session.add(SiteDomain(domain=SHOP, scheme='https', federates=True))
     db.session.commit()
     clear_domain_cache()
     shop = domain_for_host(SHOP)
-    hal, sam = two_domains.local_user('hal', hell), two_domains.local_user('sam', shop)
-    pit, wares = two_domains.local_community('pit', hell), two_domains.local_community('wares', shop)
+    hal, sam = two_domains.local_user('hal', first), two_domains.local_user('sam', shop)
+    pit, wares = two_domains.local_community('pit', first), two_domains.local_community('wares', shop)
     for row, kind in ((hal, 'u'), (sam, 'u'), (pit, 'c'), (wares, 'c')):
         _keyed(row, kind)
     peer = make_instance('peer.example', software='lemmy')
@@ -85,7 +85,7 @@ def sites(app, two_domains):
         make_community_member(rem, community)
     db.session.commit()
     cache.clear()
-    return SimpleNamespace(hell=hell, onion=onion, shop=shop, hal=hal, sam=sam, pit=pit, wares=wares, peer=peer,
+    return SimpleNamespace(first=first, onion=onion, shop=shop, hal=hal, sam=sam, pit=pit, wares=wares, peer=peer,
                            rem=rem)
 
 
@@ -115,8 +115,8 @@ def a_reply(post, author, parent=None):
     return reply
 
 
-def no_hell(body) -> bool:
-    return HELL not in json.dumps(body)
+def no_first(body) -> bool:
+    return FIRST not in json.dumps(body)
 
 
 # --------------------------------------------------------------------------
@@ -138,14 +138,14 @@ def test_a_shop_users_post_is_named_on_the_shop(app, sites):
 
 def test_a_post_or_comment_is_named_on_its_authors_domain_whatever_the_community(app, sites):
     in_shop = a_post(sites.wares, sites.hal)
-    assert in_shop.ap_id == f'{HELL_BASE}/c/wares@{SHOP}/p/{in_shop.id}/a-post'
-    in_hell = a_post(sites.pit, sites.sam)
-    assert in_hell.ap_id.startswith(f'{SHOP_BASE}/c/pit@{HELL}/p/')
-    assert a_reply(in_hell, sites.hal).ap_id.startswith(f'{HELL_BASE}/comment/')
+    assert in_shop.ap_id == f'{FIRST_BASE}/c/wares@{SHOP}/p/{in_shop.id}/a-post'
+    in_first = a_post(sites.pit, sites.sam)
+    assert in_first.ap_id.startswith(f'{SHOP_BASE}/c/pit@{FIRST}/p/')
+    assert a_reply(in_first, sites.hal).ap_id.startswith(f'{FIRST_BASE}/comment/')
     assert a_reply(in_shop, sites.sam).ap_id.startswith(f'{SHOP_BASE}/comment/')
 
 
-def test_hells_ids_keep_their_shape(app, sites):
+def test_first_domains_ids_keep_their_shape(app, sites):
     """Golden strings: the default domain's ids are built from SERVER_URL exactly as before C3."""
     post = a_post(sites.pit, sites.hal)
     assert post.ap_id == f'https://test.piefed.local/c/pit@test.piefed.local/p/{post.id}/a-post'
@@ -164,11 +164,11 @@ def test_a_remote_post_is_named_on_the_community_that_serves_it(app, sites):
     assert object_base(post) == SHOP_BASE
     assert object_base(make_post_reply(post, sites.rem)) == SHOP_BASE
     away = two_domains_away(sites)
-    assert object_base(make_post(away, sites.rem, ap_id='https://peer.example/post/2')) == HELL_BASE
+    assert object_base(make_post(away, sites.rem, ap_id='https://peer.example/post/2')) == FIRST_BASE
     message = ChatMessage(sender_id=sites.rem.id, body='hi')
     db.session.add(message)
     db.session.commit()
-    assert object_base(message) == HELL_BASE   # no domain of ours names it: as before C3
+    assert object_base(message) == FIRST_BASE   # no domain of ours names it: as before C3
 
 
 def two_domains_away(sites):
@@ -189,7 +189,7 @@ def test_a_shop_posts_documents_name_only_the_shop(app, sites):
     post.flair.append(flair)
     db.session.commit()
     page = post_to_page(post)
-    assert no_hell(page), json.dumps(page)
+    assert no_first(page), json.dumps(page)
     assert page['context'] == f'{SHOP_BASE}/post/{post.id}/context'
     assert page['replies'] == f'{SHOP_BASE}/post/{post.id}/replies'
     assert page['likes']['id'] == f'{SHOP_BASE}/post/{post.id}/likes'
@@ -198,7 +198,7 @@ def test_a_shop_posts_documents_name_only_the_shop(app, sites):
     assert community_tag['id'] == f'{SHOP_BASE}/c/wares/tag/{flair.id}'
     reply = a_reply(post, sites.sam)
     note = comment_model_to_json(reply)
-    assert no_hell(note), json.dumps(note)
+    assert no_first(note), json.dumps(note)
     assert note['context'] == f'{SHOP_BASE}/post/{post.id}/context'
     assert note['likes']['id'] == f'{SHOP_BASE}/comment/{reply.id}/likes'
 
@@ -209,7 +209,7 @@ def test_a_flair_of_a_remote_community_is_named_by_whoever_names_our_copy(app, s
     db.session.add(flair)
     db.session.commit()
     assert away.flair_tag_id(flair, SHOP_BASE) == f'{SHOP_BASE}/c/away@peer.example/tag/{flair.id}'
-    assert away.flair_for_ap(version=1)[0]['id'] == f'{HELL_BASE}/c/away@peer.example/tag/{flair.id}'
+    assert away.flair_for_ap(version=1)[0]['id'] == f'{FIRST_BASE}/c/away@peer.example/tag/{flair.id}'
     shop_flair = CommunityFlair(community_id=sites.wares.id, flair='new')
     db.session.add(shop_flair)
     db.session.commit()
@@ -231,8 +231,8 @@ def test_a_shop_microblog_notes_hashtags_and_collections_are_the_shops(app, site
 # Review Focus 1: a first-domain user replies in a shop.example community
 # --------------------------------------------------------------------------
 
-def test_a_hell_users_reply_in_a_shop_community(app, sites, monkeypatch):
-    """The reply and its Create are hell's, signed by hal's key; the community's Announce is the shop's, signed by
+def test_a_first_users_reply_in_a_shop_community(app, sites, monkeypatch):
+    """The reply and its Create are the first domain's, signed by hal's key; the community's Announce is the shop's, signed by
     the community's key. Nothing is sent to a domain of ours: sam (on the shop) is told here."""
     other = make_instance('other.example', software='mastodon')
     other.inbox = 'https://other.example/inbox'
@@ -245,7 +245,7 @@ def test_a_hell_users_reply_in_a_shop_community(app, sites, monkeypatch):
     answered.ap_id = 'https://other.example/notes/1'
     db.session.commit()
     reply = a_reply(post, sites.hal, parent=answered)
-    assert reply.ap_id == f'{HELL_BASE}/comment/{reply.id}'
+    assert reply.ap_id == f'{FIRST_BASE}/comment/{reply.id}'
     sent = captured(monkeypatch, notes_module)
 
     send_reply(reply.id, answered.id, session=db.session)
@@ -257,17 +257,17 @@ def test_a_hell_users_reply_in_a_shop_community(app, sites, monkeypatch):
     assert re.fullmatch(rf'{SHOP_BASE}/activities/announce/{TOKEN}', announce['id'])
     assert announce['actor'] == f'{SHOP_BASE}/c/wares'
     create, key_id = by_inbox['https://other.example/inbox']
-    assert key_id == f'{HELL_BASE}/u/hal#main-key'
-    assert re.fullmatch(rf'{HELL_BASE}/activities/create/{TOKEN}', create['id'])
+    assert key_id == f'{FIRST_BASE}/u/hal#main-key'
+    assert re.fullmatch(rf'{FIRST_BASE}/activities/create/{TOKEN}', create['id'])
     assert announce['object']['id'] == create['id']
     assert create['object']['id'] == reply.ap_id
 
 
 def test_a_hosted_domains_accounts_are_never_sent_to(app, sites):
     shop_instance = db.session.get(Instance, sites.shop.instance_id)
-    assert set(hosted_domain_names()) == {HELL, ONION, SHOP} == \
+    assert set(hosted_domain_names()) == {FIRST, ONION, SHOP} == \
         {app.config['SERVER_NAME'], *(row.domain for row in Instance.query.filter(
-            Instance.id.in_([sites.hell.instance_id, sites.onion.instance_id, shop_instance.id])))}
+            Instance.id.in_([sites.first.instance_id, sites.onion.instance_id, shop_instance.id])))}
 
 
 # --------------------------------------------------------------------------
@@ -275,7 +275,7 @@ def test_a_hosted_domains_accounts_are_never_sent_to(app, sites):
 # --------------------------------------------------------------------------
 
 def assert_shops(body, verb, key_id, actor=f'{SHOP_BASE}/u/sam'):
-    assert no_hell(body), json.dumps(body)
+    assert no_first(body), json.dumps(body)
     assert re.fullmatch(rf'{SHOP_BASE}/activities/{verb}/{TOKEN}', body['id']), body['id']
     assert key_id == f'{actor}#main-key'
 
@@ -306,7 +306,7 @@ def test_a_shop_users_follow_and_undo_of_a_remote_community_are_the_shops(app, s
     leave_community(False, sites.sam.id, away.id)
 
     [(_, follow, follow_key), (_, undo, undo_key)] = sent
-    assert no_hell(follow) and follow_key == f'{SHOP_BASE}/u/sam#main-key'
+    assert no_first(follow) and follow_key == f'{SHOP_BASE}/u/sam#main-key'
     assert re.fullmatch(rf'{SHOP_BASE}/activities/follow/[0-9a-f-]+', follow['id'])
     assert_shops(undo, 'undo', undo_key)
     assert undo['object']['id'] == follow['id']
@@ -336,7 +336,7 @@ def test_a_shop_communitys_accept_of_a_follow_is_the_shops(app, sites, monkeypat
                            'actor': sites.rem.ap_profile_id, 'object': f'{SHOP_BASE}/c/wares'}, True)
 
     [(_, accept, key_id)] = sent
-    assert no_hell(accept), json.dumps(accept)
+    assert no_first(accept), json.dumps(accept)
     assert re.fullmatch(rf'{SHOP_BASE}/activities/accept/[0-9A-Za-z]{{32}}', accept['id'])
     assert key_id == f'{SHOP_BASE}/c/wares#main-key'
 
@@ -396,9 +396,9 @@ def test_a_remote_like_of_a_shop_post_is_matched(app, sites, monkeypatch):
 
 def test_a_quote_of_a_shop_posts_own_url_is_found(app, sites):
     post = a_post(sites.wares, sites.sam)
-    hell_post = a_post(sites.pit, sites.hal)
-    found = resolve_quotes({f'{SHOP_BASE}/post/{post.id}', f'{SHOP_BASE}/post/{hell_post.id}',
-                            f'{HELL_BASE}/post/{post.id}', f'http://{SHOP}/post/{post.id}'})
+    first_post = a_post(sites.pit, sites.hal)
+    found = resolve_quotes({f'{SHOP_BASE}/post/{post.id}', f'{SHOP_BASE}/post/{first_post.id}',
+                            f'{FIRST_BASE}/post/{post.id}', f'http://{SHOP}/post/{post.id}'})
     assert found == {f'{SHOP_BASE}/post/{post.id}': post}
 
 
@@ -416,9 +416,9 @@ def fetch(app, path, host, headers=AP):
 
 @pytest.fixture
 def owned(sites):
-    """A post, a comment and a private message of each of hell's and the shop's, and a public feed of hell's."""
+    """A post, a comment and a private message of each of the first domain's and the shop's, and a public feed of the first domain's."""
     rows = {}
-    for name, community, author in (('hell', sites.pit, sites.hal), ('shop', sites.wares, sites.sam)):
+    for name, community, author in (('first', sites.pit, sites.hal), ('shop', sites.wares, sites.sam)):
         post = a_post(community, author)
         reply = a_reply(post, author)
         conversation = Conversation(user_id=author.id)
@@ -430,9 +430,9 @@ def owned(sites):
         db.session.flush()
         message.ap_id = message.ap_id or f'{object_base(message)}/private_message/{message.id}'
         rows[name] = SimpleNamespace(post=post, reply=reply, message=message, user=author, community=community)
-    feed = Feed(name='hellfeed', title='Hell feed', public=True, user_id=sites.hal.id,
-                instance_id=sites.hell.instance_id, ap_profile_id=f'{HELL_BASE}/f/hellfeed',
-                ap_public_url=f'{HELL_BASE}/f/hellfeed')
+    feed = Feed(name='firstfeed', title='First feed', public=True, user_id=sites.hal.id,
+                instance_id=sites.first.instance_id, ap_profile_id=f'{FIRST_BASE}/f/firstfeed',
+                ap_public_url=f'{FIRST_BASE}/f/firstfeed')
     db.session.add(feed)
     db.session.commit()
     cache.clear()
@@ -448,10 +448,10 @@ def object_paths(row) -> list[str]:
             f'/c/{community}/followers', f'/c/{community}/following']
 
 
-@pytest.mark.parametrize('owner, other', [('hell', SHOP), ('shop', HELL), ('hell', ONION)])
+@pytest.mark.parametrize('owner, other', [('first', SHOP), ('shop', FIRST), ('first', ONION)])
 def test_another_of_our_domains_objects_are_unknown_here(app, sites, owned, owner, other):
     row = owned[owner]
-    home = HELL if owner == 'hell' else SHOP
+    home = FIRST if owner == 'first' else SHOP
     for path in object_paths(row):
         spelt = path
         if path.startswith(('/u/', '/c/')):   # name@host reaches the other domain's row from this one
@@ -462,58 +462,58 @@ def test_another_of_our_domains_objects_are_unknown_here(app, sites, owned, owne
         assert fetch(app, path, home).status_code == 200, (path, home)
 
 
-@pytest.mark.parametrize('path', ['/f/hellfeed', '/f/hellfeed/outbox', '/f/hellfeed/following',
-                                  '/f/hellfeed/moderators', '/f/hellfeed/followers'])
-def test_a_feed_is_hells_and_unknown_on_the_shop(app, sites, owned, path):
+@pytest.mark.parametrize('path', ['/f/firstfeed', '/f/firstfeed/outbox', '/f/firstfeed/following',
+                                  '/f/firstfeed/moderators', '/f/firstfeed/followers'])
+def test_a_feed_is_first_domains_and_unknown_on_the_shop(app, sites, owned, path):
     assert fetch(app, path, SHOP).status_code == 404
-    assert fetch(app, path, HELL).status_code == 200
+    assert fetch(app, path, FIRST).status_code == 200
 
 
 def test_a_gone_account_of_another_domain_is_no_tombstone_here(app, sites, owned):
     sites.sam.deleted = True
     db.session.commit()
-    assert fetch(app, f'/u/sam@{SHOP}', HELL).status_code == 404
-    assert fetch(app, f'/u/sam@{SHOP}/outbox', HELL).status_code == 404
+    assert fetch(app, f'/u/sam@{SHOP}', FIRST).status_code == 404
+    assert fetch(app, f'/u/sam@{SHOP}/outbox', FIRST).status_code == 404
     assert fetch(app, '/u/sam', SHOP).status_code == 410
     assert fetch(app, '/u/sam/outbox', SHOP).status_code == 410
 
 
 def test_a_private_message_is_unknown_on_another_of_our_domains(app, sites, owned):
-    for name, other in (('hell', SHOP), ('shop', HELL)):
+    for name, other in (('first', SHOP), ('shop', FIRST)):
         message = owned[name].message
-        assert message.ap_id.startswith(HELL_BASE if name == 'hell' else SHOP_BASE)
+        assert message.ap_id.startswith(FIRST_BASE if name == 'first' else SHOP_BASE)
         assert fetch(app, f'/private_message/{message.id}', other).status_code == 404
 
 
 def test_an_activity_is_looked_up_on_the_domain_asked(app, sites):
     token = 'abcdefghijklmno'
-    for base in (HELL_BASE, SHOP_BASE):
+    for base in (FIRST_BASE, SHOP_BASE):
         db.session.add(ActivityPubLog(direction='out', activity_id=f'{base}/activities/like/{token}',
                                       activity_type='Like', result='success',
                                       activity_json=json.dumps({'id': f'{base}/activities/like/{token}',
                                                                 'to': ['https://www.w3.org/ns/activitystreams#Public']})))
     db.session.commit()
-    for host, base in ((HELL, HELL_BASE), (SHOP, SHOP_BASE)):
+    for host, base in ((FIRST, FIRST_BASE), (SHOP, SHOP_BASE)):
         response = fetch(app, f'/activities/like/{token}', host)
         assert response.status_code == 200 and json.loads(response.data)['id'] == f'{base}/activities/like/{token}'
     db.session.query(ActivityPubLog).filter(ActivityPubLog.activity_id.startswith(SHOP_BASE)).delete()
     db.session.commit()
-    assert fetch(app, f'/activities/like/{token}', SHOP).status_code == 404   # hell's is not the shop's
+    assert fetch(app, f'/activities/like/{token}', SHOP).status_code == 404   # The first domain's is not the shop's
 
 
 def test_a_browser_request_is_answered_as_before(app, sites, owned):
-    """HTML is unaffected: the shop's storefront answers a hell post's page as C2 left it (a login first), not 404."""
-    post_id = owned['hell'].post.id
+    """HTML is unaffected: the shop's storefront answers a first-domain post's page as C2 left it (a login first), not 404."""
+    post_id = owned['first'].post.id
     response = fetch(app, f'/post/{post_id}', SHOP, headers={})
     assert (response.status_code, response.headers['Location']) == (302, f'/auth/login?next=/post/{post_id}')
-    assert fetch(app, f'/post/{post_id}', HELL, headers={}).status_code == 302   # as for anyone logged out
+    assert fetch(app, f'/post/{post_id}', FIRST, headers={}).status_code == 302   # as for anyone logged out
 
 
 def test_owned_elsewhere_reads_the_requests_domain(app, sites, owned):
     with request_on(app, sites.shop):
-        assert owned_elsewhere(owned['hell'].post) and not owned_elsewhere(owned['shop'].post)
+        assert owned_elsewhere(owned['first'].post) and not owned_elsewhere(owned['shop'].post)
         assert not owned_elsewhere(make_post(two_domains_away(sites), sites.rem, ap_id='https://peer.example/p/9'))
-    assert owned_elsewhere(owned['shop'].reply) and not owned_elsewhere(owned['hell'].reply)   # no request: default
+    assert owned_elsewhere(owned['shop'].reply) and not owned_elsewhere(owned['first'].reply)   # no request: default
 
 
 # --------------------------------------------------------------------------
@@ -545,7 +545,7 @@ def test_a_shop_moderators_site_ban_targets_the_shop(app, sites, monkeypatch):
 def test_a_shop_owners_feed_delete_is_the_shops(app, sites, monkeypatch):
     """I1: the Delete is the owner's activity, so its id is on the owner's domain, as its actor and key are."""
     sent = captured(monkeypatch, shared_feed)
-    shared_feed.announce_feed_delete_to_subscribers(sites.sam.id, f'{HELL_BASE}/f/samsfeed',
+    shared_feed.announce_feed_delete_to_subscribers(sites.sam.id, f'{FIRST_BASE}/f/samsfeed',
                                                     ['https://peer.example/inbox'])
     [(inbox, delete, key_id)] = sent
     assert inbox == 'https://peer.example/inbox'
@@ -553,9 +553,9 @@ def test_a_shop_owners_feed_delete_is_the_shops(app, sites, monkeypatch):
     assert delete['actor'] == f'{SHOP_BASE}/u/sam' and key_id == f'{SHOP_BASE}/u/sam#main-key'
 
 
-def test_a_hell_owners_feed_delete_keeps_its_shape(app, sites, monkeypatch):
+def test_a_first_owners_feed_delete_keeps_its_shape(app, sites, monkeypatch):
     sent = captured(monkeypatch, shared_feed)
-    shared_feed.announce_feed_delete_to_subscribers(sites.hal.id, f'{HELL_BASE}/f/halsfeed',
+    shared_feed.announce_feed_delete_to_subscribers(sites.hal.id, f'{FIRST_BASE}/f/halsfeed',
                                                     ['https://peer.example/inbox'])
     [(_, delete, _)] = sent
     assert re.fullmatch(rf'https://test\.piefed\.local/delete/{TOKEN}', delete['id'])
@@ -565,10 +565,10 @@ def page_alternates(response) -> list[str]:
     return [link for link in response.headers.getlist('Link') if 'application/activity+json' in link]
 
 
-@pytest.mark.parametrize('owner', ['hell', 'shop'])
+@pytest.mark.parametrize('owner', ['first', 'shop'])
 def test_a_posts_page_advertises_its_activitypub_id_on_its_owners_domain(app, sites, owner):
     """I2: the HTML page's ActivityPub alternate is the URL that answers the fetch, on the post's domain."""
-    author, community, host, base = (sites.hal, sites.pit, HELL, HELL_BASE) if owner == 'hell' else \
+    author, community, host, base = (sites.hal, sites.pit, FIRST, FIRST_BASE) if owner == 'first' else \
         (sites.sam, sites.wares, SHOP, SHOP_BASE)
     post = a_post(community, author)
     db.session.get(Site, 1).private_instance = False   # a logged-out visitor sees the page
@@ -586,12 +586,12 @@ def remote_authors_post(sites, community):
     return post
 
 
-@pytest.mark.parametrize('where', ['hell', 'shop'])
+@pytest.mark.parametrize('where', ['first', 'shop'])
 def test_a_moderators_edit_of_a_remote_authors_post_is_announced_by_the_community(app, sites, monkeypatch, where):
     """I3: the community Announces the Update of a remote author's post, signed by the community, as at BASE; only
     what would go out as the author (whose key its own server holds) is skipped. The ids are the community's
     domain's: the first domain's as before, the shop's for a shop community."""
-    community, base = (sites.pit, HELL_BASE) if where == 'hell' else (sites.wares, SHOP_BASE)
+    community, base = (sites.pit, FIRST_BASE) if where == 'first' else (sites.wares, SHOP_BASE)
     post = remote_authors_post(sites, community)
     mastodon = make_instance('toot.example', software='mastodon')
     mastodon.inbox = 'https://toot.example/inbox'
@@ -608,7 +608,7 @@ def test_a_moderators_edit_of_a_remote_authors_post_is_announced_by_the_communit
     assert re.fullmatch(rf'{base}/activities/update/{TOKEN}', update['id'])
     assert update['actor'] == sites.rem.public_url() and update['object']['id'] == post.ap_id
     if where == 'shop':
-        assert no_hell(announce), json.dumps(announce)
+        assert no_first(announce), json.dumps(announce)
 
 
 def test_a_remote_authors_post_in_a_remote_community_is_not_sent(app, sites, monkeypatch):
@@ -630,8 +630,8 @@ def test_a_moderators_edit_of_a_remote_authors_microblog_is_announced_by_the_com
     send_post(post.id, edit=True, session=db.session)
 
     [(inbox, announce, key_id)] = sent
-    assert (inbox, key_id) == ('https://peer.example/inbox', f'{HELL_BASE}/c/pit#main-key')
-    assert re.fullmatch(rf'{HELL_BASE}/activities/update/{TOKEN}', announce['object']['id'])
+    assert (inbox, key_id) == ('https://peer.example/inbox', f'{FIRST_BASE}/c/pit#main-key')
+    assert re.fullmatch(rf'{FIRST_BASE}/activities/update/{TOKEN}', announce['object']['id'])
 
 
 def test_a_moderators_edit_of_a_remote_authors_video_is_announced_by_the_community(app, sites, monkeypatch):
@@ -639,10 +639,10 @@ def test_a_moderators_edit_of_a_remote_authors_video_is_announced_by_the_communi
     post = remote_authors_post(sites, sites.pit)
     post.nsfw = False
     post.type = POST_TYPE_VIDEO
-    post.url = f'{HELL_BASE}/static/media/posts/ab/cd/abcdefghijklmno.mp4'
+    post.url = f'{FIRST_BASE}/static/media/posts/ab/cd/abcdefghijklmno.mp4'
     with_media(post, status='ready', uuid=str(uuid.uuid4()), mime='video/mp4', bytes=12741, duration_s=10,
                width=640, height=360, fps=30, thumbnail_width=640, thumbnail_height=360)
-    post.image = File(source_url=f'{HELL_BASE}/static/media/posts/ef/gh/thumbthumbthumb.jpg', width=640, height=360)
+    post.image = File(source_url=f'{FIRST_BASE}/static/media/posts/ef/gh/thumbthumbthumb.jpg', width=640, height=360)
     tube = make_instance('tube.example', software='peertube')
     tube.inbox = 'https://tube.example/inbox'
     make_community_member(make_user(tube, 'watcher'), sites.pit)
@@ -652,8 +652,8 @@ def test_a_moderators_edit_of_a_remote_authors_video_is_announced_by_the_communi
     send_post(post.id, edit=True, session=db.session)
 
     [(inbox, announce, key_id)] = sent   # PeerTube would be sent the author's Update: skipped
-    assert (inbox, key_id) == ('https://peer.example/inbox', f'{HELL_BASE}/c/pit#main-key')
-    assert re.fullmatch(rf'{HELL_BASE}/activities/update/{TOKEN}', announce['object']['id'])
+    assert (inbox, key_id) == ('https://peer.example/inbox', f'{FIRST_BASE}/c/pit#main-key')
+    assert re.fullmatch(rf'{FIRST_BASE}/activities/update/{TOKEN}', announce['object']['id'])
 
 
 def test_object_base_never_raises_and_agrees_with_the_models(app, sites):
