@@ -18,15 +18,19 @@ Four defects were found:
   bulk-follow accounts from a defederated instance (D934).
 """
 import json
+import socket
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
+import respx
 
 from app import cache, db
 from app.models import BannedInstances, Community, SiteDomain, User
 from app.storefront import clear_domain_cache
 from app.utils import PAGE_MAX_BYTES
 from tests.factories import grant_permission, make_instance, make_user
+from tests.test_no_http_to_hosted import _getaddrinfo_without_the_network
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -107,7 +111,7 @@ def _flashes(flashed):
 def _responses(*payloads):
     """`get_request` is called once per HTTP round trip and the route reads
     `.text`, so each payload becomes one response object in order."""
-    return [Mock(text=json.dumps(payload)) for payload in payloads]
+    return [Mock(status_code=200, text=json.dumps(payload)) for payload in payloads]
 
 
 def _lemmy_community(actor_id, name='c', posts=1000, active=1000):
@@ -208,6 +212,50 @@ def test_one_of_our_own_domains_is_not_scanned(admin_client, remote_url):
     assert response.status_code == 302
     assert get_request.call_args_list == [], 'one of our own domains was contacted'
     assert 'is one of this server' in ' '.join(_flashes(flashed))
+
+
+@pytest.mark.parametrize('rel', ['http://nodeinfo.diaspora.software/ns/schema/2.0',
+                                 'http://nodeinfo.diaspora.software/ns/schema/2.1'])
+def test_a_nodeinfo_pointing_at_one_of_our_domains_is_refused_not_a_500(admin_client, monkeypatch, rel):
+    """Final review M5: a remote nodeinfo whose 2.0/2.1 href is on one of our hosts gets the hosted-fetch guard's
+    empty 421, and json.loads('') was a 500. The real get_request runs; only the remote server is mocked."""
+    client, token = admin_client
+    db.session.add(SiteDomain(domain='shop.example'))
+    db.session.commit()
+    clear_domain_cache()
+    monkeypatch.setattr(socket, 'getaddrinfo', _getaddrinfo_without_the_network)
+    with respx.mock(assert_all_called=False) as router:
+        router.get('https://remote.example/.well-known/nodeinfo').respond(
+            200, json={'links': [{'rel': rel, 'href': 'https://shop.example/nodeinfo/2.0'}]})
+        shop = router.get(host='shop.example').respond(200, json=_software('lemmy'))
+        response, flashed, _render = _scan(client, token)
+    clear_domain_cache()
+
+    assert response.status_code == 302
+    assert shop.call_count == 0, 'one of our own domains was contacted'
+    assert 'did not answer with a nodeinfo document' in ' '.join(_flashes(flashed))
+
+
+@pytest.mark.parametrize('first, second', [
+    (Mock(status_code=200, text='<html>not json</html>'), None),
+    (Mock(status_code=404, text=''), None),
+    (Mock(status_code=200, text='[1, 2]'), None),
+    (Mock(status_code=200, text=json.dumps({'links': [{'rel': 'http://nodeinfo.diaspora.software/ns/schema/2.0',
+                                                      'href': 'https://remote.example/nodeinfo/2.0'}]})),
+     Mock(status_code=200, text='<html>not json</html>')),
+    (Mock(status_code=200, text=json.dumps({'links': [{'rel': 'http://nodeinfo.diaspora.software/ns/schema/2.0',
+                                                      'href': 'https://remote.example/nodeinfo/2.0'}]})),
+     Mock(status_code=500, text=json.dumps(_software('lemmy')))),
+])
+def test_a_nodeinfo_answer_that_is_no_json_document_is_a_message_not_a_500(admin_client, first, second):
+    client, token = admin_client
+
+    with patch('app.admin.routes.get_request') as get_request:
+        get_request.side_effect = [first] if second is None else [first, second]
+        response, flashed, _render = _scan(client, token)
+
+    assert response.status_code == 302
+    assert 'did not answer with a nodeinfo document' in ' '.join(_flashes(flashed))
 
 
 def test_a_plainly_banned_instance_is_not_scanned(admin_client):
@@ -314,9 +362,9 @@ def test_a_server_that_never_returns_a_short_page_does_not_loop_forever(
     client, token = admin_client
 
     with patch('app.admin.routes.get_request') as get_request:
-        get_request.side_effect = ([Mock(text=json.dumps(NODEINFO)),
-                                    Mock(text=json.dumps(_software(software)))]
-                                   + [Mock(text=json.dumps({page_key: full_page}))] * 400)
+        get_request.side_effect = ([Mock(status_code=200, text=json.dumps(NODEINFO)),
+                                    Mock(status_code=200, text=json.dumps(_software(software)))]
+                                   + [Mock(status_code=200, text=json.dumps({page_key: full_page}))] * 400)
         response, flashed, _render = _scan(client, token, dry_run='y')
 
     assert response.status_code == 302
