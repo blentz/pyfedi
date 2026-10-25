@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 from flask import g
 
 from app import cache, db
-from app.branding import Branding, current_branding, offsite_references, onion_safe
+from app.branding import Branding, current_branding, ends_inside_markup, offsite_references, onion_safe
 from app.constants import POST_TYPE_IMAGE
 from app.models import DomainBranding, File, Site
 from app.onion_media import cache_name, proxy_url
@@ -400,7 +400,12 @@ ENDS_INSIDE_A_TAG = [
     pytest.param('Hi <!-- the rest', id='a comment'),
     pytest.param('Fast & <3', id='a bare lt'),
     pytest.param(f'Hi <a href="{ELSEWHERE}/l', id='a link'),
-]
+    pytest.param('a < b', id='a plain lt'),
+    # Security review: these end outside data state with their last '>' after their last '<'; the parser decides
+    pytest.param('Hi <img alt="a>b" src=', id='a gt in a quoted value'),
+    pytest.param('Hi <!-- x>', id='a comment holding a gt'),
+] + [pytest.param(f'Hi <{name}>x', id=f'open {name}') for name in (
+    'style', 'script', 'textarea', 'title', 'xmp', 'noembed', 'noframes', 'noscript', 'plaintext', 'iframe')]
 
 
 @pytest.mark.parametrize('html', ENDS_INSIDE_A_TAG)
@@ -412,6 +417,18 @@ def test_onion_safe_drops_a_field_that_ends_inside_any_tag(app, caplog, html):
     messages = [record.getMessage() for record in caplog.records]
     for field in ('description', 'sidebar_html', 'about_html', 'additional_css'):
         assert any(field in message and 'unfinished tag' in message for message in messages), field
+
+
+@pytest.mark.parametrize('html', [p.values[0] for p in ENDS_INSIDE_A_TAG])
+def test_ends_inside_markup(html):
+    assert ends_inside_markup(html)
+
+
+@pytest.mark.parametrize('html', ['', 'plain text', 'Hi <b>bold', '<p>a <a href="/x">link</a>', '<style>a{}</style>',
+                                  '<!-- c -->', '<textarea>t</textarea> after', '<p data-end-sentinel="x">'])
+def test_a_field_that_ends_in_data_state_is_finished(html):
+    """An element left open is still data state: the page's markup after it stays markup."""
+    assert not ends_inside_markup(html)
 
 
 def test_a_field_that_ends_outside_every_tag_is_left_as_written(app):
