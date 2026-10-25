@@ -11,6 +11,7 @@ from flask import request, flash, json, url_for, current_app, redirect, g, abort
 from markupsafe import Markup
 from flask_login import current_user, login_user
 from flask_babel import _, ngettext
+from flask_smorest import abort as abort_with_message
 from slugify import slugify
 from sqlalchemy import text, desc, or_, delete, update, select
 from PIL import Image
@@ -156,13 +157,50 @@ _UPLOADED_LOGO = re.compile(r'/static/media/logo_[0-9A-Za-z]{5}(_(100|180|152|32
                             re.IGNORECASE)
 
 
+def _png_copies(directory: str, base_filename: str, file_ext: str) -> tuple[dict[str, str], bool]:
+    """The PNG copies of the decoded upload `base_filename` + `file_ext` in `directory`: each one's URL path by field,
+    and whether the upload itself is then to be removed (it is not when it is one of the copies)."""
+    # For non-SVG uploads, create PNG thumbnails for PWA compatibility
+    logos = {}
+    img = Image.open(f'{directory}/{base_filename}{file_ext}')
+    if img.width > 100:
+        img.thumbnail((100, 100))
+        img.save(f'{directory}/{base_filename}_100.png')
+        logos['logo'] = f'/static/media/{base_filename}_100.png'
+        delete_original = True
+    else:
+        img.save(f'{directory}/{base_filename}.png')
+        logos['logo'] = f'/static/media/{base_filename}.png'
+        # Only when the original is a DIFFERENT file. This arm
+        # writes <base>.png, which for a .png upload is the
+        # uploaded file itself -- so an unconditional delete here
+        # unlinked the logo it had just stored, and a site icon of
+        # 100px or less (the common case) became a 404 on every
+        # page. A .jpg or .webp source is a different path and is
+        # still removed.
+        delete_original = (f'{directory}/{base_filename}.png' !=
+                           f'{directory}/{base_filename}{file_ext}')
+
+    # Save multiple copies of the logo - different sizes, all as PNG
+    # Create 512x512 and 192x192 versions too, which Site keeps in settings
+    for field, size in (('logo_180', 180), ('logo_152', 152), ('logo_32', 32), ('logo_16', 16), ('logo_512', 512),
+                        ('logo_192', 192)):
+        img = Image.open(f'{directory}/{base_filename}{file_ext}')
+        img.thumbnail((size, size))
+        img.save(f'{directory}/{base_filename}_{size}.png')
+        logos[field] = f'/static/media/{base_filename}_{size}.png'
+
+    return logos, delete_original
+
+
 def save_logo_upload(upload, directory: str) -> dict[str, str]:
     """Store an uploaded logo in `directory` (the served media directory, app/static/media) and make its sized PNG
     copies. Returns the URL path of each file, by field: the five Site keeps on its row, then `logo_192` and `logo_512`,
     the PWA manifest's icons. An SVG is stored as uploaded, once sanitized, with no copies: every other field is ''.
 
     Removes nothing a logo already occupies: the caller does, once the replacement is assigned. An upload this will not
-    take (not one of the image types, an SVG that cannot be sanitized, an image Pillow cannot decode) is a 400, with
+    take (not one of the image types, an SVG that cannot be sanitized, an image Pillow cannot decode or cannot
+    write as PNG) is a 400, with
     nothing of it left on disk."""
     allowed_extensions = ['.jpg', '.jpeg', '.png', '.webp', '.svg']  # D918: no GIF site icons
     file_ext = os.path.splitext(upload.filename)[1]
@@ -212,35 +250,17 @@ def save_logo_upload(upload, directory: str) -> dict[str, str]:
         return {'logo': f'/static/media/{base_filename}{file_ext}', 'logo_180': '', 'logo_152': '', 'logo_32': '',
                 'logo_16': '', 'logo_512': '', 'logo_192': ''}
 
-    # For non-SVG uploads, create PNG thumbnails for PWA compatibility
-    logos = {}
-    img = Image.open(f'{directory}/{base_filename}{file_ext}')
-    if img.width > 100:
-        img.thumbnail((100, 100))
-        img.save(f'{directory}/{base_filename}_100.png')
-        logos['logo'] = f'/static/media/{base_filename}_100.png'
-        delete_original = True
-    else:
-        img.save(f'{directory}/{base_filename}.png')
-        logos['logo'] = f'/static/media/{base_filename}.png'
-        # Only when the original is a DIFFERENT file. This arm
-        # writes <base>.png, which for a .png upload is the
-        # uploaded file itself -- so an unconditional delete here
-        # unlinked the logo it had just stored, and a site icon of
-        # 100px or less (the common case) became a 404 on every
-        # page. A .jpg or .webp source is a different path and is
-        # still removed.
-        delete_original = (f'{directory}/{base_filename}.png' !=
-                           f'{directory}/{base_filename}{file_ext}')
-
-    # Save multiple copies of the logo - different sizes, all as PNG
-    # Create 512x512 and 192x192 versions too, which Site keeps in settings
-    for field, size in (('logo_180', 180), ('logo_152', 152), ('logo_32', 32), ('logo_16', 16), ('logo_512', 512),
-                        ('logo_192', 192)):
-        img = Image.open(f'{directory}/{base_filename}{file_ext}')
-        img.thumbnail((size, size))
-        img.save(f'{directory}/{base_filename}_{size}.png')
-        logos[field] = f'/static/media/{base_filename}_{size}.png'
+    # A decodable image can still be one Pillow will not write as PNG (a CMYK JPEG): every copy `_png_copies` makes is a PNG. That
+    # is a 400 with every file of this upload removed, never a 500 with them left in the media root.
+    try:
+        logos, delete_original = _png_copies(directory, base_filename, file_ext)
+    except Exception:
+        for name in os.listdir(directory):
+            if name.startswith((f'{base_filename}.', f'{base_filename}_')):
+                os.unlink(f'{directory}/{name}')
+        # flask_smorest's abort: the app's HTTP error handler sends the message it carries, never a description
+        abort_with_message(400, message=_('That image could not be made into PNG icons. Save it as an RGB PNG or '
+                                          'JPEG and upload it again.'))
 
     if delete_original:
         os.unlink(f'{directory}/{base_filename}{file_ext}')

@@ -563,3 +563,46 @@ def test_a_reference_is_shown_escaped(admin, domains, domain):
     body = response.get_data(as_text=True)
     assert 'elsewhere.example.org/&lt;script&gt;alert(1)&lt;/script&gt;.png' in body
     assert '<script>alert(1)</script>' not in body
+
+
+def cmyk_jpeg() -> bytes:
+    """An image Pillow decodes but cannot write as PNG: every copy the upload makes is a PNG."""
+    buffer = io.BytesIO()
+    Image.new('CMYK', (200, 200), (10, 20, 30, 40)).save(buffer, format='JPEG')
+    return buffer.getvalue()
+
+
+UNWRITABLE = 'could not be made into PNG'
+
+
+def test_an_image_that_cannot_be_written_as_png_is_400_on_a_domain(admin, domains, media):
+    shop = domains['shop']
+    save(admin, shop, logo=(io.BytesIO(png()), 'shop.png'))
+    before = {field: getattr(own_row(shop), field) for field in LOGO_FIELDS}
+    files = media_files(media)
+    response = save(admin, shop, name='Never stored', logo=(io.BytesIO(cmyk_jpeg()), 'print.jpg'))
+    assert response.status_code == 400
+    assert UNWRITABLE in response.get_data(as_text=True)
+    row = own_row(shop)
+    assert row.name == 'Shop Branded'
+    assert {field: getattr(row, field) for field in LOGO_FIELDS} == before
+    assert media_files(media) == files   # nothing of the refused upload is left
+
+
+def test_an_image_that_cannot_be_written_as_png_is_400_on_the_site(admin, domains, media):
+    client, token = admin
+    site = db.session.get(Site, 1)
+    site.logo = '/static/media/logo_Keep1.png'
+    db.session.commit()
+    write_media(media, 'logo_Keep1.png')
+    forget_login()
+    response = client.post('/admin/site', content_type='multipart/form-data', data={
+        'name': 'Never stored', 'description': '', 'about': '', 'sidebar': '', 'legal_information': '', 'tos_url': '',
+        'announcement': '', 'contact_email': 'admin@example.org', 'submit': 'Save', 'csrf_token': token,
+        'icon': (io.BytesIO(cmyk_jpeg()), 'print.jpg')})
+    assert response.status_code == 400
+    assert UNWRITABLE in response.get_data(as_text=True)
+    db.session.expire_all()
+    site = db.session.get(Site, 1)
+    assert (site.name, site.logo) == ('The First Site', '/static/media/logo_Keep1.png')
+    assert media_files(media) == {'logo_Keep1.png'}
