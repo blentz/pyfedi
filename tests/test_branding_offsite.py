@@ -17,6 +17,7 @@ from app.constants import POST_TYPE_IMAGE
 from app.models import DomainBranding, File, Site
 from app.onion_media import cache_name, proxy_url
 from app.storefront import clear_domain_cache
+from app.utils import set_setting
 from tests.conftest import forget_login
 from tests.factories import make_instance, make_post, make_user
 from tests.two_domains import HELL, ONION, default_request, onion_request, two_domains  # noqa: F401  (a fixture)
@@ -31,14 +32,23 @@ REMOTE_IMAGE = f'https://{REMOTE_HOST}/pictrs/image/cat.webp'
 REMOTE_AVATAR = f'https://{REMOTE_HOST}/pictrs/image/face.png'
 SANDBOX = "default-src 'none'; sandbox"
 SCRIPT_POLICY = "script-src 'self' 'nonce-{nonce}' 'strict-dynamic'; object-src 'none'; base-uri 'none';"
-ONION_POLICY = SCRIPT_POLICY + " img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline';" \
-                               " connect-src 'self'; media-src 'self';"
+ONION_LOADS = " img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self';" \
+              " media-src 'self'; frame-src 'self';"
+ONION_POLICY = "default-src 'self'; " + SCRIPT_POLICY + ONION_LOADS
+ONION_POLICY_WITHOUT_NONCE = "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none';" + ONION_LOADS
 
 
 # ---------------------------------------------------------------------------------------------------------------------
 # The scanner
 
 FOUND = [
+    # a refresh, a link's imagesrcset and SVG presentation attributes (review M3)
+    ({'html': f'<meta http-equiv="Refresh" content="0; URL=\'{ELSEWHERE}/u\'">'}, [f'{ELSEWHERE}/u']),
+    ({'html': f'<meta http-equiv=refresh content="5,{ELSEWHERE}/v">'}, [f'{ELSEWHERE}/v']),
+    ({'html': f'<link rel="preload" as="image" imagesrcset="/a.png 1x, {ELSEWHERE}/w.png 2x">'}, [f'{ELSEWHERE}/w.png']),
+    ({'html': f'<svg><rect fill="url({ELSEWHERE}/x.svg#p)" mask="url(#m)"/><g filter="url({ELSEWHERE}/y.svg#f)"'
+              f' clip-path="url(\'{ELSEWHERE}/z.svg#c\')"/></svg>'},
+     [f'{ELSEWHERE}/x.svg#p', f'{ELSEWHERE}/y.svg#f', f'{ELSEWHERE}/z.svg#c']),
     # CSS url(), quoted, unquoted and //-relative, and @import
     ({'css': f'a {{ background: url({ELSEWHERE}/a.png) }}'}, [f'{ELSEWHERE}/a.png']),
     ({'css': f'a {{ background: url("{ELSEWHERE}/b.png") }}'}, [f'{ELSEWHERE}/b.png']),
@@ -70,6 +80,8 @@ FOUND = [
 ]
 
 NOT_FOUND = [
+    {'html': f'<meta http-equiv="refresh" content="30"><meta http-equiv="refresh" content="0;url=/home">'
+             f'<meta name="og:url" content="{ELSEWHERE}/n"><svg><rect fill="red" mask="url(#m)"/></svg>'},
     {'css': 'a { background: url(/static/a.png) } b { background: url(b.png) }'},
     {'css': 'a { background: url(data:image/png;base64,AAAA) }'},
     {'css': f'a {{ background: url(http://{ONION}/c.png) }} b {{ background: url(//ABC.ONION/d.png) }}'},
@@ -221,7 +233,7 @@ def assert_policy_holds(app, response, own_host=ONION):
     (strict-dynamic ignores 'self'), no inline event handler (script-src has no 'unsafe-inline'), and live updates on
     the onion."""
     assert response.status_code == 200, response.headers.get('Location')
-    nonce = re.fullmatch(r"script-src 'self' 'nonce-([^']+)' .*", response.headers['Content-Security-Policy'])[1]
+    nonce = re.search(r"'nonce-([^']+)'", response.headers['Content-Security-Policy'])[1]
     assert response.headers['Content-Security-Policy'] == ONION_POLICY.format(nonce=nonce)
     body = response.get_data(as_text=True)
     assert offsite_references(html=body, own_host=own_host) == []
@@ -405,3 +417,61 @@ def test_an_onion_post_page_preconnects_to_no_other_host(app, onion_site):
     preconnect = f"<link rel=\"preconnect\" href='{REMOTE_IMAGE}'>"
     assert preconnect in visit(app, f'/post/{post.id}', onion=False).get_data(as_text=True)
     assert 'rel="preconnect"' not in visit(app, f'/post/{post.id}').get_data(as_text=True)
+
+
+def test_onion_safe_drops_a_refresh_and_svg_paint_and_logs_the_bare_host(app, caplog):
+    branding = branding_with(sidebar_html=f'<meta http-equiv="refresh" content="0;url={ELSEWHERE}/r">'
+                                          f'<svg><rect fill="url({ELSEWHERE}/p.svg#p)"/></svg>')
+    with caplog.at_level(logging.INFO, logger=app.logger.name):
+        safe = onion_safe(branding, 'ABC.Onion.')
+    assert safe.sidebar_html == '<meta http-equiv="refresh"/><svg><rect fill="url()"></rect></svg>'
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages and all(message.endswith(f'on {ONION}: off-site on the onion') for message in messages)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Review M1: the onion's web app manifest names no off-site icon
+
+def test_the_onion_manifest_names_no_offsite_icon(app, onion_site):
+    set_setting('logo_512', f'{ELSEWHERE}/512.png')
+    set_setting('logo_192', '/static/media/own_192.png')
+
+    def icons(onion):
+        return {icon['sizes']: icon['src'] for icon in visit(app, '/manifest.json', onion=onion).get_json()['icons']
+                if icon.get('sizes') in ('192x192', '512x512')}
+    assert icons(onion=False) == {'192x192': '/static/media/own_192.png', '512x512': f'{ELSEWHERE}/512.png'}
+    assert icons(onion=True) == {'192x192': '/static/media/own_192.png',
+                                 '512x512': '/static/images/piefed_logo_icon_t_512.png'}
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Review M2: an onion response made before the nonce exists still has the policy, without a nonce
+
+def test_an_onion_response_without_a_nonce_has_the_policy_without_one(app, onion_site):
+    g.pop('nonce', None)   # the suite keeps one app context, so g holds the last request's nonce
+    client = app.test_client(use_cookies=False)
+    sent_round = client.get('/auth/login', base_url=f'http://{ONION}', headers=ONION_HEADERS,
+                            environ_base={'REMOTE_ADDR': PROXY})
+    assert sent_round.status_code == 303   # require_onion_session answers before the nonce is made
+    assert sent_round.headers['Content-Security-Policy'] == ONION_POLICY_WITHOUT_NONCE
+    g.pop('nonce', None)
+    refused = client.get(sent_round.headers['Location'], base_url=f'http://{ONION}', headers=ONION_HEADERS,
+                         environ_base={'REMOTE_ADDR': PROXY})
+    assert refused.status_code == 400   # the cookies page
+    assert refused.headers['Content-Security-Policy'] == ONION_POLICY_WITHOUT_NONCE
+    g.pop('nonce', None)
+    options = client.options('/', base_url=f'http://{ONION}', headers=ONION_HEADERS, environ_base={'REMOTE_ADDR': PROXY})
+    assert options.headers['Content-Security-Policy'] == ONION_POLICY_WITHOUT_NONCE
+
+
+def test_a_clearnet_response_without_a_nonce_has_no_policy(app, onion_site):
+    domains, _post = onion_site
+    reader = domains.local_user('noncereader', domains.domains[0])
+    client = app.test_client()
+    with client.session_transaction(base_url=f'https://{HELL}') as session:
+        session['_user_id'] = str(reader.id)
+        session['_fresh'] = True
+    forget_login()
+    g.pop('nonce', None)
+    response = client.options('/', base_url=f'https://{HELL}')
+    assert 'Content-Security-Policy' not in response.headers
