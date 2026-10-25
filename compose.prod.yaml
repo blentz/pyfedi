@@ -14,12 +14,19 @@
 #      afterwards means re-running init-db, which drops every table. Set it first.
 #   3. ./pgdata must be owned by uid 1000 to match the db service's user: "1000:1000".
 #      Deploying as root, that is: chown -R 1000:1000 pgdata media logs tmp
-#   4. Set PIEFED_DOMAIN and ACME_EMAIL in the caddy container's environment: the Caddyfile reads its site address and its ACME email from them.
+#   4. Set PIEFED_DOMAIN and ACME_EMAIL: the Caddyfile reads its site address and its ACME
+#      email from them. Export them, or put them in the .env file next to the compose files:
+#        PIEFED_DOMAIN=example.org
+#        ACME_EMAIL=admin@example.org
+#      Compose refuses to start while either is unset.
 services:
 
   caddy:
     image: docker.io/library/caddy:2
     restart: unless-stopped
+    environment:
+      PIEFED_DOMAIN: ${PIEFED_DOMAIN:?set PIEFED_DOMAIN, the Caddy site address}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL, the Let's Encrypt contact address}
     ports:
       - "80:80"
       - "443:443"

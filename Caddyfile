@@ -4,7 +4,7 @@
 # caddy_data volume -- losing that volume forces re-issuance and can trip Let's
 # Encrypt rate limits (5 certs per domain per week).
 {
-	# Let's Encrypt sends expiry and problem notices here. CHANGE THIS.
+	# Let's Encrypt sends expiry and problem notices here. Set ACME_EMAIL in the caddy container's environment.
 	email {$ACME_EMAIL}
 }
 
