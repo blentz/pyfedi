@@ -13,9 +13,10 @@ import fastapi_server
 
 CADDYFILE = pathlib.Path(__file__).resolve().parent.parent / 'Caddyfile'
 
-# The Caddyfile names its host and ACME email as {$PIEFED_DOMAIN} and {$ACME_EMAIL}; Caddy fills them from the
-# environment when it loads the file, and these tests do the same with test values.
-ENV = {'PIEFED_DOMAIN': 'piefed.example', 'ACME_EMAIL': 'admin@piefed.example'}
+# The Caddyfile names its host, ACME email and onion host as {$PIEFED_DOMAIN}, {$ACME_EMAIL} and {$PIEFED_ONION};
+# Caddy fills them from the environment when it loads the file, and these tests do the same with test values.
+ENV = {'PIEFED_DOMAIN': 'piefed.example', 'ACME_EMAIL': 'admin@piefed.example',
+       'PIEFED_ONION': 'testonionaddress.onion'}
 
 
 def caddyfile_lines():
@@ -180,3 +181,11 @@ def test_the_federating_domain_template_routes_like_the_main_block_once_uncommen
     assert any(d.startswith('header Onion-Location') for d in main)
     assert 'request_header -X-PieFed-Via' in uncommented
     assert [d for d in main if not d.startswith('header Onion-Location') and d] == [d for d in uncommented if d]
+
+
+def test_the_onion_address_comes_from_the_environment():
+    live = [line.split('#', 1)[0].strip() for line in caddyfile_lines()]
+    onion = ENV['PIEFED_ONION']
+    assert f'header Onion-Location http://{onion}{{uri}}' in site_block_directives(ENV['PIEFED_DOMAIN'], live)
+    assert f'http://{onion}:8081 {{' in live
+    assert 'request_header X-PieFed-Via onion' in site_block_directives(f'http://{onion}:8081', live)
