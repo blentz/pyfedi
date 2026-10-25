@@ -8,6 +8,7 @@ from flask_login import current_user
 from sqlalchemy import desc, or_, text
 
 from app import db, constants
+from app.branding import current_branding
 from app.constants import POST_STATUS_REVIEWING
 # The module, not the name: app.feed.routes reaches this file through
 # app.activitypub before get_all_child_feed_ids is defined (import cycle: feed.routes)
@@ -128,7 +129,7 @@ def show_tag(tag):
                                content_filters=content_filters, category=category, category_id=category_id,
                                moderated_community_ids=moderating_communities_ids(current_user.get_id()),
                                rss_feed=f"{storefront_url()}/tag/{tag.name}/feed",
-                               rss_feed_name=f"#{tag.display_as} on {g.site.name}",
+                               rss_feed_name=f"#{tag.display_as} on {current_branding().name}",
                                inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None,
                                )
     else:
@@ -153,9 +154,9 @@ def show_tag_rss(tag):
         posts = posts.order_by(desc(Post.posted_at)).limit(20).all()
 
         server_url = storefront_url()   # the visitor's storefront
-        image =  f"{server_url}{g.site.logo_152}" if g.site.logo_152 \
+        image =  f"{server_url}{current_branding().logo_152}" if current_branding().logo_152 \
                           else f"{server_url}/static/images/apple-touch-icon.png"
-        feed = RSSFeed(title = f'#{tag.display_as} on {g.site.name}',
+        feed = RSSFeed(title = f'#{tag.display_as} on {current_branding().name}',
                        link = f"{server_url}/tag/{tag.name}",
                        description = ' ',
                        logo = image,

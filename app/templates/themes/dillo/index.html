@@ -73,10 +73,10 @@
     <hr>
     {% endif -%}
 
-    <h2 style="border: none; padding-left: 0;">{{ _('About %(site_name)s', site_name=g.site.name) }}</h2>
-        <p><strong>{{ g.site.description|safe }}</strong></p>
-        {% if g.site.sidebar_html -%}
-            <p>{{ g.site.sidebar_html|safe }}</p>
+    <h2 style="border: none; padding-left: 0;">{{ _('About %(site_name)s', site_name=branding.name) }}</h2>
+        <p><strong>{{ branding.description|safe }}</strong></p>
+        {% if branding.sidebar_html -%}
+            <p>{{ branding.sidebar_html|safe }}</p>
         {% endif -%}
         {% if rss_feed %}
             <ul class="list-group list-group-flush mt-4">

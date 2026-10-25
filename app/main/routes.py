@@ -13,6 +13,7 @@ from sqlalchemy.orm import joinedload
 from ua_parser import parse as uaparse
 
 from app import db, cache, limiter, plugins
+from app.branding import current_branding
 from app.activitypub.util import users_total, active_month, local_posts, local_communities, \
     lemmy_site_data, is_activitypub_request, find_microblogging_community
 from app.discovery import KIND_COMMUNITY
@@ -306,7 +307,7 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag, live=False
                                SUBSCRIPTION_PENDING=SUBSCRIPTION_PENDING, SUBSCRIPTION_MEMBER=SUBSCRIPTION_MEMBER,
                                etag=f"{sort}_{view_filter}_{storefront_host()}_{etag_stamp(g.site.last_active)}", next_url=next_url,
                                prev_url=prev_url, instance_stickies=instance_stickies,
-                               title=f"{g.site.name} - {g.site.description}",
+                               title=f"{current_branding().name} - {current_branding().description}",
                                description=shorten_string(html_to_text(g.site.sidebar), 150),
                                content_filters=content_filters, sort=sort, view_filter=view_filter,
                                announcement=get_setting('announcement_html', get_setting('announcement')),
@@ -1569,10 +1570,11 @@ def index_rss(feed_type=None):
     posts = post_ids_to_models(post_ids, 'new').all()
 
     server_url = storefront_url()   # the visitor's storefront
-    description = shorten_string(g.site.description, 150) if g.site.description else ' '
-    image = f"{server_url}{g.site.logo}" if g.site.logo\
+    branding = current_branding()
+    description = shorten_string(branding.description, 150) if branding.description else ' '
+    image = f"{server_url}{branding.logo}" if branding.logo\
                       else f"{server_url}/static/images/apple-touch-icon.png"
-    feed = RSSFeed(title = f'{g.site.name} - {feed_type.capitalize()}',
+    feed = RSSFeed(title = f'{branding.name} - {feed_type.capitalize()}',
                    link = server_url,
                    description = description,
                    logo = image,
