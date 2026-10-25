@@ -6628,7 +6628,8 @@ def populate_child_feed_worker(feed_id, child_feed):
 def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
     post = Post.get_by_ap_id(uri)
     if post:
-        return post
+        # a post of ours stores its canonical URL, so this spelling is gated as the hosted branch below gates the rest
+        return post if not post.is_local() or post_served_to_any_peer(post) else None
     if is_hosted_uri(uri):   # one of our own domains: the post is in the database or nowhere, never fetched (C4)
         found = local_object_for_url(uri)
         # and found only if our own post route would have served it to the fetch this replaces
