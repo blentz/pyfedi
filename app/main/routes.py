@@ -1586,7 +1586,7 @@ def index_rss(feed_type=None):
     description = shorten_string(branding.description, 150) if branding.description else ' '
     image = f"{server_url}{branding.logo}" if branding.logo\
                       else f"{server_url}/static/images/apple-touch-icon.png"
-    feed = RSSFeed(title = f'{branding.name} - {feed_type.capitalize()}',
+    feed = RSSFeed(title = f'{domain_site_name(current_storefront(), g.site)} - {feed_type.capitalize()}',
                    link = server_url,
                    description = description,
                    logo = image,

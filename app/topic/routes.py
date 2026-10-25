@@ -16,7 +16,8 @@ from app.constants import SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, POST_TYPE_
 from app.email import mail_name, send_topic_suggestion
 from app.inoculation import inoculation
 from app.models import Topic, Community, NotificationSubscription, PostReply, utcnow
-from app.storefront import storefront_link, storefront_query_cache_key, storefront_url
+from app.federation_urls import domain_site_name
+from app.storefront import current_storefront, storefront_link, storefront_query_cache_key, storefront_url
 from app.topic import bp
 from app.topic.forms import SuggestTopicsForm
 from app.local_only import local_only_visible_rss, without_local_only, without_local_only_actors
@@ -242,7 +243,7 @@ def show_topic_rss(topic_path):
         posts = post_ids_to_models(post_ids, 'new').all()
 
         server_url = storefront_url()   # the visitor's storefront
-        feed = RSSFeed(title = f'{topic.name} on {current_branding().name}',
+        feed = RSSFeed(title = f'{topic.name} on {domain_site_name(current_storefront(), g.site)}',
                        link = f"{server_url}/topic/{last_topic_machine_name}",
                        description = ' ',
                        logo = f"{server_url}/static/images/apple-touch-icon.png",
