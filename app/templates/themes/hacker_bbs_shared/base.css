@@ -17,7 +17,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('../../fonts/hacker_bbs/sharetechmono/ShareTechMono-Regular.woff2') format('woff2');
+  src: url('../../fonts/hacker_bbs/sharetechmono/ShareTechMono-Regular.ttf') format('truetype');
 }
 
 @font-face {
@@ -25,7 +25,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('../../fonts/hacker_bbs/vt323/VT323-Regular.woff2') format('woff2');
+  src: url('../../fonts/hacker_bbs/vt323/VT323-Regular.ttf') format('truetype');
 }
 
 @font-face {
@@ -33,7 +33,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('../../fonts/hacker_bbs/pressstart2p/PressStart2P-Regular.woff2') format('woff2');
+  src: url('../../fonts/hacker_bbs/pressstart2p/PressStart2P-Regular.ttf') format('truetype');
 }
 
 @font-face {
@@ -41,7 +41,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('../../fonts/hacker_bbs/silkscreen/Silkscreen-Regular.woff2') format('woff2');
+  src: url('../../fonts/hacker_bbs/silkscreen/Silkscreen-Regular.ttf') format('truetype');
 }
 
 @font-face {
@@ -49,7 +49,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('../../fonts/hacker_bbs/majormonodisplay/MajorMonoDisplay-Regular.woff2') format('woff2');
+  src: url('../../fonts/hacker_bbs/majormonodisplay/MajorMonoDisplay-Regular.ttf') format('truetype');
 }
 
 @font-face {
@@ -57,7 +57,7 @@
   font-style: normal;
   font-weight: 300 400;
   font-display: swap;
-  src: url('../../fonts/hacker_bbs/crimsonpro/CrimsonPro-wght.woff2') format('woff2');
+  src: url('../../fonts/hacker_bbs/crimsonpro/CrimsonPro[wght].ttf') format('truetype');
 }
 
 @font-face {
