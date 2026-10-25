@@ -5,6 +5,7 @@ feed named by a URL on any of them is a row here already. `federation_urls.local
 caller that used to fetch such a URL stops at the database: a miss is a miss, never a GET of ourselves. Each test with
 a hosted URL watches the HTTP layer (`wire`, as test_no_http_to_hosted.py does) and asserts nothing reached it.
 """
+import json
 import socket
 from types import SimpleNamespace
 
@@ -26,6 +27,7 @@ from app.feed.util import initialise_new_communities
 from app.models import DiscoveryEntry, DiscoverySync, InstanceChooser, PostBoost, SiteDomain, UserExtraField, utcnow
 from app.relays import inbound
 from app.storefront import clear_domain_cache
+from app.user.routes import import_settings_task
 from tests.factories import make_community, make_feed_item, make_follow, make_instance, make_local_feed, make_post, \
     make_post_reply, make_user
 from tests.test_no_http_to_hosted import SERVER, _getaddrinfo_without_the_network
@@ -106,6 +108,14 @@ def test_every_path_form_resolves_to_its_row_on_either_domain(env, wire):
     assert wire.calls.call_count == 0
 
 
+@pytest.mark.parametrize('sub', ['replies', 'context', 'likes', 'dislikes', 'shares', 'edit', 'embed', 'oembed'])
+def test_a_sub_resource_of_a_post_is_not_the_post(env, wire, sub):
+    """/post/<id>/replies and the rest are other routes of ours (a collection, a page): only a slug is the post."""
+    assert lookup(f'https://{SHOP}/post/{env.post.id}/{sub}') is None
+    assert lookup(f'https://{SHOP}/post/{env.post.id}/{sub}-of-a-slug') is env.post
+    assert wire.calls.call_count == 0
+
+
 def test_a_post_asked_for_on_the_wrong_sister_is_still_that_post(env, wire):
     assert lookup(f'https://{SERVER}/post/{env.post.id}') is env.post
     assert lookup(f'https://{SERVER}/c/den/p/{env.post.id}/slug') is env.post
@@ -158,8 +168,8 @@ def test_a_hosted_url_that_is_no_post_is_none_without_a_fetch(env, wire, monkeyp
     assert fetched == [] and wire.calls.call_count == 0
 
 
-def search_for(app, env, address):
-    """The retrieve_remote_post page's answer to `address`, asked by hell's alice."""
+def post_as_alice(app, env, path, data):
+    """POST `data` to `path` as hell's alice, with a valid CSRF token."""
     client = app.test_client()
     with client.session_transaction() as sess:
         sess['_user_id'] = str(env.hell_alice.id)
@@ -170,7 +180,12 @@ def search_for(app, env, address):
         raw = flask_session['csrf_token']
     with client.session_transaction() as sess:
         sess['csrf_token'] = raw
-    response = client.post('/retrieve_remote_post', data={'address': address, 'csrf_token': token})
+    return client.post(path, data={**data, 'csrf_token': token})
+
+
+def search_for(app, env, address):
+    """The retrieve_remote_post page's answer to `address`, asked by hell's alice."""
+    response = post_as_alice(app, env, '/retrieve_remote_post', {'address': address})
     assert response.status_code == 200
     return response.get_data(as_text=True)
 
@@ -223,19 +238,13 @@ def test_a_hosted_post_no_peer_may_fetch_is_not_found_by_url(app, env, wire, hid
     assert wire.calls.call_count == 0
 
 
-def test_the_discovery_view_never_opens_a_hosted_post(app, env, wire, monkeypatch):
-    """The discovery view resolves wider-network results only: a hosted URL is refused before any lookup (a 400 for
-    a host the video cleaner refuses, else the excluded-host redirect back to the search)."""
-    env.post.visibility = VISIBILITY_FOLLOWERS
-    db.session.commit()
-    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', False)
-    client = app.test_client()
-    with client.session_transaction() as sess:
-        sess['_user_id'] = str(env.hell_alice.id)
-        sess['_fresh'] = True
-    response = client.post('/discovery/video/resolve', data={'url': f'https://{SHOP}/post/{env.post.id}'})
-    assert response.status_code in (302, 400)
-    assert f'/post/{env.post.id}' not in response.headers.get('Location', '')
+def test_the_discovery_view_never_opens_a_hosted_post(app, env, wire):
+    """The discovery view resolves wider-network results only: a hosted URL is an excluded host, sent back to the
+    search with a warning before any lookup."""
+    response = post_as_alice(app, env, '/discovery/video/resolve',
+                             {'q': 'x', 'url': f'https://{SHOP}/post/{env.post.id}'})
+    assert response.status_code == 302
+    assert response.headers['Location'].startswith('/search')
     assert wire.calls.call_count == 0
 
 
@@ -341,6 +350,29 @@ def test_an_empty_local_community_added_to_a_feed_is_not_fetched(env, wire, fetc
     assert fetches == [] and wire.calls.call_count == 0
 
 
+def test_an_empty_local_community_imported_in_settings_is_not_fetched(app, env, wire, fetches, monkeypatch):
+    """The settings import's follow of an empty community runs its backfill (user/routes.py import_settings_task):
+    for one of ours, nothing is fetched."""
+    quiet = make_community('quiet', host=SHOP)
+    quiet.site_domain_id = env.shop_row.id
+    _with_collections(quiet, SHOP)
+    backfilled = []
+
+    def backfill_spy(community_id, *args, **kwargs):
+        backfilled.append(community_id)
+        return retrieve_mods_and_backfill(community_id, *args, **kwargs)
+
+    monkeypatch.setattr(app, 'debug', True)   # the backfill runs inline, through the spy
+    monkeypatch.setattr('app.user.routes.retrieve_mods_and_backfill', backfill_spy)
+    monkeypatch.setattr('app.user.routes.find_actor_or_create', lambda *a, **k: quiet)
+    redis = SimpleNamespace(get=lambda key: json.dumps({'followed_communities': [f'https://{SHOP}/c/quiet']}),
+                            delete=lambda key: None)
+    monkeypatch.setattr('app.redis_client', redis, raising=False)
+    import_settings_task(env.hell_alice.id, 'a-redis-key')
+    assert backfilled == [quiet.id]
+    assert fetches == [] and wire.calls.call_count == 0
+
+
 # -- discovery --------------------------------------------------------------------------------------------------------
 
 def test_our_own_hosts_are_excluded_from_discovery(env):
@@ -388,6 +420,8 @@ def test_a_credit_naming_a_sister_account_is_that_account(env, wire, actor_fetch
 
 
 def test_a_credit_naming_a_hosted_url_we_do_not_store_is_not_fetched(env, wire, actor_fetches):
+    make_user(env.peer, 'bob')   # remote: a hosted path naming its handle finds it, and it does not vouch
+    assert credits.verified_credit_user(f'https://{SHOP}/u/bob@peer.example', PODCAST) is None
     assert credits.verified_credit_user(f'https://{SHOP}/@ghost', PODCAST) is None
     assert credits.verified_credit_user(f'https://{SHOP}/post/{env.post.id}', PODCAST) is None
     assert actor_fetches == [] and wire.calls.call_count == 0

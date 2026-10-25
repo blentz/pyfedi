@@ -156,12 +156,28 @@ def instance_actor_signing(domain: DomainInfo) -> tuple[str, str]:
 
 # The paths our domains serve a post, comment, account, community or feed at (plan C4): a post by id, with or
 # without its slug, or under its community's nice URL; a comment by id; an account, community or feed by name.
-_ID_PATHS = ((re.compile(r'/post/([0-9]{1,10})(?:/[^/]+)?'), 'Post'),
+_ID_PATHS = ((re.compile(r'/post/([0-9]{1,10})(?:/([^/]+))?'), 'Post'),   # group 2: a slug, or a sub-resource
              (re.compile(r'/c/[^/]+/p/([0-9]{1,10})(?:/[^/]+)?'), 'Post'),
              (re.compile(r'/comment/([0-9]{1,10})'), 'PostReply'))
 _NAME_PATHS = ((re.compile(r'/u/([^/]+)'), 'User'), (re.compile(r'/c/([^/]+)'), 'Community'),
                (re.compile(r'/f/([^/]+)'), 'Feed'))
 _PG_INT_MAX = 2 ** 31 - 1   # a larger id names no row, and Postgres refuses it as an integer
+# A route under /post/<id>/ with one more segment: a fixed name, or an any() converter's names
+_POST_SUB_RULE = re.compile(r'/post/<int:post_id>/(?:<any\(([^)]*)\):\w+>|([^/<]+))')
+
+
+def _post_sub_resources() -> frozenset[str]:
+    """The names our own routes serve under /post/<id>/ (replies, context, likes, edit, ...), read once per app from
+    its URL map, so the set cannot drift from the routes. A URL naming one is that resource, not the post."""
+    names = current_app.extensions.get('post_sub_resources')
+    if names is None:
+        found = set()
+        for rule in current_app.url_map.iter_rules():
+            matched = _POST_SUB_RULE.fullmatch(rule.rule)
+            if matched:
+                found.update(name.strip() for name in (matched.group(1) or matched.group(2)).split(','))
+        names = current_app.extensions['post_sub_resources'] = frozenset(found)
+    return names
 
 
 def _stored_form(parts) -> str:
@@ -205,9 +221,10 @@ def local_object_for_url(url: str):
     with no fetch.
 
     First the row that stores `url` as its `ap_id` / `ap_profile_id` (host in any case, trailing slash dropped).
-    Then the path: `/post/<id>[/<slug>]`, `/c/<name>/p/<id>[/<slug>]` and `/comment/<id>` by primary key, whichever
-    of our domains the URL is on, as the database is shared (only serving a document is per domain); `/u/<name>`,
-    `/c/<name>` and `/f/<name>` on the URL's own domain, where local names are unique (C1)."""
+    Then the path: `/post/<id>[/<slug>]` (not a sub-resource such as `/post/<id>/replies`), `/c/<name>/p/<id>[/<slug>]`
+    and `/comment/<id>` by primary key, whichever of our domains the URL is on, as the database is shared (only
+    serving a document is per domain); `/u/<name>`, `/c/<name>` and `/f/<name>` on the URL's own domain, where local
+    names are unique (C1)."""
     if not is_hosted_uri(url):
         return None
     try:
@@ -223,6 +240,8 @@ def local_object_for_url(url: str):
     for pattern, model_name in _ID_PATHS:
         matched = pattern.fullmatch(path)
         if matched:
+            if matched.lastindex == 2 and matched.group(2) in _post_sub_resources():
+                return None   # /post/<id>/replies and the like: a collection or a page, not the post
             row_id = int(matched.group(1))
             return db.session.get(getattr(models, model_name), row_id) if row_id <= _PG_INT_MAX else None
     for pattern, model_name in _NAME_PATHS:

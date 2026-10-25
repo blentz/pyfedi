@@ -363,7 +363,7 @@ def verified_credit_user(href, podcast, wanted: set | None = None) -> int | None
             return known.id
         if known.ap_id is None:   # a local account: nothing remote to read
             return None
-    elif is_hosted_uri(href):   # a URL of ours that names no account here: nothing to fetch
+    if is_hosted_uri(href):   # a URL of ours: what it names was read from the database above, never fetched (C4)
         return None
     if not ap_util.activitypub_actor.validate_remote_actor(href):   # banned or non-allowlisted hosts are not fetched
         return None
