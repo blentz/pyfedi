@@ -13,6 +13,7 @@ from app.activitypub.util import find_actor_or_create
 from app.api.alpha.utils.community import get_community
 from app.api.alpha.utils.misc import get_resolve_object
 from app.community.util import search_for_community
+from app.feed.util import search_for_feed
 from app.models import AllowedInstances, BannedInstances, Site
 from app.shared.feed import form_communities_to_ids
 from app.storefront import acting_for, domain_for_host
@@ -90,3 +91,51 @@ def test_our_own_domains_pass_the_ban_list_check(env, wire):
     db.session.commit()
     assert validate_remote_actor('https://peer.example/u/bob') is False
     assert search_for_community('!x@peer.example') is None
+
+
+# -- one rule for "this server is ours" in the allowlist and ban gates (C4 final review P2, P3) -----------------------
+
+@pytest.mark.parametrize('url', [f'https://evil.example@{SHOP}/u/alice', f'https://x:y@{SHOP}/u/alice',
+                                 f'https://evil.example@{SERVER}/u/alice'])
+def test_a_url_with_userinfo_gets_no_exemption_from_the_allowlist(env, wire, url):
+    """The exemption reads the authority as named, not the host httpx would connect to: userinfo never counts, so a
+    closed allowlist refuses the authority as it refuses any other it does not list."""
+    set_setting('use_allowlist', True)
+    assert validate_remote_actor(url) is False
+    assert wire.calls.call_count == 0
+
+
+@pytest.mark.parametrize('server', [f'{SHOP}#x', f'{SHOP}/x', f'{SHOP}\\x'])
+def test_a_community_server_that_is_no_authority_gets_no_exemption(env, wire, server):
+    set_setting('use_allowlist', True)
+    assert search_for_community(f'!den@{server}') is None
+    assert wire.calls.call_count == 0
+
+
+def test_a_port_on_one_of_our_hosts_is_still_ours(env, wire):
+    """As domain_for_host reads a host: the port is ignored, so shop.example:8443 is the shop.example row. The
+    exemption and the hosted branch then agree, and the den resolves from the database."""
+    set_setting('use_allowlist', True)
+    assert search_for_community(f'!den@{SHOP}:8443') is env.shop_den
+    assert validate_remote_actor(f'https://{SHOP}:8443/u/alice') is True
+    assert validate_remote_actor('https://peer.example:8443/u/bob') is False
+    assert wire.calls.call_count == 0
+
+
+@pytest.mark.parametrize('host', [SHOP, SERVER])
+def test_a_banned_own_host_still_resolves_in_every_gate(env, wire, host):
+    db.session.add(BannedInstances(domain=host))
+    db.session.commit()
+    den = env.shop_den if host == SHOP else env.hell_den
+    assert validate_remote_actor(f'https://{host}/u/alice') is True
+    assert search_for_community(f'!den@{host}') is den
+    assert search_for_feed(f'~reads@{host}') is env.feed
+    assert wire.calls.call_count == 0
+
+
+def test_a_banned_remote_feed_host_is_still_refused(env, wire):
+    db.session.add(BannedInstances(domain='peer.example', reason='spam'))
+    db.session.commit()
+    with pytest.raises(Exception, match='peer.example is blocked. Reason: spam'):
+        search_for_feed('~x@peer.example')
+    assert wire.calls.call_count == 0
