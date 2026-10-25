@@ -520,7 +520,9 @@ def test_the_onions_stored_offsite_logo_is_refused_until_replaced(admin, domains
     assert (own_row(domains['onion']).name, own_row(domains['onion']).logo) == ('Onion Branded', '')
 
 
-@pytest.mark.parametrize('field, value', [('description', 'Hi <span class=x'), ('additional_css', '.a { content: "<" }')])
+@pytest.mark.parametrize('field, value', [('description', 'Hi <span class=x'), ('additional_css', '.a { content: "<" }'),
+                                          ('description', 'Hi <img alt="a>b" src='), ('description', 'Hi <title>x'),
+                                          ('additional_css', '.a {} <!-- x>')])
 def test_the_onion_refuses_a_field_that_ends_inside_a_tag(admin, domains, field, value):
     """No URL to name, but the page would finish the tag in a way nothing here can check: refused on the onion."""
     response = save(admin, domains['onion'], **{field: value})
@@ -529,9 +531,25 @@ def test_the_onion_refuses_a_field_that_ends_inside_a_tag(admin, domains, field,
     assert own_row(domains['onion']) is None
 
 
-def test_elsewhere_a_field_that_ends_inside_a_tag_saves(admin, domains):
-    assert save(admin, domains['shop'], description='Hi <span class=x').status_code == 302
-    assert own_row(domains['shop']).description == 'Hi <span class=x'
+@pytest.mark.parametrize('value', ['Hi <span class=x', 'Hi <style>x'])
+def test_elsewhere_a_field_that_ends_inside_markup_saves_with_a_warning(admin, domains, value):
+    assert save(admin, domains['shop'], description=value).status_code == 302
+    assert own_row(domains['shop']).description == value
+    [warning] = [message for category, message in flashes(admin) if category == 'warning']
+    assert 'unfinished' in warning
+
+
+def test_a_site_tagline_that_ends_inside_markup_warns(admin, domains):
+    client, token = admin
+    forget_login()
+    with patch('app.admin.routes.render_template', return_value='rendered'):
+        client.post('/admin/site', content_type='multipart/form-data', data={
+            'name': 'The First Site', 'description': 'Hi <textarea>', 'about': '', 'sidebar': '',
+            'legal_information': '', 'tos_url': '', 'announcement': '', 'contact_email': 'admin@example.org',
+            'submit': 'Save', 'csrf_token': token, 'icon': (b'', '')})
+    assert db.session.get(Site, 1).description == 'Hi <textarea>'
+    [warning] = [message for category, message in flashes(admin) if category == 'warning']
+    assert 'unfinished' in warning
 
 
 def test_the_onion_saves_its_own_references(admin, domains):

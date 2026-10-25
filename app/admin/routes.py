@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 from furl import furl
 
 from app import db, celery, cache
-from app.branding import ends_inside_tag, offsite_references
+from app.branding import ends_inside_markup, offsite_references
 from app.discovery import sync as discovery_sync
 from app.visibility import visible_to_clause
 from app.local_only import domain_has_owners, user_local_only
@@ -337,6 +337,19 @@ def flash_offsite_warning(found: dict[str, list[str]]) -> None:
                 references=', '.join(references)), 'warning')
 
 
+def unfinished_fields(texts: dict[str, str], found: dict[str, list[str]]) -> list[str]:
+    """The fields of `texts` (form field to the HTML pages write for it) that end inside markup
+    (`ends_inside_markup`), other than those `found` already names."""
+    return [field for field, text in texts.items() if field not in found and ends_inside_markup(text)]
+
+
+def flash_unfinished_warning(fields: list[str]) -> None:
+    """Advise, off the onion, that a saved field ends inside markup, which takes in the page's markup after it."""
+    if fields:
+        flash(_('Saved, but these end inside an unfinished tag or other markup, which takes in the rest of the page: '
+                '%(fields)s', fields=', '.join(fields)), 'warning')
+
+
 @bp.route('/site', methods=['GET', 'POST'])
 @login_required
 @permission_required('change instance settings')
@@ -409,8 +422,11 @@ def admin_site():
         set_setting('announcement', form.announcement.data)
         set_setting('announcement_html', markdown_to_html(form.announcement.data, anchors_new_tab=False, a_target=""))
         flash(_('Settings saved.'))
-        flash_offsite_warning(offsite_by_field(default_domain().domain, sidebar_html=site.sidebar_html,
-                                               about_html=site.about_html, description=site.description or ''))
+        found = offsite_by_field(default_domain().domain, sidebar_html=site.sidebar_html, about_html=site.about_html,
+                                 description=site.description or '')
+        flash_offsite_warning(found)
+        flash_unfinished_warning(unfinished_fields({'description': site.description or '', 'sidebar': site.sidebar_html,
+                                                    'about': site.about_html}, found))
     elif request.method == 'GET':
         form.name.data = site.name
         form.description.data = site.description
@@ -501,19 +517,20 @@ def admin_domain_branding(domain_id):
         kept_logos = [] if replacing or branding is None else [getattr(branding, field) or '' for field in LOGO_FIELDS]
         found = offsite_by_field(row.domain, values['additional_css'], sidebar_html, about_html, kept_logos,
                                  values['description'])
-        # A field that ends inside a tag is finished by whatever the page writes after it, which nothing here can
-        # check: the onion's pages would drop it (app/branding.py), so the onion refuses it
-        unfinished = [field for field, text in (('description', values['description']),
-                                                ('additional_css', values['additional_css']),
-                                                ('sidebar', sidebar_html), ('about', about_html))
-                      if row.is_onion and field not in found and ends_inside_tag(text)]
+        # A field that ends inside markup is finished by whatever the page writes after it, which nothing here can
+        # check: the onion's pages would drop it (app/branding.py), so the onion refuses it; elsewhere it is advised.
+        # The CSS is read as HTML on the onion only, as its pages read it.
+        texts = {'description': values['description'], 'sidebar': sidebar_html, 'about': about_html}
+        if row.is_onion:
+            texts['additional_css'] = values['additional_css']
+        unfinished = unfinished_fields(texts, found)
         if (found or unfinished) and row.is_onion:
             # The onion never loads anything off the onion (spec §3.4): refused, and nothing written
             for field, references in found.items():
                 getattr(form, field).errors.append(_('Off the onion: %(references)s', references=', '.join(references)))
             for field in unfinished:
-                getattr(form, field).errors.append(_('This ends inside an unfinished tag, which the onion cannot '
-                                                     'check. Finish or remove the tag.'))
+                getattr(form, field).errors.append(_('This ends inside an unfinished tag or other markup, which the '
+                                                     'onion cannot check. Finish or remove it.'))
         else:
             logos = save_logo_upload(upload, LOGO_MEDIA) if uploading else dict.fromkeys(LOGO_FIELDS, '')
             if branding is None:
@@ -533,6 +550,7 @@ def admin_domain_branding(domain_id):
             remove_superseded_logos(superseded)
             flash(_('Branding saved.'))
             flash_offsite_warning(found)
+            flash_unfinished_warning(unfinished)
             return redirect(url_for('admin.admin_domain_branding', domain_id=row.id))
     elif request.method == 'GET' and branding is not None:
         for field in BRANDING_TEXT_FIELDS:

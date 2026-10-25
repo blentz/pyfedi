@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from functools import lru_cache
 import re
+import secrets
 from typing import NamedTuple
 
 from bs4 import BeautifulSoup
@@ -112,14 +113,34 @@ _LOADING_RELS = frozenset({'stylesheet', 'icon', 'apple-touch-icon', 'apple-touc
 # Some of the ways the page's own markup after a field can finish a tag the field leaves open: as it stands, after a
 # closed quote of either kind, or after an unquoted value ends. A field is scanned finished each way too, so a refusal
 # or warning can name what the finished tag would load. No set of finishings is every page's: on the onion a field
-# that ends inside a tag goes whole (`ends_inside_tag`), whatever it names.
+# that ends inside markup goes whole (`ends_inside_markup`), whatever it names.
 _PAGE_FINISHINGS = ('>', '">', "'>", ' >')
 
 
-def ends_inside_tag(text: str) -> bool:
-    """Whether `text` ends inside a tag, a comment or any other markup: its last '<' comes after its last '>'. A page
-    finishes such a tag with whatever it writes next, which nothing reading the field alone can know."""
-    return text.rfind('<') > text.rfind('>')
+# Elements whose content a browser reads as text (raw text, RCDATA, or all the rest of the page): a field that leaves
+# one open swallows the page's markup after it
+_SWALLOWING = frozenset({'style', 'script', 'textarea', 'title', 'xmp', 'noembed', 'noframes', 'noscript', 'plaintext',
+                         'iframe'})
+_SENTINEL = 'data-end-sentinel'
+
+
+def ends_inside_markup(text: str) -> bool:
+    """Whether `text` ends anywhere but data state, so the page's own markup after it would be read as part of it: a
+    tag, a quoted value, a comment, or a raw-text or RCDATA element left open. A page finishes such a field with
+    whatever it writes next, which nothing reading the field alone can know.
+
+    First the cheap test, its last '<' after its last '>'. Then the parser's answer: `text` followed by a sentinel
+    element of a fresh token must parse with that element real, with that one attribute, and inside no element whose
+    content is text."""
+    if '<' not in text:
+        return False
+    if text.rfind('<') > text.rfind('>'):
+        return True
+    token = secrets.token_hex(8)
+    soup = BeautifulSoup(f'{text}<i {_SENTINEL}="{token}"></i>', 'html.parser', on_duplicate_attribute='ignore',
+                         multi_valued_attributes=None)
+    found = [tag for tag in soup.find_all('i') if tag.attrs == {_SENTINEL: token}]
+    return len(found) != 1 or any(parent.name in _SWALLOWING for parent in found[0].parents)
 
 
 def _scan_finished(html: str, own_host: str) -> list[str]:
@@ -224,7 +245,7 @@ def offsite_references(css: str = '', html: str = '', urls: Iterable[str] = (), 
 def onion_safe(branding: Branding, own_host: str) -> Branding:
     """`branding` with every off-site reference removed, each removal logged at info; `branding` itself when it has
     none. A logo or icon URL becomes '' (the page shows PieFed's own); CSS and HTML lose only the reference, except a
-    field that ends inside a tag (`ends_inside_tag`), or whose tag finished by the page loads off the onion: it goes
+    field that ends inside markup (`ends_inside_markup`), or whose tag finished by the page loads off the onion: it goes
     whole. The CSS is checked as HTML too. The Markdown `sidebar` stays: pages show it as text, and text fetches
     nothing."""
     host = storefront.normalise_host(own_host)
@@ -248,14 +269,14 @@ def onion_safe(branding: Branding, own_host: str) -> Branding:
         value = changes.get(field, getattr(branding, field))
         markup = _scan_html(value, host)[1] if field == 'additional_css' else []
         markup += _scan_finished(value, host)
-        if ends_inside_tag(value):
+        if ends_inside_markup(value):
             unfinished.append(field)
             changes[field] = ''
         elif markup:
             changes[field] = ''
         dropped += [(field, url) for url in markup]
     for field in unfinished:
-        current_app.logger.info('branding: %s dropped on %s: it ends inside an unfinished tag', field, host)
+        current_app.logger.info('branding: %s dropped on %s: it ends inside an unfinished tag or other markup', field, host)
     for field, url in dict.fromkeys(dropped):
         current_app.logger.info('branding: %s dropped from %s on %s: off-site on the onion', url, field, host)
     return branding._replace(**changes) if changes else branding
