@@ -36,6 +36,8 @@ from app.onion_media import MEDIA_SUFFIXES, proxy_url
 # The module, not the name: app.models imports this module for File's media URLs, so whichever of the two is
 # imported first finds the other mid-import (import cycle: models)
 import app.models as models
+# The module: it imports this one for DomainInfo (import cycle: branding)
+import app.branding as branding
 
 
 class DomainInfo(NamedTuple):
@@ -134,6 +136,7 @@ def domain_rows() -> tuple[DomainInfo, ...]:
 
 def clear_domain_cache() -> None:
     cache.delete_memoized(domain_rows)
+    cache.delete_memoized(branding._effective)
     _hosted_destinations.cache_clear()
 
 
