@@ -5809,7 +5809,6 @@ def refuse_a_federating_onion(target) -> None:
             raise ValueError(ONION_NEVER_FEDERATES)
 
 
-
 class DomainBranding(db.Model):
     """What a domain sets of its own branding. NULL or '' in a column inherits Site row 1's value (app.branding)."""
     __tablename__ = 'domain_branding'
