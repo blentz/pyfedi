@@ -4879,7 +4879,8 @@ def parse_page(page_url):
 def current_theme():
     """The theme a page is shown in (per-domain branding, spec 3.2): the user's own theme if they set one, else the
     domain's default theme, else the site's, else piefed. A stored default theme no longer shipped is passed over, so
-    the page renders in the next one."""
+    the page renders in the next one. piefed has no theme directory, so it is never shipped, but it is a theme a domain
+    or the site can choose."""
     if current_user.is_authenticated and current_user.theme:
         return current_user.theme
     if hasattr(g, 'site'):
@@ -4888,7 +4889,8 @@ def current_theme():
         site = db.session.get(Site, 1)
     domain = current_storefront()
     domain_theme = '' if domain.is_default else branding_for(domain).default_theme   # the default's is the site's
-    return next((theme for theme in (domain_theme, site.default_theme) if is_shipped_theme(theme)), 'piefed')
+    return next((theme for theme in (domain_theme, site.default_theme) if theme == 'piefed' or is_shipped_theme(theme)),
+                'piefed')
 
 
 def is_shipped_theme(name: str | None) -> bool:

@@ -186,6 +186,18 @@ def test_domain_theme_beats_site_theme_for_visitors(app, branded):
     assert 'themes/pyroclast/styles.css' in page(app, '/')
 
 
+def test_a_domain_can_choose_the_piefed_theme(app, branded):
+    """PieFed is the first theme the branding form offers. It has no theme directory, so it is never 'shipped', but a
+    domain that picks it renders in it, over a site default of pyroclast."""
+    onion_branding(branded, default_theme='piefed')
+    with onion_request(app):
+        g.site = db.session.get(Site, 1)
+        assert current_theme() == 'piefed'
+    onion_home = page(app, '/', onion=True)
+    assert re.search(r'/static/themes/[^/"]+/styles\.css\?changed', onion_home) is None
+    assert 'themes/pyroclast/styles.css' in page(app, '/')   # the first domain keeps the site default
+
+
 def test_unknown_stored_theme_falls_back(app, branded):
     """Review Focus 3: a domain's stored theme no longer shipped renders with the next one in theme order, no 500."""
     onion_branding(branded, default_theme='gone-theme')
