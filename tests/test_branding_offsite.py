@@ -360,6 +360,16 @@ UNFINISHED = [
     pytest.param(f'Hi <img src="{ELSEWHERE}/i.png', f'{ELSEWHERE}/i.png', id='quoted value'),
     pytest.param(f"Hi <img src='{ELSEWHERE}/i.png", f'{ELSEWHERE}/i.png', id='single-quoted value'),
     pytest.param(f'Hi <img src={ELSEWHERE}/i.png', f'{ELSEWHERE}/i.png', id='bare value'),
+    # Final re-review: a field ending in an unquoted or empty attribute, which no single finishing reads right
+    pytest.param(f'Hi <img src="{ELSEWHERE}/a" alt=', f'{ELSEWHERE}/a', id='empty last value'),
+    pytest.param(f'Hi <meta content="0;url={ELSEWHERE}/go" http-equiv=refresh', f'{ELSEWHERE}/go',
+                 id='unquoted last value'),
+    pytest.param(f'Hi <meta http-equiv=refresh content=0;url={ELSEWHERE}/go ', f'{ELSEWHERE}/go',
+                 id='unquoted refresh url'),
+    pytest.param(f'Hi <img src={ELSEWHERE}/a alt=', f'{ELSEWHERE}/a', id='unquoted src, empty last value'),
+    # an open quote holding a '>': the field's last '>' is inside the value, and the page's next quote ends it
+    pytest.param(f'Hi <meta http-equiv=refresh content="0;url={ELSEWHERE}/go>', f'{ELSEWHERE}/go',
+                 id='quote holding a gt'),
 ]
 
 
@@ -383,9 +393,31 @@ def test_onion_safe_drops_css_holding_an_unfinished_tag_which_loads(app):
     assert onion_safe(branding, ONION).additional_css == ''
 
 
-def test_an_unfinished_tag_that_loads_nothing_is_left_as_written(app):
-    branding = branding_with(description=f'Hi <a href="{ELSEWHERE}/l', sidebar_html='<p>1 < 2</p>',
-                             about_html='<p>About <img src="/static/own.png')
+# Whatever the tag: a field that ends inside one goes whole on the onion, as the page's own markup finishes it in ways
+# no scan of the field alone can know. A tagline with a bare '<' after its last '>' goes too (accepted, onion only).
+ENDS_INSIDE_A_TAG = [
+    pytest.param('Hi <span class=x', id='a tag that loads nothing'),
+    pytest.param('Hi <!-- the rest', id='a comment'),
+    pytest.param('Fast & <3', id='a bare lt'),
+    pytest.param(f'Hi <a href="{ELSEWHERE}/l', id='a link'),
+]
+
+
+@pytest.mark.parametrize('html', ENDS_INSIDE_A_TAG)
+def test_onion_safe_drops_a_field_that_ends_inside_any_tag(app, caplog, html):
+    branding = branding_with(description=html, sidebar_html=html, about_html=html, additional_css=f'.a {{}} {html}')
+    with caplog.at_level(logging.INFO, logger=app.logger.name):
+        safe = onion_safe(branding, ONION)
+    assert (safe.description, safe.sidebar_html, safe.about_html, safe.additional_css) == ('', '', '', '')
+    messages = [record.getMessage() for record in caplog.records]
+    for field in ('description', 'sidebar_html', 'about_html', 'additional_css'):
+        assert any(field in message and 'unfinished tag' in message for message in messages), field
+
+
+def test_a_field_that_ends_outside_every_tag_is_left_as_written(app):
+    branding = branding_with(description=f'Hi <a href="{ELSEWHERE}/l">link</a>', sidebar_html='<p>1 < 2</p>',
+                             about_html='<p>About <img src="/static/own.png"></p>',
+                             additional_css='.a > .b { color: red }')
     assert onion_safe(branding, ONION) is branding
 
 

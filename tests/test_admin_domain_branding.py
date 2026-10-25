@@ -520,6 +520,20 @@ def test_the_onions_stored_offsite_logo_is_refused_until_replaced(admin, domains
     assert (own_row(domains['onion']).name, own_row(domains['onion']).logo) == ('Onion Branded', '')
 
 
+@pytest.mark.parametrize('field, value', [('description', 'Hi <span class=x'), ('additional_css', '.a { content: "<" }')])
+def test_the_onion_refuses_a_field_that_ends_inside_a_tag(admin, domains, field, value):
+    """No URL to name, but the page would finish the tag in a way nothing here can check: refused on the onion."""
+    response = save(admin, domains['onion'], **{field: value})
+    assert response.status_code == 200
+    assert 'ends inside an unfinished tag' in response.get_data(as_text=True)
+    assert own_row(domains['onion']) is None
+
+
+def test_elsewhere_a_field_that_ends_inside_a_tag_saves(admin, domains):
+    assert save(admin, domains['shop'], description='Hi <span class=x').status_code == 302
+    assert own_row(domains['shop']).description == 'Hi <span class=x'
+
+
 def test_the_onion_saves_its_own_references(admin, domains):
     response = save(admin, domains['onion'], additional_css=f'a {{ background: url(http://{ONION}/a.png) }}',
                     sidebar='![a cat](/static/media/cat.png)')

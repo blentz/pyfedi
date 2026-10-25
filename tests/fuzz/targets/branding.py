@@ -5,8 +5,10 @@ browser fetch from another host. Three checks hold the scanner and the scrubber 
 
 * branding_offsite_scan: random text as CSS, as HTML and as a URL, through offsite_references with the onion's own
   host. No exception; a list of distinct strings, each naming a host other than the onion's.
-* branding_onion_safe: a random Branding through onion_safe. No exception; afterwards offsite_references finds nothing
-  off the onion in its CSS (read as CSS and as HTML), its tagline, sidebar and About HTML, or its logo and icon URLs,
+* branding_onion_safe: a random Branding through onion_safe. No exception; afterwards no HTML field (the CSS read as
+  HTML included) ends inside a tag, and offsite_references finds nothing off the onion in its CSS (read as CSS and as
+  HTML), its tagline, sidebar and About HTML, each as written and followed by each of a set of page finishings of the
+  oracle's own, or in its logo and icon URLs,
   and a field onion_safe left alone is the input's own. Fields that are text (the name, the Markdown sidebar, the
   theme) are as given.
 * branding_style_kept_open: _style_kept_open never raises, leaves no `</` in the custom CSS, so the CSS can never close
@@ -17,7 +19,7 @@ nothing reads site_domain.
 """
 
 import app.storefront as storefront
-from app.branding import Branding, _style_kept_open, offsite_references, onion_safe
+from app.branding import Branding, _style_kept_open, ends_inside_tag, offsite_references, onion_safe
 from tests.fuzz.targets._target import Target
 from tests.fuzz.targets.signatures import _fields, _text
 from tests.fuzz.targets.urls import _no_domain_rows
@@ -34,13 +36,20 @@ def _branding(data: bytes) -> Branding:
     return Branding(*(_text(field) for field in _fields(data[:MAX_INPUT], len(Branding._fields))))
 
 
+# What a page may write after a field, chosen apart from the scanner's own finishings so the oracle does not pass by
+# sharing them: nothing, a closed quote of either kind, the end of an unquoted value, an attribute, the page's markup
+_ORACLE_FINISHINGS = ('', '"', "'", ' ', '>', '">', "'>", ' >', '"\'>', ' alt="x">', '</strong></p>', '\n<p>x</p>')
+
+
 def _offsite_anywhere(branding: Branding) -> list[str]:
-    """Each field read as pages write it, one at a time: every page writes each field in a place of its own, so two
-    fields never run together."""
-    return offsite_references(css=branding.additional_css, html=branding.additional_css,
-                              urls=[getattr(branding, field) for field in _URL_FIELDS], own_host=ONION_HOST) + \
-        [reference for field in _HTML_FIELDS
-         for reference in offsite_references(html=getattr(branding, field), own_host=ONION_HOST)]
+    """Each field read as pages write it, one at a time (every page writes each field in a place of its own, so two
+    fields never run together), as written and followed by each of the oracle's finishings."""
+    found = offsite_references(css=branding.additional_css,
+                               urls=[getattr(branding, field) for field in _URL_FIELDS], own_host=ONION_HOST)
+    for field in _HTML_FIELDS + ('additional_css',):
+        for finishing in _ORACLE_FINISHINGS:
+            found += offsite_references(html=getattr(branding, field) + finishing, own_host=ONION_HOST)
+    return found
 
 
 def check_branding_offsite_scan(data: bytes) -> None:
@@ -61,6 +70,8 @@ def check_branding_onion_safe(data: bytes) -> None:
         assert isinstance(safe, Branding)
         left = _offsite_anywhere(safe)
     assert left == [], f'off the onion after onion_safe: {left!r}'
+    for field in _HTML_FIELDS + ('additional_css',):
+        assert not ends_inside_tag(getattr(safe, field)), f'{field} still ends inside a tag: {getattr(safe, field)!r}'
     for field in _TEXT_FIELDS:
         assert getattr(safe, field) == getattr(branding, field), f'{field} changed'
     for field in _URL_FIELDS:
