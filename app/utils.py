@@ -81,6 +81,7 @@ from app.local_names import local_named
 from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, current_storefront, canonicalise_links, canonicalise_text, domain_base_url, \
     act_in_this_request, acting_as_default, acting_domain, domain_authority, \
     boosted_order_by, boosted_top_sql, domain_by_id, hosted_instance_ids, is_hosted_uri, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
+from app.branding import branding_for
 from collections import Counter
 from flask import has_request_context
 import app as app_pkg
@@ -4876,18 +4877,23 @@ def parse_page(page_url):
 
 
 def current_theme():
-    """ The theme the current user has set, falling back to the site default if none specified or user is not logged in """
+    """The theme a page is shown in (per-domain branding, spec 3.2): the user's own theme if they set one, else the
+    domain's default theme, else the site's, else piefed. A stored default theme no longer shipped is passed over, so
+    the page renders in the next one."""
+    if current_user.is_authenticated and current_user.theme:
+        return current_user.theme
     if hasattr(g, 'site'):
         site = g.site
     else:
         site = db.session.get(Site, 1)
-    if current_user.is_authenticated:
-        if current_user.theme is not None and current_user.theme != '':
-            return current_user.theme
-        else:
-            return site.default_theme if site.default_theme is not None else 'piefed'
-    else:
-        return site.default_theme if site.default_theme is not None else 'piefed'
+    domain = current_storefront()
+    domain_theme = '' if domain.is_default else branding_for(domain).default_theme   # the default's is the site's
+    return next((theme for theme in (domain_theme, site.default_theme) if is_shipped_theme(theme)), 'piefed')
+
+
+def is_shipped_theme(name: str | None) -> bool:
+    """Whether `name` is one of `theme_list()`'s themes other than piefed: a directory with its <name>.json."""
+    return bool(name) and os.path.exists(f'app/templates/themes/{name}/{name}.json')
 
 
 def theme_list():

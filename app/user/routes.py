@@ -11,6 +11,7 @@ from markupsafe import Markup
 from sqlalchemy import desc, or_, text, asc
 
 from app import db, cache, celery
+from app.branding import current_branding
 from app.activitypub.signature import default_context, send_post_request
 from app.activitypub.util import find_actor_or_create, extract_domain_and_actor, follow_answer_inbox
 # The module, not the name: app.auth.util reaches this file through
@@ -252,7 +253,7 @@ def show_profile(user):
                            reported_posts=reported_posts(current_user.get_id(), current_user.get_id() in g.admin_ids),
                            moderated_community_ids=moderating_communities_ids(current_user.get_id()),
                            rss_feed=f"{storefront_url()}/u/{user.link()}/feed" if user.post_count > 0 else None,
-                           rss_feed_name=f"{user.display_name()} on {g.site.name}" if user.post_count > 0 else None,
+                           rss_feed_name=f"{user.display_name()} on {current_branding().name}" if user.post_count > 0 else None,
                            user_has_public_feeds=user_has_public_feeds, user_public_feeds=user_public_feeds,
                            overview_items=overview_items, overview_next_url=overview_next_url,
                            overview_prev_url=overview_prev_url, same_ip_address=same_ip_address,
@@ -290,7 +291,7 @@ def user_upvotes(actor):
                                upvoted=upvoted, disable_voting=True,
                                user_notes=user_notes(current_user.get_id()),
                                rss_feed=f"{storefront_url()}/u/{user.link()}/feed" if user.post_count > 0 else None,
-                               rss_feed_name=f"{user.display_name()} on {g.site.name}" if user.post_count > 0 else None)
+                               rss_feed_name=f"{user.display_name()} on {current_branding().name}" if user.post_count > 0 else None)
 
 
 @bp.route('/u/<actor>/profile', methods=['GET', 'POST'])
@@ -2384,7 +2385,7 @@ def lookup(person, domain):
                 if 'is blocked.' in str(e):
                     flash(_('Sorry, that instance is blocked, check https://gui.fediseer.com/ for reasons.'), 'warning')
             if not new_person or new_person.banned:
-                flash(_('That person could not be retrieved or is banned from %(site)s.', site=g.site.name), 'warning')
+                flash(_('That person could not be retrieved or is banned from %(site)s.', site=current_branding().name), 'warning')
                 # send them back where they came from
                 return back('/')
 
@@ -2486,7 +2487,7 @@ def show_profile_rss(actor):
         description = shorten_string(user.about, 150) if user.about else ' '
         image = user.avatar_image() if user.avatar_id \
                                         else f"{server_url}/static/images/apple-touch-icon.png"
-        feed = RSSFeed(title = f'{user.display_name()} on {g.site.name}',
+        feed = RSSFeed(title = f'{user.display_name()} on {current_branding().name}',
                        link = f"{server_url}/u/{actor}",
                        description = description,
                        logo = image,

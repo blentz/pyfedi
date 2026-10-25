@@ -115,14 +115,14 @@
 
         <div id="about_card" class="card mt-3">
             <div class="card-header">
-                 <h2>{{ _('About %(site_name)s', site_name=g.site.name) }}</h2>
+                 <h2>{{ _('About %(site_name)s', site_name=branding.name) }}</h2>
             </div>
             <div class="card-body">
-                {% if g.site.description -%}
-                    <p><strong>{{ g.site.description|safe }}</strong></p>
+                {% if branding.description -%}
+                    <p><strong>{{ branding.description|safe }}</strong></p>
                 {% endif -%}
-                {% if g.site.sidebar_html -%}
-                    <p>{{ g.site.sidebar_html|safe }}</p>
+                {% if branding.sidebar_html -%}
+                    <p>{{ branding.sidebar_html|safe }}</p>
                 {% endif -%}
                 {% if rss_feed %}
                     <ul class="list-group list-group-flush mt-4">

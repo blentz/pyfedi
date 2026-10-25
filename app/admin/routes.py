@@ -314,6 +314,7 @@ def admin_site():
 
         db.session.commit()
         cache.delete_memoized(get_site_as_dict)
+        clear_domain_cache()   # the first domain's branding is Site row 1's, memoised (app/branding.py)
         set_setting('announcement', form.announcement.data)
         set_setting('announcement_html', markdown_to_html(form.announcement.data, anchors_new_tab=False, a_target=""))
         flash(_('Settings saved.'))
@@ -426,6 +427,7 @@ def admin_misc():
         db.session.commit()
         cache.delete_memoized(blocked_referrers)
         cache.delete_memoized(get_site_as_dict)
+        clear_domain_cache()   # its default theme and CSS are the first domain's branding, memoised (app/branding.py)
         set_setting("allow_default_user_add_remote_community", form.allow_default_user_add_remote_community.data)
         set_setting('meme_comms_low_quality', form.meme_comms_low_quality.data)
         set_setting('public_modlog', form.public_modlog.data)

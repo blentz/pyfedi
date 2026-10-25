@@ -1,4 +1,4 @@
-from flask import redirect, url_for, flash, request, make_response, session, current_app, g, abort, jsonify
+from flask import redirect, url_for, flash, request, make_response, session, current_app, abort, jsonify
 import base64
 from webauthn import options_to_json, generate_registration_options, verify_registration_response
 from webauthn.helpers import parse_registration_credential_json
@@ -8,6 +8,7 @@ from webauthn.helpers.structs import PublicKeyCredentialDescriptor, \
 from flask_login import current_user
 
 from app import db, cache
+from app.branding import current_branding
 from app.user import bp
 from app.models import Passkey
 from app.storefront import current_storefront, storefront_url
@@ -40,7 +41,7 @@ def user_passkey_delete(passkey_id):
 def user_passkey_options():
     options = generate_registration_options(
         rp_id=current_storefront().domain,
-        rp_name=g.site.name,
+        rp_name=current_branding().name,
         user_name=current_user.user_name,
         user_id=generate_user_handle(),
         user_display_name=current_user.display_name(),

@@ -65,13 +65,13 @@
         {% block extra_css -%}
         {% endblock -%}
         <title>{% if title %}{{ title }}{% else %}{{ _('PieFed') }}{% endif %}</title>
-        <link rel="apple-touch-icon" sizes="180x180" href="{{ g.site.logo_180 if g.site.logo_180 else '/static/images/piefed_logo_icon_t_180.png' }}">
-        <link rel="apple-touch-icon" sizes="152x152" href="{{ g.site.logo_152 if g.site.logo_152 else '/static/images/piefed_logo_icon_t_152.png' }}">
-        <link rel="icon" type="image/png" sizes="32x32" href="{{ g.site.logo_32 if g.site.logo_32 else '/static/images/favicon-32x32.png' }}">
-        <link rel="icon" type="image/png" sizes="16x16" href="{{ g.site.logo_16 if g.site.logo_16 else '/static/images/favicon-16x16.png' }}">
+        <link rel="apple-touch-icon" sizes="180x180" href="{{ branding.logo_180 if branding.logo_180 else '/static/images/piefed_logo_icon_t_180.png' }}">
+        <link rel="apple-touch-icon" sizes="152x152" href="{{ branding.logo_152 if branding.logo_152 else '/static/images/piefed_logo_icon_t_152.png' }}">
+        <link rel="icon" type="image/png" sizes="32x32" href="{{ branding.logo_32 if branding.logo_32 else '/static/images/favicon-32x32.png' }}">
+        <link rel="icon" type="image/png" sizes="16x16" href="{{ branding.logo_16 if branding.logo_16 else '/static/images/favicon-16x16.png' }}">
         <link rel="manifest" href="/manifest.json">
-        <link rel="shortcut icon" type="image/png" href="{{ g.site.logo_32 if g.site.logo_32 else '/static/images/favicon-32x32.png' }}">
-        <link href="{{ g.site.logo_16 if g.site.logo_16 else '/static/images/favicon.ico' }}" rel='icon' type='image/x-icon'>
+        <link rel="shortcut icon" type="image/png" href="{{ branding.logo_32 if branding.logo_32 else '/static/images/favicon-32x32.png' }}">
+        <link href="{{ branding.logo_16 if branding.logo_16 else '/static/images/favicon.ico' }}" rel='icon' type='image/x-icon'>
         <meta name="msapplication-TileColor" content="#da532c">
         <meta name="msapplication-config" content="/static/browserconfig.xml">
         <meta name="theme-color" content="#ffffff">
@@ -84,7 +84,7 @@
         {% if og_image -%}
             <meta property="og:image" content="{{ og_image }}" />
         {% else -%}
-            <meta property="og:image" content="{{ g.site.logo if g.site.logo else '/static/images/piefed_logo_full_t_300x300.svg' }}" />
+            <meta property="og:image" content="{{ branding.logo if branding.logo else '/static/images/piefed_logo_full_t_300x300.svg' }}" />
         {% endif -%}
         {% if creator -%}
             <meta name="fediverse:creator" content="{{ creator }}" />
@@ -113,9 +113,9 @@
       {% if config["S3_PUBLIC_URL"] and not low_bandwidth and not (g.storefront and g.storefront.is_onion) -%}
         <link rel="preconnect" href="{{ config['S3_PUBLIC_URL'] }}">
       {% endif -%}
-      {% if g.site.additional_css -%}
+      {% if branding.additional_css -%}
       <style>
-          {{ g.site.additional_css | safe }}
+          {{ branding.additional_css | safe }}
       </style>
       {% endif -%}
       {% if current_user.is_authenticated and current_user.additional_css -%}
@@ -163,14 +163,14 @@
             <a href="#" id="navbar-back-ios"><span class="fe fe-back"></span></a>
             <a class="navbar-brand" href="/" aria-label="{{ _('To home page') }}">
                 {% if not low_bandwidth -%}
-                    <img src="{% if g.site.logo and g.site.logo.endswith('.svg') -%}
-                                    {{ g.site.logo }}
-                                {%- elif g.site.logo_152 -%}
-                                    {{ g.site.logo_152 }}
+                    <img src="{% if branding.logo and branding.logo.endswith('.svg') -%}
+                                    {{ branding.logo }}
+                                {%- elif branding.logo_152 -%}
+                                    {{ branding.logo_152 }}
                                 {%- else -%}
                                     /static/images/piefed_logo_full_t_300x300.svg
                                 {%- endif %}" alt="Logo" width="50" height="50" fetchpriority="high" />
-                {%- endif %}{{ g.site.name }}</a>
+                {%- endif %}{{ branding.name }}</a>
             {% if current_user.is_authenticated -%}
                 <a class="nav-link ms-auto d-lg-none" href="/notifications" aria-label="{{ _('Notifications') }}">
                     {% if current_user.unread_notifications -%}

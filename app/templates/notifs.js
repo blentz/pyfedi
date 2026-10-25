@@ -30,7 +30,7 @@ function connect() {
                 }
 
                 if (Notification.permission === "granted") {
-                    new Notification("{{ g.site.name }}", {
+                    new Notification("{{ branding.name }}", {
                         body: `${data['num_notifs']} notifications.`,
                         icon: "/static/images/favicon-32x32.png",
                         tag: '{{ nonce }}'

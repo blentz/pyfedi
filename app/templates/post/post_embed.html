@@ -62,9 +62,9 @@
             <meta name="description" content="{{ html_to_text(g.site.sidebar) }}" />
         {% endif -%}
         <meta name="robots" content="noindex">
-      {% if g.site.additional_css -%}
+      {% if branding.additional_css -%}
       <style>
-          {{ g.site.additional_css }}
+          {{ branding.additional_css }}
       </style>
       {% endif -%}
     {% endblock -%}

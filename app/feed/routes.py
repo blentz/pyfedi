@@ -14,6 +14,7 @@ from slugify import slugify
 from sqlalchemy import desc, or_
 
 from app import db, cache, celery
+from app.branding import current_branding
 from app.activitypub.signature import RsaKeys, send_post_request
 from app.activitypub.util import extract_domain_and_actor
 from app.community.util import save_icon_file, save_banner_file, hashtags_used_in_communities
@@ -624,7 +625,7 @@ def show_feed(feed):
                                              tags=hashtags_used_in_communities(feed_community_ids, content_filters),
                                              sub_feeds=sub_feeds, feed_path=feed.path(), breadcrumbs=breadcrumbs,
                                              rss_feed=f"{storefront_url()}/f/{feed.path()}.rss",
-                                             rss_feed_name=f"{current_feed.name} on {g.site.name}",
+                                             rss_feed_name=f"{current_feed.name} on {current_branding().name}",
                                              communities_banned_from_list=communities_banned_from_list,
                                              show_post_community=True,
                                              joined_communities=joined_or_modding_communities(current_user.get_id()),
@@ -834,7 +835,7 @@ def lookup(feedname, domain):
                           'warning')
             elif new_feed is not None:
                 if new_feed.banned:
-                    flash(_('That feed is banned from %(site)s.', site=g.site.name), 'warning')
+                    flash(_('That feed is banned from %(site)s.', site=current_branding().name), 'warning')
 
             return render_template('feed/lookup_remote.html',
                                    title=_('Search result for remote feed'), new_feed=new_feed,
@@ -880,7 +881,7 @@ def show_feed_rss(feed_path):
 
         fg = FeedGenerator()
         fg.id(f"{storefront_url()}/f/{last_feed_machine_name}")
-        fg.title(f'{feed.title} on {g.site.name}')
+        fg.title(f'{feed.title} on {current_branding().name}')
         fg.link(href=f"{storefront_url()}/f/{last_feed_machine_name}", rel='alternate')
         fg.logo(f"{storefront_url()}/static/images/apple-touch-icon.png")
         fg.subtitle(' ')

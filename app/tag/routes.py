@@ -9,6 +9,7 @@ from flask_login import current_user
 from sqlalchemy import desc, or_, text
 
 from app import db, constants
+from app.branding import current_branding
 from app.constants import POST_STATUS_REVIEWING
 # The module, not the name: app.feed.routes reaches this file through
 # app.activitypub before get_all_child_feed_ids is defined (import cycle: feed.routes)
@@ -127,7 +128,7 @@ def show_tag(tag):
                                content_filters=content_filters, category=category, category_id=category_id,
                                moderated_community_ids=moderating_communities_ids(current_user.get_id()),
                                rss_feed=f"{storefront_url()}/tag/{tag.name}/feed",
-                               rss_feed_name=f"#{tag.display_as} on {g.site.name}",
+                               rss_feed_name=f"#{tag.display_as} on {current_branding().name}",
                                inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None,
                                )
     else:
@@ -153,9 +154,9 @@ def show_tag_rss(tag):
 
         fg = FeedGenerator()
         fg.id(f"{storefront_url()}/tag/{tag.name}")
-        fg.title(f'#{tag.display_as} on {g.site.name}')
+        fg.title(f'#{tag.display_as} on {current_branding().name}')
         fg.link(href=f"{storefront_url()}/tag/{tag.name}", rel='alternate')
-        fg.logo(f"{storefront_url()}{g.site.logo_152 if g.site.logo_152 else '/static/images/apple-touch-icon.png'}")
+        fg.logo(f"{storefront_url()}{current_branding().logo_152 or '/static/images/apple-touch-icon.png'}")
         fg.subtitle(' ')
         fg.link(href=f"{storefront_url()}/tag/{tag.name}/feed", rel='self')
         fg.language('en')

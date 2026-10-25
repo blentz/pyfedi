@@ -7,6 +7,7 @@ from flask_login import current_user
 from flask_wtf.csrf import generate_csrf
 
 from app import db
+from app.branding import Branding, current_branding
 from app.activitypub.entitlement import secure_mode_cache_headers, signed_fetch_refusal
 from app.community.live import post_community_link
 from app.community.util import actor_to_community
@@ -60,6 +61,23 @@ class OnUse:
         return self._compute() + other
 
 
+class BrandingOnUse:
+    """The template value `branding`: the request's domain's `Branding` (app/branding.py), looked up when a template
+    first reads one of its fields and then kept for the rest of the render. As with OnUse, a render that names no field
+    (an email from a background job) never looks it up, and a probe of the context values for anything else
+    (prime_quotes asks each one for `items`) finds nothing."""
+
+    def __init__(self):
+        self._branding = None
+
+    def __getattr__(self, field):
+        if field not in Branding._fields:
+            raise AttributeError(field)
+        if self._branding is None:
+            self._branding = current_branding()
+        return getattr(self._branding, field)
+
+
 def register_request_hooks(app):
     with app.app_context():
         check_default_domain()
@@ -69,7 +87,7 @@ def register_request_hooks(app):
         return dict(getmtime=getmtime, instance_domain=OnUse(storefront_host), site_url=OnUse(storefront_url),
                     debug_mode=current_app.debug, on_onion=is_onion_request(),
                     pendulum=pendulum, locale=g.locale if hasattr(g, 'locale') else None, notif_server=OnUse(lambda: storefront_link(current_app.config['NOTIF_SERVER'])),
-                    site=g.site if hasattr(g, 'site') else None, nonce=g.nonce if hasattr(g, 'nonce') else None,
+                    site=g.site if hasattr(g, 'site') else None, branding=BrandingOnUse(), nonce=g.nonce if hasattr(g, 'nonce') else None,
                     admin_ids=g.admin_ids if hasattr(g, 'admin_ids') else [], low_bandwidth=g.low_bandwidth if hasattr(g, 'low_bandwidth') else None,
                     can_translate=current_app.config['TRANSLATE_ENDPOINT'] != '', can_detect_ai=current_app.config['DETECT_AI_ENDPOINT'] != '',
                     POST_TYPE_LINK=POST_TYPE_LINK, POST_TYPE_IMAGE=POST_TYPE_IMAGE, notif_id_to_string=notif_id_to_string,

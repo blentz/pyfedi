@@ -21,6 +21,7 @@ from slugify import slugify
 from wtforms.fields import Label
 
 from app import db, constants, cache, limiter, get_locale
+from app.branding import current_branding
 from app.activitypub.signature import default_context, send_post_request
 from app.activitypub.util import update_post_from_activity
 from app.community.forms import CreateLinkForm, CreateDiscussionForm, CreateVideoForm, CreatePollForm, EditImageForm, \
@@ -725,7 +726,7 @@ def post_oembed(post_id):
         oembed = {
             "version": "1.0",
             "type": "rich",
-            "provider_name": g.site.name,
+            "provider_name": current_branding().name,
             "provider_url": storefront_url(),
             "title": title,
             "html": f"<p><iframe src='{iframe_url}' class='piefed-embed' style='max-width: 100%; border: 0' width='400' allowfullscreen='allowfullscreen'></iframe><script src='{storefront_url()}/static/js/embed.js' async='async'></script></p>",

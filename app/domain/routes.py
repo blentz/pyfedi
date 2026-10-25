@@ -8,6 +8,7 @@ from flask_login import current_user, login_required
 from sqlalchemy import desc, or_, text
 
 from app import db, constants, cache, limiter
+from app.branding import current_branding
 from app.constants import POST_STATUS_REVIEWING, SRC_WEB
 from app.domain import bp
 from app.domain.forms import PostWarningForm
@@ -110,7 +111,7 @@ def show_domain(domain_id):
                                    joined_communities=joined_or_modding_communities(current_user.get_id()),
                                    moderated_community_ids=moderating_communities_ids(current_user.get_id()),
                                    rss_feed=f"{storefront_url()}/d/{domain.id}/feed" if domain.post_count > 0 else None,
-                                   rss_feed_name=f"{domain.name} on {g.site.name}" if domain.post_count > 0 else None,
+                                   rss_feed_name=f"{domain.name} on {current_branding().name}" if domain.post_count > 0 else None,
                                    inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None,
                                    )
         else:
@@ -147,7 +148,7 @@ def show_domain_rss(domain_id):
 
             fg = FeedGenerator()
             fg.id(f"{storefront_url()}/d/{domain_id}")
-            fg.title(f'{domain.name} on {g.site.name}')
+            fg.title(f'{domain.name} on {current_branding().name}')
             fg.link(href=f"{storefront_url()}/d/{domain_id}", rel='alternate')
             fg.logo(f"{storefront_url()}/static/images/apple-touch-icon.png")
             fg.subtitle(' ')

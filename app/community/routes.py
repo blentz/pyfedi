@@ -16,6 +16,7 @@ from sqlalchemy.orm.exc import NoResultFound
 from ics import Calendar, Event, DisplayAlarm
 
 from app import db, cache, celery, limiter, plugins
+from app.branding import current_branding
 from app.activitypub.signature import RsaKeys, send_post_request
 from app.activitypub.util import extract_domain_and_actor, find_actor_or_create, find_microblogging_community
 from app.activitypub.actor import schedule_actor_refresh
@@ -271,7 +272,7 @@ def add_remote():
         elif new_community is not None:
             _forget_sidebar_new_communities(current_user.id)
             if new_community.banned:
-                flash(_('That community is banned from %(site)s.', site=g.site.name), 'warning')
+                flash(_('That community is banned from %(site)s.', site=current_branding().name), 'warning')
 
     return render_template('community/add_remote.html',
                            title=_('Add remote community'), form=form, new_community=new_community,
@@ -817,7 +818,7 @@ def show_community(community: Community, from_instance=None):
                                          can_upvote_here=can_upvote(user, community),
                                          can_downvote_here=can_downvote(user, community),
                                          rss_feed=None if view_actor else f"{storefront_url()}/community/{community.link()}/feed",
-                                         rss_feed_name=f"{community.title} on {g.site.name}",
+                                         rss_feed_name=f"{community.title} on {current_branding().name}",
                                          content_filters=content_filters, sort=sort, flair=flair, show_post_community=False,
                                          tags=[] if view_actor else hashtags_used_in_community(community.id, content_filters),
                                          view_actor=view_actor,
@@ -927,7 +928,7 @@ def show_community_rss(actor):
                 explicit=bool(community.nsfw or community.nsfl))
             language = community.languages.filter(Language.code != 'und').order_by(Language.id).first()
             language = language.code if language else 'en'
-        feed = RSSFeed(title = f'{community.title} on {g.site.name}',
+        feed = RSSFeed(title = f'{community.title} on {current_branding().name}',
                        link = f"{server_url}/c/{actor}",
                        description = description,
                        logo = image,
@@ -3262,7 +3263,7 @@ def lookup(community, domain):
                         'warning')
             elif new_community is not None:
                 if new_community.banned:
-                    flash(_('That community is banned from %(site)s.', site=g.site.name), 'warning')
+                    flash(_('That community is banned from %(site)s.', site=current_branding().name), 'warning')
 
             return render_template('community/lookup_remote.html',
                                    title=_('Search result for remote community'), new_community=new_community,

@@ -10,6 +10,7 @@ from flask_login import current_user
 from sqlalchemy import text, desc, asc, or_
 
 from app import db, cache
+from app.branding import current_branding
 from app.community.util import hashtags_used_in_communities
 from app.constants import SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, POST_TYPE_IMAGE, \
     POST_TYPE_LINK, POST_TYPE_VIDEO, NOTIF_TOPIC
@@ -200,7 +201,7 @@ def show_topic(topic_path):
                                tags=hashtags_used_in_communities(community_ids, content_filters),
                                joined_communities=joined_or_modding_communities(current_user.get_id()),
                                rss_feed=f"{storefront_url()}/topic/{topic_path}.rss",
-                               rss_feed_name=f"{current_topic.name} on {g.site.name}", content_type=content_type,
+                               rss_feed_name=f"{current_topic.name} on {current_branding().name}", content_type=content_type,
                                reported_posts=reported_posts(current_user.get_id(), current_user.get_id() in g.admin_ids),
                                user_notes=user_notes(current_user.get_id()),
                                moderated_community_ids=moderating_communities_ids(current_user.get_id()),
@@ -242,7 +243,7 @@ def show_topic_rss(topic_path):
 
         fg = FeedGenerator()
         fg.id(f"{storefront_url()}/topic/{last_topic_machine_name}")
-        fg.title(f'{topic.name} on {g.site.name}')
+        fg.title(f'{topic.name} on {current_branding().name}')
         fg.link(href=f"{storefront_url()}/topic/{last_topic_machine_name}", rel='alternate')
         fg.logo(f"{storefront_url()}/static/images/apple-touch-icon.png")
         fg.subtitle(' ')

@@ -26,12 +26,12 @@
     <aside id="side_pane" class="col-12 col-lg-4 side_pane" role="complementary">
         <div class="card mt-3">
             <div class="card-header">
-                 <h2>{{ _('About %(site_name)s', site_name=g.site.name) }}</h2>
+                 <h2>{{ _('About %(site_name)s', site_name=branding.name) }}</h2>
             </div>
             <div class="card-body">
-                <p><strong>{{ g.site.description|safe }}</strong></p>
-                {% if g.site.sidebar_html -%}
-                    <p>{{ g.site.sidebar_html|safe }}</p>
+                <p><strong>{{ branding.description|safe }}</strong></p>
+                {% if branding.sidebar_html -%}
+                    <p>{{ branding.sidebar_html|safe }}</p>
                 {% endif -%}
                 <p class="mt-4">
                     <a class="no-underline" href="{{ rss_feed }}" rel="nofollow"><span class="fe fe-rss"></span> {{ _('RSS feed') }}</a>
