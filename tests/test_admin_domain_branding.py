@@ -320,6 +320,14 @@ def test_an_svg_upload_keeps_no_sized_copies_and_the_manifest_falls_back(app, ad
     assert media_files(media) == {Path(row.logo).name}
     assert manifest_icons(app) == {'192x192': ('/static/images/piefed_logo_icon_t_192.png', 'image/png'),
                                    '512x512': ('/static/images/piefed_logo_icon_t_512.png', 'image/png')}
+    # nor are the page's icons the first domain's: they are PieFed's, as the manifest's are
+    site = db.session.get(Site, 1)
+    site.logo_32 = '/static/media/site_32.png'
+    db.session.commit()
+    clear_domain_cache()
+    home = page(app, '/')
+    assert 'site_32.png' not in home
+    assert 'href="/static/images/favicon-32x32.png"' in home
 
 
 def test_a_domain_with_no_logo_of_its_own_has_the_first_domains_icons(app, admin, domains):
