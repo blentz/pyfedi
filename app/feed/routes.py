@@ -20,7 +20,7 @@ from app.activitypub.util import extract_domain_and_actor
 from app.community.util import save_icon_file, save_banner_file, hashtags_used_in_communities
 from app.constants import SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, POST_TYPE_IMAGE, \
     POST_TYPE_LINK, POST_TYPE_VIDEO, NOTIF_FEED, SUBSCRIPTION_MEMBER, SUBSCRIPTION_NONMEMBER, SRC_WEB
-from app.federation_urls import activity_id
+from app.federation_urls import activity_id, domain_site_name
 from app.feed import bp
 from app.feed.forms import AddCopyFeedForm, EditFeedForm, SearchRemoteFeed
 from app.feed.util import feeds_for_form, search_for_feed, actor_to_feed, feed_communities_for_edit
@@ -34,7 +34,7 @@ import app.shared.community as shared_community
 # package before they are defined (import cycle: app.shared.feed)
 import app.shared.feed as shared_feed
 from app.local_names import actor_handle
-from app.storefront import is_local_host, storefront_link, storefront_url
+from app.storefront import current_storefront, is_local_host, storefront_link, storefront_url
 from app.shared.upload import is_refused_upload
 from app.local_only import local_only_visible_rss, without_local_only_actors
 from app.utils import etag_stamp, back, show_ban_message, piefed_markdown_to_lemmy_markdown, markdown_to_html, render_template, \
@@ -881,7 +881,7 @@ def show_feed_rss(feed_path):
 
         fg = FeedGenerator()
         fg.id(f"{storefront_url()}/f/{last_feed_machine_name}")
-        fg.title(f'{feed.title} on {current_branding().name}')
+        fg.title(f'{feed.title} on {domain_site_name(current_storefront(), g.site)}')
         fg.link(href=f"{storefront_url()}/f/{last_feed_machine_name}", rel='alternate')
         fg.logo(f"{storefront_url()}/static/images/apple-touch-icon.png")
         fg.subtitle(' ')

@@ -9,7 +9,7 @@ from random import randint
 from flask import redirect, url_for, flash, current_app, abort, request, g, make_response, jsonify
 from flask_babel import _, force_locale, gettext
 from flask_login import current_user
-from app.federation_urls import activity_id, object_base, owner_base
+from app.federation_urls import activity_id, domain_site_name, object_base, owner_base
 from app.onion import audit_field
 from furl import furl
 from sqlalchemy import text, desc, Integer, case
@@ -61,7 +61,7 @@ import app.shared.community as shared_community
 from app.shared.media import episode_form_wanted, episode_of, media_of
 from app.shared.tasks import task_selector
 import app.variants as variants
-from app.storefront import storefront_url
+from app.storefront import current_storefront, storefront_url
 from app.utils import etag_stamp
 from app.utils import clean_ap_url, can_moderate, is_local_microblogs, render_template, markdown_to_html, validation_required, \
     shorten_string, markdown_to_text, ap_datetime, return_304, \
@@ -726,7 +726,7 @@ def post_oembed(post_id):
         oembed = {
             "version": "1.0",
             "type": "rich",
-            "provider_name": current_branding().name,
+            "provider_name": domain_site_name(current_storefront(), g.site),
             "provider_url": storefront_url(),
             "title": title,
             "html": f"<p><iframe src='{iframe_url}' class='piefed-embed' style='max-width: 100%; border: 0' width='400' allowfullscreen='allowfullscreen'></iframe><script src='{storefront_url()}/static/js/embed.js' async='async'></script></p>",

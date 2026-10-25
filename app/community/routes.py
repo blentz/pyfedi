@@ -43,7 +43,7 @@ from app.constants import SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, POST_TYPE_LIN
     POST_TYPE_EVENT, REPORT_TYPE_COMMUNITY, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO, POST_STATUS_PUBLISHED, \
     COMMUNITY_KIND_MICROBLOGS, COMMUNITY_KIND_PODCAST
 from app.email import send_email
-from app.federation_urls import activity_id, object_base
+from app.federation_urls import activity_id, domain_site_name, object_base
 from app.inoculation import inoculation
 from app.models import served_path, User, Community, CommunityMember, CommunityJoinRequest, CommunityBan, Post, Site, \
     File, utcnow, Report, Notification, Topic, PostReply, \
@@ -88,7 +88,7 @@ from app.shared.tasks import task_selector
 import app.shared.feed as shared_feed
 from app.utils import is_valid_xml_utf8, get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url, joined_server_views
 from app.activitypub.serializers.podcast import uses_podcast_episode
-from app.storefront import (canonicalise_text, default_storefront, delete_memoized_everywhere, domain_authority, domain_base_url,
+from app.storefront import (canonicalise_text, current_storefront, default_storefront, delete_memoized_everywhere, domain_authority, domain_base_url,
                             domain_for_host, federating_base, hosted_instance_ids, instance_id_of, path_name, storefront_host,
                             storefront_link, storefront_query_cache_key, storefront_url)
 from app.local_names import local_named, split_local_name
@@ -928,7 +928,7 @@ def show_community_rss(actor):
                 explicit=bool(community.nsfw or community.nsfl))
             language = community.languages.filter(Language.code != 'und').order_by(Language.id).first()
             language = language.code if language else 'en'
-        feed = RSSFeed(title = f'{community.title} on {current_branding().name}',
+        feed = RSSFeed(title = f'{community.title} on {domain_site_name(current_storefront(), g.site)}',
                        link = f"{server_url}/c/{actor}",
                        description = description,
                        logo = image,

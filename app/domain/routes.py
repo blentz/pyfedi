@@ -15,7 +15,8 @@ from app.domain.forms import PostWarningForm
 from app.inoculation import inoculation
 from app.models import Post, Domain, Community, DomainBlock, read_posts
 from app.shared.domain import block_domain, unblock_domain
-from app.storefront import host_hidden_here, host_not_hidden_clause, is_local_host, storefront_link, storefront_url
+from app.federation_urls import domain_site_name
+from app.storefront import current_storefront, host_hidden_here, host_not_hidden_clause, is_local_host, storefront_link, storefront_url
 from app.local_only import local_only_visible_rss, without_local_only
 from app.visibility import listable_clause
 from app.utils import render_template, permission_required, user_filters_posts, blocked_domains, \
@@ -148,7 +149,7 @@ def show_domain_rss(domain_id):
 
             fg = FeedGenerator()
             fg.id(f"{storefront_url()}/d/{domain_id}")
-            fg.title(f'{domain.name} on {current_branding().name}')
+            fg.title(f'{domain.name} on {domain_site_name(current_storefront(), g.site)}')
             fg.link(href=f"{storefront_url()}/d/{domain_id}", rel='alternate')
             fg.logo(f"{storefront_url()}/static/images/apple-touch-icon.png")
             fg.subtitle(' ')

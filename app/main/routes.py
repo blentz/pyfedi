@@ -1576,7 +1576,7 @@ def index_rss(feed_type=None):
     og_image = branding.logo if branding.logo else None
     fg = FeedGenerator()
     fg.id(f"{storefront_url()}/{feed_type}{rss_token}")
-    fg.title(f'{branding.name} - {feed_type.capitalize()}')
+    fg.title(f'{domain_site_name(current_storefront(), g.site)} - {feed_type.capitalize()}')
     fg.link(href=f"{storefront_url()}", rel='alternate')
     if og_image:
         fg.logo(og_image)

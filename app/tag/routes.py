@@ -16,7 +16,8 @@ from app.constants import POST_STATUS_REVIEWING
 import app.feed.routes as feed_routes
 from app.inoculation import inoculation
 from app.models import Post, Community, Tag, post_tag, Topic, FeedItem, Feed
-from app.storefront import storefront_link, storefront_url
+from app.federation_urls import domain_site_name
+from app.storefront import current_storefront, storefront_link, storefront_url
 from app.tag import bp
 # The module, not the name: app.topic.routes reaches this file through
 # app.activitypub before get_all_child_topic_ids is defined (import cycle: topic.routes)
@@ -154,7 +155,7 @@ def show_tag_rss(tag):
 
         fg = FeedGenerator()
         fg.id(f"{storefront_url()}/tag/{tag.name}")
-        fg.title(f'#{tag.display_as} on {current_branding().name}')
+        fg.title(f'#{tag.display_as} on {domain_site_name(current_storefront(), g.site)}')
         fg.link(href=f"{storefront_url()}/tag/{tag.name}", rel='alternate')
         fg.logo(f"{storefront_url()}{current_branding().logo_152 or '/static/images/apple-touch-icon.png'}")
         fg.subtitle(' ')

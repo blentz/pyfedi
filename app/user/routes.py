@@ -20,7 +20,7 @@ import app.auth.util as auth_util
 from app.community.util import save_icon_file, save_banner_file, retrieve_mods_and_backfill, search_for_community
 from app.constants import *
 from app.email import send_verification_email
-from app.federation_urls import activity_id, owner_base
+from app.federation_urls import activity_id, domain_site_name, owner_base
 from app.ldap_utils import sync_user_to_ldap
 from app.local_only import local_only_visible, local_only_visible_rss, refuses_remote_contact, \
     remote_contact_refusal_message, user_local_only, without_local_only
@@ -61,7 +61,7 @@ from app.rss_extras import RSSFeed
 import app.api.alpha.views as alpha_views
 from app.utils import user_filters_languages
 from app.local_names import local_clause, local_named, named_by_actor
-from app.storefront import domain_for_host, hosted_instance_ids, is_local_host, path_name, storefront_query_cache_key, \
+from app.storefront import current_storefront, domain_for_host, hosted_instance_ids, is_local_host, path_name, storefront_query_cache_key, \
     storefront_url
 from app.utils import ap_alternate_url
 from app.utils import canonical_host
@@ -2487,7 +2487,7 @@ def show_profile_rss(actor):
         description = shorten_string(user.about, 150) if user.about else ' '
         image = user.avatar_image() if user.avatar_id \
                                         else f"{server_url}/static/images/apple-touch-icon.png"
-        feed = RSSFeed(title = f'{user.display_name()} on {current_branding().name}',
+        feed = RSSFeed(title = f'{user.display_name()} on {domain_site_name(current_storefront(), g.site)}',
                        link = f"{server_url}/u/{actor}",
                        description = description,
                        logo = image,
