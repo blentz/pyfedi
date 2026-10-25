@@ -390,8 +390,12 @@ def _refused_hosted_fetch(uri, headers) -> bool:
         path = httpx.URL(uri).path.lower() if isinstance(uri, str) else ''
     except (httpx.InvalidURL, ValueError):   # left to get_request's own validation, which raises httpx.HTTPError
         path = ''
+    # The raw string too: a handle's server is put into https://{server}/.well-known/webfinger as given, and one
+    # carrying '#', '?', '/' or '\\' (shop.example#x) moves that path out of the one httpx reads
+    raw = uri.lower() if isinstance(uri, str) else ''
     federation = 'activity+json' in accept or 'ld+json' in accept or \
-        any(path == prefix.rstrip('/') or path.startswith(prefix) for prefix in _DISCOVERY_PATHS)
+        any(path == prefix.rstrip('/') or path.startswith(prefix) or prefix in raw
+            for prefix in _DISCOVERY_PATHS)
     if federation and is_hosted_uri(uri):
         current_app.logger.info(f'hosted domain, not fetched: {uri}')
         return True

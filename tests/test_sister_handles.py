@@ -139,3 +139,13 @@ def test_a_banned_remote_feed_host_is_still_refused(env, wire):
     with pytest.raises(Exception, match='peer.example is blocked. Reason: spam'):
         search_for_feed('~x@peer.example')
     assert wire.calls.call_count == 0
+
+
+@pytest.mark.parametrize('server', [f'{SHOP}#x', f'{SHOP}/x', f'{SHOP}?x', f'{SHOP}\\x', f'{SERVER}#x'])
+def test_a_handle_whose_server_is_no_authority_is_never_fetched(env, wire, server):
+    """httpx reads https://shop.example#x/.well-known/webfinger as a GET of shop.example's root, which no discovery
+    guard knows as WebFinger: a server with a path, query or fragment character names no host, and is not looked up."""
+    assert search_for_community(f'!den@{server}') is None
+    assert search_for_feed(f'~reads@{server}') is None
+    assert find_actor_or_create(f'@alice@{server}') is None
+    assert wire.calls.call_count == 0
