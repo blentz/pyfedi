@@ -44,11 +44,8 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/admin/util.py': {
         'move_community_images_to_here': 2,
     },
-    'app/api/alpha/utils/community.py': {
-        'get_community': 1,
-    },
     'app/api/alpha/utils/misc.py': {
-        'get_resolve_object': 2,
+        'get_resolve_object': 1,
     },
     'app/api/alpha/views.py': {
         '_neutral_post': 1,
@@ -132,7 +129,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/shared/feed.py': {
         'announce_feed_add_remove_to_subscribers': 2,
         'edit_feed': 2,
-        'form_communities_to_ids': 1,
         'make_feed': 2,
     },
     'app/shared/post.py': {

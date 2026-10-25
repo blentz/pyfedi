@@ -32,7 +32,7 @@ from app.federation_urls import activity_id
 from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, \
     Instance, User, Tag, CommunityFlair, CommunityThemeAllowed, Notification, markdown_source, language_from_ap, _as_dict, _as_url, parse_ap_published
 from app.local_names import local_named, named_by_actor
-from app.storefront import domain_for_host
+from app.storefront import domain_for_host, is_hosted_uri
 from app.utils import get_request, gibberish, ensure_directory_exists, ap_datetime, instance_banned, get_task_session, \
     store_files_in_s3, guess_mime_type, patch_db_session, instance_allowed, get_setting, scale_gif, theme_list, \
     add_to_modlog, role_access, sanitize_svg, can_create_post, can_create_post_reply, save_image_without_metadata
@@ -93,12 +93,14 @@ def search_for_community(address: str, allow_fetch: bool = True, retry: bool = F
             return None
         name, server = parts
 
-        if get_setting('use_allowlist') and not instance_allowed(server):
-            return None
-        if instance_banned(server):
-            return None
-
         hosted = domain_for_host(server)
+        # One of ours is neither allowed nor banned: those lists govern the servers we federate with (plan C4)
+        if not is_hosted_uri(f'https://{server}'):
+            if get_setting('use_allowlist') and not instance_allowed(server):
+                return None
+            if instance_banned(server):
+                return None
+
         if hosted:   # one of ours: that domain's own community, or none. Never fetched (it would be a self-request)
             return db.session.query(Community).filter(local_named(Community, name, hosted)).first()
 

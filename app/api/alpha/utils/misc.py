@@ -16,7 +16,7 @@ from app.api.alpha.views import search_view, post_view, reply_view, user_view, c
 from app.community.util import search_for_community
 from app.discovery.podcast import PODCAST_DROP, podcast_route_for, podcast_twin_named_by_other
 from app.models import Post, PostReply, User, Community, BannedInstances, Feed, ModLog
-from app.storefront import domain_for_host, is_local_host
+from app.storefront import default_domain, domain_authority, domain_for_host, is_local_host
 from app.user.utils import search_for_user
 from app.local_only import without_local_only_actors
 from app.visibility import can_view, is_open, modlog_local_only_clause, modlog_open_clause
@@ -100,6 +100,13 @@ def _own_host_author(ap_json):
     return None
 
 
+def _owning_authority(server: str) -> str:
+    """The host a bare name in a URL on `server` belongs to: that URL's own domain, so `shop.example/c/den` is shop's
+    den and not the default domain's. The default domain's for a host that is none of ours."""
+    domain = domain_for_host(server)
+    return domain_authority(domain or default_domain())
+
+
 def get_resolve_object(auth, data, user_id=None, recursive=False):
     if not data or 'q' not in data:
         raise Exception('missing q parameter for resolve_object')
@@ -151,7 +158,10 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
 
     server = None
     if query.startswith('https://') or query.startswith('http://'):
-        parsed_url = urlparse(query)
+        try:
+            parsed_url = urlparse(query)
+        except ValueError:   # an unbalanced bracket in the host: a URL that names nothing, not a server error
+            raise Exception('No object found.')
         server = parsed_url.netloc.lower()
     elif query.startswith('!') or query.startswith('@') or query.startswith('~'):
         name, server = normalise_actor_string(query)
@@ -224,7 +234,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             comm_name = "!" + matches.group(1)
 
             if "@" not in comm_name:
-                comm_name = comm_name + "@" + current_app.config['SERVER_NAME']
+                comm_name = comm_name + "@" + _owning_authority(server)
 
             object = search_for_community(comm_name.lower(), allow_fetch=bool(user_id))
 

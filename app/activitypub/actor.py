@@ -18,7 +18,7 @@ from app.discovery.podcast import podcast_community_for
 from app.federation_urls import instance_actor_signing
 from app.models import User, Community, Feed
 from app.local_names import local_named
-from app.storefront import acting_domain, current_storefront, domain_for_host
+from app.storefront import acting_domain, current_storefront, domain_for_host, is_hosted_uri
 from app.utils import utcnow, get_setting, actor_contains_blocked_words, actor_profile_contains_blocked_words, \
     instance_banned, low_value_reposters, instance_allowed
 
@@ -77,13 +77,15 @@ def validate_remote_actor(actor_url, actor=None, allow_banned=False):
     if not server:
         return False
 
-    # Check if instance is allowed/banned
-    if get_setting('use_allowlist', False):
-        if not instance_allowed(server):
-            return False
-    else:
-        if instance_banned(server):
-            return False
+    # Check if instance is allowed/banned. One of our own domains is neither: the allowlist and ban list govern the
+    # servers we federate with, and we are not one of them (plan C4)
+    if not is_hosted_uri(f'https://{server}'):
+        if get_setting('use_allowlist', False):
+            if not instance_allowed(server):
+                return False
+        else:
+            if instance_banned(server):
+                return False
 
     # Check for blocked words
     if actor_contains_blocked_words(actor_url):
