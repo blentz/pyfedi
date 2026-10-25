@@ -34,6 +34,13 @@ def own_branding(domain: storefront.DomainInfo) -> models.DomainBranding | None:
     return db.session.get(models.DomainBranding, domain.id)
 
 
+def own_value(domain: storefront.DomainInfo, field: str) -> str:
+    """`domain`'s own non-blank `field`, else ''. What other servers and clients read (spec §3.3) publishes a sister
+    domain's own value where it set one and today's otherwise. The first domain has none: its branding is Site's."""
+    row = None if domain.is_default else own_branding(domain)
+    return (getattr(row, field) if row is not None else None) or ''
+
+
 @cache.memoize(timeout=300, make_name=shaped_memo_name)
 def _effective(site_domain_id: int | None, is_default: bool) -> Branding:
     site = db.session.get(models.Site, 1)

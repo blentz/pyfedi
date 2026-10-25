@@ -15,7 +15,7 @@ from sqlalchemy.orm import joinedload
 from ua_parser import parse as uaparse
 
 from app import db, cache, limiter, plugins
-from app.branding import current_branding
+from app.branding import current_branding, own_value
 from app.activitypub.util import users_total, active_month, local_posts, local_communities, \
     lemmy_site_data, is_activitypub_request, find_microblogging_community
 from app.discovery import KIND_COMMUNITY
@@ -27,7 +27,7 @@ from app.admin.util import topics_for_form
 from app.api.alpha.utils.misc import get_resolve_object
 from app.constants import SUBSCRIPTION_PENDING, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, \
     POST_STATUS_REVIEWING, POST_FORM_TYPES
-from app.email import send_email, send_registration_approved_email
+from app.email import mail_name, send_email, send_registration_approved_email
 from app.inoculation import inoculation
 from app.community import server_view_list
 from app.community.live import HOME_LIVE_FILTERS, LIVE_LIMIT, LIVE_WINDOW, home_live_available, home_live_key
@@ -1161,11 +1161,11 @@ def protocol_handler():
 @debug_mode_only
 def test_email():
     if current_user.is_anonymous:
-        email = request.args.get('email')
+        email, account = request.args.get('email'), None   # an address with no account: the first domain's mail
     else:
-        email = current_user.email
+        email, account = current_user.email, current_user
     send_email(subject='This is a test email',
-               sender=f'{g.site.name} <{current_app.config["MAIL_FROM"]}>',
+               sender=f'{mail_name(account)} <{current_app.config["MAIL_FROM"]}>',
                recipients=[email],
                text_body='This is a test email. If you received this, email sending is working!',
                html_body='<p>This is a test email. If you received this, email sending is working!</p>',
@@ -1315,14 +1315,16 @@ def _activitypub_application(domain):
         # the document every fediverse peer fetches when it first hears of this
         # instance, so a site whose tagline was never filled in answered its
         # introductions with a 500.
-        'summary': ' - '.join(part for part in (site_name, g.site.description) if part),
+        # A sister domain's own tagline and logo where it set them (per-domain branding, spec §3.3), else today's
+        'summary': ' - '.join(part for part in (site_name, own_value(domain, 'description') or g.site.description)
+                              if part),
         'published': ap_datetime(g.site.created_at),
         'updated': ap_datetime(g.site.updated),
         'inbox': f"{base}/inbox",
         'outbox': f"{base}/site_outbox",
         'icon': {
             'type': 'Image',
-            'url': f"{base}/static/images/piefed_logo_icon_t_75.png"
+            'url': f"{base}{own_value(domain, 'logo') or '/static/images/piefed_logo_icon_t_75.png'}"
         },
         'publicKey': {
             'id': f"{base}/#main-key",
@@ -1413,12 +1415,17 @@ def static_manifest():
 
     # Modify manifest
     manifest['id'] = f'{storefront_url()}'
-    manifest['name'] = g.site.name if g.site.name else 'PieFed'
-    manifest['description'] = g.site.description if g.site.description else ''
-    
-    # Update icons to use custom logos with fallbacks
-    logo_512 = get_setting('logo_512', '')
-    logo_192 = get_setting('logo_192', '')
+    # The request host's branding, with the pages' fallback to Site's (per-domain branding, spec §3.3)
+    branding = current_branding()
+    manifest['name'] = branding.name if branding.name else 'PieFed'
+    manifest['description'] = branding.description
+
+    # Update icons to use custom logos with fallbacks. A sister domain's own logo is its icon: a domain keeps no 512
+    # or 192 copy, so its largest PNG, or the logo itself for an SVG upload, which stores no sized copies
+    domain = current_storefront()
+    own_icon = own_value(domain, 'logo_180') or own_value(domain, 'logo')
+    logo_512 = own_icon or get_setting('logo_512', '')
+    logo_192 = own_icon or get_setting('logo_192', '')
     
     # Update the icons array
     for icon in manifest.get('icons', []):

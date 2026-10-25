@@ -14,7 +14,7 @@ from app.branding import current_branding
 from app.community.util import hashtags_used_in_communities
 from app.constants import SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, POST_TYPE_IMAGE, \
     POST_TYPE_LINK, POST_TYPE_VIDEO, NOTIF_TOPIC
-from app.email import send_topic_suggestion
+from app.email import mail_name, send_topic_suggestion
 from app.inoculation import inoculation
 from app.models import Topic, Community, NotificationSubscription, PostReply, utcnow
 from app.storefront import storefront_link, storefront_query_cache_key, storefront_url
@@ -325,7 +325,8 @@ def suggest_topics():
     if not current_user.trustworthy():
         return redirect(url_for('topic.suggestion_denied'))
     if form.validate_on_submit():
-        subject = _('New topic suggestion from %(site_name)s', site_name=g.site.name)
+        # mail to the admins, not to an account: named by the first domain (per-domain branding, spec §3.3)
+        subject = _('New topic suggestion from %(site_name)s', site_name=mail_name())
         recipients = g.site.contact_email
         topic_name = form.topic_name.data
         communities_for_topic = form.communities_for_topic.data

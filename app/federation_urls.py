@@ -16,6 +16,7 @@ from flask import abort, current_app
 from sqlalchemy import func, select
 
 from app import db
+from app.branding import own_value
 from app.local_names import local_named, named_by_actor
 from app.storefront import DomainInfo, current_storefront, default_domain, domain_authority, domain_base_url, \
     federating_base, hosted_instance_ids, is_hosted_uri
@@ -101,9 +102,9 @@ def federating_storefront() -> DomainInfo:
 
 def domain_site_name(domain: DomainInfo, site) -> str:
     """The name `domain`'s site goes by in what it tells other servers and clients: `site.name` for the default
-    domain, the domain itself for any other, as Site.name is the default domain's (hell.cloud on prod) and nothing a
-    sister domain publishes names hell.cloud (owner ruling)."""
-    return site.name if domain.is_default else domain_authority(domain)
+    domain; for any other its own display name (per-domain branding, spec §3.3), else the domain itself, as Site.name
+    is the default domain's and nothing a sister domain publishes names the default domain (owner ruling)."""
+    return own_value(domain, 'name') or (site.name if domain.is_default else domain_authority(domain))
 
 
 def hosted_domain_names() -> list[str]:

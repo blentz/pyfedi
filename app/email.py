@@ -8,14 +8,23 @@ from typing import List
 
 import boto3
 from botocore.exceptions import ClientError
-from flask import current_app, render_template, g, url_for, flash
+from flask import current_app, render_template, url_for, flash
 from flask_babel import _  # todo: set the locale based on account_id so that _() works
 
-from app import celery
-from app.storefront import default_storefront, home_storefront, storefront_html, storefront_url
+from app import celery, db
+from app.branding import branding_for
+from app.models import Site
+from app.storefront import default_domain, default_storefront, home_storefront, storefront_html, storefront_url
 from app.utils import get_setting, markdown_to_html, html_to_text
 
 CHARSET = "UTF-8"
+
+
+def mail_name(user=None) -> str:
+    """The name mail to `user` goes by: their home domain's display name, its own or else Site's, as its pages show
+    it; the first domain's for mail to no account (per-domain branding, spec §3.3). Read through `branding_for`, not
+    the request's site row, which a Celery task or a cron job has none of."""
+    return branding_for(user.home_domain() if user is not None else default_domain()).name
 
 
 def send_password_reset_email(user):
@@ -27,7 +36,7 @@ def send_password_reset_email(user):
         text_body = render_template('email/reset_password.txt', user=user, token=token)
         html_body = render_template('email/reset_password.html', user=user, token=token)
     send_email(_('[PieFed] Reset Your Password'),
-               sender=f'{g.site.name} <{current_app.config["MAIL_FROM"]}>',
+               sender=f'{mail_name(user)} <{current_app.config["MAIL_FROM"]}>',
                recipients=[user.email],
                text_body=text_body,
                html_body=html_body)
@@ -38,7 +47,7 @@ def send_verification_email(user):
         text_body = render_template('email/verification.txt', user=user)
         html_body = render_template('email/verification.html', user=user)
     send_email(_('[PieFed] Please verify your email address'),
-               sender=f'{g.site.name} <{current_app.config["MAIL_FROM"]}>',
+               sender=f'{mail_name(user)} <{current_app.config["MAIL_FROM"]}>',
                recipients=[user.email],
                text_body=text_body,
                html_body=html_body)
@@ -56,24 +65,26 @@ def send_registration_approved_email(user):
             url = html.escape(storefront_url())
             body = render_template('email/welcome.html', user=user,
                                    email_body=f'<p>Your account at <a href="{url}">{url}</a> has been approved. Welcome!</p>')
-    mail_from = current_app.config["MAIL_FROM"] if current_app.config["MAIL_FROM"] else g.site.contact_email
+    contact_email = db.session.get(Site, 1).contact_email   # read here: a Celery task has no request's site row
+    mail_from = current_app.config["MAIL_FROM"] if current_app.config["MAIL_FROM"] else contact_email
     send_email(subject,
-               sender=f'{g.site.name} <{mail_from}>',
+               sender=f'{mail_name(user)} <{mail_from}>',
                recipients=[user.email],
                text_body=html_to_text(body),
-               html_body=body, reply_to=g.site.contact_email)
+               html_body=body, reply_to=contact_email)
 
 
 def send_topic_suggestion(communities_for_topic, user, recipients, subject, topic_name):
+    site_name = mail_name()   # mail to the admins, not to an account: the first domain's
     with default_storefront():   # one message to several admins, not to the member suggesting (onion spec §3.4)
-        text_body = render_template('email/suggested_topic.txt', site_name=g.site.name,
+        text_body = render_template('email/suggested_topic.txt', site_name=site_name,
                                     current_user_name=user.user_name, topic_name=topic_name,
                                     communities_for_topic=communities_for_topic)
-        html_body = render_template('email/suggested_topic.html', site_name=g.site.name,
+        html_body = render_template('email/suggested_topic.html', site_name=site_name,
                                     current_user_name=user.user_name, topic_name=topic_name,
                                     communities_for_topic=communities_for_topic)
     send_email(subject,
-               sender=f'{g.site.name} <{current_app.config["MAIL_FROM"]}>',
+               sender=f'{site_name} <{current_app.config["MAIL_FROM"]}>',
                recipients=recipients, text_body=text_body, html_body=html_body)
 
 

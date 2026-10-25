@@ -10,6 +10,7 @@ from sqlalchemy import text, func, or_, inspect, select
 from sqlalchemy.orm.exc import NoResultFound
 
 from app import cache, db
+from app.branding import own_value
 from app.activitypub.util import active_month, normalise_actor_string
 from app.constants import *
 import app.discovery.credits as discovery_credits   # the module, not names: app.discovery.credits imports this package indirectly
@@ -1420,8 +1421,13 @@ def described_domain() -> DomainInfo:
 
 
 def site_view(user) -> dict:
-    logo = g.site.logo if g.site.logo else '/static/images/piefed_logo_icon_t_75.png'
     storefront = described_domain()
+    # A sister domain's own logo, sidebar and description where it set them (per-domain branding, spec §3.3), else
+    # the site's, as before
+    logo = own_value(storefront, 'logo') or (g.site.logo if g.site.logo else '/static/images/piefed_logo_icon_t_75.png')
+    sidebar = own_value(storefront, 'sidebar') or g.site.sidebar
+    sidebar_html = own_value(storefront, 'sidebar_html') or g.site.sidebar_html
+    description = own_value(storefront, 'description') or g.site.description
 
     site = {
         "enable_downvotes": g.site.enable_downvotes,
@@ -1433,14 +1439,14 @@ def site_view(user) -> dict:
         "all_languages": []
     }
 
-    if g.site.sidebar and g.site.sidebar_html:
-        if g.site.sidebar == g.site.sidebar_html:
-            site['sidebar'] = g.site.sidebar_html
+    if sidebar and sidebar_html:
+        if sidebar == sidebar_html:
+            site['sidebar'] = sidebar_html
         else:
-            site['sidebar_md'] = g.site.sidebar
-            site['sidebar'] = g.site.sidebar_html
-    elif g.site.sidebar:
-        site['sidebar'] = g.site.sidebar
+            site['sidebar_md'] = sidebar
+            site['sidebar'] = sidebar_html
+    elif sidebar:
+        site['sidebar'] = sidebar
     
     announcement = get_setting('announcement')
     if announcement:
@@ -1450,8 +1456,8 @@ def site_view(user) -> dict:
     if announcement_html:
         site['announcement'] = announcement_html
     
-    if g.site.description:
-        site['description'] = g.site.description
+    if description:
+        site['description'] = description
     for language in Language.query.all():
         site["all_languages"].append({
             "id": language.id,
@@ -1477,8 +1483,9 @@ def site_view(user) -> dict:
 
 
 def site_instance_chooser_view():
-    logo = g.site.logo if g.site.logo else '/static/images/piefed_logo_icon_t_75.png'
     storefront = described_domain()
+    # A sister domain's own branding where it set it (per-domain branding, spec §3.3), else the site's, as before
+    logo = own_value(storefront, 'logo') or (g.site.logo if g.site.logo else '/static/images/piefed_logo_icon_t_75.png')
     # Site.language_id is nullable and an instance that has never chosen one
     # leaves it so, which made `language.id` below an AttributeError: the
     # instance chooser -- the page a NEW instance is most likely to be asked
@@ -1522,9 +1529,9 @@ def site_instance_chooser_view():
         'newbie_friendly': num_topics() >= 3,
         'name': domain_site_name(storefront, g.site),
         'elevator_pitch': get_setting('elevator_pitch', ''),
-        'description': g.site.description or '',
-        'about': g.site.about_html or '',
-        'sidebar': g.site.sidebar_html or '',
+        'description': own_value(storefront, 'description') or g.site.description or '',
+        'about': own_value(storefront, 'about_html') or g.site.about_html or '',
+        'sidebar': own_value(storefront, 'sidebar_html') or g.site.sidebar_html or '',
         'logo_url': f"{storefront_url()}{logo}",
         'maturity': maturity,
         'mau': active_month(instance_id=storefront.instance_id),   # the described domain's own accounts

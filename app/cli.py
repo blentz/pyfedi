@@ -32,7 +32,7 @@ from app.community.util import is_bad_name
 from app.constants import NOTIF_COMMUNITY, NOTIF_POST, NOTIF_REPLY, POST_STATUS_SCHEDULED, POST_STATUS_PUBLISHED, \
     POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_IMAGE, NOTIF_REMINDER, POST_TYPE_VIDEO, POST_TYPE_ARTICLE, SRC_API, \
     ROLE_ADMIN_NAME, ROLE_STAFF_NAME, ANNOUNCE_MAX_OBJECTS
-from app.email import send_email
+from app.email import mail_name, send_email
 from app.federation_urls import activity_id
 from app.onion_media import evict
 from app.models import CronJobLog, Settings, BannedInstances, Role, User, RolePermission, Domain, ActivityPubLog, utcnow, \
@@ -1654,7 +1654,7 @@ def register(app):
                                                                   notifications=notifications,
                                                                   posts=posts, site=site)
                             send_email(_('[PieFed] You have unread notifications'),
-                                       sender=f'{site.name} <{current_app.config["MAIL_FROM"]}>',
+                                       sender=f'{mail_name(user)} <{current_app.config["MAIL_FROM"]}>',
                                        recipients=[user.email],
                                        text_body=text_body,
                                        html_body=html_body)
