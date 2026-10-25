@@ -37,7 +37,7 @@ from app.admin.util import (directory_candidates, fetch_mastodon_directory,
                             unsubscribe_from_everything_then_delete,
                             unsubscribe_from_everything_then_delete_task)
 from app.constants import POST_TYPE_IMAGE
-from app.models import (Community, CommunityMember, File, Instance, Post,
+from app.models import (ActivityPubLog, Community, CommunityMember, File, Instance, Post,
                         Site, Topic, User)
 from app.utils import FETCH_MAX_BYTES, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, PAGE_MAX_BYTES
 from tests.factories import (make_community, make_community_member, make_file,
@@ -94,13 +94,24 @@ class TestDeletingAnAccount:
         assert send.call_count == 1
         assert send.call_args.args[1]['type'] == 'Delete'
 
-    def test_a_local_community_membership_is_dropped_without_any_request(self, env):
-        member_id, community_id = env.member.id, env.community.id
-        with patch('app.admin.util.send_post_request') as send:
-            unsubscribe_from_everything_then_delete_task(member_id)
-        left = [call.args[1]['object']['object'] for call in send.call_args_list if call.args[1]['type'] == 'Undo']
-        assert env.community.public_url() not in left
-        assert CommunityMember.query.filter_by(user_id=member_id, community_id=community_id).count() == 0
+    def test_leaving_local_communities_of_two_domains_sends_nothing(self, env):
+        """C4: an account in a hell.cloud and a shop.example community leaves both with no Leave, no delivery and no
+        'empty uri' or 'hosted domain' failure row; both memberships are gone."""
+        Instance.query.update({Instance.inbox: None})   # the account's own Delete goes nowhere either
+        hell = make_community('hellcloud')
+        shop = make_community('shopcommunity', host='shop.example')
+        user = make_user(env.baseline.instance_local, 'leaver', local=True, with_keys=True)
+        make_community_member(user, hell)
+        make_community_member(user, shop)
+        user_id, community_ids = user.id, [hell.id, shop.id]
+        assert hell.is_local() and shop.is_local()
+        with patch('app.activitypub.signature.post_request') as post:
+            unsubscribe_from_everything_then_delete_task(user_id)
+        assert post.call_count == 0 and post.delay.call_count == 0
+        messages = [log.exception_message or '' for log in ActivityPubLog.query.all()]
+        assert not [m for m in messages if 'empty uri' in m or 'hosted domain, not sent' in m]
+        assert CommunityMember.query.filter(CommunityMember.user_id == user_id,
+                                            CommunityMember.community_id.in_(community_ids)).count() == 0
 
     def test_a_remote_account_is_not(self, env):
         remote = env.baseline.instance_remote
