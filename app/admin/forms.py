@@ -22,13 +22,20 @@ from app.utils import REDIRECT_POLICY_ALL_REFERRERS, REDIRECT_POLICY_FEDERATED_S
     REDIRECT_POLICY_SAME_ORIGIN, REDIRECT_POLICY_TRUSTED_SERVERS, validate_user_name_charset
 
 
+def no_nul(form, field):
+    """PostgreSQL cannot store a NUL character in text: one in a field is invalid input, a form error, never a 500 at
+    the commit."""
+    if field.data and '\x00' in field.data:
+        raise ValidationError(_l('This cannot contain a NUL character.'))
+
+
 class SiteProfileForm(FlaskForm):
-    name = StringField(_l('Site Name'))
-    description = StringField(_l('Tagline'))
+    name = StringField(_l('Site Name'), validators=[no_nul])
+    description = StringField(_l('Tagline'), validators=[no_nul])
     icon = FileField(_l('Icon'), validators=[FileAllowed(['jpg', 'jpeg', 'png', 'webp', 'svg'], 'Images only!')],
                      render_kw={'accept': 'image/*'})
-    sidebar = TextAreaField(_l('Sidebar'))
-    about = TextAreaField(_l('About'))
+    sidebar = TextAreaField(_l('Sidebar'), validators=[no_nul])
+    about = TextAreaField(_l('About'), validators=[no_nul])
     announcement = TextAreaField(_l('Announcement at top of home page'))
     legal_information = TextAreaField(_l('Legal information'))
     tos_url = StringField(_l('Terms of service url'), validators=[Length(max=255)])
@@ -39,14 +46,14 @@ class SiteProfileForm(FlaskForm):
 class DomainBrandingForm(FlaskForm):
     """A sister domain's own branding. A blank field inherits the first domain's value (app/branding.py). The logo has no
     FileAllowed: an upload the route will not take is a 400 (`save_logo_upload`), not a form error."""
-    name = StringField(_l('Site Name'), validators=[Length(max=256)])
-    description = StringField(_l('Tagline'), validators=[Length(max=256)])
+    name = StringField(_l('Site Name'), validators=[Length(max=256), no_nul])
+    description = StringField(_l('Tagline'), validators=[Length(max=256), no_nul])
     logo = FileField(_l('Logo'), render_kw={'accept': 'image/*'})
     remove_logo = BooleanField(_l("Remove this domain's logo"))
     default_theme = SelectField(_l('Default theme'), choices=[], render_kw={'class': 'form-select'})
-    additional_css = TextAreaField(_l('Additional CSS'))
-    sidebar = TextAreaField(_l('Sidebar'))
-    about = TextAreaField(_l('About'))
+    additional_css = TextAreaField(_l('Additional CSS'), validators=[no_nul])
+    sidebar = TextAreaField(_l('Sidebar'), validators=[no_nul])
+    about = TextAreaField(_l('About'), validators=[no_nul])
     submit = SubmitField(_l('Save'))
 
 
@@ -97,7 +104,7 @@ class SiteMiscForm(FlaskForm):
     ban_check_servers = TextAreaField(_l('Warn if new account banned from these instances'))
     language_id = SelectField(_l('Primary language'), validators=[DataRequired()], coerce=int, render_kw={'class': 'form-select'})
     default_theme = SelectField(_l('Default theme'), coerce=str, render_kw={'class': 'form-select'})
-    additional_css = TextAreaField(_l('Additional CSS'))
+    additional_css = TextAreaField(_l('Additional CSS'), validators=[no_nul])
     additional_js = TextAreaField(_l('Additional JS'))
     # InputRequired + NumberRange, not bare IntegerField: admin_misc() does
     # int(form.read_posts_cutoff.data) unguarded, so a submission that omits

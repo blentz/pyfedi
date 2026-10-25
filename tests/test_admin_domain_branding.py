@@ -671,3 +671,37 @@ def test_an_image_that_cannot_be_written_as_png_is_400_on_the_site(admin, domain
     site = db.session.get(Site, 1)
     assert (site.name, site.logo) == ('The First Site', '/static/media/logo_Keep1.png')
     assert media_files(media) == {'logo_Keep1.png'}
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# A NUL byte, which PostgreSQL cannot store in text, is invalid client input: a form error, never a 500
+
+NUL = 'before\x00after'
+SITE_PROFILE = {'name': 'The First Site', 'description': '', 'about': '', 'sidebar': '', 'legal_information': '',
+                'tos_url': '', 'announcement': '', 'contact_email': 'admin@example.org', 'submit': 'Save'}
+
+
+@pytest.mark.parametrize('field', ['name', 'description', 'additional_css', 'sidebar', 'about'])
+def test_a_nul_byte_in_a_branding_field_is_a_form_error(admin, domains, field):
+    response = save(admin, domains['shop'], **{field: NUL})
+    assert response.status_code == 200
+    assert own_row(domains['shop']) is None   # nothing written
+
+
+@pytest.mark.parametrize('field', ['name', 'description', 'sidebar', 'about'])
+def test_a_nul_byte_in_the_site_profile_is_a_form_error(admin, domains, field):
+    client, token = admin
+    forget_login()
+    with patch('app.admin.routes.render_template', return_value='rendered'):
+        response = client.post('/admin/site', content_type='multipart/form-data',
+                               data={**SITE_PROFILE, field: NUL, 'csrf_token': token, 'icon': (b'', '')})
+    assert response.status_code == 200
+    assert '\x00' not in (getattr(db.session.get(Site, 1), field) or '')
+    assert [category for category, _message in flashes(admin)] == []   # not saved
+
+
+def test_a_nul_byte_in_the_site_css_is_a_form_error(site_admin, domains):
+    response = misc_post(site_admin, NUL)
+    assert response.status_code == 200
+    assert '\x00' not in (db.session.get(Site, 1).additional_css or '')
+    assert flashes(site_admin) == []
