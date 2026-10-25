@@ -203,6 +203,13 @@ SURFACES: dict[str, list[str]] = {
         'app.interop.workarounds._host',
         'app.discovery.instance_answers._host',
     ],
+    # Branding (per-domain branding, project 4): an admin's CSS, tagline, sidebar and About HTML and logo URLs, scanned
+    # for off-site loads and scrubbed of them on the onion, and custom CSS kept inside its style element.
+    'branding': [
+        'app.branding.offsite_references',
+        'app.branding.onion_safe',
+        'app.branding._style_kept_open',
+    ],
     # Discovery (T4): third-party directory rows and podcast feeds, turned into entries, links and credits.
     'discovery': [
         'app.discovery.filters.request_host',
