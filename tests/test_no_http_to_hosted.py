@@ -15,6 +15,7 @@ import httpx
 import pytest
 import respx
 
+import app.storefront as storefront
 from app import cli, db
 from app.activitypub.signature import post_request, publish_async_posts, signed_get_capped, signed_get_request
 from app.activitypub.util import fetch_object_capped, webfinger_self_link_allowed
@@ -263,7 +264,6 @@ def test_server_name_is_hosted_when_no_row_names_it(db_session):
 
 def test_the_hosted_destinations_are_parsed_once_until_the_domain_cache_is_cleared(env, monkeypatch):
     """Review N3: is_hosted_uri parses the URI it is asked about, not every stored domain on every call."""
-    import app.storefront as storefront
     parsed = []
     real = storefront._destination
 
