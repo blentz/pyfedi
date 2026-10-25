@@ -705,3 +705,53 @@ def test_a_nul_byte_in_the_site_css_is_a_form_error(site_admin, domains):
     assert response.status_code == 200
     assert '\x00' not in (db.session.get(Site, 1).additional_css or '')
     assert flashes(site_admin) == []
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# An upload's files are only ever its own: a base name no file has, and a failed upload removes only what it wrote
+
+def drawn(*names):
+    """`gibberish` drawing these five-character names, in order."""
+    names = iter(names)
+    return lambda length: next(names)
+
+
+def test_an_upload_never_takes_a_base_name_a_file_already_has(admin, domains, media, monkeypatch):
+    write_media(media, 'logo_Taken.png', 'logo_Taken_32.png', 'logo_Other.png')
+    monkeypatch.setattr('app.admin.routes.gibberish', drawn('Taken', 'Fresh'))
+    assert save(admin, domains['shop'], logo=(io.BytesIO(png()), 'shop.png')).status_code == 302
+    assert own_row(domains['shop']).logo == '/static/media/logo_Fresh_100.png'
+    for name in ('logo_Taken.png', 'logo_Taken_32.png', 'logo_Other.png'):
+        assert (media / name).read_bytes() == b'already here'
+
+
+def test_an_original_another_upload_just_wrote_is_never_overwritten(admin, domains, media, monkeypatch):
+    """Two uploads at once can both find a base free; the second to create the file draws another."""
+    write_media(media, 'logo_Raced.png')
+    real_listdir = os.listdir
+    monkeypatch.setattr('app.admin.routes.os.listdir', lambda path: [n for n in real_listdir(path) if 'Raced' not in n])
+    monkeypatch.setattr('app.admin.routes.gibberish', drawn('Raced', 'Fresh'))
+    assert save(admin, domains['shop'], logo=(io.BytesIO(png()), 'shop.png')).status_code == 302
+    assert (media / 'logo_Raced.png').read_bytes() == b'already here'
+    assert own_row(domains['shop']).logo == '/static/media/logo_Fresh_100.png'
+
+
+def test_a_failed_upload_removes_only_the_files_it_wrote(admin, domains, media, monkeypatch):
+    """The third PNG copy fails. The two copies and the original this upload wrote go (one already removed meanwhile
+    is no error); a file another worker wrote under the same base meanwhile stays, as does every other file."""
+    write_media(media, 'logo_Other.png')
+    monkeypatch.setattr('app.admin.routes.gibberish', drawn('Fresh'))
+    real_save, saves = Image.Image.save, []
+
+    def failing_third(image, path, *args, **kwargs):
+        saves.append(path)
+        if len(saves) == 3:
+            write_media(media, 'logo_Fresh_512.png')   # not this upload's
+            os.unlink(saves[0])   # removed by something else already
+            raise OSError('disk full')
+        return real_save(image, path, *args, **kwargs)
+    monkeypatch.setattr(Image.Image, 'save', failing_third)
+    response = save(admin, domains['shop'], logo=(io.BytesIO(png()), 'shop.png'))
+    assert response.status_code == 400
+    assert media_files(media) == {'logo_Other.png', 'logo_Fresh_512.png'}
+    assert own_row(domains['shop']) is None
