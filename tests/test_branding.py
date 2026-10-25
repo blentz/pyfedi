@@ -19,7 +19,8 @@ pytestmark = pytest.mark.usefixtures('site')
 
 SITE_VALUES = dict(name='Site name', description='Site description', logo='site.png', logo_180='site180.png',
                    logo_152='site152.png', logo_32='site32.png', logo_16='site16.png', default_theme='site-theme',
-                   additional_css='.site{}', sidebar_html='<p>site sidebar</p>', about_html='<p>site about</p>')
+                   additional_css='.site{}', sidebar='site sidebar', sidebar_html='<p>site sidebar</p>',
+                   about_html='<p>site about</p>')
 ONION_VALUES = {field: f'onion {field}' for field in Branding._fields}
 
 
@@ -60,7 +61,7 @@ def test_a_domain_with_no_row_is_the_site(two_domains, site_values):
 
 def test_own_values_win(two_domains, site_values):
     _default, onion = two_domains.domains
-    set_branding(onion, **ONION_VALUES, sidebar='onion sidebar', about='onion about')
+    set_branding(onion, **ONION_VALUES, about='onion about')
     assert branding_for(onion)._asdict() == ONION_VALUES
 
 

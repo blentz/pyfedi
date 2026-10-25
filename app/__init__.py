@@ -137,8 +137,8 @@ cache = Cache()
 # The shape of the classes memos pickle (DomainInfo, Post, PostReply, User, Community). Bump it when one of them
 # gains or loses a field: every memo whose value holds one passes `make_name=shaped_memo_name`, so new code never unpickles an entry the
 # old code left in redis, and a rollback never reads one the new code wrote. v2: per-domain identity (site_domain_id,
-# local_only, DomainInfo.id). v3: DomainInfo.instance_id (plan C2).
-MEMO_SHAPE = 'v3'
+# local_only, DomainInfo.id). v3: DomainInfo.instance_id (plan C2). v4: Branding.sidebar (per-domain branding).
+MEMO_SHAPE = 'v4'
 
 
 def shaped_memo_name(fname: str) -> str:
