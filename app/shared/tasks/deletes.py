@@ -154,7 +154,7 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     # return now though, if there aren't any
     if not is_post and community.local_only:
         return
-    followers = session.query(UserFollower).filter_by(local_user_id=user.id).all()
+    followers = session.query(UserFollower).filter_by(local_user_id=user.id, is_inward=True).all()   # who follow the author: they are the cc below
     if not followers and community.local_only:
         return
 

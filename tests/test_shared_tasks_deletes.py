@@ -1371,8 +1371,10 @@ def test_a_delete_reaches_the_authors_remote_followers_and_never_who_the_author_
     follower_home.inbox = 'https://fan.example/inbox'
     sister = make_instance('shop.example', software='piefed')
     sister.inbox = 'https://shop.example/inbox'
-    make_follow(s.user, make_user(followed_home, 'followed'), is_inward=False)
-    make_follow(s.user, make_user(follower_home, 'fan'), is_inward=True)
+    followed = make_user(followed_home, 'followed')
+    follower = make_user(follower_home, 'fan')
+    make_follow(s.user, followed, is_inward=False)
+    make_follow(s.user, follower, is_inward=True)
     make_follow(s.user, make_user(sister, 'sisterfan'), is_inward=True)
     db.session.commit()
     fan = lenient_http.post('https://fan.example/inbox').respond(200, json={})
@@ -1381,6 +1383,8 @@ def test_a_delete_reaches_the_authors_remote_followers_and_never_who_the_author_
     clear_domain_cache()
 
     assert len(fan.calls) == 1 and _sent_activity(fan)['type'] == 'Delete'
+    cc = _sent_activity(fan)['cc']   # names the author's followers, never the accounts the author follows
+    assert follower.public_url() in cc and followed.public_url() not in cc
     assert _sent_activity(community_follower)['type'] == 'Announce'   # the community's followers still get it
     assert {str(call.request.url) for call in lenient_http.calls} == {
         'https://fan.example/inbox', 'https://community-fan.example/inbox'}
