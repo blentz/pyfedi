@@ -397,6 +397,18 @@ def test_a_symlink_out_of_the_media_directory_is_never_followed(admin, domains, 
     assert (media / 'logo_abcde.png').is_symlink()
 
 
+@pytest.mark.parametrize('target', ['precious.png', 'logo_Other.png'])
+def test_a_symlink_to_another_media_file_is_never_followed(admin, domains, media, target):
+    """The row names a symlink inside the media directory, pointing at another file there that nothing names. Neither
+    the file nor the link is removed: a logo save never deletes through a symlink."""
+    (media / target).write_bytes(b'not ours')
+    (media / 'logo_abcde.png').symlink_to(media / target)
+    own_logo(domains['shop'], logo='/static/media/logo_abcde.png')
+    assert save(admin, domains['shop'], remove_logo='y').status_code == 302
+    assert (media / target).read_bytes() == b'not ours'
+    assert (media / 'logo_abcde.png').is_symlink()
+
+
 def test_a_file_another_domain_names_is_never_removed(admin, domains, media):
     write_media(media, 'logo_Share.png', 'logo_Share_180.png')
     own_logo(domains['onion'], logo='/static/media/logo_Share.png', logo_180='/static/media/logo_Share_180.png')
@@ -534,3 +546,20 @@ def test_site_css_offsite_warns(site_admin, domains):
     assert f'{ELSEWHERE}/e.css' in warning
     misc_post(site_admin, '.plain { color: red; }')
     assert [category for category, _message in flashes(site_admin)] == ['message']
+
+
+SCRIPTED = f'{ELSEWHERE}/<script>alert(1)</script>.png'
+
+
+@pytest.mark.parametrize('domain', ['shop', 'onion'])
+def test_a_reference_is_shown_escaped(admin, domains, domain):
+    """A reference is the admin's own text, shown back in the warning (off the onion) or the field error (on it):
+    escaped, never as markup."""
+    response = save(admin, domains[domain], additional_css=f'a {{ background: url("{SCRIPTED}") }}')
+    if domain == 'shop':
+        assert response.status_code == 302
+        forget_login()
+        response = admin[0].get(response.headers['Location'])
+    body = response.get_data(as_text=True)
+    assert 'elsewhere.example.org/&lt;script&gt;alert(1)&lt;/script&gt;.png' in body
+    assert '<script>alert(1)</script>' not in body
