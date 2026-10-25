@@ -51,7 +51,7 @@ def test_domain_for_host_normalises(db_session):
     assert domain_for_host('evil.example') is None
     assert not is_registered_host('evil.example')
     assert default_domain().domain == 'test.piefed.local'
-    assert normalise_host('HELL.cloud.:8080') == 'hell.cloud'
+    assert normalise_host('EXAMPLE.org.:8080') == 'example.org'
 
 
 def test_no_default_row_falls_back_to_server_name(app, db_session, caplog):

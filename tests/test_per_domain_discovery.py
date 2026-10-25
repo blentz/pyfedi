@@ -1,10 +1,10 @@
 """Each federating domain answers WebFinger, host-meta, NodeInfo and the site documents for itself (plan C3, task 4).
 
-shop.example federates beside hell.cloud and holds a goldie and a goldart of its own (`shop_rows`). Owner ruling:
-nothing a sister domain publishes names hell.cloud, so with Site.name what prod's is ('hell.cloud', `site_named_hell`)
-no shop body holds hell.cloud's host at all: the shop's site name is its own domain. WebFinger answers only for a row
+shop.example federates beside the first domain and holds a goldie and a goldart of its own (`shop_rows`). Owner ruling:
+nothing a sister domain publishes names the first domain, so with Site.name what prod's is ('the first domain', `site_named_hell`)
+no shop body holds the first domain's host at all: the shop's site name is its own domain. WebFinger answers only for a row
 on the domain the request came in on, NodeInfo counts only that domain's accounts and content, and every cached copy is
-keyed by the host, so neither domain is ever answered with the other's. hell.cloud's own documents stay their golden
+keyed by the host, so neither domain is ever answered with the other's. the first domain's own documents stay their golden
 copies (tests/test_c3_golden_documents.py). The onion is local-only: it answers none of these to anyone."""
 import json
 
@@ -46,7 +46,7 @@ def get(app, path, host=SHOP):
 def shop_body(app, path) -> bytes:
     response = get(app, path)
     assert response.status_code == 200, path
-    assert HELL.encode() not in response.data   # hell.cloud's host is nowhere in the shop's answer
+    assert HELL.encode() not in response.data   # the first domain's host is nowhere in the shop's answer
     return response.data
 
 

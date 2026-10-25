@@ -1,7 +1,7 @@
 """Every hosted domain's instance row counts as "hosted here" (plan C2, task 3).
 
 Row 1 is the default domain's; the onion has a row of its own (tests/two_domains.py). A site that tests
-`Instance.id != 1` for "a peer" takes the onion's row for one: it lists it beside hell.cloud's peers in public, which
+`Instance.id != 1` for "a peer" takes the onion's row for one: it lists it beside the first domain's peers in public, which
 links the two, and delivers to, polls and counts failures against its host. Each test here sets up an onion row a
 peer list would take, and a remote peer beside it as the control: the peer is listed, the onion's row never is.
 """
@@ -41,7 +41,7 @@ PEER = 'peer.example'
 
 @pytest.fixture
 def sisters(app, two_domains):
-    """hell.cloud and the onion, each with a local user and community, and a remote peer with a user.
+    """The first domain and the onion, each with a local user and community, and a remote peer with a user.
 
     The onion's row is given what a peer's has, an inbox and a nodeinfo URL, so only its being hosted keeps it out:
     a row that federated once, or a field set by mistake, must not put it back on a peer list."""
@@ -322,7 +322,7 @@ def test_an_onion_post_in_the_microblogs_community_is_no_server_view(app, sister
 @pytest.fixture
 def shop(app, twins, site):
     """`twins`' federating shop.example (tests/test_per_domain_ap_routes.py), with an indexable post on it and one
-    on hell.cloud."""
+    on the first domain."""
     hell_bob, hell_art, onion_bob, onion_art, shop_bob, shop_art = twins
     site.private_instance = False
     for user in (hell_bob, shop_bob):

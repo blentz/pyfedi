@@ -48,7 +48,7 @@ def wire(monkeypatch):
 
 @pytest.fixture
 def env(db_session):
-    """hell.cloud (SERVER_NAME) and shop.example, each with an alice and a den: local names are unique per domain
+    """The first domain (SERVER_NAME) and shop.example, each with an alice and a den: local names are unique per domain
     (C1), so the same name on both is two rows. A shop post in shop's den with a hell reply, a site-wide feed, and a
     legacy hell post whose ap_id is a URL no path form matches."""
     local = make_instance(SERVER, software='piefed')

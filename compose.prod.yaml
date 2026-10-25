@@ -4,17 +4,17 @@
 #   podman-compose -f compose.yaml -f compose.prod.yaml up -d --build
 #
 # Prerequisites on the VPS:
-#   1. DNS: A (and AAAA if applicable) record for hell.cloud -> this VPS's public IP.
+#   1. DNS: A (and AAAA if applicable) record for example.org -> this VPS's public IP.
 #      Let's Encrypt validates over HTTP-01 on port 80, so the record must resolve
 #      and port 80 must be reachable from the internet before first start.
 #   2. .env.docker must contain:
-#        SERVER_NAME='hell.cloud'
-#        NOTIF_SERVER='https://hell.cloud'
+#        SERVER_NAME='example.org'
+#        NOTIF_SERVER='https://example.org'
 #      SERVER_NAME is baked into ActivityPub URLs by `flask init-db`, and changing it
 #      afterwards means re-running init-db, which drops every table. Set it first.
 #   3. ./pgdata must be owned by uid 1000 to match the db service's user: "1000:1000".
 #      Deploying as root, that is: chown -R 1000:1000 pgdata media logs tmp
-#   4. Set a real address in the Caddyfile's `email` field.
+#   4. Set PIEFED_DOMAIN and ACME_EMAIL in the caddy container's environment: the Caddyfile reads its site address and its ACME email from them.
 services:
 
   caddy:

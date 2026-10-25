@@ -370,7 +370,7 @@ def _capped_get(uri, params=None, headers=None, timeout=10, max_bytes: int = FET
 
 def user_agent(domain=None) -> str:
     """The User-Agent a request this server makes names itself by: `domain`'s, else the `acting_domain`'s (plan C3:
-    a request a shop account caused names the shop, never hell.cloud). For the default domain it is the string it has
+    a request a shop account caused names the shop, never the first domain). For the default domain it is the string it has
     always been, `+https://` then SERVER_NAME verbatim."""
     return f'PieFed/{current_app.config["VERSION"]}; +https://{domain_authority(domain or acting_domain())}'
 

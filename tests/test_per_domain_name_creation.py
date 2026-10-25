@@ -1,6 +1,6 @@
 """A local name is unique per domain at creation, through every path (plan C1 task 5).
 
-`bob` on hell.cloud and `bob` on the onion are two accounts: a name another domain holds no longer refuses a
+`bob` on the first domain and `bob` on the onion are two accounts: a name another domain holds no longer refuses a
 creation, and a name the same domain holds still does. Feed names stay unique across the site. Every test asserts the
 effect, the second row existing or the refusal happening, not a mock of the check."""
 from unittest.mock import MagicMock, patch

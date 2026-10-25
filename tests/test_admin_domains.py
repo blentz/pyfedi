@@ -241,7 +241,7 @@ def test_a_domain_whose_instance_row_is_referenced_is_not_deleted(app, reference
     peer = make_instance('peer.example', software='piefed')
     if reference == 'user':   # an account on the row that the domain does not own
         make_user(db.session.get(Instance, instance_id), 'stray')
-    else:   # a hell.cloud account that blocked the onion's row
+    else:   # a first-domain account that blocked the onion's row
         blocker = make_user(make_instance('test.piefed.local', software='piefed'), 'blocker', local=True)
         db.session.add(InstanceBlock(user_id=blocker.id, instance_id=instance_id))
     db.session.commit()

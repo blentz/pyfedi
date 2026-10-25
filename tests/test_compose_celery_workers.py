@@ -1,6 +1,6 @@
 """The docker compose stacks run background work in its own Celery worker.
 
-On hell.cloud one worker took `celery,background,send` with four slots. A discovery sync queued hundreds of
+On the first domain one worker took `celery,background,send` with four slots. A discovery sync queued hundreds of
 backfills on `background`, they held the slots, and the instance's inbox (`process_inbox_request` on `celery`)
 fell ~17,000 tasks behind. Every queue that `CELERY_ROUTES` names must still be consumed, and `background`
 must never share a worker with `celery`."""

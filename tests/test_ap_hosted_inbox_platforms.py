@@ -1,7 +1,7 @@
 """Hosted-blog platforms keep their users' inboxes on the platform's own host: a WordPress.com blog at
 blog.example names https://public-api.wordpress.com/... and a micro.blog custom domain names https://micro.blog/....
 The 2026-10-11 ruling trusts an inbox only on the actor's own host, so every such actor was refused (64 WordPress.com
-and 4 micro.blog refusals on hell.cloud in the week to 2026-10-19), each one emailed as an ERROR.
+and 4 micro.blog refusals on the first domain in the week to 2026-10-19), each one emailed as an ERROR.
 
 Owner ruling 2026-10-19: an inbox on a host in the admin's hosted-inbox list (Federation settings, default
 public-api.wordpress.com and micro.blog) is trusted as if it were on the actor's own host. Every other off-host

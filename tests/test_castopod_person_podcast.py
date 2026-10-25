@@ -398,7 +398,7 @@ def _listed(host, platform='castopod'):
 
 
 def test_unreadable_nodeinfo_on_a_host_the_castopod_index_lists_is_castopod(app, db_session, http_mock):
-    """Many Castopod servers answer neither nodeinfo nor NodeInfo2 (hell.cloud: 126 podcasts in one sync never got
+    """Many Castopod servers answer neither nodeinfo nor NodeInfo2 (the first domain: 126 podcasts in one sync never got
     a community). index.castopod.org lists only Castopod servers, so a host it lists is one, and that is stored."""
     instance = make_instance(CASTO, 'unknown')
     http_mock.get(f'https://{CASTO}/.well-known/nodeinfo').mock(side_effect=httpx.ConnectError('down'))

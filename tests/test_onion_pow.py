@@ -675,7 +675,7 @@ def test_noscript_link_present(app, onion):
     assert url.startswith('/auth/login?')
     assert 'next=/c/news' in url and 'wait_token=' in url
     assert wait.find('a', href=url) is not None        # and a link, for a browser that ignores the refresh
-    assert 'onion' not in url and 'http' not in url and 'hell.cloud' not in str(wait)
+    assert 'onion' not in url and 'http' not in url and app.config['SERVER_NAME'] not in str(wait)
 
 
 def test_the_wait_step_for_registration(app, open_registration):

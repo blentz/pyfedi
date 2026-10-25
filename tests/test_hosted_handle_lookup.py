@@ -42,9 +42,9 @@ def _server(app):
     ('@onionite@abc.onion', 'onionite'),
     ('OnionITE@ABC.onion', 'onionite'),
     ('nobody@abc.onion', None),
-    ('alice@abc.onion', None),        # alice is hell.cloud's: the onion has no alice
+    ('alice@abc.onion', None),        # alice is the first domain's: the onion has no alice
     ('alice@{server}', 'alice'),
-    ('onionite@{server}', None),      # nor does hell.cloud have the onion's account
+    ('onionite@{server}', None),      # nor does the first domain have the onion's account
     ('nobody@{server}', None),
 ])
 def test_a_user_on_a_hosted_domain_is_found_locally_and_never_fetched(app, world, requests, handle, expected):

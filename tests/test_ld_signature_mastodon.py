@@ -1,7 +1,7 @@
 """LDSignature against a signature Mastodon really made.
 
 Every other LD-signature test signs with pyfedi's own LDSignature.create_signature, so a verifier that disagrees
-with Mastodon about what is hashed still passes them. The document below was relayed to hell.cloud on 2026-10-11
+with Mastodon about what is hashed still passes them. The document below was relayed to the first domain on 2026-10-11
 (a public Delete from a bot account), and it verifies with Mastodon's own algorithm (Ruby json-ld). Mastodon hashes
 every key of the signature section except type, id and signatureValue, so its `expires` is part of the signature.
 """

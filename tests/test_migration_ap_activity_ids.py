@@ -1,6 +1,6 @@
 """Post and PostReply keep the ids of the Create and Announce that delivered them. PeerTube's announce ids are
 longer than 100 characters (https://peertube.linuxrocks.online/videos/watch/<uuid>/announces/116674 is 101), and a
-String(100) made every such video fail to insert, which on hell.cloud stopped a channel's backfill (interop D24)."""
+String(100) made every such video fail to insert, which on the first domain stopped a channel's backfill (interop D24)."""
 import pytest
 import sqlalchemy as sa
 

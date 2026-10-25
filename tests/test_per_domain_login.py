@@ -111,7 +111,7 @@ def test_a_bare_name_on_the_onion_is_the_onion_account(app, world):
         assert find_user('Wakko').id == world.hell.id
 
 
-def test_a_full_handle_on_the_onion_reaches_the_hell_cloud_account(app, world):
+def test_a_full_handle_on_the_onion_reaches_the_first_domain_account(app, world):
     with patch('app.auth.util.sync_user_to_ldap'):
         assert logged_in(onion_login(app, f'wakko@{HELL}', 'hell password'))
         assert logged_in(login(app, f'@wakko@{ONION}', 'onion password'))

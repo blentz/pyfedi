@@ -1,5 +1,5 @@
 """On a storefront that is not the default domain, the login form says how an account from the default domain logs
-in (final fix F3). A bare name there means that storefront's own account, so a hell.cloud member typing their bare
+in (final fix F3). A bare name there means that storefront's own account, so a first-domain member typing their bare
 name on the onion gets "Login failed" with no clue why. The passkey button reads the same user name field."""
 from html import unescape
 

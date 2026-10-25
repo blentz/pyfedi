@@ -3,7 +3,7 @@ domain (plan C3, task 5).
 
 Each federating domain is a separate ActivityPub server, so a fetch a shop.example account caused is shop.example's:
 its instance actor signs it (keyId `https://shop.example/actor#main-key`) and its User-Agent names shop.example,
-never hell.cloud (owner ruling: nothing a sister domain federates names hell.cloud). Relays, housekeeping, the
+never the first domain (owner ruling: nothing a sister domain federates names the first domain). Relays, housekeeping, the
 discovery credits and anything no account caused stay the default domain's, byte for byte what they were. Inbound,
 a URL on any federating domain is ours, a local-only one's (the onion) or a lookalike host's never is.
 
@@ -35,7 +35,7 @@ from tests.two_domains import HELL, ONION, request_on, two_domains  # noqa: F401
 SHOP = 'shop.example'
 REMOTE = 'https://remote.example'
 ACTOR_URL = f'{REMOTE}/u/carol'
-# Golden: what hell.cloud has always sent (SERVER_NAME is test.piefed.local), before and after C3
+# Golden: what the first domain has always sent (SERVER_NAME is test.piefed.local), before and after C3
 HELL_KEY_ID = 'https://test.piefed.local/actor#main-key'
 SHOP_KEY_ID = 'https://shop.example/actor#main-key'
 
@@ -126,8 +126,8 @@ def _fetch_object():
                                              ('onion_user', HELL_KEY_ID, hell_ua), (None, HELL_KEY_ID, hell_ua)])
 def test_a_signed_fetch_is_the_acting_accounts_domains(app, domains, router, fetch, who, key_id, ua):
     """A shop account's fetch is signed by the shop's instance actor and names the shop, both the unsigned first try
-    and the signed one. A hell.cloud account's, an onion account's (the onion is local-only: it names nothing) and
-    one nobody caused are hell.cloud's, byte for byte as before C3."""
+    and the signed one. A first-domain account's, an onion account's (the onion is local-only: it names nothing) and
+    one nobody caused are the first domain's, byte for byte as before C3."""
     route = _unsigned_then_signed(router, ACTOR_URL, ACTOR_DOCUMENT)
     context = _as(app, getattr(domains, who) if who else None)
     try:
@@ -141,7 +141,7 @@ def test_a_signed_fetch_is_the_acting_accounts_domains(app, domains, router, fet
 
 
 def test_with_no_request_the_default_domain_signs(app, domains, router):
-    """A Celery task has no request and no account: hell.cloud's instance actor and User-Agent, as before C3."""
+    """A Celery task has no request and no account: the first domain's instance actor and User-Agent, as before C3."""
     route = _unsigned_then_signed(router, ACTOR_URL, ACTOR_DOCUMENT)
     assert _fetch_actor() == ACTOR_DOCUMENT
     signed = route.calls[-1].request
@@ -199,7 +199,7 @@ RELAY_ACTOR = 'https://relay.example/actor'
 
 def test_a_relay_subscription_is_the_default_domains_whoever_adds_it(app, domains, router):
     """Relays are the default domain's only (spec): a shop admin adding one still fetches and follows it as
-    hell.cloud's instance actor."""
+    the first domain's instance actor."""
     fetched = router.get(RELAY_ACTOR).respond(200, json={
         'id': RELAY_ACTOR, 'type': 'Application', 'inbox': 'https://relay.example/inbox',
         'publicKey': {'id': f'{RELAY_ACTOR}#main-key', 'publicKeyPem': a_keypair()[1]}})
@@ -374,7 +374,7 @@ def test_an_rfc9421_target_is_the_federating_hosts_own(app, domains, signing_pee
 
 @pytest.mark.usefixtures('redis_double')
 def test_a_create_sent_to_both_domains_inboxes_is_processed_once(app, domains, signing_peer, monkeypatch):
-    """A peer delivers one Create to each domain whose accounts it addresses: the shop's inbox and hell.cloud's.
+    """A peer delivers one Create to each domain whose accounts it addresses: the shop's inbox and the first domain's.
     The activity dedupe (keyed on id and actor, not on the host it came in on) lets only the first through: the
     second is answered 200 and logged as ignored, not refused (a signature refusal is a 400). With a dedupe key
     that differed per delivery both were dispatched (checked by mutation)."""
@@ -418,7 +418,7 @@ def test_an_anonymous_request_acts_as_the_federating_storefront_it_came_in_on(ap
 def test_a_rotated_keys_refetch_is_signed_by_the_inbox_it_was_delivered_to(app, domains, signing_peer, router,
                                                                          monkeypatch, host, key_id, ua):
     """A signer whose stored key is stale delivers to shop.example's inbox: the one refetch of its actor is the
-    shop instance actor's, named as the shop, never hell.cloud seconds after the shop was written to."""
+    shop instance actor's, named as the shop, never the first domain seconds after the shop was written to."""
     monkeypatch.setitem(app.config, 'DEBUG', True)
     dispatched = []
     monkeypatch.setattr('app.activitypub.routes.process_inbox_request', lambda *a, **kw: dispatched.append(a))

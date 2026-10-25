@@ -1,10 +1,10 @@
 """A domain's uploads are linked on that domain (plan C3, task 6).
 
-shop.example federates beside hell.cloud (the test app's SERVER_NAME). A new upload's stored URL is on its uploader's
+shop.example federates beside the first domain (the test app's SERVER_NAME). A new upload's stored URL is on its uploader's
 domain (a community's icon or banner on the community's), and what a peer receives names a local file on the domain
 that federates it: the post's, or for an emoji, the domain serving the document. Owner ruling: nothing a sister domain
-federates names hell.cloud. The same files are served on every one of our hosts (Caddy imports piefed_routes in every
-site block), so a shop URL resolves. URLs stored before this are never rewritten, and hell.cloud's are built from
+federates names the first domain. The same files are served on every one of our hosts (Caddy imports piefed_routes in every
+site block), so a shop URL resolves. URLs stored before this are never rewritten, and the first domain's are built from
 SERVER_URL as before (golden strings below)."""
 import io
 import json
@@ -162,7 +162,7 @@ def test_a_hell_posts_uploaded_image_is_unchanged(app, sites, http_mock):
 
 
 def test_an_image_link_a_shop_user_read_on_hell_is_stored_on_the_shop(app, sites, http_mock):
-    """An API client uploads, is shown the URL on the storefront it asked (here hell.cloud), then posts it."""
+    """An API client uploads, is shown the URL on the storefront it asked (here the first domain), then posts it."""
     http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
     post = a_post(sites.wares, sites.sam)
     edit_post(_api_input(url=f'{HELL_BASE}/static/media/posts/ab/cd/abcdefghijklmno.png'), post, POST_TYPE_IMAGE,
@@ -197,7 +197,7 @@ def test_a_pasted_link_keeps_the_federating_host_typed(app, onion_rows, http_moc
 
 
 def test_a_stored_image_link_sent_back_as_read_on_the_shop_is_kept(app, sites, http_mock):
-    """A shop post whose image was stored on hell.cloud before C3, edited with its URL as the shop showed it: the same
+    """A shop post whose image was stored on the first domain before C3, edited with its URL as the shop showed it: the same
     file of ours, so it is kept as stored, not deleted and re-made."""
     http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
     stored = f'{HELL_BASE}/static/media/posts/ab/cd/abcdefghijklmno.png'
@@ -246,7 +246,7 @@ def test_a_communitys_icon_stored_on_hell_sent_back_as_read_on_the_shop_is_kept(
 
 
 def test_a_stored_url_is_not_rewritten(app, sites):
-    """A shop post whose image was stored on hell.cloud before C3 keeps that URL."""
+    """A shop post whose image was stored on the first domain before C3 keeps that URL."""
     post = a_post(sites.wares, sites.sam)
     post.type = POST_TYPE_IMAGE
     post.image = File(source_url=f'{HELL_BASE}/static/media/posts/ab/cd/old.png')
@@ -337,7 +337,7 @@ def test_a_media_upload_and_its_thumbnail_are_on_the_uploaders_domain(app, chann
 
 
 def test_a_shop_media_post_on_hell_storage_is_still_its_own(app, channel):
-    """A shop post whose media was stored on hell.cloud's URL before C3 is still found on disk."""
+    """A shop post whose media was stored on the first domain's URL before C3 is still found on disk."""
     post = a_post(channel.wares, channel.sam)
     post.type = POST_TYPE_VIDEO
     assert store_uploaded_media(post, a_video(), 'video') is None

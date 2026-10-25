@@ -1,5 +1,5 @@
 """ActivityPub and WebFinger routes find a local name on its own domain (plan C1, task 3). `bob` and `art` are on
-hell.cloud, the onion and a second FEDERATING domain, shop.example. The shop's rows come first in the tables (the
+The first domain, the onion and a second FEDERATING domain, shop.example. The shop's rows come first in the tables (the
 updates in `twins` keep that order), so a lookup that ignores the domain finds them and, the shop federating, serves
 their document instead of a 404. Each shop row differs from hell's in what the document says (its public URL, title,
 member count), so serving the wrong one shows."""

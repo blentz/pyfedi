@@ -2,7 +2,7 @@
 
 A task that set `g.site` from its own session (get_task_session) left the next task a Site whose session had
 committed and closed: expired and detached. Reading any attribute of it raised DetachedInstanceError -- measured on
-hell.cloud as 'Instance <Site at 0x...> is not bound to a Session' for 5-30 Creates an hour since 2026-10-10, and
+The first domain as 'Instance <Site at 0x...> is not bound to a Session' for 5-30 Creates an hour since 2026-10-10, and
 for every relayed robot.villas post, since a post with no language falls back to site_language_id()."""
 import pytest
 from celery.signals import task_prerun

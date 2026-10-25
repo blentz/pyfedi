@@ -1,11 +1,11 @@
 """Posts, comments, private messages and activities are named on their owner's domain (plan C3, task 3).
 
-shop.example federates beside hell.cloud (the test app's SERVER_NAME). A post's or comment's id is on its author's
+shop.example federates beside the first domain (the test app's SERVER_NAME). A post's or comment's id is on its author's
 home domain, whatever community it is in; an activity's id is on its actor's domain (a user, a community, or the
 default domain for a feed). The send paths run here as Celery runs them: no request, so nothing can come from the
-storefront. Owner ruling: nothing a sister domain federates names hell.cloud, and an ActivityPub fetch on one of our
+storefront. Owner ruling: nothing a sister domain federates names the first domain, and an ActivityPub fetch on one of our
 domains for another of our domains' object is the 404 of an unknown object, so no fetch shows the two are one server.
-hell.cloud's ids keep their shape (golden strings below)."""
+The first domain's ids keep their shape (golden strings below)."""
 import json
 import re
 import uuid
@@ -67,7 +67,7 @@ def _keyed(row, kind):
 
 @pytest.fixture
 def sites(app, two_domains):
-    """hal on hell.cloud, sam on shop.example, a community on each (pit, wares), a peer following both, and rem on
+    """hal on the first domain, sam on shop.example, a community on each (pit, wares), a peer following both, and rem on
     the peer."""
     hell, onion = two_domains.domains
     db.session.add(SiteDomain(domain=SHOP, scheme='https', federates=True))
@@ -228,7 +228,7 @@ def test_a_shop_microblog_notes_hashtags_and_collections_are_the_shops(app, site
 
 
 # --------------------------------------------------------------------------
-# Review Focus 1: a hell.cloud user replies in a shop.example community
+# Review Focus 1: a first-domain user replies in a shop.example community
 # --------------------------------------------------------------------------
 
 def test_a_hell_users_reply_in_a_shop_community(app, sites, monkeypatch):
@@ -590,7 +590,7 @@ def remote_authors_post(sites, community):
 def test_a_moderators_edit_of_a_remote_authors_post_is_announced_by_the_community(app, sites, monkeypatch, where):
     """I3: the community Announces the Update of a remote author's post, signed by the community, as at BASE; only
     what would go out as the author (whose key its own server holds) is skipped. The ids are the community's
-    domain's: hell.cloud's as before, the shop's for a shop community."""
+    domain's: the first domain's as before, the shop's for a shop community."""
     community, base = (sites.pit, HELL_BASE) if where == 'hell' else (sites.wares, SHOP_BASE)
     post = remote_authors_post(sites, community)
     mastodon = make_instance('toot.example', software='mastodon')

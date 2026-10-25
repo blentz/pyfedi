@@ -1,4 +1,4 @@
-"""A local-only domain's instance row stays off every other storefront (plan C2, task 6). Owner ruling: on hell.cloud
+"""A local-only domain's instance row stays off every other storefront (plan C2, task 6). Owner ruling: on the first domain
 the onion's row is hidden, so the lists leave it out and `/instance/<onion>` answers 404; on the onion it is shown as a
 sister. A federating sister (shop.example, from `twins`) is listed like any row, but never as "federated". The admin
 instance list shows every row to an admin."""
@@ -24,7 +24,7 @@ HOSTS = {**BASE, SHOP: f'https://{SHOP}'}
 
 @pytest.fixture
 def scene(app, twins):
-    """hell.cloud, the onion and shop.example, each with a local user and community, and a remote peer. The onion's
+    """The first domain, the onion and shop.example, each with a local user and community, and a remote peer. The onion's
     row is given what a peer's has (software, a post), so only its being local-only keeps it out."""
     hell_bob, hell_art, onion_bob, onion_art, shop_bob, shop_art = twins
     onion_bob.private_key = hell_bob.private_key = 'a key'   # approved accounts (approval_required)

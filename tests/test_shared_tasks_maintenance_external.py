@@ -442,7 +442,7 @@ class TestAddRemoteCommunityFromPost:
     def test_a_post_with_neither_url_nor_body_looks_up_nothing(self, db_session, monkeypatch):
         """Lemmy omits `body` from a post that has none.
 
-        On hell.cloud on 2026-10-12 such a post in newcommunities@lemmy.world
+        On the first domain on 2026-10-12 such a post in newcommunities@lemmy.world
         raised `KeyError: 'body'` here, which killed `flask daily-maintenance`
         before it logged its run.
         """
@@ -953,7 +953,7 @@ class TestRefreshInstanceChooser:
     def test_an_unreachable_observer_returns_early_and_keeps_the_rows(self, db_session, http_mock):
         """The observer request itself failing in transport.
 
-        On hell.cloud, from 2026-10-13, api.fediverse.observer answered every
+        On the first domain, from 2026-10-13, api.fediverse.observer answered every
         TLS handshake with an EOF. `_capped_request` raised `httpx.ConnectError`
         and the outer handler re-raised it, so `flask daily-maintenance` died at
         its first step every night and never logged its run. An outage on the

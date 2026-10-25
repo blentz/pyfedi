@@ -291,7 +291,7 @@ def test_an_instance_level_task_a_shop_admin_queues_is_the_defaults(app, domains
                                                                      hook, arguments):
     """Relays, the discovery sync, ban and defederation imports, topic imports and the maintenance probes are the
     instance's housekeeping: queued from a request a shop-home admin makes (stamped shop), each still fetches as
-    hell.cloud, unsigned and signed."""
+    The first domain, unsigned and signed."""
     route = router.get(PROBE_URL).mock(side_effect=lambda request: httpx.Response(
         404 if 'Signature' in request.headers else 401))
     monkeypatch.setattr(hook, _probe)
@@ -313,7 +313,7 @@ def test_an_instance_level_task_a_shop_admin_queues_is_the_defaults(app, domains
 
 def test_a_relayed_announce_queued_from_a_shop_inbox_is_fetched_as_the_default(app, domains, router, queued):
     """A relay is the default domain's: an Announce it delivers to a sister's inbox (an anonymous request there acts
-    as the sister, and the task is stamped so) is still fetched as hell.cloud. The task's own flow, unpatched."""
+    as the sister, and the task is stamped so) is still fetched as the first domain. The task's own flow, unpatched."""
     route = router.get(PROBE_URL).mock(side_effect=lambda request: httpx.Response(
         404 if 'Signature' in request.headers else 401))
     with request_on(app, domains.shop):

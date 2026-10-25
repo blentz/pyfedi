@@ -1,7 +1,7 @@
 """resolve_object resolves a local handle or URL on the domain its host names, and never fetches it (residual R1).
 
 It used to strip `@SERVER_NAME` from a handle and look the bare name up on every domain, so with a `bob` on both
-hell.cloud and the onion, `@bob@hell.cloud` could answer with the onion's bob. A miss is a miss: nothing is fetched.
+the first domain and the onion, `@bob@SERVER_NAME` could answer with the onion's bob. A miss is a miss: nothing is fetched.
 """
 import pytest
 
@@ -48,7 +48,7 @@ def test_a_miss_is_a_miss(app, two_bobs, no_http, query):
 
 
 def test_a_foreign_host_that_ends_like_ours_is_not_ours(app, two_bobs, no_http):
-    """`@bob@nottest.piefed.local` ends with SERVER_NAME; the old suffix test took it for hell.cloud's bob. It is a
+    """`@bob@nottest.piefed.local` ends with SERVER_NAME; the old suffix test took it for the first domain's bob. It is a
     remote handle, so it is looked for over there (refused here by the recording fixture)."""
     caller, hell_bob, onion_bob = two_bobs
     with pytest.raises(Exception, match=f'fetched https://not{HELL}/'):

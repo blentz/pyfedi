@@ -1,7 +1,7 @@
 """A logged-out visitor never sees a local-only account or community, as plan B already does for local-only posts and
 replies (owner ruling 2026-10-21, plan C2 task 6 fix round 1). They are left out of every listing and the modlog, and
-their pages and feeds answer 404; a logged-in user still sees them. On hell.cloud their names read `bob@abc.onion`, so
-the onion hostname is what each test looks for. hell.cloud's own accounts and communities are the control."""
+their pages and feeds answer 404; a logged-in user still sees them. On the first domain their names read `bob@abc.onion`, so
+the onion hostname is what each test looks for. the first domain's own accounts and communities are the control."""
 from types import SimpleNamespace
 from urllib.parse import quote
 
@@ -260,7 +260,7 @@ def test_get_suggestion_passes_on_a_refusal_that_is_not_a_failed_login(app, api,
 @pytest.mark.parametrize('query', ['!art', '@bob'])
 def test_suggest_completion_answers_a_token_that_fails_to_authorise_as_logged_out(app, api, monkeypatch, token,
                                                                                     query):
-    """As hell.cloud always did: the Authorization header is optional here, and a stale one is no error (final wave)."""
+    """As the first domain always did: the Authorization header is optional here, and a stale one is no error (final wave)."""
     if token == 'expired':
         monkeypatch.setitem(app.config, 'JWT_EXPIRY_DAYS', -1)
         token = f'Bearer {api.hell_bob.encode_jwt_token()}'

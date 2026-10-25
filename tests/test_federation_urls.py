@@ -1,5 +1,5 @@
 """Each federating domain is its own ActivityPub server: its own instance actor key and the URLs that name what it
-federates (plan C3 task 1). hell.cloud, the default, keeps today's strings exactly and Site row 1's key."""
+federates (plan C3 task 1). The first domain, the default, keeps today's strings exactly and Site row 1's key."""
 import importlib.util
 import re
 from pathlib import Path
@@ -95,7 +95,7 @@ def test_a_shop_rows_owner_is_the_shop(app, shop, two_domains):  # noqa: F811 --
     for row in (bob, art, post, reply, message, post_vote, reply_vote, shop):
         assert owner_domain(row) == shop, row
         assert owner_base(row) == f'https://{SHOP}', row
-    # A row on the shop's community is the author's: hell.cloud's own post there is hell.cloud's
+    # A row on the shop's community is the author's: the first domain's own post there is the first domain's
     assert owner_domain(hell_post) == hell
     assert owner_domain(make_post_vote(hell_bob, post, 1.0)) == hell
 

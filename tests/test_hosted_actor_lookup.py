@@ -55,7 +55,7 @@ def test_an_actor_on_a_hosted_domain_is_found_locally_and_never_fetched(app, sto
     assert requests == []
 
 
-def test_the_onions_handle_is_not_hell_clouds_account(app, stored, requests):
+def test_the_onions_handle_is_not_first_domains_account(app, stored, requests):
     assert find_actor_or_create('alice@abc.onion') is None
     assert requests == []
 

@@ -89,7 +89,7 @@ def _run_job_script(script, tmp_path, failing):
 
 
 def test_daily_sh_fails_when_a_step_fails_but_still_runs_the_rest(tmp_path):
-    """On hell.cloud `flask daily-maintenance` crashed every night from
+    """On the first domain `flask daily-maintenance` crashed every night from
     2026-10-12, yet daily.sh exited 0 because its last command succeeded, so
     the systemd unit reported success and its OnFailure email never fired."""
     code, ran = _run_job_script('daily.sh', tmp_path, failing='daily-maintenance')

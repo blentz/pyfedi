@@ -748,7 +748,7 @@ def test_a_future_published_date_cannot_rank_a_backfilled_post_above_now(env):
 
 def test_a_backfilled_post_notifies_nobody(env, monkeypatch):
     """A backfilled post is old: alerting the author's followers or the community's subscribers about it as new
-    is wrong, and on hell.cloud each one queued a notify task (38% of a ~17,000-task backlog)."""
+    is wrong, and on the first domain each one queued a notify task (38% of a ~17,000-task backlog)."""
     notified = []
     monkeypatch.setattr('app.activitypub.util.notify_about_post', notified.append)
     backfill(env.community, {MODS: EMPTY_MODS, OUTBOX: outbox(an_announce())})

@@ -1,8 +1,8 @@
 """A sister domain's reply, vote and post are stored directly and reach remote followers from the right domain (plan C4
 task 5, spec 2026-10-19 per-domain identity §3.3 and the §5 required test).
 
-hell.cloud (the test app's SERVER_NAME) and shop.example share one database. A shop.example account commenting on a
-hell.cloud post in a hell.cloud community is stored at once: nothing is sent to ourselves over the network. A remote
+The first domain (the test app's SERVER_NAME) and shop.example share one database. A shop.example account commenting on a
+A first-domain post in a first-domain community is stored at once: nothing is sent to ourselves over the network. A remote
 server following the community gets what it would get if the two domains were separate servers: the community's
 Announce, signed by the community's own key, wrapping the shop account's Create. The fan-out is upstream PieFed's
 ("exactly as if over the network"): the community, mentioned and parent authors, and only for a followers-only reply
@@ -55,7 +55,7 @@ def _peer(domain, software):
 
 @pytest.fixture
 def world(app, two_domains):  # noqa: F811 -- two_domains is the imported fixture
-    """hal on hell.cloud and sam on shop.example, a community on each (pit on hell.cloud, wares on shop.example), each
+    """hal on the first domain and sam on shop.example, a community on each (pit on the first domain, wares on shop.example), each
     with its own key, and rem on peer.example (Lemmy) following both. hal's post in pit and sam's post in wares, each
     author subscribed to replies as make_post leaves them."""
     hell = two_domains.domains[0]
@@ -156,7 +156,7 @@ def test_a_shop_users_reply_on_a_hell_post_is_stored_and_announced_by_hells_comm
     assert create['object']['inReplyTo'] == world.hello.public_url()
     assert create['audience'] == world.pit.public_url()
 
-    # hal, the post's author on hell.cloud, is told here, not over the network
+    # hal, the post's author on the first domain, is told here, not over the network
     notification = db.session.query(Notification).filter_by(user_id=world.hal.id).one()
     assert notification.author_id == world.sam.id
     assert notification.targets['comment_id'] == reply.id
