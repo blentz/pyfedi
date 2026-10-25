@@ -743,7 +743,7 @@ def test_a_failed_upload_removes_only_the_files_it_wrote(admin, domains, media, 
     is no error); a file another worker wrote under the same base meanwhile stays, as does every other file."""
     write_media(media, 'logo_Other.png')
     monkeypatch.setattr('app.admin.routes.gibberish', drawn('Fresh'))
-    real_save, saves = Image.Image.save, []
+    upload, real_save, saves = png(), Image.Image.save, []   # the upload's bytes made before save is patched
 
     def failing_third(image, path, *args, **kwargs):
         saves.append(path)
@@ -753,7 +753,9 @@ def test_a_failed_upload_removes_only_the_files_it_wrote(admin, domains, media, 
             raise OSError('disk full')
         return real_save(image, path, *args, **kwargs)
     monkeypatch.setattr(Image.Image, 'save', failing_third)
-    response = save(admin, domains['shop'], logo=(io.BytesIO(png()), 'shop.png'))
+    response = save(admin, domains['shop'], logo=(io.BytesIO(upload), 'shop.png'))
     assert response.status_code == 400
+    assert [os.path.basename(path) for path in saves] == ['logo_Fresh_100.png', 'logo_Fresh_180.png',
+                                                          'logo_Fresh_152.png']
     assert media_files(media) == {'logo_Other.png', 'logo_Fresh_512.png'}
     assert own_row(domains['shop']) is None
