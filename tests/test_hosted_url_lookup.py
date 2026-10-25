@@ -270,6 +270,18 @@ def test_a_boost_of_a_sister_post_by_its_path_is_recorded_without_a_fetch(env, w
     assert wire.calls.call_count == 0
 
 
+@pytest.mark.parametrize('hide', [_local_only_post, _unpublished])
+def test_a_boost_by_path_of_a_post_we_would_not_serve_is_ignored(env, wire, booster, ap_logs, hide):
+    """Before C4 the URL was fetched from our own post route, which refuses a local-only (404) or unpublished (403)
+    post: a peer's boost of one by its guessable URL records nothing (review I1)."""
+    hide(env)
+    db.session.commit()
+    assert process_microblog_announce(boost(booster, f'https://{SHOP}/post/{env.post.id}'), 'b3', False) is None
+    assert ap_logs == [(APLOG_ANNOUNCE, APLOG_IGNORED, 'Boosted post is not served to other servers')]
+    assert PostBoost.query.count() == 0
+    assert wire.calls.call_count == 0
+
+
 def test_a_boost_of_a_hosted_object_we_lack_is_dropped_without_a_fetch(env, wire, booster, ap_logs):
     uri = f'https://{SHOP}/post/999999'
     assert process_microblog_announce(boost(booster, uri), 'b2', False) is None

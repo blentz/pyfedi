@@ -69,7 +69,8 @@ import app.activitypub.serializers.podcast as podcast_serializer   # likewise
 import urllib.parse
 from app.utils import random_chars, site_language_id, is_hex_color, save_image_without_metadata, \
     refuse_over_remote_thumbnail_cap
-from app.visibility import OPEN_VISIBILITIES, can_view, is_open, post_served_to_any_peer, post_title_for
+from app.visibility import OPEN_VISIBILITIES, can_view, is_open, post_served_to_any_peer, post_title_for, \
+    post_withheld_from_peers
 from app.mentions import stored_mentioned_users
 from app.discovery.podcast import ensure_podcast_community, podcast_twin_named_by_other
 from app.interop.workarounds import is_castopod_podcast
@@ -6110,6 +6111,9 @@ def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, N
         if community and (community.private or community.local_only):
             log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json,
                             'Boosted post belongs to a private or local_only community')
+            return None
+        if post_withheld_from_peers(post) is not None:   # local-only or unpublished: our post route refuses it
+            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Boosted post is not served to other servers')
             return None
         if post.deleted:
             log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Boosted post is deleted')
