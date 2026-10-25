@@ -1265,6 +1265,7 @@ def test_deleting_a_local_user_unsubscribes_and_federates_the_deletion(
     remote.gone_forever = False
     community.instance_id = remote.id
     community.ap_inbox_url = 'https://remote.example/c/somewhere/inbox'
+    community.ap_id = 'somewhere@remote.example'   # a remote community: a local one is left without a Leave (C4)
     db.session.add(CommunityMember(user_id=user.id, community_id=community.id))
     db.session.commit()
     user_id = user.id
