@@ -18,6 +18,7 @@ from app.models import AllowedInstances, BannedInstances, Site
 from app.shared.feed import form_communities_to_ids
 from app.storefront import acting_for, domain_for_host
 from app.utils import set_setting
+from tests.test_actor_handles import auth
 from tests.test_hosted_url_lookup import SERVER, SHOP, env, wire  # noqa: F401 (fixtures)
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -39,7 +40,6 @@ def test_resolving_a_sisters_community_url_finds_the_sisters_den(env, wire, suff
 
 @pytest.mark.parametrize('query', ['https://[shop.example/c/den/', 'https://[shop.example/c/den', 'http://[::1/c/x'])
 def test_resolving_a_malformed_url_is_a_400_never_a_500(env, wire, app, monkeypatch, query):
-    from tests.test_actor_handles import auth
     monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')
     response = app.test_client().get('/api/alpha/resolve_object', query_string={'q': query},
                                      headers=auth(env.hell_alice))
