@@ -305,7 +305,7 @@ which is where they always ran.
 
 - **`tests/fuzz/targets/`** -- one module per input surface: `sanitizers`,
   `signatures`, `ap_json`, `ap_models`, `markdown`, `urls`, `discovery`, `nntp`,
-  `api`, `imports`, `images`, `video_channels`. Each holds plain property checks and a `TARGETS`
+  `api`, `imports`, `images`, `video_channels`, `podcasts`, `onion_media`, `branding`. Each holds plain property checks and a `TARGETS`
   list. No module in the package imports atheris, so the replay can call the
   same checks inside the ordinary suite.
 - **`Target`** (`tests/fuzz/targets/_target.py`) -- one frozen record per target:
@@ -375,8 +375,8 @@ Two corpus directories, and which is which matters:
 
 ### Targets
 
-74 targets over 13 surfaces. Generated from `REGISTRY` and `SURFACES` on
-2026-10-16; "Entry points" is the number of functions the surface lists, a
+85 targets over 15 surfaces. Generated from `REGISTRY` and `SURFACES` on
+2026-10-25; "Entry points" is the number of functions the surface lists, a
 budget is `budget_ms`, and "app" is `needs_app`. Regenerate it in the test
 container rather than editing it by hand:
 
@@ -394,7 +394,8 @@ container rather than editing it by hand:
 | `ap_models` | 15 | `models_coercers`, `models_actor_fields`, `models_timestamps`, `models_local_url` (app) |
 | `markdown` | 37 | `markdown_to_html` (2000 ms), `markdown_preprocessors` (2000 ms), `markdown_code_stash` (200 ms), `markdown_actor_links`, `html_text_helpers`, `microblog_html`, `posting_warning_html`, `enhanced_images` (50 ms), `redos_link_pattern` (150 ms), `redos_allowlist_html` (600 ms), `redos_actor_patterns` (500 ms) |
 | `text_patterns` | 6 | `credit_urls`, `redos_hostnames` (250 ms) |
-| `urls` | 28 | `url_predicates`, `url_host_helpers`, `media_urls`, `redirect_targets` (app), `invalid_get_uri` (app), `requestor_domain` (app), `webfinger_resource` (app), `strip_tracking`, `nodeinfo_hrefs`, `storefront_browser_host` (200 ms) |
+| `urls` | 33 | `url_predicates`, `url_host_helpers`, `media_urls`, `redirect_targets` (app), `invalid_get_uri` (app), `requestor_domain` (app), `webfinger_resource` (app), `strip_tracking`, `storefront_browser_host` (200 ms), `nodeinfo_hrefs`, `federation_domain_of_url` (app), `onion_media_rewrite` (app), `onion_media_signature` (app), `onion_media_fetchable`, `onion_media_style` (app) |
+| `branding` | 3 | `branding_offsite_scan` (app), `branding_onion_safe` (app), `branding_style_kept_open` |
 | `discovery` | 22 | `discovery_filters`, `discovery_entries`, `discovery_video_rows`, `podcast_feed_credits` |
 | `nntp` | 19 | `nntp_datetime`, `nntp_range`, `nntp_names`, `nntp_handler` (500 ms), `nntp_article_framing` (500 ms) |
 | `api` | 7 | `api_schemas`, `api_request_args` (app), `api_validators`, `safe_order_by` |
