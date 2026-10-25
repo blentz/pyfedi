@@ -219,7 +219,9 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
         try:
             with patch_db_session(session):
                 community = session.get(Community, community_id)
-                if not community:
+                # A local community's moderators, outbox and featured posts are rows here already: never fetched
+                # from ourselves (plan C4)
+                if not community or community.is_local():
                     return
                 site = session.get(Site, 1)
 

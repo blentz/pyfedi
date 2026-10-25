@@ -17,7 +17,7 @@ from app.models import Notification, SendQueue, CommunityBan, CommunityMember, U
     DefederationSubscription, Instance, ActivityPubLog, InstanceRole, utcnow, InstanceChooser, \
     InstanceBan, Emoji, RevokedToken, BotChallenge
 from app.shared.post import delete_post
-from app.storefront import acting_as_default, hosted_instance_ids
+from app.storefront import acting_as_default, hosted_instance_ids, is_local_host
 from app.utils import _capped_request, get_task_session, download_defeds, instance_banned, get_request_instance, get_request, \
     shorten_string, patch_db_session, archive_post, get_setting, set_setting, communities_banned_from_all_users, \
     banned_instances, blocked_or_banned_instances, get_emoji_replacements, store_files_in_s3
@@ -1083,6 +1083,9 @@ def refresh_instance_chooser():
         # Process each domain from fediverse.observer
         for node in nodes:
             domain = node['domain']
+            # One of our own domains: never asked over HTTP (plan C4), and its row is pruned below
+            if isinstance(domain, str) and is_local_host(domain):
+                continue
             observer_domains.add(domain)
             
             try:

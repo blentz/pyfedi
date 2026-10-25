@@ -36,7 +36,7 @@ from app.constants import *
 from app.local_only import federating_clause, federating_sql
 from app.local_names import local_named
 from app.federation_urls import MissingInstanceKey, activity_id, domain_site_name, instance_actor_public_key, \
-    instance_actor_signing, is_federating_url, object_base, owner_base, owner_domain
+    instance_actor_signing, is_federating_url, local_object_for_url, object_base, owner_base, owner_domain
 from app.storefront import DomainInfo, acting_domain, default_domain, domain_authority, domain_base_url, \
     hosted_instance_ids, instance_id_of, is_hosted_uri, link_on, registration_mode_on
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
@@ -6090,6 +6090,11 @@ def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, N
     # both already-ingested remote posts and posts authored on this instance.
     # A database lookup, so it may sit above the trust gate's refusal.
     post = Post.get_by_ap_id(uri)
+    # A post on one of our own domains is looked up, never fetched (plan C4): by its path when its ap_id is not stored
+    hosted = post is None and is_hosted_uri(uri)
+    if hosted:
+        found = local_object_for_url(uri)
+        post = found if isinstance(found, Post) else None
     if not announcer_is_followed(announcer.id) and not announcer_follows_author(announcer.id, post):
         log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Announce from unfollowed actor')
         return None
@@ -6121,6 +6126,10 @@ def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, N
             return None
         record_boost(post, announcer)
         return post
+    if hosted:
+        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json,
+                        f'Boosted object is on a domain of ours and not here: {uri}')
+        return None
 
     post_data = remote_object_to_json(uri, retry_delay=0)   # inbox processing: no sleep, no retry (D775)
     if not post_data:
@@ -6616,6 +6625,9 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
     post = Post.get_by_ap_id(uri)
     if post:
         return post
+    if is_hosted_uri(uri):   # one of our own domains: the post is in the database or nowhere, never fetched (C4)
+        found = local_object_for_url(uri)
+        return found if isinstance(found, Post) else None
 
     # Hosts, not authorities (D24), as in create_resolved_object: an empty host is refused at the gate below
     # rather than compared, because host_of degrades what urlparse rejects to '' and '' == '' is True.

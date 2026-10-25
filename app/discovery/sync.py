@@ -13,7 +13,7 @@ from app.discovery.backfill import backfill_in_progress, queue_backfill, run_bac
 from app.discovery.filters import host_is_excluded
 from app.discovery.instance_actor import send_instance_follow, send_instance_undo
 from app.models import Community, DiscoveryEntry, DiscoveryExclusion, DiscoverySync, utcnow
-from app.storefront import acting_as_default
+from app.storefront import acting_as_default, is_hosted_uri
 from app.utils import get_setting
 
 SYNC_PLATFORMS = ('peertube', 'castopod')
@@ -155,6 +155,8 @@ def _exclude_alias(entry) -> None:
 
 
 def _add(entry, held) -> bool:
+    if is_hosted_uri(entry.actor_url):   # a community of ours is neither fetched nor followed by ourselves (C4)
+        return False
     community = db.session.query(Community).filter(Community.ap_profile_id == entry.actor_url.lower()).first()
     if community is None:
         # Read the canonical id before any lookup can create the community an admin deleted.

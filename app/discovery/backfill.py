@@ -24,9 +24,10 @@ def backfill_in_progress(community_id) -> bool:
 
 def run_backfill(community_id: int, stop_at_known: bool = False):
     """Moderators, then the outbox, as a first backfill does; with stop_at_known (a proactive sync poll) the walk ends
-    at the first post already stored. Returns retrieve_mods_and_backfill's outcome, None for a missing community."""
+    at the first post already stored. Returns retrieve_mods_and_backfill's outcome, None for a missing community or
+    a local one, whose posts are here already."""
     community = db.session.get(Community, community_id)
-    if community is None or not community.ap_profile_id:
+    if community is None or not community.ap_profile_id or community.is_local():   # ours: nothing to fetch (C4)
         return None
     # The actor document gives the moderators of a PeerTube channel (attributedTo), which its videos are
     # attributed to; without it the backfill skips every video.

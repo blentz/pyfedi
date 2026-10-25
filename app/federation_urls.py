@@ -9,12 +9,16 @@ instance actor signs with Site row 1's key, so hell.cloud's federation does not 
 """
 from __future__ import annotations
 
+import re
+from urllib.parse import unquote, urlsplit, urlunsplit
+
 from flask import abort, current_app
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app import db
+from app.local_names import local_named, named_by_actor
 from app.storefront import DomainInfo, current_storefront, default_domain, domain_authority, domain_base_url, \
-    federating_base, hosted_instance_ids
+    federating_base, hosted_instance_ids, is_hosted_uri
 # Defined in app.storefront, which app.models can import (this module imports app.models); named here too, as the
 # helpers every federation decision uses
 from app.storefront import domain_of_url, federating_domain_of_url, is_federating_url  # noqa: F401
@@ -148,3 +152,81 @@ def instance_actor_signing(domain: DomainInfo) -> tuple[str, str]:
     if not private_key:
         raise MissingInstanceKey(f'{domain.domain} has no instance actor key')
     return private_key, f'{instance_actor_url(domain)}#main-key'
+
+
+# The paths our domains serve a post, comment, account, community or feed at (plan C4): a post by id, with or
+# without its slug, or under its community's nice URL; a comment by id; an account, community or feed by name.
+_ID_PATHS = ((re.compile(r'/post/([0-9]{1,10})(?:/[^/]+)?'), 'Post'),
+             (re.compile(r'/c/[^/]+/p/([0-9]{1,10})(?:/[^/]+)?'), 'Post'),
+             (re.compile(r'/comment/([0-9]{1,10})'), 'PostReply'))
+_NAME_PATHS = ((re.compile(r'/u/([^/]+)'), 'User'), (re.compile(r'/c/([^/]+)'), 'Community'),
+               (re.compile(r'/f/([^/]+)'), 'Feed'))
+_PG_INT_MAX = 2 ** 31 - 1   # a larger id names no row, and Postgres refuses it as an integer
+
+
+def _stored_form(parts) -> str:
+    """A URL (its urlsplit `parts`) as a stored `ap_id` or `ap_profile_id` spells it: scheme and host in lower case,
+    no trailing slash."""
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip('/'), parts.query,
+                       parts.fragment))
+
+
+def _stored_row(parts):
+    """The row whose stored URL is the URL split into `parts` (`_stored_form`): only legacy default-domain rows
+    carry one."""
+    stored = _stored_form(parts)
+    for model, column in ((models.Post, models.Post.ap_id), (models.PostReply, models.PostReply.ap_id),
+                          (models.User, models.User.ap_profile_id), (models.Community, models.Community.ap_profile_id),
+                          (models.Feed, models.Feed.ap_profile_id)):
+        row = db.session.query(model).filter(column == stored).first()
+        if row is not None:
+            return row
+    return None
+
+
+def _named_row(model, name: str, domain: DomainInfo | None):
+    """The row `/u/<name>`, `/c/<name>` or `/f/<name>` names on `domain`, as those routes look it up: a bare name is
+    the local row on the URL's own domain, `name@host` the row that handle names (`named_by_actor`). A feed is named
+    across the site, as feeds have no domain of their own."""
+    if model is models.Feed:
+        return db.session.query(models.Feed).filter(func.lower(models.Feed.name) == name.lower(),
+                                                    models.Feed.ap_id.is_(None)).first()
+    if '@' in name:
+        return db.session.query(model).filter(named_by_actor(model, name)).first()
+    if domain is None:   # a URL whose authority names no domain row (userinfo): its names are nobody's
+        return None
+    return db.session.query(model).filter(local_named(model, name, domain)).first()
+
+
+def local_object_for_url(url: str):
+    """The post, comment, account, community or feed a URL on one of our own domains names, read from the database,
+    so it is never fetched over HTTP (plan C4): one server answers for every hosted domain. None for a URL on no
+    domain of ours (the caller fetches it as before), and for one of ours that names nothing; a caller then stops,
+    with no fetch.
+
+    First the row that stores `url` as its `ap_id` / `ap_profile_id` (host in any case, trailing slash dropped).
+    Then the path: `/post/<id>[/<slug>]`, `/c/<name>/p/<id>[/<slug>]` and `/comment/<id>` by primary key, whichever
+    of our domains the URL is on, as the database is shared (only serving a document is per domain); `/u/<name>`,
+    `/c/<name>` and `/f/<name>` on the URL's own domain, where local names are unique (C1)."""
+    if not is_hosted_uri(url):
+        return None
+    try:
+        parts = urlsplit(url)
+    except ValueError:   # httpx reads a host in it that urllib refuses (an unbalanced bracket): it names nothing
+        return None
+    found = _stored_row(parts)
+    if found is not None:
+        return found
+    path = unquote(parts.path).rstrip('/')   # as the router reads it
+    if '\x00' in path:   # names no row, and Postgres refuses it in a string
+        return None
+    for pattern, model_name in _ID_PATHS:
+        matched = pattern.fullmatch(path)
+        if matched:
+            row_id = int(matched.group(1))
+            return db.session.get(getattr(models, model_name), row_id) if row_id <= _PG_INT_MAX else None
+    for pattern, model_name in _NAME_PATHS:
+        matched = pattern.fullmatch(path)
+        if matched:
+            return _named_row(getattr(models, model_name), matched.group(1), domain_of_url(url))
+    return None

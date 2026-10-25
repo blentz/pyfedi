@@ -31,7 +31,8 @@ def env(app, db_session):
     make_site()
     instance = make_instance('remote.example')
     alice = a_remote_user(instance, 'alice')  # user 1, whom make_community names as owner
-    community = make_community('microblogs')
+    community = make_community('microblogs', host='remote.example')
+    community.ap_id = 'microblogs@remote.example'   # a remote community: a local one is never backfilled (plan C4)
     community.ap_moderators_url = None
     community.ap_outbox_url = OUTBOX
     community.ap_featured_url = None
