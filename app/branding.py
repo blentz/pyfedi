@@ -63,8 +63,17 @@ def current_branding() -> Branding:
     """The request's domain's branding, as its pages show it. The one way pages read branding (the `branding` template
     value and the `current_branding` Jinja global both come here), so on the onion nothing off-site gets past it."""
     domain = storefront.current_storefront()
-    effective = branding_for(domain)
+    effective = _style_kept_open(branding_for(domain))
     return _onion_safe(effective, domain.domain) if domain.is_onion else effective
+
+
+def _style_kept_open(branding: Branding) -> Branding:
+    """`branding` with its custom CSS unable to close the `<style>` element pages write it in: each `</` (whatever
+    follows, `</STYLE` too) becomes `<\\/`, which CSS reads as `</` and HTML does not read as an end tag. A user's own
+    CSS is not branding and is left alone: it reaches only that user (spec §3.2)."""
+    if '</' not in branding.additional_css:
+        return branding
+    return branding._replace(additional_css=branding.additional_css.replace('</', '<\\/'))
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -171,6 +180,12 @@ def onion_safe(branding: Branding, own_host: str) -> Branding:
         if offsite:
             changes[field] = kept
             dropped += [(field, url) for url in offsite]
+    # Belt and braces with `_style_kept_open`: CSS read as HTML finds markup that would load should the style element
+    # ever be closed. No stylesheet holds such markup, so the field goes whole.
+    markup = _scan_html(changes.get('additional_css', branding.additional_css), host)[1]
+    if markup:
+        changes['additional_css'] = ''
+        dropped += [('additional_css', url) for url in markup]
     for field, url in dropped:
         current_app.logger.info('branding: %s dropped from %s on %s: off-site on the onion', url, field, own_host)
     return branding._replace(**changes) if changes else branding
