@@ -109,6 +109,11 @@ _LOADING_RELS = frozenset({'stylesheet', 'icon', 'apple-touch-icon', 'apple-touc
                            'dns-prefetch'})
 
 
+# What the page's own markup after a field can finish, should the field end inside a tag: a quoted attribute value,
+# then the tag. A browser loads what the finished tag names, so a field is scanned as it reads finished too.
+_PAGE_FINISHES = '"\'>'
+
+
 def _offsite(url: str, own_host: str) -> bool:
     host = storefront.browser_host(url)
     return bool(host) and host != own_host   # UNMAPPABLE is never a host of ours
@@ -195,17 +200,18 @@ def offsite_references(css: str = '', html: str = '', urls: Iterable[str] = (), 
     `url(...)` and `@import` targets; in `html`, what loads by itself (`src`, `srcset`, `poster`, `data`, `background`,
     the href of a stylesheet, icon or resource-hint `<link>`, `imagesrcset`, inline `style`, `<style>`, SVG paint
     and clip `url()`s, a `<meta http-equiv=refresh>` target), never a plain link or a canonical or alternate `<link>`;
-    and each of `urls`. With no `own_host`, every
-    reference that names a host."""
+    and each of `urls`. `html` is read as written and as the page finishes it, should it end inside a tag (see
+    `_PAGE_FINISHES`). With no `own_host`, every reference that names a host."""
     own_host = storefront.normalise_host(own_host)
     found = _scan_css(css, own_host)[1] + _scan_html(html, own_host)[1] + \
-        [url for url in urls if _offsite(url, own_host)]
+        _scan_html(html + _PAGE_FINISHES, own_host)[1] + [url for url in urls if _offsite(url, own_host)]
     return list(dict.fromkeys(found))
 
 
 def onion_safe(branding: Branding, own_host: str) -> Branding:
     """`branding` with every off-site reference removed, each removal logged at info; `branding` itself when it has
-    none. A logo or icon URL becomes '' (the page shows PieFed's own); CSS and HTML lose only the reference. The Markdown
+    none. A logo or icon URL becomes '' (the page shows PieFed's own); CSS and HTML lose only the reference, except an
+    HTML field that ends inside a tag which, finished by the page, loads off the onion: it goes whole. The Markdown
     `sidebar` stays: pages show it as text, and text fetches nothing."""
     host = storefront.normalise_host(own_host)
     changes, dropped = {}, []
@@ -218,13 +224,21 @@ def onion_safe(branding: Branding, own_host: str) -> Branding:
         if offsite:
             changes[field] = kept
             dropped += [(field, url) for url in offsite]
+    # A field that ends inside a tag is finished by the markup the page writes after it. One whose finished tag loads
+    # from off the onion goes whole: what the page would make of it cannot be cut out of the field alone.
+    for field in _HTML_FIELDS:
+        unfinished = _scan_html(changes.get(field, getattr(branding, field)) + _PAGE_FINISHES, host)[1]
+        if unfinished:
+            changes[field] = ''
+            dropped += [(field, url) for url in unfinished]
     # Belt and braces with `_style_kept_open`: CSS read as HTML finds markup that would load should the style element
     # ever be closed. No stylesheet holds such markup, so the field goes whole.
-    markup = _scan_html(changes.get('additional_css', branding.additional_css), host)[1]
+    css = changes.get('additional_css', branding.additional_css)
+    markup = _scan_html(css, host)[1] + _scan_html(css + _PAGE_FINISHES, host)[1]   # finished, as for the HTML fields
     if markup:
         changes['additional_css'] = ''
         dropped += [('additional_css', url) for url in markup]
-    for field, url in dropped:
+    for field, url in dict.fromkeys(dropped):
         current_app.logger.info('branding: %s dropped from %s on %s: off-site on the onion', url, field, host)
     return branding._replace(**changes) if changes else branding
 
