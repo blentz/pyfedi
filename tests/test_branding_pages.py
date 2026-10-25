@@ -16,6 +16,7 @@ import pytest
 from cachelib import SimpleCache
 from flask import g, session as flask_session
 from flask_wtf.csrf import generate_csrf
+from jinja2 import ChoiceLoader, DictLoader
 
 from app import cache, db
 from app.models import DomainBranding, Language, Site
@@ -207,15 +208,29 @@ def test_unknown_stored_theme_falls_back(app, branded):
 
 
 def test_no_template_reads_site_branding_directly():
-    """A ratchet: pages read `branding`, the domain's. Emails are not pages: they are named by the recipient's home
-    domain (Task 3), so app/templates/email/ is not checked here."""
-    fields = 'name|description|logo|logo_180|logo_152|logo_32|logo_16|default_theme|additional_css|sidebar_html|' \
-             'about_html'
-    pattern = re.compile(rf'g\.site\.({fields})\b')
+    """A ratchet: pages read `branding` (or `current_branding()` in a macro file), the domain's, never `g.site`'s or the
+    bare `site` value's branding fields. Emails are not pages: they are named by the recipient's home domain (Task 3),
+    so app/templates/email/ is the one exemption."""
+    fields = 'name|description|logo|logo_180|logo_152|logo_32|logo_16|default_theme|additional_css|sidebar|' \
+             'sidebar_html|about|about_html'
+    pattern = re.compile(rf'(?<![\w.])(g\.)?site\.({fields})\b')   # g.site and the bare `site` context value
     hits = [f'{path.relative_to(TEMPLATES)}:{number}: {line.strip()}'
             for path in sorted(TEMPLATES.rglob('*')) if path.is_file() and 'email' not in path.parts
             for number, line in enumerate(path.read_text(errors='replace').splitlines(), 1) if pattern.search(line)]
     assert hits == []
+
+
+def test_a_macro_imported_without_context_reads_the_domains_branding(app, branded):
+    """An imported macro file sees only Jinja globals, not context-processor values: `current_branding` is one."""
+    onion_branding(branded, name='Onion Branded')
+    env = app.jinja_env.overlay(loader=ChoiceLoader([DictLoader({
+        'macro.html': '{% macro shop_name() %}{{ current_branding().name }}{% endmacro %}'}), app.jinja_env.loader]))
+    with onion_request(app):
+        assert env.from_string("{% from 'macro.html' import shop_name %}{{ shop_name() }}").render() == 'Onion Branded'
+    macros = [TEMPLATES / 'post' / 'post_teaser' / '_macros.html',
+              TEMPLATES / 'themes' / 'dillo' / 'post' / 'post_teaser' / '_macros.html']
+    for path in macros:
+        assert re.search(r'(?<![\w.])branding\.', path.read_text()) is None, path
 
 
 # ---------------------------------------------------------------------------------------------------------------------

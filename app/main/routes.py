@@ -298,6 +298,7 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag, live=False
                                              user_pronouns=user_pronouns(),
                                              ))
     else:
+        branding = current_branding()
         resp = make_response(render_template('index.html', posts=posts, active_communities=active_communities,
                                new_communities=new_communities, upcoming_events=upcoming_events,
                                show_post_community=True, low_bandwidth=low_bandwidth, recently_upvoted=recently_upvoted,
@@ -306,8 +307,8 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag, live=False
                                SUBSCRIPTION_PENDING=SUBSCRIPTION_PENDING, SUBSCRIPTION_MEMBER=SUBSCRIPTION_MEMBER,
                                etag=f"{sort}_{view_filter}_{storefront_host()}_{etag_stamp(g.site.last_active)}", next_url=next_url,
                                prev_url=prev_url, instance_stickies=instance_stickies,
-                               title=f"{current_branding().name} - {current_branding().description}",
-                               description=shorten_string(html_to_text(current_branding().sidebar), 150),
+                               title=f"{branding.name} - {branding.description}",
+                               description=shorten_string(html_to_text(branding.sidebar), 150),
                                content_filters=content_filters, sort=sort, view_filter=view_filter,
                                announcement=get_setting('announcement_html', get_setting('announcement')),
                                reported_posts=reported_posts(user_id, user_id in g.admin_ids),
