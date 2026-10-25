@@ -101,14 +101,16 @@ if set, else as today. This is per request host, as today.
 
 **What other servers and clients read.** This covers:
 - the NodeInfo title (app/activitypub/routes.py:397);
-- the instance actor's `name`, `summary`/sidebar and icon (app/activitypub/util.py:6217-6223);
+- the site documents' name, sidebar and icon: `/api/v3/site` (`lemmy_site_data`, app/activitypub/util.py:6217-6223)
+  and the `/` Application document;
 - the API site document (app/api/alpha/views.py:1430-1454, 1523-1527).
 
 A sister domain's own value is published if set. Otherwise the output is exactly what it is today. For the name,
 today's output is the bare domain (`domain_site_name`, app/federation_urls.py:102). That rule becomes: the domain's
 display name if set, else today's answer. The first domain's output does not change by a byte.
 
-**Bare domain, always:** handles, URLs, WebFinger, the instance actor's `preferredUsername`, and anything matched
+**Bare domain, always:** handles, URLs, WebFinger, the instance actor's (`/actor`) `preferredUsername` and `name`
+(Castopod stores followers by `name`, interop D24), and anything matched
 or linked by host.
 
 ### 3.4 The onion: nothing off-site
