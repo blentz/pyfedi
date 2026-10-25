@@ -260,20 +260,24 @@ def remove_superseded_logos(paths: list[str | None]) -> None:
     """Unlink the files a domain's replaced or cleared logo named, once the row no longer names them. `paths` are
     the row's stored values, never anything a form posted. A file goes only when this domain's own upload wrote it:
     - its name is one `save_logo_upload` gives;
-    - with every symlink and `..` resolved, it is directly inside the media directory;
+    - it is not a symlink, and with every symlink and `..` resolved it is that same name directly inside the media
+      directory;
     - nothing else names it: not Site's logo fields or its logo_192/logo_512 settings, not any domain's row (this one,
       as saved, included).
-    Anything else is left where it is, and logged."""
+    Anything else is left where it is, and logged. What is unlinked is the path the row names, never a resolved target:
+    a symlink named like a logo would otherwise delete whatever it points at."""
     media = os.path.realpath(LOGO_MEDIA)
     in_use = _logo_paths_in_use()
     for path in paths:
         if not path:
             continue
-        real = os.path.realpath(f'app{path}')
-        if not _UPLOADED_LOGO.fullmatch(path) or os.path.dirname(real) != media or real in in_use:
+        stored = f'app{path}'
+        real = os.path.realpath(stored)
+        if not _UPLOADED_LOGO.fullmatch(path) or os.path.islink(stored) or \
+                real != os.path.join(media, os.path.basename(path)) or real in in_use:
             current_app.logger.info('branding: %s not removed: not a file this domain\'s logo upload alone wrote', path)
-        elif os.path.isfile(real):
-            os.unlink(real)
+        elif os.path.isfile(stored):
+            os.unlink(stored)
 
 
 def offsite_by_field(own_host: str, css: str = '', sidebar_html: str = '', about_html: str = '',
