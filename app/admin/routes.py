@@ -157,19 +157,22 @@ _UPLOADED_LOGO = re.compile(r'/static/media/logo_[0-9A-Za-z]{5}(_(100|180|152|32
                             re.IGNORECASE)
 
 
-def _png_copies(directory: str, base_filename: str, file_ext: str) -> tuple[dict[str, str], bool]:
+def _png_copies(directory: str, base_filename: str, file_ext: str, written: list[str]) -> tuple[dict[str, str], bool]:
     """The PNG copies of the decoded upload `base_filename` + `file_ext` in `directory`: each one's URL path by field,
-    and whether the upload itself is then to be removed (it is not when it is one of the copies)."""
+    and whether the upload itself is then to be removed (it is not when it is one of the copies). Each file's path is
+    appended to `written` as soon as it is saved, so a failure part way removes exactly those."""
     # For non-SVG uploads, create PNG thumbnails for PWA compatibility
     logos = {}
     img = Image.open(f'{directory}/{base_filename}{file_ext}')
     if img.width > 100:
         img.thumbnail((100, 100))
         img.save(f'{directory}/{base_filename}_100.png')
+        written.append(f'{directory}/{base_filename}_100.png')
         logos['logo'] = f'/static/media/{base_filename}_100.png'
         delete_original = True
     else:
         img.save(f'{directory}/{base_filename}.png')
+        written.append(f'{directory}/{base_filename}.png')
         logos['logo'] = f'/static/media/{base_filename}.png'
         # Only when the original is a DIFFERENT file. This arm
         # writes <base>.png, which for a .png upload is the
@@ -188,6 +191,7 @@ def _png_copies(directory: str, base_filename: str, file_ext: str) -> tuple[dict
         img = Image.open(f'{directory}/{base_filename}{file_ext}')
         img.thumbnail((size, size))
         img.save(f'{directory}/{base_filename}_{size}.png')
+        written.append(f'{directory}/{base_filename}_{size}.png')
         logos[field] = f'/static/media/{base_filename}_{size}.png'
 
     return logos, delete_original
@@ -208,9 +212,18 @@ def save_logo_upload(upload, directory: str) -> dict[str, str]:
         abort(400)
     ensure_directory_exists(directory)
 
-    # Save logo file
-    base_filename = f'logo_{gibberish(5)}'
-    upload.save(f'{directory}/{base_filename}{file_ext}')
+    # Save logo file, under a base name no file in the directory has: its copies are then its own alone. The original
+    # is created exclusively, so an upload that took the same base meanwhile is never overwritten; this one draws again.
+    while True:
+        base_filename = f'logo_{gibberish(5)}'
+        if any(name.startswith((f'{base_filename}.', f'{base_filename}_')) for name in os.listdir(directory)):
+            continue
+        try:
+            with open(f'{directory}/{base_filename}{file_ext}', 'xb') as stored:
+                shutil.copyfileobj(upload.stream, stored)
+        except FileExistsError:
+            continue
+        break
 
     # An SVG that cannot be sanitized is rejected. The '.svg' branch
     # below stores the file as uploaded -- no Pillow re-encode -- and
@@ -252,12 +265,14 @@ def save_logo_upload(upload, directory: str) -> dict[str, str]:
 
     # A decodable image can still be one Pillow will not write as PNG (a CMYK JPEG): every copy `_png_copies` makes is a PNG. That
     # is a 400 with every file of this upload removed, never a 500 with them left in the media root.
+    written = [f'{directory}/{base_filename}{file_ext}']
     try:
-        logos, delete_original = _png_copies(directory, base_filename, file_ext)
+        logos, delete_original = _png_copies(directory, base_filename, file_ext, written)
     except Exception:
-        for name in os.listdir(directory):
-            if name.startswith((f'{base_filename}.', f'{base_filename}_')):
-                os.unlink(f'{directory}/{name}')
+        # Exactly the files this upload wrote, never whatever else shares their names' prefix
+        for path in dict.fromkeys(written):
+            if os.path.isfile(path):
+                os.unlink(path)
         # flask_smorest's abort: the app's HTTP error handler sends the message it carries, never a description
         abort_with_message(400, message=_('That image could not be made into PNG icons. Save it as an RGB PNG or '
                                           'JPEG and upload it again.'))
