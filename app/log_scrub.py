@@ -65,3 +65,9 @@ def log_ldap_sync_failure(user_name: str, error: Exception) -> None:
         current_app.logger.error('LDAP sync failed', extra=ONION_SAFE)
     else:
         current_app.logger.error(f'LDAP sync failed for user {user_name}: {error}')
+
+
+def drop_onion_event(event, hint):
+    """Sentry's `before_send`: Sentry is an off-box error sink like `ERRORS_TO`, and its event carries the request's
+    URL, headers and user. On an onion request the event is dropped (None); anything else passes unchanged."""
+    return None if is_onion_request() else event

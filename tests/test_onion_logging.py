@@ -16,7 +16,7 @@ from redis.exceptions import RedisError
 
 from app import create_app
 from app.auth.util import sync_user_with_ldap
-from app.log_scrub import ONION_EXCEPTION_MESSAGE, OnionScrubFilter
+from app.log_scrub import ONION_EXCEPTION_MESSAGE, OnionScrubFilter, drop_onion_event
 from app.onion_store import read_other_store
 from app.utils import log_login_failure, log_probe_refused, log_register_attempt
 from tests.conftest import TestConfig
@@ -179,3 +179,21 @@ def test_the_app_factory_attaches_the_scrub_to_the_mail_handler(restores_the_sha
     create_app(config)
     mail = [h for h in logging.getLogger('app').handlers if isinstance(h, SMTPHandler)]
     assert mail and all(any(isinstance(f, OnionScrubFilter) for f in h.filters) for h in mail)
+
+
+def test_sentry_drops_an_event_of_an_onion_request(app, onion):
+    with onion_context(app):
+        assert drop_onion_event({'message': 'x'}, {}) is None
+
+
+def test_sentry_passes_a_clearnet_event_unchanged(app):
+    event = {'message': 'x'}
+    with app.test_request_context('/', environ_base=CLEARNET):
+        assert drop_onion_event(event, {}) is event
+    assert drop_onion_event(event, {}) is event      # outside a request, as in a Celery worker
+
+
+def test_the_factory_wires_the_sentry_filter_in(restores_the_shared_logger):
+    with patch('app.sentry_sdk.init') as init:
+        create_app(type('OneOff', (TestConfig,), {'SENTRY_DSN': 'https://key@sentry.example/1'}))
+    assert init.call_args.kwargs['before_send'] is drop_onion_event
