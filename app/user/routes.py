@@ -62,7 +62,7 @@ from app.utils import user_banned_from_community, back, render_template, markdow
 from app.rss_extras import RSSFeed
 import app.api.alpha.views as alpha_views
 from app.utils import user_filters_languages
-from app.local_names import local_clause, local_named, named_by_actor
+from app.local_names import local_clause, local_named, named_by_actor, notification_href
 from app.storefront import current_storefront, domain_for_host, hosted_instance_ids, is_local_host, path_name, storefront_query_cache_key, \
     storefront_url
 from app.utils import ap_alternate_url
@@ -1396,7 +1396,7 @@ def notification_goto(notification_id):
             current_user.unread_notifications -= 1
         notification.read = True
         db.session.commit()
-        return redirect(notification.url)
+        return redirect(notification_href(notification) or url_for('user.notifications'))
     else:
         abort(403)
 
