@@ -51,7 +51,7 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, SiteDomain, \
     instance_row_referenced, DomainBranding
 from app.storefront import acting_as_default, canonicalise_text, clear_domain_cache, default_domain, domain_authority, domain_base_url, \
-    domain_by_id, federating_base, hidden_instance_ids, hosted_instance_ids, instance_id_of, is_hosted_uri, live_registration, storefront_url
+    domain_by_id, federating_base, hosted_instance_ids, instance_id_of, is_hosted_uri, live_registration, storefront_url
 from app.onion_media import DEFAULT_CACHE_BYTES
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
@@ -2765,7 +2765,7 @@ def admin_instances():
     sort_by = request.args.get('sort_by', 'domain ASC')
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
 
-    instances = Instance.query.filter(Instance.id.not_in(hidden_instance_ids()))   # an onion's, on it only (F6)
+    instances = Instance.query
 
     if search:
         instances = instances.filter(Instance.domain.ilike(f"%{search}%"))
