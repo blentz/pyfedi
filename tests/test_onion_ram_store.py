@@ -233,6 +233,20 @@ def test_onion_crawl_writes_nothing_to_the_main_redis(limited_app, world, main_r
     assert onion_redis.get(next(iter(onion_redis.keys('votes_cast_*')))) == '1'
     assert onion_redis.keys('onion_pow_used:*') and onion_redis.keys('feed:*')
     assert limits_on.onion.storage and not limits_on.main.storage
+    fresh = limited_app.test_client()                                              # a failed login keeps a counter
+    page = challenge(onion_page(fresh, '/auth/login'))
+    onion_post(fresh, '/auth/login', data=proven(page, password='wrong password'))
+    assert_every_user_key_expires_within_a_day(onion_redis, alice)
+
+
+def assert_every_user_key_expires_within_a_day(onion_redis, user):
+    """The owner's bound: a link between an account and onion use is held in RAM for at most a day. Every key of the
+    onion store that names the account (by id, name or email) has a TTL of 1 to 86400 seconds, never -1."""
+    named = [key for key in onion_redis.keys('*')
+             if any(token in key for token in (f':{user.id}', f'_{user.id}', user.user_name, user.email))]
+    assert {key.split(':')[0] for key in named} >= {'feed', 'onion_login_fail'}      # the scan found the keys it is for
+    assert any(key.startswith('votes_cast_') for key in named)
+    assert [(key, onion_redis.ttl(key)) for key in named if not 0 < onion_redis.ttl(key) <= 86400] == []
 
 
 def test_onion_guard_keys_are_in_the_onion_store(app, world, main_redis, onion_redis):
@@ -583,3 +597,15 @@ def test_the_limiter_fallback_warns_once_a_minute(app, onion, caplog):
         storage.get('k')
         assert len(warnings()) == 2
     assert all(r.onion_safe for r in warnings())
+
+
+def test_an_onion_ai_detection_tally_expires_within_a_day_and_a_clearnet_one_is_as_it_was(app, onion, main_redis,
+                                                                                        onion_redis):
+    key = 'ai_detection:user:5'
+    now = 1_800_000_000.0
+    with onion_request(app):
+        recent_ai_detections(5, {'detection': 'ai'}, now)
+    assert 86000 < onion_redis.ttl(key) <= 86400
+    with app.test_request_context('/'):
+        recent_ai_detections(5, {'detection': 'ai'}, now)
+    assert main_redis.ttl(key) == -1
