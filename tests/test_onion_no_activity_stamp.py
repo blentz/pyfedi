@@ -107,6 +107,15 @@ def test_clearnet_request_still_stamps_last_seen(app, stampable, action):
     assert last_seen > LONG_AGO, action.__name__
 
 
+@pytest.mark.parametrize('action', ACTIONS, ids=lambda action: action.__name__)
+def test_vote_and_api_writers_leave_email_unread_sent_as_before(app, stampable, action):
+    user = sleepy_account(stampable)
+    with default_request(app), patch('app.shared.post.ip_address', return_value=CLEARNET_IP), \
+            patch('app.shared.reply.ip_address', return_value=CLEARNET_IP):
+        action(user)
+    assert stamps(user)[1] is True, action.__name__   # only the request hook ever cleared it
+
+
 def test_onion_login_leaves_last_seen_unchanged(app, stampable):
     user = sleepy_account(stampable)
     for login in (web_login, oauth_login, api_login):
@@ -144,7 +153,7 @@ def test_a_logged_in_clearnet_page_view_stamps_both(app, stampable):
 def test_onion_request_leaves_email_unread_sent_unchanged(app, stampable):
     user = sleepy_account(stampable)
     with proxy_ip(app), onion_context(app):
-        stamp_activity(user)
+        stamp_activity(user, clear_unread=True)
     db.session.commit()
     assert stamps(user) == (LONG_AGO, True)
 
@@ -152,13 +161,20 @@ def test_onion_request_leaves_email_unread_sent_unchanged(app, stampable):
 def test_clearnet_stamp_sets_both(app, stampable):
     user = sleepy_account(stampable)
     with default_request(app):
-        stamp_activity(user)
+        stamp_activity(user, clear_unread=True)
     db.session.commit()
     assert stamps(user) == (FROZEN, False)
 
 
-def test_work_outside_a_request_still_stamps(app, stampable):
+def test_stamp_without_clear_unread_leaves_the_flag(app, stampable):
     user = sleepy_account(stampable)
     stamp_activity(user)
+    db.session.commit()
+    assert stamps(user) == (FROZEN, True)
+
+
+def test_work_outside_a_request_still_stamps(app, stampable):
+    user = sleepy_account(stampable)
+    stamp_activity(user, clear_unread=True)
     db.session.commit()
     assert stamps(user) == (FROZEN, False)
