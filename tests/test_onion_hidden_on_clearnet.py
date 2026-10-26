@@ -140,14 +140,62 @@ def test_on_the_onion_it_is_present_in_the_first_domains_community(app, onion):
     assert 'ONIONINFIRST' in body and 'FIRSTPOST' in body
 
 
+SEARCHES = [  # what is searched for, the onion's term, and the first domain's term with what shows it was found
+    ('posts', 'ONIONPOST', 'FIRSTPOST', 'FIRSTPOST'),
+    ('posts', 'ONIONINFIRST', 'FIRSTPOST', 'FIRSTPOST'),
+    ('comments', 'ONIONREPLY', 'FIRSTREPLY', 'FIRSTREPLY'),
+    ('people', 'bob', 'bob', 'href="/u/bob"'),
+    ('communities', 'art', 'art', 'href="/c/art"'),
+]
+
+
+@pytest.fixture
+def searchable(onion):
+    onion.first_reply = make_post_reply(onion.first_post, onion.first_bob, 'FIRSTREPLY')
+    onion.first_reply.body_html = '<p>FIRSTREPLY</p>'
+    onion.reply.body = 'ONIONREPLY'   # what a reply is searched by
+    db.session.commit()
+    return onion
+
+
 @pytest.mark.parametrize('who', ['user', 'admin'])
-@pytest.mark.parametrize('query', ['ONIONPOST', 'ONIONINFIRST', 'ONIONREPLY', 'bob', 'art'])
-def test_search_on_the_first_domain_finds_none_of_them(app, onion, who, query):
-    viewer = viewers(onion)[who]
-    hidden = (ONION, f'/post/{onion.post.id}"', f'/post/{onion.in_first.id}"', 'ONIONREPLY</p>')
-    for kind in ('', '&type=communities', '&type=comments'):
-        body = get(app, f'/search?q={query}{kind}', user=viewer).get_data(as_text=True)
-        assert not near(body, *hidden), (query, kind, near(body, *hidden))
+@pytest.mark.parametrize('search_for, query, control, found', SEARCHES)
+def test_search_on_the_first_domain_finds_none_of_them(app, searchable, who, search_for, query, control, found):
+    viewer = viewers(searchable)[who]
+    hidden = (ONION, f'/post/{searchable.post.id}"', f'/post/{searchable.in_first.id}"', 'ONIONREPLY</p>',
+              f'/comment/{searchable.reply.id}')
+    page = Visitor(app, viewer, FIRST).get(f'/search?q={query}&search_for={search_for}', follow_redirects=True)
+    body = page.get_data(as_text=True)
+    assert not near(body, *hidden), (query, search_for, near(body, *hidden))
+    page = Visitor(app, viewer, FIRST).get(f'/search?q={control}&search_for={search_for}', follow_redirects=True)
+    assert found in page.get_data(as_text=True), (control, search_for)   # the control: the search does find
+
+
+def normalised(body: bytes, *terms: str) -> bytes:
+    """`body` without what differs between any two requests (the nonce, the CSRF token) and with the searched-for
+    term spelled one way."""
+    for term in terms:
+        body = body.replace(term.encode(), b'TERM')
+    body = re.sub(rb'nonce[=-]"?[A-Za-z0-9_-]+"?', b'nonce', body)
+    return re.sub(rb'I[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+', b'TOKEN', body)   # a signed CSRF token
+
+
+@pytest.mark.parametrize('who', ['user', 'admin'])
+@pytest.mark.parametrize('search_for, query', [('posts', 'ONIONPOST'), ('comments', 'ONIONREPLY')])
+def test_searching_for_an_onion_term_answers_as_a_search_that_finds_nothing(app, searchable, monkeypatch, who,
+                                                                           search_for, query):
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    viewer, nothing = viewers(searchable)[who], 'QWXZNOTHING'
+    found = Visitor(app, viewer, FIRST).get(f'/search?q={query}&search_for={search_for}')
+    absent = Visitor(app, viewer, FIRST).get(f'/search?q={nothing}&search_for={search_for}')
+    assert found.status_code == absent.status_code == 200
+    found, absent = normalised(found.get_data(), query, nothing), normalised(absent.get_data(), query, nothing)
+    at = next((i for i, (a, b) in enumerate(zip(found, absent)) if a != b), min(len(found), len(absent)))
+    assert found == absent, (found[at - 80:at + 80], absent[at - 80:at + 80])
+    kind = 'Posts' if search_for == 'posts' else 'Comments'
+    found = api(app, f'/api/alpha/search?q={query}&type_={kind}', viewer)
+    absent = api(app, f'/api/alpha/search?q={nothing}&type_={kind}', viewer)
+    assert (found.status_code, found.get_data()) == (absent.status_code, absent.get_data())
 
 
 def api(app, path, viewer, host=FIRST):
