@@ -64,7 +64,7 @@ def test_the_block_lists_unblock_button_unblocks_that_account(app, world, host, 
 
 
 def profile_links(html: str) -> list[str]:
-    return re.findall(r'href="(/u/[^"]*)"', html)
+    return re.findall(r'href="(/user/\d+)"', html)
 
 
 def shows(app, world, host, path) -> set[str]:
@@ -94,7 +94,7 @@ def test_a_report_about_the_onions_bob_links_to_the_onions_bob_on_first(app, tit
         html = render_template('admin/reports/user_report.html', report=report)
     suspect, reporter = profile_links(html)
     assert shows(app, world, FIRST, suspect) == {ONION}
-    assert reporter == f'/u/{world.viewers[reporter_host].stored_link()}'
+    assert reporter == f'/user/{world.viewers[reporter_host].id}'
 
 
 def test_a_follow_notification_from_the_onions_bob_links_to_the_onions_bob(app, titled):
@@ -103,7 +103,7 @@ def test_a_follow_notification_from_the_onions_bob_links_to_the_onions_bob(app, 
     follower = signed_in(app, world.bob[ONION], ONION)
     assert follower.post(f'/u/{watcher.user_name}@{FIRST}/follow').status_code in (200, 302)
     page = signed_in(app, watcher, FIRST).get('/notifications').get_data(as_text=True)
-    [link] = [href for href in profile_links(page) if href.startswith('/u/bob')]
+    [link] = [href for href in profile_links(page) if href == f'/user/{world.bob[ONION].id}']
     assert shows(app, world, FIRST, link) == {ONION}
 
 
