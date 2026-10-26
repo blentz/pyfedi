@@ -19,7 +19,7 @@ from app.models import Post, PostReply, User, Community, BannedInstances, Feed, 
 from app.post.util import post_refusal
 from app.storefront import default_domain, domain_authority, domain_for_host, is_local_host
 from app.user.utils import search_for_user
-from app.local_only import without_local_only_actors, user_local_only, community_local_only
+from app.local_only import hidden_here, without_local_only_actors
 from app.visibility import can_view, is_open, modlog_local_only_clause, modlog_open_clause
 from app.feed.util import search_for_feed
 from app.utils import authorise_api_user, gibberish, subscribed_feeds, communities_banned_from, \
@@ -122,21 +122,21 @@ def _reply_open_to(reply: PostReply, user_id: int) -> bool:
     its post (so a reply in a private or banned community, or under a draft, is as unknown as one nobody holds). A
     reply stays visible under a followers-only post, whose title the views withhold, so the post's own visibility is
     not asked."""
-    return not reply.deleted and can_view(reply, user_id) and \
+    return not reply.deleted and not hidden_here(reply, user_id is not None) and can_view(reply, user_id) and \
         post_refusal(reply.post, db.session.get(User, user_id), check_visibility=False) is None
 
 
 def _community_open_to(community: Community, user_id: int | None) -> bool:
-    """The gates the community page applies: not banned, not local-only for a logged-out reader, and a private
-    community only for its members."""
-    if community.banned or (community_local_only(community) and not user_id):
+    """The gates the community page applies: not banned, not hidden here (`hidden_here`: local-only for a logged-out
+    reader, and off its own domain for everyone), and a private community only for its members."""
+    if community.banned or hidden_here(community, user_id is not None):
         return False
     return not community.private or community.id in community_membership_private(user_id)
 
 
 def _user_open_to(user: User, user_id: int | None) -> bool:
-    """A deleted or banned account, or a local-only one to a logged-out reader, is not shown."""
-    return not (user.deleted or user.banned or (user_local_only(user) and not user_id))
+    """A deleted or banned account, or one hidden here (`hidden_here`), is not shown."""
+    return not (user.deleted or user.banned or hidden_here(user, user_id is not None))
 
 
 def _feed_open_to(feed: Feed, user_id: int) -> bool:
@@ -609,8 +609,8 @@ def get_modlog(auth, data):
     base_q = ModLog.query
     if not is_admin:
         base_q = base_q.filter(ModLog.public == True)
-    if user is None:   # as the web modlog: an entry about local-only content is not listed (spec §3.4)
-        base_q = base_q.filter(modlog_local_only_clause())
+    if (unhidden := modlog_local_only_clause(user is not None)) is not None:   # as the web modlog (spec §3.4, F6)
+        base_q = base_q.filter(unhidden)
     if mod_person_id:
         base_q = base_q.filter(ModLog.user_id == mod_person_id)
     if community_id:

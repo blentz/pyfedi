@@ -19,7 +19,7 @@ from app.visibility import mark_restricted, OPEN_VISIBILITIES, RestrictedReply, 
 from app.utils import blocked_or_banned_instances, blocked_users, is_video_hosting_site, get_request, \
     silenced_instances, html_to_text, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, is_local_microblogs, community_membership_private, \
     user_in_restricted_country
-from app.local_only import content_local_only
+from app.local_only import content_local_only, hidden_here, without_local_only
 
 
 @cache.memoize(timeout=600)
@@ -209,8 +209,8 @@ def post_replies(post: Post, sort_by: str, viewer: User, db_only=False) -> List[
         if instance_ids := silenced_instances():
             comments = comments.filter(or_(PostReply.instance_id.not_in(instance_ids), PostReply.instance_id == None))
         comments.filter(PostReply.score > -20)
-        if not db_only:  # no viewer: a local-only reply, and so all its replies, are left out (spec §3.4)
-            comments = comments.filter(PostReply.local_only.is_(False))
+    if viewer or not db_only:  # a reply hidden here, and so all its replies, is left out (spec §3.4, follow-up F6)
+        comments = without_local_only(comments, PostReply, viewer is not None)
 
     if sort_by == 'hot':
         comments = comments.order_by(desc(PostReply.ranking))
@@ -278,7 +278,7 @@ def get_comment_branch(post: Post, comment_id: int, sort_by: str, viewer: User) 
                 or_(PostReply.language_id.in_(tuple(viewer.read_language_ids)), PostReply.language_id == None))
     else:
         comments.filter(PostReply.score > -20)
-        comments = comments.filter(PostReply.local_only.is_(False))  # no viewer: as post_replies
+    comments = without_local_only(comments, PostReply, viewer is not None)   # as post_replies
 
     if sort_by == 'hot':
         comments = comments.order_by(desc(PostReply.ranking))
@@ -466,6 +466,8 @@ def post_refusal(post: Post, viewer: User | None = None, check_visibility: bool 
     community = post.community
     who = current_user if viewer is None else viewer
     if deleted_post_state(post, viewer) == 'gone':
+        return 404
+    if hidden_here(post, not who.is_anonymous):   # off its own domain a local-only post is unknown (follow-up F6)
         return 404
     if check_visibility and not can_view(post, who.get_id()):   # 404, not 403, so the answer does not confirm the post exists
         return 404

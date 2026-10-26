@@ -1,7 +1,9 @@
 """A logged-out visitor never sees a local-only account or community, as plan B already does for local-only posts and
 replies (owner ruling 2026-10-21, plan C2 task 6 fix round 1). They are left out of every listing and the modlog, and
-their pages and feeds answer 404; a logged-in user still sees them. On the first domain their names read `bob@abc.onion`, so
-the onion hostname is what each test looks for. the first domain's own accounts and communities are the control."""
+their pages and feeds answer 404. Follow-up F6 ("yes, hide onion from logged-in clearnet viewers too", 2026-10-26)
+superseded the C2 ruling that a logged-in user still sees them: off the onion nobody does, so a logged-in user sees them
+on the onion only. On the first domain their names read `bob@abc.onion`, so the onion hostname is what each test looks
+for. the first domain's own accounts and communities are the control."""
 from types import SimpleNamespace
 from urllib.parse import quote
 
@@ -37,8 +39,19 @@ def world(app, scene, twins):  # noqa: F811
     return SimpleNamespace(first_bob=first_bob, first_art=first_art, onion_bob=onion_bob, onion_art=onion_art)
 
 
-def visit(app, path, signed_in, world):
-    return get(app, path, user=world.first_bob if signed_in else None)
+def visit(app, path, signed_in, world, host=FIRST):
+    return get(app, path, host=host, user=world.first_bob if signed_in else None)
+
+
+def around(body: str, needle: str) -> str:
+    """The text around `needle` in `body`, for a failed assertion's message."""
+    at = body.find(needle)
+    return body[max(0, at - 300):at + 100]
+
+
+def on_onion(path: str) -> str:
+    """An onion row's `path` as the onion names it: bare."""
+    return path.replace(f'@{ONION}', '')
 
 
 # --- the modlog ---------------------------------------------------------------------------------------------------
@@ -66,23 +79,28 @@ def test_a_logged_out_modlog_lists_nothing_about_a_local_only_community_or_accou
     assert 'Onion art' not in body   # nor in the community chooser
 
 
-def test_a_logged_in_modlog_still_lists_them(app, world, entries):
+def test_a_logged_in_modlog_lists_them_on_the_onion_only(app, world, entries):
+    """Follow-up F6: no longer on the first domain."""
     body = visit(app, '/modlog', True, world).get_data(as_text=True)
+    assert 'MARK-FIRST' in body
+    assert 'MARK-ONION-COMMUNITY' not in body and 'MARK-ONION-TARGET' not in body and ONION not in body
+    body = visit(app, '/modlog', True, world, host=ONION).get_data(as_text=True)
     assert {'MARK-FIRST', 'MARK-ONION-COMMUNITY', 'MARK-ONION-TARGET'} <= set(body.split())
-    assert ONION_ART in body
 
 
-@pytest.mark.parametrize('signed_in, listed', [(False, 0), (True, 1)])
-def test_the_api_modlog_follows_the_same_rule(app, world, entries, monkeypatch, signed_in, listed):
+@pytest.mark.parametrize('signed_in, host, listed', [(False, FIRST, 1), (True, FIRST, 1), (False, ONION, 1),
+                                                   (True, ONION, 3)])
+def test_the_api_modlog_follows_the_same_rule(app, world, entries, monkeypatch, signed_in, host, listed):
+    """Follow-up F6: a signed-in caller is shown them on the onion only."""
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
     forget_login()
-    from_api = app.test_client().get('/api/alpha/modlog', base_url=HOSTS[FIRST],
+    from_api = app.test_client().get('/api/alpha/modlog', base_url=HOSTS[host],
                                      headers={'Authorization': f'Bearer {world.first_bob.encode_jwt_token()}'}
                                      if signed_in else {})
     assert from_api.status_code == 200
-    body = from_api.get_data(as_text=True)
-    assert f'https://{FIRST}/c/art' in body
-    assert (ONION in body) == bool(listed)
+    assert len(from_api.get_json()['added_to_community']) == listed
+    if host == FIRST:
+        assert ONION not in from_api.get_data(as_text=True)
 
 
 def test_the_modlog_name_suggestions_leave_out_local_only_accounts_when_logged_out(app, world):
@@ -102,8 +120,10 @@ def test_logged_out_people_lists_leave_out_local_only_accounts(app, world, path)
 
 
 @pytest.mark.parametrize('path', ['/instance/all/people', '/instance/people/interesting'])
-def test_logged_in_people_lists_still_show_them(app, world, path):
-    assert f'/u/{ONION_BOB}' in visit(app, path, True, world).get_data(as_text=True)
+def test_logged_in_people_lists_show_them_on_the_onion_only(app, world, path):
+    """Follow-up F6: no longer on the first domain."""
+    assert ONION not in visit(app, path, True, world).get_data(as_text=True)
+    assert 'href="/u/bob"' in visit(app, path, True, world, host=ONION).get_data(as_text=True)
 
 
 # --- communities --------------------------------------------------------------------------------------------------
@@ -116,8 +136,12 @@ def test_logged_out_community_lists_and_sidebars_leave_out_local_only_communitie
 
 
 @pytest.mark.parametrize('path', ['/communities', '/'])
-def test_logged_in_community_lists_and_sidebars_still_show_them(app, world, path):
-    assert f'/c/{ONION_ART}' in visit(app, path, True, world).get_data(as_text=True)
+def test_logged_in_community_lists_and_sidebars_show_them_on_the_onion_only(app, world, path):
+    """Follow-up F6: no longer on the first domain."""
+    body = visit(app, path, True, world).get_data(as_text=True)
+    assert ONION not in body, around(body, ONION)
+    body = visit(app, path, True, world, host=ONION).get_data(as_text=True)
+    assert '/c/art"' in body or "/c/art'" in body
 
 
 # --- pages and feeds ----------------------------------------------------------------------------------------------
@@ -134,15 +158,20 @@ def test_a_local_only_community_or_profile_page_is_not_found_when_logged_out(app
 
 
 @pytest.mark.parametrize('path', [p for p in PAGES if not p.endswith('/feed')])
-def test_a_local_only_community_or_profile_page_renders_when_logged_in(app, world, path):
-    assert visit(app, path, True, world).status_code == 200
+def test_a_local_only_community_or_profile_page_renders_when_logged_in_on_its_own_domain_only(app, world, path):
+    """C2 let a logged-in user reach them on the first domain. Follow-up F6 ("yes, hide onion from logged-in clearnet
+    viewers too", owner ruling 2026-10-26) supersedes that: off the onion they are 404 to everyone."""
+    assert visit(app, path, True, world).status_code == 404
+    assert visit(app, on_onion(path), True, world, host=ONION).status_code == 200
 
 
 @pytest.mark.parametrize('path', [f'/community/{ONION_ART}/feed', f'/u/{ONION_BOB}/feed'])
-def test_a_local_only_feed_answers_an_rss_token(app, world, path):
+def test_a_local_only_feed_answers_an_rss_token_on_its_own_domain_only(app, world, path):
+    """Follow-up F6: an RSS token is a signed-in reader, so it is answered on the onion and nowhere else."""
     world.first_bob.rss_token = 'first-bob-rss-token'
     db.session.commit()
-    assert visit(app, f'{path}?token=first-bob-rss-token', False, world).status_code == 200
+    assert visit(app, f'{path}?token=first-bob-rss-token', False, world).status_code == 404
+    assert visit(app, f'{on_onion(path)}?token=first-bob-rss-token', False, world, host=ONION).status_code == 200
 
 
 @pytest.mark.parametrize('path', [p.replace(f'@{ONION}', '') for p in PAGES])
@@ -178,8 +207,11 @@ def test_logged_out_topic_and_feed_pages_list_no_local_only_community(app, group
 
 
 @pytest.mark.parametrize('path', ['/topic/arts', '/f/artfeed'])
-def test_logged_in_topic_and_feed_pages_still_list_them(app, grouped, path):
-    assert 'Onion art' in visit(app, path, True, grouped).get_data(as_text=True)
+def test_logged_in_topic_and_feed_pages_list_them_on_the_onion_only(app, grouped, path):
+    """Follow-up F6: no longer on the first domain."""
+    assert 'Onion art' not in visit(app, path, True, grouped).get_data(as_text=True)
+    if path == '/topic/arts':   # a feed is its home domain's: the first domain's renders there only (F4)
+        assert 'Onion art' in visit(app, path, True, grouped, host=ONION).get_data(as_text=True)
 
 
 # --- share (fix round 2) -------------------------------------------------------------------------------
@@ -206,8 +238,10 @@ def test_logged_out_share_lists_no_local_only_community(app, shared):
     assert ONION not in body and 'Onion art' not in body
 
 
-def test_logged_in_share_still_lists_them(app, shared):
-    assert 'Onion art' in visit(app, f'/share?url={SHARED}', True, shared).get_data(as_text=True)
+def test_logged_in_share_lists_them_on_the_onion_only(app, shared):
+    """Follow-up F6: no longer on the first domain."""
+    assert 'Onion art' not in visit(app, f'/share?url={SHARED}', True, shared).get_data(as_text=True)
+    assert 'Onion art' in visit(app, f'/share?url={SHARED}', True, shared, host=ONION).get_data(as_text=True)
 
 
 # --- the alpha API (fix round 2) ----------------------------------------------------------------------------------
@@ -219,10 +253,10 @@ API_GROUPED = ['/api/alpha/topic/list', f'/api/alpha/feed?name=artfeed@{FIRST}']
 API_ONE = [f'/api/alpha/community?name={ONION_ART}', f'/api/alpha/user?username={ONION_BOB}']
 
 
-def api_get(app, path, world, signed_in):
+def api_get(app, path, world, signed_in, host=FIRST):
     forget_login()
     headers = {'Authorization': f'Bearer {world.first_bob.encode_jwt_token()}'} if signed_in else {}
-    return app.test_client().get(path, base_url=HOSTS[FIRST], headers=headers)
+    return app.test_client().get(path, base_url=HOSTS[host], headers=headers)
 
 
 @pytest.fixture
@@ -241,8 +275,12 @@ def test_the_alpha_apis_lists_name_no_local_only_row_to_a_logged_out_caller(app,
 
 
 @pytest.mark.parametrize('path', API_LISTS)
-def test_the_alpha_apis_lists_still_name_them_to_a_logged_in_caller(app, api, path):
+def test_the_alpha_apis_lists_name_them_to_a_logged_in_caller_on_the_onion_only(app, api, path):
+    """Follow-up F6: no longer on the first domain."""
     response = api_get(app, path, api, True)
+    assert response.status_code == 200
+    assert ONION not in response.get_data(as_text=True)
+    response = api_get(app, path, api, True, host=ONION)
     assert response.status_code == 200
     assert ONION in response.get_data(as_text=True)
 
@@ -274,13 +312,14 @@ def test_suggest_completion_answers_a_token_that_fails_to_authorise_as_logged_ou
 
 @pytest.mark.parametrize('signed_in', [False, True])
 @pytest.mark.parametrize('path', API_GROUPED)
-def test_the_alpha_apis_topic_and_feed_views_list_a_local_only_community_only_to_a_logged_in_caller(
+def test_the_alpha_apis_topic_and_feed_views_list_no_local_only_community_on_the_first_domain(
         app, api, grouped, path, signed_in):
+    """Follow-up F6: not to a logged-in caller either."""
     response = api_get(app, path, api, signed_in)
     assert response.status_code == 200
     body = response.get_data(as_text=True)
     assert f'https://{FIRST}/c/art' in body
-    assert (ONION in body) == signed_in
+    assert ONION not in body
 
 
 @pytest.mark.parametrize('path', API_ONE)
@@ -288,7 +327,8 @@ def test_the_alpha_apis_single_views_refuse_a_local_only_row_to_a_logged_out_cal
     response = api_get(app, path, api, False)
     assert response.status_code == 400
     assert ONION not in response.get_data(as_text=True)
-    assert api_get(app, path, api, True).status_code == 200
+    assert api_get(app, path, api, True).status_code == 400   # follow-up F6: on the first domain, to anyone
+    assert api_get(app, path, api, True, host=ONION).status_code == 200
 
 
 # --- subpages (fix round 2) ---------------------------------------------------------------------------------------
@@ -318,9 +358,11 @@ def test_a_local_only_community_or_accounts_subpages_are_not_found_when_logged_o
         assert ONION not in response.get_data(as_text=True), path
 
 
-def test_they_render_when_logged_in(app, subpages):
+def test_they_render_when_logged_in_on_the_onion_only(app, subpages):
+    """Follow-up F6: on the first domain they are 404 to a logged-in user too."""
     for path in subpage_paths(subpages):
-        assert visit(app, path, True, subpages).status_code == 200, path
+        assert visit(app, path, True, subpages).status_code == 404, path
+        assert visit(app, on_onion(path), True, subpages, host=ONION).status_code == 200, path
 
 
 def test_first_domains_own_subpages_are_unchanged_when_logged_out(app, subpages):
@@ -329,23 +371,27 @@ def test_first_domains_own_subpages_are_unchanged_when_logged_out(app, subpages)
 
 
 @pytest.mark.parametrize('signed_in', [False, True])
-def test_first_domains_community_page_names_a_local_only_moderator_or_related_community_only_when_logged_in(
-        app, grouped, signed_in):
+def test_first_domains_community_page_names_no_local_only_moderator_or_related_community(app, grouped, signed_in):
+    """Follow-up F6: not to a logged-in reader either; on the onion it does."""
     db.session.add(CommunityMember(user_id=grouped.onion_bob.id, community_id=grouped.first_art.id, is_moderator=True))
     db.session.commit()
     response = visit(app, '/c/art', signed_in, grouped)
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert (f'/u/{ONION_BOB}' in body) == signed_in   # the moderator list
-    assert (f'/c/{ONION_ART}' in body) == signed_in   # the related communities
+    assert f'/u/{ONION_BOB}' not in body   # the moderator list
+    assert f'/c/{ONION_ART}' not in body   # the related communities
+    if signed_in:
+        body = visit(app, f'/c/art@{FIRST}', True, grouped, host=ONION).get_data(as_text=True)
+        assert 'href="/u/bob"' in body and 'href="/c/art"' in body
 
 
 # --- /about (fix round 2) -----------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize('signed_in', [False, True])
-def test_the_about_page_names_a_local_only_admin_only_to_a_logged_in_reader(app, api, signed_in):
-    body = visit(app, '/about', signed_in, api).get_data(as_text=True)
-    assert (ONION in body) == signed_in
+def test_the_about_page_names_a_local_only_admin_only_to_a_logged_in_reader_on_the_onion(app, api, signed_in):
+    """Follow-up F6: on the first domain to nobody."""
+    assert ONION not in visit(app, '/about', signed_in, api).get_data(as_text=True)
+    assert ('href="/u/bob"' in visit(app, '/about', signed_in, api, host=ONION).get_data(as_text=True)) == signed_in
 
 
 # --- moderator lists of the first domain's own rows (fix round 2) -------------------------------------------------------------
@@ -361,20 +407,20 @@ def cross_moderated(api):
 
 
 @pytest.mark.parametrize('signed_in', [False, True])
-def test_first_domains_own_api_views_name_a_local_only_moderator_or_community_only_to_a_logged_in_caller(
-        app, cross_moderated, signed_in):
+def test_first_domains_own_api_views_name_no_local_only_moderator_or_community(app, cross_moderated, signed_in):
+    """Follow-up F6: not to a logged-in caller either."""
     for path in ('/api/alpha/community?name=art', '/api/alpha/user?username=bob',
                  f'/api/alpha/post?id={cross_moderated.first_post.id}'):
         response = api_get(app, path, cross_moderated, signed_in)
         assert response.status_code == 200, path
-        assert (ONION in response.get_data(as_text=True)) == signed_in, path
+        assert ONION not in response.get_data(as_text=True), path
 
 
 @pytest.mark.parametrize('signed_in', [False, True])
-def test_first_domains_own_profile_names_a_local_only_community_it_moderates_only_when_logged_in(app, cross_moderated,
-                                                                                         signed_in):
+def test_first_domains_own_profile_names_no_local_only_community_it_moderates(app, cross_moderated, signed_in):
+    """Follow-up F6: not to a logged-in reader either."""
     body = visit(app, '/u/bob', signed_in, cross_moderated).get_data(as_text=True)
-    assert (f'/c/{ONION_ART}' in body) == signed_in
+    assert f'/c/{ONION_ART}' not in body, around(body, f'/c/{ONION_ART}')
 
 
 # --- post and reply pages (fix round 3) ---------------------------------------------------------------------------
@@ -396,13 +442,13 @@ def thread_paths(world):
 
 
 @pytest.mark.parametrize('signed_in', [False, True])
-def test_a_first_post_page_names_a_local_only_moderator_or_community_only_when_logged_in(app, first_thread, monkeypatch,
-                                                                                       signed_in):
+def test_a_first_post_page_names_no_local_only_moderator_or_community(app, first_thread, monkeypatch, signed_in):
+    """Follow-up F6: not to a logged-in reader either."""
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the signed-in reply form renders its token
     for path in thread_paths(first_thread):
         response = visit(app, path, signed_in, first_thread)
         assert response.status_code == 200, path
         body = response.get_data(as_text=True)
-        assert (f'/u/{ONION_BOB}' in body) == signed_in, path   # the moderator list
+        assert f'/u/{ONION_BOB}' not in body, path   # the moderator list
     body = visit(app, thread_paths(first_thread)[0], signed_in, first_thread).get_data(as_text=True)
-    assert (f'/c/{ONION_ART}' in body) == signed_in   # the same-topic communities
+    assert f'/c/{ONION_ART}' not in body, around(body, f'/c/{ONION_ART}')   # the same-topic communities

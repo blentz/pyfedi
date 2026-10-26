@@ -47,17 +47,18 @@ def feed(viewer, community):
     return get_post_list(bearer(viewer), {'community_id': community.id})['posts']
 
 
-def test_a_first_user_blocks_the_onion_instance_on_the_web(app, world):
-    viewer = world.viewers[FIRST]
-    assert len(feed(viewer, world.communities[ONION])) == 1
-    visitor = Visitor(app, viewer, FIRST)
-    assert 'Onion community' in visitor.get('/communities').get_data(as_text=True)
-    assert visitor.post(f'/instance/{world.instances[ONION]}/block').status_code == 302
-    assert blocked(viewer) == {world.instances[ONION]}
-    assert feed(viewer, world.communities[ONION]) == []
+def test_an_onion_user_blocks_the_first_domains_instance_on_the_web(app, world):
+    """Follow-up F6: the first domain never shows the onion (to anyone), so the sister block is tried from the onion."""
+    viewer = world.viewers[ONION]
+    assert len(feed(viewer, world.communities[FIRST])) == 1
+    visitor = Visitor(app, viewer, ONION)
+    assert 'First community' in visitor.get('/communities').get_data(as_text=True)
+    assert visitor.post(f'/instance/{world.instances[FIRST]}/block').status_code == 302
+    assert blocked(viewer) == {world.instances[FIRST]}
+    assert feed(viewer, world.communities[FIRST]) == []
     page = visitor.get('/communities').get_data(as_text=True)
-    assert 'Onion community' not in page
-    assert 'First community' in page
+    assert 'First community' not in page
+    assert 'Onion community' in page
 
 
 def test_a_first_user_blocks_the_onion_instance_through_the_api(app, world):
@@ -156,16 +157,21 @@ def test_a_profile_on_a_sister_blocks_its_instance_but_not_ones_own(app, world, 
     assert visitor.post(f'/u/{viewer.user_name}/block_instance').status_code == 302
     assert blocked(viewer) == set()
     assert flashes(visitor) == ['You cannot block this instance.']
+    if host == FIRST:   # follow-up F6: off the onion its accounts are unknown
+        assert visitor.post(f'/u/{world.viewers[sister].user_name}@{sister}/block_instance').status_code == 404
+        return
     assert visitor.post(f'/u/{world.viewers[sister].user_name}@{sister}/block_instance').status_code == 302
     assert blocked(viewer) == {world.instances[sister]}
     assert f'Content from {sister} will be hidden.' in flashes(visitor)
 
 
 def test_a_sisters_profile_blocked_over_htmx_goes_home_when_viewed_on_that_domain(app, world):
-    visitor = Visitor(app, world.viewers[FIRST], FIRST)
-    response = visitor.client.post(f'/u/viewer@{ONION}/block_instance', data={'csrf_token': visitor.token},
+    """From the onion: the first domain never shows the onion's profiles (follow-up F6)."""
+    visitor = Visitor(app, world.viewers[ONION], ONION)
+    name = world.viewers[FIRST].user_name
+    response = visitor.client.post(f'/u/{name}@{FIRST}/block_instance', data={'csrf_token': visitor.token},
                                    base_url=visitor.base,
-                                   headers={'HX-Request': 'true', 'HX-Current-Url': f'http://{ONION}/u/viewer'})
+                                   headers={'HX-Request': 'true', 'HX-Current-Url': f'https://{FIRST}/u/{name}'})
     assert response.status_code == 200
     assert response.headers['HX-Redirect'] == '/home'
 

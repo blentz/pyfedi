@@ -12,6 +12,7 @@ import pytest
 from flask import render_template
 
 from app import db
+from app.local_only import content_local_only
 from app.models import Community, CommunityBlock, Language, Post, Report, Site, UserBlock
 from app.post.util import convert_archived_replies_to_tree, retrieve_archived_post
 from app.utils import archive_post
@@ -40,6 +41,9 @@ def test_the_profiles_block_and_unblock_buttons_act_on_the_profiles_account(app,
     """Critical 1: on one storefront, the other domain's bob's profile blocks and unblocks that bob."""
     viewer, theirs = world.viewers[host], world.bob[other(host)]
     client = signed_in(app, viewer, host)
+    if host == FIRST:   # follow-up F6: off the onion its rows are unknown
+        assert client.get(f'/u/bob@{other(host)}').status_code == 404
+        return
     page = client.get(f'/u/bob@{other(host)}').get_data(as_text=True)
     [block] = hx_posts(page, 'block')
     assert client.post(block).status_code in (200, 302)
@@ -58,6 +62,9 @@ def test_the_block_lists_unblock_button_unblocks_that_account(app, world, host, 
     db.session.commit()
     client = signed_in(app, viewer, host)
     page = client.get('/user/settings/filters').get_data(as_text=True)
+    if host == FIRST:   # follow-up F6: off the onion its rows are unknown: the list names no onion account, so there is nothing to unblock there
+        assert hx_posts(page, 'unblock') == []
+        return
     [unblock] = hx_posts(page, 'unblock')
     assert client.post(unblock).status_code in (200, 302)
     assert blocked(viewer) == set()
@@ -88,23 +95,17 @@ def test_a_report_about_the_onions_bob_links_to_the_onions_bob_on_first(app, tit
     world = titled
     client = signed_in(app, world.viewers[reporter_host], reporter_host)
     target = 'bob' if reporter_host == ONION else f'bob@{ONION}'
-    assert client.post(f'/u/{target}/report', data={'reasons': '7', 'description': 'spam'}).status_code == 302
+    response = client.post(f'/u/{target}/report', data={'reasons': '7', 'description': 'spam'})
+    if reporter_host == FIRST:   # follow-up F6: off the onion its bob is unknown, so he cannot be reported there
+        assert response.status_code == 404
+        return
+    assert response.status_code == 302
     report = Report.query.filter_by(suspect_user_id=world.bob[ONION].id).one()
-    with default_request(app):
+    with onion_request(app):
         html = render_template('admin/reports/user_report.html', report=report)
     suspect, reporter = profile_links(html)
-    assert shows(app, world, FIRST, suspect) == {ONION}
+    assert shows(app, world, ONION, suspect) == {ONION}
     assert reporter == f'/user/{world.viewers[reporter_host].id}'
-
-
-def test_a_follow_notification_from_the_onions_bob_links_to_the_onions_bob(app, titled):
-    world = titled
-    watcher = world.viewers[FIRST]
-    follower = signed_in(app, world.bob[ONION], ONION)
-    assert follower.post(f'/u/{watcher.user_name}@{FIRST}/follow').status_code in (200, 302)
-    page = signed_in(app, watcher, FIRST).get('/notifications').get_data(as_text=True)
-    [link] = [href for href in profile_links(page) if href == f'/user/{world.bob[ONION].id}']
-    assert shows(app, world, FIRST, link) == {ONION}
 
 
 def test_a_stored_name_is_the_same_on_every_storefront(app, world):
@@ -170,7 +171,11 @@ def test_a_profiles_pagination_stays_on_the_profiles_account(app, titled, host):
     for number in range(21):   # one past the overview's page of 20, so page 2 has an item and a link back
         make_post(world.art[theirs], world.bob[theirs], f'{BASE[theirs]}/post/paged-{number}', title=f'paged {number}')
     db.session.commit()
-    page = signed_in(app, world.viewers[host], host).get(f'/u/bob@{theirs}?overview_page=2').get_data(as_text=True)
+    response = signed_in(app, world.viewers[host], host).get(f'/u/bob@{theirs}?overview_page=2')
+    if host == FIRST:   # follow-up F6: off the onion its bob is unknown
+        assert response.status_code == 404
+        return
+    page = response.get_data(as_text=True)
     [back] = {href.replace('&amp;', '&') for href in re.findall(r'href="([^"]*overview_page=1[^"]*)"', page)}
     assert shows(app, world, host, back) == {theirs}
 
@@ -179,9 +184,13 @@ def test_a_profiles_pagination_stays_on_the_profiles_account(app, titled, host):
 def test_deleting_a_post_returns_to_its_own_community(app, world, host):
     author = world.viewers[host]
     post = make_post(world.art[other(host)], author, f'{BASE[host]}/post/to-delete', title='doomed')
+    post.local_only = content_local_only(author, world.art[other(host)])   # as creation stamps it
     db.session.commit()
     with patch('app.shared.post.task_selector'):
         response = signed_in(app, author, host).post(f'/post/{post.id}/delete', data={'reason': ''})
+    if host == FIRST:   # follow-up F6: a post in the onion's community is unknown off the onion, its author's too
+        assert response.status_code == 404
+        return
     assert response.status_code == 302
     assert community_shown(app, world, host, response.headers['Location']) == {other(host)}
 
@@ -193,6 +202,9 @@ def test_the_block_lists_community_link_names_that_domains_community(app, world,
     db.session.add(CommunityBlock(user_id=viewer.id, community_id=world.art[other(host)].id))
     db.session.commit()
     page = signed_in(app, viewer, host).get('/user/settings/filters').get_data(as_text=True)
+    if host == FIRST:   # follow-up F6: the list names no onion community there
+        assert re.findall(r'href="(/c/art[^"]*)"', page) == []
+        return
     [link] = re.findall(r'href="(/c/art[^"]*)"', page)
     assert community_shown(app, world, host, link) == {other(host)}
 
@@ -208,11 +220,11 @@ def test_the_posting_pattern_counts_only_this_accounts_posts(app, world):
 
     def posts_per_hour(path):
         with patch('app.user.routes.render_template', return_value='rendered') as render:
-            signed_in(app, world.viewers[FIRST], FIRST).get(path)
+            signed_in(app, world.viewers[ONION], ONION).get(path)   # the onion's bob is shown there only (F6)
         return render.call_args.kwargs['posting_pattern_values']
 
-    assert posts_per_hour('/u/bob') == [0] * 24
-    assert sum(posts_per_hour(f'/u/bob@{ONION}')) == 3
+    assert posts_per_hour(f'/u/bob@{FIRST}') == [0] * 24
+    assert sum(posts_per_hour('/u/bob')) == 3
 
 
 def test_a_communitys_alternate_link_is_lower_case_whatever_its_stored_name(app, two_domains):

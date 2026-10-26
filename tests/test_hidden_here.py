@@ -11,7 +11,7 @@ from sqlalchemy import not_, text
 
 from app import db
 from app.local_only import content_local_only, hidden_here, hidden_here_clause, hidden_here_sql, \
-    without_hidden_here
+    without_hidden_here, without_local_only, without_local_only_actors
 from app.models import Community, Post, PostReply, SiteDomain, User
 from app.storefront import clear_domain_cache, domain_for_host
 from tests.factories import make_instance, make_post, make_post_reply, make_user
@@ -195,6 +195,14 @@ def test_the_reader_defaults_to_the_sessions_login(app, world):
         assert hidden_here(world.onion_post) is True
         assert str(hidden_here_clause(User)) == str(hidden_here_clause(User, False))
         assert hidden_here_sql('t', Post) == 't.local_only'
+
+
+def test_the_c2_list_filters_go_through_it(app, world):
+    with request_on(app, domain_for_host(FIRST)):
+        users = {row.id for row in without_local_only_actors(db.session.query(User), User, True)}
+        posts = {row.id for row in without_local_only(db.session.query(Post), Post, True)}
+    assert world.onion_bob.id not in users and world.first_bob.id in users
+    assert world.onion_in_first.id not in posts and world.first_post.id in posts
 
 
 def test_the_clause_is_never_null_so_its_negation_keeps_every_other_row(app, two_onions):

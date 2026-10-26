@@ -18,6 +18,8 @@ from app.storefront import clear_domain_cache
 from tests.factories import make_community, make_feed_item, make_feed_member, make_instance, make_local_feed, \
     make_post, make_post_reply, make_user
 from tests.test_community_lifecycle import csrf, login, url
+from tests.test_per_domain_ap_routes import PROXY
+from tests.test_per_domain_html_routes import Visitor
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -355,15 +357,20 @@ def test_a_federated_feeds_followers_leave_local_only_members_out(app, world):
     assert _get(app, '/f/news/followers').json['totalItems'] == 2
 
 
-def test_a_logged_in_browser_still_sees_local_only_pages(app, world, monkeypatch):
-    """Only the ActivityPub answer is refused: what a local viewer's browser is shown is plan B task 9's business."""
+def test_a_logged_in_browser_sees_local_only_pages_on_the_onion_only(app, world, monkeypatch):
+    """Only the ActivityPub answer is refused here: what a local viewer's browser is shown is plan B task 9's
+    business, and since follow-up F6 a logged-in browser is shown them on the onion and nowhere else."""
     # the post page renders form.csrf_token(), which does not exist while CSRF is off
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
+    monkeypatch.setitem(app.config, 'ONION_PROXY_IP', PROXY)
     post = _post(app, world.hidden, world.onionite, local_only=True)
     client = app.test_client()
     login(client, world.alice)
     for path in ('/u/onionite@abc.onion', '/c/hidden@abc.onion', f'/post/{post.id}'):   # named from the first domain
-        assert client.get(path, headers={'Accept': 'text/html'}).status_code == 200, path
+        assert client.get(path, headers={'Accept': 'text/html'}).status_code == 404, path
+    onion = Visitor(app, world.alice, 'abc.onion')
+    for path in ('/u/onionite', '/c/hidden', f'/post/{post.id}'):
+        assert onion.get(path, headers={'Accept': 'text/html'}).status_code == 200, path
 
 
 def _snapshot_world(app, world):

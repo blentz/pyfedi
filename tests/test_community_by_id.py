@@ -55,7 +55,8 @@ def test_an_onion_community_is_hidden_from_a_visitor_who_is_not_logged_in(app, t
     assert on_onion(app.test_client(), '/c/hidden').status_code == 404      # the same answer /c/<name> gives
 
 
-def test_an_onion_community_opens_by_id_for_a_logged_in_visitor(app, two_domains, public):
+def test_an_onion_community_opens_by_id_for_a_logged_in_visitor_on_the_onion_only(app, two_domains, public):
+    """Follow-up F6: on the first domain it is 404 to a logged-in visitor too."""
     first, onion = two_domains.domains
     community = two_domains.local_community('hidden', onion)
     member = two_domains.local_user('visitor', first)
@@ -63,7 +64,8 @@ def test_an_onion_community_opens_by_id_for_a_logged_in_visitor(app, two_domains
     with client.session_transaction() as session:
         session['_user_id'] = str(member.id)
         session['_fresh'] = True
-    assert on_first(client, f'/community/{community.id}').status_code == 200
+    assert on_first(client, f'/community/{community.id}').status_code == 404
+    assert on_onion(client, f'/community/{community.id}').status_code == 200
 
 
 def test_a_banned_community_is_not_found_by_id(app, two_domains, public):

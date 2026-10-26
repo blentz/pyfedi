@@ -7,7 +7,7 @@ import pytest
 
 from app.api.alpha.utils.misc import get_resolve_object
 from tests.factories import make_user
-from tests.two_domains import FIRST, ONION, no_http, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, no_http, onion_request, two_domains  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -34,8 +34,15 @@ def _resolved(caller, query):
     (f'https://{ONION}/u/bob@{FIRST}', 'first'),
 ])
 def test_each_handle_resolves_to_its_own_domains_account(app, two_bobs, no_http, query, whose):
+    """Asked on the onion, where both bobs are shown. Off the onion its bob is not found (follow-up F6)."""
     caller, first_bob, onion_bob = two_bobs
-    assert _resolved(caller, query) == {'first': first_bob, 'onion': onion_bob}[whose].id
+    with onion_request(app):
+        assert _resolved(caller, query) == {'first': first_bob, 'onion': onion_bob}[whose].id
+    if whose == 'onion':
+        with pytest.raises(Exception, match='No object found'):
+            _resolved(caller, query)   # outside a request the storefront is the first domain
+    else:
+        assert _resolved(caller, query) == first_bob.id
     assert no_http == []
 
 

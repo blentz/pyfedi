@@ -177,7 +177,7 @@ def test_a_community_list_puts_its_own_domains_community_first(app, two_domains)
             return [c['community']['name'] for c in get_community_list(f'Bearer {user.encode_jwt_token()}',
                                                                       {'type_': 'All'})['communities']]
 
-    assert listing(first) == ['b_first', 'a_onion']
+    assert listing(first) == ['b_first']   # follow-up F6: the onion's community is not listed off the onion
     assert listing(onion) == ['a_onion', 'b_first']
 
 
@@ -379,7 +379,8 @@ def test_the_communities_page_lists_its_own_domains_community_first(app, two_dom
         response = client.get('/communities?sort_by=last_active%20desc', base_url=BASE[domain])
     assert response.status_code == 200
     names = [c.name for c in render.call_args.kwargs['communities'].items if c.name.endswith(('_first', '_onion'))]
-    assert names == (['b_first', 'a_onion'] if domain == 'first' else ['a_onion', 'b_first'])
+    # follow-up F6: the onion's community is not listed off the onion
+    assert names == (['b_first'] if domain == 'first' else ['a_onion', 'b_first'])
 
 
 # ------------------------------------------------------------------------ a hot-sort cursor that was not handed out
