@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 from flask import render_template
+from werkzeug.exceptions import NotFound
 
 from app import db
 from app.constants import ROLE_ADMIN_NAME
@@ -19,6 +20,7 @@ from app.models import CommunityMember, Domain, File, Notification, Post, PostBo
     Report, Role, Topic, UserRegistration, read_posts, user_file, utcnow
 from tests.factories import grant_permission, make_post, make_post_reply
 from app.hidden_routes import notification_hidden
+from app.post.routes import refuse_invisible_unless_moderating
 from tests.test_hidden_here import reply_chain
 from tests.test_per_domain_html_routes import Visitor
 from tests.test_instance_visible_here import HOSTS, get, scene  # noqa: F401 -- scene is a fixture
@@ -694,3 +696,34 @@ def test_the_apis_notifications_leave_them_out_on_the_first_domain(app, notified
     assert 'ONIONTITLE' not in body and 'ONIONPOST' not in body and 'FIRSTPOST' in body
     on_onion = api(app, '/api/alpha/user/notifications?status=All&limit=50', notified.first_bob, host=ONION)
     assert 'ONIONPOST' in on_onion.get_data(as_text=True)
+
+
+# --- the views' own gates, behind the route gate -------------------------------------------------------------------
+
+@pytest.mark.parametrize('path', ['/community/art/feed', '/community/art/ical', '/community/art/wiki/rules', '/u/bob',
+                                  '/u/bob/feed', 'preview'])
+def test_on_the_onion_a_logged_out_reader_is_refused_by_the_views_own_gate(app, onion, path):
+    """The route gate asks only the storefront's part of the rule; a logged-out reader is each view's to refuse (C2)."""
+    path = f'/user/{onion.onion_bob.id}/preview' if path == 'preview' else path
+    assert get(app, path, host=ONION).status_code == 404, path
+
+
+def test_off_the_onion_its_instance_sticky_post_is_left_out_for_a_signed_in_reader(app, onion):
+    onion.post.instance_sticky = onion.first_post.instance_sticky = True
+    db.session.commit()
+    body = get(app, '/', user=onion.first_bob).get_data(as_text=True)
+    assert 'ONIONPOST' not in body and 'FIRSTPOST' in body
+
+
+def test_a_moderation_action_on_a_hidden_post_is_refused_behind_the_route_gate(app, onion):
+    with default_request(app):
+        with pytest.raises(NotFound):
+            refuse_invisible_unless_moderating(onion.post)
+
+
+def test_a_notification_whose_link_cannot_be_parsed_is_shown_and_followed_to_the_list(app, onion):
+    notification = notice(onion.first_bob, 999, 'http://[::1/post/1')
+    body = get(app, '/notifications', user=onion.first_bob).get_data(as_text=True)
+    assert NOTE not in body and 'ONIONTITLE' in body
+    response = Visitor(app, onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
+    assert response.status_code == 302 and response.headers['Location'].endswith('/notifications')
