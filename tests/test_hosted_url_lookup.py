@@ -184,15 +184,17 @@ def post_as_alice(app, env, path, data):
 
 
 def search_for(app, env, address):
-    """The retrieve_remote_post page's answer to `address`, asked by the first domain's alice."""
+    """The retrieve_remote_post page's answer to `address`, asked by the first domain's alice: the page text, or the
+    path she is sent to (a hosted post she may open, follow-up F2)."""
     response = post_as_alice(app, env, '/retrieve_remote_post', {'address': address})
+    if response.status_code == 302:
+        return response.headers['Location']
     assert response.status_code == 200
     return response.get_data(as_text=True)
 
 
-def test_search_for_a_sister_post_url_shows_the_post(app, env, wire):
-    page = search_for(app, env, f'https://{SHOP}/c/den/p/{env.post.id}/slug')
-    assert 'a shop post' in page and 'Post not found.' not in page
+def test_search_for_a_sister_post_url_opens_the_post_here(app, env, wire):
+    assert search_for(app, env, f'https://{SHOP}/c/den/p/{env.post.id}/slug') == f'/post/{env.post.id}'
     assert wire.calls.call_count == 0
 
 
@@ -227,14 +229,28 @@ def _unpublished(env):
 @pytest.mark.parametrize('hide', [_deleted, _followers_only, _direct, _private_community, _local_only_community,
                                   _local_only_post, _unpublished])
 def test_a_hosted_post_no_peer_may_fetch_is_not_found_by_url(app, env, wire, hide):
-    """Our ActivityPub post route serves none of these to a peer, so a search by its URL, which before C4 fetched
-    that route, finds nothing either (security review of dbbb74c91)."""
+    """Our ActivityPub post route serves none of these to a peer, so the resolver a peer's Move reaches finds nothing
+    either (security review of dbbb74c91). The viewer's search is not the peer gate: see the next test."""
     hide(env)
     db.session.commit()
     for url in (f'https://{SHOP}/post/{env.post.id}', f'https://{SERVER}/c/den/p/{env.post.id}/slug'):
-        page = search_for(app, env, url)
-        assert 'Post not found.' in page and 'a shop post' not in page, url
         assert resolve_remote_post_from_search(url) is None
+    assert wire.calls.call_count == 0
+
+
+@pytest.mark.parametrize('hide, opens', [(_deleted, True), (_followers_only, False), (_direct, False),
+                                         (_private_community, False), (_local_only_community, True),
+                                         (_local_only_post, True), (_unpublished, True)])
+def test_a_search_for_a_hosted_post_is_held_to_what_the_post_page_shows_the_viewer(app, env, wire, hide, opens):
+    """alice (user 1) is an admin: she opens what the page shows an admin, and gets the plain not-found for the rest."""
+    hide(env)
+    db.session.commit()
+    for url in (f'https://{SHOP}/post/{env.post.id}', f'https://{SERVER}/c/den/p/{env.post.id}/slug'):
+        found = search_for(app, env, url)
+        if opens:
+            assert found == f'/post/{env.post.id}', url
+        else:
+            assert 'Post not found.' in found and 'a shop post' not in found, url
     assert wire.calls.call_count == 0
 
 
@@ -246,8 +262,6 @@ def test_a_hosted_post_no_peer_may_fetch_is_not_found_by_its_stored_url(app, env
     env.post.ap_id = stored
     hide(env)
     db.session.commit()
-    page = search_for(app, env, stored)
-    assert 'Post not found.' in page and 'a shop post' not in page
     assert resolve_remote_post_from_search(stored) is None
     assert wire.calls.call_count == 0
 
@@ -256,8 +270,7 @@ def test_a_public_hosted_post_is_found_by_its_stored_url(app, env, wire):
     stored = f'https://{SHOP}/post/{env.post.id}'
     env.post.ap_id = stored
     db.session.commit()
-    page = search_for(app, env, stored)
-    assert 'a shop post' in page and 'Post not found.' not in page
+    assert search_for(app, env, stored) == f'/post/{env.post.id}'
     assert resolve_remote_post_from_search(stored) is env.post
     assert wire.calls.call_count == 0
 
@@ -274,13 +287,13 @@ def test_a_remote_post_found_by_its_stored_url_is_returned_as_before(env, wire):
     assert wire.calls.call_count == 0
 
 
-def test_the_discovery_view_never_opens_a_hosted_post(app, env, wire):
-    """The discovery view resolves wider-network results only: a hosted URL is an excluded host, sent back to the
-    search with a warning before any lookup."""
+def test_the_discovery_view_opens_a_hosted_post_from_the_database(app, env, wire):
+    """A hosted URL is never fetched: the discovery view opens the local post on the domain the viewer is on
+    (follow-up F2)."""
     response = post_as_alice(app, env, '/discovery/video/resolve',
                              {'q': 'x', 'url': f'https://{SHOP}/post/{env.post.id}'})
     assert response.status_code == 302
-    assert response.headers['Location'].startswith('/search')
+    assert response.headers['Location'] == f'/post/{env.post.id}'
     assert wire.calls.call_count == 0
 
 

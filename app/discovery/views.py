@@ -13,6 +13,8 @@ from app.discovery.filters import host_is_excluded
 from app.discovery.media import platform_of
 from app.discovery.sources import is_hostname
 from app.main import bp
+from app.post.util import hosted_post_for_viewer
+from app.storefront import is_hosted_uri
 from app.models import Community, DiscoveryEntry, User
 from app.utils import login_required, show_ban_message
 
@@ -72,6 +74,12 @@ def discovery_video_resolve():
         abort(400)
     url, host = cleaned
     back = redirect(url_for('search.run_search', q=q, external='1'))
+    if is_hosted_uri(url):   # a result on one of our own domains: the local post here, never fetched (follow-up F2)
+        post = hosted_post_for_viewer(url)
+        if post is None:
+            flash(_('That video was not found.'), 'warning')
+            return back
+        return redirect(url_for('activitypub.post_ap', post_id=post.id))
     if host_is_excluded(host, frozenset()):
         flash(_('That video is on an instance this site does not federate with.'), 'warning')
         return back
