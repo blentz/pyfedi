@@ -359,3 +359,38 @@ def test_the_link_domain_and_instance_post_lists_leave_out_onion_posts(app, link
 def test_on_the_onion_the_link_domain_lists_them(app, linked):
     body = get(app, '/d/example.com', host=ONION, user=linked.first_bob).get_data(as_text=True)
     assert 'ONIONINFIRST' in body and 'FIRSTINONION' in body and 'FIRSTPOST' in body
+
+
+# --- an account's own activity lists (review I5) -----------------------------------------------------------------------
+
+@pytest.fixture
+def active(onion):
+    """The first domain's bob, signed in on the onion, upvoted, bookmarked and read the onion's posts and its reply, and
+    FIRSTPOST, the control."""
+    bob = onion.first_bob
+    for post in (onion.post, onion.in_first, onion.first_post):
+        db.session.add(PostVote(user_id=bob.id, author_id=post.user_id, post_id=post.id, effect=1.0))
+        db.session.add(PostBookmark(user_id=bob.id, post_id=post.id))
+        db.session.execute(read_posts.insert().values(user_id=bob.id, read_post_id=post.id))
+    onion.first_reply = make_post_reply(onion.first_post, bob, 'FIRSTREPLY')
+    for reply in (onion.reply, onion.first_reply):
+        db.session.add(PostReplyBookmark(user_id=bob.id, post_reply_id=reply.id))
+    db.session.commit()
+    return onion
+
+
+def test_upvotes_bookmarks_and_read_posts_leave_out_onion_content_on_the_first_domain(app, active):
+    pages = {'/u/bob/upvotes': active.admin, '/bookmarks': active.first_bob, '/read-posts': active.first_bob}
+    for path, viewer in pages.items():
+        body = get(app, path, user=viewer).get_data(as_text=True)
+        assert 'ONIONPOST' not in body and 'ONIONINFIRST' not in body, (path, near(body, 'ONIONPOST', 'ONIONINFIRST'))
+        assert 'FIRSTPOST' in body, path   # the control
+    body = get(app, '/bookmarks/comments', user=active.first_bob).get_data(as_text=True)
+    assert 'ONIONREPLY' not in body and 'FIRSTREPLY' in body
+
+
+def test_on_the_onion_they_list_it(app, active):
+    for path in ('/u/bob@test.piefed.local/upvotes', '/bookmarks', '/read-posts'):
+        body = get(app, path, host=ONION, user=active.first_bob).get_data(as_text=True)
+        assert 'ONIONPOST' in body, path
+    assert 'ONIONREPLY' in get(app, '/bookmarks/comments', host=ONION, user=active.first_bob).get_data(as_text=True)

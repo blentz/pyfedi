@@ -1954,7 +1954,8 @@ def user_bookmarks():
 
     posts = Post.query.filter(Post.status > POST_STATUS_REVIEWING, visible_to_clause(Post, current_user.id)). \
         join(PostBookmark, PostBookmark.post_id == Post.id). \
-        filter(PostBookmark.user_id == current_user.id).order_by(desc(PostBookmark.created_at))
+        filter(PostBookmark.user_id == current_user.id)
+    posts = without_local_only(posts, Post).order_by(desc(PostBookmark.created_at))   # off the onion, none of its (F6)
 
     posts = posts.paginate(page=page, per_page=100 if current_user.is_authenticated and not low_bandwidth else 50,
                            error_out=False)
@@ -1979,7 +1980,8 @@ def user_bookmarks_comments():
 
     post_replies = PostReply.query.filter(PostReply.deleted == False, visible_to_clause(PostReply, current_user.id)).join(PostReplyBookmark,
                                                                            PostReplyBookmark.post_reply_id == PostReply.id). \
-        filter(PostReplyBookmark.user_id == current_user.id).order_by(desc(PostReplyBookmark.created_at))
+        filter(PostReplyBookmark.user_id == current_user.id)
+    post_replies = without_local_only(post_replies, PostReply).order_by(desc(PostReplyBookmark.created_at))   # F6
 
     post_replies = post_replies.paginate(page=page,
                                          per_page=100 if current_user.is_authenticated and not low_bandwidth else 50,
@@ -2178,8 +2180,8 @@ def user_read_posts(sort=None):
     page = request.args.get('page', 1, type=int)
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
 
-    posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
-                             visible_to_clause(Post, current_user.id))
+    posts = without_local_only(Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
+                                                 visible_to_clause(Post, current_user.id)), Post)   # F6
 
     if current_user.ignore_bots == 1:
         posts = posts.filter(Post.from_bot == False)

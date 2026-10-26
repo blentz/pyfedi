@@ -404,8 +404,9 @@ def _get_user_same_ip(user):
 def _get_user_upvoted_posts(user):
     """Get posts upvoted by user (only for user themselves or admins)."""
     if current_user.is_authenticated and (user.id == current_user.get_id() or current_user.is_admin()):
-        return Post.query.join(PostVote, PostVote.post_id == Post.id).filter(PostVote.effect > 0, PostVote.user_id == user.id). \
-            order_by(desc(PostVote.id)).limit(50).all()
+        posts = Post.query.join(PostVote, PostVote.post_id == Post.id).filter(PostVote.effect > 0,
+                                                                              PostVote.user_id == user.id)
+        return without_local_only(posts, Post).order_by(desc(PostVote.id)).limit(50).all()   # F6, for admins too
     return []
 
 
