@@ -110,12 +110,19 @@ def target_link(targets: dict | None, name_key: str, css_class: str = '') -> Mar
     return Markup('<a{} href="{}">{}</a>').format(css, href, name)
 
 
+# the name-built urls a notification stored before follow-up F1: (model, targets key of its id, endpoint, url argument)
+_STORED_URLS = {'/c/': (Community, 'community_id', 'community.show_community_by_id', 'community_id'),
+                '/u/': (User, 'suspect_user_id', 'user.show_profile_by_id', 'user_id')}
+
+
 def notification_href(notification) -> str | None:
     """Where following `notification` goes, or None when it names nothing. A url is followed as stored, except the
-    `/c/<stored name>` a new-moderator notification kept before follow-up F1, which can name a namesake on another
-    domain: that goes to the community by id, from its targets or else a lookup of the name (`stored_name_id`)."""
+    `/c/<name>` and `/u/<name>` a notification kept before follow-up F1: a stored name can name a namesake on another
+    domain, so that goes by id, from its targets or else a lookup of the name (`stored_name_id`)."""
     url = notification.url
-    if not url.startswith('/c/'):
+    kind = _STORED_URLS.get(url[:3])
+    if kind is None:
         return url
-    community_id = (notification.targets or {}).get('community_id') or stored_name_id(Community, url[len('/c/'):])
-    return None if community_id is None else url_for('community.show_community_by_id', community_id=community_id)
+    model, key, endpoint, argument = kind
+    found = (notification.targets or {}).get(key) or stored_name_id(model, url[3:])
+    return None if found is None else url_for(endpoint, **{argument: found})
