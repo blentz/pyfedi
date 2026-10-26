@@ -769,6 +769,64 @@ def test_the_replaced_upload_is_deleted_with_its_thumbnail_mark(app, db_session,
     assert seen == [(str(tmp_path / 'icon_thumb.png'), True, True)]
 
 
+def _generated_icon(community, tmp_path):
+    """The community's icon as a File whose files our server generated for it: marked, and with no upload name."""
+    thumbnail = tmp_path / 'icon_generated_thumb_longname.png'
+    thumbnail.write_bytes(b'png')
+    icon = community.icon
+    icon.file_name = None
+    icon.thumbnail_path, icon.thumbnail_written_by_us, icon.file_written_by_us = str(thumbnail), True, True
+    db.session.commit()
+    return icon.file_path, str(thumbnail)
+
+
+def test_a_replaced_icon_whose_files_we_generated_is_reclaimed(app, db_session, monkeypatch, tmp_path):
+    """Follow-up F3 fix round: the marks on the old row make the detached copy ours to remove (it keeps the old id,
+    so the other-record check still runs); the row itself is gone by then."""
+    monkeypatch.setattr('app.models.MEDIA_ROOT', str(tmp_path))
+    community = _local_community_with_uploads(app, tmp_path)
+    community_id = community.id
+    file_path, thumbnail_path = _generated_icon(community, tmp_path)
+    _fetch_succeeds(monkeypatch, tmp_path)
+    replacement = make_file(source_url=f'https://{PEER}/pictrs/image/new-icon.png')
+    db.session.commit()
+
+    activitypub_util.replace_local_upload_task(community_id, 'icon', replacement.id)
+
+    assert not os.path.exists(file_path) and not os.path.exists(thumbnail_path)
+
+
+def test_a_replaced_icon_whose_generated_file_another_record_names_is_kept(app, db_session, monkeypatch, tmp_path):
+    monkeypatch.setattr('app.models.MEDIA_ROOT', str(tmp_path))
+    community = _local_community_with_uploads(app, tmp_path)
+    community_id = community.id
+    file_path, thumbnail_path = _generated_icon(community, tmp_path)
+    make_file(file_path=thumbnail_path)   # another record names the thumbnail
+    _fetch_succeeds(monkeypatch, tmp_path)
+    replacement = make_file(source_url=f'https://{PEER}/pictrs/image/new-icon.png')
+    db.session.commit()
+
+    activitypub_util.replace_local_upload_task(community_id, 'icon', replacement.id)
+
+    assert not os.path.exists(file_path) and os.path.exists(thumbnail_path)
+
+
+def test_a_replaced_icon_whose_files_we_did_not_generate_is_left(app, db_session, monkeypatch, tmp_path):
+    monkeypatch.setattr('app.models.MEDIA_ROOT', str(tmp_path))
+    community = _local_community_with_uploads(app, tmp_path)
+    community_id = community.id
+    file_path, thumbnail_path = _generated_icon(community, tmp_path)
+    community.icon.thumbnail_written_by_us = community.icon.file_written_by_us = False
+    db.session.commit()
+    _fetch_succeeds(monkeypatch, tmp_path)
+    replacement = make_file(source_url=f'https://{PEER}/pictrs/image/new-icon.png')
+    db.session.commit()
+
+    activitypub_util.replace_local_upload_task(community_id, 'icon', replacement.id)
+
+    assert os.path.exists(file_path) and os.path.exists(thumbnail_path)
+
+
 def test_a_new_remote_icon_for_a_local_community_replaces_and_deletes_the_upload(app, db_session, monkeypatch,
                                                                                  tmp_path):
     """Residual R3 item 1. A moderator's real new remote URL is applied, and the upload it replaces is deleted with
