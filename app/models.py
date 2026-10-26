@@ -46,6 +46,7 @@ import app as app_pkg
 # The module, not the name: app.storefront reads SiteDomain from this module (import cycle: storefront)
 import app.storefront as storefront
 import app.local_only as local_only
+from app.onion import is_onion_request, stamp_activity
 from app.relays import current_relay_id
 from app.rsa_keys import RsaKeys
 
@@ -3496,8 +3497,9 @@ class Post(db.Model):
             post.ranking_scaled = int(post.ranking + community.scale_by())
             community.post_count += 1
             community.last_active = utcnow()
-            db.session.execute(text('UPDATE "user" SET post_count = post_count + 1, last_seen = now() WHERE id = :user_id'),
-                               {'user_id': user.id})
+            db.session.execute(text('UPDATE "user" SET post_count = post_count + 1, '
+                                    'last_seen = CASE WHEN :stamp THEN now() ELSE last_seen END WHERE id = :user_id'),
+                               {'user_id': user.id, 'stamp': not is_onion_request()})
             db.session.execute(text('UPDATE "site" SET last_active = NOW()'))
             try:
                 db.session.commit()
@@ -4363,7 +4365,7 @@ class Post(db.Model):
 
             if user.is_local():
                 with app_pkg.redis_client.lock(f"lock:user:{user.id}", timeout=10, blocking_timeout=6):
-                    user.last_seen = utcnow()
+                    stamp_activity(user)
                     db.session.commit()
                 from app.utils import recently_upvoted_posts, recently_downvoted_posts  # cycle: app.utils imports from this module
                 cache.delete_memoized(recently_upvoted_posts, user.id)
@@ -4634,8 +4636,9 @@ class PostReply(db.Model):
                 post.reply_count += 1
                 post.community.post_reply_count += 1
                 post.community.last_active = post.last_active = utcnow()
-            session.execute(text('UPDATE "user" SET post_reply_count = post_reply_count + 1, last_seen = now() WHERE id = :user_id'),
-                               {'user_id': user.id})
+            session.execute(text('UPDATE "user" SET post_reply_count = post_reply_count + 1, '
+                                    'last_seen = CASE WHEN :stamp THEN now() ELSE last_seen END WHERE id = :user_id'),
+                               {'user_id': user.id, 'stamp': not is_onion_request()})
             session.execute(text('UPDATE "site" SET last_active = NOW()'))
             session.commit()
 
@@ -5036,7 +5039,7 @@ class PostReply(db.Model):
             db.session.commit()
             if user.is_local():
                 with app_pkg.redis_client.lock(f"lock:user:{user.id}", timeout=10, blocking_timeout=6):
-                    user.last_seen = utcnow()
+                    stamp_activity(user)
                     db.session.commit()
                 from app.utils import recently_upvoted_post_replies, recently_downvoted_post_replies  # cycle: app.utils imports from this module
                 cache.delete_memoized(recently_upvoted_post_replies, user.id)

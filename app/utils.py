@@ -58,7 +58,7 @@ from wtforms.validators import ValidationError
 from markupsafe import Markup
 import boto3
 from app import db, cache, httpx_client, celery, get_ip_address, plugins, shaped_memo_name
-from app.onion import is_onion_request
+from app.onion import is_onion_request, stamp_activity
 from app.pinned_http import fetch_deadline, is_refused_address
 from app.rsa_keys import RsaKeys
 from app.local_only import local_only_visible, without_local_only_actors
@@ -4418,7 +4418,7 @@ def community_moderators(community_id):
 
 def finalize_user_setup(user):
     user.verified = True
-    user.last_seen = utcnow()
+    stamp_activity(user)
     if user.private_key is None and user.public_key is None:
         private_key, public_key = RsaKeys.generate_keypair()
         user.private_key = private_key

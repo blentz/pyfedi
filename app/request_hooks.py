@@ -18,7 +18,7 @@ from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, PO
     SUBSCRIPTION_MODERATOR, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_PENDING, ROLE_ADMIN_NAME, VERSION, \
     POST_TYPE_EVENT, AP_MEDIA_TYPES, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO
 from app.models import Site, utcnow
-from app.onion import is_onion_request
+from app.onion import is_onion_request, stamp_activity
 from app.onion_guard import require_onion_session, resolve_onion_api_rate_key
 from app.local_only import user_local_only
 from app.storefront import adopt_host_storefront, check_default_domain, current_storefront, hosted_instance_ids, \
@@ -234,8 +234,7 @@ def register_request_hooks(app):
                 return refusal
 
         if current_user.is_authenticated:
-            current_user.last_seen = utcnow()
-            current_user.email_unread_sent = False
+            stamp_activity(current_user)
         else:
             if 'Windows' in request.user_agent.string:
                 current_user.font = 'inter'

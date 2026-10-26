@@ -10,7 +10,7 @@ from app import db, oauth
 from app.auth.util import create_registration_application, get_country, handle_banned_user
 from app.models import User, utcnow
 from app.storefront import current_storefront, default_domain, instance_id_of, public_registration_open
-from app.onion import apply_audit
+from app.onion import apply_audit, stamp_activity
 from app.onion_account import audit_country, audit_ip
 from app.shared.tasks import task_selector
 from app.utils import RESERVED_USER_NAMES, actor_contains_blocked_words, finalize_user_setup, get_setting, gibberish, \
@@ -256,7 +256,7 @@ def finalize_user_login(user, token, ip, country):
     """
     Performs final steps of logging in a user once verified.
     """
-    user.last_seen = utcnow()
+    stamp_activity(user)
     apply_audit(user, 'ip_address', audit_ip(user, ip))
     apply_audit(user, 'ip_address_country', audit_country(user, country))
     db.session.commit()

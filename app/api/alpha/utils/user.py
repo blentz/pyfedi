@@ -19,6 +19,7 @@ from app.local_names import local_clause, local_named
 from app.local_only import without_local_only_actors
 from app.constants import *
 from app.federation_urls import owner_base
+from app.onion import stamp_activity
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message
 from app.models import Conversation, ChatMessage, Notification, PostReply, User, Post, Community, File, UserFlair, \
     user_file, UserExtraField, UserNote, RevokedToken, utcnow, _as_url, dummy_password_hash, verify_password_hash
@@ -648,7 +649,7 @@ def put_user_save_user_settings(auth, data):
         user.title = display_name
     elif display_name is None:
         user.title = None
-    user.last_seen = utcnow()
+    stamp_activity(user)
     # save the change to the db
     db.session.commit()
 

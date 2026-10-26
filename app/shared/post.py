@@ -27,7 +27,7 @@ from app.models import File, Notification, NotificationSubscription, Poll, PollC
 from app.shared.media import MediaRefused, can_upload_media, episode_form_wanted, media_kind_for, media_of, \
     queue_probe, store_uploaded_media, with_episode
 from app.local_only import content_local_only
-from app.onion import apply_audit
+from app.onion import apply_audit, is_onion_request, stamp_activity
 from app.onion_account import audit_ip
 from app.storefront import is_upload_link, link_on, stored_link
 from app.shared.tasks import task_selector
@@ -339,7 +339,7 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None):
     community.post_count += 1
     community.last_active = g.site.last_active = utcnow()
     user.post_count += 1
-    user.last_seen = utcnow()
+    stamp_activity(user)
     apply_audit(user, 'ip_address', audit_ip(user, ip_address()))
 
     post.generate_ap_id(community)
@@ -976,7 +976,7 @@ def delete_post(post_id: int, federate_deletion, src, auth):
         post.deleted = True
         post.deleted_by = user_id
         post.author.post_count -= 1
-        post.author.last_seen = utcnow()
+        stamp_activity(post.author)
         post.community.post_count -= 1
         adjust_domain_post_count(post, -1)  # D1362
         db.session.commit()
@@ -1020,7 +1020,7 @@ def restore_post(post_id: int, src, auth):
         post.deleted = False
         post.deleted_by = None
         post.author.post_count += 1
-        post.author.last_seen = utcnow()
+        stamp_activity(post.author)
         post.community.post_count += 1
         adjust_domain_post_count(post, 1)  # D1362
         db.session.commit()
@@ -1395,8 +1395,9 @@ def mark_post_read(post_ids: List[int], read: bool, user_id: int):
                 text('DELETE FROM "read_posts" WHERE user_id = :user_id AND read_post_id = :post_id'),
                 {"user_id": user_id, "post_id": post_id})
     with app_pkg.redis_client.lock(f"lock:user:{user_id}", timeout=10, blocking_timeout=6):
-        db.session.execute(text('UPDATE "user" SET last_seen = now() WHERE id = :user_id'),
-                           {'user_id': user_id})
+        if not is_onion_request():
+            db.session.execute(text('UPDATE "user" SET last_seen = now() WHERE id = :user_id'),
+                               {'user_id': user_id})
         db.session.commit()
 
 
