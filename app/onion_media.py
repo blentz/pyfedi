@@ -138,7 +138,7 @@ def evict(cap_bytes: int) -> int:
             total -= size
             freed += size
     try:
-        app_pkg.redis_client.set(BYTES_KEY, total)
+        app_pkg.onion_redis_client.set(BYTES_KEY, total)
     except RedisError as error:
         current_app.logger.warning(f'onion media: could not reset the byte counter: {error}')
     return freed

@@ -402,7 +402,7 @@ def test_an_empty_local_community_imported_in_settings_is_not_fetched(app, env, 
     monkeypatch.setattr('app.user.routes.retrieve_mods_and_backfill', backfill_spy)
     monkeypatch.setattr('app.user.routes.find_actor_or_create', lambda *a, **k: quiet)
     redis = SimpleNamespace(get=lambda key: json.dumps({'followed_communities': [f'https://{SHOP}/c/quiet']}),
-                            delete=lambda key: None)
+                            exists=lambda key: 1, delete=lambda key: None)
     monkeypatch.setattr('app.redis_client', redis, raising=False)
     import_settings_task(env.first_alice.id, 'a-redis-key')
     assert backfilled == [quiet.id]

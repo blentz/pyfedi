@@ -74,14 +74,14 @@ def _dead_key(remote: str) -> str:
 def is_dead(remote: str) -> bool:
     """Whether `remote` was refused or failed within the last hour. False when Redis cannot answer."""
     try:
-        return bool(app_pkg.redis_client.exists(_dead_key(remote)))
+        return bool(app_pkg.onion_redis_client.exists(_dead_key(remote)))
     except RedisError:
         return False
 
 
 def _remember_dead(remote: str) -> None:
     try:
-        app_pkg.redis_client.set(_dead_key(remote), '1', ex=DEAD_SECONDS)
+        app_pkg.onion_redis_client.set(_dead_key(remote), '1', ex=DEAD_SECONDS)
     except RedisError as error:
         current_app.logger.warning(f'onion media: could not remember {remote} as dead: {error}')
 
@@ -103,13 +103,13 @@ def _hop_refused(url: str) -> bool:
 def take_slot(key: str, seconds: int) -> str | None:
     """Take the Redis slot `key` for `seconds` and return its token, or None when another fill holds it."""
     token = uuid.uuid4().hex
-    return token if app_pkg.redis_client.set(key, token, nx=True, ex=seconds) else None
+    return token if app_pkg.onion_redis_client.set(key, token, nx=True, ex=seconds) else None
 
 
 def give_back(key: str, token: str) -> None:
     """Free the slot unless it expired and another fill has taken it since."""
-    if app_pkg.redis_client.get(key) == token:
-        app_pkg.redis_client.delete(key)
+    if app_pkg.onion_redis_client.get(key) == token:
+        app_pkg.onion_redis_client.delete(key)
 
 
 def host_key(remote: str) -> str:
@@ -151,7 +151,7 @@ def _check_room(directory: pathlib.Path, written: int) -> None:
     if shutil.disk_usage(directory).free < DISK_RESERVE:
         raise NoRoom(f'under {DISK_RESERVE} bytes free on the disk')
     try:
-        counted = int(app_pkg.redis_client.get(BYTES_KEY) or 0)
+        counted = int(app_pkg.onion_redis_client.get(BYTES_KEY) or 0)
     except RedisError:
         return
     cap = get_setting('onion_media_cache_bytes', 10737418240)
@@ -161,7 +161,7 @@ def _check_room(directory: pathlib.Path, written: int) -> None:
 
 def _count(remote: str, size: int) -> None:
     try:
-        app_pkg.redis_client.incrby(BYTES_KEY, size)
+        app_pkg.onion_redis_client.incrby(BYTES_KEY, size)
     except RedisError as error:
         current_app.logger.warning(f'onion media: could not count {remote} in the byte counter: {error}')
 
@@ -250,7 +250,7 @@ def fill_task(remote: str, attempt: int = 0) -> None:
                 if attempt >= MAX_REQUEUES:
                     current_app.logger.info(f'onion media: {remote} not filled, its slot stayed busy')
                     return
-                app_pkg.redis_client.set(_queued_key(remote), '1', ex=QUEUED_SECONDS)   # still queued: no duplicate
+                app_pkg.onion_redis_client.set(_queued_key(remote), '1', ex=QUEUED_SECONDS)   # still queued: no duplicate
                 fill_task.apply_async((remote, attempt + 1), countdown=REQUEUE_SECONDS)
                 return
             slots.append((key, token))
@@ -266,5 +266,5 @@ def _queued_key(remote: str) -> str:
 
 def queue_fill(remote: str) -> None:
     """Queue `fill_task` for `remote` unless it was queued within the last QUEUED_SECONDS."""
-    if app_pkg.redis_client.set(_queued_key(remote), '1', nx=True, ex=QUEUED_SECONDS):
+    if app_pkg.onion_redis_client.set(_queued_key(remote), '1', nx=True, ex=QUEUED_SECONDS):
         fill_task.delay(remote)

@@ -241,6 +241,9 @@ class TestConfig(Config):
     # Without this, any test that builds its own app re-enables the limiter that
     # disable_rate_limiter switched off for the session, and later tests see 429.
     RATELIMIT_ENABLED = False
+    # The limiter's onion buckets in memory. The onion store itself is a fakeredis (`onion_redis`), but the limits
+    # library's Redis storage counts with Lua, which fakeredis has not got here (no lupa).
+    RATELIMIT_STORAGE_OPTIONS = {**Config.RATELIMIT_STORAGE_OPTIONS, 'onion': 'memory://'}
 
 
 @pytest.fixture(scope='session')
@@ -748,6 +751,16 @@ def signing_peer(db_session):
     sender.ap_fetched_at = utcnow()
     db.session.commit()
     return sender
+
+
+@pytest.fixture(autouse=True)
+def onion_redis(monkeypatch):
+    """The RAM-only onion store (`app.onion_redis_client`, app/onion_store.py), as a fakeredis of its own for each
+    test: the test Redis has no database to spare per xdist worker, and onion state from one test must not reach the
+    next. A separate server from `redis_double`'s, so a test can tell which store a key went to."""
+    server = fakeredis.FakeRedis(decode_responses=True)
+    monkeypatch.setattr('app.onion_redis_client', server)
+    return server
 
 
 @pytest.fixture

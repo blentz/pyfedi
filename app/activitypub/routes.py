@@ -19,7 +19,8 @@ from sqlalchemy import desc, exists, not_, or_, text, true, func, select, union_
 
 from app import db, cache, celery, limiter
 from app.activitypub import bp
-from app.onion import apply_audit, audit_field
+from app.onion import apply_audit, audit_field, is_onion_request
+from app.onion_store import onion_store_optional
 from app.activitypub.actor import find_actor_by_url
 from app.activitypub.entitlement import PRIVATE_HEADERS, actor_document, addressees_of, audience_entitles, signed_requester_actor
 from app.activitypub.signature import POST_REQUIRED, HttpSignature, publish_async_posts, signed_at, VerificationError, VerificationFormatError, default_context, LDSignature, \
@@ -136,9 +137,12 @@ def ap_miss_is_not_cached(response):
 
 @bp.route('/testredis')
 def testredis_get():
-    redis_client = get_redis_connection()
-    redis_client.set("cowbell", "1", ex=600)
-    x = redis_client.get('cowbell')
+    # over the onion, the store the onion's state goes to (app/onion_store.py): nothing is written to the main Redis
+    redis_client = app_pkg.onion_redis_client if is_onion_request() else get_redis_connection()
+    x = None
+    with onion_store_optional():
+        redis_client.set("cowbell", "1", ex=600)
+        x = redis_client.get('cowbell')
     if x is not None:
         return "Redis: OK"
     else:

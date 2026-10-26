@@ -32,6 +32,7 @@ from app.constants import IMAGE_PIXEL_CAP
 from app.pinned_http import pinned_transport
 from app.cookies import StorefrontLoginManager, StorefrontSessionInterface, secure_set_cookies
 from app.onion import is_onion_request, onion_rate_key
+from app.onion_store import OnionRoutedStorage  # noqa: F401 -- registers the onion-routed scheme RATELIMIT_STORAGE_URI names
 import sentry_sdk
 from app.plugins import load_plugins
 
@@ -146,7 +147,9 @@ def shaped_memo_name(fname: str) -> str:
 
 
 compress = Compress()
-limiter = Limiter(rate_limit_key, storage_uri='redis+'+Config.CACHE_REDIS_URL if Config.CACHE_REDIS_URL.startswith("unix://") else Config.CACHE_REDIS_URL)
+# Storage from RATELIMIT_STORAGE_URI and RATELIMIT_STORAGE_OPTIONS (config.py): onion buckets in the RAM-only onion
+# store, the rest in the main Redis (app.onion_store.OnionRoutedStorage)
+limiter = Limiter(rate_limit_key)
 # Every task acts as the domain that queued it (app.celery_acting, plan C3); named, not imported, as that module imports
 # app.storefront, which imports this package
 celery = Celery(__name__, broker=Config.CELERY_BROKER_URL, task_cls='app.celery_acting:ActingTask')
@@ -168,6 +171,7 @@ def _forget_the_previous_tasks_site(**kwargs):
 httpx_client = httpx.Client(http2=True, transport=pinned_transport(http2=True))  # R162
 oauth = OAuth()
 redis_client = None  # Will be initialized in create_app()
+onion_redis_client = None  # the RAM-only onion store (ONION_REDIS_URL, app/onion_store.py); set in create_app()
 
 
 class StorefrontApi(Api):
@@ -338,9 +342,10 @@ def create_app(config_class=Config):
     })
 
     # Initialize redis_client
-    global redis_client
+    global redis_client, onion_redis_client
     from app.utils import get_redis_connection  # cycle: app.utils imports db and the other extensions from this package
     redis_client = get_redis_connection(app.config['CACHE_REDIS_URL'])
+    onion_redis_client = get_redis_connection(app.config['ONION_REDIS_URL'])
 
     oauth.init_app(app)
     if app.config['GOOGLE_OAUTH_CLIENT_ID']:
