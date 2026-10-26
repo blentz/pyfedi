@@ -54,7 +54,7 @@ MIN_BYTES_PER_SECOND = 64 * 1024    # a slower body is refused: a trickle would 
 RATE_WINDOW = 10                # the floor applies to each window of this many seconds, so a fast start buys nothing
 MAX_REDIRECTS = 5
 READ_TIMEOUT = 10               # per read; the whole fill is bounded by max_seconds
-DISK_RESERVE = 20 * 1024 ** 3   # free bytes a fill leaves on the disk: Postgres shares it
+DISK_RESERVE = 20 * 1024 ** 3   # free bytes a fill leaves on the disk (Postgres shares it); see MEDIA_PROXY_DISK_RESERVE
 CHECK_BYTES = 8 * 1024 * 1024   # the disk and the byte counter are checked again each time a fill writes this much
 OVER_CAP = 1.1                  # the byte counter may pass the cache cap by this factor before fills stop
 _absent_logged = False          # the 'cache directory absent' WARNING is written once per process
@@ -166,10 +166,12 @@ def _warn_directory_unavailable() -> None:
 
 
 def _check_room(directory: pathlib.Path, written: int) -> None:
-    """Raise NoRoom when the disk under `directory` has less than DISK_RESERVE free, or when `written` more bytes take
+    """Raise NoRoom when the disk under `directory` has less than the reserve free, or when `written` more bytes take
     the byte counter past OVER_CAP times the cache cap. A counter Redis cannot read refuses nothing."""
-    if shutil.disk_usage(directory).free < DISK_RESERVE:
-        raise NoRoom(f'under {DISK_RESERVE} bytes free on the disk')
+    reserve = current_app.config.get('MEDIA_PROXY_DISK_RESERVE')
+    reserve = DISK_RESERVE if reserve is None else reserve
+    if shutil.disk_usage(directory).free < reserve:
+        raise NoRoom(f'under {reserve} bytes free on the disk')
     try:
         counted = int(app_pkg.onion_redis_client.get(BYTES_KEY) or 0)
     except RedisError:
