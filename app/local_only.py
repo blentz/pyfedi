@@ -7,15 +7,18 @@ import logging
 import re
 from urllib.parse import unquote, urlsplit
 
-from flask import current_app
+from flask import abort, current_app, request
 from flask_babel import _
 from flask_login import current_user
-from sqlalchemy import and_, bindparam, not_, or_, text, true
+from sqlalchemy import and_, bindparam, exists, false, not_, or_, text, true
+from sqlalchemy.orm import aliased
+from sqlalchemy.sql.elements import False_
 
 import app as app_pkg
 from app import db
-# The module, not the names: app.models imports this module, and app.storefront imports app.models, so whichever is
+# The modules, not the names: app.models imports this module, and app.storefront imports app.models, so whichever is
 # imported first finds the other mid-import (import cycle: models)
+import app.models as models
 import app.storefront as storefront
 
 logger = logging.getLogger(__name__)
@@ -146,6 +149,166 @@ def federating_sql(alias: str) -> str:
     if default_closed:
         on_closed = f'({on_closed} OR {alias}.site_domain_id IS NULL)'
     return f'({alias}.ap_id IS NOT NULL OR NOT {on_closed})'
+
+
+# --- hidden here (follow-up F6) -------------------------------------------------------------------------------------
+# Owner rulings 2026-10-26: "yes, hide onion from logged-in clearnet viewers too", and for admins "No exception". A
+# local-only domain's accounts, communities and content are shown only on that domain's own storefront, and there only
+# to a signed-in reader (the C2 rule for a logged-out one stands). Every page and list asks one of the forms below:
+# `hidden_here` for a row, `hidden_here_clause` for a query, `hidden_here_sql` for raw SQL. They agree (the parity test
+# in tests/test_hidden_here.py), and each reads the domains from the cached domain_rows(), so none costs a query.
+
+def _signed_in(signed_in: bool | None) -> bool:
+    return local_only_visible() if signed_in is None else signed_in
+
+
+def _hidden_domains(signed_in: bool) -> tuple[list[int], bool]:
+    """The hosted domains whose local-only accounts and communities the reader may not see here, as _closed_domains
+    has them: every one that does not federate for a reader who is not signed in, else every one but this storefront's
+    own. On a storefront that federates that is all of them, for every reader."""
+    closed, default_closed = _closed_domains()
+    if not signed_in:
+        return closed, default_closed
+    here = storefront.current_storefront()
+    if here.federates:
+        return closed, default_closed
+    return [id_ for id_ in closed if id_ != here.id], default_closed and not here.is_default
+
+
+def _actor_hidden(actor, signed_in: bool) -> bool:
+    if actor is None or actor.ap_id is not None:
+        return False
+    home, here = actor.home_domain(), storefront.current_storefront()
+    return not home.federates and not (signed_in and not here.federates and home.id == here.id)
+
+
+def _content_hidden(content, signed_in: bool) -> bool:
+    if not content.local_only:
+        return False
+    if not signed_in:
+        return True
+    post = content.post if isinstance(content, models.PostReply) else None
+    return (_actor_hidden(content.author, True) or _actor_hidden(content.community, True)
+            or (post is not None and _actor_hidden(post.author, True)))
+
+
+def hidden_here(obj, signed_in: bool | None = None) -> bool:
+    """Whether this request's storefront hides `obj` (a User, Community, Post or PostReply) from its reader, who is
+    signed in when `signed_in` says so (None: the session's login, local_only_visible()). Outside a request the
+    storefront is the default domain's.
+
+    An account or community is hidden when it is local-only (its home domain does not federate) and the reader is not
+    signed in, or this storefront is not its home domain. A post or reply is hidden when it is local-only (stamped at
+    creation, content_local_only) and either the reader is not signed in or it belongs to a local-only domain that
+    is not this storefront: its author or its community is hidden here, or, for a reply, its post's author (the post
+    page's gates apply to a reply, follow-up F5). A domain's `federates` setting is locked once it owns rows, so
+    whatever an onion account writes, or is written in an onion community, is stamped local-only. A reply further
+    down an onion thread by clearnet accounts in a clearnet community is stamped too but belongs to no onion: lists
+    show it, while its thread's page is 404. A remote row is never hidden."""
+    signed_in = _signed_in(signed_in)
+    if isinstance(obj, (models.Post, models.PostReply)):
+        return _content_hidden(obj, signed_in)
+    return _actor_hidden(obj, signed_in)
+
+
+def shown_here(rows, signed_in: bool | None = None) -> list:
+    """`rows` without the ones `hidden_here` hides: for a list read from a cache shared by every storefront (a user's
+    joined or moderated communities, a sidebar), which is narrowed when it is shown rather than when it is built."""
+    return [row for row in rows if not hidden_here(row, signed_in)]
+
+
+def hides_nothing(clause) -> bool:
+    """Whether a `hidden_here_clause` hides no row at all (it is `false()`), so a caller can add no condition."""
+    return isinstance(clause, False_)
+
+
+def _actor_hidden_clause(model, signed_in: bool):
+    closed, default_closed = _hidden_domains(signed_in)
+    if not closed and not default_closed:
+        return false()
+    on_closed = and_(model.site_domain_id.isnot(None), model.site_domain_id.in_(closed)) if closed else false()
+    if default_closed:
+        on_closed = or_(on_closed, model.site_domain_id.is_(None))
+    return and_(model.ap_id.is_(None), on_closed)
+
+
+def hidden_here_clause(model, signed_in: bool | None = None):
+    """`hidden_here` as a condition on `model` (User, Community, Post or PostReply): true for the rows hidden here,
+    never NULL, so `not_()` of it keeps the rest. `false()` when nothing is hidden. `without_hidden_here` filters a
+    query by it."""
+    signed_in = _signed_in(signed_in)
+    if model not in (models.Post, models.PostReply):
+        return _actor_hidden_clause(model, signed_in)
+    if not signed_in:
+        return model.local_only.is_(True)
+    author, community = aliased(models.User), aliased(models.Community)   # never correlated with the query's own
+    by_author = _actor_hidden_clause(author, True)
+    if hides_nothing(by_author):   # the hidden domains are the same for both: no local-only domain but this one
+        return false()
+    owners = [exists().where(author.id == model.user_id, by_author),
+              exists().where(community.id == model.community_id, _actor_hidden_clause(community, True))]
+    if model is models.PostReply:
+        post, post_author = aliased(models.Post), aliased(models.User)
+        owners.append(exists().where(post.id == model.post_id, post_author.id == post.user_id,
+                                     _actor_hidden_clause(post_author, True)))
+    return and_(model.local_only.is_(True), or_(*owners))
+
+
+def without_hidden_here(query, model, signed_in: bool | None = None):
+    """`query` over `model` without the rows `hidden_here` hides; the query itself when nothing is hidden."""
+    clause = hidden_here_clause(model, signed_in)
+    return query if hides_nothing(clause) else query.filter(not_(clause))
+
+
+def refuse_hidden_here(finders: dict) -> None:
+    """A blueprint's before_request: 404 when a view argument names a row hidden here (`hidden_here`), so every route
+    and sub-page of a hidden account, community, post or reply answers as one that does not exist, the same answer
+    as for a name nobody holds (follow-up F6). It asks only the storefront's part of the rule (`signed_in=True`): what a
+    logged-out reader is refused is each view's own answer, so an RSS view's `?token=` still counts. `finders` maps a
+    view argument to the function that finds its row, or None; an argument that finds nothing, or an id no row can
+    have, is left to the view."""
+    if not any_domain_closed() or not request.view_args:
+        return
+    for name, find in finders.items():
+        value = request.view_args.get(name)
+        if value is None or (isinstance(value, int) and not 0 < value <= _PG_INT_MAX):
+            continue
+        row = find(value)
+        if row is not None and hidden_here(row, True):
+            abort(404)
+
+
+def _actor_hidden_sql(alias: str, signed_in: bool) -> str:
+    closed, default_closed = _hidden_domains(signed_in)
+    if not closed and not default_closed:
+        return 'false'
+    ids = ', '.join(str(int(id_)) for id_ in closed)
+    on_closed = f'({alias}.site_domain_id IS NOT NULL AND {alias}.site_domain_id IN ({ids}))' if closed else 'false'
+    if default_closed:
+        on_closed = f'({on_closed} OR {alias}.site_domain_id IS NULL)'
+    return f'({alias}.ap_id IS NULL AND {on_closed})'
+
+
+def hidden_here_sql(alias: str, model, signed_in: bool | None = None) -> str:
+    """`hidden_here_clause` for raw SQL: a condition, never NULL, on the `model` row (User, Community, Post or
+    PostReply) aliased `alias`; 'false' when nothing is hidden. The ids are integers read from the database, so they
+    are written into the SQL."""
+    signed_in = _signed_in(signed_in)
+    if model not in (models.Post, models.PostReply):
+        return _actor_hidden_sql(alias, signed_in)
+    if not signed_in:
+        return f'{alias}.local_only'
+    author = _actor_hidden_sql('hidden_author', True)
+    if author == 'false':
+        return 'false'
+    owners = [f'EXISTS (SELECT 1 FROM "user" hidden_author WHERE hidden_author.id = {alias}.user_id AND {author})',
+              f'EXISTS (SELECT 1 FROM community hidden_community WHERE hidden_community.id = {alias}.community_id '
+              f'AND {_actor_hidden_sql("hidden_community", True)})']
+    if model is models.PostReply:
+        owners.append(f'EXISTS (SELECT 1 FROM post hidden_post JOIN "user" hidden_post_author ON '
+                      f'hidden_post_author.id = hidden_post.user_id WHERE hidden_post.id = {alias}.post_id AND '
+                      f'{_actor_hidden_sql("hidden_post_author", True)})')
+    return f'({alias}.local_only AND ({" OR ".join(owners)}))'
 
 
 def federated_mentions(users: list) -> list:
