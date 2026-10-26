@@ -197,13 +197,13 @@ def test_a_register_post_by_a_signed_in_user_still_logs(app, alice, ldap_off, ca
     assert event_lines(caplog, 'auth: register attempt') == ['auth: register attempt ip=203.0.113.9']
 
 
-def test_onion_requests_log_ip_onion(app, onion, caplog):
+def test_onion_requests_write_no_fail2ban_line(app, onion, caplog):
     client = app.test_client()
     a_session(client)   # session first, or the guard answers before the route runs
     onion_post(client, '/auth/register', data={})
     onion_get(client, '/.env')
-    assert event_lines(caplog, 'auth: register attempt') == ['auth: register attempt ip=onion']
-    assert event_lines(caplog, 'scan:') == ['scan: probe refused ip=onion']
+    assert event_lines(caplog, 'auth: register attempt') == []
+    assert event_lines(caplog, 'scan:') == []
 
 
 @pytest.mark.parametrize('site, logged', [('cross-site', False), ('same-site', False), ('same-origin', False),

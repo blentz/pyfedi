@@ -146,7 +146,7 @@ def test_an_unhosted_handle_on_the_onion_fails_like_a_wrong_password(app, world,
         unhosted = onion_login(app, 'wakko@nowhere.example', 'first password', client)
     assert not logged_in(unhosted)
     assert flashes_on(client) == wrong and wrong
-    assert failures(caplog) == wrong_lines == ['auth: login failed ip=onion']
+    assert failures(caplog) == wrong_lines == []
 
 
 def flashes_on(client):

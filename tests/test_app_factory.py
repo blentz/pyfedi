@@ -13,7 +13,7 @@ THE SHARED LOGGER. Flask.logger is logging.getLogger(app.name), and every app
 built from this package is called 'app', so an app a test builds shares one
 logger object with the session's app. Handlers accumulate on it globally:
 
-    PROBE e1 handlers: ['RotatingFileHandler', 'SMTPHandler', 'RotatingFileHandler']
+    PROBE e1 handlers: ['StreamHandler', 'SMTPHandler']
 
 The factory attaches an SMTPHandler at ERROR level whenever MAIL_SERVER and
 ERRORS_TO are set, and MAIL_SUPPRESS_SEND does not reach it -- it is a smtplib
@@ -23,7 +23,6 @@ session one app.logger.error() away from a real connection attempt. The
 when a row fails. Fact 338.
 """
 import logging
-import os
 from unittest.mock import patch
 
 import pytest
@@ -427,36 +426,6 @@ def test_a_site_with_no_language_list_still_answers_a_locale(app, db_session):
     # The key is back: a leak here would silently change every later row's
     # answer, because the `app` fixture is session-scoped.
     assert 'LANGUAGES' in app.config
-
-
-def test_the_log_directory_is_created_when_it_is_missing(restores_the_shared_logger):
-    """`:349-350`. The directory already exists in the container, so the branch
-    is unreachable without saying otherwise. os.mkdir is patched rather than
-    allowed to run: the path is relative to the process's working directory
-    (R2), and a test that really created it would leave a directory behind
-    wherever pytest happened to be started from.
-    """
-    real_exists = os.path.exists
-
-    def missing_logs(path):
-        return False if path == 'logs' else real_exists(path)
-
-    with patch('app.os.path.exists', side_effect=missing_logs):
-        with patch('app.os.mkdir') as mkdir:
-            create_app(_config())
-
-    assert mkdir.call_args_list and mkdir.call_args_list[0].args[0] == 'logs'
-
-
-def test_the_log_directory_is_left_alone_when_it_exists(restores_the_shared_logger):
-    """The other arm, which is what every other row in this file exercises
-    implicitly -- asserted once, so a mutant inverting the guard has somewhere
-    to die.
-    """
-    with patch('app.os.mkdir') as mkdir:
-        create_app(_config())
-
-    assert mkdir.call_args_list == []
 
 
 class TestAQueryStringThatIsNotUtf8:

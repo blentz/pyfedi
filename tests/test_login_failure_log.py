@@ -2,8 +2,8 @@
 
 Every failed check logs exactly once: web login, API login and verify_credentials, whether the account is unknown,
 the password is wrong, the directory bind failed, or the account is in the hidden backoff (which has to look like a
-wrong password, in the log too). On the onion the line says `ip=onion`: those requests share the proxy's address, and
-no address from them may ever be bannable. The line holds neither the user name nor the email.
+wrong password, in the log too). On the onion no line is written: those requests share the proxy's address, so no ban could act on one and
+the line would only record onion use. The line holds neither the user name nor the email.
 
 Not logged, because no password was checked: a refused or missing proof-of-work or wait token, a visible typed-key
 wait refusal, and the session-first redirect. Nor is a correct password for a banned account.
@@ -108,18 +108,18 @@ def test_a_good_bind_logs_nothing(app, alice, directory, caplog):
     assert failures(caplog) == []
 
 
-def test_an_onion_failure_logs_onion(app, alice, ldap_off, caplog):
+def test_an_onion_failure_writes_no_line(app, alice, ldap_off, caplog):
     client = app.test_client()
     a_session(client)
     web_login(client, 'alice', 'a wrong password')
-    only_failure(caplog, 'onion')
+    assert failures(caplog) == []
 
 
-def test_an_onion_unknown_user_logs_onion(app, alice, ldap_off, caplog):
+def test_an_onion_unknown_user_writes_no_line(app, alice, ldap_off, caplog):
     client = app.test_client()
     a_session(client)
     web_login(client, 'ghost', 'a wrong password')
-    only_failure(caplog, 'onion')
+    assert failures(caplog) == []
 
 
 @pytest.mark.parametrize('typed, password', [('alice', 'a wrong password'), ('alice', PASSWORD)],
@@ -130,7 +130,7 @@ def test_the_hidden_refusal_logs_as_a_wrong_password_does(app, alice, ldap_off, 
     client = app.test_client()
     a_session(client)
     web_login(client, typed, password)
-    only_failure(caplog, 'onion')
+    assert failures(caplog) == []
 
 
 def test_the_hidden_refusal_with_a_directory_logs_once(app, alice, directory, redis_double, clock, caplog):
@@ -138,7 +138,7 @@ def test_the_hidden_refusal_with_a_directory_logs_once(app, alice, directory, re
     client = app.test_client()
     a_session(client)
     web_login(client, 'alice', PASSWORD)
-    only_failure(caplog, 'onion')
+    assert failures(caplog) == []
 
 
 def test_a_visible_wait_refusal_logs_nothing(app, alice, ldap_off, redis_double, clock, caplog):
@@ -193,12 +193,12 @@ def test_api_login_logs_nothing_for_a_banned_account_with_the_right_password(app
     assert failures(caplog) == []
 
 
-def test_api_login_hidden_refusal_logs_onion(app, alice, ldap_off, redis_double, clock, caplog):
+def test_api_login_hidden_refusal_writes_no_line(app, alice, ldap_off, redis_double, clock, caplog):
     account_failures(alice.id, 6)
     with onion_context(app):
         with pytest.raises(Exception, match='incorrect_login'):
             api_log_user_in({'username': 'alice', 'password': PASSWORD})
-    only_failure(caplog, 'onion')
+    assert failures(caplog) == []
 
 
 def test_verify_credentials_logs_a_wrong_password(app, alice, caplog):
@@ -215,12 +215,12 @@ def test_verify_credentials_logs_an_unknown_user(app, alice, caplog):
     only_failure(caplog, '203.0.113.9')
 
 
-def test_verify_credentials_logs_onion_for_a_hidden_refusal(app, alice, redis_double, clock, caplog):
+def test_verify_credentials_writes_no_line_for_a_hidden_refusal(app, alice, redis_double, clock, caplog):
     account_failures(alice.id, 6)
     with onion_context(app):
         with pytest.raises(BlockingIOError):
             post_user_verify_credentials({'username': 'alice', 'password': PASSWORD})
-    only_failure(caplog, 'onion')
+    assert failures(caplog) == []
 
 
 def test_verify_credentials_logs_nothing_for_success_or_ban(app, alice, caplog):
