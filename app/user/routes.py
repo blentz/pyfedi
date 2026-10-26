@@ -62,7 +62,7 @@ from app.utils import user_banned_from_community, back, render_template, markdow
 from app.rss_extras import RSSFeed
 import app.api.alpha.views as alpha_views
 from app.utils import user_filters_languages
-from app.hidden_routes import notification_hidden, path_hidden_here
+from app.hidden_routes import notification_hidden, off_this_host, path_hidden_here
 from app.local_names import local_clause, local_named, named_by_actor, notification_href
 from app.storefront import current_storefront, domain_for_host, hosted_instance_ids, is_local_host, path_name, storefront_query_cache_key, \
     storefront_url
@@ -1402,6 +1402,8 @@ def notification_goto(notification_id):
         href = notification_href(notification)
         if path_hidden_here(href):
             abort(404)   # what its page would answer, with no Location to spell its name (follow-up F6)
+        if off_this_host(href):
+            href = None   # never sent off this host from here: to the notifications, as for one with no link
         if not notification.read:
             current_user.unread_notifications -= 1
         notification.read = True

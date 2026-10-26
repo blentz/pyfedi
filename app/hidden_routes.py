@@ -23,10 +23,10 @@ from flask import abort, current_app, request
 from werkzeug.exceptions import HTTPException
 
 from app import db
-from app.local_names import hidden_target
+from app.local_names import hidden_target, notification_href
 from app.local_only import conversation_hidden_here, hidden_here, hides_anything_here
 from app.models import ChatMessage, Community, Conversation, Instance, Post, PostReply, User
-from app.storefront import current_storefront, host_hidden_here, instance_visible_here, normalise_host
+from app.storefront import current_storefront, domain_for_host, host_hidden_here, instance_visible_here, normalise_host
 from app.user.utils import user_for_actor
 
 _PG_INT_MAX = 2 ** 31 - 1   # a larger id names no row, and Postgres refuses it as an integer
@@ -156,31 +156,53 @@ def refuse_hidden_route() -> None:
         abort(404)
 
 
-def path_hidden_here(path: str | None) -> bool:
-    """Whether `path`, one of our own pages (a notification's link), names a row hidden here, by the gate's table, so
-    it is never followed or linked: the redirect would spell the onion's name. A path that is no page of ours, or
-    whose row is gone, names nothing hidden."""
-    if not path or not hides_anything_here():
+def off_this_host(url: str | None) -> bool:
+    """Whether `url` is absolute and on a host other than this request's: never redirected to from here."""
+    try:
+        host = urlsplit(url or '').netloc
+    except ValueError:
+        return True
+    return bool(host) and normalise_host(host) != normalise_host(request.host)
+
+
+def path_hidden_here(url: str | None) -> bool:
+    """Whether `url`, one of our own pages (a notification's link), names a row hidden here, so it is never followed
+    or linked: the redirect would spell the onion's name. An absolute URL on a hidden host is hidden whatever its path
+    (follow-up F6); otherwise its path is matched against the gate's table. A path that is no page of ours, or whose row
+    is gone, names nothing hidden."""
+    if not url or not hides_anything_here():
         return False
     try:
+        parts = urlsplit(url)
+    except ValueError:   # a URL nobody can parse names no page of ours
+        return False
+    if parts.netloc and _host_hidden(parts.netloc):
+        return True
+    if parts.netloc and domain_for_host(parts.netloc) is None:
+        return False   # another site's page: its path names none of our rows
+    try:
         rule, args = current_app.url_map.bind_to_environ(request.environ).match(
-            urlsplit(path).path, method='GET', return_rule=True)
-    except (HTTPException, ValueError):   # not a page of ours, a redirect, a path nobody could parse
+            parts.path, method='GET', return_rule=True)
+    except HTTPException:   # not a page of ours, or a redirect
         return False
     named = [(name, value) for name, value in args.items() if name == 'actor' or name in OBJECT_ARGUMENTS]
     return any(not _junk(name, value) and _value_hidden(name, value, rule.rule, missing=False)
                for name, value in named)
 
 
-# The ids a notification's `targets` may hold of the post or reply it is about
+# The ids a notification's `targets` may hold of what it is about
 _NOTIFIED = (('post_id', Post), ('comment_id', PostReply), ('suspect_post_id', Post),
-             ('suspect_comment_id', PostReply))
+             ('suspect_comment_id', PostReply), ('community_id', Community), ('author_id', User),
+             ('suspect_user_id', User))
 
 
 def notification_hidden(notification) -> bool:
-    """Whether `notification` is about something hidden here (follow-up F6): its link names a hidden row, or its
-    targets a hidden post or reply. Its page then shows only the note (`hidden_note`): no link, title or body, which
-    are the hidden row's."""
+    """Whether `notification` is about something hidden here (follow-up F6): its link, as stored or as following it
+    resolves it (notification_href), names a hidden row, or its author, or its targets name a hidden post, reply,
+    community or account. Its page then shows only the note (`hidden_note`): no link, name, title or body."""
     targets = notification.targets or {}
-    return path_hidden_here(notification.url) or any(
-        isinstance(targets.get(key), int) and hidden_target(model, targets[key]) for key, model in _NOTIFIED)
+    author_id = getattr(notification, 'author_id', None)
+    return (path_hidden_here(notification.url) or path_hidden_here(notification_href(notification))
+            or (isinstance(author_id, int) and hidden_target(User, author_id))
+            or any(isinstance(targets.get(key), int) and hidden_target(model, targets[key])
+                   for key, model in _NOTIFIED))

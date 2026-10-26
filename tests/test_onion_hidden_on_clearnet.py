@@ -18,6 +18,7 @@ from app.local_only import content_local_only
 from app.models import CommunityMember, Domain, File, Notification, Post, PostBookmark, PostReplyBookmark, PostVote, \
     Report, Role, Topic, UserRegistration, read_posts, user_file, utcnow
 from tests.factories import grant_permission, make_post, make_post_reply
+from app.hidden_routes import notification_hidden
 from tests.test_hidden_here import reply_chain
 from tests.test_per_domain_html_routes import Visitor
 from tests.test_instance_visible_here import HOSTS, get, scene  # noqa: F401 -- scene is a fixture
@@ -550,14 +551,63 @@ def test_a_notification_of_a_hidden_post_or_reply_shows_only_the_note_on_the_fir
             assert NOTE in text and not near(text, *hidden), (notification.notif_type, near(text, *hidden))
 
 
-def test_a_report_notification_about_an_onion_account_names_it_as_text_with_the_note(app, onion):
+def test_a_report_notification_about_an_onion_account_shows_only_the_note(app, onion):
     about = notice(onion.first_bob, 20, '/admin/reports', subtype='user_reported', suspect_user_user_name=ONION_BOB,
                    suspect_user_id=onion.onion_bob.id)
+    by_name = notice(onion.first_bob, 20, '/admin/reports', subtype='user_reported', suspect_user_user_name=ONION_BOB)
     control = notice(onion.first_bob, 20, '/admin/reports', subtype='user_reported', suspect_user_user_name='bob',
                      suspect_user_id=onion.first_bob.id)
     body = get(app, '/notifications', user=onion.first_bob).get_data(as_text=True)
-    assert body.count(NOTE) == 1 and ONION_BOB in body
-    assert f'/notification/{about.id}/goto' not in body and f'/notification/{control.id}/goto' in body
+    assert body.count(NOTE) == 2   # by its id the whole row is the note; by its name alone, the name is text
+    for hidden in (about, by_name):
+        assert f'/notification/{hidden.id}/goto' not in body
+    assert f'/notification/{control.id}/goto' in body
+
+
+@pytest.mark.parametrize('targets', ['community_id', 'author_id', 'suspect_user_id'])
+def test_a_notification_about_an_onion_community_or_account_shows_only_the_note(app, onion, targets):
+    hidden = {'community_id': onion.onion_art.id, 'author_id': onion.onion_bob.id,
+              'suspect_user_id': onion.onion_bob.id}[targets]
+    notice(onion.first_bob, 999, '/notifications', **{targets: hidden})
+    body = get(app, '/notifications', user=onion.first_bob).get_data(as_text=True)
+    assert body.count(NOTE) == 1 and 'ONIONTITLE' not in body
+
+
+def test_a_notification_from_an_onion_account_by_its_author_column_shows_only_the_note(app, onion):
+    notification = notice(onion.first_bob, 999, '/notifications')
+    notification.author_id = onion.onion_bob.id
+    db.session.commit()
+    body = get(app, '/notifications', user=onion.first_bob).get_data(as_text=True)
+    assert body.count(NOTE) == 1 and 'ONIONTITLE' not in body
+
+
+def test_a_notification_is_judged_by_where_following_it_goes(app, onion):
+    """A /c/<name> stored before follow-up F1 is followed by the id in its targets: here, the onion's art, though on
+    the first domain the name is its own art."""
+    notification = notice(onion.first_bob, 999, '/c/art', community_id=onion.onion_art.id)
+    notification.targets = {'gen': '0', 'community_id': onion.onion_art.id}
+    db.session.commit()
+    with default_request(app):
+        assert notification_hidden(SimpleNamespace(url='/c/art', targets={'community_id': onion.onion_art.id}))
+    response = Visitor(app, onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
+    assert response.status_code == 404 and 'Location' not in response.headers
+
+
+def test_a_notification_naming_the_onions_host_is_hidden_and_followed_nowhere(app, onion):
+    notification = notice(onion.first_bob, 999, f'http://{ONION}/post/{onion.first_post.id}')
+    body = get(app, '/notifications', user=onion.first_bob).get_data(as_text=True)
+    assert body.count(NOTE) == 1 and ONION not in body
+    response = Visitor(app, onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
+    assert response.status_code == 404 and 'Location' not in response.headers
+
+
+def test_a_notification_is_never_followed_off_this_host(app, onion):
+    notification = notice(onion.first_bob, 999, 'https://elsewhere.example/post/1')
+    response = Visitor(app, onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
+    assert response.status_code == 302 and response.headers['Location'].endswith('/notifications')
+    notification = notice(onion.first_bob, 999, f'https://{FIRST}/post/{onion.first_post.id}')
+    response = Visitor(app, onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
+    assert response.headers['Location'] == f'https://{FIRST}/post/{onion.first_post.id}'   # this host's own
 
 
 def test_following_a_notification_of_a_hidden_post_answers_404_and_spells_no_onion_name(app, notified):
