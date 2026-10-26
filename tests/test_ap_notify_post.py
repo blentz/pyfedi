@@ -452,6 +452,7 @@ def test_a_subscriber_to_the_author_is_notified(app, db_session):
     assert notification.targets == {'gen': '0',
                                     'post_id': post.id,
                                     'post_title': 'a post',
+                                    'community_id': post.community_id,
                                     'community_name': f'microblogs@{PEER}',
                                     'author_id': author.id,
                                     'author_user_name': f'author@{PEER}'}
@@ -766,7 +767,7 @@ def test_a_subscriber_already_notified_by_the_user_arm_is_not_notified_again(app
     assert len(dual_notifications) == 1
     assert dual_notifications[0].notif_type == NOTIF_USER
     assert dual_notifications[0].subtype == 'new_post_from_followed_user'
-    assert 'community_id' not in dual_notifications[0].targets
+    assert dual_notifications[0].targets['community_id'] == post.community_id
     assert dual_notifications[0].targets['author_user_name'] == f'author@{PEER}'
 
     control_notifications = _notifications_for(community_only)
@@ -1054,6 +1055,7 @@ def test_a_subscriber_to_the_communitys_topic_is_notified(app, db_session):
     assert notification.targets == {'gen': '0',
                                     'post_id': post.id,
                                     'post_title': 'a post',
+                                    'community_id': post.community_id,
                                     'community_name': f'microblogs@{PEER}',
                                     'topic_name': 'News',
                                     'topic_machine_name': 'news',
@@ -1435,6 +1437,7 @@ def test_a_subscriber_to_a_feed_containing_the_community_is_notified(app, db_ses
     assert notification.targets == {'gen': '0',
                                     'post_id': post.id,
                                     'post_title': 'a post',
+                                    'community_id': post.community_id,
                                     'community_name': f'microblogs@{PEER}',
                                     'feed_id': feed.id,
                                     'feed_name': 'A Feed'}
