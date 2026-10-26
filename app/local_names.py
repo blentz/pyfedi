@@ -11,8 +11,8 @@ from app.models import Community, Post, PostReply, User
 from app import db
 from app.constants import AUTOMATED_REPORTER
 from app.local_only import any_domain_closed, hidden_here
-from app.storefront import DomainInfo, current_storefront, default_domain, domain_by_id, domain_for_host, on_domain, \
-    path_name
+from app.storefront import DomainInfo, current_storefront, default_domain, domain_by_id, domain_for_host, \
+    host_hidden_here, on_domain, path_name
 
 
 def split_local_name(raw: str) -> tuple[str, DomainInfo] | None:
@@ -158,6 +158,31 @@ def content_link(targets: dict | None, id_key: str, text, css_class: str = '') -
         return escape(text or '') + hidden_note()
     css = Markup(' class="{}"').format(css_class) if css_class else Markup('')
     return Markup('<a{} href="{}">{}</a>').format(css, path.format(id_), text or '')
+
+
+def content_hidden(targets: dict | None, id_key: str) -> bool:
+    """Whether the post or comment `targets[id_key]` names (`suspect_post_id` or `suspect_comment_id`) is hidden here,
+    so a report shows its title or text but not its body (follow-up F6)."""
+    id_ = (targets or {}).get(id_key)
+    return isinstance(id_, int) and hidden_target(_CONTENT_LINKS[id_key][0], id_)
+
+
+def instance_link(domain: str | None) -> Markup:
+    """A report's link to the instance `domain`, or the name as text with `hidden_note` when it is a domain hidden
+    here (follow-up F6): its page answers 404 there, and a link would name it."""
+    if host_hidden_here(domain or ''):
+        return escape(domain) + hidden_note()
+    return Markup('<a href="/instance/{0}">{0}</a>').format(domain or '')
+
+
+# a report's suspect, as the community's moderation page links it: the model, and the report's column of its id
+_REPORT_SUSPECTS = ((PostReply, 'suspect_post_reply_id'), (Post, 'suspect_post_id'), (User, 'suspect_user_id'))
+
+
+def report_target_hidden(report) -> bool:
+    """Whether the post, comment or account `report` is about is hidden here, so its page is not linked (F6)."""
+    return any(getattr(report, column) and hidden_target(model, getattr(report, column))
+               for model, column in _REPORT_SUSPECTS)
 
 
 # the name-built urls a notification stored before follow-up F1: (model, targets key of its id, endpoint, url argument)
