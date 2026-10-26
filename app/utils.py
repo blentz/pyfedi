@@ -58,7 +58,7 @@ from wtforms.validators import ValidationError
 from markupsafe import Markup
 import boto3
 from app import db, cache, httpx_client, celery, get_ip_address, plugins, shaped_memo_name
-from app.onion import is_onion_request, stamp_activity
+from app.onion import is_onion_request, onion_user_ttl, stamp_activity
 from app.onion_store import onion_store_needed, onion_store_optional, request_redis
 from app.pinned_http import fetch_deadline, is_refused_address
 from app.rsa_keys import RsaKeys
@@ -6083,7 +6083,7 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
 
     if cache_key:  # same key the read above used; see where it is derived
         with onion_store_optional():
-            feed_cache.set(cache_key, json.dumps(post_ids), ex=86400)  # 86400 is 1 day
+            feed_cache.set(cache_key, json.dumps(post_ids), ex=onion_user_ttl(86400))  # 86400 is 1 day; an hour on the onion
     return post_ids
 
 

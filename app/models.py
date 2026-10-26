@@ -47,7 +47,7 @@ import app as app_pkg
 import app.storefront as storefront
 import app.local_only as local_only
 from app.clock import utcnow  # noqa: F401  (re-exported: callers import it from here)
-from app.onion import is_onion_request, stamp_activity
+from app.onion import is_onion_request, onion_user_ttl, stamp_activity
 from app.onion_store import onion_store_needed, onion_store_optional, read_other_store, request_redis
 from app.relays import current_relay_id
 from app.rsa_keys import RsaKeys
@@ -116,7 +116,7 @@ def count_vote_cast(user_id: int) -> None:
     with onion_store_needed():
         redis = request_redis()
         if not redis.get(votes_cast_key(user_id)):
-            redis.set(votes_cast_key(user_id), 1, ex=86400)
+            redis.set(votes_cast_key(user_id), 1, ex=onion_user_ttl(86400))
         else:
             redis.incr(votes_cast_key(user_id))
 
@@ -133,6 +133,8 @@ def recent_ai_detections(user_id: int, detection: dict, now: float) -> list:
         redis = request_redis()
         redis.zadd(redis_key, {json.dumps(detection): now})
         redis.zremrangebyscore(redis_key, 0, now - 86400)   # entries older than 24h
+        if is_onion_request():
+            redis.expire(redis_key, onion_user_ttl(86400))     # the onion's tally names a user: gone within the hour
         detections = redis.zrange(redis_key, 0, -1) + read_other_store(
             lambda other: other.zrangebyscore(redis_key, now - 86400, '+inf'), [])   # not pruned there: read-only
     return detections
