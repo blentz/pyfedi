@@ -258,6 +258,29 @@ def without_hidden_here(query, model, signed_in: bool | None = None):
     return query if hides_nothing(clause) else query.filter(not_(clause))
 
 
+def hidden_conversation_clause(conversation_id):
+    """True for the conversation `conversation_id` (a column) when one of its members is hidden here, for a signed-in
+    reader (`hidden_here`): it names that member, so off the onion a conversation with an onion account is no one's
+    (follow-up F6). `false()` when nothing is hidden. `without_hidden_conversations` filters a query by it."""
+    member, membership = aliased(models.User), models.conversation_member.alias()   # never the query's own join
+    by_member = _actor_hidden_clause(member, True)
+    if hides_nothing(by_member):
+        return by_member
+    return exists().where(membership.c.conversation_id == conversation_id, member.id == membership.c.user_id,
+                          by_member)
+
+
+def conversation_hidden_here(conversation) -> bool:
+    """`hidden_conversation_clause` for a Conversation row."""
+    return any(_actor_hidden(member, True) for member in conversation.members)
+
+
+def without_hidden_conversations(query, conversation_id):
+    """`query` without the rows whose conversation (the column `conversation_id`) has a member hidden here."""
+    clause = hidden_conversation_clause(conversation_id)
+    return query if hides_nothing(clause) else query.filter(not_(clause))
+
+
 def hides_anything_here() -> bool:
     """Whether this storefront hides any local-only domain's accounts, communities or content from a signed-in reader:
     on a storefront that federates, whenever some domain does not; on a local-only one, whenever another does not."""

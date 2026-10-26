@@ -12,7 +12,8 @@ from app.federation_urls import object_base
 from app.models import ChatMessage, Conversation, User, Notification, Report, Site
 from app.storefront import canonicalise_text
 from app.utils import authorise_api_user, markdown_to_html, user_access
-from app.local_only import REMOTE_CONTACT_REFUSAL, refuses_remote_contact
+from app.local_only import REMOTE_CONTACT_REFUSAL, conversation_hidden_here, refuses_remote_contact, without_hidden_conversations, \
+    without_local_only_actors
 from app.shared.tasks import task_selector
 
 
@@ -38,8 +39,9 @@ def get_private_message_list(auth, data):
         private_messages = ChatMessage.query.filter(or_(ChatMessage.recipient_id == user_id,
                     ChatMessage.sender_id == user_id)).order_by(desc(ChatMessage.created_at))
     
-    # Only return conversations that the user hasn't left
-    private_messages = private_messages.filter(ChatMessage.conversation_id.in_(joined_conversations))
+    # Only return conversations that the user hasn't left, and none with an account hidden here (follow-up F6)
+    private_messages = without_hidden_conversations(
+        private_messages.filter(ChatMessage.conversation_id.in_(joined_conversations)), ChatMessage.conversation_id)
 
     private_messages = private_messages.paginate(page=page, per_page=limit, error_out=False)
 
@@ -87,8 +89,8 @@ def get_private_message_conversation(auth, data):
 
     if 'conversation_id' in data:
         conversation = db.session.get(Conversation, data['conversation_id'])
-        if conversation is None:
-            raise Exception("User is not a member of this conversation")
+        if conversation is None or conversation_hidden_here(conversation):
+            raise Exception("User is not a member of this conversation")   # one hidden here is as none (F6)
         conversation_ids = [conversation.id]
         if conversation.id not in joined_conversations:
             raise Exception("User is not a member of this conversation")
@@ -100,8 +102,9 @@ def get_private_message_conversation(auth, data):
                                                     ChatMessage.conversation_id.in_(joined_conversations),
                                                     or_(ChatMessage.recipient_id == user_id,
                                                         ChatMessage.sender_id == user_id)).\
-                                            filter(ChatMessage.recipient_id != None).\
-                                            order_by(desc(ChatMessage.created_at))
+                                            filter(ChatMessage.recipient_id != None)
+        private_messages = without_hidden_conversations(private_messages, ChatMessage.conversation_id).\
+            order_by(desc(ChatMessage.created_at))
         private_messages = private_messages.paginate(page=page, per_page=limit, error_out=False)
         for private_message in private_messages:
             pm_list.append(private_message_view(private_message, variant=1))
@@ -152,7 +155,8 @@ def post_leave_conversation(auth, data):
 
 def post_private_message(auth, data):
     sender = authorise_api_user(auth, return_type='model')
-    recipient = User.query.filter_by(id=data['recipient_id']).one()
+    # an account hidden here is as one nobody holds (follow-up F6): the same NoResultFound
+    recipient = without_local_only_actors(User.query.filter_by(id=data['recipient_id']), User, True).one()
 
     if refuses_remote_contact(sender, recipient):   # spec 3.4
         raise Exception(REMOTE_CONTACT_REFUSAL)

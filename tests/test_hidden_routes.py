@@ -6,9 +6,10 @@ and the same body, so no route is an oracle for what exists on the onion. The ga
 import pytest
 
 from app import db
+from app.models import ChatMessage, Conversation, utcnow
 from tests.test_instance_visible_here import get, scene  # noqa: F401 -- scene is a fixture
 from tests.test_local_only_actors_hidden import world  # noqa: F401 -- world is a fixture
-from tests.test_onion_hidden_on_clearnet import onion  # noqa: F401 -- a fixture
+from tests.test_onion_hidden_on_clearnet import api, onion  # noqa: F401 -- onion is a fixture
 from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
 from tests.test_per_domain_html_routes import Visitor
 from tests.two_domains import FIRST, ONION, two_domains  # noqa: F401
@@ -129,3 +130,65 @@ def test_an_onion_accounts_alternate_name_answers_as_a_name_nobody_holds(app, on
 def test_junk_in_an_object_argument_is_not_a_server_error(app, onion, path, signed_in):
     response = visit(app, onion.first_bob, 'GET', path) if signed_in else get(app, path)
     assert response.status_code in (302, 400, 404), (path, response.status_code)
+
+
+# --- C2: a conversation with an onion account -----------------------------------------------------------------------
+
+@pytest.fixture
+def talking(onion):
+    """The first domain's bob talks with the onion's bob (from the onion: nowhere else can he be seen) and with the first
+    domain's admin."""
+    onion.with_onion = Conversation(user_id=onion.first_bob.id)
+    onion.with_onion.members.extend([onion.first_bob, onion.onion_bob])
+    onion.with_admin = Conversation(user_id=onion.first_bob.id)
+    onion.with_admin.members.extend([onion.first_bob, onion.admin])
+    db.session.add_all([onion.with_onion, onion.with_admin])
+    db.session.commit()
+    for conversation, sender, recipient, text in ((onion.with_onion, onion.onion_bob, onion.first_bob, 'ONIONCHAT'),
+                                                  (onion.with_admin, onion.admin, onion.first_bob, 'FIRSTCHAT')):
+        db.session.add(ChatMessage(conversation_id=conversation.id, sender_id=sender.id, recipient_id=recipient.id,
+                                   body=text, body_html=f'<p>{text}</p>'))
+    onion.with_onion.updated_at = utcnow()   # the newest: /chat opens it first
+    db.session.commit()
+    return onion
+
+
+def test_the_chat_lists_no_conversation_with_an_onion_account_on_the_first_domain(app, talking, monkeypatch):
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the reply form renders its token
+    response = visit(app, talking.first_bob, 'GET', '/chat')
+    assert response.status_code == 302 and response.headers['Location'].endswith(f'/chat/{talking.with_admin.id}')
+    body = visit(app, talking.first_bob, 'GET', f'/chat/{talking.with_admin.id}').get_data(as_text=True)
+    assert 'FIRSTCHAT' in body and 'ONIONCHAT' not in body and ONION not in body
+    assert f'/chat/{talking.with_onion.id}' not in body
+    assert_same(app, talking.first_bob, 'GET', f'/chat/{talking.with_onion.id}', f'/chat/{NOBODY}')
+
+
+def test_the_apis_messages_leave_out_a_conversation_with_an_onion_account_on_the_first_domain(app, talking,
+                                                                                             monkeypatch):
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    body = api(app, '/api/alpha/private_message/list', talking.first_bob).get_data(as_text=True)
+    assert 'FIRSTCHAT' in body and 'ONIONCHAT' not in body
+    found = api(app, f'/api/alpha/private_message/conversation?conversation_id={talking.with_onion.id}',
+                talking.first_bob)
+    absent = api(app, f'/api/alpha/private_message/conversation?conversation_id={NOBODY}', talking.first_bob)
+    assert (found.status_code, found.get_data()) == (absent.status_code, absent.get_data())
+    found = api(app, f'/api/alpha/private_message/conversation?person_id={talking.onion_bob.id}', talking.first_bob)
+    assert 'ONIONCHAT' not in found.get_data(as_text=True)
+
+
+def test_on_the_onion_the_conversation_is_listed(app, talking, monkeypatch):
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the reply form renders its token
+    body = visit(app, talking.first_bob, 'GET', f'/chat/{talking.with_onion.id}', host=ONION).get_data(as_text=True)
+    assert 'ONIONCHAT' in body
+
+
+def test_the_api_sends_no_message_to_an_onion_account_on_the_first_domain(app, talking, monkeypatch):
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    answers = []
+    for recipient in (talking.onion_bob.id, NOBODY):
+        forget_login()
+        answers.append(app.test_client().post('/api/alpha/private_message', base_url=f'https://{FIRST}',
+                                              json={'recipient_id': recipient, 'content': 'hello'},
+                                              headers={'Authorization': f'Bearer {talking.first_bob.encode_jwt_token()}'}))
+    assert (answers[0].status_code, answers[0].get_data()) == (answers[1].status_code, answers[1].get_data())
+    assert ChatMessage.query.filter_by(recipient_id=talking.onion_bob.id).count() == 0
