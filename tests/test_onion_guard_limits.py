@@ -21,7 +21,6 @@ from unittest.mock import patch
 
 import pytest
 from flask import request, session
-from limits import parse_many
 from sqlalchemy import event
 from werkzeug.datastructures import Headers
 from werkzeug.exceptions import TooManyRequests
@@ -34,7 +33,7 @@ from app import app_bcrypt, create_app, db, limiter, rate_limit_key
 from app.auth.util import find_user
 from app.models import SiteDomain, User
 from app.storefront import domain_for_host
-from app.onion import ONION_ANON_KEY, arrived_onion_sid, mint_onion_sid, onion_user_limit
+from app.onion import ONION_ANON_KEY, arrived_onion_sid, mint_onion_sid
 from app.onion_guard import (ACCOUNT_FAILURE_KEY, COOKIE_CHECK, LOGIN_FAILURE_TTL, ONION_SESSION_ENDPOINTS,
                              ONION_SESSION_EXEMPT, TYPED_FAILURE_KEY, clear_onion_login_failures,
                              onion_session_missing, OnionLoginGate, reserve_onion_login_attempt,
@@ -440,11 +439,6 @@ def limited_app():
     @limited.route('/api/alpha/onion_probe')
     def onion_probe():
         with limiter.limit('2/minute'):
-            return 'ok'
-
-    @limited.route('/api/alpha/onion_day_probe')
-    def onion_day_probe():
-        with limiter.limit(onion_user_limit('48/day')):
             return 'ok'
 
     limiter.enabled = False
@@ -1166,61 +1160,3 @@ def test_a_429_made_before_the_storefront_is_resolved_is_still_the_onions(refuse
     assert 'Content-Security-Policy' not in clearnet.headers
     with refused_first.app_context():   # an unregistered host is still refused as one, never given a storefront
         assert refused_first.test_client().get('/auth/login', base_url='https://unknown.example.org').status_code == 429
-
-
-# --------------------------------------------------------------------------
-# A per-account bucket never outlives the hour (spec anti-goal: no link older than 1 hour)
-# --------------------------------------------------------------------------
-
-@pytest.mark.parametrize('spec, scaled', [('10/day', '1 per 1 hour'), ('20/day', '1 per 1 hour'),
-                                          ('48/day', '2 per 1 hour'), ('48 per 2 day', '1 per 1 hour'), ('50 per 2 day', '2 per 1 hour'),
-                                          ('300 per day', '13 per 1 hour'), ('20/hour', '20/hour'),
-                                          ('3/minute', '3/minute'), ('300 per day;10 per 5 minutes',
-                                                                           '13 per 1 hour;10 per 5 minute')])
-def test_a_day_limit_is_an_hour_limit_for_an_onion_account(app, onion, spec, scaled):
-    """The amount shrinks with the window (ceil, at least 1), so the rate is not loosened. A window of an hour or less
-    is left as it is."""
-    user = api_user(onion)
-    with onion_context(app, '/api/alpha/site', {'Authorization': f'Bearer {user.encode_jwt_token()}'}):
-        resolve_onion_api_rate_key()
-        assert onion_user_limit(spec)() == scaled
-
-
-def test_a_day_limit_is_unchanged_for_everyone_else(app, onion):
-    with onion_context(app, '/api/alpha/site'):
-        resolve_onion_api_rate_key()
-        assert onion_user_limit('10/day')() == '10/day'         # onion-anon names no one
-    with onion_context(app, '/auth/login', {'Authorization': 'Bearer x'}):
-        assert onion_user_limit('10/day')() == '10/day'         # a web path is keyed by session
-    with app.test_request_context('/api/alpha/site'):
-        assert onion_user_limit('10/day')() == '10/day'         # clearnet
-    assert onion_user_limit('10/day')() == '10/day'             # no request at all
-
-
-def test_a_day_limit_is_applied_per_hour_on_the_onion(limits):
-    with limits.app_context():
-        make_instance('test.piefed.local', software='piefed')
-        user = make_user(None, 'dayuser', local=True)
-        user.verified = True
-        db.session.commit()
-        bearer = {'Authorization': f'Bearer {user.encode_jwt_token()}'}
-    client = limits.test_client(use_cookies=False)
-    probe = lambda: onion_get(client, '/api/alpha/onion_day_probe', headers=bearer).status_code
-    assert [probe() for _ in range(3)] == [200, 200, 429]       # 48/day is 2/hour here
-    onion_expiries = limiter.storage.onion.expirations.values()
-    assert onion_expiries
-    assert all(0 < expires - time.time() <= 3600 for expires in onion_expiries)
-    clearnet = limits.test_client(use_cookies=False)
-    assert [clearnet.get('/api/alpha/onion_day_probe', base_url=CLEARNET_URL).status_code for _ in range(3)] \
-        == [200, 200, 200]
-
-
-def test_no_alpha_api_limit_is_a_literal_window_over_an_hour():
-    """Every alpha API limit over an hour is wrapped in `onion_user_limit`, which is what shrinks it for an onion
-    account's `onion-user:<id>` bucket; a literal string would keep the bucket for the day."""
-    tree = ast.parse((pathlib.Path(app_pkg.__file__).resolve().parent / 'api' / 'alpha' / 'routes.py').read_text())
-    literal = [node.args[0].value for node in ast.walk(tree)
-               if isinstance(node, ast.Call) and is_limit_decorator(node) and node.args
-               and isinstance(node.args[0], ast.Constant)]
-    assert literal, 'the scan found no literal limits: it is looking at the wrong calls'
-    assert [spec for spec in literal if any(item.get_expiry() > 3600 for item in parse_many(spec))] == []

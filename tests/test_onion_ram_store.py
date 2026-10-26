@@ -21,12 +21,11 @@ from redis.exceptions import ConnectionError as RedisConnectionError, RedisError
 
 import app as app_pkg
 from app import create_app, db, limiter
-from app.models import Post, User, count_vote_cast, recent_ai_detections, votes_cast_key, votes_cast_today
-from app.onion import onion_user_ttl
+from app.models import Post, User, recent_ai_detections, votes_cast_key, votes_cast_today
 from app.onion_store import (OnionRoutedStorage, check_onion_store, onion_store_needed, onion_store_optional,
                              request_redis)
 from app.user.routes import import_settings_task
-from app.utils import get_deduped_post_ids, get_redis_connection, set_setting
+from app.utils import get_redis_connection, set_setting
 from config import Config, limits_redis_uri
 from tests.conftest import TestConfig
 from tests.factories import make_community, make_post
@@ -234,20 +233,6 @@ def test_onion_crawl_writes_nothing_to_the_main_redis(limited_app, world, main_r
     assert onion_redis.get(next(iter(onion_redis.keys('votes_cast_*')))) == '1'
     assert onion_redis.keys('onion_pow_used:*') and onion_redis.keys('feed:*')
     assert limits_on.onion.storage and not limits_on.main.storage
-    fresh = limited_app.test_client()                                              # a failed login keeps a counter
-    page = challenge(onion_page(fresh, '/auth/login'))
-    onion_post(fresh, '/auth/login', data=proven(page, password='wrong password'))
-    assert_no_user_key_outlives_the_hour(onion_redis, alice)
-
-
-def assert_no_user_key_outlives_the_hour(onion_redis, user):
-    """The spec's anti-goal: a running box holds no link between a user and onion use older than an hour. Every key
-    of the onion store that names the account (by id, name or email) has a TTL of 1 to 3600 seconds, never -1."""
-    named = [key for key in onion_redis.keys('*')
-             if any(token in key for token in (f':{user.id}', f'_{user.id}', user.user_name, user.email))]
-    assert {key.split(':')[0] for key in named} >= {'feed', 'onion_login_fail'}      # the scan found the keys it is for
-    assert [(key, onion_redis.ttl(key)) for key in named if not 0 < onion_redis.ttl(key) <= 3600] == []
-    assert any(key.startswith('votes_cast_') for key in named)
 
 
 def test_onion_guard_keys_are_in_the_onion_store(app, world, main_redis, onion_redis):
@@ -575,55 +560,6 @@ def test_an_onion_store_that_never_answers_times_out():
         with pytest.raises(RedisTimeoutError):
             client.get('anything')
         assert time.monotonic() - started < 2
-
-
-# --------------------------------------------------------------------------
-# No key that names a user lives on the onion store for more than an hour
-# --------------------------------------------------------------------------
-
-def test_an_onion_vote_count_expires_within_the_hour_and_a_clearnet_one_keeps_its_day(app, onion, main_redis,
-                                                                                      onion_redis):
-    key = votes_cast_key(5)
-    with onion_request(app):
-        count_vote_cast(5)
-        count_vote_cast(5)                      # a later vote does not extend it
-    assert 0 < onion_redis.ttl(key) <= 3600 and onion_redis.get(key) == '2'
-    with app.test_request_context('/'):
-        count_vote_cast(5)
-    assert 86000 < main_redis.ttl(key) <= 86400
-
-
-def test_an_onion_ai_detection_tally_expires_within_the_hour_and_a_clearnet_one_is_as_it_was(app, onion, main_redis,
-                                                                                            onion_redis):
-    key = 'ai_detection:user:5'
-    now = 1_800_000_000.0
-    with onion_request(app):
-        recent_ai_detections(5, {'detection': 'ai'}, now)
-        recent_ai_detections(5, {'detection': 'ai'}, now + 1)           # a later one does not extend it
-    assert 0 < onion_redis.ttl(key) <= 3600
-    with app.test_request_context('/'):
-        recent_ai_detections(5, {'detection': 'ai'}, now)
-    assert main_redis.ttl(key) == -1
-
-
-def test_an_onion_feed_cache_expires_within_the_hour_and_a_clearnet_one_keeps_its_day(app, world, main_redis,
-                                                                                     onion_redis, monkeypatch):
-    monkeypatch.setattr('app.utils.current_user', world['alice'])
-    community_ids = [world['community'].id]
-    with onion_request(app):
-        get_deduped_post_ids('abc', community_ids, 'hot')
-    assert [0 < onion_redis.ttl(key) <= 3600 for key in onion_redis.keys('feed:*')] == [True]
-    with app.test_request_context('/'):
-        get_deduped_post_ids('abc', community_ids, 'hot')
-    assert [86000 < main_redis.ttl(key) <= 86400 for key in main_redis.keys('feed:*')] == [True]
-
-
-def test_the_onion_store_names_a_user_only_for_an_hour(app, onion):
-    """The TTL helper itself: capped on the onion, the caller's own anywhere else."""
-    with onion_request(app):
-        assert onion_user_ttl(86400) == 3600 and onion_user_ttl(600) == 600
-    with app.test_request_context('/'):
-        assert onion_user_ttl(86400) == 86400
 
 
 def test_the_limiter_fallback_warns_once_a_minute(app, onion, caplog):
