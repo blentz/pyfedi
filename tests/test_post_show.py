@@ -411,7 +411,7 @@ def test_adult_content_is_refused_in_a_restricted_country(app, env):
     post.nsfw = True
     db.session.commit()
 
-    with patch('app.post.routes.user_in_restricted_country',
+    with patch('app.post.util.user_in_restricted_country',
                return_value=True):
         response = as_user(app, outsider).get(f'/post/{post.id}')
 

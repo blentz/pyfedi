@@ -47,7 +47,8 @@ from app.post.forms import NewReplyForm, ReportPostForm, MeaCulpaForm, CrossPost
     ConfirmationMultiDeleteForm, EditReplyForm, FlairPostForm, DeleteConfirmationForm, NewReminderForm, \
     ShareMastodonForm, ChooseEmojiForm, MovePostForm
 from app.post.util import post_replies, get_comment_branch, form_tags_string, url_needs_archive, \
-    generate_archive_link, body_has_no_archive_link, retrieve_archived_post
+    generate_archive_link, body_has_no_archive_link, retrieve_archived_post, NEEDS_LOGIN, deleted_post_state, \
+    post_refusal
 from app.post.util import post_type_to_form_url_type
 # The module, not the names: app.shared.post reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.post)
@@ -74,7 +75,7 @@ from app.utils import clean_ap_url, can_moderate, is_local_microblogs, render_te
     referrer, can_create_post_reply, communities_banned_from, \
     block_bots, flair_for_form, login_required_if_private_instance, retrieve_image_hash, posts_with_blocked_images, \
     possible_communities, user_notes, login_required, get_recipient_language, user_filters_posts, \
-    total_comments_on_post_and_cross_posts, approval_required, libretranslate_string, user_in_restricted_country, \
+    total_comments_on_post_and_cross_posts, approval_required, libretranslate_string, \
     site_language_code, block_honey_pot, joined_communities, moderating_communities, user_pronouns, \
     instance_sticky_posts, instance_sticky_post_ids, user_access, show_reason_why_no_federation, \
     community_membership_private, user_ip_banned, check_anoobis, safe_redirect_target, \
@@ -190,38 +191,20 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
         post = db.session.get(Post, post_id) or abort(404)
         community: Community = post.community
 
-        if community.banned or post.deleted:
-            if post.deleted_by == post.user_id:
-                flash(_('This post has been deleted by the author.'), 'warning')
-            else:
-                if current_user.is_authenticated and (community.is_moderator() or current_user.is_admin_or_staff() or current_user.id == post.user_id):
-                    flash(_('This post has been deleted and is only visible to staff and admins.'), 'warning')
-                else:
-                    abort(404)
+        deleted = deleted_post_state(post)   # the refusals themselves are post_refusal's, shared with links to a post
+        if deleted == 'author':
+            flash(_('This post has been deleted by the author.'), 'warning')
+        elif deleted == 'staff':
+            flash(_('This post has been deleted and is only visible to staff and admins.'), 'warning')
 
-        # Before the anonymous NSFW/NSFL login redirect: that redirect would confirm the post exists.
-        refuse_invisible(post)
-
-        if current_user.is_anonymous:
-            if current_app.config['CONTENT_WARNING']:
-                if post.nsfl:
-                    flash(_('This post is only visible to logged in users.'))
-                    return redirect(url_for("auth.login", next=f"/post/{post_id}"))
-            else:
-                if post.nsfw or post.nsfl:
-                    flash(_('This post is only visible to logged in users.'))
-                    return redirect(url_for("auth.login", next=f"/post/{post_id}"))
-
-            if post.community.private:
-                abort(403)
-        else:
-            if (post.nsfw or post.nsfl) and user_in_restricted_country(current_user):
-                abort(403)
-
-            if post.community.private and post.community_id not in community_membership_private(current_user.id):
-                abort(403)
-
-        refuse_unpublished_post(post)
+        # post_refusal answers the invisible post before the anonymous NSFW/NSFL login redirect: that redirect would
+        # confirm the post exists.
+        refusal = post_refusal(post)
+        if refusal == NEEDS_LOGIN:
+            flash(_('This post is only visible to logged in users.'))
+            return redirect(url_for("auth.login", next=f"/post/{post_id}"))
+        if refusal is not None:
+            abort(refusal)
 
         # If nothing has changed since their last visit, return HTTP 304
         current_etag = f"{post.id}{sort}_{etag_stamp(post.last_active)}"
