@@ -224,14 +224,14 @@ def test_a_file_delete_lands_back_where_it_started(app, env):
 
 def test_following_a_notification_marks_it_read(app, env):
     client, owner, other = env
-    notification = a_notification(owner, url='/c/general')
+    notification = a_notification(owner, url='/post/7')
     owner.unread_notifications = 1
     db.session.commit()
 
     response = client.get(f'/notification/{notification.id}/goto')
 
     assert response.status_code == 302
-    assert response.headers['Location'] == '/c/general'
+    assert response.headers['Location'] == '/post/7'
     db.session.refresh(notification)
     db.session.refresh(owner)
     assert notification.read is True
