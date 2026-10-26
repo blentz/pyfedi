@@ -3697,8 +3697,9 @@ def log_login_failure(client: str | None = None):
 
     An onion request writes no line: they all share the proxy's address, so no ban could act on one, and the line
     would only record that the onion was used. An address with anything outside [0-9a-fA-F:.] logs as
-    `ip=invalid`. The line never holds the user name or email. Callers log only after a password was really checked (or the account was not found):
-    a refused proof-of-work or wait token, and a visible wait refusal, are not failed checks.
+    `ip=invalid`. The line never holds the user name or email. Callers log only after a password was really
+    checked (or the account was not found): a refused proof-of-work or wait token, and a visible wait refusal,
+    are not failed checks.
     """
     if not is_onion_request():
         current_app.logger.warning('auth: login failed ip=%s', loggable_client(client))
