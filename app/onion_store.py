@@ -18,6 +18,7 @@ it across a reboot. The onion's state goes to `app.onion_redis_client` (`ONION_R
 from __future__ import annotations
 
 from contextlib import contextmanager
+from time import monotonic
 from urllib.parse import urlsplit
 
 from flask import abort, current_app, jsonify, make_response
@@ -31,6 +32,7 @@ from app.log_scrub import ONION_SAFE
 from app.onion import is_api_path, is_onion_request, single_address
 
 ONION_ROUTED_SCHEME = 'onion-routed'
+FALLBACK_WARNING_SECONDS = 60       # the limiter's onion fallback says so at most this often per process
 
 
 def request_redis():
@@ -158,10 +160,13 @@ class OnionRoutedStorage(Storage):
 
     STORAGE_SCHEME = [ONION_ROUTED_SCHEME]
 
-    def __init__(self, uri: str | None = None, *, main: str, onion: str, onion_options: dict | None = None, **options):
+    def __init__(self, uri: str | None = None, *, main: str, onion: str, onion_options: dict | None = None, clock=monotonic,
+                 **options):
         super().__init__(uri, **options)
         self.main = storage_from_string(main)
         self.onion = storage_from_string(onion, **(onion_options or {}))   # its timeouts (ONION_REDIS_TIMEOUT)
+        self.clock = clock      # injectable, so a test needs no sleep
+        self.fallback_warned_at: float | None = None
         self.onion_fallback: MemoryStorage | None = None   # made on the first failure: it starts a timer thread
 
     @property
@@ -172,7 +177,10 @@ class OnionRoutedStorage(Storage):
         try:
             return getattr(self.onion, method)(*args)
         except self.onion.base_exceptions:
-            current_app.logger.warning('onion rate-limit store unavailable, counting in memory', extra=ONION_SAFE)
+            now = self.clock()
+            if self.fallback_warned_at is None or now - self.fallback_warned_at >= FALLBACK_WARNING_SECONDS:
+                self.fallback_warned_at = now
+                current_app.logger.warning('onion rate-limit store unavailable, counting in memory', extra=ONION_SAFE)
             if self.onion_fallback is None:
                 self.onion_fallback = MemoryStorage()
             return getattr(self.onion_fallback, method)(*args)

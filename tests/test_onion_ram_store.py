@@ -624,3 +624,26 @@ def test_the_onion_store_names_a_user_only_for_an_hour(app, onion):
         assert onion_user_ttl(86400) == 3600 and onion_user_ttl(600) == 600
     with app.test_request_context('/'):
         assert onion_user_ttl(86400) == 86400
+
+
+def test_the_limiter_fallback_warns_once_a_minute(app, onion, caplog):
+    """A store outage is several limiter calls per request: one fixed WARNING per 60 s per process, not one per call.
+    The clock is injected; nothing sleeps."""
+    now = [1000.0]
+    storage = OnionRoutedStorage(main='memory://', onion='memory://', clock=lambda: now[0])
+    storage.onion = DownStorage()
+
+    def warnings():
+        return [r for r in caplog.records if r.levelname == 'WARNING' and 'rate-limit store' in r.getMessage()]
+    with onion_request(app), caplog.at_level('WARNING'):
+        for _ in range(5):
+            storage.incr('k', 60)
+        assert len(warnings()) == 1
+        now[0] += 59.9
+        storage.incr('k', 60)
+        assert len(warnings()) == 1
+        now[0] += 0.1
+        storage.incr('k', 60)
+        storage.get('k')
+        assert len(warnings()) == 2
+    assert all(r.onion_safe for r in warnings())
