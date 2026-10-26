@@ -66,3 +66,24 @@ def test_an_own_host_hit_the_viewer_may_not_open_is_not_listed(app, world, answe
 
 def test_an_own_host_hit_naming_no_post_is_not_listed(app, world, answer):
     assert listed(app, answer, [hit(app.config['SERVER_NAME'], '/post/99999')]) == []
+
+
+def test_only_the_first_results_are_checked_so_the_service_cannot_make_us_run_a_query_per_hit(app, world, answer,
+                                                                                               monkeypatch):
+    checked = []
+    real = external_search.hosted_post_for_viewer
+    monkeypatch.setattr(external_search, 'hosted_post_for_viewer',
+                        lambda url, *args: checked.append(url) or real(url, *args))
+    server = app.config['SERVER_NAME']
+
+    listed(app, answer, [hit(server, f'/post/{n}', n) for n in range(1, 40)])
+
+    assert len(checked) == external_search.RESULT_LIMIT
+
+
+def test_the_same_post_under_two_urls_is_listed_once(app, world, answer):
+    post = _post(app, world.clearnet, world.bob)
+    server = app.config['SERVER_NAME']
+
+    assert listed(app, answer, [hit(server, f'/post/{post.id}', 1),
+                                hit(server, f'/c/clearnet/p/{post.id}/a-post', 2)]) == ['Video 1']

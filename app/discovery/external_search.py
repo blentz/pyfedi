@@ -75,22 +75,27 @@ def _videos_for(q: str) -> list:
     return videos
 
 
-def _listable(video: dict) -> bool:
-    """A hit on one of our own domains is listed when the viewer may open the local post it names (it is opened from
-    the database, never fetched); any other only when its host is not excluded."""
-    if is_hosted_uri(video['url']):
-        return hosted_post_for_viewer(video['url']) is not None
-    return not host_is_excluded(video['host'], frozenset())
-
-
 def search_videos(q: str, allow_nsfw: bool) -> list:
     q = (q or '').strip()
     if not q:
         return []
-    videos = [v for v in _videos_for(q) if (allow_nsfw or not v['nsfw']) and _listable(v)]
+    videos, local_post_ids = [], set()
+    for video in _videos_for(q)[:RESULT_LIMIT]:   # the cut comes first: each own-host hit below costs queries
+        if not (allow_nsfw or not video['nsfw']):
+            continue
+        if is_hosted_uri(video['url']):
+            # one of our own domains: listed when the viewer may open the local post it names (opened from the
+            # database, never fetched), and once however many URLs name it
+            post = hosted_post_for_viewer(video['url'])
+            if post is None or post.id in local_post_ids:
+                continue
+            local_post_ids.add(post.id)
+        elif host_is_excluded(video['host'], frozenset()):
+            continue
+        videos.append(video)
     remote = [v for v in videos if not is_hosted_uri(v['url'])]
     if remote:
         stored = {ap_id for (ap_id,) in db.session.query(Post.ap_id).filter(
             Post.ap_id.in_([v['url'] for v in remote]))}
         videos = [v for v in videos if v['url'] not in stored]
-    return videos[:RESULT_LIMIT]
+    return videos
