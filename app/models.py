@@ -99,11 +99,12 @@ def votes_cast_key(user_id: int) -> str:
     return f'votes_cast_{date.today()}_{user_id}'
 
 
-def votes_cast_today(user_id: int) -> int:
+def votes_cast_today(user_id: int, needed: bool = True) -> int:
     """Votes `user_id` cast today, as counted in the store this request's state goes to (app/onion_store.py): the
-    onion's votes are counted in the RAM-only onion store. A vote's quota is needed, so an onion request finding it
-    down is answered 503."""
-    with onion_store_needed():
+    onion's votes are counted in the RAM-only onion store. A vote's quota check is `needed`, so an onion request
+    finding the store down is answered 503; a page that only shows the count (needed=False) reads 0 instead."""
+    num = None
+    with onion_store_needed() if needed else onion_store_optional():
         num = request_redis().get(votes_cast_key(user_id))
     if num is None:
         return 0

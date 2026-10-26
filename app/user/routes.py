@@ -206,7 +206,7 @@ def show_profile(user):
     comment_pattern_labels = []
     comment_pattern_values = []
     if current_user.is_authenticated:
-        vote_quota_used = votes_cast_today(user.id) / current_app.config['VOTE_QUOTA']
+        vote_quota_used = votes_cast_today(user.id, needed=False) / current_app.config['VOTE_QUOTA']   # shown only
 
         # Generate graph of which hours of the day the user posts at. Bots tend to have a distinctive look.
         sql = """select
