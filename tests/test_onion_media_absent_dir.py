@@ -8,15 +8,17 @@ import logging
 from unittest.mock import patch
 
 import pytest
+from redis.exceptions import RedisError
 
+import app as app_pkg
 import app.onion_media_fill as onion_media_fill
 from app import cli
 from app.onion_media import DEFAULT_CACHE_BYTES, evict, proxy_url
-from app.onion_media_fill import fill
+from app.onion_media_fill import BG_SLOT_KEY, MAX_REQUEUES, fill, fill_task
 from app.utils import get_setting
 from tests.test_admin_routes_entry import _seed, _settings_admin, login
 from tests.test_onion_guard_limits import onion, onion_get  # noqa: F401
-from tests.test_onion_media_fill import image, remote  # noqa: F401
+from tests.test_onion_media_fill import free_disk, image, remote  # noqa: F401
 
 IMAGE = 'https://media.example/pictrs/image/a.png'
 REFUSED = 'onion media cache directory unavailable, fill refused'
@@ -84,3 +86,47 @@ def test_evict_with_a_file_where_the_dir_should_be_frees_nothing(app, tmp_path, 
     stand_in.write_bytes(b'x')
     monkeypatch.setitem(app.config, 'MEDIA_PROXY_DIR', str(stand_in))
     assert evict(1) == 0
+
+
+def _echoing(*args, **kwargs):
+    raise RedisError(f'down: {IMAGE}')
+
+
+def _not_cached(remote):                # noqa: F811
+    assert fill(IMAGE, max_seconds=5) is None               # a 404 from the remote: refused, remembered dead
+
+
+def _could_not_store(remote, monkeypatch):      # noqa: F811
+    remote.routes[IMAGE] = image()
+    free_disk(monkeypatch, 0)                               # under the disk reserve: NoRoom, an OSError
+    assert fill(IMAGE, max_seconds=5) is None
+
+
+def _could_not_count(remote, monkeypatch):      # noqa: F811
+    remote.routes[IMAGE] = image()
+    monkeypatch.setattr('app.onion_redis_client.incrby', _echoing)
+    assert fill(IMAGE, max_seconds=5) is not None
+
+
+def _could_not_remember(remote, monkeypatch):   # noqa: F811
+    monkeypatch.setattr('app.onion_redis_client.set', _echoing)
+    assert fill(IMAGE, max_seconds=5) is None
+
+
+def _slot_stayed_busy(remote, monkeypatch):     # noqa: F811
+    app_pkg.onion_redis_client.set(BG_SLOT_KEY, 'another task', ex=630)
+    fill_task(IMAGE, MAX_REQUEUES)
+
+
+@pytest.mark.parametrize('branch', [_could_not_store, _could_not_count, _could_not_remember, _slot_stayed_busy,
+                                    _not_cached])
+def test_no_fill_log_line_names_the_media_url(remote, monkeypatch, caplog, branch):     # noqa: F811
+    """A Celery task is not an onion request, so the log scrub never sees these lines: they must not name the URL."""
+    caplog.set_level(logging.INFO, logger='app')
+    if branch is _not_cached:
+        branch(remote)
+    else:
+        branch(remote, monkeypatch)
+    lines = [record.getMessage() for record in caplog.records if record.name == 'app']
+    assert lines                                            # the branch did log
+    assert not [line for line in lines if 'media.example' in line or 'a.png' in line or IMAGE in line]

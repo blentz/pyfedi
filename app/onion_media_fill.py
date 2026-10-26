@@ -85,7 +85,8 @@ def _remember_dead(remote: str) -> None:
     try:
         app_pkg.onion_redis_client.set(_dead_key(remote), '1', ex=DEAD_SECONDS)
     except RedisError as error:
-        current_app.logger.warning(f'onion media: could not remember {remote} as dead: {error}')
+        current_app.logger.warning(f'onion media: could not remember a URL as dead: {type(error).__name__}',
+                                   extra=ONION_SAFE)
 
 
 def is_banned(url: str) -> bool:
@@ -138,10 +139,10 @@ def fill(remote: str, *, max_seconds: float) -> pathlib.Path | None:
         _count(remote, size)
         return path
     except OSError as error:            # the cache directory or its disk (NoRoom), not the remote server
-        current_app.logger.warning(f'onion media: could not store {remote}: {error}')
+        current_app.logger.warning(f'onion media: could not store a file: {type(error).__name__}', extra=ONION_SAFE)
         return None
     except Exception as error:          # Refused, httpx errors (InvalidURL included), anything the remote caused
-        current_app.logger.info(f'onion media: {remote} not cached: {error!r}')
+        current_app.logger.info(f'onion media: a URL was not cached: {type(error).__name__}', extra=ONION_SAFE)
         _remember_dead(remote)
         return None
     finally:
@@ -176,7 +177,8 @@ def _count(remote: str, size: int) -> None:
     try:
         app_pkg.onion_redis_client.incrby(BYTES_KEY, size)
     except RedisError as error:
-        current_app.logger.warning(f'onion media: could not count {remote} in the byte counter: {error}')
+        current_app.logger.warning(f'onion media: could not count a file in the byte counter: {type(error).__name__}',
+                                   extra=ONION_SAFE)
 
 
 def _fetch(remote: str, temporary: pathlib.Path, deadline: float) -> str:
@@ -261,7 +263,7 @@ def fill_task(remote: str, attempt: int = 0) -> None:
             token = take_slot(key, seconds + SLOT_SLACK)
             if token is None:
                 if attempt >= MAX_REQUEUES:
-                    current_app.logger.info(f'onion media: {remote} not filled, its slot stayed busy')
+                    current_app.logger.info('onion media: a URL was not filled, its slot stayed busy', extra=ONION_SAFE)
                     return
                 app_pkg.onion_redis_client.set(_queued_key(remote), '1', ex=QUEUED_SECONDS)   # still queued: no duplicate
                 fill_task.apply_async((remote, attempt + 1), countdown=REQUEUE_SECONDS)
