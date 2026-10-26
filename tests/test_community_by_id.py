@@ -4,6 +4,7 @@ on another domain; an id names one community. The page and its visibility gates 
 import pytest
 
 from app import db
+from app.models import Site
 from tests.two_domains import FIRST, ONION, two_domains  # noqa: F401  (the fixture)
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -17,7 +18,6 @@ FROM_CADDY = {'REMOTE_ADDR': PROXY}
 def public(app, monkeypatch):
     """The site is public (it defaults to private, which redirects an anonymous visitor to log in)."""
     monkeypatch.setitem(app.config, 'ONION_PROXY_IP', PROXY)
-    from app.models import Site
     db.session.get(Site, 1).private_instance = False
     db.session.commit()
 
@@ -86,3 +86,8 @@ def test_a_private_community_is_forbidden_to_a_non_member(app, two_domains, publ
 
 def test_a_community_id_that_does_not_exist_is_not_found(app, two_domains, public):
     assert on_first(app.test_client(), '/community/987654').status_code == 404
+
+
+@pytest.mark.parametrize('path', ['/community/99999999999999999999', '/user/99999999999999999999'])
+def test_an_oversized_id_is_not_found_not_a_server_error(app, two_domains, public, path):
+    assert on_first(app.test_client(), path).status_code == 404
