@@ -19,7 +19,7 @@ from flask_wtf.csrf import generate_csrf
 from jinja2 import ChoiceLoader, DictLoader
 
 from app import cache, db
-from app.models import DomainBranding, Language, Site
+from app.models import DomainBranding, Instance, Language, Site
 from app.storefront import clear_domain_cache
 from app.utils import current_theme
 from tests.conftest import forget_login
@@ -64,6 +64,8 @@ def branded(app, two_domains, monkeypatch):
     site.created_at = CREATED
     site.updated = CREATED
     site.last_active = CREATED
+    branded_instance = db.session.get(Instance, site.id)   # /about prints the instance row's creation date
+    branded_instance.created_at = CREATED
     db.session.commit()
     monkeypatch.setitem(app.config, 'ONION_PROXY_IP', PROXY)
     default = two_domains.domains[0]
@@ -126,6 +128,19 @@ def stable(app, body: str) -> str:
     body = re.sub(r'nonce-[^\']*\'', "nonce-{NONCE}'", body)
     body = re.sub(r'changed=[0-9.]+', 'changed={MTIME}', body)
     return body.replace(app.config['VERSION'], '{VERSION}')
+
+
+@pytest.fixture
+def clock_before_utc_midnight(monkeypatch):
+    """A new row's `created_at` default reads 23:59:59 UTC on the last day of 2026, so the date a row is created on
+    differs from the one the golden was captured on."""
+    default = Instance.__table__.c.created_at.default
+    monkeypatch.setattr(default, 'arg', lambda ctx: datetime(2026, 12, 31, 23, 59, 59))
+
+
+def test_about_golden_does_not_depend_on_the_creation_date(app, clock_before_utc_midnight, branded):
+    body = stable(app, page(app, '/about'))
+    assert body == (GOLDEN / 'about.html').read_text()
 
 
 @pytest.mark.parametrize('name, path', sorted(PAGES.items()))
