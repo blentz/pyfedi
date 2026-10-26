@@ -63,14 +63,15 @@ def check_onion_store(app) -> bool:
     """At startup, for a site with an onion: whether `ONION_REDIS_URL` names a Redis of its own. One that shares a
     server with `CACHE_REDIS_URL` or `CELERY_BROKER_URL` is a database of the persisted main Redis, so the onion's keys
     would reach its dump.rdb: that is logged as an ERROR and the caller treats the onion store as down (False). Never a
-    reason to fail startup. A Redis Flask cache is warned about: every cache write an onion request makes would go to
-    the main Redis."""
+    reason to fail startup. A Redis Flask cache on the main Redis (the broker's server) is warned about: every cache
+    write an onion request makes would go there. A cache Redis of its own may be RAM-only, so it is not."""
     config = app.config
     if not onion_configured(config):
         return True
-    if 'redis' in str(config.get('CACHE_TYPE', '')).lower():
+    if 'redis' in str(config.get('CACHE_TYPE', '')).lower() and \
+            redis_server(config['CACHE_REDIS_URL']) == redis_server(config['CELERY_BROKER_URL']):
         app.logger.warning(f"CACHE_TYPE is {config['CACHE_TYPE']}: the onion's cache writes go to the main Redis, "
-                           'which persists to disk. Use a FileSystemCache in /dev/shm.')
+                           'which persists to disk. Use a FileSystemCache in /dev/shm, or a RAM-only Redis of its own.')
     onion = redis_server(config['ONION_REDIS_URL'])
     shared = [name for name in ('CACHE_REDIS_URL', 'CELERY_BROKER_URL') if redis_server(config[name]) == onion]
     if shared:
