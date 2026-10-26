@@ -17,7 +17,7 @@ from app.activitypub.util import get_request, signed_get_request, actor_json_to_
 from app.discovery.podcast import podcast_community_for
 from app.federation_urls import instance_actor_signing
 from app.models import User, Community, Feed
-from app.local_names import local_named
+from app.local_names import find_local_user, local_named  # noqa: F401 -- find_local_user is this module's too
 from app.storefront import acting_domain, current_storefront, domain_for_host, is_hosted_server
 from app.utils import utcnow, get_setting, actor_contains_blocked_words, actor_profile_contains_blocked_words, \
     instance_banned, low_value_reposters, instance_allowed
@@ -41,16 +41,6 @@ def podcast_twin_refused(community: Community) -> bool:
 def find_local_feed(actor_url: str) -> Feed:
     """Find a local feed by URL."""
     return db.session.query(Feed).filter(Feed.ap_profile_id == actor_url).first()
-
-
-def find_local_user(actor_url: str, allow_banned: bool = False) -> User:
-    """Find a local user by URL or alt name."""
-    alt_user_name = actor_url.rsplit('/', 1)[-1]
-    user = db.session.query(User).filter(or_(User.ap_profile_id == actor_url, User.alt_user_name == alt_user_name),
-                                         User.ap_id == None)
-    if not allow_banned:
-        user = user.filter_by(banned=False)
-    return user.first()
 
 
 def validate_remote_actor(actor_url, actor=None, allow_banned=False):

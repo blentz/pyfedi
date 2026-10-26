@@ -2,10 +2,10 @@
 it is on, find that domain's row, and spell a row's name for a path."""
 import re
 
-from flask import url_for
+from flask import current_app, url_for
 from flask_babel import _
 from markupsafe import Markup, escape
-from sqlalchemy import and_, false, func, select
+from sqlalchemy import and_, false, func, or_, select
 
 from app.models import Community, Post, PostReply, User
 from app import db
@@ -53,6 +53,24 @@ def named_by_actor(model, actor: str):
     if split is not None:
         return local_named(model, *split)
     return model.ap_id == actor if '@' in actor else false()
+
+
+def find_local_user(actor_url: str, allow_banned: bool = False) -> User:
+    """Find a local user by URL or alt name."""
+    alt_user_name = actor_url.rsplit('/', 1)[-1]
+    user = db.session.query(User).filter(or_(User.ap_profile_id == actor_url, User.alt_user_name == alt_user_name),
+                                         User.ap_id == None)
+    if not allow_banned:
+        user = user.filter_by(banned=False)
+    return user.first()
+
+
+def default_domain_user(actor: str, allow_banned: bool = False) -> User | None:
+    """The account a bare `/u/<actor>` names on the default domain: by the actor URL SERVER_URL builds, as it always
+    was (which also finds an alternate name, on any domain), read as find_actor_by_url reads it, stripped and
+    lower-cased. user_for_actor and the route gate (app.hidden_routes) both ask this, so they cannot disagree on
+    which account a spelling names (follow-up F6)."""
+    return find_local_user(f'{current_app.config["SERVER_URL"]}/u/{actor.strip()}'.strip().lower(), allow_banned)
 
 
 def local_path_name(obj) -> str:

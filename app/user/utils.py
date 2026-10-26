@@ -11,7 +11,7 @@ from app.activitypub.util import actor_json_to_model, canonical_handle, find_act
     webfinger_self_link_allowed
 from app.constants import AP_FETCH_ACCEPT, POST_STATUS_REVIEWING
 from app.federation_urls import MissingInstanceKey, activity_id, instance_actor_signing
-from app.local_names import local_named, split_local_name
+from app.local_names import default_domain_user, local_named, split_local_name
 from app.mentions import stored_user, user_address_parts
 from app.onion import has_real_ip
 from app.models import User, CommunityMember, Community, BannedInstances, Post, \
@@ -36,8 +36,7 @@ def user_for_actor(actor: str, allow_banned: bool = False) -> User | None:
     if '@' in actor:
         return find_actor_or_create(actor, create_if_not_found=False, allow_banned=allow_banned)
     if current_storefront().is_default:
-        return find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}', create_if_not_found=False,
-                                    allow_banned=allow_banned)
+        return default_domain_user(actor, allow_banned)   # the route gate asks the same (follow-up F6)
     split = split_local_name(actor)
     if split is None:
         return None
