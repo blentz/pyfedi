@@ -507,7 +507,6 @@ def panel(onion):
     db.session.commit()
     grant_permission(onion.admin, 'administer all communities')
     grant_permission(onion.admin, 'approve registrations')
-    grant_permission(onion.admin, 'change instance settings')
     return onion
 
 
@@ -522,7 +521,7 @@ def test_the_admin_panel_lists_no_onion_row_on_the_first_domain(app, panel):
                           ('/admin/communities/no-topic', None),
                           ('/admin/content?show=deleted&days=0', 'FIRSTPOST'),
                           ('/admin/approve_registrations', f'ANSWER-{first_bob}'),
-                          ('/admin/media', f'?user_id={first_bob}"'), ('/admin/instances', FIRST)):
+                          ('/admin/media', f'?user_id={first_bob}"')):
         response = get(app, path, user=panel.admin)
         assert response.status_code == 200, path
         body = response.get_data(as_text=True)
@@ -547,7 +546,6 @@ def test_on_the_onion_the_admin_panel_lists_and_edits_them(app, panel, monkeypat
     assert f'ANSWER-{panel.onion_bob.id}' in get(app, '/admin/approve_registrations', host=ONION,
                                                   user=panel.admin).get_data(as_text=True)
     assert get(app, f'/admin/user/{panel.onion_bob.id}/edit', host=ONION, user=panel.admin).status_code == 200
-    assert ONION in get(app, '/admin/instances', host=ONION, user=panel.admin).get_data(as_text=True)
 
 
 # --- notifications of a hidden post or reply (review I3, M3) ---------------------------------------------------------

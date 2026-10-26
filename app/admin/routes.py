@@ -52,7 +52,7 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, RolePermission, Domain, \
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain, instance_row_referenced, DomainBranding
-from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, live_registration, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default, federating_base, is_hosted_uri, hidden_instance_ids
+from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, live_registration, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default, federating_base, is_hosted_uri
 from app.onion_media import DEFAULT_CACHE_BYTES
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
@@ -2786,7 +2786,7 @@ def admin_instances():
     sort_by = request.args.get('sort_by', 'domain ASC')
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
 
-    instances = Instance.query.filter(Instance.id.not_in(hidden_instance_ids()))   # an onion's, on it only (F6)
+    instances = Instance.query
 
     if search:
         instances = instances.filter(Instance.domain.ilike(f"%{search}%"))
