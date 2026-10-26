@@ -3,6 +3,8 @@
 import logging
 import os
 import re
+import threading
+import time
 import sys
 from datetime import timedelta
 from types import SimpleNamespace
@@ -10,9 +12,13 @@ from types import SimpleNamespace
 import pytest
 
 import app as app_pkg
+from unittest.mock import patch
+
+from celery.signals import celeryd_init, task_failure
+
 from app import cli, create_app, db
 from app.clock import utcnow
-from app.error_counts import ErrorCountHandler, error_kind
+from app.error_counts import ErrorCountHandler, error_kind, flush_engine, name_the_worker_unit
 from app.models import ErrorCount
 from tests.conftest import TestConfig
 from tests.test_onion_logging import onion, onion_context   # noqa: F401  (the fixture and the request context)
@@ -22,12 +28,19 @@ SECRET = 'alice-secret-name'
 URL = 'https://example.org/u/alice-secret-name?token=hunter2'
 
 
+class ATask:
+    name = 'app.shared.tasks.x'
+
+
 def raise_from_app_file(message='boom', name='fake_module.py'):
     """Raise from a frame whose file lives in app/, so the innermost app/ frame is a known file:line."""
     exec(compile(f'\n\nraise ValueError({message!r})', os.path.join(APP_DIR, name), 'exec'), {})
 
 
 def counted():
+    for handler in logging.getLogger('app').handlers:
+        if isinstance(handler, ErrorCountHandler):
+            handler.flush()
     db.session.expire_all()
     return {(c.kind, c.level, c.unit): c.count for c in ErrorCount.query.all()}
 
@@ -41,10 +54,11 @@ def cli_app(app, db_session):
 @pytest.fixture
 def log(app, db_session):
     """The app's logger with the counting handler create_app attaches in production (TestConfig leaves it off)."""
-    handler = ErrorCountHandler(db.engine)
+    handler = ErrorCountHandler(flush_engine(app.config['SQLALCHEMY_DATABASE_URI']))
     app.logger.addHandler(handler)
     yield app.logger
     app.logger.removeHandler(handler)
+    handler.close()
 
 
 def test_kind_has_no_message_ip_path_or_name(log):
@@ -108,32 +122,147 @@ def test_info_lines_are_not_counted(log):
     assert counted() == {}
 
 
-def test_handler_never_raises_when_the_db_is_down(log):
-    def down():
+def a_handler(engine, **kwargs):
+    handler = ErrorCountHandler(engine, **kwargs)
+    return handler
+
+
+def a_record(level=logging.ERROR):
+    return logging.LogRecord('app', level, os.path.join(APP_DIR, 'x.py'), 1, 'm', (), None)
+
+
+def test_emit_never_touches_the_database(capsys):
+    release = threading.Event()
+    reached = []
+
+    def blocked():
+        reached.append(1)
+        release.wait(5)
         raise ConnectionError('the database is down')
-    handler = ErrorCountHandler(SimpleNamespace(begin=down))
-    record = logging.LogRecord('app', logging.ERROR, 'app/x.py', 1, 'm', (), None)
-    handler.handle(record)    # returns, raises nothing, and does not wait
+
+    handler = a_handler(SimpleNamespace(begin=blocked))
+    started = time.monotonic()
+    for _ in range(50):
+        handler.handle(a_record())
+    assert time.monotonic() - started < 1
+    assert reached == []
+    release.set()
+    handler.close()
+    assert reached == [1]    # only the flush reaches the database
+    assert 'dropped 50 counts' in capsys.readouterr().err
+
+
+def test_emit_swallows_an_error_of_its_own():
+    handler = a_handler(None)
+    with patch('app.error_counts.error_kind', side_effect=RuntimeError('boom')):
+        handler.handle(a_record())    # raises nothing
+    assert handler._counts == {}
+    handler.close()
 
 
 def test_handler_does_not_reenter_on_its_own_failure():
-    calls = []
     logger = logging.getLogger('app.error_counts_test')
     logger.propagate = False
-
-    def failing_begin():
-        calls.append(1)
-        logger.warning('the connection failed')    # a log line from inside the handler's own failure
-        raise ConnectionError('down')
-
-    handler = ErrorCountHandler(SimpleNamespace(begin=failing_begin))
+    handler = a_handler(None)
     handler.setLevel(logging.WARNING)
     logger.addHandler(handler)
+
+    def noisy(record):
+        logger.warning('a line logged while counting')    # must not be counted, nor recurse
+        return 'k'
+
     try:
-        logger.warning('first')
+        with patch('app.error_counts.error_kind', noisy):
+            logger.warning('first')
     finally:
         logger.removeHandler(handler)
-    assert calls == [1]
+    assert list(handler._counts.values()) == [1]
+    handler.close()
+
+
+def test_counts_accumulate_and_one_flush_writes_them_summed(log):
+    for _ in range(3):
+        log.error('x')
+    log.warning('y')
+    assert sorted(counted().values()) == [1, 3]
+
+
+def test_two_flushes_add_up(log):
+    for _ in range(3):
+        log.error('x')
+        counted()
+    assert list(counted().values()) == [3]
+
+
+def test_a_failed_flush_drops_the_batch_and_says_so_once(capsys):
+    def down():
+        raise ConnectionError('password=hunter2')
+
+    handler = a_handler(SimpleNamespace(begin=down))
+    for _ in range(2):
+        handler.handle(a_record())
+        handler.flush()
+    assert handler._counts == {}
+    err = capsys.readouterr().err
+    assert err.count('error counts: dropped') == 1
+    assert 'hunter2' not in err
+    handler._last_report -= 601    # ten minutes later it says so again
+    handler.handle(a_record())
+    handler.flush()
+    assert 'error counts: dropped' in capsys.readouterr().err
+    handler.close()
+
+
+def test_a_forked_child_starts_empty_with_its_own_flusher():
+    handler = a_handler(SimpleNamespace(begin=None), interval=3600)
+    handler.handle(a_record())
+    handler.handle(a_record())
+    parents_thread_pid = handler._pid
+    assert handler._pid == os.getpid() and len(handler._counts) == 1
+    handler._pid = parents_thread_pid + 1    # as in a child: the pid recorded is the parent's
+    with patch('app.error_counts.threading.Thread') as thread:
+        handler.handle(a_record(logging.CRITICAL))
+    assert handler._pid == os.getpid()
+    assert [level for (_, _, _, level) in handler._counts] == ['CRITICAL']    # the parent's counts are not the child's
+    thread.return_value.start.assert_called_once()
+    handler.close()
+
+
+def test_the_flusher_thread_writes_every_interval(app):
+    written = threading.Event()
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            written.set()
+
+        def execute(self, statement, rows):
+            self.rows = rows
+
+    handler = a_handler(SimpleNamespace(begin=Connection), interval=0.01)
+    handler.handle(a_record())
+    assert written.wait(5)
+    handler.close()
+
+
+def test_the_handler_flushes_at_exit_and_not_after_close():
+    with patch('app.error_counts.atexit') as atexit_module:
+        handler = a_handler(None)
+        atexit_module.register.assert_called_once_with(handler.flush)
+        handler.close()
+        atexit_module.unregister.assert_called_once_with(handler.flush)
+
+
+def test_the_worker_unit_is_celery_unless_the_deploy_named_one():
+    with patch.dict(os.environ):
+        os.environ.pop('PIEFED_UNIT', None)
+        celeryd_init.send(sender='worker@host')
+        assert os.environ['PIEFED_UNIT'] == 'celery'
+    with patch.dict(os.environ, {'PIEFED_UNIT': 'celery-send'}):
+        name_the_worker_unit()
+        assert os.environ['PIEFED_UNIT'] == 'celery-send'
 
 
 def test_prune_deletes_older_than_21_days_only(cli_app):
@@ -191,18 +320,62 @@ def test_error_kind_keeps_one_already_stamped():
     assert error_kind(record) == 'Stamped at app/y.py:9'
 
 
-def test_create_app_attaches_one_handler_even_when_run_twice(app):
+@pytest.fixture
+def counting_app(app, db_session):
+    """create_app as production runs it, with the counting handler on; the shared logger and signal are restored."""
     class Counting(TestConfig):
         ERROR_COUNTS = True
 
     logger = logging.getLogger('app')
     before = list(logger.handlers)
+    created = create_app(Counting)
+    yield created
+    for handler in list(logger.handlers):
+        if handler not in before:
+            logger.removeHandler(handler)
+            handler.close()
+    task_failure.disconnect(dispatch_uid='error_counts')
+
+
+def counting_handlers():
+    return [h for h in logging.getLogger('app').handlers if isinstance(h, ErrorCountHandler)]
+
+
+def test_create_app_attaches_one_handler_even_when_run_twice(counting_app):
+    class Counting(TestConfig):
+        ERROR_COUNTS = True
+
+    create_app(Counting)
+    assert len(counting_handlers()) == 1
+
+
+def test_a_real_warning_through_the_production_path_is_counted(counting_app):
+    counting_app.logger.warning('nothing personal here, ip=203.0.113.7')
+    [handler] = counting_handlers()
+    handler.flush()
+    [row] = ErrorCount.query.all()
+    assert (row.unit, row.level, row.count) == ('web', 'WARNING', 1)
+    assert re.fullmatch(r'tests/test_error_counts\.py:\d+', row.kind)
+
+
+def test_a_task_failure_is_counted_once(counting_app):
     try:
-        create_app(Counting)
-        create_app(Counting)
-        assert sum(isinstance(h, ErrorCountHandler) for h in logger.handlers) == 1
-    finally:
-        logger.handlers[:] = before
+        raise_from_app_file('secret')
+    except ValueError as error:
+        task_failure.send(sender=ATask(), exception=error,
+                          traceback=error.__traceback__)
+    [handler] = counting_handlers()
+    handler.flush()
+    [row] = ErrorCount.query.all()
+    assert (row.kind, row.level, row.count) == ('ValueError at app/fake_module.py:3', 'ERROR', 1)
+
+
+def test_a_task_failure_with_no_app_frame_is_counted_under_the_task_name(counting_app):
+    task_failure.send(sender=ATask(), exception=KeyError('secret'), traceback=None)
+    [handler] = counting_handlers()
+    handler.flush()
+    [row] = ErrorCount.query.all()
+    assert row.kind == 'KeyError in app.shared.tasks.x'
 
 
 def test_a_test_app_has_no_handler_unless_it_asks(app):
