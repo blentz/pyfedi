@@ -282,6 +282,50 @@ def test_a_first_domain_posts_voters_leave_out_an_onion_voter(app, onion):
     assert on_onion.status_code == 200 and 'bob' in on_onion.get_data(as_text=True)
 
 
+# --- a reply further down an onion reply (review I6) ---------------------------------------------------------------
+
+@pytest.fixture
+def deep(app, onion):
+    """The onion's bob replies to the first domain's FIRSTPOST; the first domain's bob answers him, on the onion, the
+    only place the onion's reply can be seen. That answer must not show on the first domain either: listed on the first
+    bob's profile it would tell that he uses the onion."""
+    onion.onion_under, onion.first_under = reply_chain(onion.first_post, onion.onion_bob, onion.first_bob)
+    onion.onion_under.body, onion.onion_under.body_html = 'ONIONUNDER', '<p>ONIONUNDER</p>'
+    onion.first_under.body, onion.first_under.body_html = 'FIRSTUNDERONION', '<p>FIRSTUNDERONION</p>'
+    db.session.commit()
+    return onion
+
+
+@pytest.mark.parametrize('who', ['user', 'admin'])
+def test_a_reply_to_an_onion_reply_is_hidden_on_the_first_domain_everywhere(app, deep, monkeypatch, who):
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the signed-in reply form renders its token
+    viewer = viewers(deep)[who]
+    reply, nobody = deep.first_under.id, 2 ** 30
+    for hidden, missing in ((f'/comment/{reply}', f'/comment/{nobody}'),
+                            (f'/post/{deep.first_post.id}/comment/{reply}', f'/post/{deep.first_post.id}/comment/{nobody}')):
+        found, absent = get(app, hidden, user=viewer), get(app, missing, user=viewer)
+        assert (found.status_code, found.get_data()) == (absent.status_code, absent.get_data()), hidden
+        assert found.status_code == 404, hidden
+    for path in (f'/post/{deep.first_post.id}', '/u/bob', f'/user/{deep.first_bob.id}', '/search?q=FIRSTUNDERONION&search_for=comments'):
+        body = get(app, path, user=viewer).get_data(as_text=True)   # the search page echoes its query
+        assert 'FIRSTUNDERONION</p>' not in body and 'ONIONUNDER</p>' not in body, (path, near(body, 'FIRSTUNDERONION'))
+        assert f'comment_{reply}' not in body and f'/comment/{reply}' not in body, path
+    for path in (f'/api/alpha/comment/list?post_id={deep.first_post.id}', f'/api/alpha/user?person_id={deep.first_bob.id}',
+                 '/api/alpha/search?q=FIRSTUNDERONION&type_=Comments'):
+        body = api(app, path, viewer).get_data(as_text=True)
+        assert 'FIRSTUNDERONION' not in body, (path, near(body, 'FIRSTUNDERONION'))
+    found, absent = api(app, f'/api/alpha/comment?id={reply}', viewer), api(app, f'/api/alpha/comment?id={nobody}', viewer)
+    assert (found.status_code, found.get_data()) == (absent.status_code, absent.get_data())
+
+
+def test_on_the_onion_the_reply_to_an_onion_reply_is_shown(app, deep, monkeypatch):
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the signed-in reply form renders its token
+    body = get(app, f'/post/{deep.first_post.id}', host=ONION, user=deep.first_bob).get_data(as_text=True)
+    assert 'FIRSTUNDERONION' in body and 'ONIONUNDER' in body
+    assert get(app, f'/comment/{deep.first_under.id}', host=ONION, user=deep.first_bob).status_code in (200, 302)
+
+
 # --- the link-domain and instance post lists (review C1) -------------------------------------------------------------
 
 @pytest.fixture

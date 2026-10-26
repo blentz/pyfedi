@@ -10,7 +10,7 @@ from urllib.parse import unquote, urlsplit
 from flask import current_app
 from flask_babel import _
 from flask_login import current_user
-from sqlalchemy import and_, bindparam, exists, false, not_, or_, text, true
+from sqlalchemy import and_, any_, bindparam, exists, false, not_, or_, text, true
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import False_
 
@@ -185,9 +185,19 @@ def _content_hidden(content, signed_in: bool) -> bool:
         return False
     if not signed_in:
         return True
-    post = content.post if isinstance(content, models.PostReply) else None
-    return (_actor_hidden(content.author, True) or _actor_hidden(content.community, True)
-            or (post is not None and _actor_hidden(post.author, True)))
+    if _actor_hidden(content.author, True) or _actor_hidden(content.community, True):
+        return True
+    if not isinstance(content, models.PostReply):
+        return False
+    return _actor_hidden(content.post.author, True) or any(
+        _actor_hidden(ancestor.author, True) for ancestor in _ancestors(content))
+
+
+def _ancestors(reply) -> list:
+    """The replies `reply` answers, from its thread's top down: the ids in its `path` but the 0 the path starts with
+    and its own."""
+    ids = [id_ for id_ in reply.path or () if id_ and id_ != reply.id]
+    return [row for row in (db.session.get(models.PostReply, id_) for id_ in ids) if row is not None]
 
 
 def hidden_here(obj, signed_in: bool | None = None) -> bool:
@@ -199,10 +209,12 @@ def hidden_here(obj, signed_in: bool | None = None) -> bool:
     signed in, or this storefront is not its home domain. A post or reply is hidden when it is local-only (stamped at
     creation, content_local_only) and either the reader is not signed in or it belongs to a local-only domain that
     is not this storefront: its author or its community is hidden here, or, for a reply, its post's author (the post
-    page's gates apply to a reply, follow-up F5). A domain's `federates` setting is locked once it owns rows, so
-    whatever an onion account writes, or is written in an onion community, is stamped local-only. A reply further
-    down an onion thread by clearnet accounts in a clearnet community is stamped too but belongs to no onion: lists
-    show it, while its thread's page is 404. A remote row is never hidden."""
+    page's gates apply to a reply, follow-up F5) or the author of any reply above it in its `path`. A domain's
+    `federates` setting is locked once it owns rows, so whatever an onion account writes, or is written in an onion
+    community, is stamped local-only. So is a clearnet account's reply further down an onion reply, in a clearnet
+    community under a clearnet post: it could only have been written where the onion reply is seen, so it goes with
+    that reply, everywhere (review I6), or listing it would tell that its author uses the onion. A reply stored with
+    no path is judged by its own rows. A remote row is never hidden."""
     signed_in = _signed_in(signed_in)
     if isinstance(obj, (models.Post, models.PostReply)):
         return _content_hidden(obj, signed_in)
@@ -249,6 +261,9 @@ def hidden_here_clause(model, signed_in: bool | None = None):
         post, post_author = aliased(models.Post), aliased(models.User)
         owners.append(exists().where(post.id == model.post_id, post_author.id == post.user_id,
                                      _actor_hidden_clause(post_author, True)))
+        ancestor, ancestor_author = aliased(models.PostReply), aliased(models.User)
+        owners.append(exists().where(ancestor.id == any_(model.path), ancestor_author.id == ancestor.user_id,
+                                     _actor_hidden_clause(ancestor_author, True)))
     return and_(model.local_only.is_(True), or_(*owners))
 
 
@@ -318,6 +333,9 @@ def hidden_here_sql(alias: str, model, signed_in: bool | None = None) -> str:
         owners.append(f'EXISTS (SELECT 1 FROM post hidden_post JOIN "user" hidden_post_author ON '
                       f'hidden_post_author.id = hidden_post.user_id WHERE hidden_post.id = {alias}.post_id AND '
                       f'{_actor_hidden_sql("hidden_post_author", True)})')
+        owners.append(f'EXISTS (SELECT 1 FROM post_reply hidden_ancestor JOIN "user" hidden_ancestor_author ON '
+                      f'hidden_ancestor_author.id = hidden_ancestor.user_id WHERE hidden_ancestor.id = '
+                      f'ANY({alias}.path) AND {_actor_hidden_sql("hidden_ancestor_author", True)})')
     return f'({alias}.local_only AND ({" OR ".join(owners)}))'
 
 
