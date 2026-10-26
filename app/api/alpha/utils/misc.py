@@ -16,7 +16,8 @@ from app.api.alpha.views import search_view, post_view, reply_view, user_view, c
 from app.community.util import search_for_community
 from app.discovery.podcast import PODCAST_DROP, podcast_route_for, podcast_twin_named_by_other
 from app.models import Post, PostReply, User, Community, BannedInstances, Feed, ModLog
-from app.storefront import default_domain, domain_authority, domain_for_host, is_local_host
+from app.post.util import post_refusal
+from app.storefront import default_domain, domain_authority, domain_for_host, is_hosted_uri, is_local_host
 from app.user.utils import search_for_user
 from app.local_only import without_local_only_actors
 from app.visibility import can_view, is_open, modlog_local_only_clause, modlog_open_clause
@@ -107,6 +108,11 @@ def _owning_authority(server: str) -> str:
     return domain_authority(domain or default_domain())
 
 
+def _post_open_to(post: Post, user_id: int) -> bool:
+    """Whether the post page would show `post` to the user `user_id` (follow-up F2)."""
+    return post_refusal(post, db.session.get(User, user_id)) is None
+
+
 def get_resolve_object(auth, data, user_id=None, recursive=False):
     if not data or 'q' not in data:
         raise Exception('missing q parameter for resolve_object')
@@ -133,7 +139,8 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
         return reply_view(reply=object, variant=5, user_id=user_id) if not recursive else object
     object = db.session.query(Post).filter_by(ap_id=query).first()
     if object:
-        if object.deleted or (not recursive and not can_view(object, user_id)):
+        if object.deleted or (not recursive and not can_view(object, user_id)) or \
+                (not recursive and is_hosted_uri(query) and not _post_open_to(object, user_id)):
             raise Exception('No object found.')
         return post_view(post=object, variant=5, user_id=user_id) if not recursive else object
     object = db.session.query(Community).filter_by(ap_profile_id=query.lower()).first()
@@ -302,8 +309,9 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             # Since this is a local request, just search for the post by id
             object = db.session.get(Post, post_id)
 
-            # A followers-only post is as unknown to this caller as an id nobody holds
-            if not object or not can_view(object, user_id):
+            # A post this caller may not open (followers-only, unpublished, in a private or banned community, ...) is
+            # as unknown to them as an id nobody holds: the gates the post page applies
+            if not object or not _post_open_to(object, user_id):
                 raise Exception('No object found.')
             else:
                 return post_view(post=object, variant=5, user_id=user_id)

@@ -404,31 +404,34 @@ def post_type_to_form_url_type(post_type: int, post_url: str):
 NEEDS_LOGIN = 'login'   # post_refusal's answer for an anonymous reader of NSFW/NSFL content: the page sends them to log in
 
 
-def deleted_post_state(post: Post) -> str:
+def deleted_post_state(post: Post, viewer: User | None = None) -> str:
     """How the post page treats a post of a banned community or a deleted post: 'live' (neither), 'author' (deleted by
     its author: shown, with a notice), 'staff' (shown to a moderator, staff or the author, with a notice) or 'gone'
-    (404 for everyone else)."""
+    (404 for everyone else). `viewer` is the reader, the session's by default."""
     if not (post.community.banned or post.deleted):
         return 'live'
     if post.deleted_by == post.user_id:
         return 'author'
-    if current_user.is_authenticated and (post.community.is_moderator() or current_user.is_admin_or_staff()
-                                          or current_user.id == post.user_id):
+    who = current_user if viewer is None else viewer
+    if who.is_authenticated and (post.community.is_moderator(viewer) or who.is_admin_or_staff()
+                                 or who.id == post.user_id):
         return 'staff'
     return 'gone'
 
 
-def post_refusal(post: Post) -> int | str | None:
+def post_refusal(post: Post, viewer: User | None = None) -> int | str | None:
     """The one place the post page's refusals are decided, in the order `show_post` applies them: 404 for a deleted
     post or one the reader may not see (followers-only, unpublished, local-only), `NEEDS_LOGIN` for an anonymous
     reader of NSFW/NSFL content, 403 for a private community or a restricted country, else None. `show_post` calls
-    this, and a link to a post asks it too, so a post nobody could open is never hinted at."""
+    this, and a link to a post asks it too, so a post nobody could open is never hinted at. `viewer` is the reader
+    (an API caller, say); by default the session's."""
     community = post.community
-    if deleted_post_state(post) == 'gone':
+    who = current_user if viewer is None else viewer
+    if deleted_post_state(post, viewer) == 'gone':
         return 404
-    if not can_view(post, current_user.get_id()):   # 404, not 403, so the answer does not confirm the post exists
+    if not can_view(post, who.get_id()):   # 404, not 403, so the answer does not confirm the post exists
         return 404
-    if current_user.is_anonymous:
+    if who.is_anonymous:
         if current_app.config['CONTENT_WARNING']:
             if post.nsfl:
                 return NEEDS_LOGIN
@@ -437,20 +440,20 @@ def post_refusal(post: Post) -> int | str | None:
         if community.private:
             return 403
     else:
-        if (post.nsfw or post.nsfl) and user_in_restricted_country(current_user):
+        if (post.nsfw or post.nsfl) and user_in_restricted_country(who):
             return 403
-        if community.private and community.id not in community_membership_private(current_user.id):
+        if community.private and community.id not in community_membership_private(who.id):
             return 403
-    if post.status < POST_STATUS_PUBLISHED and (current_user.is_anonymous or not (
-            current_user.id == post.user_id or community.is_moderator() or current_user.is_admin_or_staff())):
+    if post.status < POST_STATUS_PUBLISHED and (who.is_anonymous or not (
+            who.id == post.user_id or community.is_moderator(viewer) or who.is_admin_or_staff())):
         return 404
     return None
 
 
-def hosted_post_for_viewer(uri: str) -> Post | None:
+def hosted_post_for_viewer(uri: str, viewer: User | None = None) -> Post | None:
     """The local post a URL on one of our own domains names, when the logged-in viewer may open it, else None.
     Read from the database and never fetched: one server answers for every hosted domain. The caller sends the
     viewer to the post's page on the domain they are browsing, so the peer gate (`post_served_to_any_peer`) is not
     this lookup's business; what the page enforces is."""
     found = local_object_for_url(uri)
-    return found if isinstance(found, Post) and post_refusal(found) is None else None
+    return found if isinstance(found, Post) and post_refusal(found, viewer) is None else None
