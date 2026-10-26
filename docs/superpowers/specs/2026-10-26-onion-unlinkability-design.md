@@ -105,7 +105,9 @@ Non-goals:
 
 Anti-goals:
 - A seized box, powered off, holds anything that shows a given account, IP or email used the onion.
-- A seized box, running, holds such a link older than 1 hour, outside the email linkage and the media cache.
+- A seized box, running, holds such a link older than 1 hour, outside the email linkage, the media cache, and the
+  onion store's per-user daily limit keys. Those keys (vote quota, AI-detection tally, daily API limits, feed cache)
+  live at most 24 hours, in RAM only, so daily caps stay as strict as on the clearnet (owner, 2026-10-26).
 - fail2ban stops banning clearnet login floods, registration floods or scanners.
 - The first domain's behaviour, output or federation changes. Only its logs shrink.
 - A deploy loses queued Celery tasks.
