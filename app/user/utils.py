@@ -455,7 +455,7 @@ def _get_user_upvoted_posts(user):
         
         # Get all post IDs first, then fetch posts and map vote creation times
         post_ids = [row.post_id for row in result]
-        posts = Post.query.filter(Post.id.in_(post_ids)).all()
+        posts = without_local_only(Post.query.filter(Post.id.in_(post_ids)), Post).all()   # F6, for admins too
         
         # Create a mapping from post_id to vote_created_at
         vote_time_map = {row.post_id: row.vote_created_at for row in result}
