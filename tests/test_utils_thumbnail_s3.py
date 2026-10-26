@@ -83,12 +83,14 @@ class TestAThumbnailIsMarkedAsOurs:
         file = url_to_thumbnail_file(URL)
 
         assert file.thumbnail_path.startswith('app/static/') and file.thumbnail_written_by_us is True
+        assert file.file_written_by_us is True
 
     def test_in_the_bucket(self, app, http_mock, bucket):
         http_mock.get(URL).mock(return_value=httpx.Response(
             200, content=a_png(), headers={'content-type': 'image/png'}))
 
-        assert url_to_thumbnail_file(URL).thumbnail_written_by_us is True
+        file = url_to_thumbnail_file(URL)
+        assert file.thumbnail_written_by_us is True and file.file_written_by_us is True
 
 
 class TestAThumbnailMirroredIntoTheBucket:

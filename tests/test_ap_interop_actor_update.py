@@ -753,18 +753,20 @@ def test_the_replaced_upload_is_deleted_with_its_thumbnail_mark(app, db_session,
     """Follow-up F3: the detached copy that outlives the swap carries the old row's mark, as it carries its name."""
     community = _local_community_with_uploads(app, tmp_path)
     community.icon.thumbnail_path, community.icon.thumbnail_written_by_us = str(tmp_path / 'icon_thumb.png'), True
+    community.icon.file_written_by_us = True
     db.session.commit()
     community_id = community.id
     seen = []
     monkeypatch.setattr(File, 'delete_from_disk',
-                        lambda self, *args, **kwargs: seen.append((self.thumbnail_path, self.thumbnail_written_by_us)))
+                        lambda self, *args, **kwargs: seen.append(
+                            (self.thumbnail_path, self.thumbnail_written_by_us, self.file_written_by_us)))
     _fetch_succeeds(monkeypatch, tmp_path)
     replacement = make_file(source_url=f'https://{PEER}/pictrs/image/new-icon.png')
     db.session.commit()
 
     activitypub_util.replace_local_upload_task(community_id, 'icon', replacement.id)
 
-    assert seen == [(str(tmp_path / 'icon_thumb.png'), True)]
+    assert seen == [(str(tmp_path / 'icon_thumb.png'), True, True)]
 
 
 def test_a_new_remote_icon_for_a_local_community_replaces_and_deletes_the_upload(app, db_session, monkeypatch,

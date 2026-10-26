@@ -915,7 +915,8 @@ def save_icon_file(icon_file, directory='communities') -> File:
         thumbnail_height = img.height
 
     # Create the File object
-    file = File(file_path=final_place, file_name=new_filename + final_ext, alt_text=f'{directory} icon',
+    file = File(file_path=final_place, file_written_by_us=True, file_name=new_filename + final_ext,
+                alt_text=f'{directory} icon',
                 width=img_width, height=img_height, thumbnail_width=thumbnail_width,
                 thumbnail_height=thumbnail_height, thumbnail_path=final_place_thumbnail,
                 thumbnail_written_by_us=True)
@@ -1052,7 +1053,8 @@ def save_banner_file(banner_file, directory='communities') -> File:
     thumbnail_width = img.width
     thumbnail_height = img.height
 
-    file = File(file_path=final_place, file_name=new_filename + final_ext, alt_text=f'{directory} banner',
+    file = File(file_path=final_place, file_written_by_us=True, file_name=new_filename + final_ext,
+                alt_text=f'{directory} banner',
                 width=img_width, height=img_height, thumbnail_path=final_place_thumbnail,
                 thumbnail_written_by_us=True, thumbnail_width=thumbnail_width, thumbnail_height=thumbnail_height)
     db.session.add(file)

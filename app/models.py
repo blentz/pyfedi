@@ -1235,6 +1235,10 @@ def storable_alt_text(value) -> str | None:
 class File(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     file_path = db.Column(db.String(255))
+    # True when OUR server wrote the file at file_path (the 512px copy of a peer's thumbnail, a resized image, an
+    # upload), set with the path by the code that writes the file and by nothing a peer, an API caller or a form
+    # supplies; the same rule as thumbnail_written_by_us (follow-up F3). False for every row from before the column.
+    file_written_by_us = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     file_name = db.Column(db.String(255))
     width = db.Column(db.Integer)
     height = db.Column(db.Integer)
@@ -1363,10 +1367,10 @@ class File(db.Model):
         resolved = os.path.realpath(value)
         return resolved if resolved.startswith(os.path.realpath(MEDIA_ROOT) + os.sep) else None
 
-    def _may_remove_written(self, path: str, in_s3: bool = False, thumbnail: bool = False) -> bool:
+    def _may_remove_written(self, path: str, in_s3: bool = False, written_by_us: bool = False) -> bool:
         """Whether this record may unlink `path` (resolved, in the media folders), its `file_path` or
-        `thumbnail_path` (`thumbnail`). Our upload's record may (`file_name`). A thumbnail our thumbnailer marked
-        (`thumbnail_written_by_us`) may when no other record names the path. Any other only when a local account,
+        `thumbnail_path`. Our upload's record may (`file_name`). A path our server marked as written by it
+        (`written_by_us`: `file_written_by_us` or `thumbnail_written_by_us`) may when no other record names it. Any other only when a local account,
         community or feed owns it (`_local_owners`) and no other record of any kind names the path
         (`named_by_any_other_record`, fail closed). A peer post's File never does: until 397a91156 a peer's
         attachment could set `file_path`, and a path on our disk, even one shaped like our thumbnailer's, is no
@@ -1375,7 +1379,7 @@ class File(db.Model):
             return False
         if self.file_name:
             return True
-        if thumbnail and self.thumbnail_written_by_us:
+        if written_by_us:
             return self.id is not None and not named_by_any_other_record(path, self.id, in_s3=in_s3)
         return self.id is not None and bool(_local_owners([self.id])) and \
             not named_by_any_other_record(path, self.id, in_s3=in_s3)
@@ -1412,7 +1416,7 @@ class File(db.Model):
         if self.file_path:
             s3_key = s3_key_from_url(self.file_path) if _store_files_in_s3() else None
             if s3_key:   # the bucket follows the disk's rule: only a record that is ours removes it (N-I1)
-                if self._may_remove_written(s3_key, in_s3=True):
+                if self._may_remove_written(s3_key, in_s3=True, written_by_us=self.file_written_by_us):
                     s3_files_to_delete.append(s3_key)
                 purge_from_cache.append(self.file_path)
             else:
@@ -1424,7 +1428,7 @@ class File(db.Model):
                 # nothing about whether an edge still holds it.
                 written = self._in_the_media_folders(self.file_path)
                 if written and os.path.isfile(written):
-                    if self._may_remove_written(written):
+                    if self._may_remove_written(written, written_by_us=self.file_written_by_us):
                         try:
                             os.unlink(written)
                         except FileNotFoundError:
@@ -1436,13 +1440,13 @@ class File(db.Model):
         if self.thumbnail_path:
             s3_key = s3_key_from_url(self.thumbnail_path) if _store_files_in_s3() else None
             if s3_key:
-                if self._may_remove_written(s3_key, in_s3=True, thumbnail=True):
+                if self._may_remove_written(s3_key, in_s3=True, written_by_us=self.thumbnail_written_by_us):
                     s3_files_to_delete.append(s3_key)
                 purge_from_cache.append(self.thumbnail_path)
             else:
                 written = self._in_the_media_folders(self.thumbnail_path)
                 if written and os.path.isfile(written):  # D1349, as above
-                    if self._may_remove_written(written, thumbnail=True):
+                    if self._may_remove_written(written, written_by_us=self.thumbnail_written_by_us):
                         try:
                             os.unlink(written)
                         except FileNotFoundError:

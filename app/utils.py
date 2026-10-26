@@ -4806,7 +4806,7 @@ def url_to_thumbnail_file(filename) -> File:
                 # For local storage, use the temp file paths as final URLs
                 thumbnail_170_url = temp_file_path
                 thumbnail_512_url = temp_file_path_512 if not file_extension == ".svg" else temp_file_path
-            return File(file_path=thumbnail_512_url, thumbnail_width=thumbnail_width, width=thumbnail_512_width,
+            return File(file_path=thumbnail_512_url, file_written_by_us=True, thumbnail_width=thumbnail_width, width=thumbnail_512_width,
                         height=thumbnail_512_height,
                         thumbnail_height=thumbnail_height, thumbnail_path=thumbnail_170_url,
                         thumbnail_written_by_us=True,   # our thumbnailer wrote it (follow-up F3)

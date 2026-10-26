@@ -3076,7 +3076,8 @@ def replace_local_upload_task(community_id: int, column: str, file_id: int) -> N
             # a detached copy: delete-orphan drops the old row at the commit, and its paths are needed after it
             # it keeps the old row's name, by which it is ours to remove (File._may_remove_written)
             doomed = File(file_path=old.file_path, thumbnail_path=old.thumbnail_path, file_name=old.file_name,
-                          thumbnail_written_by_us=old.thumbnail_written_by_us) \
+                          thumbnail_written_by_us=old.thumbnail_written_by_us,
+                          file_written_by_us=old.file_written_by_us) \
                 if old is not None else None
             setattr(community, column, replacement)
             session.commit()
@@ -3267,6 +3268,7 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                                           '/' + new_filename + final_ext
 
                                         file.file_path = final_place
+                                        file.file_written_by_us = True   # our resizer wrote it (follow-up F3)
                                         file.width = medium_image.width
                                         file.height = medium_image.height
 

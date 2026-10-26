@@ -215,7 +215,7 @@ class TestAnIcon:
         """Follow-up F3."""
         file = save_icon_file(an_image(400, 400))
         try:
-            assert file.thumbnail_written_by_us is True
+            assert file.thumbnail_written_by_us is True and file.file_written_by_us is True
         finally:
             cleanup(file)
 
