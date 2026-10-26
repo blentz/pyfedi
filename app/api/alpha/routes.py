@@ -40,7 +40,7 @@ from app.api.alpha.utils.user import get_user, post_user_block, get_user_unread_
     post_user_logout, post_user_follow, post_user_unfollow
 from app.api.alpha.utils.admin import get_registration_list, put_registration_approve
 from app.constants import *
-from app.onion import is_onion_request
+from app.onion import is_onion_request, onion_user_limit
 from app.utils import orjson_response, get_setting
 from app.api.alpha.schema import *
 
@@ -292,7 +292,7 @@ def post_alpha_community_block(data):
 def post_alpha_community(data):
     if not enable_api():
         return abort(400, message="alpha api is not enabled")
-    with limiter.limit('10/day', exempt_when=is_trusted_request):
+    with limiter.limit(onion_user_limit('10/day'), exempt_when=is_trusted_request):
         auth = request.headers.get('Authorization')
         resp = post_community(auth, data)
         return CommunityResponse().load(resp)
@@ -494,7 +494,7 @@ def post_alpha_feed_follow(data):
 def post_alpha_feed(data):
     if not enable_api():
         return abort(400, message="alpha api is not enabled")
-    with limiter.limit('10/day', exempt_when=is_trusted_request):
+    with limiter.limit(onion_user_limit('10/day'), exempt_when=is_trusted_request):
         auth = request.headers.get('Authorization')
         resp = post_feed(auth, data)
         return FeedView().load(resp)
@@ -1682,7 +1682,7 @@ def post_alpha_upload_image(files_data):
 def post_alpha_upload_community_image(files_data):
     if not enable_api():
         return abort(400, message="alpha api is not enabled")
-    with limiter.limit('20/day', exempt_when=is_trusted_request):
+    with limiter.limit(onion_user_limit('20/day'), exempt_when=is_trusted_request):
         auth = request.headers.get('Authorization')
         image_file = files_data['file']
         resp = post_upload_community_image(auth, image_file)
@@ -1698,7 +1698,7 @@ def post_alpha_upload_community_image(files_data):
 def post_alpha_upload_user_image(files_data):
     if not enable_api():
         return abort(400, message="alpha api is not enabled")
-    with limiter.limit('20/day', exempt_when=is_trusted_request):
+    with limiter.limit(onion_user_limit('20/day'), exempt_when=is_trusted_request):
         auth = request.headers.get('Authorization')
         image_file = files_data['file']
         resp = post_upload_user_image(auth, image_file)

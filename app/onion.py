@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import ipaddress
 import secrets
+from math import ceil
 from functools import wraps
 from typing import TypeVar
 from urllib.parse import urlsplit
 
 from flask import current_app, flash, has_request_context, redirect, request, session, url_for
 from flask_babel import _
+from limits import parse_many
 
 from app.clock import utcnow
 
@@ -171,3 +173,30 @@ def onion_rate_key() -> str:
     sid = arrived_onion_sid()
     mint_onion_sid()
     return f'onion-session:{sid}' if sid else ONION_ANON_KEY
+
+
+ONION_USER_TTL = 3600       # spec 2026-10-26, anti-goal: a running box holds no link between a user and onion use older than this
+
+
+def onion_user_ttl(seconds: int) -> int:
+    """The expiry of a key that names a user: `seconds` as it always was on clearnet, at most an hour on the onion
+    (ONION_USER_TTL)."""
+    return min(seconds, ONION_USER_TTL) if is_onion_request() else seconds
+
+
+def onion_user_limit(spec: str):
+    """A rate limit for Flask-Limiter (a callable, which it evaluates per request) that is `spec` everywhere except
+    for an onion account's `onion-user:<id>` bucket, which names the user and so must not outlive an hour
+    (ONION_USER_TTL). There each item with a longer window becomes the same rate over an hour: the amount scaled by
+    3600 / window seconds, rounded up, at least 1. Anonymous and session buckets name no account and are as `spec`."""
+    def limit() -> str:
+        if not is_onion_request() or not is_api_path() \
+                or not str(request.environ.get(API_RATE_KEY) or '').startswith('onion-user:'):
+            return spec
+        items = parse_many(spec)
+        if all(item.get_expiry() <= ONION_USER_TTL for item in items):
+            return spec
+        return ';'.join(
+            f'{item.amount} per {item.multiples} {item.GRANULARITY.name}' if item.get_expiry() <= ONION_USER_TTL
+            else f'{max(1, ceil(item.amount * ONION_USER_TTL / item.get_expiry()))} per 1 hour' for item in items)
+    return limit
