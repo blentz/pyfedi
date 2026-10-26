@@ -3804,7 +3804,7 @@ class Post(db.Model):
                                                 'reporter_id': 1,
                                                 'reporter_user_name': 'automated'
                                                 }
-                                notify_admin('User auto-banned for AI-generated content', f'/u/{user.link()}', 1,
+                                notify_admin('User auto-banned for AI-generated content', f'/user/{user.id}', 1,
                                              NOTIF_REPORT, 'user_reported', targets_data)
 
             # Last, so the post is final (AI verdict and any ban applied) before anything is told of it.
@@ -4712,7 +4712,7 @@ class PostReply(db.Model):
                                 'reporter_id': 1,
                                 'reporter_user_name': 'automated'
                                 }
-                notify_admin('Used em-dash in comment - likely AI', f'/u/{user.link()}', 1,
+                notify_admin('Used em-dash in comment - likely AI', f'/user/{user.id}', 1,
                             NOTIF_REPORT, 'user_reported', targets_data)
 
                 # Store this in redis for a day so that duplicate reports aren't created if that setting is enabled
@@ -4762,7 +4762,7 @@ class PostReply(db.Model):
                                             'reporter_id': 1,
                                             'reporter_user_name': 'automated'
                                             }
-                            notify_admin('User auto-banned for AI-generated content', f'/u/{user.link()}', 1,
+                            notify_admin('User auto-banned for AI-generated content', f'/user/{user.id}', 1,
                                          NOTIF_REPORT, 'user_reported', targets_data)
 
         return reply
