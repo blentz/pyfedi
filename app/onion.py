@@ -97,10 +97,24 @@ def clearnet_only(fallback_endpoint: str):
     return decorate
 
 
-def audit_field(value: T) -> T | None:
-    """An IP-derived value to store (`user.ip_address`, its country, an instance's address): None for an onion
-    request, whose only address is the tor container's and so everybody's; `value` unchanged otherwise."""
-    return None if is_onion_request() else value
+# What a stored-IP audit returns for a request it must not write: the caller leaves the column as it is (and, for a
+# row being created, at its default, NULL).
+KEEP = object()
+# Every onion-registered account stores this instead of an address (link-local, so never a real client's).
+ONION_ACCOUNT_IP = '169.254.88.88'
+
+
+def audit_field(value: T) -> T | object:
+    """An IP-derived value to store (an instance's address): `KEEP` for an onion request, whose only address is the
+    tor container's and so everybody's and which must not overwrite what is stored; `value` unchanged otherwise.
+    Store it with `apply_audit`."""
+    return KEEP if is_onion_request() else value
+
+
+def apply_audit(obj, field: str, result) -> None:
+    """Set `obj.field` to an audit result, unless the result is `KEEP`."""
+    if result is not KEEP:
+        setattr(obj, field, result)
 
 
 def is_api_path() -> bool:

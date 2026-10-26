@@ -26,7 +26,8 @@ from app.storefront import (DomainInfo, current_storefront, default_domain, doma
                             instance_id_of, public_registration_open)
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role, dummy_password_hash, \
     verify_password_hash
-from app.onion import audit_field, is_onion_request
+from app.onion import apply_audit, is_onion_request
+from app.onion_account import audit_country, audit_ip, is_onion_account
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message, prepare_onion_proof
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, \
     finalize_user_setup, get_request, get_setting, gibberish, \
@@ -88,7 +89,10 @@ def ip2location(ip: str):
             'timezone': data.get('timezone', '')}
 
 
-def get_country(ip: str, fallback: Any = '') -> str:
+def get_country(ip: str, fallback: Any = '', user=None) -> str:
+    # An onion account has no country, so its address is not sent to ipinfo.
+    if user is not None and is_onion_account(user):
+        return fallback
     # An onion request is not geolocated: its address is the tor container's, and a country header on it was written
     # by the client, not by a CDN.
     if is_onion_request():
@@ -222,7 +226,8 @@ def process_registration_form(form):
     # app/utils.py's RESERVED_USER_NAMES and D1139.
     disallowed_usernames = RESERVED_USER_NAMES
     ip = ip_address()
-    country = get_country(ip)
+    # Whoever registers on an onion domain is an onion account, which has no country and is never looked up
+    country = '' if current_storefront().is_onion else get_country(ip)
 
     if is_invalid_email_or_username(form, disallowed_usernames):
         return redirect(url_for("auth.register"))
@@ -345,16 +350,16 @@ def create_new_user(form, ip, country, verification_token):
         verified=not get_setting("email_verification", True),
         instance_id=instance_id_of(storefront),
         site_domain_id=storefront.id,
-        ip_address=audit_field(ip),
         banned=user_ip_banned() or user_cookie_banned(),
         email_unread_sent=False,
         referrer=session.get("Referer", ""),
         alt_user_name=gibberish(random.randint(8, 20)),
         font=get_font_preference(),
-        ip_address_country=audit_field(country),
         timezone=form.timezone.data,
         language_id=g.site.language_id
     )
+    apply_audit(user, 'ip_address', audit_ip(user, ip))
+    apply_audit(user, 'ip_address_country', audit_country(user, country))
     if current_app.config['CONTENT_WARNING']:
         user.hide_nsfw = 0
     
@@ -374,7 +379,6 @@ def create_new_user_from_ldap(user_name, email, password, ip):
         verified=True,
         instance_id=instance_id_of(default_domain()),
         site_domain_id=default_domain().id,
-        ip_address=audit_field(ip),
         banned=False,
         email_unread_sent=False,
         referrer=session.get("Referer", ""),
@@ -383,6 +387,7 @@ def create_new_user_from_ldap(user_name, email, password, ip):
         language_id=g.site.language_id,
         last_seen=utcnow()
     )
+    apply_audit(user, 'ip_address', audit_ip(user, ip))
     if current_app.config['CONTENT_WARNING']:
         user.hide_nsfw = 0
     user.set_password(password)
@@ -480,7 +485,6 @@ def redirect_next_page():
 
 def process_login(form: LoginForm):
     ip = ip_address()
-    country = get_country(ip)
     username = form.user_name.data.strip()
     password = form.password.data.strip()
 
@@ -528,7 +532,7 @@ def process_login(form: LoginForm):
     if user.waiting_for_approval():
         return redirect(url_for("auth.please_wait"))
 
-    return log_user_in(user, form, ip, country, ldap_sync=ldap_sync)
+    return log_user_in(user, form, ip, get_country(ip, user=user), ldap_sync=ldap_sync)
 
 
 def split_handle(typed: str, storefront: DomainInfo) -> tuple[str, DomainInfo | None]:
@@ -697,10 +701,10 @@ def log_user_in(user, form, ip, country, ldap_sync=True):
 
 def update_user_session(user, form, ip, country):
     user.last_seen = utcnow()
-    user.ip_address = audit_field(ip)
+    apply_audit(user, 'ip_address', audit_ip(user, ip))
     if user.timezone is None:
         user.timezone = form.timezone.data
-    user.ip_address_country = audit_field(country or user.ip_address_country)
+    apply_audit(user, 'ip_address_country', audit_country(user, country or user.ip_address_country))
     db.session.commit()
 
 

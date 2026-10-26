@@ -28,7 +28,8 @@ from app.shared.media import MediaRefused, can_upload_media, media_kind_for, med
     store_uploaded_media, episode_form_wanted, with_episode
 from app.federation_urls import object_base
 from app.local_only import content_local_only
-from app.onion import audit_field
+from app.onion import apply_audit
+from app.onion_account import audit_ip
 from app.storefront import is_upload_link, link_on, stored_link
 from app.shared.tasks import task_selector
 from app.shared.upload import open_uploaded_image
@@ -342,7 +343,7 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None, upload
     community.last_active = g.site.last_active = utcnow()
     user.post_count += 1
     user.last_seen = utcnow()
-    user.ip_address = audit_field(ip_address())
+    apply_audit(user, 'ip_address', audit_ip(user, ip_address()))
 
     post.generate_ap_id(community)
 

@@ -336,7 +336,7 @@ def mastodon_authorize():
             session.pop("user_info", None)
             user = User.query.filter_by(**{oauth_id_key: user_info['id']}).first()
             ip = ip_address()
-            country = get_country(ip)
+            country = get_country(ip, user=user)
             if user:
                 if not user.is_ban_exempt() and (user.banned or user_ip_banned() or user_cookie_banned()):
                     return handle_banned_user(user, ip)

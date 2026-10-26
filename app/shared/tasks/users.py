@@ -7,6 +7,7 @@ import string
 
 from app import celery, db
 from app.models import UserRegistration
+from app.onion_account import is_onion_account
 from app.utils import _capped_request, get_setting, get_task_session
 
 
@@ -25,9 +26,9 @@ def check_user_application(application_id, send_async=True):
                 continue
 
             try:
-                # An applicant who registered over the onion has no stored IP (spec 2026-10-17 section 3.7): there
-                # is nothing to ask about, so only the email leg runs.
-                if application.user.ip_address:
+                # An applicant who registered over the onion stores the sentinel IP, which is not an address (onion
+                # unlinkability spec 2026-10-26, goal 2a): there is nothing to ask about, so only the email leg runs.
+                if application.user.ip_address and not is_onion_account(application.user):
                     # Generate fake IP addresses
                     fake_ips = []
                     for _ in range(3):
