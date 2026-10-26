@@ -1,5 +1,7 @@
 """Local names are unique per domain (spec 2026-10-19 §3.1): the helpers that turn a name or handle into the domain
 it is on, find that domain's row, and spell a row's name for a path."""
+import re
+
 from sqlalchemy import and_, false, func
 
 from app.models import Community, User
@@ -59,3 +61,10 @@ def actor_handle(obj) -> str:
         return obj.ap_id
     name = obj.user_name if isinstance(obj, User) else obj.name
     return f'{name}@{domain_by_id(obj.site_domain_id).domain}'
+
+
+def target_id_key(name_key: str) -> str:
+    """The `targets` key that holds the id of the account or community whose stored name is under `name_key`: the name
+    key's trailing `_user_name` (else `_name`) becomes `_id`. `suspect_user_user_name` -> `suspect_user_id`,
+    `author_user_name` -> `author_id`, `community_name` -> `community_id`."""
+    return re.sub(r'(_user)?_name$', '_id', name_key)

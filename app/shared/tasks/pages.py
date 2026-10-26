@@ -237,6 +237,7 @@ def send_post(post_id, edit=False, session=None):
                                 'post_id':post.id,
                                 'post_body':post.body,
                                 'post_title': post.title,
+                                'author_id': user.id,
                                 'author_user_name': user.stored_link()
                                 }
                 with force_locale(get_recipient_language(recipient.id)):
