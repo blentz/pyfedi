@@ -228,6 +228,8 @@ def test_onion_browsing_works_when_the_onion_store_is_down(limited_app, world, l
     with client.session_transaction(base_url=ONION_URL) as stored:
         stored['_user_id'] = str(world['alice'].id)
         stored['_fresh'] = True
+    for path in pages(post):        # logged in: a profile shows the viewer's vote quota, read from the store
+        assert onion_page(client, path) is not None
     assert onion_get(client, '/home/new/popular?result_id=abc').status_code == 200      # the feed cache is skipped
     assert store_down_answer(vote(client, post))      # a vote needs its quota
     assert limits_on.onion_fallback.storage     # the onion's buckets were counted in memory meanwhile
