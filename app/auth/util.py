@@ -677,7 +677,7 @@ def handle_banned_user(user, ip):
     flash(_("You have been banned."), "error")
     response = make_response(redirect(url_for("auth.login")))
 
-    if user.banned and not user_ip_banned() and not is_onion_request():
+    if user.banned and not user_ip_banned() and not is_onion_request() and not is_onion_account(user):
         new_ip_ban = IpBan(ip_address=ip, notes=f"{user.user_name} used new IP address")
         db.session.add(new_ip_ban)
         db.session.commit()
