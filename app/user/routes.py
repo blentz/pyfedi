@@ -22,8 +22,8 @@ from app.constants import *
 from app.email import send_verification_email
 from app.federation_urls import activity_id, domain_site_name, owner_base
 from app.ldap_utils import sync_user_to_ldap
-from app.local_only import local_only_visible, local_only_visible_rss, refuses_remote_contact, \
-    remote_contact_refusal_message, user_local_only, without_local_only
+from app.local_only import hidden_here, local_only_visible_rss, refuse_hidden_here, refuses_remote_contact, \
+    remote_contact_refusal_message, user_local_only, without_local_only, without_local_only_actors
 from app.visibility import OPEN_VISIBILITIES, visible_to_clause
 from app.log_scrub import log_ldap_sync_failure
 from app.onion import has_real_ip, is_onion_request
@@ -128,6 +128,13 @@ def import_note_text(entry: dict):
     return entry['note'] if 'note' in entry else entry.get('body')
 
 
+@bp.before_request
+def refuse_hidden_profile():
+    """Every `/u/<name>` route and sub-page of an account hidden here answers 404, as for a name nobody holds
+    (follow-up F6). `/user/<id>` is the profile page's own (show_profile)."""
+    refuse_hidden_here({'actor': lambda actor: User.query.filter(named_by_actor(User, actor)).first()})
+
+
 @bp.route('/people', methods=['GET', 'POST'])
 @login_required
 def show_people():
@@ -146,7 +153,7 @@ def show_profile_by_id(user_id):
 def show_profile(user):
     if (user.deleted or user.banned) and current_user.is_anonymous:
         abort(404)
-    if user_local_only(user) and not local_only_visible():
+    if hidden_here(user):
         abort(404)   # a logged-out visitor never sees a local-only account (owner ruling 2026-10-21)
 
     if user.deleted:
@@ -282,7 +289,7 @@ def user_upvotes(actor):
     # this instance cannot resolve was `AttributeError: 'NoneType' object has
     # no attribute 'id'` rather than the 404 the function goes on to produce.
     # D992's shape; the guard exists, it was just in the wrong place.
-    if user is None or (user_local_only(user) and not local_only_visible()):
+    if user is None or hidden_here(user):
         abort(404)   # as the profile: a logged-out visitor never sees a local-only account
 
     upvoted = _get_user_upvoted_posts(user)
@@ -1669,9 +1676,11 @@ def user_settings_filters():
         form.community_keyword_filter.data = current_user.community_keyword_filter
     filters = Filter.query.filter_by(user_id=current_user.id).order_by(Filter.title).all()
     blocked_users = User.query.filter_by(deleted=False).join(UserBlock, UserBlock.blocked_id == User.id). \
-        filter(UserBlock.blocker_id == current_user.id).order_by(User.user_name).all()
+        filter(UserBlock.blocker_id == current_user.id)
+    blocked_users = without_local_only_actors(blocked_users, User).order_by(User.user_name).all()   # F6
     blocked_communities = Community.query.join(CommunityBlock, CommunityBlock.community_id == Community.id). \
-        filter(CommunityBlock.user_id == current_user.id).order_by(Community.title).all()
+        filter(CommunityBlock.user_id == current_user.id)
+    blocked_communities = without_local_only_actors(blocked_communities, Community).order_by(Community.title).all()
     blocked_domains = Domain.query.join(DomainBlock, DomainBlock.domain_id == Domain.id). \
         filter(DomainBlock.user_id == current_user.id).order_by(Domain.name).all()
     blocked_instances = Instance.query.join(InstanceBlock, InstanceBlock.instance_id == Instance.id). \
@@ -2134,7 +2143,7 @@ def fediverse_redirect(actor):
     # and the second in this module after D1019. The page exists to send a
     # visitor to the instance that hosts the account, so a remote one has
     # nowhere to send them.
-    if user is None or not user.is_local() or (user_local_only(user) and not local_only_visible()):
+    if user is None or not user.is_local() or hidden_here(user):
         abort(404)   # nor, to a logged-out visitor, a local-only account (as its profile)
 
     if user and user.is_local():
@@ -2277,7 +2286,7 @@ def user_preview(user_id):
     return_to = request.args.get('return_to')
     if (user.deleted or user.banned) and current_user.is_anonymous:
         abort(404)
-    if user_local_only(user) and not local_only_visible():
+    if hidden_here(user):
         abort(404)   # as the profile: a logged-out visitor never sees a local-only account
     return render_template('user/user_preview.html', user=user, return_to=return_to)
 
@@ -2440,7 +2449,7 @@ def user_feeds(actor):
     actor = actor.strip()
     user = user_for_actor(actor)
 
-    if user is None or (user_local_only(user) and not local_only_visible()):
+    if user is None or hidden_here(user):
         abort(404)   # as the profile: a logged-out visitor never sees a local-only account
 
     # find all user feeds marked as public
@@ -2469,7 +2478,7 @@ def show_profile_rss(actor):
         # refuses the profile page itself. Measured: the post was listed.
         if user.deleted:
             abort(404)
-        if user_local_only(user) and not local_only_visible_rss():
+        if hidden_here(user, local_only_visible_rss()):
             abort(404)   # as the profile: a logged-out reader never sees a local-only account
 
         # If nothing has changed since their last visit, return HTTP 304

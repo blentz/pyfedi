@@ -30,7 +30,8 @@ import app.shared.community as shared_community
 import app.shared.post as shared_post
 from app.federation_urls import domain_site_name, owner_domain
 from app.storefront import DomainInfo, current_storefront, default_domain, domain_base_url, hosted_instance_ids, registration_mode_on, storefront_link, storefront_memo_name, storefront_url
-from app.local_only import community_local_only, federating_clause, user_local_only, without_local_only_actors
+from app.local_only import hidden_here, hidden_here_clause, hidden_here_sql, hides_nothing, shown_here, \
+    without_local_only_actors
 from app.visibility import can_view, visible_to_sql
 
 
@@ -122,7 +123,8 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
                     v1['alt_text'] = post.image.alt_text
         if post.cross_posts:
             v1['cross_posts'] = []
-            local_only_filter = '' if user_id else ' AND p.local_only IS FALSE'   # for a token user only (spec §3.4)
+            # for a token user only (spec §3.4), and on its own domain only (follow-up F6)
+            local_only_filter = f' AND NOT {hidden_here_sql("p", Post, user_id is not None)}'
             cross_post_data = db.session.execute(text('SELECT p.id, reply_count, c.title FROM "post" as p INNER JOIN "community" as c ON p.community_id = c.id WHERE p.id IN :cross_posts AND '
                                                       + visible_to_sql('p') + local_only_filter),
                                                  {'cross_posts': tuple(post.cross_posts), 'visibility_viewer_id': user_id}).all()
@@ -400,8 +402,9 @@ def user_view(user: User | int, variant, stub=False, user_id=None, flair_communi
             # `post_view` raises here and what `shared_error_handler` turns into the
             # 400 'Not found' this is supposed to be.
             raise NoResultFound
-    if variant == 3 and user_id is None and user_local_only(user):
-        raise NoResultFound   # a logged-out caller is never shown a local-only account (owner ruling 2026-10-21)
+    if variant == 3 and hidden_here(user, user_id is not None):
+        raise NoResultFound   # a logged-out caller is never shown a local-only account (owner ruling 2026-10-21), nor
+        # anyone off its own domain (follow-up F6)
 
     # Variant 1 - models/person/person.dart
     if variant == 1:
@@ -602,8 +605,9 @@ def community_view(community: Community | int | str, variant, stub=False, user_i
         if community is None:
             community = Community.query.filter(func.lower(Community.name) == name.lower(),
                                                func.lower(Community.ap_domain) == ap_domain.lower()).one()
-    if variant in (3, 4) and user_id is None and community_local_only(community):
-        raise NoResultFound   # a logged-out caller is never shown a local-only community (owner ruling 2026-10-21)
+    if variant in (3, 4) and hidden_here(community, user_id is not None):
+        raise NoResultFound   # a logged-out caller is never shown a local-only community (owner ruling 2026-10-21), nor
+        # anyone off its own domain (follow-up F6)
 
     # Variant 1 - models/community/community.dart
     if variant == 1:
@@ -1474,7 +1478,7 @@ def site_view(user) -> dict:
         home = owner_domain(admin)
         if not storefront.is_default and (home is None or home.domain != storefront.domain):
             continue   # a sister domain names only its own admins: another domain's would name that domain
-        if user or not user_local_only(admin):   # a logged-out caller is shown no local-only account
+        if not hidden_here(admin, user is not None):   # no local-only account to a logged-out caller, nor off its domain
             v1['admins'].append(user_view(user=admin, variant=2))
     if user:
         v1['my_user'] = user_view(user=user, variant=6)
@@ -1598,16 +1602,18 @@ def cached_modlist_for_community(community_id):
 
 
 def shown_modlist(modlist: list, user_id) -> list:
-    """`modlist` (a cached_modlist_for_* answer) as `user_id` may see it: for a logged-out caller, without the entries
-    naming a local-only moderator or community (owner ruling 2026-10-21). The cached list is shared by every caller,
-    so it is narrowed here rather than when it is built."""
-    if user_id is not None or not modlist:
+    """`modlist` (a cached_modlist_for_* answer) as `user_id` may see it: without the entries naming a moderator or
+    community hidden here (`hidden_here`: from a logged-out caller by the owner ruling of 2026-10-21, and off its own
+    domain from everyone by follow-up F6). The cached list is shared by every caller, so it is narrowed here rather
+    than when it is built."""
+    hidden_user, hidden_community = (hidden_here_clause(User, user_id is not None),
+                                     hidden_here_clause(Community, user_id is not None))
+    if not modlist or (hides_nothing(hidden_user) and hides_nothing(hidden_community)):
         return modlist
     hidden = set(db.session.scalars(select(User.id).where(User.id.in_([m['moderator']['id'] for m in modlist]),
-                                                          ~federating_clause(User))))
+                                                          hidden_user)))
     hidden_communities = set(db.session.scalars(
-        select(Community.id).where(Community.id.in_([m['community']['id'] for m in modlist]),
-                                   ~federating_clause(Community))))
+        select(Community.id).where(Community.id.in_([m['community']['id'] for m in modlist]), hidden_community)))
     return [m for m in modlist if m['moderator']['id'] not in hidden and m['community']['id'] not in hidden_communities]
 
 
@@ -1641,7 +1647,7 @@ def users_total(instance_id: int | None = None):
 def moderating_communities_view(user):
     moderates = []
     inner_user_view = user_view(user, variant=1, stub=True)
-    for community in moderating_communities(user.id):
+    for community in shown_here(moderating_communities(user.id), True):   # none hidden here (follow-up F6)
         moderates.append({'community': community_view(community, variant=1, stub=True), 'moderator': inner_user_view})
     return moderates
 
@@ -1649,7 +1655,7 @@ def moderating_communities_view(user):
 def joined_communities_view(user):
     follows = []
     inner_user_view = user_view(user, variant=1, stub=True)
-    for community in joined_communities(user.id):
+    for community in shown_here(joined_communities(user.id), True):
         follows.append({'community': community_view(community, variant=1, stub=True), 'follower': inner_user_view})
     return follows
 

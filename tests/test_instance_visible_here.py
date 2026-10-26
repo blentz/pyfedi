@@ -129,15 +129,14 @@ def test_a_federating_sisters_and_a_peers_instance_pages_render_on_first(app, sc
 
 @pytest.mark.parametrize('signed_in', [False, True])
 def test_first_domains_modlog_names_no_onion(app, scene, signed_in):
-    """The entry is an onion admin's, so the instance label is all that could name the onion: a reader who is not
-    an admin sees no actor's name. (A community entry also links the community, `/c/art@abc.onion`: a community's
-    path name, not the instance row, and left as earlier tasks made it.)"""
+    """The entry is an onion admin's. Follow-up F6: off the onion an entry naming an onion account is not listed at all,
+    for any reader (its moderator would otherwise be named to an admin); the onion's modlog lists it (below)."""
     db.session.add(ModLog(user_id=scene.onion_bob.id, action='ban_user', link='u/somebody', public=True, type='admin'))
     db.session.commit()
     response = get(app, '/modlog', user=scene.first_bob if signed_in else None)
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert ' admin' in body   # the entry itself is listed, with no instance named
+    assert ' admin' not in body and 'somebody' not in body
     assert ONION not in body
 
 

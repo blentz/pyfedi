@@ -42,8 +42,7 @@ from app.main.forms import ShareLinkForm
 from app.main.util import sidebar_active_communities, sidebar_new_instances, sidebar_upcoming_events, \
     sidebar_new_communities, _base_list_communities_context, reload_url
 from app.translation import LibreTranslateAPI
-from app.local_only import local_only_visible, local_only_visible_rss, user_local_only, without_local_only, \
-    without_local_only_actors
+from app.local_only import hidden_here, hidden_here_sql, shown_here, without_local_only, without_local_only_actors
 from app.local_names import local_named, split_local_name
 from app.visibility import listable_clause, modlog_local_only_clause, modlog_open_clause, visible_to_clause
 from app.federation_urls import domain_site_name, federating_storefront, instance_actor_public_key, instance_actor_url
@@ -247,10 +246,10 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag, live=False
                        result_id=result_id) if page > 0 else None
 
     # Sidebar
-    active_communities = sidebar_active_communities(current_user.get_id())
-    new_communities = sidebar_new_communities(current_user.get_id())
+    active_communities = shown_here(sidebar_active_communities(current_user.get_id()))   # cached for every domain
+    new_communities = shown_here(sidebar_new_communities(current_user.get_id()))
     instances = sidebar_new_instances()
-    upcoming_events = sidebar_upcoming_events(local_only_visible())
+    upcoming_events = sidebar_upcoming_events(hidden_here_sql('p', Post))
 
     # Voting history and ban status
     if current_user.is_authenticated:
@@ -426,8 +425,10 @@ def list_communities():
             )
         )
     else:
-        # For anonymous users, only show non-private communities, and no local-only one (owner ruling 2026-10-21)
-        communities = without_local_only_actors(communities.filter_by(private=False), Community)
+        # For anonymous users, only show non-private communities
+        communities = communities.filter_by(private=False)
+    # no local-only one to an anonymous user (owner ruling 2026-10-21), nor one off its own domain (follow-up F6)
+    communities = without_local_only_actors(communities, Community)
 
     if search_param == '':
         pass
@@ -701,8 +702,8 @@ def modlog():
             modlog_entries = modlog_entries.filter(ModLog.public == True).order_by(desc(ModLog.created_at))
     else:
         modlog_entries = modlog_entries.filter(ModLog.public == True).order_by(desc(ModLog.created_at))
-    if not local_only_visible():  # an entry names its post or comment, and local-only ones are not named (§3.4)
-        modlog_entries = modlog_entries.filter(modlog_local_only_clause())
+    if (unhidden := modlog_local_only_clause()) is not None:   # an entry names nothing hidden here (§3.4, F6)
+        modlog_entries = modlog_entries.filter(unhidden)
 
     # Pagination
     modlog_entries = modlog_entries.paginate(page=page, per_page=100 if not low_bandwidth else 50, error_out=False)
@@ -759,8 +760,8 @@ def about_page():
     posts_amount = local_posts(instance_id=current_instance_id())
 
     # a logged-out visitor is shown no local-only account (owner ruling 2026-10-21)
-    admins = [user for user in Site.admins() if local_only_visible() or not user_local_only(user)]
-    staff = [user for user in Site.staff() if local_only_visible() or not user_local_only(user)]
+    admins = [user for user in Site.admins() if not hidden_here(user)]
+    staff = [user for user in Site.staff() if not hidden_here(user)]
     domains_amount = db.session.execute(text('SELECT COUNT(*) as c FROM "domain" WHERE "banned" IS false')).scalar()
     community_amount = local_communities(instance_id=current_instance_id())
     instance = db.session.get(Instance, current_instance_id())
@@ -1018,12 +1019,12 @@ And if you want to add your score to the database to help your fellow Bookworms 
 @bp.route('/communities_menu')
 def communities_menu():
     if current_user.is_authenticated:
-        favorites = Community.query.filter(Community.id.in_(favorite_communities(current_user.id))).all()
+        favorites = shown_here(Community.query.filter(Community.id.in_(favorite_communities(current_user.id))).all())
     else:
         favorites = None
     return render_template('communities_menu.html',
-                           moderating_communities=moderating_communities(current_user.get_id()),
-                           joined_communities=joined_communities(current_user.get_id()),
+                           moderating_communities=shown_here(moderating_communities(current_user.get_id())),
+                           joined_communities=shown_here(joined_communities(current_user.get_id())),
                            is_admin=current_user.is_authenticated and current_user.is_admin(),
                            is_staff=current_user.is_authenticated and current_user.is_staff(),
                            default_user_add_remote=get_setting("allow_default_user_add_remote_community", True),
@@ -1043,8 +1044,8 @@ def explore_menu():
 @bp.route('/topics_menu')
 def topics_menu():
     return render_template('topics_menu.html', menu_topics=menu_topics(),
-                           moderating_communities=moderating_communities(current_user.get_id()),
-                           joined_communities=joined_communities(current_user.get_id()))
+                           moderating_communities=shown_here(moderating_communities(current_user.get_id())),
+                           joined_communities=shown_here(joined_communities(current_user.get_id())))
 
 
 @bp.route('/feeds_menu')

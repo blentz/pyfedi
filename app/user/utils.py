@@ -20,7 +20,7 @@ from app.shared.tasks import task_selector
 from app.storefront import acting_domain, current_storefront, domain_for_host
 from app.utils import get_request, get_task_session, patch_db_session, \
     intlist_to_strlist, community_membership_private, paginate_post_ids, post_ids_to_models
-from app.local_only import local_only_visible, without_local_only, without_local_only_actors
+from app.local_only import hidden_here_sql, without_local_only, without_local_only_actors
 from app.visibility import visible_to_clause, visible_to_sql
 
 import httpx
@@ -351,9 +351,8 @@ def _get_user_posts_and_replies(user, page):
 
     post_select += f" AND {visible_to_sql('post')}"
     reply_select += f" AND {visible_to_sql('post_reply', reply=True)}"
-    if not local_only_visible():
-        post_select += " AND post.local_only IS FALSE"
-        reply_select += " AND post_reply.local_only IS FALSE"
+    post_select += f" AND NOT {hidden_here_sql('post', Post)}"   # spec §3.4, follow-up F6
+    reply_select += f" AND NOT {hidden_here_sql('post_reply', PostReply)}"
 
     full_query = post_select + " UNION " + reply_select + f" ORDER BY posted_at DESC LIMIT {per_page + 1} OFFSET {offset_val};"
     query_result = db.session.execute(text(full_query), {'visibility_viewer_id': viewer_id})
@@ -415,7 +414,8 @@ def _get_user_subscribed_communities(user):
     if current_user.is_authenticated and (user.id == current_user.get_id()
                                           or current_user.is_staff() or current_user.is_admin()
                                           or user.show_subscribed_communities):
-        return Community.query.filter_by(banned=False).join(CommunityMember).filter(CommunityMember.user_id == user.id).order_by(Community.name).all()
+        subscribed = Community.query.filter_by(banned=False).join(CommunityMember).filter(CommunityMember.user_id == user.id)
+        return without_local_only_actors(subscribed, Community).order_by(Community.name).all()   # follow-up F6
     return []
 
 

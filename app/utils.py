@@ -62,7 +62,7 @@ from app.onion import is_onion_request, stamp_activity
 from app.onion_store import onion_store_needed, onion_store_optional, request_redis
 from app.pinned_http import fetch_deadline, is_refused_address
 from app.rsa_keys import RsaKeys
-from app.local_only import local_only_visible, without_local_only_actors
+from app.local_only import hidden_here, hidden_here_sql, shown_here, without_local_only_actors
 from app.visibility import OPEN_VISIBILITIES, listable_sql, visible_to_sql
 from app.constants import *
 import re
@@ -5973,9 +5973,10 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
     else:
         post_id_where.append('c.private is false ')
 
-    # Local-only posts are for logged-in readers only (spec §3.4); an RSS view passes its token's answer instead
-    if not (local_only_visible() if show_local_only is None else show_local_only):
-        post_id_where.append('p.local_only is false ')
+    # Local-only posts are for logged-in readers only (spec §3.4), and only on their own domain (follow-up F6); an
+    # RSS view passes its token's answer instead
+    if (hidden := hidden_here_sql('p', Post, show_local_only)) != 'false':
+        post_id_where.append(f'NOT {hidden} ')
 
     # filter out nsfw and nsfl if desired
     if current_user.is_anonymous:
@@ -6143,7 +6144,7 @@ def get_instance_stickies(community_ids: List[int], sort: str):
     # Check each post in turn and only return list of posts that should be displayed
     if current_user.is_anonymous:
         for post in posts:
-            if post.local_only:  # for logged-in readers only (spec §3.4)
+            if hidden_here(post):  # for logged-in readers only (spec §3.4)
                 continue
             # Only show NSFW/NSFL to anon users if content warning enabled
             if not current_app.config['CONTENT_WARNING']:
@@ -6168,6 +6169,9 @@ def get_instance_stickies(community_ids: List[int], sort: str):
 
         for post in posts:
             # All the different reasons a post might be filtered out
+            # Hidden here: another domain's local-only post (follow-up F6)
+            if hidden_here(post):
+                continue
             # Community not in main feed view filter
             if post.community_id not in community_ids and not all_communities:
                 continue
@@ -6581,15 +6585,15 @@ def post_destination_sections():
     moderating and joined. Every one is also in possible_communities(), which main.add_post checks a pick against."""
     user_id = current_user.get_id()
     favorites = Community.query.filter(Community.id.in_(favorite_communities(user_id))).order_by(Community.title).all()
-    return [('favorites', _('Favorites'), favorites),
-            ('moderating', _('Moderating'), moderating_communities(user_id)),
-            ('joined', _('Joined communities'), joined_communities(user_id))]
+    return [('favorites', _('Favorites'), shown_here(favorites)),   # none hidden here (follow-up F6)
+            ('moderating', _('Moderating'), shown_here(moderating_communities(user_id))),
+            ('joined', _('Joined communities'), shown_here(joined_communities(user_id)))]
 
 
 def possible_communities():
     which_community = {}
-    joined = joined_communities(current_user.get_id())
-    moderating = moderating_communities(current_user.get_id())
+    joined = shown_here(joined_communities(current_user.get_id()))   # none hidden here (follow-up F6)
+    moderating = shown_here(moderating_communities(current_user.get_id()))
     comms = []
     already_added = set()
     for c in moderating:

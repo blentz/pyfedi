@@ -40,7 +40,7 @@ from app.models import Post, PostReply, PostReplyValidationError, \
     Topic, User, Instance, UserFollower, Poll, PollChoice, PollChoiceVote, PostBookmark, \
     PostReplyBookmark, CommunityBlock, File, CommunityFlair, UserFlair, BlockedImage, CommunityBan, Language, Event, \
     Reminder, Emoji
-from app.local_only import without_local_only, without_local_only_actors
+from app.local_only import hidden_here, refuse_hidden_here, shown_here, without_local_only, without_local_only_actors
 from app.post import bp
 from app.visibility import can_view, is_open, post_title_for, visible_to_clause
 from app.post.forms import NewReplyForm, ReportPostForm, MeaCulpaForm, CrossPostForm, ConfirmationForm, \
@@ -121,16 +121,18 @@ def refuse_private_community(post):
 
 
 def refuse_invisible(obj):
-    """Interop D7: followers-only content is 404 to anyone but the author's accepted local followers.
-    404, not 403, so the response does not confirm that the object exists."""
-    if not can_view(obj, current_user.get_id()):
+    """Interop D7: followers-only content is 404 to anyone but the author's accepted local followers. Content hidden
+    here (`hidden_here`, follow-up F6) is 404 to everyone. 404, not 403, so the response does not confirm that the
+    object exists."""
+    if hidden_here(obj) or not can_view(obj, current_user.get_id()):
         abort(404)
 
 
 def refuse_local_only_comment(comment):
-    """§3.4: a local-only comment is 404 to a reader who is not logged in, as if it did not exist. refuse_invisible
-    would only render it as a placeholder, which still tells that reader it is there."""
-    if comment.local_only and current_user.is_anonymous:
+    """§3.4: a local-only comment is 404 to a reader who is not logged in, and off its own domain to everyone
+    (`hidden_here`, follow-up F6), as if it did not exist. refuse_invisible would only render it as a placeholder,
+    which still tells that reader it is there."""
+    if hidden_here(comment):
         abort(404)
 
 
@@ -138,6 +140,8 @@ def refuse_invisible_unless_moderating(obj):
     """refuse_invisible for a moderation action (removal, restore, lock, sticky, purge, image block). D19 restricts
     seeing, not enforcement (D22): a moderator or admin of the content's community may act on a followers-only object
     they cannot view, so a report can be actioned. What the route then shows them must stay neutral."""
+    if hidden_here(obj):   # no exception for a moderator or an admin (owner ruling, follow-up F6)
+        abort(404)
     if current_user.is_authenticated and can_moderate(obj.community, current_user):
         return
     refuse_invisible(obj)
@@ -493,6 +497,14 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
             response.headers.set('Cache-Control', 'private, max-age=15, must-revalidate')
 
         return response
+
+
+@bp.before_request
+def refuse_hidden_post():
+    """Every route and sub-page of a post or reply hidden here answers 404, as for an id nobody holds (follow-up
+    F6)."""
+    refuse_hidden_here({'post_id': lambda id_: db.session.get(Post, id_),
+                        'comment_id': lambda id_: db.session.get(PostReply, id_)})
 
 
 @bp.route('/post/<int:post_id>/lazy_replies/<nonce>', methods=['GET', 'OPTIONS'])
@@ -2175,8 +2187,8 @@ def post_search_community_suggestions():
     if not q or len(q) < 2:
         return ""
 
-    joined = joined_communities(current_user.get_id())
-    moderating = moderating_communities(current_user.get_id())
+    joined = shown_here(joined_communities(current_user.get_id()))   # follow-up F6
+    moderating = shown_here(moderating_communities(current_user.get_id()))
     comms = []
     already_added = set()
     
@@ -2758,13 +2770,13 @@ def post_view_voting_activity(post_id: int):
 
         post_title = post.title
         upvoters = (
-            db.session.query(User, PostVote)
+            without_local_only_actors(db.session.query(User, PostVote), User)   # no voter hidden here (follow-up F6)
             .join(PostVote, PostVote.user_id == User.id)
             .filter(PostVote.post_id == post_id, PostVote.effect == 1.0)
             .order_by(PostVote.created_at)
         )
         downvoters = (
-            db.session.query(User, PostVote)
+            without_local_only_actors(db.session.query(User, PostVote), User)
             .join(PostVote, PostVote.user_id == User.id)
             .filter(PostVote.post_id == post_id, PostVote.effect == -1.0)
             .order_by(PostVote.created_at)
@@ -2788,13 +2800,13 @@ def post_reply_view_voting_activity(comment_id: int):
 
         reply_text = post_reply.body
         upvoters = (
-            db.session.query(User, PostReplyVote)
+            without_local_only_actors(db.session.query(User, PostReplyVote), User)   # no voter hidden here (follow-up F6)
             .join(PostReplyVote, PostReplyVote.user_id == User.id)
             .filter(PostReplyVote.post_reply_id == comment_id, PostReplyVote.effect == 1.0)
             .order_by(PostReplyVote.created_at)
         )
         downvoters = (
-            db.session.query(User, PostReplyVote)
+            without_local_only_actors(db.session.query(User, PostReplyVote), User)
             .join(PostReplyVote, PostReplyVote.user_id == User.id)
             .filter(PostReplyVote.post_reply_id == comment_id, PostReplyVote.effect == -1.0)
             .order_by(PostReplyVote.created_at)

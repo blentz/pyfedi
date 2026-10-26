@@ -96,21 +96,19 @@ def local_only_visible_rss() -> bool:
 
 
 def without_local_only(query, model, visible: bool | None = None):
-    """`query` over `model` (Post or PostReply) without the local-only rows, unless the reader may see them.
-    `visible` is that answer when the caller has it (an RSS view's token, an API call's token user), else
-    local_only_visible()."""
-    if visible is None:
-        visible = local_only_visible()
-    return query if visible else query.filter(model.local_only.is_(False))
+    """`query` over `model` (Post or PostReply) without the local-only rows this storefront hides from its reader
+    (`hidden_here`): all of them from a reader who is not signed in, and on a storefront that federates from everyone
+    (follow-up F6). `visible` is whether the reader is signed in when the caller has that answer (an RSS view's token,
+    an API call's token user), else local_only_visible()."""
+    return without_hidden_here(query, model, visible)
 
 
 def without_local_only_actors(query, model, visible: bool | None = None):
-    """`query` over `model` (User or Community) without the local-only accounts or communities, unless the reader may
-    see them. A logged-out visitor never sees one, as with local-only posts (owner ruling 2026-10-21). `visible` is that
-    answer when the caller has it (an API call's token user), else local_only_visible()."""
-    if visible is None:
-        visible = local_only_visible()
-    return query if visible else query.filter(federating_clause(model))
+    """`query` over `model` (User or Community) without the local-only accounts or communities this storefront hides
+    from its reader (`hidden_here`). A logged-out visitor never sees one, as with local-only posts (owner ruling
+    2026-10-21), and off its own domain nobody does (follow-up F6). `visible` is whether the reader is signed in when
+    the caller has that answer (an API call's token user), else local_only_visible()."""
+    return without_hidden_here(query, model, visible)
 
 
 def _closed_domains() -> tuple[list[int], bool]:

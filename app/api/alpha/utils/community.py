@@ -9,7 +9,7 @@ from app import db, cache
 from app.api.alpha.views import community_view, user_view, post_view, cached_modlist_for_community, flair_view
 from app.community.util import search_for_community
 from app.constants import *
-from app.local_only import without_local_only_actors
+from app.local_only import hidden_here, without_local_only_actors
 from app.storefront import acting_domain, current_storefront, domain_authority, domain_boost_expr, on_domain
 from app.models import Community, CommunityMember, User, CommunityBan, Notification, CommunityJoinRequest, \
     NotificationSubscription, Post, CommunityFlair, Feed, utcnow
@@ -41,7 +41,7 @@ def a_community(community_id):
     application error and should not be filed as one.
     """
     community = db.session.get(Community, community_id)
-    if not community:
+    if not community or hidden_here(community, True):   # off its own domain, as unknown as an id nobody holds (follow-up F6)
         raise Exception('community not found')
     return community
 
@@ -49,7 +49,7 @@ def a_community(community_id):
 def a_user(user_id):
     """The account `user_id` names, or a clean refusal. See `a_community`."""
     user = db.session.get(User, user_id)
-    if not user:
+    if not user or hidden_here(user, True):   # off its own domain, as unknown as an id nobody holds (follow-up F6)
         raise Exception('user not found')
     return user
 
@@ -57,7 +57,7 @@ def a_user(user_id):
 def a_post(post_id):
     """The post `post_id` names, or a clean refusal. See `a_community`."""
     post = db.session.get(Post, post_id)
-    if not post:
+    if not post or hidden_here(post, True):   # off its own domain, as unknown as an id nobody holds (follow-up F6)
         raise Exception('post not found')
     return post
 

@@ -31,7 +31,7 @@ from app.utils import can_moderate, authorise_api_user, blocked_users, blocked_c
     community_membership_private, paginate_post_ids, post_ids_to_models, user_access, moderating_communities_ids, \
     user_filters_languages, feed_readable_by
 from app.shared.tasks import task_selector
-from app.local_only import without_local_only
+from app.local_only import hidden_here, hidden_here_sql, without_local_only, without_local_only_actors
 from app.visibility import can_view, listable_clause, listable_sql, visible_to_clause, visible_to_sql
 
 
@@ -45,7 +45,7 @@ def a_post(post_id):
     configured, filing a Sentry event. The same shape as D1194 and D1202.
     """
     post = db.session.get(Post, post_id)
-    if not post:
+    if not post or hidden_here(post, True):   # off its own domain, as unknown as an id nobody holds (follow-up F6)
         raise Exception('post not found')
     return post
 
@@ -73,7 +73,7 @@ def a_moderatable_post(post_id, auth):
 def a_community(community_id):
     """The community `community_id` names, or a clean refusal. See `a_post`."""
     community = db.session.get(Community, community_id)
-    if not community:
+    if not community or hidden_here(community, True):   # off its own domain, as unknown as an id nobody holds (follow-up F6)
         raise Exception('community not found')
     return community
 
@@ -439,8 +439,8 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         posts = posts.filter(listable_clause(Post))
         post_query_criteria.append(listable_sql('p'))
     posts = without_local_only(posts, Post, visible=user_id is not None)   # spec §3.4
-    if user_id is None:   # and the raw SQL below says the same
-        post_query_criteria.append('p.local_only is false')
+    if (hidden := hidden_here_sql('p', Post, user_id is not None)) != 'false':   # and the raw SQL below says the same
+        post_query_criteria.append(f'NOT {hidden}')
     
     # for materialized view - private community filtering
     # ALWAYS append a private-community criterion, whether or not the reader is
@@ -2046,7 +2046,8 @@ def get_post_like_list(auth, data):
         banned_from_site_user_ids = list(db.session.execute(text('SELECT id FROM "user" WHERE banned = true')).scalars())
         banned_from_community_user_ids = list(db.session.execute(text
             ('SELECT user_id from "community_ban" WHERE community_id = :community_id'), {"community_id": post.community_id}).scalars())
-        likes = PostVote.query.filter(PostVote.post_id == post_id, PostVote.effect != 0).order_by(PostVote.effect).order_by(
+        voters = without_local_only_actors(PostVote.query.join(User, User.id == PostVote.user_id), User, True)   # F6
+        likes = voters.filter(PostVote.post_id == post_id, PostVote.effect != 0).order_by(PostVote.effect).order_by(
                   PostVote.created_at).paginate(page=page, per_page=limit, error_out=False)
         post_likes = []
         for like in likes:

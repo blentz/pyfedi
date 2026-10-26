@@ -13,7 +13,7 @@ from app.shared.reply import vote_for_reply, bookmark_reply, remove_bookmark_rep
     edit_reply, \
     delete_reply, restore_reply, report_reply, mod_remove_reply, mod_restore_reply, lock_post_reply, choose_answer, \
     unchoose_answer
-from app.local_only import without_local_only
+from app.local_only import hidden_here, without_local_only, without_local_only_actors
 from app.visibility import can_view, listable_clause, visible_to_clause
 from app.utils import authorise_api_user, blocked_users, blocked_or_banned_instances, site_language_id, \
     communities_banned_from, in_sorted_list, moderating_communities_ids, joined_communities, user_access, \
@@ -488,7 +488,7 @@ def get_reply_list(auth, data, user_details=None):
 # One helper, so the ten cannot drift apart again.
 def a_reply(reply_id):
     reply = db.session.get(PostReply, reply_id)
-    if reply is None:
+    if reply is None or hidden_here(reply, True):   # off its own domain, as unknown as an id nobody holds (F6)
         raise Exception('comment not found')
     return reply
 
@@ -895,7 +895,9 @@ def get_reply_like_list(auth, data):
         banned_from_site_user_ids = list(db.session.execute(text('SELECT id FROM "user" WHERE banned = true')).scalars())
         banned_from_community_user_ids = list(db.session.execute(text
             ('SELECT user_id from "community_ban" WHERE community_id = :community_id'), {"community_id": post_reply.community_id}).scalars())
-        likes = PostReplyVote.query.filter(
+        voters = without_local_only_actors(PostReplyVote.query.join(User, User.id == PostReplyVote.user_id), User,
+                                           True)   # no voter hidden here (follow-up F6)
+        likes = voters.filter(
             PostReplyVote.post_reply_id == comment_id, PostReplyVote.effect != 0).order_by(PostReplyVote.effect).order_by(
             PostReplyVote.created_at).paginate(page=page, per_page=limit, error_out=False)
         comment_likes = []

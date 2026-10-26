@@ -93,6 +93,10 @@ def test_on_the_onion_a_first_profiles_buttons_act_on_first_domains_account(app,
     assert response.status_code in (200, 302)
     assert effect(viewer) == {world.bob[host].id}
     response = client.post(f'/u/bob@{other(host)}/{action}', data=form)
+    if host == FIRST:   # follow-up F6: off the onion its bob is unknown, so the button there is 404
+        assert response.status_code == 404
+        assert effect(viewer) == {world.bob[host].id}
+        return
     assert response.status_code in (200, 302)
     assert effect(viewer) == {world.bob[host].id, world.bob[other(host)].id}
 
@@ -104,6 +108,9 @@ def test_unblocking_by_handle_unblocks_that_domains_account(app, world, host):
         db.session.add(UserBlock(blocker_id=viewer.id, blocked_id=bob.id))
     db.session.commit()
     client = signed_in(app, viewer, host)
+    if host == FIRST:   # follow-up F6: off the onion its bob is unknown
+        assert client.post(f'/u/bob@{other(host)}/unblock').status_code == 404
+        return
     assert client.post(f'/u/bob@{other(host)}/unblock').status_code in (200, 302)
     assert {b.blocked_id for b in UserBlock.query.filter_by(blocker_id=viewer.id)} == {world.bob[host].id}
 
@@ -118,6 +125,10 @@ def test_joining_and_leaving_by_name_or_handle_is_that_domains_community(app, wo
 
     assert client.post('/community/art/subscribe').status_code == 302
     assert joined() == {world.art[host].id}
+    if host == FIRST:   # follow-up F6: off the onion its community is unknown
+        assert client.post(f'/community/art@{other(host)}/subscribe').status_code == 404
+        assert joined() == {world.art[host].id}
+        return
     assert client.post(f'/community/art@{other(host)}/subscribe').status_code == 302
     assert joined() == {world.art[host].id, world.art[other(host)].id}
     assert client.post(f'/community/art@{other(host)}/unsubscribe').status_code == 302
@@ -132,7 +143,12 @@ def test_a_communitys_feed_is_that_domains(app, world, host):
     db.session.commit()
     client = signed_in(app, world.viewers[host], host)
     mine = client.get('/community/art/feed?token=viewer-rss-token').get_data(as_text=True)
-    theirs = client.get(f'/community/art@{other(host)}/feed?token=viewer-rss-token').get_data(as_text=True)
+    theirs = client.get(f'/community/art@{other(host)}/feed?token=viewer-rss-token')
+    if host == FIRST:   # follow-up F6: off the onion its community's feed is unknown
+        assert theirs.status_code == 404
+        assert world.art[host].title in mine and world.art[other(host)].title not in mine
+        return
+    theirs = theirs.get_data(as_text=True)
     assert world.art[host].title in mine and world.art[other(host)].title not in mine
     assert world.art[other(host)].title in theirs and world.art[host].title not in theirs
 
@@ -190,7 +206,8 @@ def test_the_modlog_filters_by_the_domains_account(app, world, host, field):
         return {domain for domain in (FIRST, ONION) if f'entry-{domain}' in text}
 
     assert listed('bob') == {host}
-    assert listed(f'bob@{other(host)}') == {other(host)}
+    # follow-up F6: off the onion no entry names its bob
+    assert listed(f'bob@{other(host)}') == (set() if host == FIRST else {other(host)})
 
 
 def test_the_modlog_shows_a_default_domain_handle_as_its_bare_name_on_the_first_domain(app, world):
@@ -236,6 +253,8 @@ def test_api_login_with_an_unhosted_handle_fails_like_a_wrong_password(app, worl
 def test_the_api_finds_a_person_on_the_storefronts_domain(app, world):
     for request_on, host in ((default_request, FIRST), (onion_request, ONION)):
         for name, owner in (('bob', host), (f'bob@{other(host)}', other(host))):
+            if owner == ONION and host == FIRST:
+                continue   # follow-up F6: off the onion its account is not found (test_onion_hidden_on_clearnet)
             data = {'username': name}
             with request_on(app):   # signed in: a logged-out caller is not shown the onion's account at all
                 get_user(bearer(world.viewers[host]), data)
@@ -293,7 +312,11 @@ def test_the_profile_pages_show_the_named_domains_row(app, world, host):
                                ('/c/art', world.art[host].title, world.art[other(host)].title)):
         page = client.get(path).get_data(as_text=True)
         assert mine in page and theirs not in page, path
-        page = client.get(f'{path}@{other(host)}').get_data(as_text=True)
+        response = client.get(f'{path}@{other(host)}')
+        if host == FIRST:   # follow-up F6: off the onion its rows are 404
+            assert response.status_code == 404, path
+            continue
+        page = response.get_data(as_text=True)
         assert theirs in page and mine not in page, path
 
 

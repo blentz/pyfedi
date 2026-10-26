@@ -170,7 +170,10 @@ def test_the_api_local_community_list_follows_the_domain(app, scene):
         return {entry['community']['name'] for entry in response.json['communities']}
     assert names(_api(app, 'community/list', scene.world.alice, type_='Local')) == {'clearnet'}
     assert names(_api(app, 'community/list', scene.world.onionite, onion=True, type_='Local')) == {'hidden'}
-    assert {'clearnet', 'hidden', 'remote'} <= names(_api(app, 'community/list', scene.world.alice, type_='All'))
+    all_first = names(_api(app, 'community/list', scene.world.alice, type_='All'))
+    assert {'clearnet', 'remote'} <= all_first and 'hidden' not in all_first   # follow-up F6: not off the onion
+    assert {'clearnet', 'hidden', 'remote'} <= names(_api(app, 'community/list', scene.world.onionite, onion=True,
+                                                          type_='All'))
 
 
 @pytest.mark.parametrize('path', ['post/list', 'post/list2'])

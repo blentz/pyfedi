@@ -15,7 +15,7 @@ from sqlalchemy.orm import aliased
 
 from app import db
 from app.constants import POST_STATUS_PUBLISHED, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC, VISIBILITY_UNLISTED
-from app.local_only import federating_clause
+from app.local_only import hidden_here, hidden_here_clause, hides_nothing
 from app.models import Community, Instance, ModLog, Post, PostReply, User, UserFollower
 from app.storefront import hosted_instance_ids
 
@@ -188,14 +188,17 @@ def modlog_open_clause():
     return and_(~hidden_post, ~hidden_reply)
 
 
-def modlog_local_only_clause():
-    """ModLog entries that name no local-only post, comment, community or target account: what a reader who is not
-    logged in is shown (spec §3.4; accounts and communities by the owner ruling of 2026-10-21), on the web modlog and
-    the API's alike."""
-    return and_(~exists().where(Post.id == ModLog.post_id, Post.local_only.is_(True)),
-                ~exists().where(PostReply.id == ModLog.reply_id, PostReply.local_only.is_(True)),
-                ~exists().where(Community.id == ModLog.community_id, ~federating_clause(Community)),
-                ~exists().where(User.id == ModLog.target_user_id, ~federating_clause(User)))
+def modlog_local_only_clause(signed_in: bool | None = None):
+    """ModLog entries that name no post, comment, community, moderator or target account hidden here (`hidden_here`:
+    spec §3.4; accounts and communities by the owner ruling of 2026-10-21, and off their own domain for every reader
+    by follow-up F6), on the web modlog and the API's alike. `signed_in` as hidden_here has it. None when nothing is
+    hidden, so the caller adds no condition."""
+    named = ((Post, ModLog.post_id), (PostReply, ModLog.reply_id), (Community, ModLog.community_id),
+             (User, ModLog.user_id), (User, ModLog.target_user_id))
+    hidden = [(model, column, hidden_here_clause(model, signed_in)) for model, column in named]
+    kept = [~exists().where(model.id == column, clause) for model, column, clause in hidden
+            if not hides_nothing(clause)]
+    return and_(*kept) if kept else None
 
 
 def listable_clause(model):
@@ -233,7 +236,8 @@ class RestrictedReply:
 def mark_restricted(tree: list, viewer_id: Optional[int], parent_path: tuple = ()) -> list:
     for entry in tree:
         comment = entry['comment']
-        if not isinstance(comment, RestrictedReply) and not can_view(comment, viewer_id):
+        if not isinstance(comment, RestrictedReply) and (not can_view(comment, viewer_id) or
+                                                         hidden_here(comment, viewer_id is not None)):
             if comment.path:
                 path = tuple(comment.path)
             elif parent_path:

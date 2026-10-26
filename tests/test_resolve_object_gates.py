@@ -8,8 +8,10 @@ import app.api.alpha.utils.misc as misc
 from app.api.alpha.utils.misc import get_resolve_object
 from app.constants import POST_STATUS_DRAFT, VISIBILITY_FOLLOWERS
 from app.models import CommunityMember, Post, Site
+from app.storefront import domain_for_host
 from tests.factories import make_instance, make_local_feed, make_post, make_post_reply, make_user
 from tests.test_local_only_invisible import _post, world  # noqa: F401
+from tests.two_domains import request_on
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -210,8 +212,11 @@ def test_a_community_the_page_would_refuse_is_not_found_by_every_route(app, worl
     assert [refused(user, url) for url in urls] == ['No object found.'] * 3
 
 
-def test_a_local_only_community_is_open_to_a_logged_in_reader_and_not_to_a_logged_out_one(world):
-    assert misc._community_open_to(world.hidden, 1) and not misc._community_open_to(world.hidden, None)
+def test_a_local_only_community_is_open_to_a_logged_in_reader_and_not_to_a_logged_out_one(app, world):
+    """On the onion; off it, to nobody (follow-up F6)."""
+    with request_on(app, domain_for_host('abc.onion')):
+        assert misc._community_open_to(world.hidden, 1) and not misc._community_open_to(world.hidden, None)
+    assert not misc._community_open_to(world.hidden, 1)
     assert misc._community_open_to(world.clearnet, None)
 
 
@@ -233,8 +238,11 @@ def test_a_deleted_or_banned_user_is_not_found_by_every_route(app, world, state)
     assert [refused(user, url) for url in urls] == ['No object found.'] * 2
 
 
-def test_a_local_only_account_is_open_to_a_logged_in_reader_and_not_to_a_logged_out_one(world):
-    assert misc._user_open_to(world.onionite, 1) and not misc._user_open_to(world.onionite, None)
+def test_a_local_only_account_is_open_to_a_logged_in_reader_and_not_to_a_logged_out_one(app, world):
+    """On the onion; off it, to nobody (follow-up F6)."""
+    with request_on(app, domain_for_host('abc.onion')):
+        assert misc._user_open_to(world.onionite, 1) and not misc._user_open_to(world.onionite, None)
+    assert not misc._user_open_to(world.onionite, 1)
     assert misc._user_open_to(world.bob, None)
 
 

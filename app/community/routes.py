@@ -55,8 +55,8 @@ from app.post.util import form_tags_string
 # The module, not the names: app.shared.community reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
-from app.local_only import community_local_only, local_only_visible, local_only_visible_rss, without_local_only, \
-    without_local_only_actors
+from app.local_only import community_local_only, hidden_here, hidden_here_sql, local_only_visible_rss, \
+    refuse_hidden_here, without_local_only, without_local_only_actors
 from app.visibility import is_open, listable_clause, visible_to_clause
 from app.utils import etag_stamp
 from app.utils import user_banned_from_community, back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
@@ -100,6 +100,12 @@ from flask import render_template as flask_render_template
 def _forget_sidebar_new_communities(user_id):
     from app.main.util import sidebar_new_communities  # cycle: importing app.main runs app.main.routes, which reaches app.activitypub.routes, which imports this module
     cache.delete_memoized(sidebar_new_communities, user_id)
+
+
+@bp.before_request
+def refuse_hidden_community():
+    """Every route and sub-page of a community hidden here answers 404, as for a name nobody holds (follow-up F6)."""
+    refuse_hidden_here({'actor': actor_to_community, 'community_id': lambda id_: db.session.get(Community, id_)})
 
 
 @bp.route('/add_local', methods=['GET', 'POST'])
@@ -408,7 +414,7 @@ def community_post_query(community: Community, content_type: str, flair: str = '
 def show_community(community: Community, from_instance=None):
     if community.banned:
         abort(404)
-    if community_local_only(community) and not local_only_visible():
+    if hidden_here(community):
         abort(404)   # a logged-out visitor never sees a local-only community (owner ruling 2026-10-21)
 
     # Community.private is invite-only real access control (app/models.py:594):
@@ -652,7 +658,7 @@ def show_community(community: Community, from_instance=None):
     show_reason_why_no_federation(community.instance_id)
 
     # Upcoming events
-    local_only = '' if local_only_visible() else 'AND p.local_only is false'   # spec §3.4
+    local_only = f'AND NOT {hidden_here_sql("p", Post)}'   # spec §3.4, follow-up F6
     upcoming_events = db.session.execute(text(f"""SELECT e.start, p.title, p.id FROM "event" e
                                                  INNER JOIN post p on e.post_id = p.id
                                                  WHERE e.start > now() AND p.deleted is false 
@@ -866,7 +872,7 @@ def show_community_rss(actor):
         # answer conditionally.
         if community.private:
             abort(403)
-        if community_local_only(community) and not local_only_visible_rss():
+        if hidden_here(community, local_only_visible_rss()):
             abort(404)   # as the community's page: a logged-out reader never sees a local-only community
 
         # If nothing has changed since their last visit, return HTTP 304
@@ -955,7 +961,7 @@ def show_community_ical(actor):
     if community is not None:
         if community.private:
             abort(403)
-        if community_local_only(community) and not local_only_visible():
+        if hidden_here(community):
             abort(404)   # as the community's page
         posts = Post.query.filter(Post.community_id == community.id, Post.type == POST_TYPE_EVENT).\
             filter(Post.from_bot == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
@@ -1772,7 +1778,8 @@ def community_mod_list(community_id: int):
 
         moderators = User.query.filter(User.banned == False).join(CommunityMember, CommunityMember.user_id == User.id). \
             filter(CommunityMember.community_id == community_id,
-                   or_(CommunityMember.is_moderator == True, CommunityMember.is_owner == True)).all()
+                   or_(CommunityMember.is_moderator == True, CommunityMember.is_owner == True))
+        moderators = without_local_only_actors(moderators, User).all()   # none hidden here (follow-up F6)
 
         return render_template('community/community_mod_list.html',
                                title=_('Moderators for %(community)s', community=community.display_name()),
@@ -2385,7 +2392,7 @@ def community_moderate_subscribers(actor):
                                                                           CommunityMember.user_id == User.id).filter(
         CommunityMember.community_id == community.id)
     subscribers = subscribers.filter(CommunityMember.is_banned == False)
-    subscribers = subscribers.filter(User.deleted == False, User.banned == False)
+    subscribers = without_local_only_actors(subscribers.filter(User.deleted == False, User.banned == False), User)   # F6
 
     # Apply search filter
     if search:
@@ -2545,7 +2552,7 @@ def community_wiki_add(actor):
 @login_required_if_private_instance
 def community_wiki_view(actor, slug):
     community = actor_to_community(actor)
-    if community is not None and community_local_only(community) and not local_only_visible():
+    if community is not None and hidden_here(community):
         abort(404)   # as the community's page: a logged-out visitor never sees a local-only community
 
     if community is not None:
@@ -3323,7 +3330,7 @@ def community_changed():
         # shape, at the second fragment endpoint in this file. Measured
         # anonymously against a private community:
         # `PROBE i2 title leaked: True`.
-        if community is None or community.banned or (community_local_only(community) and not local_only_visible()):
+        if community is None or community.banned or hidden_here(community):
             abort(404)   # a local-only community, as its page, for a logged-out visitor too
         if community.private and community.id not in community_membership_private(current_user.get_id()):
             abort(403)
@@ -3378,7 +3385,7 @@ def get_sidebar(community_id):
     # for a private one the caller does not belong to. Measured, anonymously,
     # against a private community: `PROBE h2 description leaked: True title
     # leaked: True`. The refusals here are the same three, in the same order.
-    if community is None or community.banned or (community_local_only(community) and not local_only_visible()):
+    if community is None or community.banned or hidden_here(community):
         abort(404)   # a local-only community, as its page, for a logged-out visitor too
     if community.private and community.id not in community_membership_private(current_user.get_id()):
         abort(403)
