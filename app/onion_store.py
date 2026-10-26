@@ -152,15 +152,15 @@ class OnionRoutedStorage(Storage):
 
     Routed by the request rather than by the bucket's key, so a limit with its own key function (the Live views key by
     user id) is routed too. Config: `RATELIMIT_STORAGE_URI = 'onion-routed://'` and `RATELIMIT_STORAGE_OPTIONS` naming
-    the `main` and `onion` storage URIs. If the onion storage raises, onion buckets are counted in this process's
+    the `main` and `onion` storage URIs, and `onion_options` for the onion's (its timeouts). If the onion storage raises, onion buckets are counted in this process's
     memory until it answers again; the main storage's errors reach Flask-Limiter as they always did."""
 
     STORAGE_SCHEME = [ONION_ROUTED_SCHEME]
 
-    def __init__(self, uri: str | None = None, *, main: str, onion: str, **options):
+    def __init__(self, uri: str | None = None, *, main: str, onion: str, onion_options: dict | None = None, **options):
         super().__init__(uri, **options)
         self.main = storage_from_string(main)
-        self.onion = storage_from_string(onion)
+        self.onion = storage_from_string(onion, **(onion_options or {}))   # its timeouts (ONION_REDIS_TIMEOUT)
         self.onion_fallback: MemoryStorage | None = None   # made on the first failure: it starts a timer thread
 
     @property

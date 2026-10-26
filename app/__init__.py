@@ -348,7 +348,10 @@ def create_app(config_class=Config):
     global redis_client, onion_redis_client
     from app.utils import get_redis_connection  # cycle: app.utils imports db and the other extensions from this package
     redis_client = get_redis_connection(app.config['CACHE_REDIS_URL'])
-    onion_redis_client = get_redis_connection(app.config['ONION_REDIS_URL']) if onion_store_ok else RefusedOnionStore()
+    onion_redis_client = get_redis_connection(app.config['ONION_REDIS_URL'],
+                                              socket_connect_timeout=app.config['ONION_REDIS_TIMEOUT'],
+                                              socket_timeout=app.config['ONION_REDIS_TIMEOUT']) \
+        if onion_store_ok else RefusedOnionStore()
 
     oauth.init_app(app)
     if app.config['GOOGLE_OAUTH_CLIENT_ID']:
