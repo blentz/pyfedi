@@ -88,3 +88,15 @@ def test_following_a_notification_that_names_nothing_goes_to_the_notification_li
     response = client.get(f'/notification/{row.id}/goto')
     assert response.status_code == 302
     assert response.headers['Location'].endswith('/notifications')
+
+
+def test_a_community_id_that_is_not_an_integer_is_treated_as_missing(app, world):
+    reader, first_alpha, onion_alpha = world
+    row = notification(reader, '/c/alpha', {'gen': '0', 'community_id': 'x; drop'})
+    with onion_request(app):
+        assert notification_href(row) == f'/community/{first_alpha.id}'
+
+
+def test_a_notification_with_no_url_has_no_href(app, world):
+    reader = world[0]
+    assert notification_href(notification(reader, None)) is None

@@ -120,9 +120,13 @@ def notification_href(notification) -> str | None:
     `/c/<name>` and `/u/<name>` a notification kept before follow-up F1: a stored name can name a namesake on another
     domain, so that goes by id, from its targets or else a lookup of the name (`stored_name_id`)."""
     url = notification.url
+    if not url:
+        return None
     kind = _STORED_URLS.get(url[:3])
     if kind is None:
         return url
     model, key, endpoint, argument = kind
-    found = (notification.targets or {}).get(key) or stored_name_id(model, url[3:])
+    found = (notification.targets or {}).get(key)
+    if not isinstance(found, int):
+        found = stored_name_id(model, url[3:])
     return None if found is None else url_for(endpoint, **{argument: found})
