@@ -40,7 +40,7 @@ from app.models import Post, PostReply, PostReplyValidationError, \
     Topic, User, Instance, UserFollower, Poll, PollChoice, PollChoiceVote, PostBookmark, \
     PostReplyBookmark, CommunityBlock, File, CommunityFlair, UserFlair, BlockedImage, CommunityBan, Language, Event, \
     Reminder, Emoji
-from app.local_only import hidden_here, refuse_hidden_here, shown_here, without_local_only, without_local_only_actors
+from app.local_only import hidden_here, shown_here, without_local_only, without_local_only_actors
 from app.post import bp
 from app.visibility import can_view, is_open, post_title_for, visible_to_clause
 from app.post.forms import NewReplyForm, ReportPostForm, MeaCulpaForm, CrossPostForm, ConfirmationForm, \
@@ -497,14 +497,6 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
             response.headers.set('Cache-Control', 'private, max-age=15, must-revalidate')
 
         return response
-
-
-@bp.before_request
-def refuse_hidden_post():
-    """Every route and sub-page of a post or reply hidden here answers 404, as for an id nobody holds (follow-up
-    F6)."""
-    refuse_hidden_here({'post_id': lambda id_: db.session.get(Post, id_),
-                        'comment_id': lambda id_: db.session.get(PostReply, id_)})
 
 
 @bp.route('/post/<int:post_id>/lazy_replies/<nonce>', methods=['GET', 'OPTIONS'])

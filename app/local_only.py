@@ -7,7 +7,7 @@ import logging
 import re
 from urllib.parse import unquote, urlsplit
 
-from flask import abort, current_app, request
+from flask import current_app
 from flask_babel import _
 from flask_login import current_user
 from sqlalchemy import and_, bindparam, exists, false, not_, or_, text, true
@@ -258,22 +258,11 @@ def without_hidden_here(query, model, signed_in: bool | None = None):
     return query if hides_nothing(clause) else query.filter(not_(clause))
 
 
-def refuse_hidden_here(finders: dict) -> None:
-    """A blueprint's before_request: 404 when a view argument names a row hidden here (`hidden_here`), so every route
-    and sub-page of a hidden account, community, post or reply answers as one that does not exist, the same answer
-    as for a name nobody holds (follow-up F6). It asks only the storefront's part of the rule (`signed_in=True`): what a
-    logged-out reader is refused is each view's own answer, so an RSS view's `?token=` still counts. `finders` maps a
-    view argument to the function that finds its row, or None; an argument that finds nothing, or an id no row can
-    have, is left to the view."""
-    if not any_domain_closed() or not request.view_args:
-        return
-    for name, find in finders.items():
-        value = request.view_args.get(name)
-        if value is None or (isinstance(value, int) and not 0 < value <= _PG_INT_MAX):
-            continue
-        row = find(value)
-        if row is not None and hidden_here(row, True):
-            abort(404)
+def hides_anything_here() -> bool:
+    """Whether this storefront hides any local-only domain's accounts, communities or content from a signed-in reader:
+    on a storefront that federates, whenever some domain does not; on a local-only one, whenever another does not."""
+    closed, default_closed = _hidden_domains(True)
+    return bool(closed) or default_closed
 
 
 def _actor_hidden_sql(alias: str, signed_in: bool) -> str:

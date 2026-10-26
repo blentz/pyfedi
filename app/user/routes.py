@@ -22,7 +22,7 @@ from app.constants import *
 from app.email import send_verification_email
 from app.federation_urls import activity_id, domain_site_name, owner_base
 from app.ldap_utils import sync_user_to_ldap
-from app.local_only import hidden_here, local_only_visible_rss, refuse_hidden_here, refuses_remote_contact, \
+from app.local_only import hidden_here, local_only_visible_rss, refuses_remote_contact, \
     remote_contact_refusal_message, user_local_only, without_local_only, without_local_only_actors
 from app.visibility import OPEN_VISIBILITIES, visible_to_clause
 from app.log_scrub import log_ldap_sync_failure
@@ -126,13 +126,6 @@ def import_note_text(entry: dict):
     is what this import used to read -- so an export imports again and a file written for the old import still
     does. 'note' wins whenever it is present, string or not, as text_color wins over textColor on a flair."""
     return entry['note'] if 'note' in entry else entry.get('body')
-
-
-@bp.before_request
-def refuse_hidden_profile():
-    """Every `/u/<name>` route and sub-page of an account hidden here answers 404, as for a name nobody holds
-    (follow-up F6). `/user/<id>` is the profile page's own (show_profile)."""
-    refuse_hidden_here({'actor': lambda actor: User.query.filter(named_by_actor(User, actor)).first()})
 
 
 @bp.route('/people', methods=['GET', 'POST'])

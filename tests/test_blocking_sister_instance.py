@@ -195,6 +195,10 @@ def test_a_chat_blocks_a_sister_instance_but_not_ones_own(app, world, host):
     assert visitor.post(f'/chat/{world.instances[host]}/block_instance').status_code == 302
     assert blocked(viewer) == set()
     assert flashes(visitor) == [OWN]
+    if host == FIRST:   # follow-up F6: off the onion its instance row answers as an id nobody holds
+        assert visitor.post(f'/chat/{world.instances[sister]}/block_instance').status_code == 404
+        assert blocked(viewer) == set()
+        return
     assert visitor.post(f'/chat/{world.instances[sister]}/block_instance').status_code == 302
     assert blocked(viewer) == {world.instances[sister]}
     assert 'Instance blocked.' in flashes(visitor)
@@ -215,6 +219,11 @@ def test_unblocking_a_sister_instance_brings_its_content_back(app, world, host):
     sister = ONION if host == FIRST else FIRST
     viewer = world.viewers[host]
     visitor = Visitor(app, viewer, host)
+    if host == FIRST:   # follow-up F6: off the onion its instance row answers as an id nobody holds
+        assert visitor.post(f'/instance/{world.instances[sister]}/block').status_code == 404
+        assert visitor.post(f'/instance/{world.instances[sister]}/unblock').status_code == 404
+        assert blocked(viewer) == set()
+        return
     assert visitor.post(f'/instance/{world.instances[sister]}/block').status_code == 302
     assert feed(viewer, world.communities[sister]) == []
     assert visitor.post(f'/instance/{world.instances[sister]}/unblock').status_code == 302

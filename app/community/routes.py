@@ -56,7 +56,7 @@ from app.post.util import form_tags_string
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
 from app.local_only import community_local_only, hidden_here, hidden_here_sql, local_only_visible_rss, \
-    refuse_hidden_here, without_local_only, without_local_only_actors
+    without_local_only, without_local_only_actors
 from app.visibility import is_open, listable_clause, visible_to_clause
 from app.utils import etag_stamp
 from app.utils import user_banned_from_community, back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
@@ -100,12 +100,6 @@ from flask import render_template as flask_render_template
 def _forget_sidebar_new_communities(user_id):
     from app.main.util import sidebar_new_communities  # cycle: importing app.main runs app.main.routes, which reaches app.activitypub.routes, which imports this module
     cache.delete_memoized(sidebar_new_communities, user_id)
-
-
-@bp.before_request
-def refuse_hidden_community():
-    """Every route and sub-page of a community hidden here answers 404, as for a name nobody holds (follow-up F6)."""
-    refuse_hidden_here({'actor': actor_to_community, 'community_id': lambda id_: db.session.get(Community, id_)})
 
 
 @bp.route('/add_local', methods=['GET', 'POST'])

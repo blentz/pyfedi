@@ -563,9 +563,10 @@ def test_an_onion_senders_message_id_is_ours_and_opens_its_conversation(app, oni
     message = chat_util.send_message('hello', conversation.id, user=onion_rows.ollie)
     assert message.ap_id == f'{DEFAULT_BASE}/private_message/{message.id}'
     client = app.test_client()
-    with client.session_transaction() as session:
+    with client.session_transaction(base_url=f'http://{ONION}') as session:
         session['_user_id'], session['_fresh'] = str(onion_rows.hal.id), True
-    response = client.get(f'/private_message/{message.id}', base_url=f'https://{FIRST}')
+    # on the onion: off it a conversation with an onion account answers as one nobody holds (follow-up F6)
+    response = client.get(f'/private_message/{message.id}', base_url=f'http://{ONION}')
     assert response.status_code == 302 and response.headers['Location'].endswith(f'/chat/{conversation.id}')
 
 

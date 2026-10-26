@@ -17,9 +17,10 @@ from app.shared import community as shared_community
 from app.storefront import clear_domain_cache
 from tests.factories import make_community, make_feed_item, make_feed_member, make_instance, make_local_feed, \
     make_post, make_post_reply, make_user
-from tests.test_community_lifecycle import csrf, login, url
+from tests.test_community_lifecycle import login
 from tests.test_per_domain_ap_routes import PROXY
 from tests.test_per_domain_html_routes import Visitor
+from tests.two_domains import ONION
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -236,13 +237,11 @@ def test_a_local_only_account_cannot_be_made_moderator_of_a_federating_community
     assert CommunityMember.query.filter_by(community_id=world.hidden.id, user_id=world.onionite.id,
                                            is_moderator=True).count() == 1
 
-    client = app.test_client()
-    login(client, world.alice)
-    token = csrf(app, client)
-    response = client.post(url(app, 'community.community_add_moderator', community_id=world.clearnet.id,
-                               user_id=world.onionite.id), data={'csrf_token': token})
+    # on the onion: off it the onion's account answers as an id nobody holds (follow-up F6)
+    visitor = Visitor(app, world.alice, ONION)
+    response = visitor.post(f'/community/community/{world.clearnet.id}/moderators/add/{world.onionite.id}')
     assert response.status_code == 302
-    with client.session_transaction() as session:
+    with visitor.client.session_transaction(base_url=visitor.base) as session:
         assert any('cannot moderate' in message for _, message in session.get('_flashes', []))
     assert not CommunityMember.query.filter_by(community_id=world.clearnet.id, user_id=world.onionite.id).count()
 
@@ -311,11 +310,9 @@ def test_federated_objects_pass_the_new_checks(app, world):
 
 
 def test_a_non_owner_still_gets_401_adding_a_moderator(app, world):
-    client = app.test_client()
-    login(client, world.bob)
-    token = csrf(app, client)
-    response = client.post(url(app, 'community.community_add_moderator', community_id=world.clearnet.id,
-                               user_id=world.onionite.id), data={'csrf_token': token})
+    # on the onion: off it the onion's account answers as an id nobody holds (follow-up F6)
+    response = Visitor(app, world.bob, ONION).post(
+        f'/community/community/{world.clearnet.id}/moderators/add/{world.onionite.id}')
     assert response.status_code == 401
 
 
@@ -368,7 +365,7 @@ def test_a_logged_in_browser_sees_local_only_pages_on_the_onion_only(app, world,
     login(client, world.alice)
     for path in ('/u/onionite@abc.onion', '/c/hidden@abc.onion', f'/post/{post.id}'):   # named from the first domain
         assert client.get(path, headers={'Accept': 'text/html'}).status_code == 404, path
-    onion = Visitor(app, world.alice, 'abc.onion')
+    onion = Visitor(app, world.alice, ONION)
     for path in ('/u/onionite', '/c/hidden', f'/post/{post.id}'):
         assert onion.get(path, headers={'Accept': 'text/html'}).status_code == 200, path
 
