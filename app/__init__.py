@@ -31,7 +31,7 @@ from config import Config
 from app.constants import IMAGE_PIXEL_CAP
 from app.pinned_http import pinned_transport
 from app.cookies import StorefrontLoginManager, StorefrontSessionInterface, secure_set_cookies
-from app.log_scrub import log_onion_safe_exception, scrub as onion_scrub
+from app.log_scrub import drop_onion_event, log_onion_safe_exception, scrub as onion_scrub
 from app.onion import is_onion_request, onion_rate_key
 from app.onion_store import OnionRoutedStorage, RefusedOnionStore, check_onion_store  # noqa: F401 -- OnionRoutedStorage registers the onion-routed scheme RATELIMIT_STORAGE_URI names
 import sentry_sdk
@@ -258,6 +258,7 @@ def create_app(config_class=Config):
         sentry_sdk.init(
             dsn=app.config["SENTRY_DSN"],
             enable_tracing=False,
+            before_send=drop_onion_event,
         )
 
     app.session_interface = StorefrontSessionInterface()
