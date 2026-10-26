@@ -104,15 +104,21 @@ def _hop_refused(url: str) -> bool:
 
 
 def take_slot(key: str, seconds: int) -> str | None:
-    """Take the Redis slot `key` for `seconds` and return its token, or None when another fill holds it."""
+    """Take the Redis slot `key` for `seconds` and return its token, or None when another fill holds it or the onion
+    store cannot answer (the caller then queues, or answers 404)."""
     token = uuid.uuid4().hex
-    return token if app_pkg.onion_redis_client.set(key, token, nx=True, ex=seconds) else None
+    try:
+        return token if app_pkg.onion_redis_client.set(key, token, nx=True, ex=seconds) else None
+    except RedisError:
+        return None
 
 
 def give_back(key: str, token: str) -> None:
-    """Free the slot unless it expired and another fill has taken it since."""
-    if app_pkg.onion_redis_client.get(key) == token:
-        app_pkg.onion_redis_client.delete(key)
+    """Free the slot unless it expired and another fill has taken it since. A store that cannot answer frees nothing:
+    the slot lapses by its own expiry."""
+    with contextlib.suppress(RedisError):
+        if app_pkg.onion_redis_client.get(key) == token:
+            app_pkg.onion_redis_client.delete(key)
 
 
 def host_key(remote: str) -> str:
@@ -279,7 +285,13 @@ def _queued_key(remote: str) -> str:
     return QUEUED_KEY.format(hashlib.sha256(remote.encode()).hexdigest())
 
 
-def queue_fill(remote: str) -> None:
-    """Queue `fill_task` for `remote` unless it was queued within the last QUEUED_SECONDS."""
-    if app_pkg.onion_redis_client.set(_queued_key(remote), '1', nx=True, ex=QUEUED_SECONDS):
-        fill_task.delay(remote)
+def queue_fill(remote: str) -> bool:
+    """Queue `fill_task` for `remote` unless it was queued within the last QUEUED_SECONDS. False when the onion store
+    cannot answer: nothing is queued, since the de-duplication key cannot be kept."""
+    try:
+        if app_pkg.onion_redis_client.set(_queued_key(remote), '1', nx=True, ex=QUEUED_SECONDS):
+            fill_task.delay(remote)
+    except RedisError:
+        current_app.logger.warning('onion media: the onion store is unavailable, nothing queued', extra=ONION_SAFE)
+        return False
+    return True
