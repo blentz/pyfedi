@@ -6,19 +6,20 @@ copy a client sent. The header alone is client-writable on any other path, so a 
 peer is Caddy as well: the address ProxyFix saw before it rewrote `REMOTE_ADDR` from `X-Forwarded-For`, compared
 with `ONION_PROXY_IP`. X-Forwarded-For and TRUSTED_CLIENT_IP_HEADER are never consulted here.
 
-This module imports nothing from `app`, so `app/__init__.py` can import it without a cycle.
+This module imports nothing from `app` but the leaf `app.clock`, so `app/__init__.py` can import it without a cycle.
 """
 from __future__ import annotations
 
 import ipaddress
 import secrets
-from datetime import datetime, timezone
 from functools import wraps
 from typing import TypeVar
 from urllib.parse import urlsplit
 
 from flask import current_app, flash, has_request_context, redirect, request, session, url_for
 from flask_babel import _
+
+from app.clock import utcnow
 
 ONION_MARKER_HEADER = 'X-PieFed-Via'
 ONION_MARKER_VALUE = 'onion'
@@ -122,12 +123,6 @@ def apply_audit(obj, field: str, result) -> None:
     """Set `obj.field` to an audit result, unless the result is `KEEP`."""
     if result is not KEEP:
         setattr(obj, field, result)
-
-
-def utcnow() -> datetime:
-    """Now, as the naive UTC datetime the columns hold (the same value as `app.models.utcnow`, which this module may not
-    import)."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def stamp_activity(user, clear_unread: bool = False) -> None:
