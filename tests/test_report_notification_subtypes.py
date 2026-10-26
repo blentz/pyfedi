@@ -57,7 +57,9 @@ def template_blocks() -> dict:
                      text)
     blocks = {}
     for i in range(1, len(parts) - 1, 2):
-        keys = set(re.findall(r'targets\.(\w+)', parts[i + 1]))
+        # a stored name is read through `target_link(notification.targets, 'key')` (follow-up F1)
+        keys = set(re.findall(r'targets\.(\w+)|target_link\(notification\.targets, \'(\w+)\'', parts[i + 1]))
+        keys = {name or quoted for name, quoted in keys}
         if keys:
             blocks.setdefault(parts[i], set()).update(keys)
     return blocks

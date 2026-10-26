@@ -2,9 +2,7 @@
     <td width="*">
         <div class="overflow-ellipses-parent text-truncate">
             <div class="child my-1 {% if not notification.read %}unread{% endif %}">
-                <a class="border border-0" href="/u/{{ notification.targets.author_user_name }}">
-                    {{ notification.targets.author_user_name }}
-                </a>
+                {{ target_link(notification.targets, 'author_user_name', 'border border-0') }}
                 {{ _('chose your answer to this question: ') }}
                 <a href="/post/{{ notification.targets.post_id }}">
                     {{ notification.targets.post_title }}

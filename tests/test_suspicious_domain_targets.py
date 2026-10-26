@@ -103,12 +103,19 @@ def keys_written_near_subtype(path: str) -> list[set]:
     return found
 
 
+def targets_read(block: str) -> set:
+    """The `targets` keys a template block reads: `targets.<key>`, or `target_link(notification.targets, '<key>')`,
+    which is how a stored name is linked (follow-up F1)."""
+    found = re.findall(r"targets\.(\w+)|target_link\(notification\.targets, '(\w+)'", block)
+    return {attribute or quoted for attribute, quoted in found}
+
+
 def keys_the_template_reads() -> set:
     """`targets.<key>` inside this subtype's `{% elif %}` block."""
     text = TEMPLATE.read_text()
     start = text.index(f'"{SUBTYPE}"')
     end = text.index('{% elif notification.subtype', start + 1)
-    return set(re.findall(r'targets\.(\w+)', text[start:end]))
+    return targets_read(text[start:end])
 
 
 class TestTheWritersAgreeWithEachOther:
@@ -190,7 +197,7 @@ class TestTheSiblingSubtype:
         start = text.index(f'"{self.SUBTYPE}"')
         nxt = text.find('{% elif notification.subtype', start + 1)
         block = text[start:nxt if nxt > 0 else len(text)]
-        read = set(re.findall(r'targets\.(\w+)', block))
+        read = targets_read(block)
 
         assert read, 'the block moved or was renamed'
         assert not read - self._keys(), read - self._keys()

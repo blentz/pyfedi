@@ -20,7 +20,7 @@
                         <p>{{ _('Suspect User') }}:  </p>
                     </div>
                     <div class="flex-column flex-grow-1 pl-1">
-                        <a class="text-start" href="/u/{{ report.targets.suspect_user_user_name }}">{{ report.targets.suspect_user_user_name }}</a>
+                        {{ target_link(report.targets, 'suspect_user_user_name', 'text-start') }}
                     </div>
                 </div>
                 {% if report.targets.source_instance_domain %}
@@ -38,7 +38,7 @@
                         <p>{{ _('Reported By') }}:  </p>
                     </div>
                     <div class="flex-column flex-grow-1 pl-1">
-                        <a href="/u/{{ report.targets.reporter_user_name }}">{{ report.targets.reporter_user_name }}</a>
+                        {{ target_link(report.targets, 'reporter_user_name') }}
                     </div>
                 </div>
                 <div class="d-flex">

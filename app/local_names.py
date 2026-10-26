@@ -2,10 +2,14 @@
 it is on, find that domain's row, and spell a row's name for a path."""
 import re
 
-from sqlalchemy import and_, false, func
+from flask import url_for
+from markupsafe import Markup, escape
+from sqlalchemy import and_, false, func, select
 
 from app.models import Community, User
-from app.storefront import DomainInfo, current_storefront, domain_by_id, domain_for_host, on_domain, path_name
+from app import db
+from app.storefront import DomainInfo, current_storefront, default_domain, domain_by_id, domain_for_host, on_domain, \
+    path_name
 
 
 def split_local_name(raw: str) -> tuple[str, DomainInfo] | None:
@@ -68,3 +72,39 @@ def target_id_key(name_key: str) -> str:
     key's trailing `_user_name` (else `_name`) becomes `_id`. `suspect_user_user_name` -> `suspect_user_id`,
     `author_user_name` -> `author_id`, `community_name` -> `community_id`."""
     return re.sub(r'(_user)?_name$', '_id', name_key)
+
+
+def stored_name_id(model, stored: str) -> int | None:
+    """The id of the user or community a name stored in `targets` names, or None. Stored names are the same on every
+    storefront: bare is the default domain's, `name@domain` that hosted domain's (else a remote row's `ap_id`)."""
+    clause = local_named(model, stored, default_domain()) if '@' not in stored else named_by_actor(model, stored)
+    return db.session.scalar(select(model.id).where(clause).limit(1))
+
+
+def target_href(targets: dict | None, name_key: str) -> str | None:
+    """Where the account or community whose stored name is `targets[name_key]` is linked, by id so the link works on
+    whichever domain the viewer is on: `/user/<id>` or `/community/<id>`. The id is `targets[target_id_key(name_key)]`;
+    a row stored without one is found by its name (`stored_name_id`). None when the name is empty or finds nothing: the
+    caller shows it as text, never as a `/u/<name>` path that might reach a namesake."""
+    targets = targets or {}
+    name = targets.get(name_key)
+    if not name:
+        return None
+    is_user = name_key.endswith('_user_name')
+    id_ = targets.get(target_id_key(name_key))
+    if not isinstance(id_, int):
+        id_ = stored_name_id(User if is_user else Community, name)
+    if id_ is None:
+        return None
+    return url_for('user.show_profile_by_id', user_id=id_) if is_user \
+        else url_for('community.show_community_by_id', community_id=id_)
+
+
+def target_link(targets: dict | None, name_key: str, css_class: str = '') -> Markup:
+    """`targets[name_key]` as a link by `target_href`, or as plain text when it has none."""
+    name = (targets or {}).get(name_key) or ''
+    href = target_href(targets, name_key)
+    if href is None:
+        return escape(name)
+    css = Markup(' class="{}"').format(css_class) if css_class else Markup('')
+    return Markup('<a{} href="{}">{}</a>').format(css, href, name)

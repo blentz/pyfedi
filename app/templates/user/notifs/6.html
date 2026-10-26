@@ -2,9 +2,7 @@
     <td width="*">
         <div class="child my-1 {% if not notification.read %}unread{% endif %}">
             {{ _('You have been mentioned by') }} 
-            <a class="border border-0" href="/u/{{ notification.targets.author_user_name }}">
-                {{ notification.targets.author_user_name }}
-            </a>
+            {{ target_link(notification.targets, 'author_user_name', 'border border-0') }}
             :
         </div>
         {% if notification.subtype == "comment_mention" %}
