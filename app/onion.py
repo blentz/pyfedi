@@ -130,14 +130,16 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def stamp_activity(user) -> None:
-    """Record that `user` was active just now: `last_seen` is now and the unread-notifications email may be sent again.
-    An onion request records nothing, so no stored time links an account to onion use (spec 2026-10-26, goal 3). Work
-    outside a request (a scheduled task, federation) is not an onion request and stamps as before."""
+def stamp_activity(user, clear_unread: bool = False) -> None:
+    """Record that `user` was active just now: `last_seen` is now. With `clear_unread` (the per-request hook, the one
+    place that ever did) the unread-notifications email may be sent again as well. An onion request records nothing, so
+    no stored time links an account to onion use (spec 2026-10-26, goal 3). Work outside a request (a scheduled task,
+    federation) is not an onion request and stamps as before."""
     if is_onion_request():
         return
     user.last_seen = utcnow()
-    user.email_unread_sent = False
+    if clear_unread:
+        user.email_unread_sent = False
 
 
 def is_api_path() -> bool:

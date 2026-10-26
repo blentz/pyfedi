@@ -234,7 +234,7 @@ def register_request_hooks(app):
                 return refusal
 
         if current_user.is_authenticated:
-            stamp_activity(current_user)
+            stamp_activity(current_user, clear_unread=True)
         else:
             if 'Windows' in request.user_agent.string:
                 current_user.font = 'inter'
