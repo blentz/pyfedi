@@ -73,6 +73,24 @@ def keys_in(client):
     return sorted(item['Key'] for item in listing.get('Contents', []))
 
 
+class TestAThumbnailIsMarkedAsOurs:
+    """Follow-up F3: File.thumbnail_written_by_us, set with thumbnail_path by the code that wrote the file."""
+
+    def test_on_the_local_disk(self, app, http_mock):
+        http_mock.get(URL).mock(return_value=httpx.Response(
+            200, content=a_png(), headers={'content-type': 'image/png'}))
+
+        file = url_to_thumbnail_file(URL)
+
+        assert file.thumbnail_path.startswith('app/static/') and file.thumbnail_written_by_us is True
+
+    def test_in_the_bucket(self, app, http_mock, bucket):
+        http_mock.get(URL).mock(return_value=httpx.Response(
+            200, content=a_png(), headers={'content-type': 'image/png'}))
+
+        assert url_to_thumbnail_file(URL).thumbnail_written_by_us is True
+
+
 class TestAThumbnailMirroredIntoTheBucket:
     def test_both_sizes_are_uploaded(self, app, http_mock, bucket):
         http_mock.get(URL).mock(return_value=httpx.Response(
