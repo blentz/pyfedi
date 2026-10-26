@@ -8,7 +8,7 @@ step whose signed token is good from 15 s to 600 s after it was issued. Either p
 before the login delay, the account lookup, LDAP or any password check, and each is good once. Clearnet never asks.
 
 The time in tokens is `app.onion_guard._now`, frozen by the `clock` fixture (as tests/test_onion_guard_limits.py
-does). Redis is the `redis_double` fakeredis.
+does). Redis is the onion store's fakeredis, `onion_redis`.
 """
 import hashlib
 from types import SimpleNamespace
@@ -51,7 +51,7 @@ DIGITS = '0123456789abcdefghijklmnopqrstuvwxyz'
 # --------------------------------------------------------------------------
 
 @pytest.fixture
-def onion(app, site, monkeypatch, redis_double):
+def onion(app, site, monkeypatch, onion_redis):
     monkeypatch.setitem(app.config, 'ONION_PROXY_IP', PROXY)
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the login and register forms render their token
     if not SiteDomain.query.filter_by(domain='test.piefed.local').first():
@@ -59,7 +59,7 @@ def onion(app, site, monkeypatch, redis_double):
     db.session.add(SiteDomain(domain='abc.onion', scheme='http', federates=False))
     db.session.commit()
     clear_domain_cache()
-    yield redis_double
+    yield onion_redis
     clear_domain_cache()
 
 
@@ -251,7 +251,7 @@ def test_verify_pow_accepts_a_solution_once(app, easy, clock):
         nonce = solve(salt, 8)
         assert verify_pow(token, nonce)
         assert not verify_pow(token, nonce)          # reused
-    redis = onion_guard.app_pkg.redis_client
+    redis = onion_guard.app_pkg.onion_redis_client
     assert redis.get(f'onion_pow_used:{salt}') is not None
     assert redis.ttl(f'onion_pow_used:{salt}') == 660   # the token's 600 s, plus slack for its whole-second stamp
 
@@ -486,7 +486,7 @@ def test_a_proof_from_another_browser_is_refused(app, alice, easy, no_login):
     page = challenge(onion_page(app.test_client(), '/auth/login'))
     other = app.test_client()
     mine = challenge(onion_page(other, '/auth/login'))
-    post_refused(other, onion_guard.app_pkg.redis_client, no_login,
+    post_refused(other, onion_guard.app_pkg.onion_redis_client, no_login,
                  login_data(mine.csrf, pow_token=page.token, pow_nonce=solve(page.salt, 8)))
 
 
@@ -516,7 +516,7 @@ def test_a_default_domain_account_logs_in_on_the_onion_with_a_proof(app, dora, e
 def test_a_default_domain_name_without_a_proof_is_refused_before_any_lookup(app, dora, easy, no_login):
     client = app.test_client()
     page = challenge(onion_page(client, '/auth/login'))
-    post_refused(client, onion_guard.app_pkg.redis_client, no_login,
+    post_refused(client, onion_guard.app_pkg.onion_redis_client, no_login,
                  {**login_data(page.csrf), 'user_name': 'dora@test.piefed.local'})
 
 
@@ -542,7 +542,7 @@ def test_expired(app, alice, easy, clock, no_login):
     client = app.test_client()
     page = challenge(onion_page(client, '/auth/login'))
     clock.t += 601
-    post_refused(client, onion_guard.app_pkg.redis_client, no_login,
+    post_refused(client, onion_guard.app_pkg.onion_redis_client, no_login,
                  login_data(page.csrf, pow_token=page.token, pow_nonce=solve(page.salt, 8)))
 
 
@@ -550,7 +550,7 @@ def test_bad_signature(app, alice, easy, no_login):
     client = app.test_client()
     page = challenge(onion_page(client, '/auth/login'))
     forged = URLSafeTimedSerializer('not the key', salt='onion-pow').dumps({'salt': page.salt, 'bits': 0})
-    post_refused(client, onion_guard.app_pkg.redis_client, no_login,
+    post_refused(client, onion_guard.app_pkg.onion_redis_client, no_login,
                  login_data(page.csrf, pow_token=forged, pow_nonce='0'))
 
 
@@ -563,11 +563,11 @@ def test_reused(app, alice, easy, monkeypatch):
     assert not logged_in(client)
     called = []
     monkeypatch.setattr('app.auth.routes.process_login', lambda form: called.append(form) or 'processed')
-    keys = failure_keys(onion_guard.app_pkg.redis_client)
+    keys = failure_keys(onion_guard.app_pkg.onion_redis_client)
     response = onion_post(client, '/auth/login', data=login_data(page.csrf, **proof))
     assert refused(response)
     assert called == []
-    assert failure_keys(onion_guard.app_pkg.redis_client) == keys
+    assert failure_keys(onion_guard.app_pkg.onion_redis_client) == keys
     assert not logged_in(client)
 
 
@@ -579,13 +579,13 @@ def test_unsolved(app, alice, easy, no_login, proof):
             'no nonce': {'pow_token': page.token},
             'no token': {'pow_nonce': solve(page.salt, 8)},
             'nothing': {}}[proof]
-    post_refused(client, onion_guard.app_pkg.redis_client, no_login, login_data(page.csrf, **data))
+    post_refused(client, onion_guard.app_pkg.onion_redis_client, no_login, login_data(page.csrf, **data))
 
 
 def test_a_refusal_shows_a_new_challenge(app, alice, easy, no_login):
     client = app.test_client()
     page = challenge(onion_page(client, '/auth/login'))
-    response = post_refused(client, onion_guard.app_pkg.redis_client, no_login, login_data(page.csrf))
+    response = post_refused(client, onion_guard.app_pkg.onion_redis_client, no_login, login_data(page.csrf))
     again = challenge(BeautifulSoup(response.get_data(as_text=True), 'html.parser'))
     assert again.token and again.token != page.token
     assert value(BeautifulSoup(response.get_data(as_text=True), 'html.parser'), 'user_name') == 'alice'
@@ -604,7 +604,7 @@ def test_a_refused_login_offers_the_wait_step(app, alice, easy, no_login):
     client = app.test_client()
     page = challenge(onion_page(client, '/auth/login?next=%2Fc%2Fnews'))
     assert visible_wait_links(onion_page(client, '/auth/login')) == []
-    response = post_refused(client, onion_guard.app_pkg.redis_client, no_login, login_data(page.csrf))
+    response = post_refused(client, onion_guard.app_pkg.onion_redis_client, no_login, login_data(page.csrf))
     assert visible_wait_links(BeautifulSoup(response.get_data(as_text=True), 'html.parser')) == \
         ['/auth/onion_wait?form=login']
 
@@ -714,7 +714,7 @@ def test_pow_js_self_hosted(app, onion):
     assert script.get('type') == 'module' and script.get('nonce') is not None
 
 
-def test_clearnet_has_no_pow(app, site, monkeypatch, redis_double):
+def test_clearnet_has_no_pow(app, site, monkeypatch, redis_double, onion_redis):
     local = make_instance('test.piefed.local', software='piefed')
     make_user(local, 'founder', local=True)
     user = make_user(local, 'alice', local=True)
@@ -733,7 +733,7 @@ def test_clearnet_has_no_pow(app, site, monkeypatch, redis_double):
     assert response.status_code == 302
     with client.session_transaction() as stored:
         assert str(stored['_user_id']) == str(user.id)
-    assert redis_double.keys('onion_*') == []
+    assert redis_double.keys('onion_*') == [] and onion_redis.keys('*') == []
 
 
 # --------------------------------------------------------------------------

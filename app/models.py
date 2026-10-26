@@ -48,6 +48,7 @@ import app.storefront as storefront
 import app.local_only as local_only
 from app.clock import utcnow  # noqa: F401  (re-exported: callers import it from here)
 from app.onion import is_onion_request, stamp_activity
+from app.onion_store import onion_store_needed, onion_store_optional, request_redis
 from app.relays import current_relay_id
 from app.rsa_keys import RsaKeys
 
@@ -94,11 +95,42 @@ def federation_base(obj) -> str:
     return storefront.domain_base_url(storefront.default_domain())
 
 
+def votes_cast_key(user_id: int) -> str:
+    return f'votes_cast_{date.today()}_{user_id}'
+
+
 def votes_cast_today(user_id: int) -> int:
-    num = app_pkg.redis_client.get(f'votes_cast_{date.today()}_{user_id}')
+    """Votes `user_id` cast today, as counted in the store this request's state goes to (app/onion_store.py): the
+    onion's votes are counted in the RAM-only onion store. A vote's quota is needed, so an onion request finding it
+    down is answered 503."""
+    with onion_store_needed():
+        num = request_redis().get(votes_cast_key(user_id))
     if num is None:
         return 0
     return int(num)
+
+
+def count_vote_cast(user_id: int) -> None:
+    """One more vote cast today by `user_id`, where votes_cast_today reads it."""
+    with onion_store_needed():
+        if votes_cast_today(user_id) == 0:
+            request_redis().set(votes_cast_key(user_id), 1, ex=86400)
+        else:
+            request_redis().incr(votes_cast_key(user_id))
+
+
+def recent_ai_detections(user_id: int, detection: dict, now: float) -> list:
+    """Add `detection` (scored by `now`) to the user's AI-detection results of the last 24 hours, and return them all.
+    Kept in the store this request's state goes to (app/onion_store.py). An onion request that finds the onion store
+    down records nothing and gets nothing back: the tally is a heuristic, and the post or reply still goes in."""
+    redis_key = f'ai_detection:user:{user_id}'
+    detections = []
+    with onion_store_optional():
+        redis = request_redis()
+        redis.zadd(redis_key, {json.dumps(detection): now})
+        redis.zremrangebyscore(redis_key, 0, now - 86400)   # entries older than 24h
+        detections = redis.zrange(redis_key, 0, -1)
+    return detections
 
 
 def ai_verdict(response):
@@ -3722,7 +3754,6 @@ class Post(db.Model):
                             db.session.commit()
                         # use redis to keep track of the posts this person has done in the last day and whether each is AI-generated
 
-                        redis_key = f"ai_detection:user:{user.id}"
                         now = time()
 
                         # Store each detection as a JSON entry with timestamp
@@ -3732,14 +3763,7 @@ class Post(db.Model):
                             'timestamp': utcnow().isoformat()
                         }
 
-                        # Add with timestamp as score
-                        app_pkg.redis_client.zadd(redis_key, {json.dumps(detection_data): now})
-
-                        # Remove entries older than 24h
-                        app_pkg.redis_client.zremrangebyscore(redis_key, 0, now - 86400)
-
-                        # Get all recent detections
-                        detections = app_pkg.redis_client.zrange(redis_key, 0, -1)
+                        detections = recent_ai_detections(user.id, detection_data, now)
                         if len(detections) >= 3:
                             ai_count = sum(1 for d in detections if json.loads(d)['detection'] != 'human')
                             ai_percentage = ai_count / len(detections)
@@ -4339,12 +4363,7 @@ class Post(db.Model):
                     db.session.commit()
                 db.session.add(vote)
 
-                # keep track of how many votes this user has cast today
-                votes_cast = votes_cast_today(user.id)
-                if votes_cast == 0:
-                    app_pkg.redis_client.set(f'votes_cast_{date.today()}_{user.id}', 1, ex=86400)
-                else:
-                    app_pkg.redis_client.incr(f'votes_cast_{date.today()}_{user.id}')
+                count_vote_cast(user.id)   # keep track of how many votes this user has cast today
 
             if emoji or emoji == '-1':
                 db.session.commit()
@@ -4692,7 +4711,6 @@ class PostReply(db.Model):
                 if confidence > 0.8:
                     # use redis to keep track of the posts this person has done in the last day and whether each is AI-generated
 
-                    redis_key = f"ai_detection:user:{user.id}"
                     now = time()
 
                     # Store each detection as a JSON entry with timestamp
@@ -4703,14 +4721,7 @@ class PostReply(db.Model):
                         'timestamp': utcnow().isoformat()
                     }
 
-                    # Add with timestamp as score
-                    app_pkg.redis_client.zadd(redis_key, {json.dumps(detection_data): now})
-
-                    # Remove entries older than 24h
-                    app_pkg.redis_client.zremrangebyscore(redis_key, 0, now - 86400)
-
-                    # Get all recent detections
-                    detections = app_pkg.redis_client.zrange(redis_key, 0, -1)
+                    detections = recent_ai_detections(user.id, detection_data, now)
                     if len(detections) >= 3:
                         ai_count = sum(1 for d in detections if json.loads(d)['detection'] != 'human')
                         ai_percentage = ai_count / len(detections)
@@ -5018,12 +5029,7 @@ class PostReply(db.Model):
                     db.session.commit()
                 db.session.add(vote)
 
-                # keep track of how many votes this user has cast today
-                votes_cast = votes_cast_today(user.id)
-                if votes_cast == 0:
-                    app_pkg.redis_client.set(f'votes_cast_{date.today()}_{user.id}', 1, ex=86400)
-                else:
-                    app_pkg.redis_client.incr(f'votes_cast_{date.today()}_{user.id}')
+                count_vote_cast(user.id)   # keep track of how many votes this user has cast today
 
             if emoji or emoji == '-1':
                 db.session.commit()

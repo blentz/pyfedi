@@ -3,7 +3,7 @@
 The remote servers are an httpx.MockTransport put in place of `app.httpx_client`, the pinned client `fill` sends
 through, so no test reaches the network. Host names under `.example` resolve to a public address through a stubbed
 `socket.getaddrinfo`, so `is_invalid_get_request_uri` runs its real checks (DEBUG off) without a DNS lookup. A refused
-hop is proven refused before connecting: the mock transport never sees its request. Redis is the `redis_double`
+hop is proven refused before connecting: the mock transport never sees its request. Redis is the `onion_redis`
 fakeredis. Free disk space is a stubbed `shutil.disk_usage`, plenty unless a test says otherwise.
 """
 import hashlib
@@ -49,7 +49,7 @@ class Remote:
 
 
 @pytest.fixture
-def remote(app, db_session, redis_double, tmp_path, monkeypatch):
+def remote(app, db_session, onion_redis, tmp_path, monkeypatch):
     def getaddrinfo(host, *args, **kwargs):
         if isinstance(host, str) and host.endswith('.example'):
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('93.184.216.34', 0))]
@@ -323,7 +323,7 @@ def test_disk_error_leaves_no_file_and_is_not_remembered(remote, tmp_path, monke
     assert not is_dead(REMOTE)                       # our fault, not the URL's
 
 
-def test_banned_instance_and_domain_refused(remote, tmp_path, redis_double):
+def test_banned_instance_and_domain_refused(remote, tmp_path, onion_redis):
     make_banned_instance('banned.example')
     db.session.add(Domain(name='blocked.example', banned=True))
     db.session.add(Domain(name='fine.example', banned=False))
@@ -338,8 +338,8 @@ def test_banned_instance_and_domain_refused(remote, tmp_path, redis_double):
         assert fill(REMOTE, max_seconds=15) is None
         assert remote.urls() == [REMOTE]
         assert is_dead(REMOTE)
-        assert 3500 < redis_double.ttl(redis_key) <= 3600
-        redis_double.delete(redis_key)
+        assert 3500 < onion_redis.ttl(redis_key) <= 3600
+        onion_redis.delete(redis_key)
     assert leftovers(tmp_path) == []
     remote.routes['https://fine.example/a.png'] = image()
     assert fill('https://fine.example/a.png', max_seconds=15) is not None
@@ -371,7 +371,7 @@ def test_redis_failure_does_not_raise(remote, monkeypatch):
         def incrby(self, *args):
             raise RedisConnectionError('redis down')
 
-    monkeypatch.setattr('app.redis_client', Down())
+    monkeypatch.setattr('app.onion_redis_client', Down())
     assert fill('http://127.0.0.1/a.png', max_seconds=15) is None
     assert not is_dead(REMOTE)
     remote.routes[REMOTE] = image()
@@ -410,29 +410,29 @@ def test_a_fill_stops_when_the_disk_fills_while_it_streams(remote, tmp_path, mon
     assert leftovers(tmp_path) == []
 
 
-def test_a_stored_file_adds_its_size_to_the_byte_counter(remote, redis_double):
+def test_a_stored_file_adds_its_size_to_the_byte_counter(remote, onion_redis):
     remote.routes[REMOTE] = image()
     other = 'https://media.example/b.png'
     remote.routes[other] = image()
     fill(REMOTE, max_seconds=15)
-    assert int(redis_double.get(BYTES_KEY)) == len(PNG)
+    assert int(onion_redis.get(BYTES_KEY)) == len(PNG)
     fill(other, max_seconds=15)
-    assert int(redis_double.get(BYTES_KEY)) == 2 * len(PNG)
+    assert int(onion_redis.get(BYTES_KEY)) == 2 * len(PNG)
 
 
-def test_a_fill_is_refused_once_the_byte_counter_passes_the_cache_cap(remote, tmp_path, redis_double, monkeypatch):
+def test_a_fill_is_refused_once_the_byte_counter_passes_the_cache_cap(remote, tmp_path, onion_redis, monkeypatch):
     """Eviction runs every 15 minutes; between runs the byte counter holds the cache to 1.1 x its cap."""
     set_setting('onion_media_cache_bytes', 1000)
-    redis_double.set(BYTES_KEY, 1101)
+    onion_redis.set(BYTES_KEY, 1101)
     remote.routes[REMOTE] = image()
     assert fill(REMOTE, max_seconds=15) is None
     assert remote.seen == []
     assert not is_dead(REMOTE)
-    redis_double.set(BYTES_KEY, 1100)                   # at 1.1 x the cap is not past it
+    onion_redis.set(BYTES_KEY, 1100)                   # at 1.1 x the cap is not past it
     assert fill(REMOTE, max_seconds=15) is not None
 
     monkeypatch.setattr('app.onion_media_fill.CHECK_BYTES', 100)
-    redis_double.set(BYTES_KEY, 1000)
+    onion_redis.set(BYTES_KEY, 1000)
     video = 'https://media.example/v.mp4'
     remote.routes[video] = chunked(5)                   # passes 1100 at the check at 120 bytes
     assert fill(video, max_seconds=15) is None

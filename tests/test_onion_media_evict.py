@@ -20,7 +20,7 @@ MIB = 1048576
 
 
 @pytest.fixture
-def cache(app, tmp_path, monkeypatch, redis_double):
+def cache(app, tmp_path, monkeypatch, onion_redis):
     monkeypatch.setitem(app.config, 'MEDIA_PROXY_DIR', str(tmp_path))
     return tmp_path
 
@@ -115,15 +115,15 @@ def test_a_file_that_vanishes_before_its_eviction_still_counts_as_freed(cache):
         assert evict(100) == 200   # 200 bytes down to the 90-byte target takes both files; another worker removed them first
 
 
-def test_evict_sets_the_byte_counter_to_the_real_total(cache, redis_double):
-    redis_double.set(BYTES_KEY, 10 ** 9)                # counted fills since the last run, files deleted by hand
+def test_evict_sets_the_byte_counter_to_the_real_total(cache, onion_redis):
+    onion_redis.set(BYTES_KEY, 10 ** 9)                # counted fills since the last run, files deleted by hand
     for n in range(1, 11):
         _entry(cache, n, 100, age=1000 - n)
     (cache / ('.tmp-' + 'a' * 32)).write_bytes(b'x' * 7)   # a fill still running is not in the total
     evict(900)
-    assert int(redis_double.get(BYTES_KEY)) == 800
+    assert int(onion_redis.get(BYTES_KEY)) == 800
     evict(10 ** 9)                                      # under the cap: still the real total
-    assert int(redis_double.get(BYTES_KEY)) == 800
+    assert int(onion_redis.get(BYTES_KEY)) == 800
 
 
 def test_evict_without_redis_still_evicts(cache, monkeypatch):
@@ -131,7 +131,7 @@ def test_evict_without_redis_still_evicts(cache, monkeypatch):
         def set(self, *args, **kwargs):
             raise RedisConnectionError('redis down')
 
-    monkeypatch.setattr('app.redis_client', Down())
+    monkeypatch.setattr('app.onion_redis_client', Down())
     for n in range(1, 4):
         _entry(cache, n, 100, age=1000 - n)
     assert evict(0) == 300

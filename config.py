@@ -52,6 +52,11 @@ def safe_int_env(var_name: str, default: int = 0) -> int:
         return default
 
 
+def limits_redis_uri(url: str) -> str:
+    """A Redis URL as the limits library reads it: a unix socket is `redis+unix://`."""
+    return 'redis+' + url if url.startswith('unix://') else url
+
+
 class Config(object):
     SERVER_NAME = os.environ.get('SERVER_NAME').lower() or 'localhost'
     SECRET_KEY = os.environ.get('SECRET_KEY')
@@ -73,6 +78,9 @@ class Config(object):
     SIG_REQUIRED_HEADERS_ENFORCE = os.environ.get('SIG_REQUIRED_HEADERS_ENFORCE', '0') == '1'
     CACHE_TYPE = os.environ.get('CACHE_TYPE') or 'FileSystemCache'
     CACHE_REDIS_URL = os.environ.get('CACHE_REDIS_URL') or 'redis://localhost:6379/1'
+    # The RAM-only onion store (app/onion_store.py): a Redis run with `save ""`, `appendonly no` and no volume. Every key an
+    # onion request writes goes here, never to CACHE_REDIS_URL, whose Redis persists to disk.
+    ONION_REDIS_URL = os.environ.get('ONION_REDIS_URL') or 'redis://localhost:6379/2'
     CACHE_DIR = os.environ.get('CACHE_DIR') or '/dev/shm/pyfedi'
     CACHE_DEFAULT_TIMEOUT = 300
     CACHE_THRESHOLD = 1000
@@ -173,6 +181,10 @@ class Config(object):
     SKIP_RATE_LIMIT_IPS = ip_list(os.environ.get('SKIP_RATE_LIMIT_IPS'), '127.0.0.1')
     SERVE_API_DOCS = os.environ.get('SERVE_API_DOCS') or False
     RATELIMIT_ENABLED = os.environ.get('RATELIMIT_ENABLED', 'True') in ('True', 'true', '1')
+    # Flask-Limiter's storage (app.onion_store.OnionRoutedStorage): an onion request's buckets in the onion store, the
+    # rest in the main Redis. A unix socket URL is `redis+unix://` to the limits library.
+    RATELIMIT_STORAGE_URI = 'onion-routed://'
+    RATELIMIT_STORAGE_OPTIONS = {'main': limits_redis_uri(CACHE_REDIS_URL), 'onion': limits_redis_uri(ONION_REDIS_URL)}
 
     IMAGE_HASHING_ENDPOINT = os.environ.get('IMAGE_HASHING_ENDPOINT') or ''
 

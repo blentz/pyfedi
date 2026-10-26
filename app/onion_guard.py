@@ -41,6 +41,7 @@ from redis.exceptions import WatchError
 import app as app_pkg
 from app import limiter
 from app.onion import API_RATE_KEY, arrived_onion_sid, is_api_path, is_onion_request, mint_onion_sid
+from app.onion_store import onion_store_needed
 from app.utils import authorise_api_user, get_setting
 
 # Every endpoint with a `@limiter.limit` decorator is in exactly one of these two sets
@@ -230,6 +231,7 @@ def _queue_failure(pipe, key: str, now: float) -> None:
     pipe.expire(key, LOGIN_FAILURE_TTL)
 
 
+@onion_store_needed()
 def reserve_onion_login_attempt(typed: str, account_id: int | None = None) -> OnionLoginGate:
     """Check and reserve one onion login attempt, typed as `typed` and naming the account `account_id` (None when it
     names none), atomically.
@@ -247,7 +249,7 @@ def reserve_onion_login_attempt(typed: str, account_id: int | None = None) -> On
     RESERVE_RETRIES such collisions the caller is told to wait 2 s, the shortest wait a backoff can show."""
     typed_key = _login_key(typed)
     keys = [typed_key] if account_id is None else [typed_key, _account_key(account_id)]
-    with app_pkg.redis_client.pipeline() as pipe:
+    with app_pkg.onion_redis_client.pipeline() as pipe:
         for _ in range(RESERVE_RETRIES):
             try:
                 pipe.watch(*keys)
@@ -268,10 +270,11 @@ def reserve_onion_login_attempt(typed: str, account_id: int | None = None) -> On
     return OnionLoginGate(wait=login_wait(FREE_LOGIN_FAILURES + 1))
 
 
+@onion_store_needed()
 def clear_onion_login_failures(username: str, account_id: int | None = None) -> None:
     """Forget the failures typed as `username`, and the account's own when `account_id` is given."""
     keys = [_login_key(username)] + ([] if account_id is None else [_account_key(account_id)])
-    app_pkg.redis_client.delete(*keys)
+    app_pkg.onion_redis_client.delete(*keys)
 
 
 def onion_wait_message(seconds: int) -> str:
@@ -321,9 +324,10 @@ def _load(salt: str, token, max_age: int):
     return body, _now() - issued.timestamp()
 
 
+@onion_store_needed()
 def _spend(key: str, salt: str, ttl: int) -> bool:
     """Mark a proof used. SET NX is the decision, so two requests racing with one proof cannot both have it."""
-    return bool(app_pkg.redis_client.set(key.format(salt), '1', nx=True, ex=ttl))
+    return bool(app_pkg.onion_redis_client.set(key.format(salt), '1', nx=True, ex=ttl))
 
 
 def _issuing_sid() -> str | None:
@@ -377,16 +381,18 @@ def verify_pow(token, nonce) -> bool:
     return _spend(POW_USED_KEY, salt, POW_MAX_AGE + USED_KEY_SLACK)
 
 
+@onion_store_needed()
 def issue_wait_token() -> str:
     """A signed token for the no-JavaScript wait step, good from WAIT_MIN_AGE to WAIT_MAX_AGE seconds after now in
     this session. It replaces the session's last one, so a session cannot queue up waits in parallel. That record is
-    in Redis, by sid, not in the session: the session is a cookie, and an old cookie could be sent again."""
+    in the onion store, by sid, not in the session: the session is a cookie, and an old cookie could be sent again."""
     salt, sid = token_hex(16), _issuing_sid()
     if sid is not None:
-        app_pkg.redis_client.set(WAIT_CURRENT_KEY.format(sid), salt, ex=WAIT_MAX_AGE)
+        app_pkg.onion_redis_client.set(WAIT_CURRENT_KEY.format(sid), salt, ex=WAIT_MAX_AGE)
     return _serializer(WAIT_SALT).dumps({'salt': salt, 'sid': sid})
 
 
+@onion_store_needed()
 def wait_token_ready(token) -> bool:
     """Whether `token` is a wait token signed here for this session, WAIT_MIN_AGE to WAIT_MAX_AGE seconds old, the
     session's latest, and not used before. A success uses it up; one that is too early is left as it was."""
@@ -397,7 +403,7 @@ def wait_token_ready(token) -> bool:
     if not (isinstance(body, dict) and isinstance(body.get('salt'), str) and _from_this_session(body)) \
             or age < WAIT_MIN_AGE:
         return False
-    if app_pkg.redis_client.get(WAIT_CURRENT_KEY.format(body['sid'])) != body['salt']:
+    if app_pkg.onion_redis_client.get(WAIT_CURRENT_KEY.format(body['sid'])) != body['salt']:
         return False
     return _spend(WAIT_USED_KEY, body['salt'], WAIT_MAX_AGE + USED_KEY_SLACK)
 

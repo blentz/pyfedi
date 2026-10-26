@@ -97,7 +97,7 @@ def proof_given(monkeypatch):
 def _seed_failures(key: str, count: int) -> None:
     """`count` failed onion logins on counter `key`, the latest of them now: the state reserve_onion_login_attempt
     reads and counts on. Written to Redis directly, as the reservation itself writes it."""
-    redis = app_pkg.redis_client
+    redis = app_pkg.onion_redis_client
     redis.hset(key, mapping={'count': count, 'last': onion_guard._now()})
     redis.expire(key, LOGIN_FAILURE_TTL)
 
@@ -526,7 +526,7 @@ def test_onion_api_buckets_are_per_account(limits):
 # The per-account login delay (3.7)
 # --------------------------------------------------------------------------
 
-def test_login_delay_formula(app, redis_double, clock):
+def test_login_delay_formula(app, onion_redis, clock):
     """None for the first 5 failures, then doubling from 2 s, capped at 300 s, counted from the latest failure."""
     typed_failures('alice', 5)
     assert reserve_onion_login_attempt('alice').wait == 0   # the 6th goes ahead, and is counted
@@ -538,37 +538,37 @@ def test_login_delay_formula(app, redis_double, clock):
     assert reserve_onion_login_attempt('alice').wait == 3
     typed_failures('alice', 36)
     assert reserve_onion_login_attempt('alice').wait == 300
-    assert redis_double.hget('onion_login_fail:typed:alice', 'count') == '36'   # a refused attempt is not counted
-    assert 3500 < redis_double.ttl('onion_login_fail:typed:alice') <= 3600
+    assert onion_redis.hget('onion_login_fail:typed:alice', 'count') == '36'   # a refused attempt is not counted
+    assert 3500 < onion_redis.ttl('onion_login_fail:typed:alice') <= 3600
 
 
 def test_the_clock_is_the_wall_clock():
     assert abs(onion_guard._now() - time.time()) < 60
 
 
-def test_the_key_is_the_lower_case_name(app, redis_double, clock):
+def test_the_key_is_the_lower_case_name(app, onion_redis, clock):
     assert [reserve_onion_login_attempt(' Alice ').wait for _ in range(6)] == [0] * 6
     assert reserve_onion_login_attempt('ALICE').wait == 2
-    assert redis_double.exists('onion_login_fail:typed:alice')
+    assert onion_redis.exists('onion_login_fail:typed:alice')
     clear_onion_login_failures('aLiCe')
-    assert not redis_double.exists('onion_login_fail:typed:alice')
+    assert not onion_redis.exists('onion_login_fail:typed:alice')
     assert reserve_onion_login_attempt('alice').wait == 0
 
 
-def test_reserving_is_the_failure(app, redis_double, clock):
+def test_reserving_is_the_failure(app, onion_redis, clock):
     """An attempt is counted when it is let through, before its password is checked. A failure needs nothing more;
     a success clears the counter. So the first 5 attempts are free, the 6th still goes ahead, and then the wait is
     2 s from the 6th."""
     assert [reserve_onion_login_attempt('alice').wait for _ in range(6)] == [0] * 6
-    assert redis_double.hget('onion_login_fail:typed:alice', 'count') == '6'
+    assert onion_redis.hget('onion_login_fail:typed:alice', 'count') == '6'
     assert reserve_onion_login_attempt('alice').wait == 2
-    assert redis_double.hget('onion_login_fail:typed:alice', 'count') == '6'   # a refused attempt is not counted
-    assert 3500 < redis_double.ttl('onion_login_fail:typed:alice') <= 3600
+    assert onion_redis.hget('onion_login_fail:typed:alice', 'count') == '6'   # a refused attempt is not counted
+    assert 3500 < onion_redis.ttl('onion_login_fail:typed:alice') <= 3600
     clear_onion_login_failures('alice')
     assert reserve_onion_login_attempt('alice').wait == 0
 
 
-def test_parallel_attempts_get_one_per_wait_window(app, redis_double, clock):
+def test_parallel_attempts_get_one_per_wait_window(app, onion_redis, clock):
     """N attempts arriving together, none of them finished yet: only one goes ahead per window."""
     typed_failures('alice', 5)
     assert [reserve_onion_login_attempt('alice').wait for _ in range(10)] == [0] + [2] * 9
@@ -576,26 +576,26 @@ def test_parallel_attempts_get_one_per_wait_window(app, redis_double, clock):
     assert [reserve_onion_login_attempt('alice').wait for _ in range(10)] == [0] + [4] * 9
     clock.t += 4
     assert [reserve_onion_login_attempt('alice').wait for _ in range(3)] == [0, 8, 8]
-    assert redis_double.hget('onion_login_fail:typed:alice', 'count') == '8'
+    assert onion_redis.hget('onion_login_fail:typed:alice', 'count') == '8'
 
 
-def test_an_account_in_backoff_is_refused_silently(app, redis_double, clock):
+def test_an_account_in_backoff_is_refused_silently(app, onion_redis, clock):
     """A typed identifier that is free, naming an account in backoff, is refused without a wait to show (`hidden`),
     and counted on both counters like a wrong password. The typed counter's own backoff is the visible one."""
     account_failures(42, 6)
     gate = reserve_onion_login_attempt('alice@example.com', 42)
     assert gate == OnionLoginGate(wait=0, hidden=True) and not gate.proceed
-    assert redis_double.hget('onion_login_fail:acct:42', 'count') == '7'
-    assert redis_double.hget('onion_login_fail:typed:alice@example.com', 'count') == '1'
+    assert onion_redis.hget('onion_login_fail:acct:42', 'count') == '7'
+    assert onion_redis.hget('onion_login_fail:typed:alice@example.com', 'count') == '1'
     # The account's name typed is a typed counter of its own, free here: hidden too, never a visible wait
     assert reserve_onion_login_attempt('alice', 42) == OnionLoginGate(hidden=True)
-    assert redis_double.hget('onion_login_fail:acct:42', 'count') == '8'   # 8 failures: an 8 s hidden wait
+    assert onion_redis.hget('onion_login_fail:acct:42', 'count') == '8'   # 8 failures: an 8 s hidden wait
     clock.t += 8
     assert reserve_onion_login_attempt('alice@example.com', 42).proceed
     assert reserve_onion_login_attempt('nobody').proceed
 
 
-def test_a_concurrent_change_is_retried(app, redis_double, clock, monkeypatch):
+def test_a_concurrent_change_is_retried(app, onion_redis, clock, monkeypatch):
     """Another attempt reserving between the read and the write aborts this transaction (WATCH); it is decided
     again on the new state, so the two are never both let through."""
     typed_failures('alice', 6)
@@ -605,15 +605,15 @@ def test_a_concurrent_change_is_retried(app, redis_double, clock, monkeypatch):
     def racing_now():
         if not raced:
             raced.append(1)
-            redis_double.hincrby('onion_login_fail:typed:alice', 'count', 1)   # another attempt was let through meanwhile
-            redis_double.hset('onion_login_fail:typed:alice', 'last', clock.t)
+            onion_redis.hincrby('onion_login_fail:typed:alice', 'count', 1)   # another attempt was let through meanwhile
+            onion_redis.hset('onion_login_fail:typed:alice', 'last', clock.t)
         return clock.t
     monkeypatch.setattr('app.onion_guard._now', racing_now)
     assert reserve_onion_login_attempt('alice').wait == 4
-    assert redis_double.hget('onion_login_fail:typed:alice', 'count') == '7'
+    assert onion_redis.hget('onion_login_fail:typed:alice', 'count') == '7'
 
 
-def test_a_one_second_wait_is_singular(app, alice, redis_double, clock, ldap_off):
+def test_a_one_second_wait_is_singular(app, alice, onion_redis, clock, ldap_off):
     client = app.test_client()
     a_session(client)
     for _ in range(6):
@@ -625,16 +625,16 @@ def test_a_one_second_wait_is_singular(app, alice, redis_double, clock, ldap_off
     assert onion_guard.onion_wait_message(300).endswith('in 300 seconds.')
 
 
-def test_endless_contention_is_a_short_wait(app, redis_double, clock, monkeypatch):
+def test_endless_contention_is_a_short_wait(app, onion_redis, clock, monkeypatch):
     typed_failures('alice', 6)
     clock.t += 2
 
     def always_racing():
-        redis_double.hset('onion_login_fail:typed:alice', 'other', clock.t)
+        onion_redis.hset('onion_login_fail:typed:alice', 'other', clock.t)
         return clock.t
     monkeypatch.setattr('app.onion_guard._now', always_racing)
     assert reserve_onion_login_attempt('alice').wait == 2   # a wait a real backoff can show, not a tell
-    assert redis_double.hget('onion_login_fail:typed:alice', 'count') == '6'
+    assert onion_redis.hget('onion_login_fail:typed:alice', 'count') == '6'
 
 
 def web_login(client, user_name, password, **kwargs):
@@ -658,7 +658,7 @@ def alpha_api(app, monkeypatch):
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
 
 
-def test_login_delay_grows(app, alice, redis_double, clock, ldap_off):
+def test_login_delay_grows(app, alice, onion_redis, clock, ldap_off):
     client = app.test_client()
     a_session(client)
     for _ in range(6):
@@ -666,7 +666,7 @@ def test_login_delay_grows(app, alice, redis_double, clock, ldap_off):
     refused = web_login(client, 'alice', PASSWORD)
     assert not logged_in(refused)
     assert 'try again in 2 seconds' in flashes(client)
-    assert redis_double.hget('onion_login_fail:typed:alice', 'count') == '6'   # a refused attempt is not a failure
+    assert onion_redis.hget('onion_login_fail:typed:alice', 'count') == '6'   # a refused attempt is not a failure
     clock.t += 2
     assert not logged_in(web_login(client, 'alice', 'wrong password'))
     assert not logged_in(web_login(client, 'alice', PASSWORD))
@@ -681,7 +681,7 @@ def answer(client, response):
             [tuple(item) for item in flashed], response.get_data())
 
 
-def test_an_account_in_backoff_answers_like_a_wrong_password(app, alice, redis_double, clock, ldap_off):
+def test_an_account_in_backoff_answers_like_a_wrong_password(app, alice, onion_redis, clock, ldap_off):
     """After 6 failures typed as 'alice', alice's email with the CORRECT password gets exactly the answer an unknown
     email with a wrong password gets: no wait message, nothing linking the email to the account. 'alice' itself
     still shows the wait."""
@@ -695,10 +695,10 @@ def test_an_account_in_backoff_answers_like_a_wrong_password(app, alice, redis_d
     assert hidden == unknown
     assert 'Invalid user name or password' in hidden[2] and 'try again' not in hidden[2].lower()
     assert 'Please try again in 2 seconds' in answer(client, web_login(client, 'alice', PASSWORD))[2]
-    assert redis_double.hget('onion_login_fail:typed:alice@example.com', 'count') == '1'   # counted like a failure
+    assert onion_redis.hget('onion_login_fail:typed:alice@example.com', 'count') == '1'   # counted like a failure
 
 
-def test_failures_as_an_email_never_show_through_the_accounts_name(app, alice, redis_double, clock, ldap_off,
+def test_failures_as_an_email_never_show_through_the_accounts_name(app, alice, onion_redis, clock, ldap_off,
                                                                    alpha_api):
     """The re-review's linkage attack: a baseline attempt typed as the name U, 6 wrong ones typed as an email E, then U
     again. If E's attempts filled a counter U's attempts show a wait from, U's answer would say E is U's email. U's
@@ -717,22 +717,22 @@ def test_failures_as_an_email_never_show_through_the_accounts_name(app, alice, r
     assert (hidden.status_code, hidden.get_data()) == (wrong.status_code, wrong.get_data())
 
 
-def test_rotating_variants_does_not_reset_the_delay(app, alice, redis_double, clock, ldap_off):
+def test_rotating_variants_does_not_reset_the_delay(app, alice, onion_redis, clock, ldap_off):
     client = app.test_client()
     a_session(client)
     variants = ['alice', 'ALICE@example.com', ' aLiCe ', 'alice@EXAMPLE.com', 'ALICE', 'Alice@example.com ']
     for typed in variants:
         assert not logged_in(web_login(client, typed, 'wrong password'))
-    assert redis_double.hget(f'onion_login_fail:acct:{alice.id}', 'count') == '6'
+    assert onion_redis.hget(f'onion_login_fail:acct:{alice.id}', 'count') == '6'
     assert not logged_in(web_login(client, 'aLICE@example.COM', PASSWORD))   # a variant whose own counter is free
-    assert redis_double.hget(f'onion_login_fail:acct:{alice.id}', 'count') == '7'
+    assert onion_redis.hget(f'onion_login_fail:acct:{alice.id}', 'count') == '7'
     clock.t += 4
     assert logged_in(web_login(client, 'alice@example.com', PASSWORD))
-    assert not redis_double.exists(f'onion_login_fail:acct:{alice.id}')   # a success clears the account's counter
-    assert not redis_double.exists('onion_login_fail:typed:alice@example.com')   # and the one it was typed as
+    assert not onion_redis.exists(f'onion_login_fail:acct:{alice.id}')   # a success clears the account's counter
+    assert not onion_redis.exists('onion_login_fail:typed:alice@example.com')   # and the one it was typed as
 
 
-def test_unknown_identifiers_behave_like_known_ones(app, alice, redis_double, clock, ldap_off):
+def test_unknown_identifiers_behave_like_known_ones(app, alice, onion_redis, clock, ldap_off):
     client = app.test_client()
     a_session(client)
     for typed in ('Nobody ', 'alice'):
@@ -747,7 +747,7 @@ def test_unknown_identifiers_behave_like_known_ones(app, alice, redis_double, cl
     assert messages[0] == messages[1] and 'Please try again in 2 seconds' in messages[0]
 
 
-def test_api_login_counts_the_account_too(app, alice, redis_double, clock, ldap_off, alpha_api):
+def test_api_login_counts_the_account_too(app, alice, onion_redis, clock, ldap_off, alpha_api):
     client = app.test_client(use_cookies=False)
     for _ in range(6):
         onion_post(client, '/api/alpha/user/login', json={'username': 'Alice', 'password': 'wrong one'})
@@ -759,14 +759,14 @@ def test_api_login_counts_the_account_too(app, alice, redis_double, clock, ldap_
         .status_code == 429
 
 
-def test_success_clears(app, alice, redis_double, clock, ldap_off):
+def test_success_clears(app, alice, onion_redis, clock, ldap_off):
     client = app.test_client()
     a_session(client)
     for _ in range(6):
         web_login(client, 'alice', 'wrong password')
     clock.t += 2
     assert logged_in(web_login(client, 'alice', PASSWORD))
-    assert not redis_double.exists('onion_login_fail:typed:alice')
+    assert not onion_redis.exists('onion_login_fail:typed:alice')
 
 
 # --------------------------------------------------------------------------
@@ -790,30 +790,30 @@ def dora(onion):
     return user
 
 
-def test_a_default_domain_account_logs_in_on_the_onion_by_its_handle(app, dora, redis_double, clock, ldap_off):
+def test_a_default_domain_account_logs_in_on_the_onion_by_its_handle(app, dora, onion_redis, clock, ldap_off):
     client = app.test_client()
     a_session(client)
     assert logged_in(web_login(client, FIRST_HANDLE, PASSWORD))
 
 
-def test_a_bare_default_domain_name_is_nobody_on_the_onion(app, dora, redis_double, clock, ldap_off):
+def test_a_bare_default_domain_name_is_nobody_on_the_onion(app, dora, onion_redis, clock, ldap_off):
     client = app.test_client()
     a_session(client)
     assert not logged_in(web_login(client, 'dora', PASSWORD))
 
 
-def test_failures_typed_as_a_handle_make_the_next_attempt_wait(app, dora, redis_double, clock, ldap_off):
+def test_failures_typed_as_a_handle_make_the_next_attempt_wait(app, dora, onion_redis, clock, ldap_off):
     client = app.test_client()
     a_session(client)
     for _ in range(6):
         web_login(client, FIRST_HANDLE, 'wrong password')
-    assert redis_double.hget(f'onion_login_fail:typed:{FIRST_HANDLE}', 'count') == '6'
-    assert redis_double.hget(f'onion_login_fail:acct:{dora.id}', 'count') == '6'
+    assert onion_redis.hget(f'onion_login_fail:typed:{FIRST_HANDLE}', 'count') == '6'
+    assert onion_redis.hget(f'onion_login_fail:acct:{dora.id}', 'count') == '6'
     assert not logged_in(web_login(client, FIRST_HANDLE, PASSWORD))
     assert 'Please try again in 2 seconds' in flashes(client)
 
 
-def test_a_hot_default_domain_account_answers_like_a_wrong_password(app, dora, redis_double, clock, ldap_off):
+def test_a_hot_default_domain_account_answers_like_a_wrong_password(app, dora, onion_redis, clock, ldap_off):
     """The account is in backoff and her email is typed with the CORRECT password: no wait message, nothing linking
     the email to the account, the same answer as an unknown email."""
     account_failures(dora.id, 6)
@@ -827,17 +827,17 @@ def test_a_hot_default_domain_account_answers_like_a_wrong_password(app, dora, r
     assert 'Please try again' in answer(client, web_login(client, FIRST_HANDLE, PASSWORD))[2]
 
 
-def test_a_success_clears_both_counters_of_a_default_domain_account(app, dora, redis_double, clock, ldap_off):
+def test_a_success_clears_both_counters_of_a_default_domain_account(app, dora, onion_redis, clock, ldap_off):
     typed_failures(FIRST_HANDLE, 2)
     account_failures(dora.id, 2)
     client = app.test_client()
     a_session(client)
     assert logged_in(web_login(client, FIRST_HANDLE, PASSWORD))
-    assert not redis_double.exists(f'onion_login_fail:typed:{FIRST_HANDLE}')
-    assert not redis_double.exists(f'onion_login_fail:acct:{dora.id}')
+    assert not onion_redis.exists(f'onion_login_fail:typed:{FIRST_HANDLE}')
+    assert not onion_redis.exists(f'onion_login_fail:acct:{dora.id}')
 
 
-def test_api_login_of_a_default_domain_account_over_the_onion(app, dora, redis_double, clock, ldap_off, alpha_api):
+def test_api_login_of_a_default_domain_account_over_the_onion(app, dora, onion_redis, clock, ldap_off, alpha_api):
     client = app.test_client(use_cookies=False)
     for _ in range(6):
         onion_post(client, '/api/alpha/user/login', json={'username': FIRST_HANDLE, 'password': 'wrong one'})
@@ -846,25 +846,25 @@ def test_api_login_of_a_default_domain_account_over_the_onion(app, dora, redis_d
     clock.t += 2
     assert onion_post(client, '/api/alpha/user/login', json={'username': FIRST_HANDLE, 'password': PASSWORD}) \
         .status_code == 200
-    assert not redis_double.exists(f'onion_login_fail:acct:{dora.id}')
+    assert not onion_redis.exists(f'onion_login_fail:acct:{dora.id}')
 
 
-def test_delay_onion_only(app, alice, redis_double, clock, ldap_off, alpha_api):
+def test_delay_onion_only(app, alice, onion_redis, clock, ldap_off, alpha_api):
     typed_failures('alice', 10)
     client = app.test_client()
     response = client.post('/auth/login', base_url=CLEARNET_URL,
                            data={'user_name': 'alice@abc.onion', 'password': 'wrong password', **LOGIN})
     assert not logged_in(response)
-    assert redis_double.hget('onion_login_fail:typed:alice', 'count') == '10'   # a clearnet failure is not counted
+    assert onion_redis.hget('onion_login_fail:typed:alice', 'count') == '10'   # a clearnet failure is not counted
     assert logged_in(client.post('/auth/login', base_url=CLEARNET_URL,
                                  data={'user_name': 'alice@abc.onion', 'password': PASSWORD, **LOGIN}))
-    assert redis_double.exists('onion_login_fail:typed:alice')                  # nor does a clearnet success clear it
+    assert onion_redis.exists('onion_login_fail:typed:alice')                  # nor does a clearnet success clear it
     api = client.post('/api/alpha/user/login', base_url=CLEARNET_URL,
                       json={'username': 'alice@abc.onion', 'password': PASSWORD})
     assert api.status_code == 200
 
 
-def test_delay_covers_api(app, alice, redis_double, clock, ldap_off, alpha_api):
+def test_delay_covers_api(app, alice, onion_redis, clock, ldap_off, alpha_api):
     client = app.test_client(use_cookies=False)
     for _ in range(6):
         response = onion_post(client, '/api/alpha/user/login', json={'username': 'Alice', 'password': 'wrong one'})
@@ -880,8 +880,8 @@ def test_delay_covers_api(app, alice, redis_double, clock, ldap_off, alpha_api):
         .status_code == 400
     accepted = onion_post(client, '/api/alpha/user/login', json={'username': 'alice', 'password': PASSWORD})
     assert accepted.status_code == 200 and accepted.get_json()['jwt']
-    assert not redis_double.exists('onion_login_fail:typed:alice')
-    assert redis_double.hget('onion_login_fail:typed:nobody', 'count') == '1'
+    assert not onion_redis.exists('onion_login_fail:typed:alice')
+    assert onion_redis.hget('onion_login_fail:typed:nobody', 'count') == '1'
 
 
 # --------------------------------------------------------------------------
@@ -968,17 +968,17 @@ def verify(client, username, password, onion=True):
     return post(client, '/api/alpha/user/verify_credentials', json={'username': username, 'password': password})
 
 
-def test_verify_credentials_honours_the_delay(app, alice, redis_double, clock, alpha_api):
+def test_verify_credentials_honours_the_delay(app, alice, onion_redis, clock, alpha_api):
     client = app.test_client(use_cookies=False)
     assert [verify(client, 'alice', 'wrong one').status_code for _ in range(6)] == [400] * 6
     assert verify(client, 'alice', PASSWORD).status_code == 429
     assert verify(client, 'alice@abc.onion', PASSWORD, onion=False).status_code == 200   # clearnet is not delayed
     clock.t += 2
     assert verify(client, 'alice', PASSWORD).status_code == 200
-    assert not redis_double.exists('onion_login_fail:typed:alice')
+    assert not onion_redis.exists('onion_login_fail:typed:alice')
 
 
-def test_verify_credentials_counts_with_login(app, alice, redis_double, clock, ldap_off, alpha_api):
+def test_verify_credentials_counts_with_login(app, alice, onion_redis, clock, ldap_off, alpha_api):
     """Guesses here slow down /user/login and the other way round, and an account in backoff answers as a wrong
     password does."""
     client = app.test_client(use_cookies=False)
@@ -993,8 +993,8 @@ def test_verify_credentials_counts_with_login(app, alice, redis_double, clock, l
         (400, unknown.get_data())
     clock.t += 300
     assert verify(client, 'alice@example.com', PASSWORD).status_code == 200
-    assert not redis_double.exists(f'onion_login_fail:acct:{alice.id}')
-    assert not redis_double.exists('onion_login_fail:typed:alice@example.com')
+    assert not onion_redis.exists(f'onion_login_fail:acct:{alice.id}')
+    assert not onion_redis.exists('onion_login_fail:typed:alice@example.com')
 
 
 # --------------------------------------------------------------------------
@@ -1016,7 +1016,7 @@ def hidden_verify(app, client):
 
 
 @pytest.mark.parametrize('attempt', [hidden_web, hidden_api, hidden_verify])
-def test_a_hidden_refusal_hashes_the_password_once(app, alice, redis_double, clock, ldap_off, alpha_api, attempt):
+def test_a_hidden_refusal_hashes_the_password_once(app, alice, onion_redis, clock, ldap_off, alpha_api, attempt):
     """The account is in backoff: the correct password is refused, but only after the same hash verification a wrong
     password gets, because it goes through the same check_password, told to refuse."""
     account_failures(alice.id, 6)
@@ -1027,7 +1027,7 @@ def test_a_hidden_refusal_hashes_the_password_once(app, alice, redis_double, clo
 
 
 @pytest.mark.parametrize('attempt', [hidden_web, hidden_api, hidden_verify])
-def test_a_legacy_bcrypt_hash_costs_its_bcrypt_check(app, alice, redis_double, clock, ldap_off, alpha_api, attempt):
+def test_a_legacy_bcrypt_hash_costs_its_bcrypt_check(app, alice, onion_redis, clock, ldap_off, alpha_api, attempt):
     """check_password falls back to bcrypt for a legacy hash, so the hidden refusal does too; and a refused match is
     not re-saved, as an accepted one would be."""
     legacy = app_bcrypt.generate_password_hash(PASSWORD, rounds=4).decode()   # bcrypt's cheapest cost: still bcrypt
@@ -1069,7 +1069,7 @@ def directory(app, monkeypatch):
 
 
 @pytest.mark.parametrize('ldap', [True, False], ids=['ldap', 'no-ldap'])
-def test_a_hidden_refusal_runs_the_whole_wrong_password_flow(app, alice, bob, redis_double, clock, monkeypatch,
+def test_a_hidden_refusal_runs_the_whole_wrong_password_flow(app, alice, bob, onion_redis, clock, monkeypatch,
                                                              request, ldap):
     """alice's account is in backoff and her email is typed with her CORRECT password; bob's email is typed with a
     wrong one. The two answers are the same in every part (status, Location, each flash with its category, body),

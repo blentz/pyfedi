@@ -26,6 +26,7 @@ from app.local_only import local_only_visible, local_only_visible_rss, refuses_r
     remote_contact_refusal_message, user_local_only, without_local_only
 from app.visibility import OPEN_VISIBILITIES, visible_to_clause
 from app.onion import has_real_ip, is_onion_request
+from app.onion_store import onion_store_needed, request_redis
 from app.models import Post, Community, CommunityMember, User, PostReply, Notification, utcnow, File, Site, \
     Instance, Report, UserBlock, CommunityJoinRequest, CommunityBlock, Filter, Domain, DomainBlock, \
     InstanceBlock, NotificationSubscription, PostBookmark, PostReplyBookmark, read_posts, Topic, UserNote, \
@@ -871,7 +872,8 @@ def user_settings_import_export():
                 flash(_('That file is too large to import.'), 'error')
                 return redirect(url_for('user.user_settings_import_export'))
 
-            app_pkg.redis_client.set(redis_key, imported_data, ex=3600)
+            with onion_store_needed():   # over the onion it waits in the RAM-only onion store (app/onion_store.py)
+                request_redis().set(redis_key, imported_data, ex=3600)
 
             # import settings in background task
             import_settings(redis_key)
@@ -1485,6 +1487,12 @@ def import_settings(redis_key):
         import_settings_task.delay(current_user.id, redis_key)
 
 
+def settings_import_store(redis_key: str):
+    """The Redis an uploaded settings file waits in: the main one, or the onion store for a file uploaded over the
+    onion. The task is not told which (a task records nothing of the onion), and the key is random, so it looks."""
+    return app_pkg.redis_client if app_pkg.redis_client.exists(redis_key) else app_pkg.onion_redis_client
+
+
 @celery.task
 def import_settings_task(user_id, redis_key):
     from app.api.alpha.utils.misc import get_resolve_object  # cycle: app.api.alpha.utils.misc imports app.api.alpha.utils.community, mid-import when this module loads
@@ -1501,7 +1509,8 @@ def import_settings_task(user_id, redis_key):
                 # D992's shape, in a background task rather than a route.
                 if user is None:
                     return
-                contents_json = settings_import_contents(app_pkg.redis_client.get(redis_key))
+                upload = settings_import_store(redis_key)
+                contents_json = settings_import_contents(upload.get(redis_key))
 
                 # Follow communities
                 for community_ap_id in import_entries(contents_json, 'followed_communities'):
@@ -1613,7 +1622,7 @@ def import_settings_task(user_id, redis_key):
                 cache.delete_memoized(blocked_domains, user.id)
                 cache.delete_memoized(alpha_views.user_view)
 
-                app_pkg.redis_client.delete(redis_key)
+                upload.delete(redis_key)
 
         except Exception:
             session.rollback()

@@ -59,6 +59,7 @@ from markupsafe import Markup
 import boto3
 from app import db, cache, httpx_client, celery, get_ip_address, plugins, shaped_memo_name
 from app.onion import is_onion_request, stamp_activity
+from app.onion_store import onion_store_needed, onion_store_optional, request_redis
 from app.pinned_http import fetch_deadline, is_refused_address
 from app.rsa_keys import RsaKeys
 from app.local_only import local_only_visible, without_local_only_actors
@@ -5662,10 +5663,16 @@ def create_captcha(length=4):
 
     uuid = os.urandom(12).hex()
 
-    redis_client = get_redis_connection()
-    redis_client.set("captcha_" + uuid, code, ex=30 * 60)
+    with onion_store_needed():
+        captcha_store().set("captcha_" + uuid, code, ex=30 * 60)
 
     return {"uuid": uuid, "audio": audio, "image": image}
+
+
+def captcha_store():
+    """Where a captcha's code waits for its answer: the RAM-only onion store for an onion request
+    (app/onion_store.py), the main Redis otherwise."""
+    return app_pkg.onion_redis_client if is_onion_request() else get_redis_connection()
 
 
 def decode_captcha(uuid: str, code: str):
@@ -5676,13 +5683,14 @@ def decode_captcha(uuid: str, code: str):
     except TypeError:
         return False
 
-    redis_client = get_redis_connection()
+    redis_client = captcha_store()
     # GETDEL reads and deletes in a single atomic command (requires Redis >= 6.2,
     # already the version pinned by compose.yaml/compose.dev.yaml/compose.test.yaml).
     # A separate get() then delete() left a TOCTOU window: two concurrent callers
     # could both read the code before either deleted it, so one solved captcha
     # could validate more than once.
-    saved_code = redis_client.getdel("captcha_" + uuid)
+    with onion_store_needed():
+        saved_code = redis_client.getdel("captcha_" + uuid)
     if saved_code is not None and code is not None:
         if code.lower() == saved_code.lower():
             return True
@@ -5882,8 +5890,14 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
     # the write required only an authenticated user.
     # and per domain: the list was filtered for the domain it was built on (Local, local-only content)
     cache_key = f'feed:{current_storefront().domain}:{current_user.id}:{result_id}' if result_id and current_user.is_authenticated else None
-    if cache_key and app_pkg.redis_client.exists(cache_key):
-        return json.loads(app_pkg.redis_client.get(cache_key))
+    # the onion's in the RAM-only onion store (app/onion_store.py); a page does without it when that is down
+    feed_cache = request_redis()
+    cached = None
+    if cache_key:
+        with onion_store_optional():
+            cached = feed_cache.get(cache_key) if feed_cache.exists(cache_key) else None
+    if cached is not None:
+        return json.loads(cached)
 
     params = {}                 # parameters provided to the SQL query
     post_id_sql = 'FROM "post" as p\nINNER JOIN "community" as c on p.community_id = c.id\n'
@@ -6065,7 +6079,8 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
     post_ids = dedupe_post_ids(post_ids, limit_to_visible=(community_ids[0] != -1))
 
     if cache_key:  # same key the read above used; see where it is derived
-        app_pkg.redis_client.set(cache_key, json.dumps(post_ids), ex=86400)  # 86400 is 1 day
+        with onion_store_optional():
+            feed_cache.set(cache_key, json.dumps(post_ids), ex=86400)  # 86400 is 1 day
     return post_ids
 
 
