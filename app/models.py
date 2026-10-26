@@ -46,15 +46,10 @@ import app as app_pkg
 # The module, not the name: app.storefront reads SiteDomain from this module (import cycle: storefront)
 import app.storefront as storefront
 import app.local_only as local_only
+from app.clock import utcnow  # noqa: F401  (re-exported: callers import it from here)
 from app.onion import is_onion_request, stamp_activity
 from app.relays import current_relay_id
 from app.rsa_keys import RsaKeys
-
-
-def utcnow(naive=True):
-    if naive:
-        return datetime.now(ZoneInfo('UTC')).replace(tzinfo=None)
-    return datetime.now(ZoneInfo('UTC'))
 
 
 def is_local_url(url) -> bool:
