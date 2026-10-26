@@ -16,7 +16,7 @@ from app.models import User
 from app.onion import stamp_activity
 from app.shared.post import delete_post, mark_post_read, restore_post
 from app.utils import finalize_user_setup
-from tests.factories import bearer, make_post_reply
+from tests.factories import bearer, make_post, make_post_reply
 from tests.test_onion_marker import ONION, PROXY, onion_context, proxy_ip
 from tests.test_onion_unlinkable_ip import (CLEARNET_IP, WORLD, a_post, a_reply, account, api_login, oauth_login,
                                             refreshed, web_login, world)  # noqa: F401  (world is a fixture)
@@ -77,9 +77,8 @@ ACTIONS = [web_login, oauth_login, api_login, a_post, a_reply, vote_on_post, vot
 
 @pytest.fixture
 def stampable(world):
-    from tests.factories import make_post as make_post_row
     WORLD['reply'] = make_post_reply(WORLD['post'], world.local_user('replied', world.domains[0]))
-    WORLD['own_post'] = make_post_row(WORLD['post'].community, world.local_user('poster', world.domains[0]),
+    WORLD['own_post'] = make_post(WORLD['post'].community, world.local_user('poster', world.domains[0]),
                                       'https://elsewhere.example/p/2')
     return world
 
