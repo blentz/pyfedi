@@ -277,18 +277,20 @@ def test_the_back_button_shows_for_a_referrer_on_any_storefront(app, onion, refe
 
 
 @pytest.mark.parametrize('path, location', [
-    ('/user/lookup/bob/abc.onion', '/u/bob@abc.onion'),
-    ('/community/lookup/general/abc.onion', '/c/general@abc.onion'),
+    ('/user/lookup/bob/abc.onion', '/u/bob'),
+    ('/community/lookup/general/abc.onion', '/c/general'),
     ('/feed/lookup/news/abc.onion', '/f/news'),
 ])
 def test_a_lookup_on_a_registered_domain_is_local(app, onion, path, location):
-    """Plan C1: a local name is the domain's own row, so the redirect names the onion's, never the first domain's namesake."""
+    """Plan C1: a local name is the domain's own row, so the redirect names the onion's, never the first domain's namesake.
+    Since follow-up F6 the onion's names are looked up on the onion: off it they answer as names nobody holds."""
     make_site()
     onion_id = SiteDomain.query.filter_by(domain=ALIAS).one().id
     _local_user('bob').site_domain_id = onion_id
     make_community('general').site_domain_id = onion_id
     db.session.commit()
-    response = app.test_client().get(path)
+    assert app.test_client().get(path).status_code == 404
+    response = app.test_client().get(path, base_url=f'http://{ALIAS}')
     assert response.status_code == 302
     assert response.headers['Location'] == location
 
