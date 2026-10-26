@@ -3360,6 +3360,7 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                                                 'post_id': post.id,
                                                                 'orig_post_title': post.title,
                                                                 'orig_post_body': post.body,
+                                                                'suspect_user_id': post.user_id,
                                                                 'suspect_user_user_name': (
                                                                     post.author.stored_link() if post.author else ''),
                                                                 }
@@ -4257,6 +4258,7 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
                                     'post_id': post_reply.post_id,
                                     'comment_id': post_reply.id,
                                     'comment_body': post_reply.body,
+                                    'author_id': author.id,
                                     'author_user_name': author.stored_link()
                                     }
                     with force_locale(get_recipient_language(recipient.id)):
@@ -4507,6 +4509,7 @@ def notify_about_post_task(post_id):
                     targets_data = {'gen': '0',
                                     'post_id': post.id,
                                     'post_title': post.title,
+                                    'community_id': community.id,
                                     'community_name': community.stored_link(),
                                     'author_id': post.user_id,
                                     'author_user_name': author.stored_link()}
@@ -4566,6 +4569,7 @@ def notify_about_post_task(post_id):
                     targets_data = {'gen': '0',
                                     'post_id': post.id,
                                     'post_title': post.title,
+                                    'community_id': community.id,
                                     'community_name': community.stored_link(),
                                     'topic_name': topic.name,
                                     'topic_machine_name': topic.machine_name,
@@ -4602,6 +4606,7 @@ def notify_about_post_task(post_id):
                         targets_data = {'gen': '0',
                                         'post_id': post.id,
                                         'post_title': post.title,
+                                        'community_id': community.id,
                                         'community_name': community.stored_link(),
                                         'feed_id': feed.id,
                                         'feed_name': feed.title
@@ -4636,7 +4641,9 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
                 targets_data = {'gen': '0',
                                 'post_id': new_reply.post.id,
                                 'post_title': post_title,
+                                'community_id': community.id,
                                 'community_name': community.stored_link(),
+                                'author_id': author.id,
                                 'author_user_name': author.stored_link(),
                                 'comment_id': new_reply.id,
                                 'comment_body': new_reply.body}
@@ -4834,6 +4841,7 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
                                                         'post_id': reply.post_id,
                                                         'comment_id': reply.id,
                                                         'comment_body': reply.body,
+                                                        'author_id': author.id,
                                                         'author_user_name': author.stored_link()
                                                         }
                                         with force_locale(get_recipient_language(recipient.id)):
@@ -5013,6 +5021,7 @@ def update_post_from_activity(post: Post, request_json: dict):
                                                     'post_id': post.id,
                                                     'post_title': post.title,
                                                     'post_body': post.body,
+                                                    'author_id': author.id,
                                                     'author_user_name': author.stored_link()
                                                     }
                                     # in the recipient's language, as the reply path does (D248)
@@ -5403,6 +5412,7 @@ def update_post_from_activity(post: Post, request_json: dict):
                                     'orig_post_title': post.title,
                                     'orig_post_body': post.body,
                                     'orig_post_domain': new_domain.name,
+                                    'suspect_user_id': post.user_id,
                                     'suspect_user_user_name': (
                                         post.author.stored_link() if post.author else ''),
                                     }

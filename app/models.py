@@ -3419,6 +3419,7 @@ class Post(db.Model):
                                 'orig_post_title': post.title,
                                 'orig_post_body': post.body,
                                 'orig_post_domain': domain.name,
+                                'suspect_user_id': user.id,
                                 'suspect_user_user_name': user.stored_link(),
                                 }
                 if domain.notify_mods:
@@ -3585,6 +3586,7 @@ class Post(db.Model):
                                                     'post_id': post.id,
                                                     'post_body': post.body,
                                                     'post_title': post.title,
+                                                    'author_id': author.id,
                                                     'author_user_name': author.stored_link(),
                                                     }
                                     # import here to avoid circular import errors

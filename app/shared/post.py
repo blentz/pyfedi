@@ -758,6 +758,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                             # this dict now have the SAME shape, which is reason (2)
                             # of the arbitration recorded in
                             # tests/test_ap_update_post_tails.py's banner.
+                            'suspect_user_id': user.id,
                             'suspect_user_user_name': user.stored_link(),
                             }
             if domain.notify_mods:
