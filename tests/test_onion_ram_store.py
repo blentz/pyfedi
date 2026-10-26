@@ -527,6 +527,12 @@ def test_a_redis_flask_cache_beside_an_onion_is_warned(cache_type, caplog):
     assert check_onion_store(a_config(CACHE_TYPE=cache_type, ONION_PROXY_IP=None)) and caplog.records == []
 
 
+def test_a_redis_flask_cache_on_its_own_server_is_not_warned(caplog):
+    # A cache Redis apart from the persisted main one (the broker's) can be a RAM-only Redis.
+    assert check_onion_store(a_config(CACHE_TYPE='RedisCache', CACHE_REDIS_URL='redis://cache-redis:6379/0'))
+    assert caplog.records == []
+
+
 class SharedConfig(TestConfig):
     ONION_PROXY_IP = PROXY
     ONION_REDIS_URL = TestConfig.CACHE_REDIS_URL.rpartition('/')[0] + '/9'
