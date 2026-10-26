@@ -22,7 +22,7 @@ from werkzeug.exceptions import BadRequest
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import cached_property
 from celery import Celery
-from celery.signals import task_prerun
+from celery.signals import task_failure, task_prerun
 from sqlalchemy_searchable import make_searchable
 import httpx
 from authlib.integrations.flask_client import OAuth
@@ -31,7 +31,7 @@ from config import Config
 from app.constants import IMAGE_PIXEL_CAP
 from app.pinned_http import pinned_transport
 from app.cookies import StorefrontLoginManager, StorefrontSessionInterface, secure_set_cookies
-from app.error_counts import ErrorCountHandler
+from app.error_counts import ErrorCountHandler, flush_engine
 from app.log_scrub import drop_onion_event, log_onion_safe_exception, scrub as onion_scrub
 from app.onion import is_onion_request, onion_rate_key
 from app.onion_store import OnionRoutedStorage, RefusedOnionStore, check_onion_store  # noqa: F401 -- OnionRoutedStorage registers the onion-routed scheme RATELIMIT_STORAGE_URI names
@@ -490,9 +490,12 @@ def create_app(config_class=Config):
     # counts web and worker alike (the unit is PIEFED_UNIT). One handler only: create_app can run more than once.
     for old in [h for h in app.logger.handlers if isinstance(h, ErrorCountHandler)]:
         app.logger.removeHandler(old)
+        old.close()
+    task_failure.disconnect(dispatch_uid='error_counts')
     if app.config['ERROR_COUNTS']:
-        with app.app_context():
-            app.logger.addHandler(ErrorCountHandler(db.engine))
+        error_counts = ErrorCountHandler(flush_engine(app.config['SQLALCHEMY_DATABASE_URI']))
+        app.logger.addHandler(error_counts)
+        task_failure.connect(error_counts.task_failed, weak=False, dispatch_uid='error_counts')   # Celery logs elsewhere
 
     # Load plugins
     load_plugins()
