@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 from celery.signals import celeryd_init, task_failure
 
-from app import cli, create_app, db
+from app import celery, cli, create_app, db
 from app.clock import utcnow
 from app.error_counts import ErrorCountHandler, error_kind, flush_engine, name_the_worker_unit
 from app.models import ErrorCount
@@ -414,3 +414,43 @@ def test_a_task_failure_with_no_app_frame_is_counted_under_the_task_name(countin
 
 def test_a_test_app_has_no_handler_unless_it_asks(app):
     assert not any(isinstance(h, ErrorCountHandler) for h in logging.getLogger('app').handlers)
+
+
+@pytest.fixture
+def exploding_task(monkeypatch):
+    """A real task on the project's Celery app, run in-process by `.apply()` (the eager tracer the worker's own
+    `build_tracer` builds, with `task_eager_propagates` off). It fails in a frame whose file lives in app/."""
+    monkeypatch.setitem(celery.conf, 'task_eager_propagates', False)
+
+    @celery.task(name='tests.exploding_task')
+    def exploding_task():
+        raise_from_app_file('secret')
+
+    yield exploding_task
+    celery.tasks.pop('tests.exploding_task', None)
+
+
+def test_a_real_celery_task_failure_is_counted_once(counting_app, exploding_task, monkeypatch):
+    monkeypatch.setenv('PIEFED_UNIT', 'celery-send')
+    result = exploding_task.apply()
+    assert result.failed() and isinstance(result.result, ValueError)
+    [handler] = counting_handlers()
+    handler.flush()
+    [row] = ErrorCount.query.all()
+    assert (row.kind, row.level, row.unit, row.count) == ('ValueError at app/fake_module.py:3', 'ERROR',
+                                                           'celery-send', 1)
+
+
+def test_the_worker_start_names_the_unit_before_the_first_failure_is_counted(counting_app, exploding_task, monkeypatch):
+    """celery_worker_docker.py builds the app with create_app, so this module is imported and its receiver connected;
+    the worker then sends `celeryd_init` (sender: its node name, with the instance, conf and options) before a task."""
+    monkeypatch.delenv('PIEFED_UNIT', raising=False)
+    receivers = [receiver for receiver, _ in celeryd_init.send(
+        sender='celery@worker-1', instance=None, conf=celery.conf, options={})]
+    assert name_the_worker_unit in receivers
+    assert os.environ['PIEFED_UNIT'] == 'celery'
+    exploding_task.apply()
+    [handler] = counting_handlers()
+    handler.flush()
+    [row] = ErrorCount.query.all()
+    assert (row.unit, row.count) == ('celery', 1)
