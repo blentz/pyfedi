@@ -72,7 +72,10 @@ def test_an_old_row_with_a_bare_name_links_to_the_first_domains_account(app, bob
 
 
 def test_an_old_row_with_a_domain_links_to_that_domains_account(app, bobs):
+    """On the first domain the onion's account is hidden (follow-up F6), so there it is text; on the onion, a link."""
     with default_request(app):
+        assert target_href({'author_user_name': 'bob@abc.onion'}, 'author_user_name') is None
+    with onion_request(app):
         assert target_href({'author_user_name': 'bob@abc.onion'}, 'author_user_name') == f'/user/{bobs.onion_bob.id}'
 
 

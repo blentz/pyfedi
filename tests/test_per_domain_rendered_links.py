@@ -106,6 +106,19 @@ def test_a_report_about_the_onions_bob_links_to_the_onions_bob_on_first(app, tit
     suspect, reporter = profile_links(html)
     assert shows(app, world, ONION, suspect) == {ONION}
     assert reporter == f'/user/{world.viewers[reporter_host].id}'
+    with default_request(app):   # follow-up F6: on the first domain both onion accounts are text, with the note
+        html = render_template('admin/reports/user_report.html', report=report)
+    assert profile_links(html) == [] and 'Open this on the onion to see it.' in html
+
+
+def test_a_follow_notification_from_the_onions_bob_links_to_the_onions_bob(app, titled):
+    world = titled
+    watcher = world.viewers[FIRST]
+    follower = signed_in(app, world.bob[ONION], ONION)
+    assert follower.post(f'/u/{watcher.user_name}@{FIRST}/follow').status_code in (200, 302)
+    page = signed_in(app, watcher, FIRST).get('/notifications').get_data(as_text=True)
+    # follow-up F6: on the first domain the onion's bob is named as text, with the note
+    assert f'/user/{world.bob[ONION].id}"' not in page and 'Open this on the onion to see it.' in page
 
 
 def test_a_stored_name_is_the_same_on_every_storefront(app, world):
