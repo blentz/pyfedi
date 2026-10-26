@@ -1517,6 +1517,14 @@ def add_post(actor, type=None):
                            )
 
 
+@bp.route('/<int:community_id>', methods=['GET'])
+def show_community_by_id(community_id):
+    """`/community/<id>` (the blueprint adds the prefix): the community page by id, for a link that must reach the same community on whichever domain the viewer is on:
+    `/c/<name>` names one on the current storefront, so a stored name could reach a namesake. The page, and the gates
+    that hide a banned, local-only or private community, are `show_community`'s."""
+    return show_community(db.session.get(Community, community_id) or abort(404))
+
+
 @bp.route('/community/<int:community_id>/report', methods=['GET', 'POST'])
 @login_required
 def community_report(community_id: int):
