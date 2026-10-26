@@ -197,3 +197,60 @@ def test_the_factory_wires_the_sentry_filter_in(restores_the_shared_logger):
     with patch('app.sentry_sdk.init') as init:
         create_app(type('OneOff', (TestConfig,), {'SENTRY_DSN': 'https://key@sentry.example/1'}))
     assert init.call_args.kwargs['before_send'] is drop_onion_event
+
+
+class FakeSMTP:
+    """smtplib.SMTP with no network: the handler's own emit runs, builds its message, and hands it here."""
+    sent = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def send_message(self, message, *args, **kwargs):
+        self.sent.append(message)
+
+    def quit(self):
+        pass
+
+
+@pytest.fixture
+def factory_mail(restores_the_shared_logger, onion, monkeypatch):
+    """An app built by the real create_app with ERRORS_TO and the onion proxy configured, a route that fails with
+    a message naming a user and an URL, and the mail the factory's own SMTPHandler would have sent."""
+    FakeSMTP.sent = []
+    monkeypatch.setattr('smtplib.SMTP', FakeSMTP)
+    config = type('Mailing', (TestConfig,), {
+        'MAIL_SERVER': 'mail.example.org', 'MAIL_PORT': 25, 'ERRORS_TO': 'ops@example.org',
+        'MAIL_FROM': 'piefed@example.org', 'ONION_PROXY_IP': '10.89.0.2', 'PROPAGATE_EXCEPTIONS': False})
+    factory_app = create_app(config)
+    [handler] = [h for h in factory_app.logger.handlers if isinstance(h, SMTPHandler)]
+    assert handler.emit.__func__ is SMTPHandler.emit      # the real emit, not a stand-in
+
+    @factory_app.route('/boom')
+    def boom():
+        raise ValueError(f'no such user {SECRET} at https://example.org/u/{SECRET}')
+
+    def bodies():
+        return [message.get_content() for message in FakeSMTP.sent]
+
+    return factory_app, bodies
+
+
+def test_the_factorys_error_mail_for_an_onion_request_carries_no_request_details(factory_mail):
+    factory_app, bodies = factory_mail
+    response = onion_get(factory_app.test_client(), '/boom?token=hunter2')
+    assert response.status_code == 500
+    [mail] = bodies()
+    for leaked in (SECRET, 'hunter2', '/boom', 'abc.onion', 'example.org/u', 'no such user', 'raise ValueError'):
+        assert leaked not in mail
+    assert 'ValueError' in mail
+    assert 'in boom' in mail and 'test_onion_logging.py' in mail      # the class and the app frames stay
+
+
+def test_the_factorys_error_mail_for_a_clearnet_request_is_flasks_own(factory_mail):
+    factory_app, bodies = factory_mail
+    factory_app.test_client().get('/boom?token=hunter2', environ_base=CLEARNET)
+    [mail] = bodies()
+    assert 'Exception on /boom [GET]' in mail
+    assert f'ValueError: no such user {SECRET} at https://example.org/u/{SECRET}' in mail
+    assert 'raise ValueError' in mail
