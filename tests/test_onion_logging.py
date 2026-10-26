@@ -6,13 +6,18 @@ carries its message and its source lines.
 """
 import logging
 import os
+import sys
 from logging.handlers import RotatingFileHandler, SMTPHandler
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from redis.exceptions import RedisError
 
 from app import create_app
+from app.auth.util import sync_user_with_ldap
 from app.log_scrub import ONION_EXCEPTION_MESSAGE, OnionScrubFilter
+from app.onion_store import read_other_store
 from app.utils import log_login_failure, log_probe_refused, log_register_attempt
 from tests.conftest import TestConfig
 from tests.test_login_failure_log import CLEARNET, clearnet_login, failures, only_failure
@@ -54,7 +59,7 @@ def raise_in(app, context, message=f'no such user {SECRET}'):
         try:
             raise ValueError(message)
         except ValueError:
-            app.log_exception(__import__('sys').exc_info())
+            app.log_exception(sys.exc_info())
 
 
 def test_onion_login_failure_writes_no_log_line(app, alice, ldap_off, caplog):
@@ -138,8 +143,6 @@ def test_onion_safe_records_pass_unchanged(app, onion):
 
 
 def test_an_unavailable_onion_store_line_names_no_user_ip_or_path(app, caplog):
-    from app.onion_store import read_other_store
-    from redis.exceptions import RedisError
 
     def broken(_client):
         raise RedisError('Error connecting to /run/redis/onion.sock for alice at 203.0.113.9')
@@ -152,8 +155,6 @@ def test_an_unavailable_onion_store_line_names_no_user_ip_or_path(app, caplog):
 
 
 def test_ldap_sync_failure_on_the_onion_names_no_user(app, onion, caplog):
-    from app.auth.util import sync_user_with_ldap
-    from types import SimpleNamespace
     user = SimpleNamespace(user_name=SECRET, email='x@example.com')
     with patch('app.auth.util.sync_user_to_ldap', side_effect=RuntimeError(f'bind failed for {SECRET}')), \
             onion_context(app):
