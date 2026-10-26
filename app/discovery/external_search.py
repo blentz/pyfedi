@@ -10,6 +10,8 @@ from app import cache, db
 from app.discovery import sources
 from app.discovery.filters import host_is_excluded
 from app.models import Post
+from app.post.util import hosted_post_for_viewer
+from app.storefront import is_hosted_uri
 
 SEPIASEARCH_VIDEOS_URL = 'https://sepiasearch.org/api/v1/search/videos'
 RESULT_LIMIT = 10
@@ -73,13 +75,22 @@ def _videos_for(q: str) -> list:
     return videos
 
 
+def _listable(video: dict) -> bool:
+    """A hit on one of our own domains is listed when the viewer may open the local post it names (it is opened from
+    the database, never fetched); any other only when its host is not excluded."""
+    if is_hosted_uri(video['url']):
+        return hosted_post_for_viewer(video['url']) is not None
+    return not host_is_excluded(video['host'], frozenset())
+
+
 def search_videos(q: str, allow_nsfw: bool) -> list:
     q = (q or '').strip()
     if not q:
         return []
-    videos = [v for v in _videos_for(q) if (allow_nsfw or not v['nsfw']) and not host_is_excluded(v['host'], frozenset())]
-    if videos:
+    videos = [v for v in _videos_for(q) if (allow_nsfw or not v['nsfw']) and _listable(v)]
+    remote = [v for v in videos if not is_hosted_uri(v['url'])]
+    if remote:
         stored = {ap_id for (ap_id,) in db.session.query(Post.ap_id).filter(
-            Post.ap_id.in_([v['url'] for v in videos]))}
+            Post.ap_id.in_([v['url'] for v in remote]))}
         videos = [v for v in videos if v['url'] not in stored]
     return videos[:RESULT_LIMIT]
