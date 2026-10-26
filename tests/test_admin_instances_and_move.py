@@ -57,14 +57,14 @@ def env(app, api_baseline):
                            baseline=api_baseline)
 
 
-def client_for(env, permission, name='anadmin'):
+def client_for(env, permission, name='anadmin', base_url=None):
     user = make_user(env.baseline.instance_local, name, local=True)
     user.verified = True
     user.private_key = 'x'
     db.session.commit()
     grant_permission(user, permission)
     client = env.app.test_client()
-    with client.session_transaction() as session:
+    with client.session_transaction(**({'base_url': base_url} if base_url else {})) as session:
         session['_user_id'] = str(user.id)
         session['_fresh'] = True
         session['csrf_token'] = env.raw
@@ -77,9 +77,9 @@ def get(client, path):
     return client.get(path)
 
 
-def post(client, path, **data):
+def post(client, path, base_url=None, **data):
     forget_login()
-    return client.post(path, data=data)
+    return client.post(path, data=data, **({'base_url': base_url} if base_url else {}))
 
 
 class TestTheInstanceList:
@@ -181,8 +181,11 @@ class TestEditingAnInstance:
         db.session.commit()
         clear_domain_cache()
         hosted = db.session.query(SiteDomain).filter_by(domain='abc.onion').one().instance_id
-        client = client_for(env, 'administer all communities')
-        response = post(client, f'/admin/instance/{hosted}/edit',
+        # on the onion: off it the onion's instance row answers as an id nobody holds (follow-up F6)
+        assert post(client_for(env, 'administer all communities', 'clearadmin'), f'/admin/instance/{hosted}/edit',
+                    **self.payload(env, trusted='y')).status_code == 404
+        client = client_for(env, 'administer all communities', base_url='http://abc.onion')
+        response = post(client, f'/admin/instance/{hosted}/edit', base_url='http://abc.onion',
                         **self.payload(env, inbox='http://abc.onion/inbox', trusted='y'))
         assert response.status_code == 302
         db.session.expire_all()
@@ -390,12 +393,12 @@ def incoming(env):
 
 
 class TestMovingACommunityHere:
-    def move(self, env, client, incoming, **overrides):
+    def move(self, env, client, incoming, base_url=None, **overrides):
         data = {'csrf_token': env.token, 'new_url': 'somewhere_else',
                 'new_owner': 'y'}
         data.update(overrides)
         return post(client, f'/admin/community/{incoming.community.id}'
-                            f'/move/{incoming.owner.id}', **data)
+                            f'/move/{incoming.owner.id}', base_url=base_url, **data)
 
     def test_the_form(self, env, incoming):
         client = client_for(env, 'change instance settings')
@@ -517,8 +520,10 @@ class TestMovingACommunityHere:
         db.session.commit()
         clear_domain_cache()
         try:
-            client = client_for(env, 'change instance settings')
-            response = self.move(env, client, incoming)
+            # on the onion: off it the onion's account answers as an id nobody holds (follow-up F6)
+            assert self.move(env, client_for(env, 'change instance settings', 'clearadmin'), incoming).status_code == 404
+            client = client_for(env, 'change instance settings', base_url='http://abc.onion')
+            response = self.move(env, client, incoming, base_url='http://abc.onion')
             assert response.status_code == 200
             assert 'cannot own a community' in response.get_data(as_text=True)
             db.session.expire_all()
