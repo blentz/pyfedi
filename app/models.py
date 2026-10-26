@@ -134,7 +134,8 @@ def recent_ai_detections(user_id: int, detection: dict, now: float) -> list:
         redis.zadd(redis_key, {json.dumps(detection): now})
         redis.zremrangebyscore(redis_key, 0, now - 86400)   # entries older than 24h
         if is_onion_request():
-            redis.expire(redis_key, 86400)      # the onion store's tally is gone after a day, not only when the user posts again
+            # the onion store's tally is gone after a day, not only when the user posts again
+            redis.expire(redis_key, 86400)
         detections = redis.zrange(redis_key, 0, -1) + read_other_store(
             lambda other: other.zrangebyscore(redis_key, now - 86400, '+inf'), [])   # not pruned there: read-only
     return detections
