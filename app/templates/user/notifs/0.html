@@ -9,13 +9,9 @@
         </div>
         <div class="child">
             {{ _('New post by followed user ') }}
-            <a href="/u/{{ notification.targets.author_user_name }}">
-                {{ notification.targets.author_user_name }}
-            </a>
+            {{ target_link(notification.targets, 'author_user_name') }}
             {{ _('in') }} 
-            <a href="/c/{{ notification.targets.community_name }}">
-                {{ notification.targets.community_name }}
-            </a>
+            {{ target_link(notification.targets, 'community_name') }}
         </div>
     </td>
     {% include "user/notifs/_time_and_buttons.html" %}
