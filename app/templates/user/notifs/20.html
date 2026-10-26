@@ -32,7 +32,11 @@
             <h4>{{ _('User Reported') }}</h4>
             <div class="overflow-ellipses-parent text-truncate">
                 <div class="child my-1 {% if not notification.read %}unread{% endif %}">
-                    {{ _('Username') }}: <a href="{{ url_for('user.notification_goto', notification_id=notification.id) }}">{{ notification.targets.suspect_user_user_name }}</a>
+                    {% if target_hidden(notification.targets, 'suspect_user_user_name') -%}
+                        {{ _('Username') }}: {{ target_link(notification.targets, 'suspect_user_user_name') }}
+                    {%- else -%}
+                        {{ _('Username') }}: <a href="{{ url_for('user.notification_goto', notification_id=notification.id) }}">{{ notification.targets.suspect_user_user_name }}</a>
+                    {%- endif %}
                     {% if notification.title != 'Reported user' -%}
                         <br>{{ notification.title }}
                     {% endif -%}

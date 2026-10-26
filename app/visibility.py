@@ -62,7 +62,11 @@ def can_view(obj, viewer_id: Optional[int]) -> bool:
 
     Local-only content is for logged-in readers only (spec §3.4), so with no viewer it is never visible. The two
     clauses do not apply that rule, since admin pages pass them no viewer too: lists leave it out with
-    app.local_only.without_local_only."""
+    app.local_only.without_local_only.
+
+    It knows nothing of storefronts, so it is not follow-up F6's rule: a notification it lets a task fan out may name
+    a row that a storefront hides (`hidden_here`), and the page showing the notification asks that
+    (app.hidden_routes.notification_hidden)."""
     if obj.local_only and not viewer_id:
         return False
     visibility = obj.visibility if obj.visibility is not None else VISIBILITY_PUBLIC

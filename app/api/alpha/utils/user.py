@@ -15,6 +15,7 @@ from app.api.alpha.views import user_view, reply_view, post_view, community_view
 # The module, not the name: app.auth.util reaches this file, through the activitypub and api blueprints, before
 # find_user is defined (import cycle: app.auth.util)
 import app.auth.util as auth_util
+from app.hidden_routes import notification_hidden
 from app.local_names import local_clause, local_named
 from app.local_only import without_local_only_actors
 from app.constants import *
@@ -680,6 +681,9 @@ def get_user_notifications(auth, data):
     user_notifications = Notification.query.filter_by(user_id=user.id).order_by(desc(Notification.created_at)).\
         paginate(page=page, per_page=limit, error_out=False)
 
+    # none about something hidden here: its row would name it (follow-up F6)
+    shown = [item for item in user_notifications if not notification_hidden(item)]
+
     # currently supported notif types
     supported_notif_types = [
         NOTIF_USER,
@@ -693,7 +697,7 @@ def get_user_notifications(auth, data):
 
     # new
     if status == 'Unread' or status == 'New':
-        for item in user_notifications:
+        for item in shown:
             if item.read == False and item.notif_type in supported_notif_types:
                 if isinstance(item.subtype, str):
                     try:
@@ -704,7 +708,7 @@ def get_user_notifications(auth, data):
                         continue
     # all
     elif status == 'All':
-        for item in user_notifications:
+        for item in shown:
             if isinstance(item.subtype, str) and item.notif_type in supported_notif_types:
                 try:
                     notif = _process_notification_item(item)
@@ -714,7 +718,7 @@ def get_user_notifications(auth, data):
                     continue
     # read
     elif status == 'Read':
-        for item in user_notifications:
+        for item in shown:
             if item.read == True and item.notif_type in supported_notif_types:
                 if isinstance(item.subtype, str):
                     try:

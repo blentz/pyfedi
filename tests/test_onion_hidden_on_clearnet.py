@@ -454,3 +454,102 @@ def test_on_the_onion_the_admin_panel_lists_and_edits_them(app, panel, monkeypat
                                                   user=panel.admin).get_data(as_text=True)
     assert get(app, f'/admin/user/{panel.onion_bob.id}/edit', host=ONION, user=panel.admin).status_code == 200
     assert ONION in get(app, '/admin/instances', host=ONION, user=panel.admin).get_data(as_text=True)
+
+
+# --- notifications of a hidden post or reply (review I3, M3) ---------------------------------------------------------
+
+def notice(user, notif_type, url, subtype=None, **targets):
+    notification = Notification(user_id=user.id, title='ONIONTITLE', url=url, notif_type=notif_type, subtype=subtype,
+                                author_id=user.id, targets={'gen': '0', **targets})
+    db.session.add(notification)
+    db.session.commit()
+    return notification
+
+
+@pytest.fixture
+def notified(onion):
+    """One notification of each kind that names a post or reply, about the onion's ONIONPOST and its reply, for the first
+    domain's bob, who took part on the onion; and one about FIRSTPOST, the control."""
+    bob, post, reply = onion.first_bob, onion.post, onion.reply
+    about = dict(post_id=post.id, post_title='ONIONTITLE', comment_id=reply.id, comment_body='ONIONBODY',
+                 parent_reply_body='ONIONBODY', author_user_name=ONION_BOB, author_id=onion.onion_bob.id,
+                 community_name=ONION_ART, community_id=onion.onion_art.id)
+    onion.notices = [notice(bob, kind, f'/post/{post.id}', **about) for kind in (0, 1, 2, 5, 10, 11, 41, 999)]
+    onion.notices += [notice(bob, kind, f'/post/{post.id}/comment/{reply.id}#comment_{reply.id}', **about)
+                      for kind in (3, 4, 12)]
+    onion.notices.append(notice(bob, 6, f'/comment/{reply.id}', subtype='comment_mention', **about))
+    onion.notices.append(notice(bob, 20, '/admin/reports', subtype='post_reported', suspect_post_id=post.id,
+                                orig_post_title='ONIONTITLE', orig_post_body='ONIONBODY',
+                                suspect_user_user_name=ONION_BOB, suspect_user_id=onion.onion_bob.id))
+    onion.notices.append(notice(bob, 20, '/admin/reports', subtype='comment_reported', suspect_comment_id=reply.id,
+                                orig_comment_body='ONIONBODY', suspect_user_user_name=ONION_BOB,
+                                suspect_user_id=onion.onion_bob.id))
+    onion.control = notice(bob, 0, f'/post/{onion.first_post.id}', post_id=onion.first_post.id, post_title='FIRSTPOST',
+                           author_user_name='bob', author_id=bob.id, community_name='art',
+                           community_id=onion.first_art.id)
+    onion.control.title = 'FIRSTPOST'
+    db.session.commit()
+    return onion
+
+
+def test_a_notification_of_a_hidden_post_or_reply_shows_only_the_note_on_the_first_domain(app, notified):
+    body = get(app, '/notifications', user=notified.first_bob).get_data(as_text=True)
+    hidden = ('ONIONTITLE', 'ONIONBODY', f'/post/{notified.post.id}', f'/comment/{notified.reply.id}', ONION)
+    assert not near(body, *hidden), near(body, *hidden)
+    assert body.count(NOTE) == len(notified.notices)
+    assert 'FIRSTPOST' in body   # the control
+    for notification in notified.notices:   # each one's own row, when it is marked read or unread
+        for action in ('read', 'unread'):
+            row = Visitor(app, notified.first_bob, FIRST).post(f'/notification/{notification.id}/{action}')
+            text = row.get_data(as_text=True)
+            assert NOTE in text and not near(text, *hidden), (notification.notif_type, near(text, *hidden))
+
+
+def test_a_report_notification_about_an_onion_account_names_it_as_text_with_the_note(app, onion):
+    about = notice(onion.first_bob, 20, '/admin/reports', subtype='user_reported', suspect_user_user_name=ONION_BOB,
+                   suspect_user_id=onion.onion_bob.id)
+    control = notice(onion.first_bob, 20, '/admin/reports', subtype='user_reported', suspect_user_user_name='bob',
+                     suspect_user_id=onion.first_bob.id)
+    body = get(app, '/notifications', user=onion.first_bob).get_data(as_text=True)
+    assert body.count(NOTE) == 1 and ONION_BOB in body
+    assert f'/notification/{about.id}/goto' not in body and f'/notification/{control.id}/goto' in body
+
+
+def test_following_a_notification_of_a_hidden_post_answers_404_and_spells_no_onion_name(app, notified):
+    viewer = Visitor(app, notified.first_bob, FIRST)
+    response = viewer.get(f'/notification/{notified.notices[0].id}/goto')
+    assert response.status_code == 404 and 'Location' not in response.headers
+    response = viewer.get(f'/notification/{notified.control.id}/goto')
+    assert response.status_code == 302 and response.headers['Location'].endswith(f'/post/{notified.first_post.id}')
+
+
+def test_a_notification_naming_an_onion_account_by_its_handle_is_followed_nowhere(app, onion):
+    notification = notice(onion.first_bob, 13, f'/u/{ONION_BOB}', author_user_name=ONION_BOB,
+                          author_id=onion.onion_bob.id)
+    response = Visitor(app, onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
+    assert response.status_code == 404 and 'Location' not in response.headers
+
+
+def test_a_notification_whose_link_is_no_page_or_none_is_shown_as_it_was(app, onion):
+    for url in ('/nowhere/at/all', None, f'/post/{2 ** 30}'):
+        notice(onion.first_bob, 999, url)
+    body = get(app, '/notifications', user=onion.first_bob).get_data(as_text=True)
+    assert NOTE not in body and body.count('ONIONTITLE') == 3   # the title these test notifications all carry
+
+
+def test_on_the_onion_the_notifications_show_them(app, notified):
+    body = get(app, '/notifications', host=ONION, user=notified.first_bob).get_data(as_text=True)
+    assert 'ONIONTITLE' in body and NOTE not in body
+    response = Visitor(app, notified.first_bob, ONION).get(f'/notification/{notified.notices[0].id}/goto')
+    assert response.status_code == 302
+
+
+def test_the_apis_notifications_leave_them_out_on_the_first_domain(app, notified, monkeypatch):
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    for notification in [*notified.notices, notified.control]:
+        notification.subtype = notification.subtype or 'new_post'
+    db.session.commit()
+    body = api(app, '/api/alpha/user/notifications?status=All&limit=50', notified.first_bob).get_data(as_text=True)
+    assert 'ONIONTITLE' not in body and 'ONIONPOST' not in body and 'FIRSTPOST' in body
+    on_onion = api(app, '/api/alpha/user/notifications?status=All&limit=50', notified.first_bob, host=ONION)
+    assert 'ONIONPOST' in on_onion.get_data(as_text=True)

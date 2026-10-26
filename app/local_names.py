@@ -127,6 +127,11 @@ def target_href(targets: dict | None, name_key: str) -> str | None:
     return _target(targets, name_key)[0]
 
 
+def target_hidden(targets: dict | None, name_key: str) -> bool:
+    """Whether the account or community whose stored name is `targets[name_key]` is hidden here (follow-up F6)."""
+    return _target(targets, name_key)[1]
+
+
 def target_link(targets: dict | None, name_key: str, css_class: str = '') -> Markup:
     """`targets[name_key]` as a link by `target_href`, or as plain text when it has none; a target hidden here is
     plain text with `hidden_note` beside it."""
