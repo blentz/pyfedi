@@ -313,3 +313,11 @@ def test_the_protocol_handler_opens_a_visible_peer_post(app, world):
     post = peer_post(world)
     response = handler(app, caller(), post.ap_id.replace('https://', 'web+ap://'))
     assert response.status_code == 302 and response.headers['Location'].endswith(f'/post/{post.id}')
+
+
+def test_a_reply_under_a_followers_only_post_still_resolves(app, world):
+    post = peer_post(world)
+    reply = peer_reply(post)
+    post.visibility = VISIBILITY_FOLLOWERS
+    db.session.commit()
+    assert resolve(caller(), reply.ap_id)['comment']['comment']['id'] == reply.id
