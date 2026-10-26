@@ -61,6 +61,7 @@ from app.utils import render_template, markdown_to_html, user_access, markdown_t
 from app.rss_extras import RSSFeed
 import app.api.alpha.views as alpha_views
 from app.utils import user_filters_languages
+from app.hidden_routes import notification_hidden, path_hidden_here
 from app.local_names import local_clause, local_named, named_by_actor, notification_href
 from app.storefront import current_storefront, domain_for_host, hosted_instance_ids, is_local_host, path_name, storefront_query_cache_key, \
     storefront_url
@@ -1472,11 +1473,20 @@ def notifications():
                            )
 
 
+def notification_template(notification) -> str:
+    """The template of `notification`'s row: its type's, or only the note when it is about something hidden here."""
+    return 'user/notifs/hidden.html' if notification_hidden(notification) else \
+        f'user/notifs/{notification.notif_type}.html'
+
+
 @bp.route('/notification/<int:notification_id>/goto', methods=['GET', 'POST'])
 @login_required
 def notification_goto(notification_id):
     notification = db.session.get(Notification, notification_id) or abort(404)
     if notification.user_id == current_user.id:
+        href = notification_href(notification)
+        if path_hidden_here(href):
+            abort(404)   # what its page would answer, with no Location to spell its name (follow-up F6)
         if not notification.read:
             current_user.unread_notifications -= 1
         notification.read = True
@@ -1485,7 +1495,7 @@ def notification_goto(notification_id):
         if notification.url == "/admin/reports" and notification.targets and "report_id" in notification.targets:
             dest_url = notification.url + f"#report_{notification.targets['report_id']}"
         else:
-            dest_url = notification_href(notification) or url_for('user.notifications')
+            dest_url = href or url_for('user.notifications')
 
         return redirect(dest_url)
     else:
@@ -1515,7 +1525,7 @@ def notification_read(notification_id):
             current_user.unread_notifications -= 1
         notification.read = True
         db.session.commit()
-        return render_template(f"user/notifs/{notification.notif_type}.html", notification=notification,
+        return render_template(notification_template(notification), notification=notification,
                                markdown_to_html=markdown_to_html)
     else:
         abort(403)
@@ -1530,7 +1540,7 @@ def notification_unread(notification_id):
             current_user.unread_notifications += 1
         notification.read = False
         db.session.commit()
-        return render_template(f"user/notifs/{notification.notif_type}.html", notification=notification,
+        return render_template(notification_template(notification), notification=notification,
                                markdown_to_html=markdown_to_html)
     else:
         abort(403)

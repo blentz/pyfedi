@@ -1,0 +1,7 @@
+{# A notification about something hidden on this storefront (follow-up F6): only the note, no link, title or body #}
+<tr class="align-middle">
+    <td width="*">
+        <div class="child my-1 {% if not notification.read %}unread{% endif %}">{{ hidden_note() }}</div>
+    </td>
+    {% include "user/notifs/_time_and_buttons.html" %}
+</tr>

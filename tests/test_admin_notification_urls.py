@@ -15,6 +15,7 @@ from app.constants import NOTIF_REPORT
 from app.local_names import notification_href
 from app.models import Notification, PostReply
 from app.utils import utcnow
+from tests.conftest import forget_login
 from tests.factories import make_post
 from tests.test_models_post_new_branches import env as post_env  # noqa: F401  (the fixture)
 from tests.test_models_post_new_branches import new
@@ -98,8 +99,16 @@ def test_an_admin_following_the_onion_bobs_notification_reaches_the_onion_bob(ap
     db.session.add(notification)
     db.session.commit()
     client = app.test_client()
+    with client.session_transaction(base_url='http://abc.onion') as session:
+        session['_user_id'] = str(admin.id)
+        session['_fresh'] = True
+    response = client.get(f'/notification/{notification.id}/goto', base_url='http://abc.onion')
+    assert response.headers['Location'].endswith(f'/user/{bobs.onion.id}')
+    # follow-up F6: off the onion it is followed nowhere, as its page would answer, with no Location to name it
+    client = app.test_client()
     with client.session_transaction() as session:
         session['_user_id'] = str(admin.id)
         session['_fresh'] = True
+    forget_login()
     response = client.get(f'/notification/{notification.id}/goto')
-    assert response.headers['Location'].endswith(f'/user/{bobs.onion.id}')
+    assert response.status_code == 404 and 'Location' not in response.headers

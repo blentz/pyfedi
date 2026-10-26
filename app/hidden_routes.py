@@ -17,9 +17,13 @@ row, and Postgres refuses it in a string; so is a host argument that names no ho
 
 Every argument of every route is either in the table or on `NON_OBJECT_ARGUMENTS`, the arguments that name nothing a
 reader could be hidden from; tests/test_hidden_routes_table.py walks the URL map and fails on any other."""
-from flask import abort, request
+from urllib.parse import urlsplit
+
+from flask import abort, current_app, request
+from werkzeug.exceptions import HTTPException
 
 from app import db
+from app.local_names import hidden_target
 from app.local_only import conversation_hidden_here, hidden_here, hides_anything_here
 from app.models import ChatMessage, Community, Conversation, Instance, Post, PostReply, User
 from app.storefront import current_storefront, host_hidden_here, instance_visible_here, normalise_host
@@ -123,13 +127,15 @@ def actor_kind(rule: str):
     return next((hidden for prefix, hidden in _ACTORS.items() if rule.startswith(prefix)), None)
 
 
-def _value_hidden(name: str, value, rule: str) -> bool:
+def _value_hidden(name: str, value, rule: str, missing: bool = True) -> bool:
+    """Whether the argument `name`'s `value` in the route `rule` names a row hidden here; an id nobody holds counts
+    as hidden when `missing` says so (the gate's answer for both is one)."""
     if name in _IDS:
         if not isinstance(value, int) or not 0 < value <= _PG_INT_MAX:
             return False   # no row can have it: the view answers as for any id nobody holds
         model, hidden = _IDS[name]
         row = db.session.get(model, value)
-        return row is None or hidden(row)
+        return missing if row is None else hidden(row)
     if name == 'actor':
         return actor_kind(rule)(value)
     return _NAMES[name](value)
@@ -148,3 +154,33 @@ def refuse_hidden_route() -> None:
         return
     if any(_value_hidden(name, value, rule.rule) for name, value in named):
         abort(404)
+
+
+def path_hidden_here(path: str | None) -> bool:
+    """Whether `path`, one of our own pages (a notification's link), names a row hidden here, by the gate's table, so
+    it is never followed or linked: the redirect would spell the onion's name. A path that is no page of ours, or
+    whose row is gone, names nothing hidden."""
+    if not path or not hides_anything_here():
+        return False
+    try:
+        rule, args = current_app.url_map.bind_to_environ(request.environ).match(
+            urlsplit(path).path, method='GET', return_rule=True)
+    except (HTTPException, ValueError):   # not a page of ours, a redirect, a path nobody could parse
+        return False
+    named = [(name, value) for name, value in args.items() if name == 'actor' or name in OBJECT_ARGUMENTS]
+    return any(not _junk(name, value) and _value_hidden(name, value, rule.rule, missing=False)
+               for name, value in named)
+
+
+# The ids a notification's `targets` may hold of the post or reply it is about
+_NOTIFIED = (('post_id', Post), ('comment_id', PostReply), ('suspect_post_id', Post),
+             ('suspect_comment_id', PostReply))
+
+
+def notification_hidden(notification) -> bool:
+    """Whether `notification` is about something hidden here (follow-up F6): its link names a hidden row, or its
+    targets a hidden post or reply. Its page then shows only the note (`hidden_note`): no link, title or body, which
+    are the hidden row's."""
+    targets = notification.targets or {}
+    return path_hidden_here(notification.url) or any(
+        isinstance(targets.get(key), int) and hidden_target(model, targets[key]) for key, model in _NOTIFIED)
