@@ -253,13 +253,58 @@ def test_a_report_with_no_usable_post_id_shows_its_text(app, onion):
     assert 'a title' in html and 'href="/post/' not in html
 
 
-def test_a_first_domain_post_in_a_report_is_still_a_link(app, onion):
+def test_a_first_domain_reply_in_a_report_is_still_a_link(app, onion):
+    reply = make_post_reply(onion.first_post, onion.first_bob)
     report = SimpleNamespace(id=1, reasons='spam', description='', is_local=lambda *a, **k: True,
                              created_at=datetime(2026, 1, 1), updated=datetime(2026, 1, 1),
-                             targets={'suspect_comment_id': onion.first_post.id, 'orig_comment_body': 'body'})
+                             targets={'suspect_comment_id': reply.id, 'orig_comment_body': 'body',
+                                      'source_instance_domain': FIRST})
     with default_request(app):
         html = render_template('admin/reports/comment_report.html', report=report)
+    assert f'href="/comment/{reply.id}"' in html and f'href="/instance/{FIRST}"' in html
     assert NOTE not in html
+
+
+def report_of(kind, **targets):
+    return SimpleNamespace(id=1, reasons='spam', description='', is_local=lambda *a, **k: True,
+                           created_at=datetime(2026, 1, 1), updated=datetime(2026, 1, 1),
+                           targets={'source_instance_domain': ONION, **targets})
+
+
+def test_a_report_of_a_hidden_post_keeps_its_title_but_not_its_body_or_the_onions_instance_link(app, onion):
+    reports = {'post_report': report_of('post', suspect_post_id=onion.post.id, orig_post_title='ONIONTITLE',
+                                        orig_post_body='ONIONBODY'),
+               'comment_report': report_of('comment', suspect_comment_id=onion.reply.id, orig_comment_body='ONIONTEXT'),
+               'user_report': report_of('user', suspect_user_user_name=ONION_BOB, suspect_user_id=onion.onion_bob.id),
+               'community_report': report_of('community', suspect_community_name=ONION_ART,
+                                             suspect_community_id=onion.onion_art.id)}
+    for template, report in reports.items():
+        with default_request(app):
+            html = render_template(f'admin/reports/{template}.html', report=report)
+        assert 'ONIONBODY' not in html and f'/instance/{ONION}' not in html, (template, near(html, 'ONIONBODY', '/instance/'))
+        assert NOTE in html, template
+    with default_request(app):
+        html = render_template('admin/reports/post_report.html', report=reports['post_report'])
+    assert 'ONIONTITLE' in html
+    with default_request(app):
+        html = render_template('admin/reports/comment_report.html', report=reports['comment_report'])
+    assert 'ONIONTEXT' in html
+    with onion_request(app):   # on the onion the body and the instance link are shown
+        html = render_template('admin/reports/post_report.html', report=reports['post_report'])
+    assert 'ONIONBODY' in html and f'href="/instance/{ONION}"' in html
+
+
+def test_a_community_moderators_report_list_does_not_link_a_hidden_target(app, onion):
+    for suspect in ({'suspect_post_id': onion.in_first.id}, {'suspect_user_id': onion.onion_bob.id},
+                    {'suspect_post_id': onion.first_post.id}):
+        db.session.add(Report(reasons='spam', description='REPORTED', type=1, reporter_id=onion.first_bob.id,
+                              in_community_id=onion.first_art.id, status=0, source_instance_id=1, targets={},
+                              **suspect))
+    db.session.commit()
+    body = get(app, '/community/art/moderate', user=onion.admin).get_data(as_text=True)
+    assert f'href="/post/{onion.in_first.id}"' not in body and f'href="/user/{onion.onion_bob.id}"' not in body
+    assert body.count(NOTE) == 2
+    assert f'href="/post/{onion.first_post.id}"' in body   # the control
 
 
 # --- lists of people ---------------------------------------------------------------------------------------------

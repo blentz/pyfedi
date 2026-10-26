@@ -49,7 +49,9 @@
                             Actions
                           </button>
                           <ul class="dropdown-menu">
-                            {% if report.suspect_conversation_id %}
+                            {% if report_target_hidden(report) %}
+                                <li class="dropdown-item">{{ hidden_note() }}</li>
+                            {% elif report.suspect_conversation_id %}
                                 <li><a class="dropdown-item" href="/chat/{{ report.suspect_conversation_id }}#message">{{ _('View') }}</a></li>
                             {% elif report.suspect_post_reply_id %}
                                 <li><a class="dropdown-item" href="/post/{{ report.suspect_post_id }}#comment_{{ report.suspect_post_reply_id }}">{{ _('View') }}</a></li>

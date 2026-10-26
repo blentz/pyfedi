@@ -20,7 +20,11 @@
                         <p>{{ _('Original Post Body') }}:  </p>
                     </div>
                     <div class="flex-column flex-grow-1 pl-1">
-                        <p class="text-start">{{ report.targets.orig_post_body }}</a>
+                        {% if content_hidden(report.targets, 'suspect_post_id') -%}
+                            <p class="text-start">{{ hidden_note() }}</p>
+                        {%- else -%}
+                            <p class="text-start">{{ report.targets.orig_post_body }}</p>
+                        {%- endif %}
                     </div>
                 </div>                      
                 <div class="d-flex">
@@ -37,7 +41,7 @@
                         <p>{{ _('Source Instance') }}:  </p>
                     </div>
                     <div class="flex-column flex-grow-1 pl-1">
-                        <a href="/instance/{{ report.targets.source_instance_domain }}">{{ report.targets.source_instance_domain }}</a>
+                        {{ instance_link(report.targets.source_instance_domain) }}
                     </div>
                 </div>  
                 {% endif %}

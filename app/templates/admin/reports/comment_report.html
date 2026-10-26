@@ -29,7 +29,7 @@
                         <p>{{ _('Suspect User Instance') }}:  </p>
                     </div>
                     <div class="flex-column flex-grow-1 pl-1">
-                        <a href="/instance/{{ report.targets.source_instance_domain }}">{{ report.targets.source_instance_domain }}</a>
+                        {{ instance_link(report.targets.source_instance_domain) }}
                     </div>
                 </div>  
                 {% endif %}
