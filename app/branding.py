@@ -16,6 +16,7 @@ from bs4.element import Stylesheet
 from flask import current_app
 
 from app import cache, db, shaped_memo_name
+from app.log_scrub import ONION_SAFE   # these lines name the site's own settings and host, never a visitor
 # The modules, not the names: app.storefront imports this module to clear its memo, so whichever of the two is imported
 # first finds the other mid-import (import cycle: storefront)
 import app.models as models
@@ -276,9 +277,11 @@ def onion_safe(branding: Branding, own_host: str) -> Branding:
             changes[field] = ''
         dropped += [(field, url) for url in markup]
     for field in unfinished:
-        current_app.logger.info('branding: %s dropped on %s: it ends inside an unfinished tag or other markup', field, host)
+        current_app.logger.info('branding: %s dropped on %s: it ends inside an unfinished tag or other markup', field, host,
+                                   extra=ONION_SAFE)
     for field, url in dict.fromkeys(dropped):
-        current_app.logger.info('branding: %s dropped from %s on %s: off-site on the onion', url, field, host)
+        current_app.logger.info('branding: %s dropped from %s on %s: off-site on the onion', url, field, host,
+                                   extra=ONION_SAFE)
     return branding._replace(**changes) if changes else branding
 
 

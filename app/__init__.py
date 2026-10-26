@@ -2,7 +2,7 @@
 # You should have received a copy of the GPL along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 import logging
-from logging.handlers import SMTPHandler, RotatingFileHandler
+from logging.handlers import SMTPHandler
 import os
 import warnings
 from PIL import Image
@@ -31,6 +31,7 @@ from config import Config
 from app.constants import IMAGE_PIXEL_CAP
 from app.pinned_http import pinned_transport
 from app.cookies import StorefrontLoginManager, StorefrontSessionInterface, secure_set_cookies
+from app.log_scrub import log_onion_safe_exception, scrub as onion_scrub
 from app.onion import is_onion_request, onion_rate_key
 from app.onion_store import OnionRoutedStorage, RefusedOnionStore, check_onion_store  # noqa: F401 -- OnionRoutedStorage registers the onion-routed scheme RATELIMIT_STORAGE_URI names
 import sentry_sdk
@@ -472,19 +473,15 @@ def create_app(config_class=Config):
             subject='PieFed error',
             credentials=auth, secure=secure, timeout=5.0)
         mail_handler.setLevel(logging.ERROR)
+        mail_handler.addFilter(onion_scrub)
         app.logger.addHandler(mail_handler)
 
-    # log rotation
-    if not os.path.exists('logs'):
-        os.mkdir('logs')
-    file_handler = RotatingFileHandler('logs/pyfedi.log',
-                                       maxBytes=1002400, backupCount=15)
-    file_handler.setFormatter(logging.Formatter(
-        '%(asctime)s %(levelname)s: %(message)s '
-        '[in %(pathname)s:%(lineno)d]'))
-    file_handler.setLevel(logging.INFO)
-    app.logger.addHandler(file_handler)
-
+    # No log file: the journal (stderr) is the only log. A record of an onion request is scrubbed on the record, so
+    # every handler sees the same one; the handlers carry the filter too because loggers below `app` skip app.logger's.
+    app.logger.addFilter(onion_scrub)
+    for handler in app.logger.handlers:
+        handler.addFilter(onion_scrub)
+    log_onion_safe_exception(app)
     app.logger.setLevel(logging.INFO)
 
     # Load plugins

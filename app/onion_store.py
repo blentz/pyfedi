@@ -27,6 +27,7 @@ from markupsafe import escape
 from redis.exceptions import ConnectionError as RedisConnectionError, RedisError
 
 import app as app_pkg
+from app.log_scrub import ONION_SAFE
 from app.onion import is_api_path, is_onion_request, single_address
 
 ONION_ROUTED_SCHEME = 'onion-routed'
@@ -101,8 +102,8 @@ def read_other_store(read, default):
         return default
     try:
         return read(app_pkg.onion_redis_client)
-    except RedisError as error:
-        current_app.logger.warning(f'onion store unavailable, its tally skipped: {error}')
+    except RedisError:
+        current_app.logger.warning('onion store unavailable, its tally skipped', extra=ONION_SAFE)
         return default
 
 
@@ -131,7 +132,7 @@ def onion_store_needed():
     except RedisError:
         if not is_onion_request():
             raise
-        current_app.logger.warning('onion store unavailable')
+        current_app.logger.warning('onion store unavailable', extra=ONION_SAFE)
         abort(onion_store_unavailable())
 
 
@@ -144,7 +145,7 @@ def onion_store_optional():
     except RedisError:
         if not is_onion_request():
             raise
-        current_app.logger.warning('onion store unavailable')
+        current_app.logger.warning('onion store unavailable', extra=ONION_SAFE)
 
 
 class OnionRoutedStorage(Storage):
@@ -170,8 +171,8 @@ class OnionRoutedStorage(Storage):
     def _onion(self, method: str, *args):
         try:
             return getattr(self.onion, method)(*args)
-        except self.onion.base_exceptions as error:
-            current_app.logger.warning(f'onion rate-limit store unavailable, counting in memory: {error}')
+        except self.onion.base_exceptions:
+            current_app.logger.warning('onion rate-limit store unavailable, counting in memory', extra=ONION_SAFE)
             if self.onion_fallback is None:
                 self.onion_fallback = MemoryStorage()
             return getattr(self.onion_fallback, method)(*args)

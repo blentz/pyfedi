@@ -25,6 +25,7 @@ from app.ldap_utils import sync_user_to_ldap
 from app.local_only import local_only_visible, local_only_visible_rss, refuses_remote_contact, \
     remote_contact_refusal_message, user_local_only, without_local_only
 from app.visibility import OPEN_VISIBILITIES, visible_to_clause
+from app.log_scrub import log_ldap_sync_failure
 from app.onion import has_real_ip, is_onion_request
 from app.onion_store import onion_store_needed, request_redis
 from app.models import Post, Community, CommunityMember, User, PostReply, Notification, utcnow, File, Site, \
@@ -393,7 +394,7 @@ def edit_profile(actor):
             )
         except Exception as e:
             # Log error but don't fail the profile update
-            current_app.logger.error(f"LDAP sync failed for user {current_user.user_name}: {e}")
+            log_ldap_sync_failure(current_user.user_name, e)
 
         cache.delete_memoized(user_pronouns)
         cache.delete_memoized(alpha_views.user_view)

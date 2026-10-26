@@ -27,6 +27,7 @@ from app.storefront import (DomainInfo, current_storefront, default_domain, doma
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role, dummy_password_hash, \
     verify_password_hash
 from app.onion import apply_audit, is_onion_request, stamp_activity
+from app.log_scrub import log_ldap_sync_failure
 from app.onion_account import audit_country, audit_ip, is_onion_account
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message, prepare_onion_proof
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, \
@@ -712,7 +713,7 @@ def sync_user_with_ldap(user, password):
     try:
         sync_user_to_ldap(user.user_name, user.email, password.strip())
     except Exception as e:
-        current_app.logger.error(f"LDAP sync failed for user {user.user_name}: {e}")
+        log_ldap_sync_failure(user.user_name, e)
 
 
 def determine_next_page():

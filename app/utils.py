@@ -3670,11 +3670,9 @@ LOGGABLE_IP_RE = re.compile(r'[0-9a-fA-F:.]+')
 
 
 def loggable_client(client: str | None = None) -> str:
-    """What a fail2ban line may say about the caller: the address, `onion` for an onion request (they all share the
-    proxy's address, so no ban can act on it), or `invalid` for anything outside [0-9a-fA-F:.]. `client` is a peer
-    address given by a caller with no HTTP request to read one from (NNTP, which is not served on the onion)."""
-    if client is None and is_onion_request():
-        return 'onion'
+    """What a fail2ban line may say about the caller: the address, or `invalid` for anything outside [0-9a-fA-F:.].
+    `client` is a peer address given by a caller with no HTTP request to read one from (NNTP, which is not served on
+    the onion). An onion request never reaches here: its fail2ban lines are not written at all."""
     client = ip_address() if client is None else client
     return client if client and LOGGABLE_IP_RE.fullmatch(client) else 'invalid'
 
@@ -3691,24 +3689,26 @@ def fetched_by_hand() -> bool:
 # NNTP credential check. A refusal of an account that authenticated correctly (banned, deleted, unverified,
 # registrations closed, a declined country, an OAuth profile with no email or an email already in use) is not one,
 # whichever way the credential was accepted. The one exception is the onion's hidden-backoff refusal, which logs as the
-# wrong password it imitates; it is always `ip=onion`, which no ban acts on.
+# wrong password it imitates; it is not logged at all on the onion.
 def log_login_failure(client: str | None = None):
     """One WARNING line for a failed credential check: `auth: login failed ip=<ip>`, which fail2ban on the host
     matches to ban a clearnet address that keeps failing. `client` is the peer address of a login that has no HTTP
     request to read one from (NNTP, which is not served on the onion); otherwise the request's address is used.
 
-    Onion requests all share the proxy's address (get_ip_address() is '' for them), so they log `ip=onion`, which no
-    ban can ever act on. An address with anything outside [0-9a-fA-F:.] logs as `ip=invalid`. The line never holds
+    An onion request writes no line: they all share the proxy's address, so no ban could act on one, and the line
+    would only record that the onion was used. An address with anything outside [0-9a-fA-F:.] logs as `ip=invalid`. The line never holds
     the user name or email. Callers log only after a password was really checked (or the account was not found):
     a refused proof-of-work or wait token, and a visible wait refusal, are not failed checks.
     """
-    current_app.logger.warning('auth: login failed ip=%s', loggable_client(client))
+    if not is_onion_request():
+        current_app.logger.warning('auth: login failed ip=%s', loggable_client(client))
 
 
 def log_register_attempt():
     """One WARNING line per registration POST, valid or not: `auth: register attempt ip=<ip>`, which fail2ban on the
     host matches to ban a clearnet address that keeps posting the form. The address is as in log_login_failure."""
-    current_app.logger.warning('auth: register attempt ip=%s', loggable_client())
+    if not is_onion_request():
+        current_app.logger.warning('auth: register attempt ip=%s', loggable_client())
 
 
 # What scanners ask for: WordPress, dotenv files, phpMyAdmin, CGI, XML-RPC. Matched at the start of the path, so a
@@ -3718,7 +3718,8 @@ PROBE_PATH_RE = re.compile(r'/(?:wp-|\.env|phpmyadmin|cgi-bin|xmlrpc\.php)')
 
 def log_probe_refused():
     """One WARNING line for a probe path the site answered with a 4xx: `scan: probe refused ip=<ip>`, for fail2ban."""
-    current_app.logger.warning('scan: probe refused ip=%s', loggable_client())
+    if not is_onion_request():
+        current_app.logger.warning('scan: probe refused ip=%s', loggable_client())
 
 
 def user_ip_banned() -> bool:
