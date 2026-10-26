@@ -877,6 +877,7 @@ def test_targets_data_records_post_comment_and_falls_back_to_username(
     assert notification.targets == {
         'gen': '0',
         'post_id': s.post.id,
+        'author_id': s.user.id,
         'author_user_name': s.user.user_name,
         'comment_id': s.reply.id,
         'comment_body': s.reply.body,

@@ -3290,6 +3290,7 @@ class TestSuspiciousDomainNotifications:
                                    'orig_post_title': UPDATE_NAME,
                                    'orig_post_body': SEEDED_BODY,
                                    'orig_post_domain': SUSPICIOUS_DOMAIN,
+                                   'suspect_user_id': post.user_id,
                                    'suspect_user_user_name': post.author.ap_id}
 
     def test_an_admin_holding_the_admin_role_is_notified(
@@ -3339,6 +3340,7 @@ class TestSuspiciousDomainNotifications:
                                    'orig_post_title': UPDATE_NAME,
                                    'orig_post_body': SEEDED_BODY,
                                    'orig_post_domain': SUSPICIOUS_DOMAIN,
+                                   'suspect_user_id': post.user_id,
                                    'suspect_user_user_name': post.author.ap_id}
 
     def test_user_one_is_notified_as_an_admin_without_holding_the_admin_role(

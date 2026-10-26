@@ -1294,7 +1294,7 @@ def test_the_notify_dict_carries_every_key_the_four_writers_share(db_session, ht
     # rename is what makes all four writers of this dict share one shape, which is
     # what this test is for.
     assert set(targets) == {'gen', 'post_id', 'orig_post_title', 'orig_post_body',
-                            'orig_post_domain', 'suspect_user_user_name'}
+                            'orig_post_domain', 'suspect_user_id', 'suspect_user_user_name'}
     assert targets['gen'] == '0'
     assert targets['post_id'] == s.post.id
     assert targets['orig_post_title'] == 'shaped'
