@@ -26,7 +26,7 @@ from app.storefront import (DomainInfo, current_storefront, default_domain, doma
                             instance_id_of, public_registration_open)
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role, dummy_password_hash, \
     verify_password_hash
-from app.onion import apply_audit, is_onion_request
+from app.onion import apply_audit, is_onion_request, stamp_activity
 from app.onion_account import audit_country, audit_ip, is_onion_account
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message, prepare_onion_proof
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, \
@@ -384,9 +384,9 @@ def create_new_user_from_ldap(user_name, email, password, ip):
         referrer=session.get("Referer", ""),
         alt_user_name=gibberish(random.randint(8, 20)),
         font=get_font_preference(),
-        language_id=g.site.language_id,
-        last_seen=utcnow()
+        language_id=g.site.language_id
     )
+    stamp_activity(user)
     apply_audit(user, 'ip_address', audit_ip(user, ip))
     if current_app.config['CONTENT_WARNING']:
         user.hide_nsfw = 0
@@ -700,7 +700,7 @@ def log_user_in(user, form, ip, country, ldap_sync=True):
 
 
 def update_user_session(user, form, ip, country):
-    user.last_seen = utcnow()
+    stamp_activity(user)
     apply_audit(user, 'ip_address', audit_ip(user, ip))
     if user.timezone is None:
         user.timezone = form.timezone.data

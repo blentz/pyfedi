@@ -4,7 +4,7 @@ from app import db, cache
 from app.auth.util import find_user, get_country
 from app.ldap_utils import sync_user_to_ldap
 from app.models import IpBan, utcnow, dummy_password_hash, verify_password_hash
-from app.onion import apply_audit, is_onion_request
+from app.onion import apply_audit, is_onion_request, stamp_activity
 from app.onion_account import audit_country, audit_ip, is_onion_account
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message
 from app.utils import ip_address, user_ip_banned, user_cookie_banned, banned_ip_addresses, log_login_failure
@@ -47,7 +47,7 @@ def api_log_user_in(input):
         raise Exception('incorrect_login')
 
     onion_login_succeeded(username, user)
-    user.last_seen = utcnow()
+    stamp_activity(user)
     apply_audit(user, 'ip_address', audit_ip(user, ip))
     apply_audit(user, 'ip_address_country', audit_country(user, get_country(ip, user=user)))
     db.session.commit()

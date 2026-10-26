@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ipaddress
 import secrets
+from datetime import datetime, timezone
 from functools import wraps
 from typing import TypeVar
 from urllib.parse import urlsplit
@@ -121,6 +122,22 @@ def apply_audit(obj, field: str, result) -> None:
     """Set `obj.field` to an audit result, unless the result is `KEEP`."""
     if result is not KEEP:
         setattr(obj, field, result)
+
+
+def utcnow() -> datetime:
+    """Now, as the naive UTC datetime the columns hold (the same value as `app.models.utcnow`, which this module may not
+    import)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def stamp_activity(user) -> None:
+    """Record that `user` was active just now: `last_seen` is now and the unread-notifications email may be sent again.
+    An onion request records nothing, so no stored time links an account to onion use (spec 2026-10-26, goal 3). Work
+    outside a request (a scheduled task, federation) is not an onion request and stamps as before."""
+    if is_onion_request():
+        return
+    user.last_seen = utcnow()
+    user.email_unread_sent = False
 
 
 def is_api_path() -> bool:
