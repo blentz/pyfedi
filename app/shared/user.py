@@ -5,7 +5,7 @@ from sqlalchemy import text
 
 from app import db, cache, plugins
 from app.constants import *
-from app.local_only import REMOTE_CONTACT_REFUSAL, refuses_remote_contact
+from app.local_only import REMOTE_CONTACT_REFUSAL, hidden_here, refuses_remote_contact
 from app.onion import has_real_ip
 from app.models import UserBlock, NotificationSubscription, User, IpBan, UserFollower, Notification, BotChallenge, \
     Conversation
@@ -92,7 +92,9 @@ def unblock_another_user(person_id, src, auth=None):
 
 def subscribe_user(person_id: int, subscribe, src, auth=None):
     user_id = authorise_api_user(auth) if src == SRC_API else current_user.id
-    person = db.session.query(User).filter_by(id=person_id, banned=False).first() or abort(404)
+    person = db.session.query(User).filter_by(id=person_id, banned=False).first()
+    if person is None or hidden_here(person, True):   # an account hidden here is as one nobody holds (F6)
+        abort(404)
 
     if src == SRC_WEB:
         subscribe = False if person.notify_new_posts(user_id) else True
