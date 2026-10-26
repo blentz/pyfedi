@@ -393,6 +393,16 @@ def test_a_fill_is_refused_without_a_request_while_the_disk_is_nearly_full(remot
     assert fill(REMOTE, max_seconds=15) is not None
 
 
+def test_the_disk_reserve_is_configurable_for_a_cache_on_its_own_volume(remote, app, monkeypatch):
+    """A cache on its own small volume shares it with nothing, so MEDIA_PROXY_DISK_RESERVE replaces the 20 GiB."""
+    monkeypatch.setitem(app.config, 'MEDIA_PROXY_DISK_RESERVE', 256 * 1024 ** 2)
+    free_disk(monkeypatch, 256 * 1024 ** 2 - 1)
+    remote.routes[REMOTE] = image()
+    assert fill(REMOTE, max_seconds=15) is None
+    free_disk(monkeypatch, 256 * 1024 ** 2)
+    assert fill(REMOTE, max_seconds=15) is not None
+
+
 def chunked(count, size=60):
     return httpx.Response(200, headers={'Content-Type': 'video/mp4'}, content=iter([b'x' * size] * count))
 

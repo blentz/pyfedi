@@ -211,6 +211,10 @@ class Config(object):
 
     # Where the onion remote-media proxy caches fetched files; never inside media/
     MEDIA_PROXY_DIR = os.environ.get('MEDIA_PROXY_DIR') or os.path.join(basedir, 'media_proxy')
+    # Free bytes a fill leaves on the cache's disk; unset means 20 GiB (DISK_RESERVE in app/onion_media_fill.py),
+    # for a cache that shares its disk with Postgres. A cache on a volume of its own can set much less.
+    MEDIA_PROXY_DISK_RESERVE = int(os.environ['MEDIA_PROXY_DISK_RESERVE']) \
+        if os.environ.get('MEDIA_PROXY_DISK_RESERVE') else None
 
     # Image formats
     MEDIA_IMAGE_MAX_DIMENSION = int(os.environ.get('MEDIA_IMAGE_MAX_DIMENSION') or 2000)
