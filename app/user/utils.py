@@ -13,6 +13,7 @@ from app.constants import AP_FETCH_ACCEPT, POST_STATUS_REVIEWING
 from app.federation_urls import MissingInstanceKey, activity_id, instance_actor_signing
 from app.local_names import local_named, split_local_name
 from app.mentions import stored_user, user_address_parts
+from app.onion import has_real_ip
 from app.models import User, CommunityMember, Community, BannedInstances, Post, \
     PostVote, ArchivedPostReply, PostReply, UserNote
 from app.shared.tasks import task_selector
@@ -395,7 +396,7 @@ def _get_user_same_ip(user):
 
     if current_user.is_anonymous or not current_user.is_admin_or_staff():
         return []       # the template gates this too; the gate belongs here as well
-    if user.ip_address is None or user.ip_address == '':
+    if not has_real_ip(user):
         return []
 
     return User.query.filter_by(ip_address=user.ip_address).filter(User.ap_id == None, User.id != user.id).all()

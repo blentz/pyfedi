@@ -6,6 +6,7 @@ from sqlalchemy import text
 from app import db, cache, plugins
 from app.constants import *
 from app.local_only import REMOTE_CONTACT_REFUSAL, refuses_remote_contact
+from app.onion import has_real_ip
 from app.models import UserBlock, NotificationSubscription, User, IpBan, UserFollower, Notification, BotChallenge, \
     Conversation
 from app.shared.tasks import task_selector
@@ -202,7 +203,7 @@ def ban_user(input, src, auth=None):
                 flash(_('%(actor)s has been banned.', actor=to_ban.display_name()))
 
     # IP address ban
-    if ban_ip_address and to_ban.ip_address:
+    if ban_ip_address and has_real_ip(to_ban):
         existing_ip_ban = IpBan.query.filter(IpBan.ip_address == to_ban.ip_address).first()
         if not existing_ip_ban:
             db.session.add(IpBan(ip_address=to_ban.ip_address, notes=reason))

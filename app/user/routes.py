@@ -25,7 +25,7 @@ from app.ldap_utils import sync_user_to_ldap
 from app.local_only import local_only_visible, local_only_visible_rss, refuses_remote_contact, \
     remote_contact_refusal_message, user_local_only, without_local_only
 from app.visibility import OPEN_VISIBILITIES, visible_to_clause
-from app.onion import is_onion_request
+from app.onion import has_real_ip, is_onion_request
 from app.models import Post, Community, CommunityMember, User, PostReply, Notification, utcnow, File, Site, \
     Instance, Report, UserBlock, CommunityJoinRequest, CommunityBlock, Filter, Domain, DomainBlock, \
     InstanceBlock, NotificationSubscription, PostBookmark, PostReplyBookmark, read_posts, Topic, UserNote, \
@@ -923,7 +923,7 @@ def ban_profile(actor):
             if not user_access('manage users', current_user.id):
                 form.purge.render_kw = {'disabled': True}
                 form.purge.data = False
-            if user.ip_address is None or user.ip_address == '':
+            if not has_real_ip(user):
                 form.ip_address.render_kw = {'disabled': True}
                 form.ip_address.data = False
 
