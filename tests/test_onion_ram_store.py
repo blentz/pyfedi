@@ -11,12 +11,13 @@ import io
 import json
 
 import fakeredis
+from fakeredis._socket._base import BaseFakeSocket
 import pytest
 from limits.storage import MemoryStorage, storage_from_string
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app import create_app, db, limiter
-from app.models import Post, User
+from app.models import Post, User, votes_cast_key
 from app.onion_store import OnionRoutedStorage, onion_store_needed, onion_store_optional, request_redis
 from app.user.routes import import_settings_task
 from app.utils import set_setting
@@ -28,7 +29,21 @@ from tests.test_onion_pow import (FROM_CADDY, MARKER, ONION_URL, PASSWORD, PROXY
                                   register_data)
 
 CLEARNET_IP = '198.51.100.23'
-NOT_BROKER = ('celery', 'kombu', '_kombu', 'unacked')
+# The Celery broker's own keys, the spec's one exception: its queues (app/__init__.py CELERY_ROUTES), kombu's
+# bindings and the unacked set. Not `celery-task-meta-*`: a result is not a broker message.
+BROKER_QUEUES = {'celery', 'background', 'send', 'onion_media'}
+BROKER_PREFIXES = ('_kombu.', 'unacked')
+# The other accepted exception: redis-py locks on rows clearnet and Celery lock too, released within the request.
+LOCK_PREFIXES = ('lock:post:', 'lock:user:', 'lock:post_reply:', 'lock:vote:', 'lock:community:')
+# Commands that change no key. Everything else sent to the main Redis is counted as a write to its first argument.
+READ_ONLY = {'GET', 'MGET', 'EXISTS', 'TTL', 'PTTL', 'TYPE', 'KEYS', 'SCAN', 'HGET', 'HMGET', 'HGETALL', 'HLEN',
+             'HEXISTS', 'ZRANGE', 'ZRANGEBYSCORE', 'ZCOUNT', 'ZCARD', 'ZSCORE', 'SMEMBERS', 'SISMEMBER', 'SCARD',
+             'LRANGE', 'LLEN', 'STRLEN', 'DBSIZE', 'PING', 'INFO', 'MEMORY', 'MULTI', 'EXEC', 'DISCARD', 'WATCH',
+             'UNWATCH', 'SELECT', 'CLIENT', 'HELLO', 'PUBLISH'}
+
+
+def is_broker_key(key: str) -> bool:
+    return key in BROKER_QUEUES or key.startswith(BROKER_PREFIXES)
 
 
 class PlainLock:
@@ -51,6 +66,27 @@ class PlainLock:
 def main_redis(redis_double, monkeypatch):
     monkeypatch.setattr(redis_double, 'lock', lambda name, timeout=None, **kwargs: PlainLock(redis_double, name, timeout))
     return redis_double
+
+
+@pytest.fixture
+def main_writes(main_redis, monkeypatch):
+    """Every write command the main Redis receives, as (command, key): each command as it reaches the fake server,
+    so one inside a pipeline or MULTI counts, and so does a key written and deleted again before the test looks."""
+    connection = main_redis.connection_pool.get_connection()
+    server = connection._server
+    main_redis.connection_pool.release(connection)
+    writes = []
+    process = BaseFakeSocket._process_command
+
+    def recording(socket, fields):
+        if socket._server is server and fields:
+            command = fields[0].decode().upper()
+            if command not in READ_ONLY:
+                writes.append((command, fields[1].decode() if len(fields) > 1 else None))
+        return process(socket, fields)
+
+    monkeypatch.setattr(BaseFakeSocket, '_process_command', recording)
+    return writes
 
 
 class LimitedConfig(TestConfig):
@@ -111,16 +147,24 @@ class DownStorage(MemoryStorage):
 
 
 def state(redis):
-    """Every key outside the Celery broker's, with its value and TTL: what an onion request must leave as it was."""
+    """Every key outside the Celery broker's, with its type, value and TTL: what an onion request must leave as it
+    was. A TTL counts down meanwhile, so `unchanged` compares it to the second, with a little slack."""
     snapshot = {}
     for key in redis.keys('*'):
-        if key.startswith(NOT_BROKER):
+        if is_broker_key(key):
             continue
         kind = redis.type(key)
         value = {'string': redis.get, 'hash': redis.hgetall, 'zset': lambda k: redis.zrange(k, 0, -1, withscores=True),
                  'set': redis.smembers, 'list': lambda k: redis.lrange(k, 0, -1)}[kind](key)
         snapshot[key] = (kind, value, redis.ttl(key))
     return snapshot
+
+
+def unchanged(before, after, slack=30):
+    assert {key: entry[:2] for key, entry in after.items()} == {key: entry[:2] for key, entry in before.items()}
+    for key, (_, _, ttl) in before.items():
+        assert ttl - slack <= after[key][2] <= ttl if ttl >= 0 else after[key][2] == ttl, key
+    return True
 
 
 @pytest.fixture
@@ -155,8 +199,13 @@ def proven(page, **data):
     return login_data(page.csrf, pow_token=page.token, pow_nonce='a', **data)
 
 
-def test_onion_crawl_writes_nothing_to_the_main_redis(limited_app, world, main_redis, onion_redis, limits_on):
+def test_onion_crawl_writes_nothing_to_the_main_redis(limited_app, world, main_redis, main_writes, onion_redis,
+                                                      limits_on):
+    alice = world['alice']
+    main_redis.set(votes_cast_key(alice.id), 7, ex=5000)                        # her clearnet votes today
+    main_redis.set(f'feed:test.piefed.local:{alice.id}:abc', '[]', ex=4000)    # her clearnet feed cache
     before = state(main_redis)
+    del main_writes[:]
     client = limited_app.test_client()
     post = world['post']
     for path in pages(post) + ('/auth/register', '/testredis'):
@@ -170,7 +219,10 @@ def test_onion_crawl_writes_nothing_to_the_main_redis(limited_app, world, main_r
     api = limited_app.test_client(use_cookies=False)
     assert onion_post(api, '/api/alpha/user/login', json={'username': 'alice', 'password': PASSWORD}).status_code == 200
 
-    assert state(main_redis) == before
+    assert unchanged(before, state(main_redis))
+    written = {key for _, key in main_writes}
+    assert {key for key in written if not (is_broker_key(key) or key.startswith(LOCK_PREFIXES))} == set(), main_writes
+    assert any(key.startswith('lock:user:') for key in written)      # the recorder saw the vote's lock come and go
     db.session.expire_all()
     assert db.session.get(Post, post.id).up_votes == 1
     assert onion_redis.get(next(iter(onion_redis.keys('votes_cast_*')))) == '1'
