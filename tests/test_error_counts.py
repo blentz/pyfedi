@@ -1,5 +1,6 @@
 """Daily error counts that name nothing and no one, kept 21 days (project 5, task 5; spec goal 5, section 5
 "Daily counts"). The journal keeps an hour; this is what a week-long log search used to be."""
+import gc
 import logging
 import os
 import re
@@ -213,18 +214,51 @@ def test_a_failed_flush_drops_the_batch_and_says_so_once(capsys):
     handler.close()
 
 
-def test_a_forked_child_starts_empty_with_its_own_flusher():
+def test_a_forked_child_starts_empty_with_its_own_flusher_and_locks():
     handler = a_handler(SimpleNamespace(begin=None), interval=3600)
     handler.handle(a_record())
-    handler.handle(a_record())
-    parents_thread_pid = handler._pid
-    assert handler._pid == os.getpid() and len(handler._counts) == 1
-    handler._pid = parents_thread_pid + 1    # as in a child: the pid recorded is the parent's
+    held = handler._counts_lock
+    held.acquire()    # as if another thread of the parent held it at fork time
+    with patch('app.error_counts.os.register_at_fork') as register:
+        late = a_handler(None)
+    child_reset = register.call_args.kwargs['after_in_child']
+    late.handle(a_record())
+    child_reset()
+    assert late._counts == {} and late._pid is None
+    handler._after_fork()    # the callback the handler registered, called as the child would
+    assert handler._counts == {} and handler._pid is None and handler._counts_lock is not held
     with patch('app.error_counts.threading.Thread') as thread:
         handler.handle(a_record(logging.CRITICAL))
-    assert handler._pid == os.getpid()
-    assert [level for (_, _, _, level) in handler._counts] == ['CRITICAL']    # the parent's counts are not the child's
+    assert [level for (_, _, _, level) in handler._counts] == ['CRITICAL']
     thread.return_value.start.assert_called_once()
+    handler.close()
+    late.close()
+
+
+def test_the_at_fork_callback_does_nothing_once_its_handler_is_gone():
+    with patch('app.error_counts.os.register_at_fork') as register:
+        handler = a_handler(None)
+    callback = register.call_args.kwargs['after_in_child']
+    handler.close()
+    del handler
+    gc.collect()
+    callback()    # raises nothing
+
+
+def test_two_first_records_race_for_one_flusher():
+    handler = a_handler(None)
+
+    class Rival:
+        def __enter__(self):
+            handler._pid = os.getpid()    # another thread won while this one waited for the lock
+
+        def __exit__(self, *args):
+            return False
+
+    handler._start_lock = Rival()
+    with patch('app.error_counts.threading.Thread') as thread:
+        handler.handle(a_record())
+    thread.assert_not_called()
     handler.close()
 
 
