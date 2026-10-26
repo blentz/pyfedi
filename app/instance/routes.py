@@ -269,7 +269,6 @@ def instance_posts(instance_domain):
         posts = Post.query.filter(Post.instance_id == instance.id, Post.from_bot == False, Post.nsfw == False,
                                   Post.nsfl == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
                                   Post.private == False, listable_clause(Post))
-        posts = without_local_only(posts, Post)
         content_filters = {}
     else:
         posts = Post.query.filter(Post.instance_id == instance.id, Post.deleted == False,
@@ -300,6 +299,7 @@ def instance_posts(instance_domain):
         if blocked_accounts:
             posts = posts.filter(Post.user_id.not_in(blocked_accounts))
         content_filters = user_filters_home(current_user.id)
+    posts = without_local_only(posts, Post)   # every reader: off the onion its posts are no one's (F6)
 
     # Sorting
     posts = posts.order_by(desc(Post.posted_at))

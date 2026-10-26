@@ -63,13 +63,13 @@ def show_domain(domain_id):
                            Post.deleted == False, Post.status > POST_STATUS_REVIEWING, Post.private == False,
                            listable_clause(Post)). \
                     order_by(desc(Post.posted_at))
-                posts = without_local_only(posts, Post)
             else:
                 posts = Post.query.join(Community).filter(Post.domain_id == domain.id, Community.banned == False,
                                                           Post.deleted == False,
                                                           Post.status > POST_STATUS_REVIEWING,
                                                           listable_clause(Post)).order_by(
                     desc(Post.posted_at))
+            posts = without_local_only(posts, Post)   # every reader: off the onion its posts are no one's (F6)
 
             if current_user.is_authenticated:
                 instance_ids = blocked_or_banned_instances(current_user.id)

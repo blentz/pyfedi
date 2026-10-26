@@ -5,6 +5,7 @@ onion target as plain text, with a note to open it on the onion.
 On the first domain a signed-in user and an admin alike get the 404 a name nobody holds gets for the onion's accounts,
 communities, posts and replies, and every list and search leaves them out. On the onion the same viewers see them all.
 The first domain's own rows are the control."""
+import re
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -14,8 +15,11 @@ from flask import render_template
 from app import db
 from app.constants import ROLE_ADMIN_NAME
 from app.local_only import content_local_only
-from app.models import CommunityMember, Post, PostVote, Report, Role, Topic, utcnow
+from app.models import CommunityMember, Domain, File, Notification, Post, PostBookmark, PostReplyBookmark, PostVote, \
+    Report, Role, Topic, UserRegistration, read_posts, user_file, utcnow
 from tests.factories import grant_permission, make_post, make_post_reply
+from tests.test_hidden_here import reply_chain
+from tests.test_per_domain_html_routes import Visitor
 from tests.test_instance_visible_here import HOSTS, get, scene  # noqa: F401 -- scene is a fixture
 from tests.test_local_only_actors_hidden import ONION_ART, ONION_BOB, world  # noqa: F401 -- world is a fixture
 from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
@@ -277,3 +281,37 @@ def test_a_first_domain_posts_voters_leave_out_an_onion_voter(app, onion):
     on_onion = get(app, f'/post/{onion.first_post.id}/voting_activity', host=ONION, user=onion.admin)
     assert on_onion.status_code == 200 and 'bob' in on_onion.get_data(as_text=True)
 
+
+# --- the link-domain and instance post lists (review C1) -------------------------------------------------------------
+
+@pytest.fixture
+def linked(onion):
+    """FIRSTPOST and the onion's ONIONINFIRST link to example.com; the first's bob also posts FIRSTINONION in the onion's
+    art, so it is on the first domain's instance row and hidden off the onion all the same."""
+    domain = Domain(name='example.com')
+    db.session.add(domain)
+    db.session.flush()
+    onion.first_in_onion = stamped(make_post(onion.onion_art, onion.first_bob, f'https://{FIRST}/post/in-onion',
+                                             title='FIRSTINONION'), onion.first_bob, onion.onion_art)
+    for post in (onion.in_first, onion.first_post, onion.first_in_onion):
+        post.domain_id = domain.id
+        post.url = 'https://example.com/a'
+    db.session.commit()
+    onion.domain = domain
+    return onion
+
+
+@pytest.mark.parametrize('who', ['user', 'admin'])
+def test_the_link_domain_and_instance_post_lists_leave_out_onion_posts(app, linked, who):
+    viewer = viewers(linked)[who]
+    viewer.ignore_bots = 0   # the default: the signed-in branch of the domain page
+    db.session.commit()
+    for path in ('/d/example.com', f'/d/{linked.domain.id}', f'/instance/{FIRST}/posts'):
+        body = get(app, path, user=viewer).get_data(as_text=True)
+        assert 'ONIONINFIRST' not in body and 'FIRSTINONION' not in body, (path, near(body, 'ONIONINFIRST', 'FIRSTINONION'))
+        assert 'FIRSTPOST' in body, path   # the control: the list does show posts
+
+
+def test_on_the_onion_the_link_domain_lists_them(app, linked):
+    body = get(app, '/d/example.com', host=ONION, user=linked.first_bob).get_data(as_text=True)
+    assert 'ONIONINFIRST' in body and 'FIRSTINONION' in body and 'FIRSTPOST' in body
