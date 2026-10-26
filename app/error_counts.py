@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import traceback
+import weakref
 
 from celery.signals import celeryd_init
 from sqlalchemy import create_engine, text
@@ -92,6 +93,8 @@ class ErrorCountHandler(logging.Handler):
         self._pid = None
         self._last_report = None
         atexit.register(self.flush)
+        me = weakref.ref(self)    # a callback cannot be unregistered, so it holds the handler weakly
+        os.register_at_fork(after_in_child=lambda: me() and me()._after_fork())
 
     def emit(self, record: logging.LogRecord) -> None:
         if getattr(_guard, 'busy', False):
@@ -115,10 +118,15 @@ class ErrorCountHandler(logging.Handler):
             if self._pid == os.getpid():
                 return
             self._pid = os.getpid()
-            self._counts = {}    # a forked child must not write what its parent counted
-            self._counts_lock = threading.Lock()
-            self._start_lock = threading.Lock()
             threading.Thread(target=self._run, daemon=True, name='error-count-flusher').start()
+
+    def _after_fork(self) -> None:
+        """In a forked child: forget what the parent counted (it writes those itself), replace locks the fork may have
+        copied held, and let the first record start this process's own flusher."""
+        self._counts = {}
+        self._counts_lock = threading.Lock()
+        self._start_lock = threading.Lock()
+        self._pid = None
 
     def _run(self) -> None:
         while not self._stop.wait(self.interval):
