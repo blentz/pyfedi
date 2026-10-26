@@ -8,7 +8,7 @@ from app.chat import bp
 from app.chat.forms import AddReply, ReportConversationForm
 from app.chat.util import send_message
 from app.constants import NOTIF_REPORT, SRC_WEB, REPORT_TYPE_MESSAGE
-from app.local_only import refuses_remote_contact, remote_contact_refusal_message
+from app.local_only import refuses_remote_contact, remote_contact_refusal_message, without_hidden_conversations
 from app.models import Site, User, Report, ChatMessage, Notification, Conversation, conversation_member, \
     Community, CommunityBan, ModLog
 from app.shared.site import block_remote_instance
@@ -42,7 +42,8 @@ def chat_home(conversation_id=None):
         conversations = Conversation.query.join(conversation_member,
                                                 conversation_member.c.conversation_id == Conversation.id). \
             filter(conversation_member.c.user_id == current_user.id). \
-            filter(conversation_member.c.joined == True). \
+            filter(conversation_member.c.joined == True)
+        conversations = without_hidden_conversations(conversations, Conversation.id). \
             order_by(desc(Conversation.updated_at)).limit(50).all()
         if conversation_id is None:
             if conversations:

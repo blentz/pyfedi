@@ -20,7 +20,7 @@ reader could be hidden from; tests/test_hidden_routes_table.py walks the URL map
 from flask import abort, request
 
 from app import db
-from app.local_only import hidden_here, hides_anything_here
+from app.local_only import conversation_hidden_here, hidden_here, hides_anything_here
 from app.models import ChatMessage, Community, Conversation, Instance, Post, PostReply, User
 from app.storefront import current_storefront, host_hidden_here, instance_visible_here, normalise_host
 from app.user.utils import user_for_actor
@@ -49,10 +49,6 @@ def _user_name_hidden(name: str) -> bool:
     return user is not None and hidden_here(user, True)
 
 
-def _conversation_hidden(conversation) -> bool:
-    return any(hidden_here(member, True) for member in conversation.members)
-
-
 def _message_hidden(message) -> bool:
     return any(user is not None and hidden_here(user, True)
                for user in (db.session.get(User, message.sender_id), db.session.get(User, message.recipient_id)))
@@ -68,7 +64,7 @@ _IDS = {
     'community_id': (Community, _row_hidden),
     'post_id': (Post, _row_hidden),
     'comment_id': (PostReply, _row_hidden), 'post_reply_id': (PostReply, _row_hidden),
-    'conversation_id': (Conversation, _conversation_hidden),   # it names its members: the onion side, off the onion
+    'conversation_id': (Conversation, conversation_hidden_here),   # it names its members: the onion side, off the onion
     'message_id': (ChatMessage, _message_hidden),
     'instance_id': (Instance, lambda row: not instance_visible_here(row.id)),
 }
