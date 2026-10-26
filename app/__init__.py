@@ -32,7 +32,7 @@ from app.constants import IMAGE_PIXEL_CAP
 from app.pinned_http import pinned_transport
 from app.cookies import StorefrontLoginManager, StorefrontSessionInterface, secure_set_cookies
 from app.onion import is_onion_request, onion_rate_key
-from app.onion_store import OnionRoutedStorage  # noqa: F401 -- registers the onion-routed scheme RATELIMIT_STORAGE_URI names
+from app.onion_store import OnionRoutedStorage, RefusedOnionStore, check_onion_store  # noqa: F401 -- OnionRoutedStorage registers the onion-routed scheme RATELIMIT_STORAGE_URI names
 import sentry_sdk
 from app.plugins import load_plugins
 
@@ -321,6 +321,9 @@ def create_app(config_class=Config):
     babel.init_app(app, locale_selector=get_locale)
     cache.init_app(app)
     compress.init_app(app)
+    onion_store_ok = check_onion_store(app)
+    if not onion_store_ok:   # the onion's buckets in memory, as when its store is down; a copy: the class's is shared
+        app.config['RATELIMIT_STORAGE_OPTIONS'] = {**app.config['RATELIMIT_STORAGE_OPTIONS'], 'onion': 'memory://'}
     limiter.init_app(app)
     app_bcrypt.init_app(app)
     celery.conf.update(app.config)
@@ -345,7 +348,7 @@ def create_app(config_class=Config):
     global redis_client, onion_redis_client
     from app.utils import get_redis_connection  # cycle: app.utils imports db and the other extensions from this package
     redis_client = get_redis_connection(app.config['CACHE_REDIS_URL'])
-    onion_redis_client = get_redis_connection(app.config['ONION_REDIS_URL'])
+    onion_redis_client = get_redis_connection(app.config['ONION_REDIS_URL']) if onion_store_ok else RefusedOnionStore()
 
     oauth.init_app(app)
     if app.config['GOOGLE_OAUTH_CLIENT_ID']:
