@@ -129,6 +129,7 @@ class TestTheSizesThatAreRecorded:
         assert file.thumbnail_written_by_us is False
         stored = run(file, answered_with(image_bytes(800, 600)))
         assert stored.thumbnail_path and stored.thumbnail_written_by_us is True
+        assert stored.file_path and stored.file_written_by_us is True
 
     def test_an_image_smaller_than_the_thumbnail_is_not_grown(self, env):
         """D1292. An image already narrower than `medium_width`, on an

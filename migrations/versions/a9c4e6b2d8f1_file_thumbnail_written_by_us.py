@@ -1,4 +1,5 @@
-"""file.thumbnail_written_by_us: the thumbnail file at thumbnail_path was written by this server (follow-up F3)
+"""file.thumbnail_written_by_us and file.file_written_by_us: the file at thumbnail_path or file_path was written by this
+server (follow-up F3)
 
 Existing rows get false: a path shaped like our thumbnailer's is no proof that we wrote it, so they are not reclaimed.
 
@@ -22,8 +23,10 @@ def upgrade():
     with op.batch_alter_table('file', schema=None) as batch_op:
         batch_op.add_column(sa.Column('thumbnail_written_by_us', sa.Boolean(), server_default='false',
                                       nullable=False))
+        batch_op.add_column(sa.Column('file_written_by_us', sa.Boolean(), server_default='false', nullable=False))
 
 
 def downgrade():
     with op.batch_alter_table('file', schema=None) as batch_op:
+        batch_op.drop_column('file_written_by_us')
         batch_op.drop_column('thumbnail_written_by_us')
