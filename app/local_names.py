@@ -8,6 +8,7 @@ from sqlalchemy import and_, false, func, select
 
 from app.models import Community, User
 from app import db
+from app.constants import AUTOMATED_REPORTER
 from app.storefront import DomainInfo, current_storefront, default_domain, domain_by_id, domain_for_host, on_domain, \
     path_name
 
@@ -88,7 +89,7 @@ def target_href(targets: dict | None, name_key: str) -> str | None:
     caller shows it as text, never as a `/u/<name>` path that might reach a namesake."""
     targets = targets or {}
     name = targets.get(name_key)
-    if not name:
+    if not name or name == AUTOMATED_REPORTER:
         return None
     is_user = name_key.endswith('_user_name')
     id_ = targets.get(target_id_key(name_key))
