@@ -3,12 +3,14 @@ it is on, find that domain's row, and spell a row's name for a path."""
 import re
 
 from flask import url_for
+from flask_babel import _
 from markupsafe import Markup, escape
 from sqlalchemy import and_, false, func, select
 
-from app.models import Community, User
+from app.models import Community, Post, PostReply, User
 from app import db
 from app.constants import AUTOMATED_REPORTER
+from app.local_only import any_domain_closed, hidden_here
 from app.storefront import DomainInfo, current_storefront, default_domain, domain_by_id, domain_for_host, on_domain, \
     path_name
 
@@ -82,33 +84,75 @@ def stored_name_id(model, stored: str) -> int | None:
     return db.session.scalar(select(model.id).where(clause).limit(1))
 
 
-def target_href(targets: dict | None, name_key: str) -> str | None:
-    """Where the account or community whose stored name is `targets[name_key]` is linked, by id so the link works on
-    whichever domain the viewer is on: `/user/<id>` or `/community/<id>`. The id is `targets[target_id_key(name_key)]`;
-    a row stored without one is found by its name (`stored_name_id`). None when the name is empty or finds nothing: the
-    caller shows it as text, never as a `/u/<name>` path that might reach a namesake."""
+def hidden_target(model, id_: int | None) -> bool:
+    """Whether the `model` row `id_` (a User, Community, Post or PostReply) is hidden here (`hidden_here`), so a report
+    or notification names it as text, never a link (follow-up F6). Report and notification pages have signed-in
+    readers only, so it is the storefront that decides. The row is read only when some domain is local-only."""
+    if not any_domain_closed():
+        return False
+    row = db.session.get(model, id_)
+    return row is not None and hidden_here(row, True)
+
+
+def hidden_note() -> Markup:
+    """What a report or notification says beside a target hidden here (owner ruling, follow-up F6)."""
+    return Markup(' <small class="text-body-secondary">{}</small>').format(_('Open this on the onion to see it.'))
+
+
+def _target(targets: dict | None, name_key: str) -> tuple[str | None, bool]:
+    """`target_href`'s answer, and whether the target is hidden here."""
     targets = targets or {}
     name = targets.get(name_key)
     if not name or name == AUTOMATED_REPORTER:
-        return None
+        return None, False
     is_user = name_key.endswith('_user_name')
+    model = User if is_user else Community
     id_ = targets.get(target_id_key(name_key))
     if not isinstance(id_, int):
-        id_ = stored_name_id(User if is_user else Community, name)
+        id_ = stored_name_id(model, name)
     if id_ is None:
-        return None
-    return url_for('user.show_profile_by_id', user_id=id_) if is_user \
-        else url_for('community.show_community_by_id', community_id=id_)
+        return None, False
+    if hidden_target(model, id_):
+        return None, True
+    return (url_for('user.show_profile_by_id', user_id=id_) if is_user
+            else url_for('community.show_community_by_id', community_id=id_)), False
+
+
+def target_href(targets: dict | None, name_key: str) -> str | None:
+    """Where the account or community whose stored name is `targets[name_key]` is linked, by id so the link works on
+    whichever domain the viewer is on: `/user/<id>` or `/community/<id>`. The id is `targets[target_id_key(name_key)]`;
+    a row stored without one is found by its name (`stored_name_id`). None when the name is empty or finds nothing, or
+    names a row hidden here (follow-up F6): the caller shows it as text, never as a `/u/<name>` path that might reach a
+    namesake."""
+    return _target(targets, name_key)[0]
 
 
 def target_link(targets: dict | None, name_key: str, css_class: str = '') -> Markup:
-    """`targets[name_key]` as a link by `target_href`, or as plain text when it has none."""
+    """`targets[name_key]` as a link by `target_href`, or as plain text when it has none; a target hidden here is
+    plain text with `hidden_note` beside it."""
     name = (targets or {}).get(name_key) or ''
-    href = target_href(targets, name_key)
+    href, hidden = _target(targets, name_key)
     if href is None:
-        return escape(name)
+        return escape(name) + hidden_note() if hidden else escape(name)
     css = Markup(' class="{}"').format(css_class) if css_class else Markup('')
     return Markup('<a{} href="{}">{}</a>').format(css, href, name)
+
+
+_CONTENT_LINKS = {'suspect_post_id': (Post, '/post/{}'), 'suspect_comment_id': (PostReply, '/comment/{}')}
+
+
+def content_link(targets: dict | None, id_key: str, text, css_class: str = '') -> Markup:
+    """A report's link to the post or comment `targets[id_key]` names (`suspect_post_id` or `suspect_comment_id`),
+    reading `text`; plain text with `hidden_note` when it is hidden here (follow-up F6), and plain text when there is
+    no usable id."""
+    model, path = _CONTENT_LINKS[id_key]
+    id_ = (targets or {}).get(id_key)
+    if not isinstance(id_, int):
+        return escape(text or '')
+    if hidden_target(model, id_):
+        return escape(text or '') + hidden_note()
+    css = Markup(' class="{}"').format(css_class) if css_class else Markup('')
+    return Markup('<a{} href="{}">{}</a>').format(css, path.format(id_), text or '')
 
 
 # the name-built urls a notification stored before follow-up F1: (model, targets key of its id, endpoint, url argument)

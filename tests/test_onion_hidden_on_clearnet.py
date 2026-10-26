@@ -5,23 +5,27 @@ onion target as plain text, with a note to open it on the onion.
 On the first domain a signed-in user and an admin alike get the 404 a name nobody holds gets for the onion's accounts,
 communities, posts and replies, and every list and search leaves them out. On the onion the same viewers see them all.
 The first domain's own rows are the control."""
+from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
+from flask import render_template
 
 from app import db
 from app.constants import ROLE_ADMIN_NAME
 from app.local_only import content_local_only
-from app.models import CommunityMember, Post, PostVote, Role, Topic, utcnow
+from app.models import CommunityMember, Post, PostVote, Report, Role, Topic, utcnow
 from tests.factories import grant_permission, make_post, make_post_reply
 from tests.test_instance_visible_here import HOSTS, get, scene  # noqa: F401 -- scene is a fixture
 from tests.test_local_only_actors_hidden import ONION_ART, ONION_BOB, world  # noqa: F401 -- world is a fixture
 from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
-from tests.two_domains import FIRST, ONION, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, onion_request, default_request, two_domains  # noqa: F401
 from tests.conftest import forget_login
 
 pytestmark = pytest.mark.usefixtures('site')
 
 TOKEN = 'f6-rss-token'
+NOTE = 'Open this on the onion to see it.'
 
 
 def near(body: str, *needles: str) -> list[str]:
@@ -189,6 +193,69 @@ def test_the_api_on_the_onion_still_shows_them(app, alpha):
     for path in (f'/api/alpha/post?id={alpha.post.id}', f'/api/alpha/community?id={alpha.onion_art.id}',
                  f'/api/alpha/user?person_id={alpha.onion_bob.id}', f'/api/alpha/comment?id={alpha.reply.id}'):
         assert api(app, path, alpha.first_bob, host=ONION).status_code == 200, path
+
+
+# --- reports and notifications -----------------------------------------------------------------------------------
+
+@pytest.fixture
+def reported(onion):
+    onion.report = Report(reasons='spam', description='about onion bob', type=0, reporter_id=onion.first_bob.id,
+                          suspect_user_id=onion.onion_bob.id, source_instance_id=1,
+                          targets={'suspect_user_user_name': ONION_BOB, 'suspect_user_id': onion.onion_bob.id,
+                                   'reporter_user_name': 'bob', 'reporter_id': onion.first_bob.id})
+    onion.post_report = Report(reasons='spam', description='about ONIONPOST', type=1, reporter_id=onion.first_bob.id,
+                               suspect_post_id=onion.post.id, source_instance_id=1,
+                               targets={'suspect_post_id': onion.post.id, 'orig_post_title': 'the onion post',
+                                        'suspect_user_user_name': ONION_BOB, 'suspect_user_id': onion.onion_bob.id})
+    db.session.add_all([onion.report, onion.post_report])
+    db.session.commit()
+    return onion
+
+
+def test_a_first_domain_admins_report_page_names_onion_bob_as_text_with_the_note(app, reported):
+    response = get(app, '/admin/reports', user=reported.admin)
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert ONION_BOB in body and NOTE in body
+    assert f'/user/{reported.onion_bob.id}"' not in body and f'/post/{reported.post.id}"' not in body
+    assert 'the onion post' in body
+    assert f'href="/user/{reported.first_bob.id}"' in body   # the first domain's reporter is still a link
+
+
+def test_on_the_onion_the_report_links_them(app, reported):
+    with onion_request(app):
+        html = render_template('admin/reports/post_report.html', report=reported.post_report)
+    assert f'href="/post/{reported.post.id}"' in html and f'href="/user/{reported.onion_bob.id}"' in html
+    assert NOTE not in html
+
+
+def test_a_notification_on_the_first_domain_names_an_onion_author_as_text_with_the_note(app, onion):
+    notification = SimpleNamespace(
+        id=1, read=False, created_at=None, subtype=None,
+        targets={'author_user_name': ONION_BOB, 'author_id': onion.onion_bob.id, 'community_name': 'art',
+                 'community_id': onion.first_art.id, 'post_id': onion.first_post.id, 'post_title': 'a post'})
+    with default_request(app):
+        html = render_template('user/notifs/0.html', notification=notification, localize_datetime=lambda *a: '',
+                               locale='en')
+    assert NOTE in html and f'/user/{onion.onion_bob.id}"' not in html
+    assert f'href="/community/{onion.first_art.id}"' in html
+
+
+def test_a_report_with_no_usable_post_id_shows_its_text(app, onion):
+    report = SimpleNamespace(id=1, reasons='spam', description='', is_local=lambda *a, **k: True,
+                             created_at=datetime(2026, 1, 1), updated=datetime(2026, 1, 1), targets={'orig_post_title': 'a title'})
+    with default_request(app):
+        html = render_template('admin/reports/post_report.html', report=report)
+    assert 'a title' in html and 'href="/post/' not in html
+
+
+def test_a_first_domain_post_in_a_report_is_still_a_link(app, onion):
+    report = SimpleNamespace(id=1, reasons='spam', description='', is_local=lambda *a, **k: True,
+                             created_at=datetime(2026, 1, 1), updated=datetime(2026, 1, 1),
+                             targets={'suspect_comment_id': onion.first_post.id, 'orig_comment_body': 'body'})
+    with default_request(app):
+        html = render_template('admin/reports/comment_report.html', report=report)
+    assert NOTE not in html
 
 
 # --- lists of people ---------------------------------------------------------------------------------------------
