@@ -236,3 +236,7 @@ IMAGE_PIXEL_CAP = 50_000_000
 # IMAGE_PIXEL_CAP, and Pillow decodes even a one-pixel frame onto a full-screen canvas: 1.6 s of CPU per fetch. At
 # 16 MP (4000x4000) the slowest thumbnail measured takes 0.9 s. Local uploads keep IMAGE_PIXEL_CAP.
 REMOTE_THUMBNAIL_PIXEL_CAP = 16_000_000
+
+# The reporter name the automated reports (AI detection) store beside `reporter_id: 1`: it names no account, so a
+# report page shows it as text.
+AUTOMATED_REPORTER = 'automated'

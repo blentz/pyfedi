@@ -37,7 +37,7 @@ from sqlalchemy_utils.types import \
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from app import db, login, cache, celery, httpx_client, constants, app_bcrypt, shaped_memo_name
-from app.constants import SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPTION_MODERATOR, SUBSCRIPTION_OWNER, \
+from app.constants import AUTOMATED_REPORTER, SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPTION_MODERATOR, SUBSCRIPTION_OWNER, \
     SUBSCRIPTION_BANNED, SUBSCRIPTION_PENDING, NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC, NOTIF_POST, NOTIF_REPLY, \
     NOTIF_FEED, NOTIF_DEFAULT, NOTIF_REPORT, NOTIF_MENTION, POST_STATUS_REVIEWING, \
     POST_STATUS_PUBLISHED, POST_TYPE_VIDEO, INVITE_MEMBERS_ONLY, INVITE_MODS_ONLY, INVITE_OWNER_ONLY, ROLE_ADMIN_NAME, \
@@ -3802,7 +3802,7 @@ class Post(db.Model):
                                                 'source_instance_id': 1,
                                                 'source_instance_domain': '',
                                                 'reporter_id': 1,
-                                                'reporter_user_name': 'automated'
+                                                'reporter_user_name': AUTOMATED_REPORTER
                                                 }
                                 notify_admin('User auto-banned for AI-generated content', f'/user/{user.id}', 1,
                                              NOTIF_REPORT, 'user_reported', targets_data)
@@ -4710,7 +4710,7 @@ class PostReply(db.Model):
                                 'source_instance_id': 1,
                                 'source_instance_domain': '',
                                 'reporter_id': 1,
-                                'reporter_user_name': 'automated'
+                                'reporter_user_name': AUTOMATED_REPORTER
                                 }
                 notify_admin('Used em-dash in comment - likely AI', f'/user/{user.id}', 1,
                             NOTIF_REPORT, 'user_reported', targets_data)
@@ -4760,7 +4760,7 @@ class PostReply(db.Model):
                                             'source_instance_id': 1,
                                             'source_instance_domain': '',
                                             'reporter_id': 1,
-                                            'reporter_user_name': 'automated'
+                                            'reporter_user_name': AUTOMATED_REPORTER
                                             }
                             notify_admin('User auto-banned for AI-generated content', f'/user/{user.id}', 1,
                                          NOTIF_REPORT, 'user_reported', targets_data)

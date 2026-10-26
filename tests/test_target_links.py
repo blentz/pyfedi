@@ -145,3 +145,11 @@ def test_no_template_builds_a_path_from_a_stored_name():
     offenders = [f'{p.relative_to(TEMPLATES)}:{n}' for p in sorted(TEMPLATES.rglob('*.html'))
                  for n, line in enumerate(p.read_text().splitlines(), 1) if pattern.search(line)]
     assert offenders == []
+
+
+def test_an_automated_reporter_is_text_not_a_link_to_user_one(app, bobs):
+    """The automated reports store `reporter_id: 1` and the name `automated`."""
+    targets = {'reporter_user_name': 'automated', 'reporter_id': 1}
+    with onion_request(app):
+        assert target_href(targets, 'reporter_user_name') is None
+        assert str(target_link(targets, 'reporter_user_name')) == 'automated'
