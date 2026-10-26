@@ -18,9 +18,9 @@ from sqlalchemy import text
 
 from app import db
 from app.auth.oauth_util import finalize_user_login
-from app.auth.util import get_country, update_user_session
+from app.auth.util import get_country, handle_banned_user, update_user_session
 from app.constants import POST_TYPE_ARTICLE, SRC_API
-from app.models import Instance, Language, User
+from app.models import Instance, IpBan, Language, User
 from app.onion import ONION_ACCOUNT_IP, apply_audit, audit_field
 from app.onion_account import audit_country, audit_ip, is_onion_account
 from app.shared.auth import api_log_user_in
@@ -28,7 +28,7 @@ from app.shared.post import make_post
 from app.shared.reply import make_reply
 from app.shared.tasks.users import check_user_application
 from app.utils import set_setting
-from tests.factories import bearer, make_post as make_post_row, make_site
+from tests.factories import bearer, make_post as make_post_row, make_site, make_user
 from tests.test_onion_marker import REGISTRATION, ONION, PROXY, onion_context, proxy_ip, registration_env
 from tests.test_shared_post_edit import _api_input
 from tests.test_shared_tasks_users import _lowest_randint, _no_sleep, _recording_client, _seed
@@ -212,6 +212,38 @@ def test_ban_check_still_sends_a_clearnet_accounts_ip(app, world, monkeypatch):
     check_user_application(s.application.id)
     assert [url for url, _ in client.posts] == ['https://one.example/api/is_ip_banned',
                                                 'https://one.example/api/is_email_banned']
+
+
+def ban(user):
+    user.banned = True
+    db.session.commit()
+
+
+def banned_login_over_the_clearnet(app, user, how):
+    with default_request(app):
+        if how == 'web':
+            handle_banned_user(user, CLEARNET_IP)
+        else:
+            with patch('app.shared.auth.ip_address', return_value=CLEARNET_IP), \
+                    pytest.raises(Exception, match='incorrect_login'):
+                api_login(user)
+
+
+@pytest.mark.parametrize('how', ['web', 'api'])
+def test_banned_onion_account_clearnet_login_writes_no_ipban(app, world, how):
+    user = account(world, world.domains[1], 'onionuser', ip=ONION_ACCOUNT_IP, country=None)
+    ban(user)
+    banned_login_over_the_clearnet(app, user, how)
+    assert IpBan.query.count() == 0
+
+
+@pytest.mark.parametrize('how', ['web', 'api'])
+def test_banned_clearnet_account_still_gets_ipban(app, world, how):
+    make_user(None, 'burn-the-id-1-seat', local=True)
+    user = account(world, world.domains[0], 'clearuser')
+    ban(user)
+    banned_login_over_the_clearnet(app, user, how)
+    assert [(b.ip_address, b.notes) for b in IpBan.query.all()] == [(CLEARNET_IP, 'clearuser used new IP address')]
 
 
 def test_instance_ip_unchanged_by_an_onion_request(app, db_session):
