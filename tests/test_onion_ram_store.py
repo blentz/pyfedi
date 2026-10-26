@@ -11,14 +11,17 @@ import io
 import json
 
 import fakeredis
-from fakeredis._socket._base import BaseFakeSocket
 import pytest
+from fakeredis._socket._base import BaseFakeSocket
+from flask import Flask
 from limits.storage import MemoryStorage, storage_from_string
-from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import ConnectionError as RedisConnectionError, RedisError
 
+import app as app_pkg
 from app import create_app, db, limiter
 from app.models import Post, User, recent_ai_detections, votes_cast_key, votes_cast_today
-from app.onion_store import OnionRoutedStorage, onion_store_needed, onion_store_optional, request_redis
+from app.onion_store import (OnionRoutedStorage, check_onion_store, onion_store_needed, onion_store_optional,
+                             request_redis)
 from app.user.routes import import_settings_task
 from app.utils import set_setting
 from config import Config, limits_redis_uri
@@ -458,3 +461,71 @@ def test_ai_detection_tally_merges_both_paths(app, world, main_redis, main_write
     with app.test_request_context('/'):
         detections = recent_ai_detections(alice.id, {'detection': 'human', 'n': 5}, now)
     assert sorted(json.loads(d)['n'] for d in detections) == [1, 2, 4, 5]
+
+
+# --------------------------------------------------------------------------
+# The startup check
+# --------------------------------------------------------------------------
+
+def a_config(**values):
+    checked = Flask('checked')
+    checked.config.update({'ONION_PROXY_IP': PROXY, 'CACHE_TYPE': 'FileSystemCache',
+                           'CACHE_REDIS_URL': 'redis://redis:6379/1', 'CELERY_BROKER_URL': 'redis://redis:6379/0',
+                           'ONION_REDIS_URL': 'redis://onion-redis:6379/0', **values})
+    return checked
+
+
+@pytest.mark.parametrize('onion_url', ['redis://redis:6379/2', 'redis://REDIS/5', 'redis://:secret@redis:6379/2'])
+def test_an_onion_store_on_the_main_redis_is_refused(onion_url, caplog):
+    assert not check_onion_store(a_config(ONION_REDIS_URL=onion_url))
+    assert [record.levelname for record in caplog.records] == ['ERROR']
+    assert 'ONION_REDIS_URL' in caplog.text
+
+
+@pytest.mark.parametrize('values', [
+    {'ONION_REDIS_URL': 'redis://localhost:6379/2', 'CACHE_REDIS_URL': 'redis://127.0.0.1:6379/1'},
+    {'ONION_REDIS_URL': 'unix:///run/redis/redis.sock?db=2', 'CACHE_REDIS_URL': 'unix:///run/redis/redis.sock?db=1'},
+    {'ONION_REDIS_URL': 'redis://broker:6379/3', 'CELERY_BROKER_URL': 'redis://broker:6379/0'},
+])
+def test_the_main_redis_is_recognised_however_it_is_written(values):
+    assert not check_onion_store(a_config(**values))
+
+
+@pytest.mark.parametrize('values', [
+    {},                                                               # its own Redis
+    {'ONION_REDIS_URL': 'redis://redis:6380/0'},                      # same host, another server
+    {'ONION_REDIS_URL': 'unix:///run/onion-redis.sock', 'CACHE_REDIS_URL': 'unix:///run/redis.sock'},
+    {'ONION_PROXY_IP': None, 'ONION_REDIS_URL': 'redis://redis:6379/2'},   # no onion: nothing to protect
+])
+def test_a_separate_onion_store_passes(values, caplog):
+    assert check_onion_store(a_config(**values))
+    assert caplog.records == []
+
+
+@pytest.mark.parametrize('cache_type', ['RedisCache', 'flask_caching.backends.RedisSentinelCache', 'redis'])
+def test_a_redis_flask_cache_beside_an_onion_is_warned(cache_type, caplog):
+    assert check_onion_store(a_config(CACHE_TYPE=cache_type))       # a warning, not a refusal
+    assert [record.levelname for record in caplog.records] == ['WARNING']
+    assert 'CACHE_TYPE' in caplog.text
+    caplog.clear()
+    assert check_onion_store(a_config(CACHE_TYPE=cache_type, ONION_PROXY_IP=None)) and caplog.records == []
+
+
+class SharedConfig(TestConfig):
+    ONION_PROXY_IP = PROXY
+    ONION_REDIS_URL = TestConfig.CACHE_REDIS_URL.rpartition('/')[0] + '/9'
+
+
+def test_a_refused_onion_store_fails_closed(app, world, main_redis, caplog):
+    """Startup goes on, and the onion behaves as if its store were down: guarded actions 503, buckets in memory."""
+    refused = create_app(SharedConfig)
+    assert 'ONION_REDIS_URL' in caplog.text
+    assert refused.config['RATELIMIT_STORAGE_OPTIONS']['onion'] == 'memory://'
+    assert TestConfig.RATELIMIT_STORAGE_OPTIONS['onion'] == 'memory://' and \
+        Config.RATELIMIT_STORAGE_OPTIONS['onion'] != 'memory://'      # a copy was changed, not the class's
+    with pytest.raises(RedisError):
+        app_pkg.onion_redis_client.get('anything')
+    client = app.test_client()
+    page = challenge(onion_page(client, '/auth/login'))
+    assert store_down_answer(onion_post(client, '/auth/login', data=proven(page)))
+    assert main_redis.keys('*') == []

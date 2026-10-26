@@ -18,12 +18,13 @@ it across a reboot. The onion's state goes to `app.onion_redis_client` (`ONION_R
 from __future__ import annotations
 
 from contextlib import contextmanager
+from urllib.parse import urlsplit
 
 from flask import abort, current_app, jsonify, make_response
 from flask_babel import _
 from limits.storage import MemoryStorage, Storage, storage_from_string
 from markupsafe import escape
-from redis.exceptions import RedisError
+from redis.exceptions import ConnectionError as RedisConnectionError, RedisError
 
 import app as app_pkg
 from app.onion import is_api_path, is_onion_request, single_address
@@ -37,9 +38,53 @@ def request_redis():
     return app_pkg.onion_redis_client if is_onion_request() else app_pkg.redis_client
 
 
-def onion_configured() -> bool:
+def onion_configured(config=None) -> bool:
     """Whether this site has an onion at all: `ONION_PROXY_IP` names the proxy onion requests arrive through."""
-    return single_address(current_app.config.get('ONION_PROXY_IP')) is not None
+    return single_address((config if config is not None else current_app.config).get('ONION_PROXY_IP')) is not None
+
+
+LOOPBACK = {'localhost', '127.0.0.1', '::1'}
+
+
+def redis_server(url: str) -> tuple:
+    """Which Redis server a URL names, whatever database, password or spelling: ('unix', socket path) or
+    (host, port), with the loopback names as one host."""
+    parts = urlsplit(url.replace('redis+unix://', 'unix://'))
+    if parts.scheme == 'unix':
+        return 'unix', parts.path
+    host = (parts.hostname or 'localhost').lower()
+    return 'localhost' if host in LOOPBACK else host, parts.port or 6379
+
+
+def check_onion_store(app) -> bool:
+    """At startup, for a site with an onion: whether `ONION_REDIS_URL` names a Redis of its own. One that shares a
+    server with `CACHE_REDIS_URL` or `CELERY_BROKER_URL` is a database of the persisted main Redis, so the onion's keys
+    would reach its dump.rdb: that is logged as an ERROR and the caller treats the onion store as down (False). Never a
+    reason to fail startup. A Redis Flask cache is warned about: every cache write an onion request makes would go to
+    the main Redis."""
+    config = app.config
+    if not onion_configured(config):
+        return True
+    if 'redis' in str(config.get('CACHE_TYPE', '')).lower():
+        app.logger.warning(f"CACHE_TYPE is {config['CACHE_TYPE']}: the onion's cache writes go to the main Redis, "
+                           'which persists to disk. Use a FileSystemCache in /dev/shm.')
+    onion = redis_server(config['ONION_REDIS_URL'])
+    shared = [name for name in ('CACHE_REDIS_URL', 'CELERY_BROKER_URL') if redis_server(config[name]) == onion]
+    if shared:
+        app.logger.error(f"ONION_REDIS_URL is on the same Redis server as {' and '.join(shared)}, which persists to "
+                         'disk: the onion store is treated as down until it has a Redis of its own.')
+        return False
+    return True
+
+
+class RefusedOnionStore:
+    """The onion client when `check_onion_store` refused ONION_REDIS_URL: every command raises, as a Redis that is down
+    does, so the onion's guard answers 503 and nothing reaches the main Redis."""
+
+    def __getattr__(self, name):
+        def refused(*args, **kwargs):
+            raise RedisConnectionError('the onion store shares the main Redis (see the startup log)')
+        return refused
 
 
 def read_other_store(read, default):
