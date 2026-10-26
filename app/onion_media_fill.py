@@ -32,7 +32,8 @@ from redis.exceptions import RedisError
 
 import app as app_pkg
 from app import celery
-from app.onion_media import BYTES_KEY, cache_name, kind, url_kind
+from app.log_scrub import ONION_SAFE
+from app.onion_media import BYTES_KEY, DEFAULT_CACHE_BYTES, cache_name, kind, url_kind
 from app.pinned_http import fetch_deadline
 from app.storefront import default_domain
 from app.utils import domain_from_url, get_setting, instance_banned, is_invalid_get_request_uri, user_agent
@@ -56,6 +57,7 @@ READ_TIMEOUT = 10               # per read; the whole fill is bounded by max_sec
 DISK_RESERVE = 20 * 1024 ** 3   # free bytes a fill leaves on the disk: Postgres shares it
 CHECK_BYTES = 8 * 1024 * 1024   # the disk and the byte counter are checked again each time a fill writes this much
 OVER_CAP = 1.1                  # the byte counter may pass the cache cap by this factor before fills stop
+_absent_logged = False          # the 'cache directory absent' WARNING is written once per process
 _REDIRECTS = {301, 302, 303, 307, 308}
 
 
@@ -122,9 +124,11 @@ def fill(remote: str, *, max_seconds: float) -> pathlib.Path | None:
     nothing. A refused or failed URL is remembered for an hour (is_dead); a failure writing the cache is not, since
     it says nothing about the URL. No temporary file is left behind on any path."""
     directory = pathlib.Path(current_app.config['MEDIA_PROXY_DIR'])
+    if not (directory.is_dir() and os.access(directory, os.W_OK | os.X_OK)):
+        _warn_directory_unavailable()   # never created here: absent means the encrypted volume is locked
+        return None
     temporary = directory / f'.tmp-{uuid.uuid4().hex}'
     try:
-        directory.mkdir(parents=True, exist_ok=True)
         _check_room(directory, 0)
         with fetch_deadline(max_seconds):
             content_type = _fetch(remote, temporary, monotonic() + max_seconds)
@@ -145,6 +149,15 @@ def fill(remote: str, *, max_seconds: float) -> pathlib.Path | None:
             temporary.unlink(missing_ok=True)
 
 
+def _warn_directory_unavailable() -> None:
+    """Say once per process that the cache directory is absent or unwritable. The text is fixed (`ONION_SAFE`) and
+    names no URL, path or host, so it can stay readable on an onion request."""
+    global _absent_logged
+    if not _absent_logged:
+        _absent_logged = True
+        current_app.logger.warning('onion media cache directory unavailable, fill refused', extra=ONION_SAFE)
+
+
 def _check_room(directory: pathlib.Path, written: int) -> None:
     """Raise NoRoom when the disk under `directory` has less than DISK_RESERVE free, or when `written` more bytes take
     the byte counter past OVER_CAP times the cache cap. A counter Redis cannot read refuses nothing."""
@@ -154,7 +167,7 @@ def _check_room(directory: pathlib.Path, written: int) -> None:
         counted = int(app_pkg.onion_redis_client.get(BYTES_KEY) or 0)
     except RedisError:
         return
-    cap = get_setting('onion_media_cache_bytes', 10737418240)
+    cap = get_setting('onion_media_cache_bytes', DEFAULT_CACHE_BYTES)
     if counted + written > cap * OVER_CAP:
         raise NoRoom(f'the cache holds {counted} bytes, past its cap of {cap}')
 
@@ -208,7 +221,7 @@ def _store(response: httpx.Response, temporary: pathlib.Path, deadline: float, i
         cap = get_setting('onion_media_image_max_bytes', 20971520)
     else:
         cap = get_setting('onion_media_av_max_bytes', 524288000)
-    cap = min(cap, get_setting('onion_media_cache_bytes', 10737418240))   # one file never fills the whole cache
+    cap = min(cap, get_setting('onion_media_cache_bytes', DEFAULT_CACHE_BYTES))   # one file never fills the whole cache
     started = monotonic()
     declared = response.headers.get('Content-Length')
     if declared is not None and (not declared.strip().isdigit() or int(declared) > cap):

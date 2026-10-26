@@ -44,6 +44,7 @@ CACHE_FILE = re.compile(r'[0-9a-f]{64}\.[a-z0-9]+')
 TEMPORARY_FILE = re.compile(r'\.tmp-[0-9a-f]{32}')
 TEMPORARY_MAX_AGE = 3600        # seconds; a fill that is still running does not take an hour
 EVICT_TARGET = 0.9
+DEFAULT_CACHE_BYTES = 5 * 1024 ** 3     # the admin's cache cap until they set one
 BYTES_KEY = 'onion_media:bytes'         # the cache's bytes: each fill adds its file, each eviction counts afresh
 
 
@@ -111,7 +112,7 @@ def evict(cap_bytes: int) -> int:
     now = time.time()
     try:
         entries = list(os.scandir(current_app.config['MEDIA_PROXY_DIR']))
-    except FileNotFoundError:
+    except OSError:     # the directory is absent (its volume is locked) or is not one: nothing to free
         return 0
     for entry in entries:
         if not entry.is_file(follow_symlinks=False):
