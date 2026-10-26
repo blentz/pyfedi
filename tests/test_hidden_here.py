@@ -35,6 +35,25 @@ def write(author, community, title):
     return post, reply
 
 
+def reply_to(post, parent, author):
+    """`author`'s reply to `parent` (a reply, or None for the post), with the path and stamp PostReply.new gives it."""
+    reply = make_post_reply(post, author)
+    reply.parent_id = parent.id if parent is not None else None
+    reply.path = [*(parent.path if parent is not None else [0]), reply.id]
+    reply.local_only = content_local_only(author, post.community, parent, post)
+    db.session.commit()
+    return reply
+
+
+def reply_chain(post, *authors):
+    """A chain of replies under `post`, each answering the one before, by `authors` in turn."""
+    replies, parent = [], None
+    for author in authors:
+        parent = reply_to(post, parent, author)
+        replies.append(parent)
+    return replies
+
+
 @pytest.fixture
 def world(app, twins, two_domains):  # noqa: F811
     first_bob, first_art, onion_bob, onion_art, shop_bob, shop_art = twins
@@ -49,6 +68,8 @@ def world(app, twins, two_domains):  # noqa: F811
     rows.remote_post, _ = write(remote, first_art, 'remote-in-first')
     rows.first_under_onion = make_post_reply(rows.onion_in_first, first_bob)   # the first's reply to an onion post
     rows.first_under_onion.local_only = content_local_only(first_bob, first_art, None, rows.onion_in_first)
+    # review I6: the onion's reply under the first's post, and the first's reply to that one, deeper down
+    rows.onion_under_first, rows.first_under_onion_reply = reply_chain(rows.first_post, onion_bob, first_bob)
     db.session.commit()
     rows.two_domains = two_domains
     return rows
@@ -132,9 +153,11 @@ def named(world, *names):
 
 ALL = ('first_bob', 'first_art', 'onion_bob', 'onion_art', 'shop_bob', 'remote', 'legacy', 'onion_post',
        'onion_reply', 'onion_in_first', 'onion_in_first_reply', 'first_in_onion', 'first_post', 'first_reply',
-       'remote_post', 'first_under_onion')
+       'remote_post', 'first_under_onion', 'onion_under_first', 'first_under_onion_reply')
+# a reply to an onion post goes with its post (follow-up F5's rule), and one further down an onion reply goes with
+# that reply (review I6): it could only have been written on the onion
 ONIONS = {'onion_bob', 'onion_art', 'onion_post', 'onion_reply', 'onion_in_first', 'onion_in_first_reply',
-          'first_in_onion', 'first_under_onion'}   # a reply to an onion post goes with its post (follow-up F5's rule)
+          'first_in_onion', 'first_under_onion', 'onion_under_first', 'first_under_onion_reply'}
 
 
 @pytest.mark.parametrize('host', [FIRST, SHOP])
@@ -214,3 +237,21 @@ def test_the_clause_is_never_null_so_its_negation_keeps_every_other_row(app, two
                 not_(hidden_here_clause(model, True))))
             hid = db.session.scalar(db.select(db.func.count()).select_from(model).where(hidden_here_clause(model, True)))
             assert nulls == 0 and kept + hid == db.session.query(model).count(), model
+
+
+def test_a_reply_further_down_an_onion_reply_is_hidden_with_it(app, world):
+    """Review I6: the first's reply, three levels down, to the onion's reply under the first's own post."""
+    deeper = reply_to(world.first_post, world.first_under_onion_reply, world.first_bob)
+    above = reply_to(world.first_post, None, world.first_bob)   # the control: a reply above the onion's is the first's
+    rows = {'deeper': deeper, 'above': above, 'first_post': world.first_post}
+    assert hidden(app, FIRST, True, rows) == {'deeper'}
+    assert hidden(app, ONION, True, rows) == set()
+    assert_parity(app, (FIRST, ONION))
+
+
+def test_a_reply_with_no_path_is_judged_by_its_own_rows(app, world):
+    """A reply stored before paths were kept: its author, community and post decide, as before."""
+    world.first_under_onion_reply.path = None
+    db.session.commit()
+    assert hidden(app, FIRST, True, named(world, 'first_under_onion_reply')) == set()
+    assert_parity(app, (FIRST,))
