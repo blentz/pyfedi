@@ -8,6 +8,7 @@ it across a reboot. The onion's state goes to `app.onion_redis_client` (`ONION_R
 
 - `request_redis()` is the store for state a request writes on behalf of its visitor (vote quota, AI-detection tally,
   feed cache, captcha, settings import): the onion store for an onion request, the main Redis otherwise.
+  `read_other_store` reads the other one, so an account's vote quota and AI-detection tally add up across both.
 - `OnionRoutedStorage` is the rate limiter's storage. It sends an onion request's buckets to the onion store and every
   other request's to the main Redis, unchanged. When the onion store is down, onion buckets are kept in this process's
   memory meanwhile, so the onion still renders and is still limited; clearnet is not affected either way.
@@ -25,7 +26,7 @@ from markupsafe import escape
 from redis.exceptions import RedisError
 
 import app as app_pkg
-from app.onion import is_api_path, is_onion_request
+from app.onion import is_api_path, is_onion_request, single_address
 
 ONION_ROUTED_SCHEME = 'onion-routed'
 
@@ -34,6 +35,30 @@ def request_redis():
     """The Redis for the state this request keeps for its visitor: the RAM-only onion store on the onion, the main
     Redis otherwise (and outside a request)."""
     return app_pkg.onion_redis_client if is_onion_request() else app_pkg.redis_client
+
+
+def onion_configured() -> bool:
+    """Whether this site has an onion at all: `ONION_PROXY_IP` names the proxy onion requests arrive through."""
+    return single_address(current_app.config.get('ONION_PROXY_IP')) is not None
+
+
+def read_other_store(read, default):
+    """`read(store)` on the store this request does NOT keep its state in, so that a per-account tally kept per store
+    (vote quota, AI-detection streak) adds up across clearnet and the onion and neither path is a way round the other.
+    Only ever a read: an onion request still writes nothing to the main Redis.
+
+    - On the onion it reads the main Redis; its errors go to the caller's guard as any onion-store error would.
+    - On clearnet it reads the onion store, and an onion store that is down, or no onion at all, gives `default`:
+      clearnet never depends on it."""
+    if is_onion_request():
+        return read(app_pkg.redis_client)
+    if not onion_configured():
+        return default
+    try:
+        return read(app_pkg.onion_redis_client)
+    except RedisError as error:
+        current_app.logger.warning(f'onion store unavailable, its tally skipped: {error}')
+        return default
 
 
 def onion_store_unavailable():
