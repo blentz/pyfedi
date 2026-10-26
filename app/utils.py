@@ -5401,15 +5401,16 @@ def patch_db_session(task_session):
         db.session = original_session
 
 
-def get_redis_connection(connection_string=None) -> redis.Redis:
+def get_redis_connection(connection_string=None, **options) -> redis.Redis:
+    """A client for `connection_string` (default CACHE_REDIS_URL); `options` go to redis.Redis (e.g. timeouts)."""
     if connection_string is None:
         connection_string = current_app.config['CACHE_REDIS_URL']
     if connection_string.startswith('unix://'):
         unix_socket_path, db, password = parse_redis_pipe_string(connection_string)
-        return redis.Redis(unix_socket_path=unix_socket_path, db=db, password=password, decode_responses=True)
+        return redis.Redis(unix_socket_path=unix_socket_path, db=db, password=password, decode_responses=True, **options)
     else:
         host, port, db, password = parse_redis_socket_string(connection_string)
-        return redis.Redis(host=host, port=port, db=db, password=password, decode_responses=True)
+        return redis.Redis(host=host, port=port, db=db, password=password, decode_responses=True, **options)
 
 
 def parse_redis_pipe_string(connection_string: str):

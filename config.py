@@ -81,6 +81,11 @@ class Config(object):
     # The RAM-only onion store (app/onion_store.py): a Redis run with `save ""`, `appendonly no` and no volume. Every key an
     # onion request writes goes here, never to CACHE_REDIS_URL, whose Redis persists to disk.
     ONION_REDIS_URL = os.environ.get('ONION_REDIS_URL') or 'redis://localhost:6379/2'
+    # Seconds the onion client and the limiter's onion storage wait to connect, and for a reply. The store is a local
+    # container that answers in well under a millisecond, so half a second is only ever reached when it is gone: an
+    # unreachable host that drops packets (not refusing them) then costs an onion request half a second per call, not
+    # a hang. The main Redis keeps redis-py's defaults, as before.
+    ONION_REDIS_TIMEOUT = 0.5
     CACHE_DIR = os.environ.get('CACHE_DIR') or '/dev/shm/pyfedi'
     CACHE_DEFAULT_TIMEOUT = 300
     CACHE_THRESHOLD = 1000
@@ -184,7 +189,9 @@ class Config(object):
     # Flask-Limiter's storage (app.onion_store.OnionRoutedStorage): an onion request's buckets in the onion store, the
     # rest in the main Redis. A unix socket URL is `redis+unix://` to the limits library.
     RATELIMIT_STORAGE_URI = 'onion-routed://'
-    RATELIMIT_STORAGE_OPTIONS = {'main': limits_redis_uri(CACHE_REDIS_URL), 'onion': limits_redis_uri(ONION_REDIS_URL)}
+    RATELIMIT_STORAGE_OPTIONS = {'main': limits_redis_uri(CACHE_REDIS_URL), 'onion': limits_redis_uri(ONION_REDIS_URL),
+                                 'onion_options': {'socket_connect_timeout': ONION_REDIS_TIMEOUT,
+                                                   'socket_timeout': ONION_REDIS_TIMEOUT}}
 
     IMAGE_HASHING_ENDPOINT = os.environ.get('IMAGE_HASHING_ENDPOINT') or ''
 

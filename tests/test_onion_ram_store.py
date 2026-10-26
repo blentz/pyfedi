@@ -9,13 +9,15 @@ stand-ins, as the limits library's Redis storage needs Lua, which fakeredis has 
 """
 import io
 import json
+import socket
+import time
 
 import fakeredis
 import pytest
 from fakeredis._socket._base import BaseFakeSocket
 from flask import Flask
 from limits.storage import MemoryStorage, storage_from_string
-from redis.exceptions import ConnectionError as RedisConnectionError, RedisError
+from redis.exceptions import ConnectionError as RedisConnectionError, RedisError, TimeoutError as RedisTimeoutError
 
 import app as app_pkg
 from app import create_app, db, limiter
@@ -23,7 +25,7 @@ from app.models import Post, User, recent_ai_detections, votes_cast_key, votes_c
 from app.onion_store import (OnionRoutedStorage, check_onion_store, onion_store_needed, onion_store_optional,
                              request_redis)
 from app.user.routes import import_settings_task
-from app.utils import set_setting
+from app.utils import get_redis_connection, set_setting
 from config import Config, limits_redis_uri
 from tests.conftest import TestConfig
 from tests.factories import make_community, make_post
@@ -317,8 +319,8 @@ def test_clearnet_rate_limit_keys_still_in_the_main_redis(limited_app, world, li
 
 def test_the_limiter_storages_are_the_two_redises():
     assert Config.RATELIMIT_STORAGE_URI == 'onion-routed://'
-    assert Config.RATELIMIT_STORAGE_OPTIONS == {'main': limits_redis_uri(Config.CACHE_REDIS_URL),
-                                               'onion': limits_redis_uri(Config.ONION_REDIS_URL)}
+    assert {name: Config.RATELIMIT_STORAGE_OPTIONS[name] for name in ('main', 'onion')} == {
+        'main': limits_redis_uri(Config.CACHE_REDIS_URL), 'onion': limits_redis_uri(Config.ONION_REDIS_URL)}
     assert limits_redis_uri('unix:///run/redis.sock?db=2') == 'redis+unix:///run/redis.sock?db=2'
     assert limits_redis_uri('redis://onion-redis:6379/0') == 'redis://onion-redis:6379/0'
     storage = storage_from_string('onion-routed://', main='redis://main-redis:6379/1', onion='redis://onion-redis:6379/0')
@@ -529,3 +531,32 @@ def test_a_refused_onion_store_fails_closed(app, world, main_redis, caplog):
     page = challenge(onion_page(client, '/auth/login'))
     assert store_down_answer(onion_post(client, '/auth/login', data=proven(page)))
     assert main_redis.keys('*') == []
+
+
+# --------------------------------------------------------------------------
+# A packet-dropping onion host cannot hang the onion's pages
+# --------------------------------------------------------------------------
+
+def test_both_onion_clients_time_out():
+    timeouts = {'socket_connect_timeout': Config.ONION_REDIS_TIMEOUT, 'socket_timeout': Config.ONION_REDIS_TIMEOUT}
+    assert Config.ONION_REDIS_TIMEOUT == 0.5
+    assert Config.RATELIMIT_STORAGE_OPTIONS['onion_options'] == timeouts
+    storage = storage_from_string('onion-routed://', **Config.RATELIMIT_STORAGE_OPTIONS)
+    kwargs = storage.onion.storage.connection_pool.connection_kwargs
+    assert {name: kwargs[name] for name in timeouts} == timeouts
+    assert storage.main.storage.connection_pool.connection_kwargs.get('socket_timeout') is None   # main: as before
+    create_app(TestConfig)
+    kwargs = app_pkg.onion_redis_client.connection_pool.connection_kwargs
+    assert {name: kwargs[name] for name in timeouts} == timeouts
+    assert app_pkg.redis_client.connection_pool.connection_kwargs.get('socket_timeout') is None
+
+
+def test_an_onion_store_that_never_answers_times_out():
+    """A server that takes the connection and never replies: the onion client gives up after its timeout."""
+    with socket.create_server(('127.0.0.1', 0)) as silent:
+        port = silent.getsockname()[1]
+        client = get_redis_connection(f'redis://127.0.0.1:{port}/0', socket_connect_timeout=0.5, socket_timeout=0.5)
+        started = time.monotonic()
+        with pytest.raises(RedisTimeoutError):
+            client.get('anything')
+        assert time.monotonic() - started < 2
