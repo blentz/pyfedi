@@ -35,7 +35,7 @@ from app.constants import NOTIF_COMMUNITY, NOTIF_POST, NOTIF_REPLY, POST_STATUS_
 from app.email import mail_name, send_email
 from app.federation_urls import activity_id
 from app.error_counts import KEEP_DAYS
-from app.onion_media import evict
+from app.onion_media import DEFAULT_CACHE_BYTES, evict
 from app.models import CronJobLog, Settings, BannedInstances, Role, User, RolePermission, Domain, ActivityPubLog, utcnow, \
     utcnow, Site, Instance, File, Notification, Post, CommunityMember, NotificationSubscription, PostReply, Language, \
     Community, SendQueue, _store_files_in_s3, PostVote, Poll, \
@@ -1606,7 +1606,7 @@ def register(app):
     def evict_onion_media():
         """ Keep the onion remote-media cache under the admin's size cap, dropping the least recently used files """
         with app.app_context():
-            evict(get_setting('onion_media_cache_bytes', 10737418240))
+            evict(get_setting('onion_media_cache_bytes', DEFAULT_CACHE_BYTES))
             log_cron_task_to_db("evict_onion_media")
 
     @app.cli.command("error-counts")

@@ -52,6 +52,7 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
     instance_row_referenced, DomainBranding
 from app.storefront import acting_as_default, canonicalise_text, clear_domain_cache, default_domain, domain_authority, domain_base_url, \
     domain_by_id, federating_base, hosted_instance_ids, instance_id_of, is_hosted_uri, live_registration, storefront_url
+from app.onion_media import DEFAULT_CACHE_BYTES
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
@@ -685,7 +686,7 @@ def admin_misc():
         # than a missing line.
         form.captcha_enabled.data = get_setting('captcha_enabled', True)
         form.onion_pow_difficulty.data = pow_difficulty()
-        form.onion_media_cache_mb.data = get_setting('onion_media_cache_bytes', 10737418240) // 1048576
+        form.onion_media_cache_mb.data = get_setting('onion_media_cache_bytes', DEFAULT_CACHE_BYTES) // 1048576
         form.onion_media_image_max_mb.data = get_setting('onion_media_image_max_bytes', 20971520) // 1048576
         form.onion_media_av_max_mb.data = get_setting('onion_media_av_max_bytes', 524288000) // 1048576
         form.choose_topics.data = get_setting('choose_topics', True)

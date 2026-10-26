@@ -196,7 +196,7 @@ def test_admin_misc_shows_the_defaults(app, db_session):
         client.get('/admin/misc')
     form = render.call_args.kwargs['form']
     assert (form.onion_media_cache_mb.data, form.onion_media_image_max_mb.data, form.onion_media_av_max_mb.data) == \
-           (10240, 20, 500)
+           (5120, 20, 500)
 
 
 @pytest.mark.parametrize('field, value', [('onion_media_cache_mb', '1023'), ('onion_media_cache_mb', '1048577'),
