@@ -917,7 +917,8 @@ def save_icon_file(icon_file, directory='communities') -> File:
     # Create the File object
     file = File(file_path=final_place, file_name=new_filename + final_ext, alt_text=f'{directory} icon',
                 width=img_width, height=img_height, thumbnail_width=thumbnail_width,
-                thumbnail_height=thumbnail_height, thumbnail_path=final_place_thumbnail)
+                thumbnail_height=thumbnail_height, thumbnail_path=final_place_thumbnail,
+                thumbnail_written_by_us=True)
     db.session.add(file)
 
     # Move uploaded files to S3 if needed
@@ -1053,7 +1054,7 @@ def save_banner_file(banner_file, directory='communities') -> File:
 
     file = File(file_path=final_place, file_name=new_filename + final_ext, alt_text=f'{directory} banner',
                 width=img_width, height=img_height, thumbnail_path=final_place_thumbnail,
-                thumbnail_width=thumbnail_width, thumbnail_height=thumbnail_height)
+                thumbnail_written_by_us=True, thumbnail_width=thumbnail_width, thumbnail_height=thumbnail_height)
     db.session.add(file)
 
     # Move uploaded files to S3 if needed

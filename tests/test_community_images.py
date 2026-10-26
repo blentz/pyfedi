@@ -211,6 +211,14 @@ class TestAnIcon:
         finally:
             cleanup(file)
 
+    def test_the_thumbnail_is_marked_as_ours(self, env):
+        """Follow-up F3."""
+        file = save_icon_file(an_image(400, 400))
+        try:
+            assert file.thumbnail_written_by_us is True
+        finally:
+            cleanup(file)
+
     def test_the_row_says_what_it_is_for(self, env):
         file = save_icon_file(an_image(100, 100), directory='feeds')
         try:
@@ -533,6 +541,14 @@ class TestAnAvifCarriesNoUploaderMetadata:
 
 
 class TestABanner:
+    def test_the_thumbnail_is_marked_as_ours(self, env):
+        """Follow-up F3."""
+        file = save_banner_file(an_image(800, 300))
+        try:
+            assert file.thumbnail_written_by_us is True
+        finally:
+            cleanup(file)
+
     def test_a_small_one_is_kept_as_it_is(self, env):
         file = save_banner_file(an_image(500, 100))
         try:

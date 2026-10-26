@@ -1241,6 +1241,10 @@ class File(db.Model):
     alt_text = db.Column(db.String(ALT_TEXT_MAX))
     source_url = db.Column(db.String(1024))
     thumbnail_path = db.Column(db.String(255))
+    # True when OUR thumbnailer wrote the file at thumbnail_path, set in the same transaction as the path by the code
+    # that writes the file and by nothing a peer, an API caller or a form supplies (follow-up F3). Rows from before
+    # the column are False: a path shaped like our thumbnailer's is no proof that we wrote it.
+    thumbnail_written_by_us = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     thumbnail_width = db.Column(db.Integer)
     thumbnail_height = db.Column(db.Integer)
     hash = db.Column(BIT(256), index=True)
@@ -1359,16 +1363,20 @@ class File(db.Model):
         resolved = os.path.realpath(value)
         return resolved if resolved.startswith(os.path.realpath(MEDIA_ROOT) + os.sep) else None
 
-    def _may_remove_written(self, path: str, in_s3: bool = False) -> bool:
+    def _may_remove_written(self, path: str, in_s3: bool = False, thumbnail: bool = False) -> bool:
         """Whether this record may unlink `path` (resolved, in the media folders), its `file_path` or
-        `thumbnail_path`. Our upload's record may (`file_name`). Any other only when a local account, community or
-        feed owns it (`_local_owners`) and no other record of any kind names the path (`named_by_any_other_record`,
-        fail closed). A peer post's File never does: until 397a91156 a peer's attachment could set `file_path`, and a
-        path on our disk, even one shaped like our thumbnailer's, is no proof that we wrote it."""
+        `thumbnail_path` (`thumbnail`). Our upload's record may (`file_name`). A thumbnail our thumbnailer marked
+        (`thumbnail_written_by_us`) may when no other record names the path. Any other only when a local account,
+        community or feed owns it (`_local_owners`) and no other record of any kind names the path
+        (`named_by_any_other_record`, fail closed). A peer post's File never does: until 397a91156 a peer's
+        attachment could set `file_path`, and a path on our disk, even one shaped like our thumbnailer's, is no
+        proof that we wrote it; only the mark is."""
         if _too_vague(path):
             return False
         if self.file_name:
             return True
+        if thumbnail and self.thumbnail_written_by_us:
+            return self.id is not None and not named_by_any_other_record(path, self.id, in_s3=in_s3)
         return self.id is not None and bool(_local_owners([self.id])) and \
             not named_by_any_other_record(path, self.id, in_s3=in_s3)
 
@@ -1428,13 +1436,13 @@ class File(db.Model):
         if self.thumbnail_path:
             s3_key = s3_key_from_url(self.thumbnail_path) if _store_files_in_s3() else None
             if s3_key:
-                if self._may_remove_written(s3_key, in_s3=True):
+                if self._may_remove_written(s3_key, in_s3=True, thumbnail=True):
                     s3_files_to_delete.append(s3_key)
                 purge_from_cache.append(self.thumbnail_path)
             else:
                 written = self._in_the_media_folders(self.thumbnail_path)
                 if written and os.path.isfile(written):  # D1349, as above
-                    if self._may_remove_written(written):
+                    if self._may_remove_written(written, thumbnail=True):
                         try:
                             os.unlink(written)
                         except FileNotFoundError:

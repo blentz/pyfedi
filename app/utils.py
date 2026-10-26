@@ -4809,6 +4809,7 @@ def url_to_thumbnail_file(filename) -> File:
             return File(file_path=thumbnail_512_url, thumbnail_width=thumbnail_width, width=thumbnail_512_width,
                         height=thumbnail_512_height,
                         thumbnail_height=thumbnail_height, thumbnail_path=thumbnail_170_url,
+                        thumbnail_written_by_us=True,   # our thumbnailer wrote it (follow-up F3)
                         source_url=filename)
 
 

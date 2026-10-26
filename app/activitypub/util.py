@@ -3075,7 +3075,8 @@ def replace_local_upload_task(community_id: int, column: str, file_id: int) -> N
             old = getattr(community, column)
             # a detached copy: delete-orphan drops the old row at the commit, and its paths are needed after it
             # it keeps the old row's name, by which it is ours to remove (File._may_remove_written)
-            doomed = File(file_path=old.file_path, thumbnail_path=old.thumbnail_path, file_name=old.file_name) \
+            doomed = File(file_path=old.file_path, thumbnail_path=old.thumbnail_path, file_name=old.file_name,
+                          thumbnail_written_by_us=old.thumbnail_written_by_us) \
                 if old is not None else None
             setattr(community, column, replacement)
             session.commit()
@@ -3313,6 +3314,7 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                             final_place_thumbnail = f"https://{current_app.config['S3_PUBLIC_URL']}/{original_directory}/{new_filename[0:2]}/{new_filename[2:4]}" + \
                                                                     '/' + new_filename + '_thumbnail' + thumbnail_ext
                                         file.thumbnail_path = final_place_thumbnail
+                                        file.thumbnail_written_by_us = True   # our thumbnailer wrote it (follow-up F3)
                                         # `thumbnail_image`, not `image`. These
                                         # recorded the SOURCE image's size, so
                                         # every thumbnail this instance made was

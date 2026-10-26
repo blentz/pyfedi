@@ -123,6 +123,13 @@ class TestTheSizesThatAreRecorded:
         assert stored.thumbnail_width <= 50
         assert stored.thumbnail_height < 600
 
+    def test_the_thumbnail_it_writes_is_marked_as_ours(self, env):
+        """Follow-up F3: the marker is set with the path, by the code that wrote the file."""
+        file = a_file(env)
+        assert file.thumbnail_written_by_us is False
+        stored = run(file, answered_with(image_bytes(800, 600)))
+        assert stored.thumbnail_path and stored.thumbnail_written_by_us is True
+
     def test_an_image_smaller_than_the_thumbnail_is_not_grown(self, env):
         """D1292. An image already narrower than `medium_width`, on an
         instance with no configured medium format, took neither arm of the
