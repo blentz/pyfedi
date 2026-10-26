@@ -9,13 +9,16 @@ from flask_login import current_user
 from sqlalchemy import desc, asc, text, or_
 
 from app import db, cache
-from app.constants import VISIBILITY_PUBLIC, POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_VIDEO, POST_TYPE_POLL
+from app.constants import VISIBILITY_PUBLIC, POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_VIDEO, POST_TYPE_POLL, \
+    POST_STATUS_PUBLISHED
+from app.federation_urls import local_object_for_url
 from app.models import PostReply, Post, Community, User, Language, utcnow
 from app.activitypub.serializers.microblog import body_hashtags
 from app.local_only import content_local_only
-from app.visibility import OPEN_VISIBILITIES, RestrictedReply, mark_restricted
+from app.storefront import is_hosted_uri
+from app.visibility import OPEN_VISIBILITIES, RestrictedReply, can_view, mark_restricted
 from app.utils import blocked_or_banned_instances, blocked_users, is_video_hosting_site, get_request, silenced_instances, \
-    MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, is_local_microblogs
+    MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, is_local_microblogs, community_membership_private, user_in_restricted_country
 
 
 @cache.memoize(timeout=600)
@@ -396,3 +399,30 @@ def post_type_to_form_url_type(post_type: int, post_url: str):
         return 'poll'
     else:
         return ''
+
+
+def post_page_open_to_viewer(post: Post) -> bool:
+    """Whether the post page (`show_post`) would show `post` to the logged-in viewer, asked without opening it: the
+    gates that page answers 404 or 403 to, so a link that finds a post the viewer may not see says nothing more than
+    a link that finds no post. A mirror of those gates; the page still enforces them itself."""
+    community = post.community
+    if (community.banned or post.deleted) and post.deleted_by != post.user_id:
+        if not (community.is_moderator() or current_user.is_admin_or_staff() or current_user.id == post.user_id):
+            return False
+    if not can_view(post, current_user.id):
+        return False
+    if (post.nsfw or post.nsfl) and user_in_restricted_country(current_user):
+        return False
+    if community.private and community.id not in community_membership_private(current_user.id):
+        return False
+    return post.status >= POST_STATUS_PUBLISHED or current_user.id == post.user_id or community.is_moderator() \
+        or current_user.is_admin_or_staff()
+
+
+def hosted_post_for_viewer(uri: str) -> Post | None:
+    """The local post a URL on one of our own domains names, when the logged-in viewer may open it, else None.
+    Read from the database and never fetched: one server answers for every hosted domain. The caller sends the
+    viewer to the post's page on the domain they are browsing, so the peer gate (`post_served_to_any_peer`) is not
+    this lookup's business; what the page enforces is."""
+    found = local_object_for_url(uri)
+    return found if isinstance(found, Post) and post_page_open_to_viewer(found) else None

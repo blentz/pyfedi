@@ -5,6 +5,8 @@ from sqlalchemy import or_, desc, text
 
 from app import limiter, db, current_app
 from app.activitypub.util import resolve_remote_post_from_search
+from app.post.util import hosted_post_for_viewer
+from app.storefront import is_hosted_uri
 from app.community.forms import RetrieveRemotePost
 from app.community.util import search_for_community
 from app.constants import POST_STATUS_REVIEWING
@@ -259,7 +261,12 @@ def retrieve_remote_post():
     new_post = None
     if form.validate_on_submit():
         address = form.address.data.strip()
-        new_post = resolve_remote_post_from_search(address)
+        if is_hosted_uri(address):   # one of our own domains: the local post here, never fetched (follow-up F2)
+            new_post = hosted_post_for_viewer(address)
+            if new_post is not None:
+                return redirect(url_for('activitypub.post_ap', post_id=new_post.id))
+        else:
+            new_post = resolve_remote_post_from_search(address)
         if new_post is None:
             flash(_('Post not found.'), 'warning')
 
