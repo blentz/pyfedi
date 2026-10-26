@@ -71,7 +71,8 @@ class Config(object):
     MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD') or None
     MAIL_FROM = os.environ.get('MAIL_FROM') or 'noreply@' + os.environ.get('SERVER_NAME')
     ERRORS_TO = os.environ.get('ERRORS_TO') or ''
-    ERROR_COUNTS = os.environ.get('ERROR_COUNTS', 'True') in ('True', 'true', '1')    # count WARNING-and-worse log records per day (app/error_counts.py); tests turn it off
+    # count WARNING-and-worse log records per day (app/error_counts.py); the tests turn it off
+    ERROR_COUNTS = os.environ.get('ERROR_COUNTS', 'True') in ('True', 'true', '1')
     LANGUAGES = ['ca', 'ceb', 'de', 'en', 'es', 'eu', 'fi', 'fil', 'fr', 'hi', 'it', 'ja', 'ko', 'pl', 'ru', 'uk', 'zh']
     FULL_AP_CONTEXT = bool(int(os.environ.get('FULL_AP_CONTEXT', 0)))
     # S2.1 (ap-security-track): refuse an inbound HTTP signature that does not cover (request-target), host,
