@@ -10,7 +10,8 @@ from flask import redirect, url_for, flash, current_app, abort, request, g, make
 from flask_babel import _, force_locale, gettext
 from flask_login import current_user
 from app.federation_urls import activity_id, domain_site_name, object_base, owner_base
-from app.onion import audit_field
+from app.onion import apply_audit
+from app.onion_account import audit_ip
 from furl import furl
 from sqlalchemy import text, desc, Integer, case
 from sqlalchemy.orm.exc import NoResultFound
@@ -1092,7 +1093,7 @@ def add_reply(post_id: int, comment_id: int):
     form.language_id.choices = languages_for_form()
     if form.validate_on_submit():
         current_user.last_seen = utcnow()
-        current_user.ip_address = audit_field(ip_address())
+        apply_audit(current_user, 'ip_address', audit_ip(current_user, ip_address()))
 
         try:
             reply = make_reply(form, post, in_reply_to.id, SRC_WEB)

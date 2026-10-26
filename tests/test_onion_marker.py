@@ -18,7 +18,7 @@ from app import cache, db, get_ip_address, limiter, rate_limit_key
 from app.api.alpha.routes import is_trusted_request
 from app.auth.util import get_country, handle_banned_user, update_user_session
 from app.models import Instance, IpBan, Site, SiteDomain, User
-from app.onion import audit_field, is_onion_host, is_onion_request
+from app.onion import KEEP, ONION_ACCOUNT_IP, audit_field, is_onion_host, is_onion_request
 from app.shared.auth import api_log_user_in
 from app.storefront import check_default_domain, clear_domain_cache
 from app.utils import banned_ip_addresses, block_honey_pot, user_ip_banned
@@ -281,10 +281,10 @@ def test_onion_country_is_not_looked_up(app):
             assert get_country('1.2.3.4') == 'NZ'
 
 
-def test_audit_field_is_null_on_the_onion(app):
+def test_audit_field_keeps_what_is_stored_on_the_onion(app):
     with proxy_ip(app), onion_context(app):
-        assert audit_field('') is None
-        assert audit_field('NZ') is None
+        assert audit_field('') is KEEP
+        assert audit_field('NZ') is KEEP
     with proxy_ip(app), app.test_request_context('/'):
         assert audit_field('1.2.3.4') == '1.2.3.4'
         assert audit_field('') == ''
@@ -308,7 +308,7 @@ REGISTRATION = {'user_name': 'newperson', 'email': '', 'real_email': 'new@exampl
                 'submit': 'Register'}
 
 
-def test_onion_signup_ip_null(app, site):
+def test_onion_signup_stores_the_sentinel_ip(app, site):
     registration_env()
     add_onion_domain()
     with proxy_ip(app), patch.dict(app.config, {'COUNTRY_SOURCE_HEADER': 'CF-IPCountry'}), \
@@ -323,7 +323,7 @@ def test_onion_signup_ip_null(app, site):
                                environ_base={'REMOTE_ADDR': PROXY})
     assert response.status_code == 302
     user = User.query.filter_by(user_name='newperson').one()
-    assert user.ip_address is None
+    assert user.ip_address == ONION_ACCOUNT_IP
     assert user.ip_address_country is None
     located.assert_not_called()
 
@@ -355,12 +355,12 @@ def login_user_with_password(banned=False):
     return user
 
 
-def test_onion_api_login_stores_no_ip(app, db_session):
+def test_onion_api_login_leaves_the_stored_ip(app, db_session):
     user = login_user_with_password()
     with proxy_ip(app), onion_context(app), patch('app.shared.auth.sync_user_to_ldap'):
         api_log_user_in({'username': 'onionuser', 'password': 'correct horse battery'})
     db.session.refresh(user)
-    assert user.ip_address is None and user.ip_address_country is None
+    assert (user.ip_address, user.ip_address_country) == ('203.0.113.9', 'NZ')
 
 
 def test_onion_api_login_of_a_banned_user_bans_no_address(app, db_session):
@@ -380,12 +380,12 @@ def test_onion_web_login_of_a_banned_user_bans_no_address(app, db_session):
     assert [ban.ip_address for ban in IpBan.query.all()] == ['203.0.113.9']
 
 
-def test_onion_web_login_stores_no_ip(app, db_session):
+def test_onion_web_login_leaves_the_stored_ip(app, db_session):
     user = login_user_with_password()
     form = SimpleNamespace(timezone=SimpleNamespace(data='UTC'))
     with proxy_ip(app), onion_context(app):
         update_user_session(user, form, '', '')
-    assert user.ip_address is None and user.ip_address_country is None
+    assert (user.ip_address, user.ip_address_country) == ('203.0.113.9', 'NZ')
     with proxy_ip(app), app.test_request_context('/'):
         update_user_session(user, form, '198.51.100.4', '')
-    assert user.ip_address == '198.51.100.4' and user.ip_address_country is None
+    assert user.ip_address == '198.51.100.4' and user.ip_address_country == 'NZ'

@@ -19,7 +19,7 @@ from sqlalchemy import desc, exists, not_, or_, text, true, func, select, union_
 
 from app import db, cache, celery, limiter
 from app.activitypub import bp
-from app.onion import audit_field
+from app.onion import apply_audit, audit_field
 from app.activitypub.actor import find_actor_by_url
 from app.activitypub.entitlement import PRIVATE_HEADERS, actor_document, addressees_of, audience_entitles, signed_requester_actor
 from app.activitypub.signature import POST_REQUIRED, HttpSignature, publish_async_posts, signed_at, VerificationError, VerificationFormatError, default_context, LDSignature, \
@@ -978,7 +978,7 @@ def shared_inbox():
             actor.instance.gone_forever = False
             actor.instance.failures = 0
             if not request.environ.get(PARKED_RERUN_ENVIRON):   # a re-run has no sender address of its own (M6)
-                actor.instance.ip_address = audit_field(ip_address()) if not bounced else ''
+                apply_audit(actor.instance, 'ip_address', '' if bounced else audit_field(ip_address()))
         db.session.commit()
 
         # When a user is deleted, the only way to be fairly sure they get deleted everywhere is to tell the whole fediverse.

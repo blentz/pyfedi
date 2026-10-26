@@ -27,7 +27,8 @@ from app.models import File, Notification, NotificationSubscription, Poll, PollC
 from app.shared.media import MediaRefused, can_upload_media, episode_form_wanted, media_kind_for, media_of, \
     queue_probe, store_uploaded_media, with_episode
 from app.local_only import content_local_only
-from app.onion import audit_field
+from app.onion import apply_audit
+from app.onion_account import audit_ip
 from app.storefront import is_upload_link, link_on, stored_link
 from app.shared.tasks import task_selector
 from app.shared.upload import open_uploaded_image
@@ -339,7 +340,7 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None):
     community.last_active = g.site.last_active = utcnow()
     user.post_count += 1
     user.last_seen = utcnow()
-    user.ip_address = audit_field(ip_address())
+    apply_audit(user, 'ip_address', audit_ip(user, ip_address()))
 
     post.generate_ap_id(community)
 

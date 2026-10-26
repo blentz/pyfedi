@@ -10,7 +10,8 @@ from app import db, oauth
 from app.auth.util import create_registration_application, get_country, handle_banned_user
 from app.models import User, utcnow
 from app.storefront import current_storefront, default_domain, instance_id_of, public_registration_open
-from app.onion import audit_field
+from app.onion import apply_audit
+from app.onion_account import audit_country, audit_ip
 from app.shared.tasks import task_selector
 from app.utils import RESERVED_USER_NAMES, actor_contains_blocked_words, finalize_user_setup, get_setting, gibberish, \
     ip_address, user_cookie_banned, user_ip_banned, user_name_is_taken
@@ -136,11 +137,11 @@ def initialize_new_user(email, username, oauth_id_key, user_info, ip, country):
         verification_token='',
         instance_id=instance_id_of(default_domain()),
         site_domain_id=default_domain().id,
-        ip_address=audit_field(ip),
-        ip_address_country=audit_field(country),
         banned=user_ip_banned() or user_cookie_banned(),
         alt_user_name=gibberish(randint(8, 20)),
     )
+    apply_audit(user, 'ip_address', audit_ip(user, ip))
+    apply_audit(user, 'ip_address_country', audit_country(user, country))
     if user.title is None or user.title.strip() == '':  # ensure user has a display name. Sometimes OAuth doesn't give us one
         user.title = user.user_name
     if current_app.config['CONTENT_WARNING']:
@@ -231,8 +232,8 @@ def handle_oauth_authorize(provider, user_info_endpoint, oauth_id_key, form_clas
         return can_user_authenticate
 
     ip = ip_address()
-    country = get_country(ip)
     user = User.query.filter(getattr(User, oauth_id_key) == user_info['id']).first()
+    country = get_country(ip, user=user)
     if user:
         if not user.is_ban_exempt() and (user.banned or user_ip_banned() or user_cookie_banned()):
             return handle_banned_user(user, ip)
@@ -256,8 +257,8 @@ def finalize_user_login(user, token, ip, country):
     Performs final steps of logging in a user once verified.
     """
     user.last_seen = utcnow()
-    user.ip_address = audit_field(ip)
-    user.ip_address_country = audit_field(country)
+    apply_audit(user, 'ip_address', audit_ip(user, ip))
+    apply_audit(user, 'ip_address_country', audit_country(user, country))
     db.session.commit()
 
     login_user(user, remember=True)
