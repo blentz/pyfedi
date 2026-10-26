@@ -111,6 +111,12 @@ def audit_field(value: T) -> T | object:
     return KEEP if is_onion_request() else value
 
 
+def has_real_ip(user) -> bool:
+    """Whether `user` has a stored address that is a client's: not empty and not the onion accounts' shared sentinel.
+    The IP-ban feature (same-IP lists, banning an address) treats anything else as no IP."""
+    return bool(user.ip_address) and user.ip_address != ONION_ACCOUNT_IP
+
+
 def apply_audit(obj, field: str, result) -> None:
     """Set `obj.field` to an audit result, unless the result is `KEEP`."""
     if result is not KEEP:
