@@ -17,13 +17,14 @@ from app.community.util import search_for_community
 from app.discovery.podcast import PODCAST_DROP, podcast_route_for, podcast_twin_named_by_other
 from app.models import Post, PostReply, User, Community, BannedInstances, Feed, ModLog
 from app.post.util import post_refusal
-from app.storefront import default_domain, domain_authority, domain_for_host, is_hosted_uri, is_local_host
+from app.storefront import default_domain, domain_authority, domain_for_host, is_local_host
 from app.user.utils import search_for_user
-from app.local_only import without_local_only_actors
+from app.local_only import without_local_only_actors, user_local_only, community_local_only
 from app.visibility import can_view, is_open, modlog_local_only_clause, modlog_open_clause
 from app.feed.util import search_for_feed
 from app.utils import authorise_api_user, gibberish, subscribed_feeds, communities_banned_from, \
-    moderating_communities_ids, joined_or_modding_communities, blocked_communities, blocked_or_banned_instances
+    moderating_communities_ids, joined_or_modding_communities, blocked_communities, blocked_or_banned_instances, \
+    community_membership_private
 from app import db
 
 
@@ -113,6 +114,67 @@ def _post_open_to(post: Post, user_id: int) -> bool:
     return post_refusal(post, db.session.get(User, user_id)) is None
 
 
+NOT_FOUND = 'No object found.'
+
+
+def _reply_open_to(reply: PostReply, user_id: int) -> bool:
+    """Whether the reader may open `reply`: it is not deleted, they may see it, and the post page would show them
+    its post (so a reply in a private or banned community, or under a draft, is as unknown as one nobody holds)."""
+    return not reply.deleted and can_view(reply, user_id) and _post_open_to(reply.post, user_id)
+
+
+def _community_open_to(community: Community, user_id: int | None) -> bool:
+    """The gates the community page applies: not banned, not local-only for a logged-out reader, and a private
+    community only for its members."""
+    if community.banned or (community_local_only(community) and not user_id):
+        return False
+    return not community.private or community.id in community_membership_private(user_id)
+
+
+def _user_open_to(user: User, user_id: int | None) -> bool:
+    """A deleted or banned account, or a local-only one to a logged-out reader, is not shown."""
+    return not (user.deleted or user.banned or (user_local_only(user) and not user_id))
+
+
+def _feed_open_to(feed: Feed, user_id: int) -> bool:
+    """A banned feed is not shown; a private feed is its owner's and an admin's alone (as `feed_view` has it)."""
+    if feed.banned:
+        return False
+    return feed.public or user_id == feed.user_id or db.session.get(User, user_id).is_admin()
+
+
+def _post_result(post: Post, user_id: int, recursive: bool = False):
+    """The post as the API shows it, or the object itself for a recursive call, once the viewer gate passes. A post
+    that is hidden answers with the text of a post that does not exist."""
+    if not _post_open_to(post, user_id):
+        raise Exception(NOT_FOUND)
+    return post_view(post=post, variant=5, user_id=user_id) if not recursive else post
+
+
+def _reply_result(reply: PostReply, user_id: int, recursive: bool = False):
+    if not _reply_open_to(reply, user_id):
+        raise Exception(NOT_FOUND)
+    return reply_view(reply=reply, variant=5, user_id=user_id) if not recursive else reply
+
+
+def _community_result(community: Community, user_id: int, recursive: bool = False):
+    if not _community_open_to(community, user_id):
+        raise Exception(NOT_FOUND)
+    return community_view(community=community, variant=6, user_id=user_id) if not recursive else community
+
+
+def _user_result(user: User, user_id: int, recursive: bool = False):
+    if not _user_open_to(user, user_id):
+        raise Exception(NOT_FOUND)
+    return user_view(user=user, variant=7, user_id=user_id) if not recursive else user
+
+
+def _feed_result(feed: Feed, feed_dict: dict | None, user_id: int, recursive: bool = False):
+    if not _feed_open_to(feed, user_id):
+        raise Exception(NOT_FOUND)
+    return feed_view(feed=feed, **(feed_dict or feed_view_arguments(user_id))) if not recursive else feed
+
+
 def get_resolve_object(auth, data, user_id=None, recursive=False):
     if not data or 'q' not in data:
         raise Exception('missing q parameter for resolve_object')
@@ -134,31 +196,19 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
     # Check to see if the query parameter is already federated and is the canonical ap url
     object = db.session.query(PostReply).filter_by(ap_id=query).first()
     if object:
-        if object.deleted or (not recursive and not can_view(object, user_id)):
-            raise Exception('No object found.')
-        return reply_view(reply=object, variant=5, user_id=user_id) if not recursive else object
+        return _reply_result(object, user_id, recursive)
     object = db.session.query(Post).filter_by(ap_id=query).first()
     if object:
-        if object.deleted or (not recursive and not can_view(object, user_id)) or \
-                (not recursive and is_hosted_uri(query) and not _post_open_to(object, user_id)):
-            raise Exception('No object found.')
-        return post_view(post=object, variant=5, user_id=user_id) if not recursive else object
+        return _post_result(object, user_id, recursive)
     object = db.session.query(Community).filter_by(ap_profile_id=query.lower()).first()
     if object:
-        if object.banned:
-            raise Exception('No object found.')
-        return community_view(community=object, variant=6, user_id=user_id) if not recursive else object
+        return _community_result(object, user_id, recursive)
     object = db.session.query(User).filter_by(ap_profile_id=query.lower()).first()
     if object:
-        if object.deleted or object.banned:
-            raise Exception('No object found.')
-        return user_view(user=object, variant=7, user_id=user_id) if not recursive else object
+        return _user_result(object, user_id, recursive)
     object = db.session.query(Feed).filter_by(ap_profile_id=query.lower()).first()
     if object:
-        if object.banned:
-            raise Exception('No object found.')
-        return feed_view(feed=object, **(feed_dict or feed_view_arguments(user_id))) \
-            if not recursive else object
+        return _feed_result(object, feed_dict, user_id, recursive)
 
     # if not found and user is logged in, fetch the object if it's not hosted on a banned instance
     # note: accommodating !, @, and ~ queries for communities, people, and feeds is different from lemmy's v3 api
@@ -224,7 +274,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             if query.startswith('!'):
                 object = search_for_community(query.lower(), allow_fetch=bool(user_id))
                 if object:
-                    return community_view(community=object, variant=6, user_id=user_id)
+                    return _community_result(object, user_id)
                 else:
                     raise Exception('No object found.')
             
@@ -246,7 +296,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             object = search_for_community(comm_name.lower(), allow_fetch=bool(user_id))
 
             if object:
-                return community_view(community=object, variant=6, user_id=user_id)
+                return _community_result(object, user_id)
             else:
                 raise Exception('No object found.')
 
@@ -259,7 +309,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             if query.startswith("@"):
                 object = search_for_user(query.lower(), allow_fetch=bool(user_id))
                 if object:
-                    return user_view(user=object, variant=7, user_id=user_id)
+                    return _user_result(object, user_id)
                 else:
                     raise Exception('No object found.')
             
@@ -272,7 +322,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             object = search_for_user(user_name.lower(), allow_fetch=bool(user_id),
                                      home=None if '@' in user_name else domain_for_host(server))
             if object:
-                return user_view(user=object, variant=7, user_id=user_id)
+                return _user_result(object, user_id)
             else:
                 raise Exception('No object found.')
         
@@ -311,10 +361,9 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
 
             # A post this caller may not open (followers-only, unpublished, in a private or banned community, ...) is
             # as unknown to them as an id nobody holds: the gates the post page applies
-            if not object or not _post_open_to(object, user_id):
-                raise Exception('No object found.')
-            else:
-                return post_view(post=object, variant=5, user_id=user_id)
+            if not object:
+                raise Exception(NOT_FOUND)
+            return _post_result(object, user_id)
         
         # Comments
         if "/comment/" in query:
@@ -332,10 +381,9 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             # Since this is a local request, just search for the comment by id
             object = db.session.get(PostReply, comment_id)
 
-            if not object or not can_view(object, user_id):
-                raise Exception('No object found.')
-            else:
-                return reply_view(reply=object, variant=5, user_id=user_id)
+            if not object:
+                raise Exception(NOT_FOUND)
+            return _reply_result(object, user_id)
         
         # Feeds
         if "/f/" in query or query.startswith("~"):
@@ -344,7 +392,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                 object = search_for_feed(query.lower(), allow_fetch=False)
                 
                 if object and feed_dict:
-                    return feed_view(feed=object, **feed_dict)
+                    return _feed_result(object, feed_dict, user_id)
                 else:
                     raise Exception('No object found.')
             
@@ -359,7 +407,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             object = search_for_feed(feed_name, allow_fetch=bool(user_id))
 
             if object and feed_dict:
-                return feed_view(feed=object, **feed_dict)
+                return _feed_result(object, feed_dict, user_id)
             else:
                 raise Exception('No object found.')
 
@@ -368,17 +416,17 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
     if not recursive and query.startswith('!'):
         object = search_for_community(query.lower())
         if object:
-            return community_view(community=object, variant=6, user_id=user_id)
+            return _community_result(object, user_id)
     # assume that queries starting with @ are for a user
     if not recursive and query.startswith('@'):
         object = search_for_user(query.lower())
         if object:
-            return user_view(user=object, variant=7, user_id=user_id)
+            return _user_result(object, user_id)
     # assume that queries starting with ~ are for a feed
     if not recursive and query.startswith('~'):
         object = search_for_feed(query.lower())
         if object and feed_dict:
-            return feed_view(feed=object, **feed_dict)
+            return _feed_result(object, feed_dict, user_id)
     # if the instance is following the lemmy convention, a '/u/' means user and '/c/' means community
     if '/u/' in query or (('/comment/' not in query) and (  # D1190's twin
         (query.startswith('!')) or
@@ -387,12 +435,11 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
         object = find_actor_or_create(query.lower())
         if object:
             if isinstance(object, User):
-                return user_view(user=object, variant=7, user_id=user_id) if not recursive else object
+                return _user_result(object, user_id, recursive)
             elif isinstance(object, Community):
-                return community_view(community=object, variant=6, user_id=user_id) if not recursive else object
+                return _community_result(object, user_id, recursive)
             elif isinstance(object, Feed):
-                return feed_view(feed=object,
-                                 **(feed_dict or feed_view_arguments(user_id)))
+                return _feed_result(object, feed_dict, user_id)
 
     # no more hints from query
     ap_json = remote_object_to_json(query, retry_delay=0)   # a request path: no sleep, no retry (D738)
@@ -422,12 +469,11 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
         object = actor_json_to_model(ap_json, name, server)
         if object:
             if isinstance(object, User):
-                return user_view(user=object, variant=7, user_id=user_id) if not recursive else object
+                return _user_result(object, user_id, recursive)
             elif isinstance(object, Community):
-                return community_view(community=object, variant=6, user_id=user_id) if not recursive else object
+                return _community_result(object, user_id, recursive)
             elif isinstance(object, Feed):
-                return feed_view(feed=object,
-                                 **(feed_dict or feed_view_arguments(user_id)))
+                return _feed_result(object, feed_dict, user_id)
 
     # a post or a reply
     author = _own_host_author(ap_json)
@@ -487,13 +533,11 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             get_resolve_object(None, {"q": ap_json['inReplyTo']}, user_id, True)
             object = create_resolved_object(query, ap_json, server, community, announce_id, False)
 
-    if object and not recursive and not can_view(object, user_id):
-        raise Exception('No object found.')  # as for an object that could not be resolved
-    if object:
+    if object:   # a hidden one is refused as one that could not be resolved
         if isinstance(object, Post):
-            return post_view(post=object, variant=5, user_id=user_id) if not recursive else object
+            return _post_result(object, user_id, recursive)
         elif isinstance(object, PostReply):
-            return reply_view(reply=object, variant=5, user_id=user_id) if not recursive else object
+            return _reply_result(object, user_id, recursive)
 
     # failed to resolve if here.
     raise Exception('No object found.')
