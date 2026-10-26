@@ -20,6 +20,7 @@ from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, PO
 from app.models import Site, utcnow
 from app.onion import is_onion_request, stamp_activity
 from app.onion_guard import require_onion_session, resolve_onion_api_rate_key
+from app.hidden_routes import refuse_hidden_route
 from app.local_names import content_link, target_link
 from app.local_only import user_local_only
 from app.storefront import adopt_host_storefront, check_default_domain, current_storefront, hosted_instance_ids, \
@@ -175,6 +176,7 @@ def register_request_hooks(app):
     app.before_request(resolve_storefront)   # first: an unregistered host is refused before anything else runs
     app.before_request(require_onion_session)   # spec 3.7a C: a cookieless onion request is sent round for a cookie
     app.before_request(resolve_onion_api_rate_key)   # spec 3.7: onion API limits per account, found before the view
+    app.before_request(refuse_hidden_route)   # follow-up F6: a route naming a row hidden here answers as for none
     # Registered before after_request below, so it runs after it (Flask runs them in reverse) and before Flask-Compress
     app.after_request(rewrite_response_for_storefront)
 

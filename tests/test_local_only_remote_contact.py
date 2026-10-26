@@ -16,6 +16,8 @@ from tests.conftest import forget_login
 from tests.factories import make_instance, make_user
 from tests.test_community_lifecycle import csrf, login
 from tests.test_local_only_invisible import world  # noqa: F401 -- world is a fixture
+from tests.test_per_domain_html_routes import Visitor
+from tests.two_domains import ONION
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -89,10 +91,12 @@ def test_a_local_only_account_cannot_write_into_a_conversation_with_a_remote_per
     conversation.members.extend([scene.remote, scene.onionite])
     db.session.add(conversation)
     db.session.commit()
-    client = _client(app, scene.onionite)
-    response = client.post(f'/chat/{conversation.id}', data={'message': 'hello', 'csrf_token': client.token})
+    # on the onion: off it a conversation with the onion's account answers as one nobody holds (follow-up F6)
+    visitor = Visitor(app, scene.onionite, ONION)
+    response = visitor.post(f'/chat/{conversation.id}', data={'message': 'hello'})
     assert response.status_code == 302
-    assert REFUSAL in _flashes(client)
+    with visitor.client.session_transaction(base_url=visitor.base) as session:
+        assert REFUSAL in [message for _, message in session.get('_flashes', [])]
     assert ChatMessage.query.count() == 0
 
 

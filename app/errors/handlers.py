@@ -20,7 +20,9 @@ def not_found_error(error):
                                    '.ttf', '.webp', '.txt'))):
         return render_template('errors/404.html'), 404
 
-    # Check if there's a page for this URL
+    # Check if there's a page for this URL. A path holding a NUL names none, and Postgres refuses it in a string.
+    if '\x00' in request.path:
+        return render_template('errors/404.html'), 404
     cms_page = CmsPage.query.filter(CmsPage.url == request.path).first()
     if cms_page:
         return render_template('cms_page.html', page=cms_page)

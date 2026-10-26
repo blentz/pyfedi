@@ -169,7 +169,10 @@ def test_a_lookup_of_a_hosted_name_names_that_domain_or_is_404(app, world, kind,
     for host in (FIRST, ONION):
         client = signed_in(app, world.viewers[host], host)
         response = client.get(f'/{kind}/lookup/{row}/{other(host)}')
-        assert response.headers['Location'] == f'/{model_path}/{row}@{other(host)}'
+        if host == FIRST:   # follow-up F6: off the onion a name there answers as a name nobody holds
+            assert response.status_code == 404
+        else:
+            assert response.headers['Location'] == f'/{model_path}/{row}@{other(host)}'
         response = client.get(f'/{kind}/lookup/{row}/{host}')
         assert response.headers['Location'] == f'/{model_path}/{row}'   # the first domain's own redirect, unchanged
         assert client.get(f'/{kind}/lookup/nobody/{other(host)}').status_code == 404
@@ -185,10 +188,13 @@ def test_a_signed_in_miss_on_a_hosted_handle_is_404_and_fetches_nothing(app, wor
 
 
 def test_a_signed_in_miss_on_a_hosted_community_handle_ends_in_404(app, world):
-    client = signed_in(app, world.viewers[FIRST], FIRST)
-    response = client.get(f'/c/nobody@{ONION}', follow_redirects=True)
+    client = signed_in(app, world.viewers[ONION], ONION)
+    response = client.get(f'/c/nobody@{FIRST}', follow_redirects=True)
     assert response.status_code == 404
-    assert [step.headers['Location'] for step in response.history] == [f'/community/lookup/nobody/{ONION}']
+    assert [step.headers['Location'] for step in response.history] == [f'/community/lookup/nobody/{FIRST}']
+    # follow-up F6: off the onion a name there is 404 at once, held or not, so not even the redirect tells
+    response = signed_in(app, world.viewers[FIRST], FIRST).get(f'/c/nobody@{ONION}', follow_redirects=True)
+    assert response.status_code == 404 and not response.history
 
 
 @pytest.mark.parametrize('host', [ONION, FIRST])
