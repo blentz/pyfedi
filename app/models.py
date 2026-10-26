@@ -5342,8 +5342,10 @@ class UserRegistration(db.Model):
     user = db.relationship('User', foreign_keys=[user_id], lazy='joined')
 
     def search_similar_names(self):
-        return User.query.filter(or_(func.lower(User.user_name) == self.user.user_name.lower(), User.title == self.user.title),
-                                 User.id != self.user.id).order_by(desc(User.banned)).order_by(User.reputation).limit(15)
+        similar = User.query.filter(or_(func.lower(User.user_name) == self.user.user_name.lower(),
+                                        User.title == self.user.title), User.id != self.user.id)
+        similar = local_only.without_local_only_actors(similar, User)   # none hidden here (follow-up F6)
+        return similar.order_by(desc(User.banned)).order_by(User.reputation).limit(15)
 
 
 class PostVote(db.Model):

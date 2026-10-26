@@ -22,7 +22,7 @@ from app import db, celery, cache
 from app.branding import ends_inside_markup, offsite_references
 from app.discovery import sync as discovery_sync
 from app.visibility import visible_to_clause
-from app.local_only import domain_has_owners, user_local_only
+from app.local_only import domain_has_owners, user_local_only, without_local_only, without_local_only_actors
 from app.activitypub.routes import process_inbox_request, process_delete_request, replay_inbox_request, \
     SIGNATURE_FAILURE_MESSAGES, UNVERIFIED_LOG_MESSAGES
 from app.activitypub.signature import post_request, default_context, RsaKeys
@@ -51,7 +51,7 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, SiteDomain, \
     instance_row_referenced, DomainBranding
 from app.storefront import acting_as_default, canonicalise_text, clear_domain_cache, default_domain, domain_authority, domain_base_url, \
-    domain_by_id, federating_base, hosted_instance_ids, instance_id_of, is_hosted_uri, live_registration, storefront_url
+    domain_by_id, federating_base, hidden_instance_ids, hosted_instance_ids, instance_id_of, is_hosted_uri, live_registration, storefront_url
 from app.onion_media import DEFAULT_CACHE_BYTES
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
@@ -1759,7 +1759,7 @@ def admin_communities():
     if current_user.page_length and current_user.page_length < page_length:
         page_length = current_user.page_length
 
-    communities = Community.query
+    communities = without_local_only_actors(Community.query, Community)   # admins manage the onion's on the onion (F6)
     if search:
         communities = communities.filter(or_(Community.title.ilike(f"%{search}%"), Community.ap_id.ilike(f"%{search}%")))
     communities = communities.order_by(safe_order_by(sort_by, Community, {'title', 'topic_id', 'subscriptions_count',
@@ -1785,7 +1785,7 @@ def admin_communities_no_topic():
     page = request.args.get('page', 1, type=int)
     search = request.args.get('search', '')
 
-    communities = Community.query.filter(Community.topic_id == None)
+    communities = without_local_only_actors(Community.query.filter(Community.topic_id == None), Community)   # F6
     if search:
         communities = communities.filter(Community.title.ilike(f"%{search}%"))
     communities = communities.order_by(-Community.post_count).paginate(page=page, per_page=1000, error_out=False)
@@ -1805,7 +1805,7 @@ def admin_communities_low_quality():
     page = request.args.get('page', 1, type=int)
     search = request.args.get('search', '')
 
-    communities = Community.query.filter(Community.low_quality == True)
+    communities = without_local_only_actors(Community.query.filter(Community.low_quality == True), Community)   # F6
     if search:
         communities = communities.filter(Community.title.ilike(f"%{search}%"))
     communities = communities.order_by(-Community.post_count).paginate(page=page, per_page=1000, error_out=False)
@@ -1827,7 +1827,7 @@ def admin_communities_unmoderated():
     page = request.args.get('page', 1, type=int)
     search = request.args.get('search', '')
 
-    communities = Community.query.filter(Community.un_moderated == True)
+    communities = without_local_only_actors(Community.query.filter(Community.un_moderated == True), Community)   # F6
     if search:
         communities = communities.filter(Community.title.ilike(f"%{search}%"))
     communities = communities.order_by(-Community.post_count).paginate(page=page, per_page=1000, error_out=False)
@@ -2204,7 +2204,7 @@ def admin_users():
     if sort_by_btn:
         return redirect(url_for('admin.admin_users', page=page, search=search, local_remote=local_remote, sort_by=sort_by_btn, last_seen=last_seen))
 
-    users = User.query.filter_by(deleted=False)
+    users = without_local_only_actors(User.query.filter_by(deleted=False), User)   # admins manage the onion's there (F6)
     if local_remote == 'local':
         users = users.filter_by(ap_id=None)
     elif local_remote == 'remote':
@@ -2299,6 +2299,7 @@ def admin_content():
             post_replies = post_replies.filter(PostReply.posted_at > utcnow() - timedelta(days=days))
         post_replies = post_replies.order_by(desc(PostReply.posted_at))
 
+    posts, post_replies = without_local_only(posts, Post), without_local_only(post_replies, PostReply)   # F6
     if posts_replies == 'posts':
         post_replies = post_replies.filter(False)
     elif posts_replies == 'replies':
@@ -2339,9 +2340,12 @@ def admin_approve_registrations():
     else:
         disposable_domains = []
 
-    registrations = UserRegistration.query.filter_by(status=0).order_by(UserRegistration.created_at).all()
-    recently_approved = UserRegistration.query.filter_by(status=1).order_by(desc(UserRegistration.approved_at)).limit(
-        30)
+    # the onion's accounts are approved on the onion (follow-up F6)
+    registrations = without_local_only_actors(UserRegistration.query.join(User, User.id == UserRegistration.user_id),
+                                              User)
+    recently_approved = registrations.filter(UserRegistration.status == 1).order_by(
+        desc(UserRegistration.approved_at)).limit(30)
+    registrations = registrations.filter(UserRegistration.status == 0).order_by(UserRegistration.created_at).all()
     return render_template('admin/approve_registrations.html',
                            registrations=registrations, disposable_domains=disposable_domains,
                            recently_approved=recently_approved,
@@ -2761,7 +2765,7 @@ def admin_instances():
     sort_by = request.args.get('sort_by', 'domain ASC')
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
 
-    instances = Instance.query
+    instances = Instance.query.filter(Instance.id.not_in(hidden_instance_ids()))   # an onion's, on it only (F6)
 
     if search:
         instances = instances.filter(Instance.domain.ilike(f"%{search}%"))
@@ -3223,7 +3227,8 @@ def perf_test():
 def admin_media():
     page = request.args.get('page', 1, int)
     user_id = request.args.get('user_id', 0, int)
-    files = File.query.join(user_file).filter(user_file.c.file_id == File.id)
+    files = without_local_only_actors(File.query.join(user_file).filter(user_file.c.file_id == File.id).join(
+        User, User.id == user_file.c.user_id), User)   # the onion's accounts' files are managed on the onion (F6)
     if user_id:
         files = files.filter(user_file.c.user_id == user_id)
 

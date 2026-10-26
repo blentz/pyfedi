@@ -394,3 +394,63 @@ def test_on_the_onion_they_list_it(app, active):
         body = get(app, path, host=ONION, user=active.first_bob).get_data(as_text=True)
         assert 'ONIONPOST' in body, path
     assert 'ONIONREPLY' in get(app, '/bookmarks/comments', host=ONION, user=active.first_bob).get_data(as_text=True)
+
+
+# --- the admin panel (review I4) ----------------------------------------------------------------------------------
+
+@pytest.fixture
+def panel(onion):
+    for user in (onion.onion_bob, onion.first_bob):
+        db.session.add(UserRegistration(user_id=user.id, answer=f'ANSWER-{user.id}', status=0))
+    for post in (onion.post, onion.in_first, onion.first_post):
+        post.deleted = True
+    onion.reply.deleted = True
+    for user in (onion.onion_bob, onion.first_bob):
+        file = File(file_path=f'upload-{user.id}.png')
+        db.session.add(file)
+        db.session.flush()
+        db.session.execute(user_file.insert().values(user_id=user.id, file_id=file.id))
+    db.session.commit()
+    grant_permission(onion.admin, 'administer all communities')
+    grant_permission(onion.admin, 'approve registrations')
+    grant_permission(onion.admin, 'change instance settings')
+    return onion
+
+
+def test_the_admin_panel_lists_no_onion_row_on_the_first_domain(app, panel):
+    onion_bob, first_bob, onion_art, first_art = panel.onion_bob.id, panel.first_bob.id, panel.onion_art.id, \
+        panel.first_art.id
+    marks = (ONION, 'Onion art', 'ONIONPOST', 'ONIONINFIRST', f'ANSWER-{onion_bob}', f'/admin/user/{onion_bob}/edit"',
+             f'/admin/community/{onion_art}/edit"', f'?user_id={onion_bob}"')
+    for path, control in (('/admin/users', f'/admin/user/{first_bob}/edit"'),
+                          ('/admin/users?search=bob', f'/admin/user/{first_bob}/edit"'),
+                          ('/admin/communities', f'/admin/community/{first_art}/edit"'),
+                          ('/admin/communities/no-topic', None),
+                          ('/admin/content?show=deleted&days=0', 'FIRSTPOST'),
+                          ('/admin/approve_registrations', f'ANSWER-{first_bob}'),
+                          ('/admin/media', f'?user_id={first_bob}"'), ('/admin/instances', FIRST)):
+        response = get(app, path, user=panel.admin)
+        assert response.status_code == 200, path
+        body = response.get_data(as_text=True)
+        assert not near(body, *marks), (path, near(body, *marks))
+        assert control is None or control in body, path
+
+
+def test_the_admin_edit_pages_answer_an_onion_row_as_one_nobody_holds(app, panel):
+    nobody = 2 ** 30
+    for hidden, missing in ((f'/admin/user/{panel.onion_bob.id}/edit', f'/admin/user/{nobody}/edit'),
+                            (f'/admin/community/{panel.onion_art.id}/edit', f'/admin/community/{nobody}/edit'),
+                            (f'/admin/masquerade/{panel.onion_bob.id}', f'/admin/masquerade/{nobody}')):
+        found, absent = get(app, hidden, user=panel.admin), get(app, missing, user=panel.admin)
+        assert (found.status_code, found.get_data()) == (absent.status_code, absent.get_data()), hidden
+        assert found.status_code == 404, hidden
+
+
+def test_on_the_onion_the_admin_panel_lists_and_edits_them(app, panel, monkeypatch):
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the edit form renders its token
+    assert ONION_BOB.split('@')[0] in get(app, '/admin/users?search=bob', host=ONION, user=panel.admin).get_data(as_text=True)
+    assert 'Onion art' in get(app, '/admin/communities', host=ONION, user=panel.admin).get_data(as_text=True)
+    assert f'ANSWER-{panel.onion_bob.id}' in get(app, '/admin/approve_registrations', host=ONION,
+                                                  user=panel.admin).get_data(as_text=True)
+    assert get(app, f'/admin/user/{panel.onion_bob.id}/edit', host=ONION, user=panel.admin).status_code == 200
+    assert ONION in get(app, '/admin/instances', host=ONION, user=panel.admin).get_data(as_text=True)
