@@ -119,8 +119,11 @@ NOT_FOUND = 'No object found.'
 
 def _reply_open_to(reply: PostReply, user_id: int) -> bool:
     """Whether the reader may open `reply`: it is not deleted, they may see it, and the post page would show them
-    its post (so a reply in a private or banned community, or under a draft, is as unknown as one nobody holds)."""
-    return not reply.deleted and can_view(reply, user_id) and _post_open_to(reply.post, user_id)
+    its post (so a reply in a private or banned community, or under a draft, is as unknown as one nobody holds). A
+    reply stays visible under a followers-only post, whose title the views withhold, so the post's own visibility is
+    not asked."""
+    return not reply.deleted and can_view(reply, user_id) and \
+        post_refusal(reply.post, db.session.get(User, user_id), check_visibility=False) is None
 
 
 def _community_open_to(community: Community, user_id: int | None) -> bool:

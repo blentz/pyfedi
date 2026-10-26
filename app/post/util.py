@@ -419,17 +419,18 @@ def deleted_post_state(post: Post, viewer: User | None = None) -> str:
     return 'gone'
 
 
-def post_refusal(post: Post, viewer: User | None = None) -> int | str | None:
+def post_refusal(post: Post, viewer: User | None = None, check_visibility: bool = True) -> int | str | None:
     """The one place the post page's refusals are decided, in the order `show_post` applies them: 404 for a deleted
     post or one the reader may not see (followers-only, unpublished, local-only), `NEEDS_LOGIN` for an anonymous
     reader of NSFW/NSFL content, 403 for a private community or a restricted country, else None. `show_post` calls
     this, and a link to a post asks it too, so a post nobody could open is never hinted at. `viewer` is the reader
-    (an API caller, say); by default the session's."""
+    (an API caller, say); by default the session's. `check_visibility=False` leaves out the post's own visibility
+    (followers-only), for a reply that is shown with only the post's title withheld: the other gates still apply."""
     community = post.community
     who = current_user if viewer is None else viewer
     if deleted_post_state(post, viewer) == 'gone':
         return 404
-    if not can_view(post, who.get_id()):   # 404, not 403, so the answer does not confirm the post exists
+    if check_visibility and not can_view(post, who.get_id()):   # 404, not 403, so the answer does not confirm the post exists
         return 404
     if who.is_anonymous:
         if current_app.config['CONTENT_WARNING']:
