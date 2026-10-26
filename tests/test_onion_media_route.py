@@ -7,10 +7,12 @@ the network; tests/test_onion_media_fill.py covers it. Redis is the `onion_redis
 from Caddy's address with the onion marker, as in tests/test_onion_pow.py.
 """
 import hashlib
+import logging
 import os
 import time
 
 import pytest
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 import app.onion_media_fill as onion_media_fill
 import app.onion_media_routes as onion_media_routes
@@ -18,6 +20,7 @@ from app import celery, db
 from app.models import SiteDomain
 from app.onion_media import cache_name, proxy_url, url_kind
 from app.onion_media_fill import BG_SLOT_KEY, DEAD_SECONDS, MAX_REQUEUES, fill_task, queue_fill
+from app.onion_store import RefusedOnionStore
 from app.storefront import clear_domain_cache
 from tests.factories import make_banned_instance, make_instance, make_user
 
@@ -381,3 +384,49 @@ def test_background_fill_whose_host_is_busy_requeues_and_another_host_proceeds(a
 def test_fill_task_routes_to_onion_media_queue(app):
     assert fill_task.name == 'app.onion_media_fill.fill_task'
     assert celery.conf.CELERY_ROUTES[fill_task.name] == {'queue': 'onion_media'}
+
+
+@pytest.fixture(params=['down', 'refused'])
+def store_down(request, monkeypatch):
+    """The onion store unreachable: a Redis that raises, or the RefusedOnionStore a failed startup check installs."""
+    if request.param == 'refused':
+        store = RefusedOnionStore()
+    else:
+        class Down:
+            def __getattr__(self, name):
+                def fail(*args, **kwargs):
+                    raise RedisConnectionError('down')
+                return fail
+        store = Down()
+    monkeypatch.setattr('app.onion_redis_client', store)
+    return store
+
+
+@pytest.mark.parametrize('remote', [IMAGE, VIDEO])
+def test_a_miss_with_the_onion_store_down_is_404_not_500_and_logs_no_url(app, onion, store_down, no_fetch, queued,
+                                                                          caplog, remote):
+    with caplog.at_level(logging.DEBUG):
+        response = onion_get(app.test_client(), proxy_url(remote))
+    assert response.status_code == 404
+    assert queued == []
+    assert 'media.example' not in caplog.text
+    assert remote not in caplog.text
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+
+def test_give_back_with_the_onion_store_down_is_silent_and_takes_nothing(app, store_down):
+    assert onion_media_fill.take_slot('onion_media:inflight:0', 20) is None
+    onion_media_fill.give_back('onion_media:inflight:0', 'token')
+
+
+def test_a_fill_that_raises_with_the_store_down_still_frees_what_it_can(app, onion, monkeypatch, caplog):
+    """The slots were taken, then the store went down mid-fill: give_back must not turn the 404 into a 500."""
+    taken = []
+
+    def fill(remote, *, max_seconds):
+        monkeypatch.setattr('app.onion_redis_client', RefusedOnionStore())
+        taken.append(remote)
+        return None
+    monkeypatch.setattr(onion_media_routes, 'fill', fill)
+    assert onion_get(app.test_client(), proxy_url(IMAGE)).status_code == 404
+    assert taken == [IMAGE]

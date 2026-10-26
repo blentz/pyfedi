@@ -80,7 +80,8 @@ def _take_request_slots(remote: str) -> list[tuple[str, str]] | None:
 
 
 def _queued(remote: str, retry_after: int) -> Response:
-    queue_fill(remote)
+    if not queue_fill(remote):          # the onion store is down: nothing was queued, so no retry would help
+        abort(404)
     return Response('', status=503, mimetype='text/plain', headers={'Retry-After': str(retry_after)})
 
 
