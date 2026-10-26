@@ -20,11 +20,10 @@ reader could be hidden from; tests/test_hidden_routes_table.py walks the URL map
 from urllib.parse import urlsplit
 
 from flask import abort, current_app, request
-from sqlalchemy import or_
 from werkzeug.exceptions import HTTPException
 
 from app import db
-from app.local_names import hidden_target, notification_href
+from app.local_names import default_domain_user, hidden_target, notification_href
 from app.local_only import conversation_hidden_here, hidden_here, hides_anything_here
 from app.models import ChatMessage, Community, Conversation, Instance, Post, PostReply, User
 from app.storefront import current_storefront, domain_for_host, host_hidden_here, instance_visible_here, normalise_host
@@ -49,16 +48,8 @@ def _user_name_hidden(name: str) -> bool:
         return True
     if '@' in name or not current_storefront().is_default:
         return False   # a bare name elsewhere is that storefront's own account, which is never hidden on it
-    user = _default_domain_user(name)
+    user = default_domain_user(name, allow_banned=True)
     return user is not None and hidden_here(user, True)
-
-
-def _default_domain_user(name: str):
-    """The local account a bare `/u/<name>` names on the default domain, banned or not: by the actor URL SERVER_URL
-    builds, or by its alternate name on any domain. It is the lookup app.user.utils.user_for_actor makes there
-    (activitypub.actor.find_local_user), read here without importing the user blueprint, which imports this module."""
-    url = f"{current_app.config['SERVER_URL']}/u/{name}"
-    return User.query.filter(or_(User.ap_profile_id == url, User.alt_user_name == name), User.ap_id.is_(None)).first()
 
 
 def _message_hidden(message) -> bool:

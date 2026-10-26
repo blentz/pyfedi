@@ -79,6 +79,9 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/feed/util.py': {
         'feed_communities_for_edit': 1,
     },
+    'app/local_names.py': {
+        'default_domain_user': 1,   # a bare name on the default domain is found by the actor URL SERVER_URL builds
+    },
     'app/local_only.py': {
         'outbound_refusal': 1,   # the canonical host is ours in the "names our post or comment" test (plan B task 7)
     },
@@ -169,9 +172,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     },
     'app/user/subscription.py': {
         'choose_plan': 3,
-    },
-    'app/user/utils.py': {
-        'user_for_actor': 1,   # a bare name on the default domain is found by the actor URL SERVER_URL builds
     },
     'app/visibility.py': {
         '_mentions': 1,

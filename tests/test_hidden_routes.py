@@ -204,3 +204,29 @@ def test_the_apis_subscribe_answers_an_onion_account_as_an_id_nobody_holds(app, 
                                              headers={'Authorization': f'Bearer {onion.first_bob.encode_jwt_token()}'}))
     assert (answers[0].status_code, answers[0].get_data()) == (answers[1].status_code, answers[1].get_data())
     assert not onion.onion_bob.notify_new_posts(onion.first_bob.id)
+
+
+# --- the gate and the views read a name alike (security scan) ------------------------------------------------------
+
+@pytest.mark.parametrize('spelling', ['QuietOtter', 'QUIETOTTER', 'quietotter%20', '%20quietotter', 'quietotter%09'])
+@pytest.mark.parametrize('sub', ['', '/report', '/upvotes'])
+def test_an_alternate_name_in_any_case_or_spacing_answers_as_a_name_nobody_holds(app, onion, spelling, sub):
+    onion.onion_bob.alt_user_name = 'quietotter'
+    db.session.commit()
+    assert_same(app, onion.first_bob, 'GET', f'/u/{spelling}{sub}', f'/u/loudbadger{sub}')
+
+
+@pytest.mark.parametrize('hidden, missing', [
+    (f'/u/BOB@{ONION.upper()}', f'/u/NOBODY@{ONION.upper()}'),
+    (f'/u/bob@{ONION}%20', f'/u/nobody@{ONION}%20'),
+    (f'/u/%20bob@{ONION}', f'/u/%20nobody@{ONION}'),
+    (f'/c/ART@{ONION.upper()}', f'/c/NOPE@{ONION.upper()}'),
+    (f'/c/art@{ONION}%20', f'/c/nope@{ONION}%20'),
+    (f'/community/Art@{ONION}./moderate', f'/community/nope@{ONION}./moderate'),
+    (f'/user/lookup/BOB/{ONION.upper()}', f'/user/lookup/NOBODY/{ONION.upper()}'),
+    (f'/user/lookup/bob/{ONION}%20', f'/user/lookup/nobody/{ONION}%20'),
+    (f'/community/lookup/art/{ONION.upper()}:80', f'/community/lookup/nope/{ONION.upper()}:80'),
+    (f'/feed/lookup/news/{ONION.upper()}', f'/feed/lookup/nothing/{ONION.upper()}'),
+])
+def test_a_name_on_the_onion_in_any_case_or_spacing_answers_as_a_name_nobody_holds(app, onion, hidden, missing):
+    assert_same(app, onion.first_bob, 'GET', hidden, missing)
