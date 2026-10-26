@@ -2,8 +2,8 @@
 
 Every failed check logs exactly once: web login, API login and verify_credentials, whether the account is unknown,
 the password is wrong, the directory bind failed, or the account is in the hidden backoff (which has to look like a
-wrong password, in the log too). On the onion no line is written: those requests share the proxy's address, so no ban could act on one and
-the line would only record onion use. The line holds neither the user name nor the email.
+wrong password, in the log too). On the onion no line is written: those requests share the proxy's address, so no
+ban could act on one and the line would only record onion use. The line holds neither the user name nor the email.
 
 Not logged, because no password was checked: a refused or missing proof-of-work or wait token, a visible typed-key
 wait refusal, and the session-first redirect. Nor is a correct password for a banned account.
