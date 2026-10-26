@@ -41,6 +41,7 @@ KNOWN_SCHEDULES = {
     'daily_maintenance': timedelta(hours=25),
     'send_queue': timedelta(minutes=5),
     'evict_onion_media': timedelta(hours=1),
+    'prune_error_counts': timedelta(hours=25),
 }
 
 FALLBACK = timedelta(days=1)

@@ -31,6 +31,7 @@ from config import Config
 from app.constants import IMAGE_PIXEL_CAP
 from app.pinned_http import pinned_transport
 from app.cookies import StorefrontLoginManager, StorefrontSessionInterface, secure_set_cookies
+from app.error_counts import ErrorCountHandler
 from app.log_scrub import drop_onion_event, log_onion_safe_exception, scrub as onion_scrub
 from app.onion import is_onion_request, onion_rate_key
 from app.onion_store import OnionRoutedStorage, RefusedOnionStore, check_onion_store  # noqa: F401 -- OnionRoutedStorage registers the onion-routed scheme RATELIMIT_STORAGE_URI names
@@ -484,6 +485,14 @@ def create_app(config_class=Config):
         handler.addFilter(onion_scrub)
     log_onion_safe_exception(app)
     app.logger.setLevel(logging.INFO)
+
+    # Counts per day of what was logged at WARNING and above. The Celery worker builds its app here too, so one handler
+    # counts web and worker alike (the unit is PIEFED_UNIT). One handler only: create_app can run more than once.
+    for old in [h for h in app.logger.handlers if isinstance(h, ErrorCountHandler)]:
+        app.logger.removeHandler(old)
+    if app.config['ERROR_COUNTS']:
+        with app.app_context():
+            app.logger.addHandler(ErrorCountHandler(db.engine))
 
     # Load plugins
     load_plugins()
