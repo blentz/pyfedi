@@ -192,3 +192,15 @@ def test_the_api_sends_no_message_to_an_onion_account_on_the_first_domain(app, t
                                               headers={'Authorization': f'Bearer {talking.first_bob.encode_jwt_token()}'}))
     assert (answers[0].status_code, answers[0].get_data()) == (answers[1].status_code, answers[1].get_data())
     assert ChatMessage.query.filter_by(recipient_id=talking.onion_bob.id).count() == 0
+
+
+def test_the_apis_subscribe_answers_an_onion_account_as_an_id_nobody_holds(app, onion, monkeypatch):
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    answers = []
+    for person in (onion.onion_bob.id, NOBODY):
+        forget_login()
+        answers.append(app.test_client().put('/api/alpha/user/subscribe', base_url=f'https://{FIRST}',
+                                             json={'person_id': person, 'subscribe': True},
+                                             headers={'Authorization': f'Bearer {onion.first_bob.encode_jwt_token()}'}))
+    assert (answers[0].status_code, answers[0].get_data()) == (answers[1].status_code, answers[1].get_data())
+    assert not onion.onion_bob.notify_new_posts(onion.first_bob.id)
