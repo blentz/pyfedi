@@ -42,6 +42,9 @@
                                     {{ form.hp_field() }}
                                 </div>
                                 {{ render_field(form.real_email) }}
+                                {% if g.storefront and g.storefront.is_onion -%}
+                                    <p class="form-text">{{ _('We recommend registering with ProtonMail or another privacy-preserving email service.') }}</p>
+                                {% endif -%}
                                 <div class="password-container">
                                     {{ render_field(form.password) }}
                                     <a href="#" class="hidePassword" title="{{ _('Show password') }}"><img src="/static/images/eye-password-show.svg" alt="{{ _('Show password') }}"></a>
