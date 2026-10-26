@@ -34,11 +34,12 @@ from app.constants import NOTIF_COMMUNITY, NOTIF_POST, NOTIF_REPLY, POST_STATUS_
     ROLE_ADMIN_NAME, ROLE_STAFF_NAME, ANNOUNCE_MAX_OBJECTS
 from app.email import mail_name, send_email
 from app.federation_urls import activity_id
+from app.error_counts import KEEP_DAYS
 from app.onion_media import evict
 from app.models import CronJobLog, Settings, BannedInstances, Role, User, RolePermission, Domain, ActivityPubLog, utcnow, \
     utcnow, Site, Instance, File, Notification, Post, CommunityMember, NotificationSubscription, PostReply, Language, \
     Community, SendQueue, _store_files_in_s3, PostVote, Poll, \
-    ActivityBatch, Reminder, RssFeed, RssFeedItem, Feed, media_of
+    ActivityBatch, Reminder, RssFeed, RssFeedItem, Feed, media_of, ErrorCount
 from app.shared.tasks import task_selector
 from app.visibility import listable_clause, post_title_for
 from app.shared.tasks.maintenance import add_remote_communities, remove_old_bot_content, pwn_bots
@@ -1607,6 +1608,24 @@ def register(app):
         with app.app_context():
             evict(get_setting('onion_media_cache_bytes', 10737418240))
             log_cron_task_to_db("evict_onion_media")
+
+    @app.cli.command("error-counts")
+    @click.option('--days', default=KEEP_DAYS, show_default=True, help='How many days back to show')
+    def error_counts(days):
+        """ Print the daily error counts: day, unit, level, count, kind """
+        with app.app_context():
+            since = utcnow().date() - timedelta(days=days)
+            for row in ErrorCount.query.filter(ErrorCount.day >= since).order_by(
+                    ErrorCount.day, ErrorCount.unit, ErrorCount.level, ErrorCount.kind):
+                click.echo(f'{row.day} {row.unit} {row.level} {row.count} {row.kind}')
+
+    @app.cli.command("prune-error-counts")
+    def prune_error_counts():
+        """ Delete the daily error counts older than 21 days """
+        with app.app_context():
+            ErrorCount.query.filter(ErrorCount.day < utcnow().date() - timedelta(days=KEEP_DAYS)).delete()
+            db.session.commit()
+            log_cron_task_to_db("prune_error_counts")
 
     @app.cli.command("send_missed_notifs")
     def send_missed_notifs():

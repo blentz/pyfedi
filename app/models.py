@@ -6269,6 +6269,8 @@ class CronJobLog(db.Model):
             return timedelta(minutes=5)
         elif self.name == 'evict_onion_media':
             return timedelta(hours=1)  # runs every 15 minutes
+        elif self.name == 'prune_error_counts':
+            return timedelta(hours=25)  # runs daily
         # D1334. This used to fall off the end and answer None for any name not
         # listed above, and `app/admin/routes.py` does
         # `if diff_last_run > cron_task.get_frequency():`, so the admin dashboard
@@ -6438,3 +6440,14 @@ def _large_community_subscribers() -> float:
 def _store_files_in_s3():
     return current_app.config['S3_ACCESS_KEY'] != '' and current_app.config['S3_ACCESS_SECRET'] != '' and \
         current_app.config['S3_ENDPOINT'] != ''
+
+
+class ErrorCount(db.Model):
+    """How many times an error of one kind was logged on one day by one unit (app/error_counts.py). The kind is a
+    class and a source line, never a message; the rows are pruned after 21 days."""
+    __tablename__ = 'error_count'
+    day = db.Column(db.Date, primary_key=True)
+    unit = db.Column(db.String(32), primary_key=True)
+    kind = db.Column(db.String(256), primary_key=True)
+    level = db.Column(db.String(8), primary_key=True)
+    count = db.Column(db.Integer, nullable=False, default=0)

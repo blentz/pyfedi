@@ -11,6 +11,7 @@ import traceback
 
 from flask import current_app
 
+from app.error_counts import error_kind
 from app.onion import is_onion_request
 
 ONION_EXCEPTION_MESSAGE = 'Exception on an onion request'
@@ -25,6 +26,7 @@ class OnionScrubFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if getattr(record, _SCRUBBED, False) or getattr(record, 'onion_safe', False) or not is_onion_request():
             return True
+        record.error_kind = error_kind(record)     # the error counts want the real frame, which is gone below
         error = record.exc_info[1] if record.exc_info else None
         kind = type(error).__name__ if error is not None else None
         if record.msg == ONION_EXCEPTION_MESSAGE:
