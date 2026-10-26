@@ -743,7 +743,7 @@ def test_add_mod_to_community_local_moderator_gets_notification_and_unread_count
         user_id=target.id, author_id=s.user.id).one()
     assert notif.notif_type == NOTIF_NEW_MOD
     assert notif.subtype == 'new_moderator'
-    assert notif.url == '/c/' + s.community.name
+    assert notif.url == f'/community/{s.community.id}'      # by id, so it reaches this community on any domain (F1)
     assert notif.targets == {'gen': '0', 'community_id': s.community.id}
     assert target.unread_notifications == 1
     assert calls == [('add_mod', {'user_id': s.user.id, 'mod_id': target.id,

@@ -108,3 +108,14 @@ def target_link(targets: dict | None, name_key: str, css_class: str = '') -> Mar
         return escape(name)
     css = Markup(' class="{}"').format(css_class) if css_class else Markup('')
     return Markup('<a{} href="{}">{}</a>').format(css, href, name)
+
+
+def notification_href(notification) -> str | None:
+    """Where following `notification` goes, or None when it names nothing. A url is followed as stored, except the
+    `/c/<stored name>` a new-moderator notification kept before follow-up F1, which can name a namesake on another
+    domain: that goes to the community by id, from its targets or else a lookup of the name (`stored_name_id`)."""
+    url = notification.url
+    if not url.startswith('/c/'):
+        return url
+    community_id = (notification.targets or {}).get('community_id') or stored_name_id(Community, url[len('/c/'):])
+    return None if community_id is None else url_for('community.show_community_by_id', community_id=community_id)
