@@ -197,6 +197,7 @@ def test_a_deleted_post_is_not_found(app, env):
     from app.api.alpha.utils.misc import get_resolve_object
 
     user, author, community, post, reply, baseline = env
+    post.user_id = author.id   # the author is shown a post that was deleted (follow-up F5: as the post page has it)
     post.deleted = True
     db.session.commit()
 
@@ -1543,7 +1544,7 @@ def test_an_object_the_caller_may_not_view_is_not_found(app, env):
 
     with pytest.raises(Exception) as refused:
         resolve_document(user, {'id': REMOTE_X, 'type': 'Page'}, community=community,
-                         create_resolved_object=lambda *a, **k: post, can_view=lambda *a, **k: False)
+                         create_resolved_object=lambda *a, **k: post, post_refusal=lambda *a, **k: 404)
 
     assert str(refused.value) == 'No object found.'
 
