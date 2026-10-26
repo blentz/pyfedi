@@ -48,7 +48,7 @@ import app.storefront as storefront
 import app.local_only as local_only
 from app.clock import utcnow  # noqa: F401  (re-exported: callers import it from here)
 from app.onion import is_onion_request, stamp_activity
-from app.onion_store import onion_store_needed, onion_store_optional, request_redis
+from app.onion_store import onion_store_needed, onion_store_optional, read_other_store, request_redis
 from app.relays import current_relay_id
 from app.rsa_keys import RsaKeys
 
@@ -100,37 +100,41 @@ def votes_cast_key(user_id: int) -> str:
 
 
 def votes_cast_today(user_id: int, needed: bool = True) -> int:
-    """Votes `user_id` cast today, as counted in the store this request's state goes to (app/onion_store.py): the
-    onion's votes are counted in the RAM-only onion store. A vote's quota check is `needed`, so an onion request
-    finding the store down is answered 503; a page that only shows the count (needed=False) reads 0 instead."""
-    num = None
+    """Votes `user_id` cast today: the clearnet ones, counted in the main Redis, plus the onion ones, counted in the
+    RAM-only onion store (app/onion_store.py), so neither path gets a quota of its own. A vote's quota check is
+    `needed`, so an onion request finding its store down is answered 503; a page that only shows the count
+    (needed=False) reads 0 instead."""
+    total = 0
     with onion_store_needed() if needed else onion_store_optional():
-        num = request_redis().get(votes_cast_key(user_id))
-    if num is None:
-        return 0
-    return int(num)
+        total = int(request_redis().get(votes_cast_key(user_id)) or 0) \
+            + int(read_other_store(lambda redis: redis.get(votes_cast_key(user_id)), None) or 0)
+    return total
 
 
 def count_vote_cast(user_id: int) -> None:
-    """One more vote cast today by `user_id`, where votes_cast_today reads it."""
+    """One more vote cast today by `user_id`, counted in this request's own store only."""
     with onion_store_needed():
-        if votes_cast_today(user_id) == 0:
-            request_redis().set(votes_cast_key(user_id), 1, ex=86400)
+        redis = request_redis()
+        if not redis.get(votes_cast_key(user_id)):
+            redis.set(votes_cast_key(user_id), 1, ex=86400)
         else:
-            request_redis().incr(votes_cast_key(user_id))
+            redis.incr(votes_cast_key(user_id))
 
 
 def recent_ai_detections(user_id: int, detection: dict, now: float) -> list:
-    """Add `detection` (scored by `now`) to the user's AI-detection results of the last 24 hours, and return them all.
-    Kept in the store this request's state goes to (app/onion_store.py). An onion request that finds the onion store
-    down records nothing and gets nothing back: the tally is a heuristic, and the post or reply still goes in."""
+    """Add `detection` (scored by `now`) to the user's AI-detection results of the last 24 hours, and return them all,
+    from both paths: it is written to this request's own store (app/onion_store.py), and the other store's last 24
+    hours are read with it, so a streak split across clearnet and the onion is still one streak. An onion request
+    that finds its store down records nothing and gets nothing back: the tally is a heuristic, and the post or reply
+    still goes in."""
     redis_key = f'ai_detection:user:{user_id}'
     detections = []
     with onion_store_optional():
         redis = request_redis()
         redis.zadd(redis_key, {json.dumps(detection): now})
         redis.zremrangebyscore(redis_key, 0, now - 86400)   # entries older than 24h
-        detections = redis.zrange(redis_key, 0, -1)
+        detections = redis.zrange(redis_key, 0, -1) + read_other_store(
+            lambda other: other.zrangebyscore(redis_key, now - 86400, '+inf'), [])   # not pruned there: read-only
     return detections
 
 

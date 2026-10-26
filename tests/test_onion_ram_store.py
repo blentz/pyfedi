@@ -17,7 +17,7 @@ from limits.storage import MemoryStorage, storage_from_string
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app import create_app, db, limiter
-from app.models import Post, User, votes_cast_key
+from app.models import Post, User, recent_ai_detections, votes_cast_key, votes_cast_today
 from app.onion_store import OnionRoutedStorage, onion_store_needed, onion_store_optional, request_redis
 from app.user.routes import import_settings_task
 from app.utils import set_setting
@@ -397,3 +397,64 @@ def test_an_onion_settings_import_waits_in_the_onion_store(app, world, main_redi
     assert onion_redis.get(key) == contents.decode() and not main_redis.keys('import:*')
     import_settings_task(world['alice'].id, key)
     assert not onion_redis.exists(key)
+
+
+# --------------------------------------------------------------------------
+# Per-user tallies count both paths (security review ruling)
+# --------------------------------------------------------------------------
+
+def test_vote_quota_counts_both_paths(app, limited_app, world, main_redis, main_writes, onion_redis, monkeypatch):
+    """One account's votes are counted where each was cast, but its quota is the sum: voting on the other path is no
+    way round it. An onion vote is still counted only in the onion store, and clearnet works with that store down."""
+    alice, post = world['alice'], world['post']
+    key = votes_cast_key(alice.id)
+    main_redis.set(key, 3, ex=5000)
+    onion_redis.set(key, 4, ex=5000)
+    with app.test_request_context('/'):
+        assert votes_cast_today(alice.id) == 7
+    with onion_request(app):
+        assert votes_cast_today(alice.id) == 7
+    monkeypatch.setitem(limited_app.config, 'VOTE_QUOTA', 7)
+    client = limited_app.test_client()
+    page = challenge(onion_page(client, '/auth/login'))
+    assert logged_in(onion_post(client, '/auth/login', data=proven(page)))
+    assert vote(client, post).status_code == 429                  # 3 on clearnet + 4 on the onion: the quota is spent
+    monkeypatch.setitem(limited_app.config, 'VOTE_QUOTA', 8)
+    del main_writes[:]
+    assert vote(client, post).status_code == 200
+    assert onion_redis.get(key) == '5' and main_redis.get(key) == '3'
+    assert not [write for write in main_writes if write[1] == key]
+    monkeypatch.setattr('app.onion_redis_client', down())
+    with app.test_request_context('/'):
+        assert votes_cast_today(alice.id) == 3                    # the onion's count is skipped, not an error
+
+
+def test_the_other_store_is_not_read_without_an_onion(app, main_redis, onion_redis, monkeypatch):
+    monkeypatch.setitem(app.config, 'ONION_PROXY_IP', None)
+    onion_redis.set(votes_cast_key(5), 4)
+    main_redis.set(votes_cast_key(5), 1)
+    with app.test_request_context('/'):
+        assert votes_cast_today(5) == 1
+
+
+def test_ai_detection_tally_merges_both_paths(app, world, main_redis, main_writes, onion_redis, monkeypatch):
+    alice = world['alice']
+    key = f'ai_detection:user:{alice.id}'
+    now = 1_800_000_000.0
+    main_redis.zadd(key, {json.dumps({'detection': 'ai', 'n': 1}): now - 100,
+                          json.dumps({'detection': 'ai', 'n': 2}): now - 50,
+                          json.dumps({'detection': 'human', 'n': 0}): now - 90_000})    # older than a day
+    before = state(main_redis)
+    del main_writes[:]
+    with onion_request(app):
+        detections = recent_ai_detections(alice.id, {'detection': 'ai', 'n': 3}, now)
+    assert sorted(json.loads(d)['n'] for d in detections) == [1, 2, 3]
+    assert unchanged(before, state(main_redis)) and main_writes == []
+    assert len(onion_redis.zrange(key, 0, -1)) == 1               # the onion's own entry, only there
+    with app.test_request_context('/'):
+        detections = recent_ai_detections(alice.id, {'detection': 'human', 'n': 4}, now)
+    assert sorted(json.loads(d)['n'] for d in detections) == [1, 2, 3, 4]
+    monkeypatch.setattr('app.onion_redis_client', down())
+    with app.test_request_context('/'):
+        detections = recent_ai_detections(alice.id, {'detection': 'human', 'n': 5}, now)
+    assert sorted(json.loads(d)['n'] for d in detections) == [1, 2, 4, 5]
