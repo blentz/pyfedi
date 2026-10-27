@@ -24,7 +24,8 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from flask import current_app
 from flask_login import login_user
 
-from app import db
+from app import db, storefront
+from app.storefront import DomainInfo
 from app.activitypub import signature_rfc9421
 from app.activitypub.signature import HttpSignature, RsaKeys, http_date
 from app.constants import NOTIF_POST, NOTIF_REPORT
@@ -234,7 +235,8 @@ def make_feed(instance, name: str = 'peerfeed', public: bool = False,
     return feed
 
 
-def make_local_feed(name: str = 'localfeed', public: bool = False) -> Feed:
+def make_local_feed(name: str = 'localfeed', public: bool = False, domain: DomainInfo | None = None,
+                    user=None) -> Feed:
     """A Feed webfinger can actually resolve: `ap_id` is None.
 
     `make_feed` cannot be used here. It sets `ap_id` unconditionally -- even at
@@ -255,15 +257,21 @@ def make_local_feed(name: str = 'localfeed', public: bool = False) -> Feed:
     fixture row the product cannot produce is a state to assert nothing against
     (fact 781).
     """
-    base = f"https://test.piefed.local/f/{name}"
-    feed = Feed(name=name, machine_name=name, title=name, instance_id=1,
-                public=public,
+    if domain is None:
+        base, instance_id, authority, domain_id = (f"https://test.piefed.local/f/{name}", 1, 'test.piefed.local',
+                                                   storefront.default_domain().id)
+    else:
+        base, instance_id, authority, domain_id = (f"{storefront.domain_base_url(domain)}/f/{name}",
+                                                   storefront.instance_id_of(domain),
+                                                   storefront.domain_authority(domain), domain.id)
+    feed = Feed(name=name, machine_name=name, title=name, instance_id=instance_id,
+                public=public, site_domain_id=domain_id, user_id=user.id if user else None,
                 ap_profile_id=base,
                 ap_public_url=base,
                 ap_followers_url=f"{base}/followers",
                 ap_following_url=f"{base}/following",
                 ap_outbox_url=f"{base}/outbox",
-                ap_domain='test.piefed.local')
+                ap_domain=authority)
     db.session.add(feed)
     db.session.commit()
     return feed
