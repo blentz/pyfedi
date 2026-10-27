@@ -111,7 +111,7 @@ def seen(page, feeds):
     ('shop', FIRST, 'shop'),                       # an account sees its home domain's feeds anywhere
     ('first', ONION, 'first'),                     # a first-domain account on the onion
     ('onion', ONION, 'onion'), ('onion', SHOP, 'shop'),   # an onion account off the onion browses as logged out
-    (None, ONION, 'onion')])
+    (None, ONION, 'first')])   # the onion's feeds are not for a logged-out reader (C2): the first domain's instead
 def test_feed_view_domain(app, world, who, host, expected):
     d, people, _feeds = world
     context = as_viewer(app, host, people[who] if who else None)
@@ -273,7 +273,13 @@ def test_an_onion_account_off_the_onion_is_listed_no_feed_of_its_own(app, world)
 def test_the_onion_lists_its_own_feeds_to_a_signed_in_reader_only(app, world):
     _d, people, feeds = world
     assert seen(signed_get(app, people['onion'], '/feeds', ONION), feeds) == {'onion', 'remote'}
-    assert 'onion' not in seen(signed_get(app, None, '/feeds', ONION), feeds)   # the C2 rule stands
+    assert seen(signed_get(app, None, '/feeds', ONION), feeds) == {'first', 'remote'}   # the C2 rule stands
+
+
+@pytest.mark.parametrize('path', ['/feeds', '/feeds_menu', '/explore_menu', '/explore'])
+def test_a_logged_out_onion_visitor_is_shown_the_first_domains_feeds(app, world, path):
+    _d, _people, feeds = world
+    assert seen(signed_get(app, None, path, ONION), feeds) == {'first', 'remote'}, path
 
 
 @pytest.mark.parametrize('signed_in', [False, True])

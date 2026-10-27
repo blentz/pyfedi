@@ -1034,13 +1034,19 @@ def communities_menu():
                            )
 
 
+def feed_menus() -> dict:
+    """The feed menus a page shows its reader: the view domain's instance feeds, and the reader's own and subscribed
+    feeds, each narrowed to what this storefront shows (follow-up F6), after the cache."""
+    signed_in = current_user.is_authenticated
+    return {'menu_instance_feeds': shown_here(menu_instance_feeds(feed_view_domain().id)),
+            'menu_my_feeds': shown_here(menu_my_feeds(current_user.id)) if signed_in else None,
+            'menu_subscribed_feeds': shown_here(menu_subscribed_feeds(current_user.id)) if signed_in else None}
+
+
 @bp.route('/explore_menu')
 def explore_menu():
     return render_template('explore_menu.html', menu_topics=menu_topics(),
-                           menu_instance_feeds=shown_here(menu_instance_feeds(feed_view_domain().id)),
-                           menu_my_feeds=shown_here(menu_my_feeds(current_user.id)) if current_user.is_authenticated else None,
-                           menu_subscribed_feeds=shown_here(menu_subscribed_feeds(current_user.id)) if current_user.is_authenticated else None
-                           )
+                           **feed_menus())
 
 
 @bp.route('/topics_menu')
@@ -1053,9 +1059,7 @@ def topics_menu():
 @bp.route('/feeds_menu')
 def feeds_menu():
     return render_template('feeds_menu.html',
-                           menu_instance_feeds=shown_here(menu_instance_feeds(feed_view_domain().id)),
-                           menu_my_feeds=shown_here(menu_my_feeds(current_user.id)) if current_user.is_authenticated else None,
-                           menu_subscribed_feeds=shown_here(menu_subscribed_feeds(current_user.id)) if current_user.is_authenticated else None,
+                           **feed_menus(),
                            )
 
 
@@ -1494,9 +1498,7 @@ def list_feeds():
 @login_required_if_private_instance
 def explore():
     topics = topic_tree()
-    return render_template('explore.html', topics=topics, menu_instance_feeds=shown_here(menu_instance_feeds(feed_view_domain().id)),
-                           menu_my_feeds=shown_here(menu_my_feeds(current_user.id)) if current_user.is_authenticated else None,
-                           menu_subscribed_feeds=shown_here(menu_subscribed_feeds(current_user.id)) if current_user.is_authenticated else None,)
+    return render_template('explore.html', topics=topics, **feed_menus())
 
 
 # RSS feed of the community
@@ -1789,8 +1791,8 @@ def health2():
     if request.args.get('prompt'):
         flash(_('You did not choose any topics. Would you like to choose individual communities instead?'))
 
-    topics = Topic.query.order_by(Topic.name).all()              # noqa f841
-    languages = Language.query.order_by(Language.name).all()     # noqa f841
+    topics = Topic.query.order_by(Topic.name).all()            
+    languages = Language.query.order_by(Language.name).all()   
     communities = Community.query.filter_by(banned=False)
     if search_param == '':
         pass
@@ -1806,7 +1808,7 @@ def health2():
 
     # find all the feeds marked as public
     public_feeds = Feed.query.filter_by(public=True).filter(listed_feeds_clause(feed_view_domain())).order_by(
-        Feed.title).all()  # noqa f841
+        Feed.title).all()
 
     # if filtering by public feed
     # get all the ids of the communities
@@ -1857,6 +1859,6 @@ def health2():
                                                      {'title', 'subscriptions_count', 'post_count', 'post_reply_count',
                                                       'last_active', 'created_at'})).limit(100)
 
-    c = communities.all()   # noqa f841
+    c = communities.all() 
 
     return ''

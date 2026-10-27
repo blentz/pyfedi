@@ -12,10 +12,11 @@ from app.models import Feed
 from app.storefront import DomainInfo, current_storefront, default_domain, on_domain
 
 
-def _owns_public_feed(domain: DomainInfo) -> bool:
-    """Whether `domain` owns a public, unbanned local feed."""
+def _owns_public_feed(domain: DomainInfo, signed_in: bool) -> bool:
+    """Whether `domain` owns a public, unbanned local feed this reader may see (`hidden_here`). Not cached: a feed
+    made, banned or made private must change the answer at once, and the answer differs by reader."""
     return Feed.query.filter(Feed.ap_id.is_(None), Feed.public.is_(True), Feed.banned.is_(False),
-                             on_domain(domain, Feed)).first() is not None
+                             on_domain(domain, Feed), not_(hidden_here_clause(Feed, signed_in))).first() is not None
 
 
 def feed_view_domain(account=None) -> DomainInfo:
@@ -31,7 +32,7 @@ def feed_view_domain(account=None) -> DomainInfo:
         home = account.home_domain()
         if home.federates or home.id == here.id:
             domain = home
-    if not domain.federates and not _owns_public_feed(domain):
+    if not domain.federates and not _owns_public_feed(domain, account is not None):
         return default_domain()
     return domain
 
