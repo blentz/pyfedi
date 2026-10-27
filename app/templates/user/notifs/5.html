@@ -9,7 +9,7 @@
         </div>
         <div class="child">
             {{ _('New Post in followed feed ') }}
-            <a href="/f/{{ notification.targets.feed_name }}">
+            <a href="/f/{{ stored_feed_path(notification.targets.feed_link) if notification.targets.feed_link else notification.targets.feed_name }}">
                 {{ notification.targets.feed_name }}
             </a>
             /

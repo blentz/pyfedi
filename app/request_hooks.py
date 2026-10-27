@@ -22,7 +22,7 @@ from app.onion import is_onion_request, stamp_activity
 from app.onion_guard import require_onion_session, resolve_onion_api_rate_key
 from app.hidden_routes import refuse_hidden_route, unread_shown
 from app.local_names import content_hidden, content_link, hidden_note, instance_link, report_target_hidden, \
-    reporter_link, target_hidden, target_link
+    reporter_link, stored_feed_path, target_hidden, target_link
 from app.feed_domains import shown_community_count
 from app.local_only import user_local_only
 from app.storefront import adopt_host_storefront, check_default_domain, current_storefront, hosted_instance_ids, \
@@ -121,6 +121,7 @@ def register_request_hooks(app):
     app.jinja_env.globals['len'] = len
     app.jinja_env.globals['target_link'] = target_link
     app.jinja_env.globals['content_link'] = content_link
+    app.jinja_env.globals['stored_feed_path'] = stored_feed_path
     app.jinja_env.globals['hidden_note'] = hidden_note
     app.jinja_env.globals['target_hidden'] = target_hidden
     app.jinja_env.globals['content_hidden'] = content_hidden

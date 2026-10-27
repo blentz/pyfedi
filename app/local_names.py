@@ -111,6 +111,12 @@ def actor_handle(obj) -> str:
     return f'{name}@{domain_by_id(obj.site_domain_id).domain}'
 
 
+def stored_feed_path(stored: str) -> str:
+    """The `/f/` path segment for the feed a notification stored under `Feed.stored_link()`: `name@domain` as stored, and
+    a bare name (the default domain's) written for this storefront, so it never opens a namesake here."""
+    return stored if '@' in stored else path_name(stored, default_domain().id)
+
+
 def target_id_key(name_key: str) -> str:
     """The `targets` key that holds the id of the account or community whose stored name is under `name_key`: the name
     key's trailing `_user_name` (else `_name`) becomes `_id`. `suspect_user_user_name` -> `suspect_user_id`,
