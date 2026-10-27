@@ -1,6 +1,8 @@
 """The table behind the one gate (follow-up F6, review I8): every argument of every route is either in it, so the gate
 finds the row it names, or on the allow-list of arguments that name no account, community, post or reply."""
-from app.hidden_routes import EXEMPT_ENDPOINTS, NON_OBJECT_ARGUMENTS, OBJECT_ARGUMENTS, actor_kind
+from werkzeug.routing import IntegerConverter
+
+from app.hidden_routes import EXEMPT_ENDPOINTS, ID_ARGUMENTS, NON_OBJECT_ARGUMENTS, OBJECT_ARGUMENTS, actor_kind
 
 
 def test_every_route_argument_is_gated_or_named_harmless(app):
@@ -32,3 +34,10 @@ def test_the_table_and_the_allow_list_do_not_overlap(app):
 def test_every_exempt_endpoint_exists(app):
     endpoints = {rule.endpoint for rule in app.url_map.iter_rules()}
     assert EXEMPT_ENDPOINTS <= endpoints
+
+
+def test_every_id_argument_is_an_integer_wherever_it_is_used(app):
+    """The gate looks an id up only when it is an int: a string converter would slip past it (re-review N-m1)."""
+    strings = [(rule.rule, argument) for rule in app.url_map.iter_rules() for argument in rule.arguments
+               if argument in ID_ARGUMENTS and not isinstance(rule._converters[argument], IntegerConverter)]
+    assert strings == []

@@ -4,7 +4,9 @@ Off its own domain a local-only domain's rows are hidden from every reader (`hid
 name one must answer exactly as a route naming a row nobody holds, or the difference tells a clearnet reader what
 exists on the onion. So the answer for both is decided here, before any view runs, and is the same `abort(404)`:
 
-- an id argument (`OBJECT_ARGUMENTS`) that names a hidden row, or no row at all, is 404;
+- an id argument (`ID_ARGUMENTS`) that names a hidden row, or no row at all, is 404. This is intended: a view that
+  answered an id nobody holds with a flash, a redirect or an htmx fragment answers 404 while anything is hidden on its
+  storefront, since a different answer for the two would be the oracle (re-review N-m9);
 - a name argument that is a handle on a hidden domain (`bob@<onion>`), or a host argument that is a hidden domain,
   is 404 whether or not the name is held there, so a lookup tells nothing either;
 - a bare `/u/<name>` on the default domain also finds an account by its alternate name, on any domain, so that one
@@ -12,8 +14,8 @@ exists on the onion. So the answer for both is decided here, before any view run
 
 It asks only the storefront's part of the rule (`signed_in=True`): what a logged-out reader is refused (plan C2) is each
 view's own answer. When nothing is hidden on this storefront it asks nothing at all, so a site with no local-only
-domain, and the onion itself, keep every answer they had. A name argument holding a NUL is 404 everywhere: it names no
-row, and Postgres refuses it in a string; so is a host argument that names no host.
+domain, and the onion itself, keep every answer they had. Any string argument holding a NUL is 404 everywhere, on
+every route: it names no row, and Postgres refuses it in a string; so is a host argument that names no host.
 
 Every argument of every route is either in the table or on `NON_OBJECT_ARGUMENTS`, the arguments that name nothing a
 reader could be hidden from; tests/test_hidden_routes_table.py walks the URL map and fails on any other."""
@@ -82,7 +84,8 @@ _HOSTS = frozenset({'domain', 'instance_domain'})
 _ACTORS = {'/u/': _user_name_hidden, '/c/': _handle_hidden, '/community/': _handle_hidden, '/f/': _handle_hidden,
            '/feed/': _handle_hidden}
 
-OBJECT_ARGUMENTS = frozenset(_IDS) | frozenset(_NAMES)
+ID_ARGUMENTS = frozenset(_IDS)   # each an `int:` argument wherever it is used (tests/test_hidden_routes_table.py)
+OBJECT_ARGUMENTS = ID_ARGUMENTS | frozenset(_NAMES)
 
 # The arguments that name no account, community, post or reply, or name one that an argument above already names
 # (a page of a community, a revision of its wiki page). A value is None, or the rule prefixes it is allowed under.
@@ -114,8 +117,8 @@ EXEMPT_ENDPOINTS = frozenset({'user.user_newsletter_unsubscribe', 'user.user_ema
 
 
 def _junk(name: str, value) -> bool:
-    """Whether a name argument holds a NUL, which names no row and which Postgres refuses in a string, or a host
-    argument names no host at all."""
+    """Whether a string argument, any of them, holds a NUL, which names no row and which Postgres refuses in a string,
+    or a host argument names no host at all."""
     if not isinstance(value, str):
         return False
     return '\x00' in value or (name in _HOSTS and not normalise_host(value))
@@ -144,11 +147,13 @@ def refuse_hidden_route() -> None:
     """The app's before_request: 404 when a view argument names a row hidden here, or, for an id, no row at all, so
     both answers are one (see the module's docstring)."""
     args, rule = request.view_args, request.url_rule
-    if not args or rule is None or request.endpoint in EXEMPT_ENDPOINTS:
+    if not args or rule is None:
+        return
+    if any(_junk(name, value) for name, value in args.items()):
+        abort(404)
+    if request.endpoint in EXEMPT_ENDPOINTS:
         return
     named = [(name, value) for name, value in args.items() if name == 'actor' or name in OBJECT_ARGUMENTS]
-    if any(_junk(name, value) for name, value in named):
-        abort(404)
     if not named or not hides_anything_here():
         return
     if any(_value_hidden(name, value, rule.rule) for name, value in named):
