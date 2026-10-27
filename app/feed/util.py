@@ -11,7 +11,7 @@ from app import db
 from app.activitypub.util import actor_json_to_model, canonical_handle, webfinger_self_link_allowed
 from app.community.util import search_for_community, retrieve_mods_and_backfill
 from app.constants import AP_FETCH_ACCEPT
-from app.feed_domains import feeds_shown_here_clause
+from app.feed_domains import feeds_shown_here_clause, shown_feed_communities
 from app.models import BannedInstances, Feed, FeedItem, Community, _as_dict
 from app.local_names import local_named, named_by_actor
 from app.storefront import DomainInfo, domain_for_host, is_hosted_server
@@ -132,8 +132,8 @@ def actor_to_feed(actor, signed_in: bool | None = None) -> Feed | None:
 
 def feed_communities_for_edit(feed_id: int) -> str:
     return_value = []
-    for community in Community.query.filter(Community.banned == False).join(FeedItem, FeedItem.community_id == Community.id).\
-            filter(FeedItem.feed_id == feed_id).all():
+    shown = shown_feed_communities(Community.query.filter(Community.banned == False), True)   # not one hidden here
+    for community in shown.join(FeedItem, FeedItem.community_id == Community.id).filter(FeedItem.feed_id == feed_id).all():
         ap_id = community.link()
         if '@' not in ap_id:
             ap_id = f'{ap_id}@{current_app.config["SERVER_NAME"]}'
