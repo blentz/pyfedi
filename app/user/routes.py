@@ -48,7 +48,7 @@ from app.user.utils import unsubscribe_from_community, search_for_user, _get_use
     _get_user_upvoted_posts, _get_user_subscribed_communities, _get_user_posts, _get_user_post_replies, \
     _get_user_archived_replies, _get_user_posts_and_replies, _get_user_same_ip, insert_or_update_user_note, \
     _get_user_same_name, user_for_actor
-from app.utils import etag_stamp
+from app.utils import etag_stamp, feed_open_to_clause
 from app.utils import render_template, markdown_to_html, user_access, markdown_to_text, shorten_string, back, user_banned_from_community, \
     gibberish, community_membership, user_filters_home, \
     user_filters_posts, user_filters_replies, theme_list, \
@@ -2180,6 +2180,7 @@ def user_alerts(type='posts', filter='all'):
         # ignore filter
         entities = Feed.query.join(NotificationSubscription, NotificationSubscription.entity_id == Feed.id). \
             filter_by(type=NOTIF_FEED, user_id=current_user.id).filter(feeds_shown_here_clause()). \
+            filter(feed_open_to_clause(current_user.id)). \
             order_by(desc(NotificationSubscription.created_at))
         title = _('Feed Alerts')
 
