@@ -182,6 +182,24 @@ def _feed_result(feed: Feed, feed_dict: dict | None, user_id: int, recursive: bo
     return feed_view(feed=feed, **(feed_dict or feed_view_arguments(user_id))) if not recursive else feed
 
 
+def _fetch_inner(ap_id: str, user_id: int, required: bool = True):
+    """Resolve `ap_id` on the way to resolving something else, which keeps its own gates. What the caller may not
+    open still lands in the database, so a hidden target is read back from there: the child resolves if its own
+    gates allow it (which include the parent's, bar its followers-only visibility) and is refused as a missing
+    object if they do not. A target that cannot be had at all raises as before."""
+    try:
+        return get_resolve_object(None, {"q": ap_id}, user_id, True)
+    except Exception as error:
+        if str(error) != NOT_FOUND:
+            raise
+        stored = Post.get_by_ap_id(ap_id) or PostReply.get_by_ap_id(ap_id)
+        for model in (Community, User, Feed):
+            stored = stored or db.session.query(model).filter_by(ap_profile_id=ap_id.lower()).first()
+        if stored is None and required:
+            raise
+        return stored
+
+
 def get_resolve_object(auth, data, user_id=None, recursive=False):
     if not data or 'q' not in data:
         raise Exception('missing q parameter for resolve_object')
@@ -499,7 +517,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                 potential_id = ap_json[location]
                 if isinstance(potential_id, str):
                     if not potential_id.startswith('https://www.w3.org') and not potential_id.endswith('/followers'):
-                        potential_community = get_resolve_object(None, {"q": potential_id}, user_id, True)
+                        potential_community = _fetch_inner(potential_id, user_id, required=False)
                         if isinstance(potential_community, Community) and \
                                 not podcast_twin_named_by_other(potential_community, author):  # D24 R2
                             community = potential_community
@@ -507,7 +525,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                 if isinstance(potential_id, list):
                     for c in potential_id:
                         if not c.startswith('https://www.w3.org') and not c.endswith('/followers'):
-                            potential_community = get_resolve_object(None, {"q": c}, user_id, True)
+                            potential_community = _fetch_inner(c, user_id, required=False)
                             if isinstance(potential_community, Community) and \
                                     not podcast_twin_named_by_other(potential_community, author):  # D24 R2
                                 community = potential_community
@@ -524,7 +542,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                     community = comment_being_replied_to.community
             # if parent doesn't already exist, call this function recursively to create it, and use parent's community
             if not post_being_replied_to and not comment_being_replied_to:
-                object = get_resolve_object(None, {"q": ap_json['inReplyTo']}, user_id, True)
+                object = _fetch_inner(ap_json['inReplyTo'], user_id)
                 if object:
                     community = object.community
 
@@ -537,7 +555,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
     # if object can't be created due to missing a parent post or reply, call this function recursively to create it.
     if not object:
         if 'inReplyTo' in ap_json and ap_json['inReplyTo'] is not None:
-            get_resolve_object(None, {"q": ap_json['inReplyTo']}, user_id, True)
+            _fetch_inner(ap_json['inReplyTo'], user_id)
             object = create_resolved_object(query, ap_json, server, community, announce_id, False)
 
     if object:   # a hidden one is refused as one that could not be resolved
