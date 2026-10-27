@@ -42,6 +42,7 @@ from app.main.util import sidebar_active_communities, sidebar_new_instances, sid
     sidebar_new_communities, _base_list_communities_context, reload_url
 from app.shared.tasks.maintenance import refresh_instance_chooser
 from app.translation import LibreTranslateAPI
+from app.feed_domains import feed_view_domain, listed_feeds_clause
 from app.local_only import hidden_here, hidden_here_sql, shown_here, without_local_only, without_local_only_actors
 from app.local_names import local_named, split_local_name
 from app.visibility import listable_clause, modlog_local_only_clause, modlog_open_clause, visible_to_clause
@@ -473,7 +474,8 @@ def list_communities():
     # default to no public feeds
     server_has_feeds = False
     # find all the feeds marked as public
-    public_feeds = Feed.query.filter_by(public=True).order_by(Feed.title).all()
+    public_feeds = Feed.query.filter_by(public=True).filter(listed_feeds_clause(feed_view_domain())).order_by(
+        Feed.title).all()
     if len(public_feeds) > 0:
         server_has_feeds = True
 
@@ -1039,9 +1041,9 @@ def communities_menu():
 @bp.route('/explore_menu')
 def explore_menu():
     return render_template('explore_menu.html', menu_topics=menu_topics(),
-                           menu_instance_feeds=menu_instance_feeds(),
-                           menu_my_feeds=menu_my_feeds(current_user.id) if current_user.is_authenticated else None,
-                           menu_subscribed_feeds=menu_subscribed_feeds(current_user.id) if current_user.is_authenticated else None
+                           menu_instance_feeds=shown_here(menu_instance_feeds(feed_view_domain().id)),
+                           menu_my_feeds=shown_here(menu_my_feeds(current_user.id)) if current_user.is_authenticated else None,
+                           menu_subscribed_feeds=shown_here(menu_subscribed_feeds(current_user.id)) if current_user.is_authenticated else None
                            )
 
 
@@ -1055,9 +1057,9 @@ def topics_menu():
 @bp.route('/feeds_menu')
 def feeds_menu():
     return render_template('feeds_menu.html',
-                           menu_instance_feeds=menu_instance_feeds(),
-                           menu_my_feeds=menu_my_feeds(current_user.id) if current_user.is_authenticated else None,
-                           menu_subscribed_feeds=menu_subscribed_feeds(current_user.id) if current_user.is_authenticated else None,
+                           menu_instance_feeds=shown_here(menu_instance_feeds(feed_view_domain().id)),
+                           menu_my_feeds=shown_here(menu_my_feeds(current_user.id)) if current_user.is_authenticated else None,
+                           menu_subscribed_feeds=shown_here(menu_subscribed_feeds(current_user.id)) if current_user.is_authenticated else None,
                            )
 
 
@@ -1466,11 +1468,11 @@ def list_feeds():
 
     if search_param == '':
         # find all the feeds marked as public
-        public_feeds = feed_tree_public()
-
+        public_feeds = feed_tree_public(domain=feed_view_domain())
+        
     else:
         # find all the feeds marked as public that match the search param
-        public_feeds = feed_tree_public(search_param)
+        public_feeds = feed_tree_public(search_param, feed_view_domain())
 
     if len(public_feeds) > 0:
         server_has_feeds = True
@@ -1502,9 +1504,9 @@ def list_feeds():
 @login_required_if_private_instance
 def explore():
     topics = topic_tree()
-    return render_template('explore.html', topics=topics, menu_instance_feeds=menu_instance_feeds(),
-                           menu_my_feeds=menu_my_feeds(current_user.id) if current_user.is_authenticated else None,
-                           menu_subscribed_feeds=menu_subscribed_feeds(current_user.id) if current_user.is_authenticated else None,)
+    return render_template('explore.html', topics=topics, menu_instance_feeds=shown_here(menu_instance_feeds(feed_view_domain().id)),
+                           menu_my_feeds=shown_here(menu_my_feeds(current_user.id)) if current_user.is_authenticated else None,
+                           menu_subscribed_feeds=shown_here(menu_subscribed_feeds(current_user.id)) if current_user.is_authenticated else None,)
 
 
 # RSS feed of the home page
@@ -1837,7 +1839,8 @@ def health2():
         communities = communities.join(community_language).filter(community_language.c.language_id == language_id)
 
     # find all the feeds marked as public
-    public_feeds = Feed.query.filter_by(public=True).order_by(Feed.title).all() # noqa f841
+    public_feeds = Feed.query.filter_by(public=True).filter(listed_feeds_clause(feed_view_domain())).order_by(
+        Feed.title).all()  # noqa f841
 
     # if filtering by public feed
     # get all the ids of the communities
