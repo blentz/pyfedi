@@ -11,6 +11,7 @@ from app import db
 from app.activitypub.util import actor_json_to_model, canonical_handle, webfinger_self_link_allowed
 from app.community.util import search_for_community, retrieve_mods_and_backfill
 from app.constants import AP_FETCH_ACCEPT
+from app.feed_domains import feeds_shown_here_clause
 from app.models import BannedInstances, Feed, FeedItem, Community, _as_dict
 from app.local_names import local_named, named_by_actor
 from app.storefront import DomainInfo, domain_for_host, is_hosted_server
@@ -65,7 +66,8 @@ def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False)
 
         hosted = domain_for_host(server)
         if hosted:   # one of ours: that domain's own feed, or none. Never fetched (it would be a self-request)
-            return Feed.query.filter(local_named(Feed, name, hosted)).first()
+            # nor one hidden here: an onion feed is found on the onion only (task 7)
+            return Feed.query.filter(local_named(Feed, name, hosted), feeds_shown_here_clause(True)).first()
 
         already_exists = Feed.query.filter_by(ap_id=address[1:]).first()
         if already_exists:
@@ -119,11 +121,13 @@ def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False)
         return None
 
 
-def actor_to_feed(actor) -> Feed | None:
+def actor_to_feed(actor, signed_in: bool | None = None) -> Feed | None:
     """The unbanned feed a `/f/<actor>` path segment names: a local name on its domain (a bare name is the
     storefront's, `name@host` that hosted domain's, never fetched), else the remote feed whose `ap_id` the handle is.
-    The one resolver for every path that names a feed."""
-    return Feed.query.filter(named_by_actor(Feed, actor.strip().lower()), Feed.banned.is_(False)).first()
+    The one resolver for every path that names a feed. None for a feed this storefront hides from its reader
+    (`feed_shown_here`; `signed_in` as there), as for one nobody holds: an onion feed exists on the onion only."""
+    return Feed.query.filter(named_by_actor(Feed, actor.strip().lower()), Feed.banned.is_(False),
+                             feeds_shown_here_clause(signed_in)).first()
 
 
 def feed_communities_for_edit(feed_id: int) -> str:

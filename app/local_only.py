@@ -180,6 +180,17 @@ def _actor_hidden(actor, signed_in: bool) -> bool:
     return not home.federates and not (signed_in and not here.federates and home.id == here.id)
 
 
+def _feed_hidden(feed, signed_in: bool) -> bool:
+    """A feed is hidden with its home domain, and with its owner (ruling N-m8: a legacy row filed under the default
+    domain that an onion account owns, or the feed would tell that the account owns one). A remote feed never is."""
+    if feed.ap_id is not None:
+        return False
+    if _actor_hidden(feed, signed_in):
+        return True
+    owner = db.session.get(models.User, feed.user_id) if feed.user_id is not None else None
+    return _actor_hidden(owner, signed_in)
+
+
 def _content_hidden(content, signed_in: bool) -> bool:
     if not content.local_only:
         return False
@@ -211,28 +222,31 @@ def _ancestors(reply) -> list | None:
 
 
 def hidden_here(obj, signed_in: bool | None = None) -> bool:
-    """Whether this request's storefront hides `obj` (a User, Community, Post or PostReply) from its reader, who is
-    signed in when `signed_in` says so (None: the session's login, local_only_visible()). Outside a request the
+    """Whether this request's storefront hides `obj` (a User, Community, Feed, Post or PostReply) from its reader, who
+    is signed in when `signed_in` says so (None: the session's login, local_only_visible()). Outside a request the
     storefront is the default domain's.
 
     An account or community is hidden when it is local-only (its home domain does not federate) and the reader is not
-    signed in, or this storefront is not its home domain. A post or reply is hidden when it is local-only (stamped at
-    creation, content_local_only) and either the reader is not signed in or it belongs to a local-only domain that
-    is not this storefront: its author or its community is hidden here, or, for a reply, its post's author (the post
-    page's gates apply to a reply, follow-up F5) or the author of any reply above it in its `path`. A domain's
-    `federates` setting is locked once it owns rows, so whatever an onion account writes, or is written in an onion
-    community, is stamped local-only. So is a clearnet account's reply further down an onion reply, in a clearnet
-    community under a clearnet post: it could only have been written where the onion reply is seen, so it goes with
-    that reply, everywhere (review I6), or listing it would tell that its author uses the onion. That is the only way
-    such a reply is stamped, so a local-only reply whose ancestry cannot be read (no path, one without itself or its
-    parent, or one naming a purged reply) is hidden wherever anything is: fail closed (ruling, N-m3). Accepted
-    (re-review 2, m3): where the default domain does not federate and another local-only domain exists too, the default
-    domain's own unreadable local-only replies are hidden on the default domain as well; only archived and legacy
-    rows can be unreadable, and telling whose they are would need the ancestry that cannot be read. A remote row
-    is never hidden."""
+    signed in, or this storefront is not its home domain. A local feed is hidden as an account is, by its home
+    domain, and also when its owner is hidden (per-domain feeds Task 7, ruling N-m8). A post or reply is hidden when
+    it is local-only (stamped at creation, content_local_only) and either the reader is not signed in or it belongs
+    to a local-only domain that is not this storefront: its author or its community is hidden here, or, for a reply,
+    its post's author (the post page's gates apply to a reply, follow-up F5) or the author of any reply above it in
+    its `path`. A domain's `federates` setting is locked once it owns rows, so whatever an onion account writes, or
+    is written in an onion community, is stamped local-only. So is a clearnet account's reply further down an onion
+    reply, in a clearnet community under a clearnet post: it could only have been written where the onion reply is
+    seen, so it goes with that reply, everywhere (review I6), or listing it would tell that its author uses the
+    onion. That is the only way such a reply is stamped, so a local-only reply whose ancestry cannot be read (no
+    path, one without itself or its parent, or one naming a purged reply) is hidden wherever anything is: fail closed
+    (ruling, N-m3). Accepted (re-review 2, m3): where the default domain does not federate and another local-only
+    domain exists too, the default domain's own unreadable local-only replies are hidden on the default domain as
+    well; only archived and legacy rows can be unreadable, and telling whose they are would need the ancestry that
+    cannot be read. A remote row is never hidden."""
     signed_in = _signed_in(signed_in)
     if isinstance(obj, (models.Post, models.PostReply)):
         return _content_hidden(obj, signed_in)
+    if isinstance(obj, models.Feed):
+        return _feed_hidden(obj, signed_in)
     return _actor_hidden(obj, signed_in)
 
 
@@ -257,11 +271,23 @@ def _actor_hidden_clause(model, signed_in: bool):
     return and_(model.ap_id.is_(None), on_closed)
 
 
+def _feed_hidden_clause(signed_in: bool):
+    feed = models.Feed
+    by_domain = _actor_hidden_clause(feed, signed_in)
+    if hides_nothing(by_domain):   # the owner's hidden domains are the same ones
+        return by_domain
+    owner = aliased(models.User)   # never correlated with the query's own
+    return or_(by_domain, and_(feed.ap_id.is_(None),
+                               exists().where(owner.id == feed.user_id, _actor_hidden_clause(owner, signed_in))))
+
+
 def hidden_here_clause(model, signed_in: bool | None = None):
-    """`hidden_here` as a condition on `model` (User, Community, Post or PostReply): true for the rows hidden here,
-    never NULL, so `not_()` of it keeps the rest. `false()` when nothing is hidden. `without_hidden_here` filters a
-    query by it."""
+    """`hidden_here` as a condition on `model` (User, Community, Feed, Post or PostReply): true for the rows hidden
+    here, never NULL, so `not_()` of it keeps the rest. `false()` when nothing is hidden. `without_hidden_here` filters
+    a query by it."""
     signed_in = _signed_in(signed_in)
+    if model is models.Feed:
+        return _feed_hidden_clause(signed_in)
     if model not in (models.Post, models.PostReply):
         return _actor_hidden_clause(model, signed_in)
     if not signed_in:
@@ -435,9 +461,9 @@ def _row_hidden_here(row) -> bool:
 def found_here(model, id_):
     """The `model` row `id_` names, or None: for an id nobody holds and for a row hidden here alike, so a lookup by an
     id a caller sent (a JSON body, a form field, a query string) answers both one way (follow-up F6). `model` is User,
-    Community, Post, PostReply, Conversation, ChatMessage, Report or CommunityFlair; a conversation, a message, a report
-    or a flair is hidden with its member, its target or its community. Only the storefront's part of the rule is asked
-    (`signed_in=True`). An id that is not a whole number in Postgres's range names nothing."""
+    Community, Feed, Post, PostReply, Conversation, ChatMessage, Report or CommunityFlair; a conversation, a message, a
+    report or a flair is hidden with its member, its target or its community. Only the storefront's part of the rule
+    is asked (`signed_in=True`). An id that is not a whole number in Postgres's range names nothing."""
     try:
         id_ = int(id_)
     except (TypeError, ValueError):
@@ -450,7 +476,7 @@ def found_here(model, id_):
 
 def one_here(query, model):
     """`query.one()` without the rows hidden here: the same NoResultFound for a hidden row as for none. `model` is the
-    query's entity: User, Community, Post, PostReply (by `hidden_here`) or ChatMessage (by its conversation)."""
+    query's entity: User, Community, Feed, Post, PostReply (by `hidden_here`) or ChatMessage (by its conversation)."""
     if model is models.ChatMessage:
         return without_hidden_messages(query).one()
     return without_hidden_here(query, model, True).one()
@@ -481,10 +507,16 @@ def _actor_hidden_sql(alias: str, signed_in: bool) -> str:
 
 
 def hidden_here_sql(alias: str, model, signed_in: bool | None = None) -> str:
-    """`hidden_here_clause` for raw SQL: a condition, never NULL, on the `model` row (User, Community, Post or
+    """`hidden_here_clause` for raw SQL: a condition, never NULL, on the `model` row (User, Community, Feed, Post or
     PostReply) aliased `alias`; 'false' when nothing is hidden. The ids are integers read from the database, so they
     are written into the SQL."""
     signed_in = _signed_in(signed_in)
+    if model is models.Feed:
+        by_domain = _actor_hidden_sql(alias, signed_in)
+        if by_domain == 'false':
+            return by_domain
+        return (f'({by_domain} OR ({alias}.ap_id IS NULL AND EXISTS (SELECT 1 FROM "user" hidden_owner WHERE '
+                f'hidden_owner.id = {alias}.user_id AND {_actor_hidden_sql("hidden_owner", signed_in)})))')
     if model not in (models.Post, models.PostReply):
         return _actor_hidden_sql(alias, signed_in)
     if not signed_in:

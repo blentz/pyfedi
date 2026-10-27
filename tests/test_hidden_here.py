@@ -12,17 +12,17 @@ from sqlalchemy import not_, text
 from app import db
 from app.local_only import content_local_only, hidden_here, hidden_here_clause, hidden_here_sql, \
     without_hidden_here, without_local_only, without_local_only_actors
-from app.models import Community, Post, PostReply, SiteDomain, User
+from app.models import Community, Feed, Post, PostReply, SiteDomain, User
 from app.storefront import clear_domain_cache, domain_for_host
-from tests.factories import make_instance, make_post, make_post_reply, make_user
+from tests.factories import make_feed, make_instance, make_local_feed, make_post, make_post_reply, make_user
 from tests.test_per_domain_ap_routes import SHOP, onion_proxy, twins  # noqa: F401
 from tests.two_domains import FIRST, ONION, request_on, two_domains  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
 
 XYZ = 'xyz.onion'   # a second local-only domain
-MODELS = (User, Community, Post, PostReply)
-TABLES = {User: '"user"', Community: 'community', Post: 'post', PostReply: 'post_reply'}
+MODELS = (User, Community, Post, PostReply, Feed)
+TABLES = {User: '"user"', Community: 'community', Post: 'post', PostReply: 'post_reply', Feed: 'feed'}
 
 
 def write(author, community, title):
@@ -78,7 +78,23 @@ def world(app, twins, two_domains):  # noqa: F811
     rows.parentless.path = [0, rows.parentless.id]
     db.session.commit()
     rows.two_domains = two_domains
+    add_feeds(rows, peer)
     return rows
+
+
+def add_feeds(rows, peer):
+    """Feeds on each domain, by each domain's account, a remote one, and legacy rows filed under no domain: one an onion
+    account owns (ruling N-m8), one with no owner, and a first-domain feed an onion account owns."""
+    first, onion, shop = (domain_for_host(host) for host in (FIRST, ONION, SHOP))
+    rows.onion_feed = make_local_feed('onionfeed', True, onion, rows.onion_bob)
+    rows.first_feed = make_local_feed('firstfeed', True, first, rows.first_bob)
+    rows.shop_feed = make_local_feed('shopfeed', True, shop, rows.shop_bob)
+    rows.onion_owned_first_feed = make_local_feed('onionownedfirst', True, first, rows.onion_bob)
+    rows.remote_feed = make_feed(peer, 'remotefeed', public=True)
+    rows.legacy_onion_feed = make_local_feed('legacyonion', True, None, rows.onion_bob)
+    rows.legacy_feed = make_local_feed('legacynobody', True, None, None)
+    rows.legacy_onion_feed.site_domain_id = rows.legacy_feed.site_domain_id = None
+    db.session.commit()
 
 
 @pytest.fixture
@@ -159,11 +175,14 @@ def named(world, *names):
 
 ALL = ('first_bob', 'first_art', 'onion_bob', 'onion_art', 'shop_bob', 'remote', 'legacy', 'onion_post',
        'onion_reply', 'onion_in_first', 'onion_in_first_reply', 'first_in_onion', 'first_post', 'first_reply',
-       'remote_post', 'first_under_onion', 'onion_under_first', 'first_under_onion_reply', 'orphaned', 'parentless')
+       'remote_post', 'first_under_onion', 'onion_under_first', 'first_under_onion_reply', 'orphaned', 'parentless',
+       'onion_feed', 'first_feed', 'shop_feed', 'onion_owned_first_feed', 'remote_feed', 'legacy_onion_feed',
+       'legacy_feed')
 # a reply to an onion post goes with its post (follow-up F5's rule), and one further down an onion reply goes with
 # that reply (review I6): it could only have been written on the onion
 ONIONS = {'onion_bob', 'onion_art', 'onion_post', 'onion_reply', 'onion_in_first', 'onion_in_first_reply',
-          'first_in_onion', 'first_under_onion', 'onion_under_first', 'first_under_onion_reply', 'orphaned', 'parentless'}
+          'first_in_onion', 'first_under_onion', 'onion_under_first', 'first_under_onion_reply', 'orphaned', 'parentless',
+          'onion_feed', 'onion_owned_first_feed', 'legacy_onion_feed'}   # a feed goes with its domain and its owner (N-m8)
 
 
 @pytest.mark.parametrize('host', [FIRST, SHOP])
@@ -189,10 +208,10 @@ def test_on_one_onion_the_other_onions_rows_are_hidden(app, two_onions):
 
 
 def test_a_closed_default_domains_legacy_rows_are_hidden_off_it_only(app, closed_default):
-    rows = named(closed_default, 'legacy', 'first_bob', 'onion_bob')
+    rows = named(closed_default, 'legacy', 'first_bob', 'onion_bob', 'legacy_feed', 'first_feed')
     assert hidden(app, FIRST, True, rows) == {'onion_bob'}
-    assert hidden(app, SHOP, True, rows) == {'legacy', 'first_bob', 'onion_bob'}
-    assert hidden(app, ONION, True, rows) == {'legacy', 'first_bob'}
+    assert hidden(app, SHOP, True, rows) == {'legacy', 'first_bob', 'onion_bob', 'legacy_feed', 'first_feed'}
+    assert hidden(app, ONION, True, rows) == {'legacy', 'first_bob', 'legacy_feed', 'first_feed'}
 
 
 def test_a_stamped_row_that_belongs_to_no_onion_is_hidden_from_a_logged_out_reader_only(app, world):
