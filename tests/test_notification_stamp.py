@@ -19,8 +19,9 @@ import app.hidden_routes as hidden_routes
 from app import db
 import app.local_only as local_only
 from app.models import Conversation, Instance, Notification, SiteDomain, User
+from app.storefront import domain_for_host
 from app.utils import patch_db_session
-from tests.factories import make_post_reply
+from tests.factories import make_local_feed, make_post_reply
 from tests.test_instance_visible_here import scene  # noqa: F401 -- a fixture
 from tests.test_local_only_actors_hidden import ONION_ART, ONION_BOB, world  # noqa: F401 -- world is a fixture
 from tests.test_onion_hidden_on_clearnet import MIGRATION, alpha, onion, queries_in, stamped_notice  # noqa: F401
@@ -137,6 +138,16 @@ def test_the_python_stamp_covers_every_notification_the_migrations_backfill_stam
     db.session.add_all([with_onion, with_first])
     db.session.commit()
     rows = shapes(alpha, with_onion.id, with_first.id, alpha.reply.id, first_reply.id)
+    # a feed's notification names it by `feed_id` (per-domain feeds Task 7), which the backfill predates: the hook
+    # stamps the onion's feed and a first-filed one an onion account owns (N-m8), and not the first domain's own
+    first, onion_domain = (domain_for_host(host) for host in (FIRST, ONION))
+    feeds = [make_local_feed('onionfeed', True, onion_domain, alpha.onion_bob),
+             make_local_feed('legacyfeed', True, first, alpha.onion_bob),
+             make_local_feed('firstfeed', True, first, alpha.first_bob)]
+    feed_rows = [SimpleNamespace(url=f'/post/{alpha.first_post.id}', targets={'feed_id': feed.id}, author_id=None)
+                 for feed in feeds]
+    assert local_only.notification_stamps(feed_rows, db.session) == [True, True, False]
+    rows += feed_rows
     python = local_only.notification_stamps(rows, db.session)
     connection = db.session.connection()
     connection.exec_driver_sql(MIGRATION.HELPERS)
