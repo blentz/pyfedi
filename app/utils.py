@@ -62,7 +62,7 @@ from app.onion import is_onion_request, stamp_activity
 from app.onion_store import onion_store_needed, onion_store_optional, request_redis
 from app.pinned_http import fetch_deadline, is_refused_address
 from app.rsa_keys import RsaKeys
-from app.feed_domains import federating_feed_clause, feeds_on_domain_clause
+from app.feed_domains import feeds_on_domain_clause
 from app.local_only import hidden_here, hidden_here_clause, hidden_here_sql, shown_here, without_local_only_actors
 from app.visibility import OPEN_VISIBILITIES, listable_sql, visible_to_sql
 from app.constants import *
@@ -4555,15 +4555,11 @@ def feed_tree(user_id, domain: DomainInfo | None = None) -> List[dict]:
     return [feed for feed in feeds_dict.values() if feed['feed'].parent_feed_id is None]
 
 
-def feed_tree_public(search_param=None, domain: DomainInfo | None = None, signed_in: bool | None = None,
-                     federating: bool = False) -> List[dict]:
+def feed_tree_public(search_param=None, domain: DomainInfo | None = None, signed_in: bool | None = None) -> List[dict]:
     """The public feeds as a tree; with `domain`, its feeds and the remote ones. The feeds this storefront hides from
     its reader are never in it (`signed_in` as in `hidden_here`: the session's login unless a caller with no session
-    says); with `federating`, for a list other servers read, nor any that does not exist to them
-    (`federating_feed_clause`, ruling a2)."""
+    says). With `signed_in=False` that is `federating_feed_clause`, the list other servers may read (ruling a2)."""
     feeds = Feed.query.filter(Feed.public == True).filter(not_(hidden_here_clause(Feed, signed_in)))
-    if federating:
-        feeds = feeds.filter(federating_feed_clause())
     if domain is not None:
         feeds = feeds.filter(feeds_on_domain_clause(domain))
     if search_param:

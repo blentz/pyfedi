@@ -229,3 +229,12 @@ def test_an_onion_accounts_feed_alerts_off_the_onion_omit_its_onion_feeds(app, w
     assert 'onionfeed' not in body and 'legacyfeed' not in body
     body = signed_get(app, world.onion_owner, '/alerts/feeds/all', ONION).get_data(as_text=True)
     assert 'onionfeed' in body and 'legacyfeed' in body
+
+
+def test_an_onion_feeds_rss_on_the_onion_follows_its_token(app, world):
+    """Review M7: an RSS reader is the account its `?token=` names, signed in for the rule as for the view."""
+    world.onion_owner.rss_token = 'ONIONTOKEN'
+    db.session.commit()
+    assert signed_get(app, None, '/f/onionfeed.rss?token=ONIONTOKEN', ONION).status_code == 200
+    assert signed_get(app, None, '/f/onionfeed.rss', ONION).status_code == 404
+    assert signed_get(app, None, f'/f/onionfeed@{ONION}.rss?token=ONIONTOKEN', FIRST).status_code == 404

@@ -863,7 +863,8 @@ def show_feed_rss(feed_path):
     reader_id = current_user.id if current_user.is_authenticated else None
     candidates = ('/'.join(feed_url_parts[-2:]), feed_url_parts[-1]) if len(feed_url_parts) > 1 else (feed_url_parts[-1],)
     feed = next((found for candidate in candidates
-                 if (found := actor_to_feed(candidate)) and feed_readable_by(found, reader_id)), None)
+                 if (found := actor_to_feed(candidate, local_only_visible_rss()))   # the token's reader (review M7)
+                 and feed_readable_by(found, reader_id)), None)
 
     # D1394. The RSS twin of `show_feed`, which refuses a private feed: only a feed the reader may read is chosen
     # above, or the title, description and posts of a private feed were readable here.

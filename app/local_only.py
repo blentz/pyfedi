@@ -11,7 +11,7 @@ from flask import current_app, has_request_context, request
 from flask_babel import _
 from flask_login import current_user
 from sqlalchemy import and_, any_, bindparam, exists, false, func, not_, or_, select, text, true
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import aliased, object_session
 from sqlalchemy.sql.elements import False_
 
 import app as app_pkg
@@ -185,9 +185,15 @@ def _feed_hidden(feed, signed_in: bool) -> bool:
     domain that an onion account owns, or the feed would tell that the account owns one). A remote feed never is."""
     if feed.ap_id is not None:
         return False
+    closed, default_closed = _hidden_domains(signed_in)
+    if not closed and not default_closed:
+        return False   # nothing is hidden here: no owner to read (review M4)
     if _actor_hidden(feed, signed_in):
         return True
-    owner = db.session.get(models.User, feed.user_id) if feed.user_id is not None else None
+    if feed.user_id is None:
+        return False
+    # through the feed's own session: a task reads its rows through one of its own (D663)
+    owner = (object_session(feed) or db.session).get(models.User, feed.user_id)
     return _actor_hidden(owner, signed_in)
 
 

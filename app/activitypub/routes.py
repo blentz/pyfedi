@@ -15,7 +15,7 @@ from furl import furl
 # the whole inbox request down with a 500 instead of logging the membership as
 # already existing.
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import desc, exists, not_, or_, text, true, func, select, union_all, literal_column
+from sqlalchemy import desc, or_, text, func, select, union_all, literal_column
 
 from app import db, cache, celery, limiter
 from app.activitypub import bp
@@ -51,7 +51,7 @@ from app.discovery import SYNC_ACCEPTED, SYNC_REJECTED
 from app.discovery.instance_answers import instance_actor_answer, record_answer
 from app.relays import current_relay_id
 from app.relays import inbound as relay_inbound
-from app.local_only import any_domain_closed, community_local_only, federated_mentions, federating_clause, \
+from app.local_only import community_local_only, federated_mentions, federating_clause, \
     refused_outbound, user_local_only
 from app.local_names import actor_handle, local_clause, split_local_name
 from app.federation_urls import activity_id, domain_site_name, federating_storefront, instance_actor_url, \
@@ -1439,43 +1439,31 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                             log_incoming_ap(id, APLOG_FOLLOW, APLOG_FAILURE, saved_json,
                                             'Local only cannot be followed by remote users')
                             return
-                        reject_follow = False
-                        # if the feed is not public send a reject
-                        # it should not get here as we wont have a subscribe option on non-public feeds,
-                        # but just for cya its here.
                         if not feed.public:
+                            # no Reject: a Follow of a feed nobody holds gets no answer, so one would tell that a
+                            # private feed exists (task 7, review M1)
                             log_incoming_ap(id, APLOG_FOLLOW, APLOG_FAILURE, saved_json, 'Feed is not public')
-                            reject_follow = True
-
-                        if reject_follow:
-                            # send reject message to deny the follow
-                            reject = {"@context": default_context(), "actor": feed.public_url(), "to": [user.public_url()],
-                                      "object": {"actor": user.public_url(), "to": None, "object": feed.public_url(),
-                                                 "type": "Follow", "id": follow_id},
-                                      "type": "Reject",
-                                      "id": activity_id('reject', feed, gibberish(32))}
-                            send_post_request(follow_answer_inbox(user), reject, feed.private_key, f"{feed.public_url()}#main-key")
-                        else:
-                            already_member = feed_membership(user, feed) == SUBSCRIPTION_MEMBER
-                            if not already_member:
-                                member = FeedMember(user_id=user.id, feed_id=feed.id)
-                                session.add(member)
-                                feed.subscriptions_count += 1
-                                session.commit()
-                                cache.delete_memoized(feed_membership, user, feed)
-                                mark_accepted(core_activity, announced)   # R-UNDORELEASE
-                            # send accept message to acknowledge the follow - again for an existing member (D66)
-                            accept = {"@context": default_context(), "actor": feed.public_url(),
-                                      "to": [user.public_url()],
-                                      "object": {"actor": user.public_url(), "to": None, "object": feed.public_url(),
-                                                 "type": "Follow", "id": follow_id},
-                                      "type": "Accept",
-                                      "id": activity_id('accept', feed, gibberish(32))}
-                            with acting_for(owner_domain(feed)):   # the feed's domain answers, whichever host the Follow came in on
-                                send_post_request(follow_answer_inbox(user), accept, feed.private_key,
-                                                  f"{feed.public_url()}#main-key")
-                            log_incoming_ap(id, APLOG_FOLLOW, APLOG_SUCCESS, saved_json,
-                                            'Already a member, Accept re-sent' if already_member else None)
+                            return
+                        already_member = feed_membership(user, feed) == SUBSCRIPTION_MEMBER
+                        if not already_member:
+                            member = FeedMember(user_id=user.id, feed_id=feed.id)
+                            session.add(member)
+                            feed.subscriptions_count += 1
+                            session.commit()
+                            cache.delete_memoized(feed_membership, user, feed)
+                            mark_accepted(core_activity, announced)   # R-UNDORELEASE
+                        # send accept message to acknowledge the follow - again for an existing member (D66)
+                        accept = {"@context": default_context(), "actor": feed.public_url(),
+                                  "to": [user.public_url()],
+                                  "object": {"actor": user.public_url(), "to": None, "object": feed.public_url(),
+                                             "type": "Follow", "id": follow_id},
+                                  "type": "Accept",
+                                  "id": activity_id('accept', feed, gibberish(32))}
+                        with acting_for(owner_domain(feed)):   # the feed's domain answers, whichever host the Follow came in on
+                            send_post_request(follow_answer_inbox(user), accept, feed.private_key,
+                                              f"{feed.public_url()}#main-key")
+                        log_incoming_ap(id, APLOG_FOLLOW, APLOG_SUCCESS, saved_json,
+                                        'Already a member, Accept re-sent' if already_member else None)
                         return
                     elif isinstance(target, User):
                         local_user = target

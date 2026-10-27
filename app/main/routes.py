@@ -1464,7 +1464,7 @@ def list_feeds():
         # the domain asked tells other servers its own feeds, whoever's session came with the request
         served = federating_storefront()   # the onion lists none to another server
         # never a feed that does not exist to other servers (ruling a2): an onion one, or one an onion account owns
-        public_feeds = feed_tree_public(search_param or None, served, signed_in=False, federating=True)
+        public_feeds = feed_tree_public(search_param or None, served, signed_in=False)   # = federating_feed_clause
         site_data = lemmy_site_data(served)
         feeds_list = [f"{domain_base_url(served)}/f/{f['feed'].machine_name}" for f in public_feeds
                       if f['feed'].is_local()]
