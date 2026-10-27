@@ -10,7 +10,7 @@ from app.api.alpha.views import community_view, user_view, post_view, cached_mod
     shown_modlist
 from app.community.util import search_for_community
 from app.constants import *
-from app.local_only import hidden_here, without_local_only_actors
+from app.local_only import found_here, hidden_here, without_local_only_actors
 from app.api.alpha.utils.found import a_community, a_post, a_user
 from app.storefront import acting_domain, current_storefront, domain_authority, domain_boost_expr, on_domain
 from app.models import Community, CommunityMember, User, CommunityBan, Notification, CommunityJoinRequest, \
@@ -697,7 +697,7 @@ def post_community_flair_create(auth, data):
 
 def put_community_flair_edit(auth, data):
     user = authorise_api_user(auth, return_type='model')
-    flair = db.session.get(CommunityFlair, data['flair_id'])
+    flair = found_here(CommunityFlair, data['flair_id'])   # hidden here or nobody's: one answer (follow-up F6, m8)
 
     if not flair:
         raise Exception(f"No matching flair with id={data['flair_id']} found.")
@@ -737,7 +737,7 @@ def put_community_flair_edit(auth, data):
 
 def post_community_flair_delete(auth, data):
     user = authorise_api_user(auth, return_type='model')
-    flair = db.session.get(CommunityFlair, data['flair_id'])
+    flair = found_here(CommunityFlair, data['flair_id'])   # hidden here or nobody's: one answer (follow-up F6, m8)
 
     if not flair:
         raise Exception(f"No matching flair with id={data['flair_id']} found.")
