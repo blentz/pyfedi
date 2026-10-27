@@ -23,6 +23,7 @@ from app.constants import *
 from app.email import send_verification_email
 from app.federation_urls import activity_id, domain_site_name, owner_base
 from app.ldap_utils import sync_user_to_ldap
+from app.feed_domains import feeds_shown_here_clause
 from app.local_only import hidden_here, local_only_visible_rss, refuses_remote_contact, \
     remote_contact_refusal_message, user_local_only, without_local_only, without_local_only_actors
 from app.visibility import OPEN_VISIBILITIES, visible_to_clause
@@ -175,7 +176,8 @@ def show_profile(user):
 
     # find all user feeds marked as public
     user_has_public_feeds = False
-    user_public_feeds = Feed.query.filter_by(public=True).filter_by(user_id=user.id).all()
+    user_public_feeds = Feed.query.filter_by(public=True).filter_by(user_id=user.id).filter(
+        feeds_shown_here_clause()).all()   # never one hidden here (task 7)
 
     if len(user_public_feeds) > 0:
         user_has_public_feeds = True
@@ -2081,7 +2083,8 @@ def user_alerts(type='posts', filter='all'):
     elif type == 'feeds':
         # ignore filter
         entities = Feed.query.join(NotificationSubscription, NotificationSubscription.entity_id == Feed.id). \
-            filter_by(type=NOTIF_FEED, user_id=current_user.id).order_by(desc(NotificationSubscription.created_at))
+            filter_by(type=NOTIF_FEED, user_id=current_user.id).filter(feeds_shown_here_clause()). \
+            order_by(desc(NotificationSubscription.created_at))
         title = _('Feed Alerts')
 
     elif type == 'users':
@@ -2441,18 +2444,15 @@ def lookup(person, domain):
 @login_required
 def user_myfeeds(actor):
     # this will show a user's personal feeds
-    user_has_feeds = False
-    if current_user.is_authenticated and len(Feed.query.filter_by(user_id=current_user.id).all()) > 0:
-        user_has_feeds = True
-    current_user_feeds = Feed.query.filter_by(user_id=current_user.id)
+    # only the ones this storefront shows: an onion account's onion feeds are listed on the onion only (task 7)
+    current_user_feeds = Feed.query.filter_by(user_id=current_user.id).filter(feeds_shown_here_clause())
+    user_has_feeds = current_user_feeds.first() is not None
 
     # this is for feeds the user is subscribed to
-    user_has_feed_subscriptions = False
-    if current_user.is_authenticated and len(Feed.query.join(FeedMember, Feed.id == FeedMember.feed_id).filter(
-            FeedMember.user_id == current_user.id).all()) > 0:
-        user_has_feed_subscriptions = True
-    subbed_feeds = Feed.query.join(FeedMember, Feed.id == FeedMember.feed_id).filter(
-        FeedMember.user_id == current_user.id).filter_by(is_owner=False)
+    subscribed = Feed.query.join(FeedMember, Feed.id == FeedMember.feed_id).filter(
+        FeedMember.user_id == current_user.id, feeds_shown_here_clause())
+    user_has_feed_subscriptions = subscribed.first() is not None
+    subbed_feeds = subscribed.filter(FeedMember.is_owner.is_(False))
 
     return render_template('user/user_feeds.html', user_has_feeds=user_has_feeds, user_feeds_list=current_user_feeds,
                            user_has_feed_subscriptions=user_has_feed_subscriptions,
@@ -2473,7 +2473,8 @@ def user_feeds(actor):
         abort(404)   # as the profile: a logged-out visitor never sees a local-only account
 
     # find all user feeds marked as public
-    user_public_feeds = Feed.query.filter_by(public=True).filter_by(user_id=user.id).all()
+    user_public_feeds = Feed.query.filter_by(public=True).filter_by(user_id=user.id).filter(
+        feeds_shown_here_clause()).all()   # never one hidden here (task 7)
 
     if len(user_public_feeds) > 0:
         user_has_public_feeds = True

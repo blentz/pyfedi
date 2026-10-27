@@ -43,7 +43,7 @@ from app.main.util import sidebar_active_communities, sidebar_new_instances, sid
     sidebar_new_communities, _base_list_communities_context, reload_url
 from app.translation import LibreTranslateAPI
 from app.feed_domains import feed_view_domain, listed_feeds_clause
-from app.local_only import any_domain_closed, hidden_here, hidden_here_sql, shown_here, without_local_only, without_local_only_actors
+from app.local_only import hidden_here, hidden_here_sql, shown_here, without_local_only, without_local_only_actors
 from app.local_names import local_named, split_local_name
 from app.visibility import listable_clause, modlog_local_only_clause, modlog_open_clause, visible_to_clause
 from app.federation_urls import domain_site_name, federating_storefront, instance_actor_public_key, instance_actor_url
@@ -68,8 +68,7 @@ from app.models import Community, CommunityMember, Post, Site, User, utcnow, Top
     Notification, Language, community_language, ModLog, Feed, FeedItem, CmsPage, BannedInstances, BotChallenge
 from app.ldap_utils import test_ldap_connection, sync_user_to_ldap, login_with_ldap
 import boto3
-from app.activitypub.routes import replay_inbox_request, paged_outbox, AP_CACHE_COLLECTION, ap_media_type, \
-    feed_local_only
+from app.activitypub.routes import replay_inbox_request, paged_outbox, AP_CACHE_COLLECTION, ap_media_type
 import app as app_pkg
 
 
@@ -1464,12 +1463,11 @@ def list_feeds():
     if is_activitypub_request():
         # the domain asked tells other servers its own feeds, whoever's session came with the request
         served = federating_storefront()   # the onion lists none to another server
-        public_feeds = feed_tree_public(search_param or None, served, signed_in=False)
+        # never a feed that does not exist to other servers (ruling a2): an onion one, or one an onion account owns
+        public_feeds = feed_tree_public(search_param or None, served, signed_in=False, federating=True)
         site_data = lemmy_site_data(served)
-        # never a feed a local-only account owns (ruling a2: it is no server's to see); no domain closed: none is
-        closed = any_domain_closed()
         feeds_list = [f"{domain_base_url(served)}/f/{f['feed'].machine_name}" for f in public_feeds
-                      if f['feed'].is_local() and not (closed and feed_local_only(f['feed']))]
+                      if f['feed'].is_local()]
         site_data['site_view']['public_feeds'] = feeds_list
         site_data['site_view']['counts']['public_feeds'] = len(feeds_list)
         resp = jsonify(site_data)

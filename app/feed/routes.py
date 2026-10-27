@@ -24,6 +24,7 @@ from app.federation_urls import activity_id, domain_site_name
 from app.feed import bp
 from app.feed.forms import AddCopyFeedForm, EditFeedForm, SearchRemoteFeed
 from app.feed.util import feeds_for_form, refuse_bad_parent, search_for_feed, actor_to_feed, feed_communities_for_edit
+from app.feed_domains import feeds_shown_here_clause
 from app.inoculation import inoculation
 from app.models import Feed, FeedMember, FeedItem, Community, NotificationSubscription, \
     CommunityMember, User, FeedJoinRequest, Instance, Topic, CommunityJoinRequest
@@ -474,7 +475,7 @@ def feed_list():
     community_id = request.args.get('community_id', 0, type=int)
     current_feed_id = request.args.get('current_feed_id', 0, type=int)
     # get the user's feeds
-    user_feeds = Feed.query.filter_by(user_id=user_id).all()
+    user_feeds = Feed.query.filter_by(user_id=user_id).filter(feeds_shown_here_clause()).all()   # task 7
 
     # setup html base to send back
     options_html = ""

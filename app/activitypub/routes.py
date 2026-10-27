@@ -64,6 +64,7 @@ from app.constants import *
 # app.activitypub before show_feed is defined (import cycle: feed.routes)
 import app.feed.routes as feed_routes
 from app.feed.util import actor_to_feed
+from app.feed_domains import federating_feed_clause, feed_local_only
 from app.models import User, Community, CommunityJoinRequest, CommunityMember, ActivityPubLog, Post, \
     PostReply, Instance, AllowedInstances, BannedInstances, utcnow, Site, Notification, \
     ChatMessage, Conversation, UserFollower, UserBlock, Poll, PollChoice, Feed, FeedItem, FeedMember, FeedJoinRequest, \
@@ -3755,22 +3756,6 @@ def process_chat(user, store_ap_json, core_activity, session):
 
 
 # ---- Feeds ----
-
-def feed_local_only(feed: Feed) -> bool:
-    """True for a local feed owned by a local-only account: like its owner, it does not exist to other servers."""
-    if feed.ap_id is not None or feed.user_id is None:
-        return False
-    owner = db.session.get(User, feed.user_id)
-    return owner is not None and user_local_only(owner)
-
-
-def federating_feed_clause():
-    """feed_local_only as a filter on Feed: keeps the feeds no local-only account owns. A plain true, with no
-    subquery, while every domain federates."""
-    if not any_domain_closed():
-        return true()
-    return ~exists().where(User.id == Feed.user_id, not_(federating_clause(User)))
-
 
 @bp.route('/f/<actor>')
 @bp.route('/f/<actor>/<feed_owner>', methods=['GET'])

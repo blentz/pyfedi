@@ -260,7 +260,8 @@ def test_a_shop_feeds_menu_entries_name_it_at_shop_on_the_first_domain(app, thre
 
 def test_every_link_a_feed_renders_resolves_back_to_it(app, three_domains, news, peer):  # noqa: F811
     """A feed's `link()` is bare on its own storefront and `name@host` on another; each, on each storefront, names the
-    same row through actor_to_feed (the first domain's feed on shop was `news@<first host>`, read as a remote one)."""
+    same row through actor_to_feed (the first domain's feed on shop was `news@<first host>`, read as a remote one). The
+    onion's feed is found only where it is shown, on the onion (task 7): elsewhere its link names nothing."""
     onion = three_domains.local_feed('onionfeed', three_domains.onion)
     remote = make_feed(peer, 'faraway')
     seen = set()
@@ -269,8 +270,9 @@ def test_every_link_a_feed_renders_resolves_back_to_it(app, three_domains, news,
             for feed in (*news, onion, remote):
                 link = feed.link()
                 seen.add(link)
-                assert actor_to_feed(link) == feed, (host, link)
-                assert actor_to_feed(link.upper()) == feed, (host, link)
+                expected = feed if feed is not onion or host == ONION else None
+                assert actor_to_feed(link, signed_in=True) == expected, (host, link)
+                assert actor_to_feed(link.upper(), signed_in=True) == expected, (host, link)
     assert {'news', 'news@shop.example', f'news@{FIRST}', f'onionfeed@{ONION}'} <= seen
 
 

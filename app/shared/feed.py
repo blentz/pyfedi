@@ -37,7 +37,7 @@ def join_feed(actor, user_id, src=SRC_WEB):
     try:
         actor = actor.strip()
         user = db.session.get(User, user_id)
-        feed = actor_to_feed(actor)
+        feed = actor_to_feed(actor, signed_in=True)   # the joiner is the reader, signed in from the web or the API
         remote = feed is not None and not feed.is_local()
 
         if feed is not None:

@@ -55,7 +55,7 @@ from app.post.util import form_tags_string
 # The module, not the names: app.shared.community reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
-from app.feed_domains import feed_view_domain, listed_feeds_clause
+from app.feed_domains import feed_view_domain, feeds_shown_here_clause, listed_feeds_clause
 from app.local_only import community_local_only, found_here, hidden_here, hidden_here_sql, local_only_visible_rss, \
     without_local_only, without_local_only_actors
 from app.visibility import is_open, listable_clause, visible_to_clause
@@ -439,10 +439,12 @@ def show_community(community: Community, from_instance=None):
     user_has_feeds = False
     current_feed_id = 0
     current_feed_title = "None"
-    if current_user.is_authenticated and len(Feed.query.filter_by(user_id=current_user.id).all()) > 0:
+    # the reader's own feeds this storefront shows: an onion account's onion feeds only on the onion (task 7)
+    if current_user.is_authenticated and Feed.query.filter(Feed.user_id == current_user.id,
+                                                           feeds_shown_here_clause()).first() is not None:
         user_has_feeds = True
-        current_feed = Feed.query.filter(Feed.user_id == current_user.id).join(FeedItem, FeedItem.feed_id == Feed.id).filter(
-            FeedItem.community_id == community.id).first()
+        current_feed = Feed.query.filter(Feed.user_id == current_user.id, feeds_shown_here_clause()).join(
+            FeedItem, FeedItem.feed_id == Feed.id).filter(FeedItem.community_id == community.id).first()
         if current_feed is not None:
             current_feed_id = current_feed.id
             current_feed_title = current_feed.title
