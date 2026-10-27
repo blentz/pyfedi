@@ -1,5 +1,4 @@
 from flask import current_app, g
-from sqlalchemy import and_
 
 from app import db
 from app.api.alpha.views import feed_view
@@ -8,9 +7,8 @@ from app.feed.util import feeds_for_form
 from app.feed_domains import feed_view_domain, feeds_shown_here_clause
 from app.api.alpha.utils.found import a_feed
 from app.local_only import found_here
-from app.local_names import actor_handle, local_named
+from app.local_names import actor_handle, named_by_actor
 from app.models import User, Feed, FeedItem, Community
-from app.storefront import current_storefront, domain_for_host
 # The module, not the names: app.shared.feed reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.feed)
 import app.shared.feed as shared_feed
@@ -87,16 +85,15 @@ def get_feed_list(auth, data, user_id=None) -> dict:
 
 
 def _feed_named(name: str):
-    """The clause for the feed the API's `name` names. Raises invalid_request for one with more than one `@`."""
-    feed_name, *host = name.split('@')
-    if len(host) > 1:
+    """The clause for the feed the API's `name` names, by the one resolver (`named_by_actor`): a bare name is the request
+    host's own feed, `name@host` that hosted domain's, any other `name@host` the remote feed (goal 11). Raises
+    invalid_request for one with more than one `@`."""
+    actor = name.strip().lower()
+    if actor[:1] in ('@', '!'):
+        actor = actor[1:]   # the resolver drops one leading sigil, so it is not a second `@`
+    if actor.count('@') > 1:
         raise Exception('invalid_request')
-    if not host:
-        return local_named(Feed, feed_name, current_storefront())
-    hosted = domain_for_host(host[0])
-    if hosted is not None:
-        return local_named(Feed, feed_name, hosted)
-    return and_(Feed.name == feed_name, Feed.ap_domain == host[0])
+    return named_by_actor(Feed, name.strip().lower())
 
 
 def get_feed(auth, data, user_id=None):
