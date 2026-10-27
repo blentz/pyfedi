@@ -13,6 +13,7 @@ from app.activitypub.signature import send_post_request, default_context, RsaKey
 from app.activitypub.util import find_actor_or_create, make_image_sizes
 from app.constants import *
 from app.federation_urls import activity_id, owner_base, owner_domain
+from app.feed_domains import feed_local_only
 from app.models import User, Feed, FeedMember, FeedItem, Community, FeedJoinRequest, CommunityMember, \
     CommunityJoinRequest, Instance, File, _as_url
 from app.shared.tasks import task_selector
@@ -808,6 +809,9 @@ def announce_feed_add_remove_to_subscribers(action: str, feed_id: int, community
 
             # look up the feedmembers
             feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
+            # a feed that does not exist to other servers (an onion feed, or one an onion account owns) is announced
+            # to none of them; its local members still follow the community (task 7)
+            federates = not feed_local_only(feed)
 
             # for each member
             #  - if its the owner, skip
@@ -825,6 +829,8 @@ def announce_feed_add_remove_to_subscribers(action: str, feed_id: int, community
                     continue
 
                 # if we get here the feedmember is a remote user
+                if not federates:
+                    continue
                 instance: Instance = session.get(Instance, fm_user.instance_id)
                 if instance.inbox and instance.online() and not instance_banned(instance.domain):
                     send_post_request(instance.inbox, activity_json, feed.private_key, feed.ap_profile_id + '#main-key', timeout=10)

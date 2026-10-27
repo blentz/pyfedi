@@ -1433,6 +1433,12 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                         return
                     elif isinstance(target, Feed):
                         feed = target
+                        if feed_local_only(feed):
+                            # it does not exist to other servers: no Accept, and no Reject either, which would tell
+                            # that it does (task 7)
+                            log_incoming_ap(id, APLOG_FOLLOW, APLOG_FAILURE, saved_json,
+                                            'Local only cannot be followed by remote users')
+                            return
                         reject_follow = False
                         # if the feed is not public send a reject
                         # it should not get here as we wont have a subscribe option on non-public feeds,
