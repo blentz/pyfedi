@@ -393,9 +393,30 @@ def without_hidden_reports(query):
 
 def message_hidden_here(message) -> bool:
     """Whether the message `message` is hidden here: with its conversation, when one of its members is (the one rule
-    for a message, for the gate, the finder and the batch alike, re-review 2 m4)."""
+    for a message, for the gate, the finder and the batch alike, re-review 2 m4). A message whose conversation cannot
+    be read (none, or gone: legacy rows) is hidden wherever anything is: fail closed, as for a reply (N-m3, N4).
+    `hidden_message_clause` is the query form."""
     conversation = db.session.get(models.Conversation, message.conversation_id) if message.conversation_id else None
-    return conversation is not None and conversation_hidden_here(conversation)
+    if conversation is None:
+        return hides_anything_here()
+    return conversation_hidden_here(conversation)
+
+
+def hidden_message_clause():
+    """`message_hidden_here` as a condition on ChatMessage, never NULL; `false()` when nothing is hidden."""
+    message = models.ChatMessage
+    by_conversation = hidden_conversation_clause(message.conversation_id)
+    if hides_nothing(by_conversation):
+        return by_conversation
+    conversation = aliased(models.Conversation)
+    return or_(message.conversation_id.is_(None), ~exists().where(conversation.id == message.conversation_id),
+               by_conversation)
+
+
+def without_hidden_messages(query):
+    """`query` over ChatMessage without the messages `message_hidden_here` hides."""
+    clause = hidden_message_clause()
+    return query if hides_nothing(clause) else query.filter(not_(clause))
 
 
 def _row_hidden_here(row) -> bool:
@@ -431,7 +452,7 @@ def one_here(query, model):
     """`query.one()` without the rows hidden here: the same NoResultFound for a hidden row as for none. `model` is the
     query's entity: User, Community, Post, PostReply (by `hidden_here`) or ChatMessage (by its conversation)."""
     if model is models.ChatMessage:
-        return without_hidden_conversations(query, models.ChatMessage.conversation_id).one()
+        return without_hidden_messages(query).one()
     return without_hidden_here(query, model, True).one()
 
 
