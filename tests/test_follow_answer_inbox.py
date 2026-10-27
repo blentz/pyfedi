@@ -86,14 +86,16 @@ def test_the_accept_of_a_feed_follow_goes_to_the_followers_own_inbox(app, db_ses
     assert [(uri, body['type']) for uri, body, _ in sends] == [(OWN, 'Accept')]
 
 
-def test_the_reject_of_a_feed_follow_goes_to_the_followers_own_inbox(app, db_session, monkeypatch):
+def test_a_follow_of_a_private_feed_gets_no_answer_in_any_inbox(app, db_session, monkeypatch):
+    """It was a Reject to the follower's own inbox; since per-domain feeds Task 7 (review M1) a private feed answers
+    a Follow as a feed nobody holds does: not at all."""
     sends = record_sends(monkeypatch)
     follower, feed = _seed_follow_of_feed(public=False, local=True, with_keys=True)
     _with_own_inbox(follower)
 
     dispatch(inbox_activity(follower, activity_type='Follow', object_uri=feed.ap_profile_id))
 
-    assert [(uri, body['type']) for uri, body, _ in sends] == [(OWN, 'Reject')]
+    assert sends == []
 
 
 # --- follows of a local user ---
