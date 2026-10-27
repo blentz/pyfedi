@@ -3,14 +3,14 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+from flask import g, request, request_finished
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app import db
 from app.models import Feed
 from tests.factories import make_feed
-from tests.three_domains import peer, three_domains  # noqa: F401
-from tests.two_domains import two_domains  # noqa: F401  (three_domains is built on it)
+from tests.three_domains import ONION, get, peer, three_domains, two_domains  # noqa: F401
 
 MIGRATION = Path(__file__).resolve().parent.parent / 'migrations' / 'versions' / 'd5a9c3e7f1b4_per_domain_feeds.py'
 _spec = importlib.util.spec_from_file_location('per_domain_feeds_migration', MIGRATION)
@@ -79,3 +79,19 @@ def test_a_feeds_home_domain_is_its_own_or_the_default(app, three_domains, stamp
     feed.site_domain_id = {None: None, 'first': t.first.id, 'shop': t.shop.id}[stamped]
     db.session.commit()
     assert feed.home_domain() == (t.shop if stamped == 'shop' else t.first)
+
+
+@pytest.mark.usefixtures('site')
+def test_get_on_the_onion_host_is_an_onion_request(app, three_domains):
+    """No `onion_proxy` fixture here: `three_domains` itself arranges the onion guard, so the request is the onion's."""
+    seen = []
+
+    def note(sender, response, **extra):
+        seen.append((g.get('storefront'), request.host))
+
+    request_finished.connect(note, app)
+    try:
+        get(app, '/', host=ONION)
+    finally:
+        request_finished.disconnect(note, app)
+    assert seen and all(host == ONION and domain.is_onion for domain, host in seen)

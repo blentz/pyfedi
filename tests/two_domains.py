@@ -20,6 +20,7 @@ from app import db
 from app.models import Community, SiteDomain, User
 from app.storefront import DomainInfo, clear_domain_cache, domain_for_host
 from tests.factories import make_instance, make_user
+from tests.test_onion_guard_limits import PROXY, a_session, onion_get
 
 FIRST = 'test.piefed.local'      # the test app's SERVER_NAME
 ONION = 'abc.onion'
@@ -49,6 +50,16 @@ def onion_request(app):
 def default_request(app):
     with request_on(app, domain_for_host(FIRST)):
         yield
+
+
+def routed_get(app, path, host=FIRST, headers=None):
+    """GET `path` on `host`; the onion goes through the onion guard (a session first, as a browser does it), which needs
+    `app.config['ONION_PROXY_IP'] = PROXY` (the `three_domains` fixture sets it)."""
+    client = app.test_client()
+    if host == ONION:
+        a_session(client)
+        return onion_get(client, path, headers=headers)
+    return client.get(path, headers=headers, base_url=f'https://{host}')
 
 
 def register_local_only_onion() -> str:
