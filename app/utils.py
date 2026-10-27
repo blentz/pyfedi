@@ -50,7 +50,7 @@ from flask import current_app, json, redirect, url_for, request, make_response, 
 from flask_babel import _, lazy_gettext as _l
 from flask_login import current_user, logout_user
 from flask_wtf.csrf import validate_csrf
-from sqlalchemy import text, or_, desc, asc, event, inspect, select, func, update
+from sqlalchemy import text, or_, not_, desc, asc, event, inspect, select, func, update
 from sqlalchemy.orm import Session, object_session
 from wtforms.fields import SelectMultipleField, StringField
 from wtforms.widgets import ListWidget, CheckboxInput, TextInput
@@ -62,7 +62,8 @@ from app.onion import is_onion_request, stamp_activity
 from app.onion_store import onion_store_needed, onion_store_optional, request_redis
 from app.pinned_http import fetch_deadline, is_refused_address
 from app.rsa_keys import RsaKeys
-from app.local_only import hidden_here, hidden_here_sql, shown_here, without_local_only_actors
+from app.feed_domains import feeds_on_domain_clause
+from app.local_only import hidden_here, hidden_here_clause, hidden_here_sql, shown_here, without_local_only_actors
 from app.visibility import OPEN_VISIBILITIES, listable_sql, visible_to_sql
 from app.constants import *
 import re
@@ -4383,9 +4384,11 @@ def menu_topics():
 
 
 @cache.memoize(timeout=3000)
-def menu_instance_feeds():
-    return Feed.query.filter(Feed.parent_feed_id == None).filter(Feed.is_instance_feed == True).order_by(
-        Feed.name).all()
+def menu_instance_feeds(site_domain_id: int | None):
+    """The instance menu's feeds on one domain (a cached list is per domain: it holds nothing of the reader). The
+    caller narrows it with `shown_here`, which does."""
+    return Feed.query.filter(Feed.parent_feed_id == None).filter(Feed.is_instance_feed == True).filter(
+        feeds_on_domain_clause(domain_by_id(site_domain_id))).order_by(Feed.name).all()
 
 
 # @cache.memoize(timeout=3000)
@@ -4542,11 +4545,16 @@ def feed_tree(user_id, domain: DomainInfo | None = None) -> List[dict]:
     return [feed for feed in feeds_dict.values() if feed['feed'].parent_feed_id is None]
 
 
-def feed_tree_public(search_param=None) -> List[dict]:
+def feed_tree_public(search_param=None, domain: DomainInfo | None = None, signed_in: bool | None = None) -> List[dict]:
+    """The public feeds as a tree; with `domain`, its feeds and the remote ones. The feeds this storefront hides from
+    its reader are never in it (`signed_in` as in `hidden_here`: the session's login unless a caller with no session
+    says)."""
+    feeds = Feed.query.filter(Feed.public == True).filter(not_(hidden_here_clause(Feed, signed_in)))
+    if domain is not None:
+        feeds = feeds.filter(feeds_on_domain_clause(domain))
     if search_param:
-        feeds = Feed.query.filter(Feed.public == True).filter(Feed.title.ilike(f"%{search_param}%")).order_by(Feed.title)
-    else:
-        feeds = Feed.query.filter(Feed.public == True).order_by(Feed.title)
+        feeds = feeds.filter(Feed.title.ilike(f"%{search_param}%"))
+    feeds = feeds.order_by(Feed.title)
 
     feeds_dict = {feed.id: {'feed': feed, 'children': []} for feed in feeds.all()}
 

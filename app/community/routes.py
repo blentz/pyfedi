@@ -55,6 +55,7 @@ from app.post.util import form_tags_string
 # The module, not the names: app.shared.community reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
+from app.feed_domains import feed_view_domain, listed_feeds_clause
 from app.local_only import community_local_only, found_here, hidden_here, hidden_here_sql, local_only_visible_rss, \
     without_local_only, without_local_only_actors
 from app.visibility import is_open, listable_clause, visible_to_clause
@@ -647,7 +648,8 @@ def show_community(community: Community, from_instance=None):
         comments = comments.paginate(page=page, per_page=per_page, error_out=False)
 
     community_feeds = Feed.query.join(FeedItem, FeedItem.feed_id == Feed.id).\
-        filter(FeedItem.community_id == community.id).filter(Feed.public == True).all()
+        filter(FeedItem.community_id == community.id).filter(Feed.public == True).filter(
+        listed_feeds_clause(feed_view_domain())).all()
 
     show_reason_why_no_federation(community.instance_id)
 

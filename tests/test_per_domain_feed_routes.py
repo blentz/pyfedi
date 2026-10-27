@@ -6,7 +6,7 @@ from flask_wtf.csrf import generate_csrf
 
 from app import cache, db
 from app.feed.util import actor_to_feed, search_for_feed
-from app.models import Feed, FeedMember
+from app.models import Feed, FeedMember, User
 from app.storefront import domain_for_host
 from app.utils import menu_instance_feeds
 from tests.conftest import forget_login
@@ -249,9 +249,13 @@ def test_a_shop_feeds_menu_entries_name_it_at_shop_on_the_first_domain(app, thre
     news[0].is_instance_feed = news[1].is_instance_feed = True
     db.session.commit()
     cache.delete_memoized(menu_instance_feeds)
-    html = get(app, '/explore', host=FIRST).data.decode()
+    client = app.test_client()
+    login(client, db.session.get(User, news[1].user_id))   # a shop account's menu is its home domain's (plan F4, task 5)
+    html = client.get('/explore', base_url=f'https://{FIRST}').data.decode()
     assert 'href="/f/news@shop.example"' in html
-    assert 'href="/f/news"' in html
+    assert 'href="/f/news"' not in html
+    forget_login()
+    assert 'href="/f/news"' in get(app, '/explore', host=FIRST).data.decode()
 
 
 def test_every_link_a_feed_renders_resolves_back_to_it(app, three_domains, news, peer):  # noqa: F811

@@ -36,7 +36,7 @@ def get_feed_list(auth, data, user_id=None) -> dict:
     if user_id and mine_only:
         feeds = feed_tree(user_id)
     else:
-        feeds = feed_tree_public()
+        feeds = feed_tree_public(signed_in=bool(user_id))   # the API has no session
 
     if user_id:
         subscribed = subscribed_feeds(user_id)
