@@ -80,7 +80,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'feed_communities_for_edit': 1,
     },
     'app/local_names.py': {
-        'default_domain_user': 1,   # a bare name on the default domain is found by the actor URL SERVER_URL builds
+        'default_domain_user_url': 1,   # a bare name on the default domain is found by the actor URL SERVER_URL builds
     },
     'app/local_only.py': {
         'outbound_refusal': 1,   # the canonical host is ours in the "names our post or comment" test (plan B task 7)

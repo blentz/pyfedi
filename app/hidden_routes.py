@@ -22,13 +22,16 @@ reader could be hidden from; tests/test_hidden_routes_table.py walks the URL map
 from urllib.parse import urlsplit
 
 from flask import abort, current_app, request
+from sqlalchemy import func, select
 from werkzeug.exceptions import HTTPException
 
 from app import db
-from app.local_names import default_domain_user, hidden_target, notification_href
-from app.local_only import conversation_hidden_here, hidden_here, hides_anything_here
+from app.local_names import default_domain_user, default_domain_users
+from app.local_only import conversation_hidden_here, hidden_conversation_clause, hidden_default_domain, hidden_here, \
+    hidden_here_clause, hides_anything_here, hides_nothing
 from app.models import ChatMessage, Community, Conversation, Instance, Post, PostReply, User
-from app.storefront import current_storefront, domain_for_host, host_hidden_here, instance_visible_here, normalise_host
+from app.storefront import current_storefront, default_domain, domain_for_host, host_hidden_here, instance_visible_here, \
+    normalise_host, on_domain
 
 _PG_INT_MAX = 2 ** 31 - 1   # a larger id names no row, and Postgres refuses it as an integer
 
@@ -169,46 +172,146 @@ def off_this_host(url: str | None) -> bool:
     return bool(host) and normalise_host(host) != normalise_host(request.host)
 
 
-def path_hidden_here(url: str | None) -> bool:
-    """Whether `url`, one of our own pages (a notification's link), names a row hidden here, so it is never followed
-    or linked: the redirect would spell the onion's name. An absolute URL on a hidden host is hidden whatever its path
-    (follow-up F6); otherwise its path is matched against the gate's table. A path that is no page of ours, or whose row
-    is gone, names nothing hidden."""
-    if not url or not hides_anything_here():
-        return False
+class _Plan:
+    """What one link or notification names, gathered without a query, so a page's worth resolve in one query per
+    model: `hidden` when that is already known (a hidden host or handle, a hidden instance row), else the rows and the
+    bare `/u/` names that decide it."""
+    __slots__ = ('hidden', 'rows', 'names', 'stored')
+
+    def __init__(self):
+        self.hidden, self.rows, self.names, self.stored = False, [], [], []
+
+
+def _plan_path(plan: _Plan, url: str | None) -> None:
+    """Add what `url`, one of our own pages, names to `plan`, by the gate's table. An absolute URL on a hidden host is
+    hidden whatever its path; a path that is no page of ours, or another site's, names nothing."""
+    if not url:
+        return
     try:
         parts = urlsplit(url)
     except ValueError:   # a URL nobody can parse names no page of ours
-        return False
+        return
     if parts.netloc and _host_hidden(parts.netloc):
-        return True
+        plan.hidden = True
+        return
     if parts.netloc and domain_for_host(parts.netloc) is None:
-        return False   # another site's page: its path names none of our rows
+        return   # another site's page: its path names none of our rows
     try:
         rule, args = current_app.url_map.bind_to_environ(request.environ).match(
             parts.path, method='GET', return_rule=True)
     except HTTPException:   # not a page of ours, or a redirect
-        return False
-    named = [(name, value) for name, value in args.items() if name == 'actor' or name in OBJECT_ARGUMENTS]
-    return any(not _junk(name, value) and _value_hidden(name, value, rule.rule, missing=False)
-               for name, value in named)
+        return
+    for name, value in args.items():
+        if (name != 'actor' and name not in OBJECT_ARGUMENTS) or _junk(name, value):
+            continue
+        if name in _IDS:
+            if isinstance(value, int) and 0 < value <= _PG_INT_MAX:
+                plan.rows.append((_IDS[name][0], value))
+        elif name == 'actor' and actor_kind(rule.rule) is _user_name_hidden and '@' not in value \
+                and current_storefront().is_default:
+            plan.names.append(value)   # found by its alternate name too: looked up with the page's others
+        elif (actor_kind(rule.rule) if name == 'actor' else _NAMES[name])(value):
+            plan.hidden = True
 
 
 # The ids a notification's `targets` may hold of what it is about
 _NOTIFIED = (('post_id', Post), ('comment_id', PostReply), ('suspect_post_id', Post),
              ('suspect_comment_id', PostReply), ('community_id', Community), ('author_id', User),
              ('suspect_user_id', User))
+# the name-built links a notification stored before follow-up F1: the model, and the targets key of its id
+_STORED_LINKS = {'/c/': (Community, 'community_id'), '/u/': (User, 'suspect_user_id')}
+
+
+def _plan_notification(notification) -> _Plan:
+    """`notification`'s plan: its link as stored and as following it resolves it (notification_href), its author,
+    and its targets' ids."""
+    plan, targets = _Plan(), notification.targets or {}
+    _plan_path(plan, notification.url)
+    stored = _STORED_LINKS.get((notification.url or '')[:3])
+    if stored is not None and not isinstance(targets.get(stored[1]), int):
+        plan.stored.append((stored[0], notification.url[3:]))   # notification_href finds it by its stored name
+    author_id = getattr(notification, 'author_id', None)
+    if isinstance(author_id, int):
+        plan.rows.append((User, author_id))
+    plan.rows.extend((model, targets[key]) for key, model in _NOTIFIED if isinstance(targets.get(key), int))
+    return plan
+
+
+def _hidden_ids(model, ids: set) -> set:
+    """The ids of `ids` whose `model` rows are hidden here, in one query. The rows themselves are read in one more, so
+    the page's own lookups of them (target_link) find them in the session."""
+    ids = {id_ for id_ in ids if 0 < id_ <= _PG_INT_MAX}
+    if not ids:
+        return set()
+    if model is Conversation:
+        clause = hidden_conversation_clause(Conversation.id)
+    elif model is ChatMessage:
+        clause = hidden_conversation_clause(ChatMessage.conversation_id)
+    elif model is Instance:
+        return {id_ for id_ in ids if not instance_visible_here(id_)}
+    else:
+        db.session.scalars(select(model).where(model.id.in_(ids))).unique().all()
+        clause = hidden_here_clause(model, True)
+    if hides_nothing(clause):
+        return set()
+    return set(db.session.scalars(select(model.id).where(model.id.in_(ids), clause)))
+
+
+def _stored_hidden(model, names: set) -> set:
+    """Which bare names a notification stored before follow-up F1 name a row hidden here: the default domain's
+    (stored_name_id), so only when the default domain itself is hidden here. A handle's host decides it already."""
+    bare = {name.lower() for name in names if '@' not in name}
+    if not bare or not hidden_default_domain():
+        return {name for name in names if '@' in name and _handle_hidden(name)}
+    column = User.user_name if model is User else Community.name
+    held = set(db.session.scalars(select(func.lower(column)).where(func.lower(column).in_(bare),
+                                                                    model.ap_id.is_(None),
+                                                                    on_domain(default_domain(), model))))
+    return {name for name in names if name.lower() in held or ('@' in name and _handle_hidden(name))}
+
+
+def _resolve(plans: list) -> list:
+    """Whether each of `plans` names something hidden here: one query per model for all of them together."""
+    wanted = {}
+    for plan in plans:
+        for model, id_ in plan.rows:
+            wanted.setdefault(model, set()).add(id_)
+    hidden = {model: _hidden_ids(model, ids) for model, ids in wanted.items()}
+    users = default_domain_users({name for plan in plans for name in plan.names})
+    stored = {}
+    for plan in plans:
+        for model, name in plan.stored:
+            stored.setdefault(model, set()).add(name)
+    stored_hidden = {model: _stored_hidden(model, names) for model, names in stored.items()}
+    return [plan.hidden
+            or any(id_ in hidden[model] for model, id_ in plan.rows)
+            or any(users[name] is not None and hidden_here(users[name], True) for name in plan.names)
+            or any(name in stored_hidden[model] for model, name in plan.stored)
+            for plan in plans]
+
+
+def path_hidden_here(url: str | None) -> bool:
+    """Whether `url`, one of our own pages (a notification's link), names a row hidden here, so it is never followed
+    or linked: the redirect would spell the onion's name (follow-up F6). See `_plan_path`. A row that is gone names
+    nothing hidden."""
+    if not url or not hides_anything_here():
+        return False
+    plan = _Plan()
+    _plan_path(plan, url)
+    return _resolve([plan])[0]
+
+
+def hidden_notifications(notifications) -> list:
+    """Whether each of `notifications` is about something hidden here (follow-up F6): its link, as stored or as
+    following it resolves it, names a hidden row, or its author, or its targets name a hidden post, reply, community
+    or account. Its page then shows only the note (`hidden_note`). A page of them costs one query per model, whatever
+    their number (N-m4), and none at all where nothing is hidden."""
+    notifications = list(notifications)
+    if not notifications or not hides_anything_here():
+        return [False] * len(notifications)
+    return _resolve([_plan_notification(notification) for notification in notifications])
 
 
 def notification_hidden(notification) -> bool:
-    """Whether `notification` is about something hidden here (follow-up F6): its link, as stored or as following it
-    resolves it (notification_href), names a hidden row, or its author, or its targets name a hidden post, reply,
-    community or account. Its page then shows only the note (`hidden_note`): no link, name, title or body."""
-    if not hides_anything_here():
-        return False   # nothing to hide here: no lookups, which a page of notifications would make for each (N-m4)
-    targets = notification.targets or {}
-    author_id = getattr(notification, 'author_id', None)
-    return (path_hidden_here(notification.url) or path_hidden_here(notification_href(notification))
-            or (isinstance(author_id, int) and hidden_target(User, author_id))
-            or any(isinstance(targets.get(key), int) and hidden_target(model, targets[key])
-                   for key, model in _NOTIFIED))
+    """`hidden_notifications` for one notification."""
+    return hidden_notifications([notification])[0]

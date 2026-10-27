@@ -34,7 +34,7 @@
             </div>
             <table class="table table-striped notification-table">
                 {% for notification in notifications %}
-                    {% if notification_hidden(notification) %}
+                    {% if notification.id in hidden_notification_ids %}
                         {% include "user/notifs/hidden.html" %}
                     {% elif notification.targets.gen == "0" %}
                         {% include "user/notifs/" + str(notification.notif_type) + ".html" %}

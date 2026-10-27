@@ -66,13 +66,34 @@ def find_local_user(actor_url: str, allow_banned: bool = False) -> User:
     return user.order_by((User.ap_profile_id == actor_url).desc(), User.id).first()
 
 
-def default_domain_user(actor: str, allow_banned: bool = False) -> User | None:
-    """The account a bare `/u/<actor>` names on the default domain: by the actor URL SERVER_URL builds, as it always
-    was (which also finds an alternate name, on any domain), read as find_actor_by_url reads it, stripped and
-    lower-cased. user_for_actor and the route gate (app.hidden_routes) both ask this, so they cannot disagree on
-    which account a spelling names (follow-up F6)."""
-    return find_local_user(f'{current_app.config["SERVER_URL"]}/u/{actor.strip()}'.strip().lower(), allow_banned)
+def default_domain_user_url(actor: str) -> str:
+    """The actor URL a bare `/u/<actor>` names on the default domain, read as find_actor_by_url reads it: stripped
+    and lower-cased."""
+    return f'{current_app.config["SERVER_URL"]}/u/{actor.strip()}'.strip().lower()
 
+
+def default_domain_user(actor: str, allow_banned: bool = False) -> User | None:
+    """The account a bare `/u/<actor>` names on the default domain: by its actor URL (default_domain_user_url), as it
+    always was (which also finds an alternate name, on any domain). user_for_actor and the route gate
+    (app.hidden_routes) both ask this, so they cannot disagree on which account a spelling names (follow-up F6)."""
+    return find_local_user(default_domain_user_url(actor), allow_banned)
+
+
+def default_domain_users(actors) -> dict:
+    """`default_domain_user(actor, allow_banned=True)` for each of `actors` at once, in one query: {actor: User or
+    None}. For a page that would otherwise look each one up (follow-up F6, N-m4)."""
+    urls = {actor: default_domain_user_url(actor) for actor in actors}
+    if not urls:
+        return {}
+    alts = {url: url.rsplit('/', 1)[-1] for url in urls.values()}
+    rows = db.session.scalars(select(User).where(or_(User.ap_profile_id.in_(set(urls.values())),
+                                                     User.alt_user_name.in_(set(alts.values()))),
+                                                 User.ap_id.is_(None)).order_by(User.id)).unique().all()
+
+    def found(url):   # as find_local_user orders them: the account the URL is, else the first alternate name
+        return next((row for row in rows if row.ap_profile_id == url), None) or \
+            next((row for row in rows if row.alt_user_name == alts[url]), None)
+    return {actor: found(url) for actor, url in urls.items()}
 
 def local_path_name(obj) -> str:
     """How a local user or community is named in a path: bare on its own domain's storefront, else `name@domain`."""
