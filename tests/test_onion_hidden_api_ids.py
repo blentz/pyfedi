@@ -4,7 +4,7 @@ what a missing row raises, so the two answers are one; no endpoint keeps its own
 import pytest
 
 from app import db
-from app.models import ChatMessage, CommunityBan, PostReply, Report, UserBlock, UserFlair, \
+from app.models import ChatMessage, CommunityBan, Notification, PostReply, Report, UserBlock, UserFlair, \
     UserFollower, UserNote, read_posts
 from tests.conftest import forget_login
 from tests.factories import grant_permission, make_post_reply
@@ -192,6 +192,42 @@ def test_resolving_a_report_about_an_onion_row_answers_as_a_report_nobody_holds(
                          ('/api/alpha/private_message/report/resolve', reports.reports[2])):
         assert_same(app, reports.admin, 'PUT', path, {'report_id': report.id, 'resolved': True},
                     {'report_id': NOBODY, 'resolved': True})
+
+
+# --- N5: replies and mentions -------------------------------------------------------------------------------------
+
+@pytest.fixture
+def replied(alpha):
+    onion = alpha
+    mine = make_post_reply(onion.post, onion.first_bob, 'MINE')
+    theirs = make_post_reply(onion.post, onion.onion_bob, 'ONIONANSWER')
+    theirs.local_only = True
+    db.session.add_all([
+        Notification(user_id=onion.first_bob.id, title='t', url=f'/comment/{theirs.id}', notif_type=4,
+                     subtype='new_reply_on_followed_comment', author_id=onion.onion_bob.id,
+                     targets={'comment_id': theirs.id, 'post_id': onion.post.id}),
+        Notification(user_id=onion.first_bob.id, title='t', url=f'/comment/{theirs.id}', notif_type=6,
+                     subtype='comment_mention', author_id=onion.onion_bob.id,
+                     targets={'comment_id': theirs.id, 'post_id': onion.post.id})])
+    onion.first_bob.unread_notifications = 2
+    db.session.commit()
+    onion.mine, onion.theirs = mine, theirs
+    return onion
+
+
+@pytest.mark.parametrize('path', ['/api/alpha/user/replies', '/api/alpha/user/mentions',
+                                  '/api/alpha/user/replies?unread_only=false'])
+def test_the_apis_replies_and_mentions_leave_out_onion_replies_on_the_first_domain(app, replied, path):
+    body = call(app, replied.first_bob, 'GET', path).get_data(as_text=True)
+    assert 'ONIONANSWER' not in body and ONION_BOB not in body, path
+    assert 'ONIONANSWER' in call(app, replied.first_bob, 'GET', path, host=ONION).get_data(as_text=True)
+
+
+def test_the_unread_count_leaves_them_out_on_the_first_domain(app, replied):
+    counts = call(app, replied.first_bob, 'GET', '/api/alpha/user/unread_count').get_json()
+    assert (counts['replies'], counts['mentions'], counts['other']) == (0, 0, 0), counts
+    counts = call(app, replied.first_bob, 'GET', '/api/alpha/user/unread_count', host=ONION).get_json()
+    assert (counts['replies'], counts['mentions']) == (1, 1), counts
 
 
 # --- N-m5: a message of a conversation with an onion account, by its id -------------------------------------------------
