@@ -20,7 +20,7 @@ from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, PO
 from app.models import Site, utcnow
 from app.onion import is_onion_request, stamp_activity
 from app.onion_guard import require_onion_session, resolve_onion_api_rate_key
-from app.hidden_routes import refuse_hidden_route
+from app.hidden_routes import refuse_hidden_route, unread_shown
 from app.local_names import content_hidden, content_link, hidden_note, instance_link, report_target_hidden, \
     reporter_link, target_hidden, target_link
 from app.local_only import user_local_only
@@ -126,6 +126,7 @@ def register_request_hooks(app):
     app.jinja_env.globals['instance_link'] = instance_link
     app.jinja_env.globals['report_target_hidden'] = report_target_hidden
     app.jinja_env.globals['reporter_link'] = reporter_link
+    app.jinja_env.globals['unread_shown'] = unread_shown
     app.jinja_env.globals['digits'] = digits
     app.jinja_env.globals['str'] = str
     app.jinja_env.globals['shorten_number'] = shorten_number

@@ -327,3 +327,15 @@ def hidden_unread(user_id: int) -> Counter:
         Notification.user_id == user_id, Notification.read.is_(False))).all()
     return Counter((row.notif_type, row.subtype) for row, hidden in zip(rows, hidden_notifications(rows)) if hidden)
 
+
+
+def unread_shown(user) -> int:
+    """`user.unread_notifications` less the unread ones hidden here: the count a page or a client shows, so it never
+    promises notifications the list leaves out (re-review 2, m1). Computed once per request and count."""
+    unread = max(user.unread_notifications or 0, 0)
+    if not unread or not hides_anything_here():
+        return unread
+    shown = request.__dict__.setdefault('_unread_shown', {})   # this request's, which a page asks several times
+    if (user.id, unread) not in shown:
+        shown[(user.id, unread)] = max(0, unread - sum(hidden_unread(user.id).values()))
+    return shown[(user.id, unread)]
