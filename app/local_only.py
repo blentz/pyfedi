@@ -225,7 +225,10 @@ def hidden_here(obj, signed_in: bool | None = None) -> bool:
     community under a clearnet post: it could only have been written where the onion reply is seen, so it goes with
     that reply, everywhere (review I6), or listing it would tell that its author uses the onion. That is the only way
     such a reply is stamped, so a local-only reply whose ancestry cannot be read (no path, one without itself or its
-    parent, or one naming a purged reply) is hidden wherever anything is: fail closed (ruling, N-m3). A remote row
+    parent, or one naming a purged reply) is hidden wherever anything is: fail closed (ruling, N-m3). Accepted
+    (re-review 2, m3): where the default domain does not federate and another local-only domain exists too, the default
+    domain's own unreadable local-only replies are hidden on the default domain as well; only archived and legacy
+    rows can be unreadable, and telling whose they are would need the ancestry that cannot be read. A remote row
     is never hidden."""
     signed_in = _signed_in(signed_in)
     if isinstance(obj, (models.Post, models.PostReply)):
