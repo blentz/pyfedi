@@ -84,6 +84,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     },
     'app/local_only.py': {
         'outbound_refusal': 1,   # the canonical host is ours in the "names our post or comment" test (plan B task 7)
+        'notification_stamps': 1,   # the canonical host is ours: its links' paths are read (follow-up F6, stamp)
     },
     'app/main/routes.py': {
         'list_feeds': 1,

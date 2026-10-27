@@ -223,7 +223,7 @@ def _plan_notification(notification) -> _Plan:
     and its targets' ids."""
     plan, targets = _Plan(), notification.targets or {}
     if getattr(notification, 'local_only', True) is False:
-        return plan   # stamped as naming no local-only row: hidden nowhere (notification_names_local_only)
+        return plan   # stamped as naming no local-only row: hidden nowhere (local_only.notification_stamps)
     _plan_path(plan, notification.url)
     stored = _STORED_LINKS.get((notification.url or '')[:3])
     if stored is not None and not isinstance(targets.get(stored[1]), int):

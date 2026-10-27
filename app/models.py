@@ -5442,27 +5442,32 @@ class Notification(db.Model):
     notif_type = db.Column(db.Integer, default=NOTIF_DEFAULT, index=True)  # see constants.py for possible values: NOTIF_*
     subtype = db.Column(db.String(50), index=True)
     targets = db.Column(db.JSON)
-    # Whether it may name a local-only domain's row (notification_names_local_only, stamped as it is flushed): one
+    # Whether it may name a local-only domain's row (app.local_only.notification_stamps, stamped as it is flushed): one
     # that does not is hidden on no storefront, so a count reads only the stamped ones (follow-up F6, round 5)
     local_only = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+
+    # The counts' index (app.hidden_routes._hidden_counts): declared here so a database built by create_all has it too
+    __table_args__ = (Index('ix_notification_user_local_only', 'user_id', postgresql_where=local_only),)
 
 
 @event.listens_for(Session, 'after_flush')
 def stamp_new_notifications(session, flush_context):
-    """Stamp each notification this flush inserted, or whose link, targets or author it changed, with
-    `notification_names_local_only`, the rule its migration (c6e2a8f4b1d9) keeps in the database: one UPDATE per flush,
-    and none on a site where every domain federates."""
+    """Stamp each notification this flush inserted, or whose link, targets or author it changed, by
+    `app.local_only.notification_stamps`: one query for the rows they name and one UPDATE of the stamps that changed,
+    and none on a site where every domain federates (follow-up F6). No database function is involved, so nothing
+    depends on the notification table (re-review 4, I-A)."""
     new = [row for row in session.new if isinstance(row, Notification)]
     new += [row for row in session.dirty if isinstance(row, Notification) and any(   # one whose link changed too
         inspect(row).attrs[name].history.has_changes() for name in ('url', 'targets', 'author_id'))]
-    if not new or not local_only.any_domain_closed():
+    if not new:
         return
-    stamped = dict(session.execute(text(
-        'UPDATE notification SET local_only = notification_names_local_only(notification, :host) '
-        'WHERE id = ANY(:ids) RETURNING id, local_only'),
-        {'host': storefront.default_domain().domain, 'ids': [row.id for row in new]}).all())
-    for row in new:
-        set_committed_value(row, 'local_only', stamped.get(row.id, True))
+    stamps = local_only.notification_stamps(new, session)
+    changed = [(row, stamp) for row, stamp in zip(new, stamps) if row.local_only is not stamp]
+    if changed:
+        session.execute(text('UPDATE notification SET local_only = (id = ANY(:stamped)) WHERE id = ANY(:ids)'),
+                        {'stamped': [row.id for row, stamp in changed if stamp], 'ids': [row.id for row, _ in changed]})
+    for row, stamp in changed:
+        set_committed_value(row, 'local_only', stamp)
 
 
 class Report(db.Model):

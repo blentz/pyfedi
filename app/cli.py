@@ -76,6 +76,18 @@ import app as app_pkg
 logger = logging.getLogger(__name__)
 
 
+def rebuild_schema(connection) -> None:
+    """What `flask init-db` does to the schema, on `connection`: every table dropped and created again from the
+    models. Nothing a migration leaves in the database may depend on a table, or the drop is refused (follow-up F6,
+    re-review 4 I-A, tests/test_notification_stamp.py)."""
+    db.metadata.drop_all(connection)
+    # Drop PostgreSQL functions that are created by migrations but not dropped by drop_all()
+    # These functions persist even after tables are dropped and cause errors on db.create_all(), later.
+    connection.execute(text("DROP FUNCTION IF EXISTS post_search_vector_update() CASCADE"))
+    db.configure_mappers()
+    db.metadata.create_all(connection)
+
+
 def register(app):
     register_relay_commands(app)   # fork: flask relays
     register_discovery_commands(app)   # fork (interop D24): flask refresh_discovery
@@ -155,15 +167,8 @@ def register(app):
                 print(f"Warning: Could not check database encoding: {e}")
                 print("If using PostgreSQL, please ensure your database uses UTF8 encoding.")
 
-            db.drop_all()
-
-            # Drop PostgreSQL functions that are created by migrations but not dropped by drop_all()
-            # These functions persist even after tables are dropped and cause errors on db.create_all(), later.
-            db.session.execute(text("DROP FUNCTION IF EXISTS post_search_vector_update() CASCADE"))
-            db.session.commit()
-
-            db.configure_mappers()
-            db.create_all()
+            with db.engine.begin() as connection:
+                rebuild_schema(connection)
             private_key, public_key = RsaKeys.generate_keypair()
             db.session.add(
                 Site(name="PieFed", description='Explore Anything, Discuss Everything.', public_key=public_key,
