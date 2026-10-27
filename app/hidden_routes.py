@@ -29,7 +29,7 @@ from werkzeug.exceptions import HTTPException
 from app import db
 from app.local_names import default_domain_user, default_domain_users
 from app.local_only import conversation_hidden_here, hidden_conversation_clause, hidden_default_domain, hidden_here, \
-    hidden_here_clause, hides_anything_here, message_hidden_here
+    hidden_here_clause, hides_anything_here, keep_for_request, message_hidden_here
 from app.models import ChatMessage, Community, Conversation, Instance, Notification, Post, PostReply, User
 from app.storefront import current_storefront, default_domain, domain_for_host, host_hidden_here, instance_visible_here, \
     normalise_host, on_domain
@@ -248,7 +248,7 @@ def _hidden_ids(model, ids: set) -> set:
     elif model is Instance:
         return {id_ for id_ in ids if not instance_visible_here(id_)}
     else:
-        db.session.scalars(select(model).where(model.id.in_(ids))).unique().all()
+        keep_for_request(db.session.scalars(select(model).where(model.id.in_(ids))).unique())   # for target_link
         clause = hidden_here_clause(model, True)   # never false(): the caller has seen that something is hidden
     return set(db.session.scalars(select(model.id).where(model.id.in_(ids), clause)))
 

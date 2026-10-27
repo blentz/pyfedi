@@ -1,7 +1,10 @@
 """The alpha API's actions on an id in the body or query answer an onion row off the onion exactly as an id nobody
 holds (follow-up F6, re-review N1 to N5, N-m5, N-m6). Ruling: one shared API finder applies `hidden_here` and raises
 what a missing row raises, so the two answers are one; no endpoint keeps its own copy of the rule."""
+import gc
+
 import pytest
+from sqlalchemy import event
 from sqlalchemy.exc import NoResultFound
 
 from app import db
@@ -10,7 +13,7 @@ from app.local_only import found_here, hidden_report_clause, prime_reporters, re
 from app.models import ChatMessage, CommunityBan, CommunityFlair, CommunityMember, Conversation, Post, Notification, \
     PostReply, Report, User, UserBlock, UserFlair, UserFollower, UserNote, UserRegistration, read_posts
 from tests.conftest import forget_login
-from tests.factories import grant_permission, make_post_reply
+from tests.factories import grant_permission, make_post_reply, make_user
 from tests.test_hidden_routes import talking  # noqa: F401 -- a fixture
 from tests.test_instance_visible_here import HOSTS, scene  # noqa: F401 -- scene is a fixture
 from tests.test_local_only_actors_hidden import ONION_ART, ONION_BOB, world  # noqa: F401 -- world is a fixture
@@ -469,13 +472,47 @@ def test_a_report_list_reads_its_reporters_in_one_query(app, reported_by_onion, 
     assert calls == [1], calls   # once for the page
 
 
-def test_primed_reporters_cost_no_query_each(app, reported_by_onion):
+def test_primed_reporters_cost_no_query_each(app, alpha):
+    """N2 (re-review 3): the session's identity map holds rows weakly, so reporters read and dropped were read again,
+    one query per report. Here no reporter is held by the test."""
+    for index in range(4):
+        reporter = make_user(alpha.first_art.instance, f'reporter{index}', local=True)
+        db.session.add(Report(reasons='spam', description='R', type=1, reporter_id=reporter.id, status=0,
+                              suspect_post_id=alpha.first_post.id, in_community_id=alpha.first_art.id,
+                              source_instance_id=1, suspect_user_id=alpha.first_bob.id, targets={}))
+    del reporter
+    db.session.commit()
     db.session.expire_all()
     with default_request(app):
-        rows = Report.query.all()
+        rows = Report.query.filter_by(description='R').all()
+        gc.collect()
         prime_reporters(rows)
+        gc.collect()
         cost = queries_in(lambda: [reporter_hidden_here(report) for report in rows])
-    assert [statement for statement in cost if not statement.startswith('SELECT site_domain')] == []   # cached
+    assert [statement for statement in cost if not statement.startswith('SELECT site_domain')] == []
+
+
+def test_a_report_list_reads_its_reporters_once(app, alpha):
+    """N2: the whole list request, not the helper alone: its user reads do not grow with its reports' reporters."""
+    def reads(count):
+        for index in range(count):
+            reporter = make_user(alpha.first_art.instance, f'lister{count}{index}', local=True)
+            db.session.add(Report(reasons='spam', description='L', type=1, reporter_id=reporter.id, status=0,
+                                  suspect_post_id=alpha.first_post.id, in_community_id=alpha.first_art.id,
+                                  source_instance_id=1, suspect_user_id=alpha.first_bob.id,
+                                  targets={'suspect_post_id': alpha.first_post.id}))
+        db.session.commit()
+        db.session.expire_all()
+        gc.collect()
+        statements = []
+        listener = lambda conn, cursor, statement, *args: statements.append(' '.join(statement.split()))  # noqa: E731
+        event.listen(db.engine, 'before_cursor_execute', listener)
+        try:
+            assert call(app, alpha.admin, 'GET', '/api/alpha/post/report/list?limit=50').status_code == 200
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', listener)
+        return [s for s in statements if s.startswith('SELECT "user".') and s.endswith('WHERE "user".id = %(pk_1)s')]
+    assert len(reads(2)) == len(reads(4)), 'a reporter is read once per report'
 
 
 @pytest.mark.parametrize('method, path', [('PUT', '/api/alpha/community/flair'),

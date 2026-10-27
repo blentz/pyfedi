@@ -7,7 +7,7 @@ import logging
 import re
 from urllib.parse import unquote, urlsplit
 
-from flask import current_app
+from flask import current_app, has_request_context, request
 from flask_babel import _
 from flask_login import current_user
 from sqlalchemy import and_, any_, bindparam, exists, false, func, not_, or_, select, text, true
@@ -331,12 +331,22 @@ _REPORT_TARGETS = (('suspect_post_reply_id', 'PostReply'), ('suspect_post_id', '
                    ('suspect_community_id', 'Community'))
 
 
+def keep_for_request(rows) -> list:
+    """Hold `rows` for the rest of this request and return them. The session's identity map holds its rows weakly, so a
+    row read ahead for later `session.get`s (a page's reporters, the targets of its notifications) is otherwise freed
+    at once and read again, one query at a time (re-review 3, N2). Outside a request, nothing is kept."""
+    rows = list(rows)
+    if has_request_context():
+        request.__dict__.setdefault('_kept_rows', []).extend(rows)
+    return rows
+
+
 def prime_reporters(reports) -> None:
-    """Read the accounts that filed `reports` in one query, so `reporter_hidden_here` finds each in the session: a
-    report list costs one query for its reporters, not one per report (re-review 2, m5)."""
+    """Read the accounts that filed `reports` in one query and keep them for the request, so `reporter_hidden_here`
+    finds each in the session: a report list costs one query for its reporters, not one per report (m5, N2)."""
     ids = {report.reporter_id for report in reports if report.reporter_id}
     if ids:
-        db.session.scalars(select(models.User).where(models.User.id.in_(ids))).unique().all()
+        keep_for_request(db.session.scalars(select(models.User).where(models.User.id.in_(ids))).unique())
 
 
 def reporter_hidden_here(report) -> bool:
