@@ -7,6 +7,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
+from flask import g
 
 from sqlalchemy import update
 
@@ -14,7 +15,7 @@ from app import db
 from app.constants import SRC_API
 from app.models import CommunityMember, PostBoost, PostReplyVote, PostVote, SiteDomain, UserFollower, utcnow
 from app.shared import community as shared_community
-from app.storefront import clear_domain_cache
+from app.storefront import clear_domain_cache, domain_for_host
 from tests.factories import make_community, make_feed_item, make_feed_member, make_instance, make_local_feed, \
     make_post, make_post_reply, make_user
 from tests.test_community_lifecycle import login
@@ -227,7 +228,9 @@ def test_a_local_only_account_cannot_be_made_moderator_of_a_federating_community
     monkeypatch.setattr('app.shared.community.authorise_api_user', lambda *a, **k: world.alice)
     # its own app context: the anonymous user flask_login loads into g here (a queued task reads who is acting,
     # plan C3) must not still be in g when the test client's request below runs in the test's app context
+    # on the onion: off it the onion's account answers as an id nobody holds (follow-up F6)
     with app.app_context(), app.test_request_context():
+        g.storefront = domain_for_host(ONION)
         with pytest.raises(Exception, match='local_only_moderator'):
             shared_community.add_mod_to_community(world.clearnet.id, world.onionite.id, SRC_API, auth='token')
         # the onion's own community may have it, and a first-domain account may moderate the first domain's

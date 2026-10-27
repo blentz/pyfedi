@@ -2,9 +2,12 @@
 holds (follow-up F6, re-review N1 to N5, N-m5, N-m6). Ruling: one shared API finder applies `hidden_here` and raises
 what a missing row raises, so the two answers are one; no endpoint keeps its own copy of the rule."""
 import pytest
+from sqlalchemy.exc import NoResultFound
 
 from app import db
-from app.models import ChatMessage, CommunityBan, Notification, PostReply, Report, UserBlock, UserFlair, \
+from app.api.alpha.views import user_view
+from app.local_only import found_here
+from app.models import ChatMessage, CommunityBan, Conversation, Post, Notification, PostReply, Report, UserBlock, UserFlair, \
     UserFollower, UserNote, read_posts
 from tests.conftest import forget_login
 from tests.factories import grant_permission, make_post_reply
@@ -13,7 +16,7 @@ from tests.test_instance_visible_here import HOSTS, scene  # noqa: F401 -- scene
 from tests.test_local_only_actors_hidden import ONION_BOB, world  # noqa: F401 -- world is a fixture
 from tests.test_onion_hidden_on_clearnet import onion  # noqa: F401 -- a fixture
 from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
-from tests.two_domains import FIRST, ONION, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, default_request, onion_request, two_domains  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -274,3 +277,24 @@ def test_a_communitys_banned_list_names_no_onion_account_on_the_first_domain(app
     on_onion = call(app, alpha.admin, 'GET', f'/api/alpha/community/moderate/bans?community_id={alpha.first_art.id}',
                     host=ONION).get_data(as_text=True)
     assert f'"id":{alpha.onion_bob.id}' in on_onion.replace(' ', '')
+
+
+# --- the finder itself ----------------------------------------------------------------------------------------------
+
+def test_the_finder_answers_a_hidden_conversation_or_message_and_junk_ids_as_none(app, chatted):
+    message = ChatMessage.query.filter_by(conversation_id=chatted.with_onion.id).first()
+    with default_request(app):
+        assert found_here(Conversation, chatted.with_onion.id) is None
+        assert found_here(ChatMessage, message.id) is None
+        assert found_here(Conversation, chatted.with_admin.id) is not None   # the control
+        for junk in ('abc', None, 0, -1, 2 ** 40):
+            assert found_here(Post, junk) is None, junk
+    with onion_request(app):
+        assert found_here(ChatMessage, message.id) is not None
+
+
+@pytest.mark.parametrize('variant', [2, 4, 5])
+def test_the_profile_an_action_answers_with_is_refused_for_a_hidden_account(app, alpha, variant):
+    with default_request(app):
+        with pytest.raises(NoResultFound):
+            user_view(alpha.onion_bob.id, variant=variant, user_id=alpha.first_bob.id)

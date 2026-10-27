@@ -34,7 +34,7 @@ from tests.factories import (a_keypair, make_conversation, make_instance, make_p
                              make_post_reply_vote, make_post_vote, make_site, make_user)
 from tests.test_per_domain_ap_routes import SHOP, get as ap_get, onion_proxy, twins  # noqa: F401
 from tests.test_per_domain_html_routes import Visitor
-from tests.two_domains import FIRST, ONION, no_http, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, no_http, request_on, two_domains  # noqa: F401
 
 PEER = 'peer.example'
 
@@ -280,8 +280,10 @@ def test_an_onion_users_report_reads_as_local(app, sisters):
     db.session.add(message)
     db.session.commit()
 
-    answer = post_private_message_report(f'Bearer {onion_user.encode_jwt_token()}',
-                                         {'private_message_id': message.id, 'reason': 'spam'})
+    # on the onion: off it a conversation with an onion account is no one's (follow-up F6)
+    with request_on(app, onion):
+        answer = post_private_message_report(f'Bearer {onion_user.encode_jwt_token()}',
+                                             {'private_message_id': message.id, 'reason': 'spam'})
 
     report = Report.query.one()
     assert report.source_instance_id == onion_row.id
