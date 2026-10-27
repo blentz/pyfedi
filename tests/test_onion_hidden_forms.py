@@ -113,3 +113,57 @@ def test_a_communitys_banned_list_on_its_page_names_no_onion_account_on_the_firs
     assert not near(body, ONION, 'BANNEDONION'), near(body, ONION, 'BANNEDONION')
     on_onion = get(app, f'/community/art@{FIRST}/moderate/subscribers', host=ONION, user=onion.admin)
     assert 'bob' in on_onion.get_data(as_text=True)
+
+
+# --- N9: the unread-notifications email --------------------------------------------------------------------------
+
+def test_the_unread_email_of_a_first_domain_account_leaves_out_onion_items(app, onion):
+    bob = onion.first_bob
+    bob.email_unread, bob.email_unread_sent, bob.email = True, False, 'bob@example.com'
+    bob.last_seen = utcnow() - timedelta(days=2)
+    hour_ago = utcnow() - timedelta(hours=1)
+    db.session.add(Notification(user_id=bob.id, title='ONIONTITLE', url=f'/post/{onion.post.id}', notif_type=NOTIF_POST,
+                                created_at=hour_ago, targets={'post_id': onion.post.id}))
+    db.session.add(Notification(user_id=bob.id, title='FIRSTTITLE', url=f'/post/{onion.first_post.id}',
+                                notif_type=NOTIF_POST, created_at=hour_ago, targets={'post_id': onion.first_post.id}))
+    for post in (onion.post, onion.in_first, onion.first_post):
+        post.posted_at = hour_ago
+    db.session.commit()
+    sent = {}
+    with patch('app.cli.send_email', lambda *a, **k: sent.update({k['recipients'][0]: (k['text_body'],
+                                                                                         k['html_body'])})):
+        cli.register(current_app)
+        current_app.test_cli_runner().invoke(args=['send_missed_notifs'])
+    text, html = sent['bob@example.com']
+    for body in (text, html):
+        assert 'ONIONTITLE' not in body and 'ONIONPOST' not in body and 'ONIONINFIRST' not in body
+    assert 'FIRSTTITLE' in text and 'FIRSTPOST' in html
+
+
+def test_an_unread_email_with_only_onion_items_is_not_sent_off_the_onion(app, onion):
+    bob = onion.first_bob
+    bob.email_unread, bob.email_unread_sent, bob.email = True, False, 'bob@example.com'
+    bob.last_seen = utcnow() - timedelta(days=2)
+    db.session.add(Notification(user_id=bob.id, title='ONIONTITLE', url=f'/post/{onion.post.id}', notif_type=NOTIF_POST,
+                                created_at=utcnow() - timedelta(hours=1), targets={'post_id': onion.post.id}))
+    db.session.commit()
+    sent = {}
+    with patch('app.cli.send_email', lambda *a, **k: sent.update({k['recipients'][0]: k['html_body']})):
+        cli.register(current_app)
+        current_app.test_cli_runner().invoke(args=['send_missed_notifs'])
+    assert sent == {}
+
+
+def test_an_onion_accounts_email_keeps_them(app, onion):
+    bob = onion.onion_bob
+    bob.email_unread, bob.email_unread_sent, bob.email = True, False, 'onionbob@example.com'
+    bob.last_seen = utcnow() - timedelta(days=2)
+    db.session.add(Notification(user_id=bob.id, title='ONIONTITLE', url=f'/post/{onion.post.id}', notif_type=NOTIF_POST,
+                                created_at=utcnow() - timedelta(hours=1), targets={'post_id': onion.post.id}))
+    db.session.commit()
+    sent = {}
+    with patch('app.cli.send_email', lambda *a, **k: sent.update({k['recipients'][0]: k['text_body']})):
+        cli.register(current_app)
+        current_app.test_cli_runner().invoke(args=['send_missed_notifs'])
+    assert 'ONIONTITLE' in sent['onionbob@example.com']
+
