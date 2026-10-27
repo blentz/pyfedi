@@ -62,7 +62,7 @@ from app.utils import user_banned_from_community, back, render_template, markdow
 from app.rss_extras import RSSFeed
 import app.api.alpha.views as alpha_views
 from app.utils import user_filters_languages
-from app.hidden_routes import notification_hidden, off_this_host, path_hidden_here
+from app.hidden_routes import hidden_notifications, notification_hidden, off_this_host, path_hidden_here
 from app.local_names import local_clause, local_named, named_by_actor, notification_href
 from app.storefront import current_storefront, domain_for_host, hosted_instance_ids, is_local_host, path_name, storefront_query_cache_key, \
     storefront_url
@@ -1379,9 +1379,13 @@ def notifications():
             except ValueError:
                 current_filter = ''
 
-    notification_list = notification_list.order_by(desc(Notification.created_at)).limit(50)
+    notification_list = notification_list.order_by(desc(Notification.created_at)).limit(50).all()
+    # which are about something hidden here, for the page at once: one query per model (follow-up F6, N-m4)
+    hidden_ids = {notification.id for notification, hidden in
+                  zip(notification_list, hidden_notifications(notification_list)) if hidden}
 
     return render_template('user/notifications.html', title=_('Notifications'), notifications=notification_list,
+                           hidden_notification_ids=hidden_ids,
                            notification_types=notification_types, has_notifications=has_notifications, unread=unread,
                            user=current_user, notification_links=notification_links, current_filter=current_filter,
                            site=g.site, markdown_to_html=markdown_to_html,

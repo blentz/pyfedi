@@ -408,6 +408,12 @@ def one_here(query, model):
     return without_hidden_here(query, model, True).one()
 
 
+def hidden_default_domain() -> bool:
+    """Whether this storefront hides the default domain's local-only rows: the default domain does not federate and
+    this storefront is another."""
+    return _hidden_domains(True)[1]
+
+
 def hides_anything_here() -> bool:
     """Whether this storefront hides any local-only domain's accounts, communities or content from a signed-in reader:
     on a storefront that federates, whenever some domain does not; on a local-only one, whenever another does not."""

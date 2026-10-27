@@ -6,11 +6,13 @@ On the first domain a signed-in user and an admin alike get the 404 a name nobod
 communities, posts and replies, and every list and search leaves them out. On the onion the same viewers see them all.
 The first domain's own rows are the control."""
 import re
+from collections import Counter
 from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
 from flask import render_template
+from sqlalchemy import event
 from werkzeug.exceptions import NotFound
 
 from app import db
@@ -19,7 +21,8 @@ from app.local_only import content_local_only
 from app.models import CommunityMember, Domain, File, Notification, Post, PostBookmark, PostReplyBookmark, PostVote, \
     Report, Role, Topic, UserRegistration, read_posts, user_file, utcnow
 from tests.factories import grant_permission, make_post, make_post_reply
-from app.hidden_routes import notification_hidden
+import app.hidden_routes as hidden_routes
+from app.hidden_routes import hidden_notifications, notification_hidden
 from app.post.routes import refuse_invisible_unless_moderating
 from tests.test_hidden_here import reply_chain
 from tests.test_per_domain_html_routes import Visitor
@@ -743,3 +746,80 @@ def test_a_report_by_an_onion_account_shows_its_reporter_as_the_note_on_the_firs
     with onion_request(app):
         html = render_template(f'admin/reports/{template}.html', report=report)
     assert f'href="/user/{onion.onion_bob.id}"' in html
+
+
+# --- a page of notifications is checked in one query per model (round 3, N-m4) --------------------------------------
+
+def many_notices(onion, count):
+    """`count` notifications of the kinds a page holds, each about a post of its own: half the onion's, half the
+    first domain's."""
+    made = []
+    for index in range(count):
+        about_onion = index % 2 == 0
+        community, author = (onion.onion_art, onion.onion_bob) if about_onion else (onion.first_art, onion.first_bob)
+        post = stamped(make_post(community, author, f'https://{FIRST}/post/many-{len(made)}-{utcnow().timestamp()}',
+                                 title=f'TITLE{index}'), author, community)
+        made.append(notice(onion.first_bob, (0, 3, 13, 20)[index % 4], f'/post/{post.id}', subtype='post_reported',
+                           post_id=post.id, post_title=f'TITLE{index}', author_user_name='bob', author_id=author.id,
+                           community_id=community.id, community_name='art'))
+    return made
+
+
+class Queries(list):
+    def __call__(self, connection, cursor, statement, *args, **kwargs):
+        self.append(' '.join(statement.split())[:90])
+
+
+def queries_in(call):
+    """The SQL statements `call` runs."""
+    statements = Queries()
+    event.listen(db.engine, 'before_cursor_execute', statements)
+    try:
+        call()
+    finally:
+        event.remove(db.engine, 'before_cursor_execute', statements)
+    return statements
+
+
+def test_checking_notifications_costs_the_same_queries_for_any_number_of_them(app, onion):
+    few, many = many_notices(onion, 4), many_notices(onion, 16)
+    def loaded(notifications):   # as a page's one query loads them; nothing else of theirs in the session
+        db.session.expire_all()
+        return Notification.query.filter(Notification.id.in_([n.id for n in notifications])).order_by(
+            Notification.id).all()
+    with default_request(app):
+        few_rows = loaded(few)
+        cost_few = queries_in(lambda: hidden_notifications(few_rows))
+        many_rows = loaded(many)
+        cost_many = queries_in(lambda: hidden_notifications(many_rows))
+        assert hidden_notifications(few) == [True, False, True, False]
+    assert len(cost_few) == len(cost_many), Counter(cost_many) - Counter(cost_few)
+    ours = [statement for statement in cost_few if not statement.startswith('SELECT site_domain')]
+    assert len(ours) <= 8, ours   # two per model at most: posts, replies, users, communities
+
+
+def test_the_notification_page_costs_the_same_queries_for_any_number_of_them(app, onion):
+    """domain_rows() is memoized in production and not under the tests' null cache, so its reads are left out."""
+    viewer = Visitor(app, onion.first_bob, FIRST)
+
+    def cost():
+        viewer.get('/notifications')   # first, so what a visit writes (the unread count) is written already
+        db.session.expire_all()   # nothing of the page's rows already in the session: each is read as in production
+        return [statement for statement in queries_in(lambda: viewer.get('/notifications'))
+                if not statement.startswith('SELECT site_domain')]
+    many_notices(onion, 4)
+    cost_few = cost()
+    many_notices(onion, 12)
+    cost_many = cost()
+    assert len(cost_few) == len(cost_many), Counter(cost_many) - Counter(cost_few)
+
+
+def test_the_apis_notification_list_costs_the_same_hidden_checks_for_any_number_of_them(app, onion, monkeypatch):
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    calls = []
+    real = hidden_routes.hidden_notifications
+    monkeypatch.setattr('app.api.alpha.utils.user.hidden_notifications',
+                        lambda items: calls.append(len(list(items))) or real(items))
+    many_notices(onion, 6)
+    api(app, '/api/alpha/user/notifications?status=All&limit=50', onion.first_bob)
+    assert calls == [6]   # one batched call for the page, never one per notification

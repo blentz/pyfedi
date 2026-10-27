@@ -16,7 +16,7 @@ from app.api.alpha.views import user_view, reply_view, post_view, community_view
 # find_user is defined (import cycle: app.auth.util)
 import app.auth.util as auth_util
 from app.api.alpha.utils.found import a_community, a_person
-from app.hidden_routes import notification_hidden
+from app.hidden_routes import hidden_notifications
 from app.local_names import local_clause, local_named
 from app.local_only import without_hidden_conversations, without_hidden_here, without_local_only_actors
 from app.constants import *
@@ -158,7 +158,7 @@ def get_user_unread_count(auth):
     if unread_notifications > 0:
         # counted from the rows, so a notification or message about something hidden here counts nowhere (F6)
         rows = Notification.query.filter_by(user_id=user.id, read=False).all()
-        unread = [n for n in rows if not notification_hidden(n)]
+        unread = [n for n, hidden in zip(rows, hidden_notifications(rows)) if not hidden]
 
         def counted(notif_type, subtype):
             return sum(1 for n in unread if n.notif_type == notif_type and n.subtype == subtype)
@@ -676,7 +676,8 @@ def get_user_notifications(auth, data):
         paginate(page=page, per_page=limit, error_out=False)
 
     # none about something hidden here: its row would name it (follow-up F6)
-    shown = [item for item in user_notifications if not notification_hidden(item)]
+    on_page = list(user_notifications)
+    shown = [item for item, hidden in zip(on_page, hidden_notifications(on_page)) if not hidden]   # a query per model
 
     # currently supported notif types
     supported_notif_types = [
