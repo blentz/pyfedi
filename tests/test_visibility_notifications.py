@@ -82,7 +82,7 @@ def test_followers_only_post_in_a_followed_topic_notifies_a_follower_but_not_a_s
 
 def test_followers_only_post_in_a_followed_feed_notifies_a_follower_but_not_a_stranger(world):
     w = world
-    feed = make_feed(w.author.instance, 'newsfeed', local=True)
+    feed = make_feed(w.author.instance, 'newsfeed', public=True, local=True)   # a private one notifies non-members of nothing
     make_feed_item(feed, w.community)
     for user in (w.follower, w.stranger, w.pending):
         make_notification_subscription(user, feed.id, NOTIF_FEED)
