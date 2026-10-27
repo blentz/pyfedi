@@ -1,5 +1,7 @@
 """Follow-up F5: every way `resolve_object` can return a post, reply, community, user or feed applies the viewer gate
 the matching page applies, and a thing the caller may not see is answered exactly as one that does not exist."""
+import inspect
+
 import pytest
 from flask import g
 
@@ -9,7 +11,7 @@ from app.api.alpha.utils.misc import get_resolve_object
 from app.constants import POST_STATUS_DRAFT, VISIBILITY_FOLLOWERS
 from app.models import CommunityMember, Post, Site
 from app.storefront import domain_for_host
-from tests.factories import make_instance, make_local_feed, make_post, make_post_reply, make_user
+from tests.factories import make_community, make_instance, make_local_feed, make_post, make_post_reply, make_user
 from tests.test_local_only_invisible import _post, world  # noqa: F401
 from tests.two_domains import request_on
 
@@ -281,6 +283,67 @@ def _get(app, user, url):
                                  headers={'Authorization': f'Bearer {user.encode_jwt_token()}'})
 
 
+def _onion(post_or_reply):
+    post_or_reply.local_only = True
+
+
+def _refused_cases(app, world):
+    """(kind, why) -> the url of a stored object this caller may not open, for every kind of object."""
+    onion = domain_for_host('abc.onion')
+    peer = make_instance('peer.example')
+    pat = make_user(peer, 'pat')
+
+    followers = make_post(world.clearnet, pat, 'https://peer.example/post/1')
+    followers.visibility = VISIBILITY_FOLLOWERS
+    onion_post = make_post(world.hidden, pat, 'https://peer.example/post/2')
+    onion_post.local_only = True
+    private_community = make_community('closed', host=app.config['SERVER_NAME'])
+    private_community.private = True
+    private_post = make_post(private_community, pat, 'https://peer.example/post/3')
+    private_reply = make_post_reply(private_post, pat)
+    private_reply.ap_id = 'https://peer.example/comment/3'
+    onion_reply = make_post_reply(onion_post, pat)
+    onion_reply.ap_id = 'https://peer.example/comment/4'
+    onion_reply.local_only = True
+    banned = make_user(None, 'banned', local=True)
+    banned.banned = True
+    banned.ap_profile_id = f"{app.config['SERVER_URL']}/u/banned"
+    closed_feed = make_local_feed('closed', public=False)
+    onion_feed = make_local_feed('onionfeed', public=True, domain=onion, user=world.onionite)
+    db.session.commit()
+    return {
+        ('post', 'followers-only'): followers.ap_id, ('post', 'onion'): onion_post.ap_id,
+        ('reply', 'private'): private_reply.ap_id, ('reply', 'onion'): onion_reply.ap_id,
+        ('user', 'banned'): banned.ap_profile_id, ('user', 'onion'): world.onionite.ap_profile_id,
+        ('community', 'private'): private_community.ap_profile_id,
+        ('community', 'onion'): world.hidden.ap_profile_id,
+        ('feed', 'private'): closed_feed.ap_profile_id, ('feed', 'onion'): onion_feed.ap_profile_id,
+    }
+
+
+MISSING_BY_KIND = {'post': '/post/424242', 'reply': '/comment/424242', 'user': '/u/ghost',
+                   'community': '/c/ghost', 'feed': '/f/ghost'}
+
+
+def _answer(response):
+    """Everything the caller can read of an answer but the clock."""
+    return response.status_code, response.get_data(), {k: v for k, v in response.headers.items() if k != 'Date'}
+
+
+@pytest.mark.parametrize('kind,why', [('post', 'followers-only'), ('post', 'onion'), ('reply', 'private'),
+                                      ('reply', 'onion'), ('user', 'banned'), ('user', 'onion'),
+                                      ('community', 'private'), ('community', 'onion'),
+                                      ('feed', 'private'), ('feed', 'onion')])
+def test_a_refused_object_is_answered_byte_for_byte_as_a_missing_one(app, world, monkeypatch, kind, why):
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    url = _refused_cases(app, world)[(kind, why)]
+    user = caller()
+    hidden = _get(app, user, url)
+    missing = _get(app, user, f"{app.config['SERVER_URL']}{MISSING_BY_KIND[kind]}")
+    assert _answer(hidden)[0] == 400 and b'No object found.' in hidden.get_data()
+    assert _answer(hidden) == _answer(missing)
+
+
 @pytest.mark.parametrize('hide', HIDDEN)
 def test_a_hidden_post_is_answered_byte_for_byte_as_a_missing_one(app, world, monkeypatch, hide):
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
@@ -288,20 +351,7 @@ def test_a_hidden_post_is_answered_byte_for_byte_as_a_missing_one(app, world, mo
     hide(post, world)
     db.session.commit()
     user = caller()
-    hidden = _get(app, user, post.ap_id)
-    missing = _get(app, user, f"https://{app.config['SERVER_NAME']}/post/424242")
-    assert hidden.status_code == missing.status_code == 400
-    assert hidden.get_data() == missing.get_data()
-    assert b'No object found.' in hidden.get_data()
-
-
-def test_a_private_feed_is_answered_as_a_missing_one(app, world, monkeypatch):
-    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
-    feed = make_local_feed('closed', public=False)
-    user = caller()
-    hidden = _get(app, user, feed_url(feed))
-    missing = _get(app, user, f"https://{app.config['SERVER_NAME']}/post/424242")
-    assert hidden.status_code == missing.status_code and hidden.get_data() == missing.get_data()
+    assert _answer(_get(app, user, post.ap_id)) == _answer(_get(app, user, f"{app.config['SERVER_URL']}/post/424242"))
 
 
 # ---- the protocol handler ------------------------------------------------------------------------------------------
@@ -411,5 +461,4 @@ def test_a_banned_account_the_reply_mentions_does_not_stop_it_resolving(world, p
 
 
 def test_the_not_found_text_is_one_shared_value():
-    import inspect
     assert inspect.getsource(misc).count("'No object found.'") == 1 and misc.NOT_FOUND == 'No object found.'
