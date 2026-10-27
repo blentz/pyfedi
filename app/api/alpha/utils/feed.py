@@ -14,7 +14,7 @@ from app.models import User, Feed, FeedItem, Community
 import app.shared.feed as shared_feed
 from app.utils import authorise_api_user, blocked_communities, blocked_or_banned_instances, filtered_out_communities, \
     communities_banned_from, moderating_communities_ids, joined_or_modding_communities, feed_tree_public, feed_tree, \
-    feed_readable_by, subscribed_feeds
+    feed_membership, feed_readable_by, subscribed_feeds
 
 
 def get_feed_list(auth, data, user_id=None) -> dict:
@@ -156,8 +156,10 @@ def post_feed_follow(auth, data):
     # Fact 478 again: the same question asked at two ends, guarded at one.
     # Leaving is not gated -- somebody who is already a member may always get
     # out, including of a feed that has since been made private.
-    if follow and not (feed.public or feed.user_id == user.id):
-        raise Exception('access_denied')
+    # A feed the caller may not read answers as one nobody holds, joining or leaving (per-domain feeds Task 7, review
+    # I2: `access_denied` told which ids are private feeds); one it still holds a membership row of it may leave.
+    if not feed_readable_by(feed, user.id) and (follow or feed_membership(user, feed) == SUBSCRIPTION_NONMEMBER):
+        raise Exception('could not find feed')
 
     if follow:
         shared_feed.join_feed(feed.link(), user.id, SRC_API)
@@ -227,7 +229,8 @@ def put_feed(auth, data):
     # which feed ids are the owner's
     user = authorise_api_user(auth, return_type='model')
     if not (feed.user_id == user.id or user.is_admin()):
-        raise Exception('incorrect_login')
+        # one the caller may not read is as one nobody holds (review I2); a feed it can see is just not its to edit
+        raise Exception('incorrect_login' if feed_readable_by(feed, user.id) else 'not_found')
 
     url = data['url'] if 'url' in data else feed.name
     title = data['title'] if 'title' in data else feed.title

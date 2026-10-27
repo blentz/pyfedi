@@ -97,7 +97,7 @@ def test_a_stranger_may_not_follow_a_private_feed(app, env):
         post_feed_follow(token(stranger), {'feed_id': private.id,
                                            'follow': True})
 
-    assert str(refused.value) == 'access_denied'
+    assert str(refused.value) == 'could not find feed'   # as for a missing id (per-domain feeds Task 7, review I2)
     assert FeedMember.query.filter_by(user_id=stranger.id,
                                       feed_id=private.id).first() is None
 
