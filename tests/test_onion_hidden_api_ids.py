@@ -7,8 +7,8 @@ from sqlalchemy.exc import NoResultFound
 from app import db
 from app.api.alpha.views import user_view
 from app.local_only import found_here, hidden_report_clause, prime_reporters, reporter_hidden_here
-from app.models import ChatMessage, CommunityBan, CommunityMember, Conversation, Post, Notification, PostReply, Report, User, UserBlock, \
-    UserFlair, UserFollower, UserNote, UserRegistration, read_posts
+from app.models import ChatMessage, CommunityBan, CommunityFlair, CommunityMember, Conversation, Post, Notification, \
+    PostReply, Report, User, UserBlock, UserFlair, UserFollower, UserNote, UserRegistration, read_posts
 from tests.conftest import forget_login
 from tests.factories import grant_permission, make_post_reply
 from tests.test_hidden_routes import talking  # noqa: F401 -- a fixture
@@ -454,7 +454,8 @@ def test_the_report_clause_tests_each_reports_own_targets(app, reports):
     assert hidden == {report.id for report in reports.reports[:3]}
 
 
-REPORTERS = {LISTS[0]: 'app.api.alpha.utils.post.prime_reporters', LISTS[1]: 'app.api.alpha.utils.reply.prime_reporters',
+REPORTERS = {LISTS[0]: 'app.api.alpha.utils.post.prime_reporters',
+             LISTS[1]: 'app.api.alpha.utils.reply.prime_reporters',
              LISTS[2]: 'app.api.alpha.utils.private_message.prime_reporters',
              LISTS[3]: 'app.api.alpha.utils.private_message.prime_reporters'}
 
@@ -475,3 +476,20 @@ def test_primed_reporters_cost_no_query_each(app, reported_by_onion):
         prime_reporters(rows)
         cost = queries_in(lambda: [reporter_hidden_here(report) for report in rows])
     assert [statement for statement in cost if not statement.startswith('SELECT site_domain')] == []   # cached
+
+
+@pytest.mark.parametrize('method, path', [('PUT', '/api/alpha/community/flair'),
+                                          ('POST', '/api/alpha/community/flair/delete')])
+def test_editing_or_deleting_an_onion_communitys_flair_answers_as_a_flair_nobody_holds(app, alpha, method, path):
+    """m8: a clearnet admin could edit or delete an onion community's flair, and anyone could tell its id from a
+    missing one."""
+    flair = CommunityFlair(community_id=alpha.onion_art.id, flair='ONIONFLAIR')
+    db.session.add(flair)
+    db.session.commit()
+    for viewer in (alpha.admin, alpha.first_bob):
+        found = call(app, viewer, method, path, {'flair_id': flair.id, 'flair_title': 'PROBE'})
+        absent = call(app, viewer, method, path, {'flair_id': NOBODY, 'flair_title': 'PROBE'})
+        assert (found.status_code, found.get_data()) == \
+            (absent.status_code, absent.get_data().replace(str(NOBODY).encode(), str(flair.id).encode()))
+    db.session.expire_all()
+    assert db.session.get(CommunityFlair, flair.id).flair == 'ONIONFLAIR'   # neither edited nor deleted

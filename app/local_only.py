@@ -392,15 +392,18 @@ def _row_hidden_here(row) -> bool:
         return message_hidden_here(row)
     if isinstance(row, models.Report):
         return report_hidden_here(row)
+    if isinstance(row, models.CommunityFlair):   # with its community (re-review 2, m8)
+        community = db.session.get(models.Community, row.community_id) if row.community_id else None
+        return community is not None and hidden_here(community, True)
     return hidden_here(row, True)
 
 
 def found_here(model, id_):
     """The `model` row `id_` names, or None: for an id nobody holds and for a row hidden here alike, so a lookup by an
     id a caller sent (a JSON body, a form field, a query string) answers both one way (follow-up F6). `model` is User,
-    Community, Post, PostReply, Conversation, ChatMessage or Report; a conversation, a message or a report is hidden
-    with its member or its target. Only the storefront's part of the rule is asked (`signed_in=True`). An id that is
-    not a whole number in Postgres's range names nothing."""
+    Community, Post, PostReply, Conversation, ChatMessage, Report or CommunityFlair; a conversation, a message, a report
+    or a flair is hidden with its member, its target or its community. Only the storefront's part of the rule is asked
+    (`signed_in=True`). An id that is not a whole number in Postgres's range names nothing."""
     try:
         id_ = int(id_)
     except (TypeError, ValueError):
