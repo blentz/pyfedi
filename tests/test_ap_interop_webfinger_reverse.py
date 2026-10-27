@@ -568,7 +568,7 @@ def test_search_for_feed_reverse_looks_up_the_feed_handle_with_its_tilde(stored_
     serve_actor(http_mock, feed_document(FEED, 'news'))
     reverse = serve_webfinger(http_mock, 'social.example', FEED)
 
-    search_for_feed('~news@alias.example')
+    search_for_feed('~news@alias.example', signed_in=True)
 
     assert stored_as == [(FEED, 'news', 'social.example')]
     assert reverse.calls.last.request.url.params['resource'] == 'acct:~news@social.example'
@@ -579,7 +579,7 @@ def test_search_for_feed_refuses_an_alias_the_reverse_lookup_does_not_confirm(st
     serve_actor(http_mock, feed_document(FEED, 'news'))
     serve_webfinger(http_mock, 'social.example', 'https://social.example/f/other')
 
-    assert search_for_feed('~news@alias.example') is None
+    assert search_for_feed('~news@alias.example', signed_in=True) is None
     assert stored_as == []
 
 
@@ -649,10 +649,15 @@ def test_host_meta_json_is_cached_like_the_xml_route():
     assert activitypub_routes.host_meta_json.cache_timeout == activitypub_routes.host_meta.cache_timeout == 600
 
 
+def search_for_a_feed(address):
+    """`search_for_feed` as a signed-in reader asks it, so the three searches take one argument alike."""
+    return search_for_feed(address, signed_in=True)
+
+
 @pytest.mark.parametrize('search, address, actor_id, name, kind', [
     (search_for_user, 'alice@alias.example', ALICE, 'alice', 'Person'),
     (search_for_community, '!memes@alias.example', GROUP, 'memes', 'Group'),
-    (search_for_feed, '~news@alias.example', FEED, 'news', 'Feed'),
+    (search_for_a_feed, '~news@alias.example', FEED, 'news', 'Feed'),
 ])
 def test_each_search_stores_the_origin_document_not_the_alias_copy(stored_as, http_mock, search, address,
                                                                      actor_id, name, kind):
@@ -668,7 +673,7 @@ def test_each_search_stores_the_origin_document_not_the_alias_copy(stored_as, ht
 @pytest.mark.parametrize('search, address, actor_id, kind', [
     (search_for_user, 'alice@alias.example', ALICE, 'Person'),
     (search_for_community, '!memes@alias.example', GROUP, 'Group'),
-    (search_for_feed, '~news@alias.example', FEED, 'Feed'),
+    (search_for_a_feed, '~news@alias.example', FEED, 'Feed'),
 ])
 def test_each_search_stores_nothing_when_the_origin_refetch_fails(stored_as, http_mock, search, address, actor_id,
                                                                     kind):
@@ -685,7 +690,7 @@ def test_each_search_stores_nothing_when_the_origin_refetch_fails(stored_as, htt
 @pytest.mark.parametrize('search, address, actor_id, kind', [
     (search_for_user, 'alice@alias.example', 'https://banned.example/users/alice', 'Person'),
     (search_for_community, '!memes@alias.example', 'https://banned.example/c/memes', 'Group'),
-    (search_for_feed, '~news@alias.example', 'https://banned.example/f/news', 'Feed'),
+    (search_for_a_feed, '~news@alias.example', 'https://banned.example/f/news', 'Feed'),
 ])
 def test_no_search_fetches_a_self_link_on_a_banned_instance(stored_as, http_mock, search, address, actor_id, kind):
     """C1 residual R1 item 2: the self link's host is gated before the fetch, not only the id's host after it."""

@@ -471,6 +471,11 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
             if src == SRC_API:
                 raise Exception('feed_has_subscribers')
             abort(400)
+        # a feed name is unique on the feed's domain: refuse a taken one here, before anything is assigned, not as an
+        # IntegrityError at commit (D681). The web form refuses it first (EditFeedForm.validate).
+        if db.session.query(Feed).filter(local_named(Feed, url, feed.home_domain()), Feed.id != feed.id).first() \
+                is not None:
+            raise Exception('A feed with that url already exists')
         # D1371. `feed.name` is half of a local feed's ActivityPub identity -- every
         # one of these five URLs is built from it at creation -- and renaming used to
         # change the name alone, so after any edit the feed's name and its identity

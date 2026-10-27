@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from flask_babel import lazy_gettext as _l
 from flask_login import current_user
 from flask_wtf import FlaskForm
@@ -99,6 +101,14 @@ class EditFeedForm(FlaskForm):
                 return False
             else:
                 if not apply_feed_url_rules(self):
+                    return False
+                # apply_feed_url_rules compares the url as typed, but edit_feed stores it slugified: 'news_' is 'news'
+                # (D681, as AddCopyFeedForm checks it). Checked on the feed's own domain, the feed itself aside.
+                owner = SimpleNamespace(user_name=getattr(self, 'owner_user_name', current_user.user_name))
+                name = shared_feed.feed_machine_name(self.url.data, self.public.data, owner)
+                domain = self.feed_domain or current_user.home_domain()
+                if Feed.query.filter(local_named(Feed, name, domain), Feed.id != self.feed_id).first() is not None:
+                    self.url.errors.append(_l('A Feed with this url already exists.'))
                     return False
 
         input_communities = self.communities.data.strip().split('\n')

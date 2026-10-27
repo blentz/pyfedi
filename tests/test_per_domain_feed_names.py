@@ -168,6 +168,57 @@ def test_a_rename_is_checked_on_the_feeds_own_domain(app, three_domains):
     assert feed.name == 'news' and feed.site_domain_id == d.shop.id
 
 
+def renamed_columns(feed_id):
+    db.session.expire_all()
+    feed = db.session.get(Feed, feed_id)
+    return {column: getattr(feed, column) for column in ('name', 'machine_name', 'title', 'ap_profile_id', 'ap_public_url',
+                                                         'ap_outbox_url', 'ap_domain', 'site_domain_id')}
+
+
+def api_put(app, user, host=SHOP, **body):
+    forget_login()
+    return app.test_client().put('/api/alpha/feed', base_url=f'https://{host}', json=body,
+                                 headers={'Authorization': f'Bearer {user.encode_jwt_token()}'})
+
+
+@pytest.mark.parametrize('url', ['news', 'News', 'news_', 'news-'])
+def test_an_api_rename_to_a_name_its_domain_holds_is_a_400(app, alpha, three_domains, api_site, url):
+    """Review I1: a rename collision was an IntegrityError at commit, a 500. It is refused before anything changes."""
+    d = three_domains
+    shopper = d.account('shopper', d.shop)
+    d.local_feed('news', d.shop, shopper)
+    feed = d.local_feed('oldname', d.shop, shopper)
+    before = renamed_columns(feed.id)
+    response = api_put(app, shopper, feed_id=feed.id, url=url, title='Renamed')
+    assert response.status_code == 400 and b'A feed with that url already exists' in response.data
+    assert renamed_columns(feed.id) == before
+
+
+def test_an_api_rename_to_a_name_another_domain_holds_succeeds(app, alpha, three_domains, api_site):
+    d = three_domains
+    shopper = d.account('shopper', d.shop)
+    d.local_feed('news', d.first, d.account('firster', d.first))
+    feed = d.local_feed('oldname', d.shop, shopper)
+    response = api_put(app, shopper, host=FIRST, feed_id=feed.id, url='News', title='News')
+    assert response.status_code == 200, response.data
+    assert renamed_columns(feed.id)['name'] == 'news' and renamed_columns(feed.id)['site_domain_id'] == d.shop.id
+
+
+@pytest.mark.parametrize('url, error', [('News', 'A Feed with this url already exists.'),
+                                        ('news_', 'A Feed with this url already exists.'),
+                                        ('news__', 'A Feed with this url already exists.'),
+                                        ('news-', '- cannot be in Url. Use _ instead?')])
+def test_a_web_rename_to_a_name_its_domain_holds_shows_the_form_again(app, three_domains, url, error):
+    """Review I1: the edit form checks the slug edit_feed stores, so `news_` is `news` and a form error, not a 500."""
+    d = three_domains
+    shopper = d.account('shopper', d.shop)
+    d.local_feed('news', d.shop, shopper)
+    feed = d.local_feed('oldname', d.shop, shopper)
+    before = renamed_columns(feed.id)
+    assert url_errors(app, shopper, f'/feed/{feed.id}/edit', url=url, title='Renamed') == [error]
+    assert renamed_columns(feed.id) == before
+
+
 def test_a_feed_keeps_its_own_name_when_edited(app, three_domains):
     d = three_domains
     shopper = d.account('shopper', d.shop)
@@ -292,6 +343,18 @@ def test_resolve_object_never_returns_an_onion_feed_off_the_onion(app, alpha, ne
         assert MISSING.encode() in hidden.data
 
 
+@pytest.mark.parametrize('query, missing', [(f'https://{SHOP}/f/privatefeed', f'https://{SHOP}/f/nosuchfeed'),
+                                            (f'https://{SHOP}:443/f/privatefeed', f'https://{SHOP}:443/f/nosuchfeed'),
+                                            (f'~privatefeed@{SHOP}', f'~nosuchfeed@{SHOP}')])
+def test_resolve_object_answers_a_private_feed_as_a_missing_one(app, alpha, news, three_domains, query, missing):
+    """Review M5: a private feed, to a reader who is not its owner, is as unknown as a feed nobody holds."""
+    reader = three_domains.account('stranger', three_domains.shop)
+    hidden, nobody = api(app, '/resolve_object', SHOP, reader, q=query), api(app, '/resolve_object', SHOP, reader,
+                                                                             q=missing)
+    assert hidden.status_code == 400, hidden.data
+    assert (hidden.status_code, hidden.data) == (nobody.status_code, nobody.data)
+
+
 def test_resolve_object_finds_an_onion_feed_on_the_onion(app, news, three_domains):
     """The positive control: a signed-in onion reader resolves it by every spelling."""
     with request_on(app, three_domains.onion):
@@ -304,7 +367,8 @@ def test_resolve_object_finds_an_onion_feed_on_the_onion(app, news, three_domain
                                              (f'https://{FIRST}/f/news@{SHOP}', 'shop'),
                                              # not the stored ap_profile_id: read by its path, on the URL's domain
                                              (f'https://{SHOP}:443/f/news', 'shop'),
-                                             (f'https://{FIRST}:443/f/news', 'first')])
+                                             (f'https://{FIRST}:443/f/news', 'first'),
+                                             (f'https://{SHOP}:8443/f/news', 'shop')])   # review M2: any port
 @pytest.mark.parametrize('host', [FIRST, SHOP])
 def test_resolve_object_by_url_names_the_urls_domain(app, alpha, news, three_domains, query, expected, host):
     reader = three_domains.account(f'reader{host.split(".")[0]}', three_domains.first)

@@ -47,12 +47,11 @@ def feeds_for_form_children(feeds, current_feed: int, depth: int) -> List[Tuple[
     return result
 
 
-def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False, signed_in: bool = True):
+def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False, *, signed_in: bool):
     """The feed `~name@server` names: one of ours on that hosted domain (never fetched), else the stored remote feed,
     else, with `allow_fetch`, the one WebFinger finds. Never one this storefront hides from its reader
-    (`feed_shown_here`), who is signed in when `signed_in` says so. The API passes its caller's (Task 7 review M5);
-    the default is a signed-in reader, as the web callers are (login required), and a worker reads as one on the
-    default domain."""
+    (`feed_shown_here`), who is signed in when `signed_in` says so. Every caller says (Task 7 review M5, Task 9
+    review M4): the API its caller's, a page its session's, a worker True (the default domain's signed-in reader)."""
     if address.startswith('~'):
         # Exactly two parts, or the address is not one: '~a@b@c' used to raise
         # ValueError out of this unpacking, and feed_add_remote's first arm

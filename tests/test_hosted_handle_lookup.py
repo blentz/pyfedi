@@ -67,7 +67,7 @@ def test_a_community_on_a_hosted_domain_is_found_locally_and_never_fetched(app, 
 
 
 def test_a_feed_on_a_hosted_domain_is_never_fetched(app, world, requests):
-    assert search_for_feed('~nothing@abc.onion') is None
+    assert search_for_feed('~nothing@abc.onion', signed_in=True) is None
     assert requests == []
 
 

@@ -17,8 +17,8 @@ from app.community.util import search_for_community
 from app.discovery.podcast import PODCAST_DROP, podcast_route_for, podcast_twin_named_by_other
 from app.models import Post, PostReply, User, Community, BannedInstances, Feed, ModLog
 from app.post.util import post_refusal
-from app.storefront import current_storefront, default_domain, domain_authority, domain_for_host, domain_of_url, \
-    is_local_host, link_host
+from app.storefront import current_storefront, default_domain, domain_authority, domain_for_host, is_local_host, \
+    link_host
 from app.user.utils import search_for_user
 from app.feed_domains import feed_shown_here
 from app.local_only import hidden_here, without_local_only_actors
@@ -409,7 +409,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             feed_name = "~" + matches.group(1)
 
             if "@" not in feed_name:   # a bare `/f/name` is on the domain the URL is on, as `/u/` and `/c/` are
-                feed_name = feed_name + "@" + link_host(domain_of_url(query) or current_storefront())
+                feed_name = feed_name + "@" + link_host(domain_for_host(server) or current_storefront())
 
             object = search_for_feed(feed_name, allow_fetch=bool(user_id), signed_in=user_id is not None)
 

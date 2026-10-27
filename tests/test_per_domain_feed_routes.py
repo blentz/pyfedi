@@ -226,9 +226,9 @@ def test_lookup_redirects_a_hosted_feed_to_its_path_name(app, three_domains, new
 
 def test_search_for_feed_finds_each_hosted_domains_own_row(app, three_domains, news, no_http):  # noqa: F811
     first_feed, shop_feed = news
-    assert search_for_feed('~news@shop.example').id == shop_feed.id
-    assert search_for_feed(f'~news@{FIRST}').id == first_feed.id
-    assert search_for_feed('~nothing@shop.example') is None
+    assert search_for_feed('~news@shop.example', signed_in=True).id == shop_feed.id
+    assert search_for_feed(f'~news@{FIRST}', signed_in=True).id == first_feed.id
+    assert search_for_feed('~nothing@shop.example', signed_in=True) is None
     assert no_http == []
 
 

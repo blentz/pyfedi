@@ -183,11 +183,11 @@ def test_a_profile_off_the_onion_never_lists_a_feed_filed_on_the_onion(app, worl
 
 def test_search_for_an_onion_feed_off_the_onion_finds_nothing(app, world, no_http):  # noqa: F811
     with request_on(app, world.d.first):
-        assert search_for_feed(f'~onionfeed@{ONION}') is None
-        assert search_for_feed(f'~legacyfeed@{FIRST}') is None
-        assert search_for_feed(f'~firstfeed@{FIRST}').id == world.first_feed.id
+        assert search_for_feed(f'~onionfeed@{ONION}', signed_in=True) is None
+        assert search_for_feed(f'~legacyfeed@{FIRST}', signed_in=True) is None
+        assert search_for_feed(f'~firstfeed@{FIRST}', signed_in=True).id == world.first_feed.id
     with request_on(app, world.d.onion):
-        assert search_for_feed(f'~onionfeed@{ONION}').id == world.onion_feed.id
+        assert search_for_feed(f'~onionfeed@{ONION}', signed_in=True).id == world.onion_feed.id
     assert no_http == []
 
 

@@ -16,7 +16,7 @@ import pytest
 from flask import g
 
 from app import db
-from app.api.alpha.utils.feed import put_feed
+from app.api.alpha.utils.feed import get_feed, put_feed
 from app.models import Feed, FeedItem, FeedMember, Site, SiteDomain, User
 from app.storefront import clear_domain_cache
 from tests.factories import (make_community, make_community_member,
@@ -76,8 +76,6 @@ def env(app, api_baseline):
 def test_a_stranger_may_not_read_a_private_feed(app, env):
     """The end that was guarded. Measured: `PROBE bb1 outcome: Exception:
     access_denied`; since per-domain feeds Task 7 the missing feed's answer."""
-    from app.api.alpha.utils.feed import get_feed
-
     owner, stranger, public, private = env
 
     with pytest.raises(Exception) as refused:
@@ -177,8 +175,6 @@ def test_following_a_feed_that_does_not_exist(app, env):
 
 
 def test_a_feed_can_be_read_by_id(app, env):
-    from app.api.alpha.utils.feed import get_feed
-
     owner, stranger, public, private = env
 
     answer = get_feed(token(stranger), {'id': public.id})
@@ -187,8 +183,6 @@ def test_a_feed_can_be_read_by_id(app, env):
 
 
 def test_a_feed_can_be_read_by_name(app, env):
-    from app.api.alpha.utils.feed import get_feed
-
     owner, stranger, public, private = env
 
     answer = get_feed(token(stranger), {'name': 'publicfeed@test.piefed.local'})
@@ -200,8 +194,6 @@ def test_a_bare_feed_name_is_the_storefronts_own_feed(app, env):
     """D1174. `parts[1]` on a name carrying no `@` was `IndexError: list
     index out of range` (PROBE bb4). A bare name is now the request host's
     own feed (per-domain feeds, spec goal 11)."""
-    from app.api.alpha.utils.feed import get_feed
-
     owner, stranger, public, private = env
 
     with app.test_request_context('/'):
@@ -209,8 +201,6 @@ def test_a_bare_feed_name_is_the_storefronts_own_feed(app, env):
 
 
 def test_a_feed_name_with_two_at_signs_is_a_bad_request_not_a_crash(app, env):
-    from app.api.alpha.utils.feed import get_feed
-
     owner, stranger, public, private = env
 
     with pytest.raises(Exception) as refused:
@@ -220,8 +210,6 @@ def test_a_feed_name_with_two_at_signs_is_a_bad_request_not_a_crash(app, env):
 
 
 def test_asking_for_no_feed_at_all_is_a_bad_request(app, env):
-    from app.api.alpha.utils.feed import get_feed
-
     owner, stranger, public, private = env
 
     with pytest.raises(Exception) as refused:
@@ -231,8 +219,6 @@ def test_asking_for_no_feed_at_all_is_a_bad_request(app, env):
 
 
 def test_a_feed_that_does_not_exist_is_not_found(app, env):
-    from app.api.alpha.utils.feed import get_feed
-
     owner, stranger, public, private = env
 
     with pytest.raises(Exception) as refused:
@@ -242,8 +228,6 @@ def test_a_feed_that_does_not_exist_is_not_found(app, env):
 
 
 def test_the_owner_reads_their_own_private_feed(app, env):
-    from app.api.alpha.utils.feed import get_feed
-
     owner, stranger, public, private = env
 
     assert get_feed(token(owner), {'id': private.id})['id'] == private.id
@@ -252,16 +236,12 @@ def test_the_owner_reads_their_own_private_feed(app, env):
 def test_an_anonymous_reader_gets_the_public_feed(app, env):
     """`auth` is None for an unauthenticated call, and the blocked and
     subscribed lists are empty rather than looked up."""
-    from app.api.alpha.utils.feed import get_feed
-
     owner, stranger, public, private = env
 
     assert get_feed(None, {'id': public.id})['id'] == public.id
 
 
 def test_an_anonymous_reader_is_refused_a_private_feed(app, env):
-    from app.api.alpha.utils.feed import get_feed
-
     owner, stranger, public, private = env
 
     with pytest.raises(Exception) as refused:
