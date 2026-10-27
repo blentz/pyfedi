@@ -153,30 +153,41 @@ DROP FUNCTION IF EXISTS notification_target_id(json, text);
 DROP_FIRST_DRAFT = 'DROP FUNCTION IF EXISTS notification_names_local_only(notification, text)'
 
 # Existing notifications: only those the rule stamps are written, so a site where every domain federates writes none.
-# `default_host` is the default domain's host, which has no site_domain row on a site that never added one.
-BACKFILL = ('UPDATE notification SET local_only = true '
-            'WHERE NOT local_only AND notification_names_local_only(url, targets, author_id, :default_host)')
+# `default_host` is the default domain's host, which has no site_domain row on a site that never added one. One id
+# range per statement (re-review 4, M2): outside a transaction each batch commits on its own, so no lock is held long.
+BATCH = 10_000
+ANY_CLOSED = 'SELECT EXISTS (SELECT 1 FROM site_domain WHERE NOT federates)'
+BACKFILL = ('UPDATE notification SET local_only = true WHERE id >= :start AND id < :stop AND NOT local_only '
+            'AND notification_names_local_only(url, targets, author_id, :default_host)')
 
 
 def default_host() -> str:
     return (current_app.config.get('SERVER_NAME') or '').split(':')[0].strip('.').lower()
 
 
-def backfill(bind, host: str) -> None:
-    """Stamp the existing notifications on `bind` by the frozen rule, then drop it: the helpers live only as long as
-    the backfill."""
+def backfill(bind, host: str, batch: int = BATCH) -> None:
+    """Stamp the existing notifications on `bind` by the frozen rule, `batch` ids at a time, then drop the rule: the
+    helpers live only as long as the backfill. Where every domain federates nothing is stamped, so nothing is read.
+    Run again, it stamps only what is still unstamped."""
     bind.exec_driver_sql(HELPERS)
     try:
-        bind.execute(sa.text(BACKFILL), {'default_host': host})
+        if bind.execute(sa.text(ANY_CLOSED)).scalar():
+            low, high = bind.execute(sa.text('SELECT min(id), max(id) FROM notification')).one()
+            for start in range(low or 0, (high or -1) + 1, batch):
+                bind.execute(sa.text(BACKFILL), {'start': start, 'stop': start + batch, 'default_host': host})
     finally:
         bind.exec_driver_sql(DROP_HELPERS)
 
 
 def upgrade():
-    with op.batch_alter_table('notification', schema=None) as batch_op:
-        batch_op.add_column(sa.Column('local_only', sa.Boolean(), server_default='false', nullable=False))
-    backfill(op.get_bind(), default_host())
-    op.execute('CREATE INDEX ix_notification_user_local_only ON notification (user_id) WHERE local_only')
+    # ADD COLUMN takes an ACCESS EXCLUSIVE lock until its transaction ends, so it is committed first, on its own; with
+    # a constant default it is a catalog change, not a rewrite. The backfill and the index then run outside any
+    # transaction: a batch at a time, and the index CONCURRENTLY, so readers and writers of notification go on.
+    op.execute('ALTER TABLE notification ADD COLUMN IF NOT EXISTS local_only boolean NOT NULL DEFAULT false')
+    with op.get_context().autocommit_block():
+        backfill(op.get_bind(), default_host())
+        op.execute('CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_notification_user_local_only ON notification '
+                   '(user_id) WHERE local_only')
 
 
 def downgrade():

@@ -6,6 +6,7 @@ that copy once the backfill is done, so nothing in the database depends on the `
 drop_all and create_all work on a migrated database, and a database built by create_all stamps as a migrated one does.
 """
 import json
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -22,7 +23,7 @@ from app.utils import patch_db_session
 from tests.factories import make_post_reply
 from tests.test_instance_visible_here import scene  # noqa: F401 -- a fixture
 from tests.test_local_only_actors_hidden import ONION_ART, ONION_BOB, world  # noqa: F401 -- world is a fixture
-from tests.test_onion_hidden_on_clearnet import MIGRATION, alpha, onion  # noqa: F401 -- alpha, onion are fixtures
+from tests.test_onion_hidden_on_clearnet import MIGRATION, alpha, onion, queries_in, stamped_notice  # noqa: F401
 from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401 -- fixtures
 from tests.two_domains import FIRST, ONION, two_domains  # noqa: F401 -- two_domains is a fixture
 
@@ -165,3 +166,66 @@ def test_the_count_reads_the_partial_index_of_the_stamped_notifications(app, alp
     plan = '\n'.join(db.session.execute(text(f'EXPLAIN {sql}')).scalars())
     db.session.rollback()
     assert 'ix_notification_user_local_only' in plan, plan
+
+
+def test_the_backfill_stamps_in_id_batches_and_leaves_no_helper(app, alpha):
+    """M2 (re-review 4): each batch is its own short UPDATE over an id range, so no statement holds the table for the
+    whole scan; the stamps are the hook's, and the frozen rule is dropped once it is done."""
+    rows = [stamped_notice(alpha.first_bob, url) for url in
+            (f'/post/{alpha.first_post.id}', f'/post/{alpha.post.id}', f'/u/{ONION_BOB}', '/admin/reports', None)]
+    stamps = [row.local_only for row in rows]
+    db.session.execute(text('UPDATE notification SET local_only = false'))
+    low, high = db.session.execute(text('SELECT min(id), max(id) FROM notification')).one()
+    statements = queries_in(lambda: MIGRATION.backfill(db.session.connection(), FIRST, batch=2))
+    db.session.commit()
+    db.session.expire_all()
+    assert [db.session.get(Notification, row.id).local_only for row in rows] == stamps == [False, True, True, False,
+                                                                                           False]
+    updates = [statement for statement in statements if statement.startswith('UPDATE notification')]
+    assert len(updates) == len(range(low, high + 1, 2)) > 1, statements
+    assert all('id >= %(start)s AND id < %(stop)s' in statement for statement in updates), statements
+    assert db.session.execute(text('SELECT proname FROM pg_proc WHERE proname = ANY(:names)'),
+                              {'names': list(HELPERS)}).scalars().all() == []
+
+
+def test_the_backfill_reads_nothing_where_every_domain_federates(app):
+    statements = queries_in(lambda: MIGRATION.backfill(db.session.connection(), FIRST, batch=2))
+    db.session.rollback()
+    assert [statement for statement in statements if statement.startswith(('UPDATE', 'SELECT min'))] == [], statements
+
+
+class Operations:
+    """What the upgrade asks of alembic's `op`, in order."""
+    def __init__(self):
+        self.calls = []
+
+    def execute(self, sql):
+        self.calls.append(' '.join(sql.split()))
+
+    def get_bind(self):
+        return 'the connection'
+
+    def get_context(self):
+        return self
+
+    @contextmanager
+    def autocommit_block(self):
+        self.calls.append('autocommit')
+        yield
+        self.calls.append('end of autocommit')
+
+
+def test_the_upgrade_commits_the_column_before_the_backfill(app, monkeypatch):
+    """M2: ADD COLUMN takes an ACCESS EXCLUSIVE lock until its transaction ends, so it is committed before the
+    backfill starts, and the batches and the index (built CONCURRENTLY) run outside any long transaction."""
+    operations = Operations()
+    monkeypatch.setattr(MIGRATION, 'op', operations)
+    monkeypatch.setattr(MIGRATION, 'backfill', lambda bind, host: operations.calls.append(('backfill', bind, host)))
+    MIGRATION.upgrade()
+    assert operations.calls == [
+        'ALTER TABLE notification ADD COLUMN IF NOT EXISTS local_only boolean NOT NULL DEFAULT false',
+        'autocommit',
+        ('backfill', 'the connection', FIRST),
+        'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_notification_user_local_only ON notification (user_id) '
+        'WHERE local_only',
+        'end of autocommit']
