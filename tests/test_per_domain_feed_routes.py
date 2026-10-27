@@ -290,3 +290,33 @@ def test_feed_path_names_the_last_segment_for_its_domain(app, three_domains):  #
         assert child.path() == 'parent/kid'
     with request_on(app, three_domains.first):
         assert child.path() == 'parent/kid@shop.example'
+
+
+def test_rss_of_a_public_child_is_not_hidden_by_a_private_feed_of_the_same_path(app, three_domains):  # noqa: F811
+    """A private feed is named `parent/kid` (parent, owned by user kid); a public child `kid` under `parent` has the
+    same path. A reader who may not read the private row gets the public child. Its owner gets the private feed: the
+    path spells that feed's name exactly, and it is the first candidate the owner may read."""
+    kid = three_domains.account('kid', three_domains.shop)
+    kid.rss_token = 'kid-rss-token'
+    parent = three_domains.local_feed('parent', three_domains.shop)
+    child = three_domains.local_feed('kid', three_domains.shop)
+    child.parent_feed_id, child.title = parent.id, 'Public kid'
+    private = three_domains.local_feed('parent/kid', three_domains.shop, owner=kid, public=False)
+    private.title = 'Private kid'
+    db.session.commit()
+    anonymous = get(app, '/f/parent/kid.rss', host=SHOP)
+    assert anonymous.status_code == 200 and b'Public kid' in anonymous.data
+    forget_login()
+    owner = get(app, '/f/parent/kid.rss?token=kid-rss-token', host=SHOP)
+    assert owner.status_code == 200 and b'Private kid' in owner.data
+
+
+def test_the_edit_link_comes_back_to_the_feed_as_this_storefront_names_it(app, three_domains, news):  # noqa: F811
+    owner = three_domains.account('shopowner2', three_domains.shop)
+    news[1].user_id = owner.id
+    db.session.add(FeedMember(feed_id=news[1].id, user_id=owner.id, is_owner=True))
+    db.session.commit()
+    with app.test_client() as client:
+        login(client, owner)
+        html = client.get('/f/news@shop.example', base_url=f'https://{FIRST}').data.decode()
+    assert 'next=/f/news@shop.example' in html.replace('%40', '@').replace('%2F', '/')

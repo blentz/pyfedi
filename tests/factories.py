@@ -251,9 +251,9 @@ def make_local_feed(name: str = 'localfeed', public: bool = False, domain: Domai
     assertion resting on a declared default proves nothing.
 
     `machine_name` and all five URLs are set because they are not decoration:
-    `/f/<name>` and `/f/<name>.rss` both look the feed up by `machine_name`
-    (app/feed/routes.py:618, :778), so a row without one is a feed that cannot
-    be reached at its own address, and `make_feed` never builds such a row. A
+    `/f/<name>` and `/f/<name>.rss` look the feed up by `name` and `ap_id=None`
+    (`actor_to_feed`), and the product always writes `machine_name` and the URLs
+    with it, but `make_feed` never builds such a row. A
     fixture row the product cannot produce is a state to assert nothing against
     (fact 781).
     """

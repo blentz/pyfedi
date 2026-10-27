@@ -853,17 +853,16 @@ def lookup(feedname, domain):
 @refuse_if_private_instance
 @as_rss_reader
 def show_feed_rss(feed_path):
-    # the last segment names the feed (a private feed's name is `slug/owner`, so the last two are tried first)
+    # the last segment names the feed (a private feed's name is `slug/owner`, so the last two are tried first); the
+    # first candidate this reader may read wins, so a private row never hides a public child of the same path
     feed_url_parts = feed_path.split('/')
-    feed = next((found for found in (actor_to_feed('/'.join(feed_url_parts[-2:])), actor_to_feed(feed_url_parts[-1]))
-                 if found is not None), None)
+    reader_id = current_user.id if current_user.is_authenticated else None
+    candidates = ('/'.join(feed_url_parts[-2:]), feed_url_parts[-1]) if len(feed_url_parts) > 1 else (feed_url_parts[-1],)
+    feed = next((found for candidate in candidates
+                 if (found := actor_to_feed(candidate)) and feed_readable_by(found, reader_id)), None)
 
-    # D1394. The RSS twin of `show_feed`, which refuses a private feed. This one
-    # asked only that the name resolve, so a private feed was readable as RSS:
-    # the title, the description and one item per post with the community it is
-    # in, which is the membership `/f/<name>/following` returns 403 for.
-    if feed and not feed_readable_by(feed, current_user.id if current_user.is_authenticated else None):
-        feed = None
+    # D1394. The RSS twin of `show_feed`, which refuses a private feed: only a feed the reader may read is chosen
+    # above, or the title, description and posts of a private feed were readable here.
 
     if feed:
         # Get the feed_ids
