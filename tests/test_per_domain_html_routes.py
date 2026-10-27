@@ -17,11 +17,12 @@ from app.models import Community, CommunityBlock, CommunityMember, ModLog, Site,
 from app.mentions import stored_user
 from tests.factories import bearer, make_local_feed, make_post
 from tests.test_onion_guard_limits import cheap_hashes  # noqa: F401
+from tests.three_domains import SHOP
 from tests.two_domains import FIRST, ONION, default_request, no_http, onion_request, two_domains  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
 
-BASE = {FIRST: f'https://{FIRST}', ONION: f'http://{ONION}'}
+BASE = {FIRST: f'https://{FIRST}', SHOP: f'https://{SHOP}', ONION: f'http://{ONION}'}
 
 
 @pytest.fixture

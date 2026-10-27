@@ -416,8 +416,8 @@ def test_actor_to_feed_returns_nothing_for_an_unknown_name(app, db_session):
 
 
 def test_the_edit_form_lists_a_feeds_communities_sorted_and_qualified(app, db_session):
-    """feed_communities_for_edit: local communities get '@SERVER_NAME'
-    appended, remote ones already carry a host, banned ones are excluded, and
+    """feed_communities_for_edit: local communities are named by their own
+    home domain (here the first domain's SERVER_NAME), remote ones already carry a host, banned ones are excluded, and
     the result is sorted.
 
     The fixture adds them in reverse alphabetical order precisely so the sort
@@ -442,9 +442,6 @@ def test_the_edit_form_lists_a_feeds_communities_sorted_and_qualified(app, db_se
 
     lines = result.split('\n')
     assert lines == sorted(lines)
-    # Community.link() returns the bare 'name@host' for a local community --
-    # no '!' prefix -- and the function appends the server only when the link
-    # carries no host at all. Asserted as measured rather than as assumed.
     assert f'alpha@{server}' in lines
     assert any(line.endswith('@remote.example') for line in lines)
     assert not any('mike' in line for line in lines)
