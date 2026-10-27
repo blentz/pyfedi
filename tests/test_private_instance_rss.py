@@ -41,7 +41,7 @@ from flask import g
 
 from app import db
 from app.models import Domain, Post, Site, Tag, Topic, User
-from tests.factories import (make_community, make_feed, make_feed_item, make_instance,
+from tests.factories import (make_community, make_feed_item, make_local_feed, make_instance,
                              make_post, make_site, make_user)
 
 HOST = 'test.piefed.local'
@@ -77,11 +77,7 @@ def seeded(app, db_session):
     # posts of the communities in the feed, and a feed with none serves 404 whatever the
     # privacy setting -- which is how the first version of this file left the feed guard
     # unobservable, and a mutation of it survived while every row passed.
-    feed = make_feed(instance, name='thefeed', public=True, local=True)
-    # `show_feed_rss` looks the feed up by MACHINE_NAME, which the factory does not set --
-    # it sets `name` and `title` only. Without this the url resolves to no feed and the
-    # route 404s whatever the privacy setting.
-    feed.machine_name = 'thefeed'
+    feed = make_local_feed('thefeed', public=True)   # `show_feed_rss` looks a local feed up by its name on this domain
     make_feed_item(feed, community)
     db.session.commit()
     return SimpleNamespace(site=site, community=community, author=author, post=post,

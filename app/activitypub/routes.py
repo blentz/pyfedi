@@ -63,6 +63,7 @@ from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
 # app.activitypub before show_feed is defined (import cycle: feed.routes)
 import app.feed.routes as feed_routes
+from app.feed.util import actor_to_feed
 from app.models import User, Community, CommunityJoinRequest, CommunityMember, ActivityPubLog, Post, \
     PostReply, Instance, AllowedInstances, BannedInstances, utcnow, Site, Notification, \
     ChatMessage, Conversation, UserFollower, UserBlock, Poll, PollChoice, Feed, FeedItem, FeedMember, FeedJoinRequest, \
@@ -3791,14 +3792,11 @@ def feed_profile(actor, feed_owner=None):
     if feed_owner is not None:
         feed_owner = feed_owner.strip()
         actor = actor + '/' + feed_owner
-    if '@' in actor:
+    if '@' in actor and is_activitypub_request():
         # don't provide activitypub info for remote communities
-        if is_activitypub_request():
-            abort(400)
-        feed: Feed = db.session.query(Feed).filter_by(ap_id=actor.lower(), banned=False).first()
-    else:
-        actor = actor.lower()  # the canonical name, so the document's id is the stored one whatever the caller's casing
-        feed: Feed = db.session.query(Feed).filter_by(name=actor, ap_id=None, banned=False).first()
+        abort(400)
+    actor = actor.lower()  # the canonical name, so the document's id is the stored one whatever the caller's casing
+    feed: Feed = actor_to_feed(actor)
     if feed is not None:
         if is_activitypub_request():
             if feed_local_only(feed) or owned_elsewhere(feed):
@@ -3894,7 +3892,7 @@ def feed_outbox(actor):
         # don't provide activitypub info for remote feeds
         abort(400)
     else:
-        feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None, banned=False).first()
+        feed: Feed = actor_to_feed(actor)
 
     # unknown feed - 404 rather than crashing on feed.public below; a local-only account's feed is unknown there too
     if feed is None or feed_local_only(feed) or owned_elsewhere(feed):
@@ -3930,7 +3928,7 @@ def feed_following(actor):
         # don't provide activitypub info for remote feeds
         abort(400)
     else:
-        feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None, banned=False).first()
+        feed: Feed = actor_to_feed(actor)
 
     # unknown feed - 404 rather than crashing on feed.public below; a local-only account's feed is unknown there too
     if feed is None or feed_local_only(feed) or owned_elsewhere(feed):
@@ -3974,7 +3972,7 @@ def feed_moderators_route(actor):
         # don't provide activitypub info for remote feeds
         abort(400)
     else:
-        feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None, banned=False).first()
+        feed: Feed = actor_to_feed(actor)
     # D1394. Two of the five AP feed endpoints checked `public` and two did not.
     # `feed_profile`, `/outbox` and `/following` all answer 403 for a private
     # feed; this one named its owner and `/followers` counted its members. Same
@@ -4019,7 +4017,7 @@ def feed_followers(actor):
         # don't provide activitypub info for remote feeds
         abort(400)
     else:
-        feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None, banned=False).first()
+        feed: Feed = actor_to_feed(actor)
         if feed is not None and (feed_local_only(feed) or owned_elsewhere(feed)):
             abort(404)   # as feed_profile
         # D1394, as feed_moderators_route above.

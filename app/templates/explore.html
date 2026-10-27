@@ -47,7 +47,7 @@
             <ul class="list-group mb-4 mt-4">
                 {% if menu_instance_feeds -%}
                     {% for feed_menu_item in menu_instance_feeds -%}
-                        <li class="list-group-item"><a class="{% if feed and feed.id == feed_menu_item.id%} active{% endif %}" href="/f/{{ feed_menu_item.ap_id if feed_menu_item.ap_id else feed_menu_item.name }}">{{ feed_menu_item.title }}</a></li>
+                        <li class="list-group-item"><a class="{% if feed and feed.id == feed_menu_item.id%} active{% endif %}" href="/f/{{ feed_menu_item.link() }}">{{ feed_menu_item.title }}</a></li>
                     {% endfor -%}
                 {% endif -%}
                 {% if menu_my_feeds or menu_subscribed_feeds -%}
@@ -55,10 +55,10 @@
                         <li class="list-group-item"><a class="{% if active_child == 'user_feeds' %} active{% endif %}" href="/u/{{ current_user.link() }}/myfeeds">{{ _('My Feeds') }}</a></li>
                     {% endif -%}
                     {% for feed_menu_item in menu_my_feeds -%}
-                        <li class="list-group-item"><a class="{% if feed and feed.id == feed_menu_item.id%} active{% endif %}" href="/f/{{ feed_menu_item.ap_id if feed_menu_item.ap_id else feed_menu_item.name }}">{{ feed_menu_item.title }}</a></li>
+                        <li class="list-group-item"><a class="{% if feed and feed.id == feed_menu_item.id%} active{% endif %}" href="/f/{{ feed_menu_item.link() }}">{{ feed_menu_item.title }}</a></li>
                     {% endfor -%}
                     {% for feed_menu_item in menu_subscribed_feeds -%}
-                        <li class="list-group-item"><a class="{% if feed and feed.id == feed_menu_item.id%} active{% endif %}" href="/f/{{ feed_menu_item.ap_id if feed_menu_item.ap_id else feed_menu_item.name }}">{{ feed_menu_item.title }}</a></li>
+                        <li class="list-group-item"><a class="{% if feed and feed.id == feed_menu_item.id%} active{% endif %}" href="/f/{{ feed_menu_item.link() }}">{{ feed_menu_item.title }}</a></li>
                     {% endfor -%}
                 {% else -%}
                     {% if not current_user.is_anonymous -%}

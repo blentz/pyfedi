@@ -35,7 +35,6 @@ ALLOWED = {
                                           'per-domain federation identity is C3',
     ('app/shared/tasks/groups.py', 'edit_community'): "the Group id an Update federates, on the community's own home "
                                                       "domain's origin (a full URL, so the host names the domain; C3)",
-    ('app/feed/routes.py', 'show_feed'): 'a feed: feed names stay unique across the site (plan C1 ruling)',
     ('app/community/routes.py', 'community_move'): 'the community a move request names is remote (the route refuses '
                                                    'a local one), never a bare local name',
     ('app/models.py', 'Community.flair_tag_id'): "a flair's federated id, on the community's own home domain's "

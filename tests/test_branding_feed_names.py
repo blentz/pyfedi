@@ -31,8 +31,9 @@ def rows(app, shop_rows):
     db.session.add_all([Topic(machine_name='crafts', name='Crafts', show_posts_in_children=False),
                         Tag(name='knit', display_as='Knit', post_count=1),
                         Domain(name='yarn.example'),
-                        Feed(title='Makers', machine_name='makers', user_id=user.id, public=True,
-                             nsfw=False, nsfl=False, instance_id=shop.instance_id, show_posts_in_children=False)])
+                        *[Feed(title='Makers', name='makers', machine_name='makers', user_id=user.id, public=True,
+                               nsfw=False, nsfl=False, instance_id=shop.instance_id, show_posts_in_children=False,
+                               site_domain_id=domain_id) for domain_id in (None, shop.id)]])   # one on each domain
     db.session.commit()
     post = make_post(community, user, f'{SHOP_BASE}/post/1', title='A post')
     db.session.commit()

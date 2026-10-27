@@ -80,7 +80,7 @@
                         <p><strong><a class="" data-bs-toggle="dropdown" href="/feeds"  aria-haspopup="true" aria-expanded="false">{{ _('Feeds') }}</a></strong><br>
                               {% if menu_instance_feeds -%}
                                    {% for feed_menu_item in menu_instance_feeds -%}
-                                        <a class="{% if feed and feed.id == feed_menu_item.id%} active{% endif %}" href="/f/{{ feed_menu_item.ap_id if feed_menu_item.ap_id else feed_menu_item.name }}">{{ feed_menu_item.title }}</a><br>
+                                        <a class="{% if feed and feed.id == feed_menu_item.id%} active{% endif %}" href="/f/{{ feed_menu_item.link() }}">{{ feed_menu_item.title }}</a><br>
                                    {% endfor -%}
                                 <a class="{% if active_child == 'public_feeds' %} active{% endif %}" href="/feeds">{{ _('Public Feeds') }}</a><br>
                               {% else -%}
@@ -107,7 +107,7 @@
                                 <h4 class="mb-0"><a href="/u/{{ current_user.link() }}/myfeeds">{{ _('Feeds') }}</a></h4>
                                 <p>
                                 {% for feed_menu_item in menu_instance_feeds -%}
-                                    <a class="{% if feed and feed.id == feed_menu_item.id%} active{% endif %}" href="/f/{{ feed_menu_item.ap_id if feed_menu_item.ap_id else feed_menu_item.name }}">{{ feed_menu_item.title }}</a><br>
+                                    <a class="{% if feed and feed.id == feed_menu_item.id%} active{% endif %}" href="/f/{{ feed_menu_item.link() }}">{{ feed_menu_item.title }}</a><br>
                                 {% endfor -%}
                                 </p>
                            {% endif -%}
@@ -116,10 +116,10 @@
                                 <h4 class="mb-0"><a class="{% if active_child == 'user_feeds' %} active{% endif %}" href="/u/{{ current_user.link() }}/myfeeds">{{ _('My Feeds') }}</a></h4>
                                 <p>
                                    {% for feed_menu_item in menu_my_feeds -%}
-                                        <a class="{% if feed and feed.id == feed_menu_item.id%} active{% endif %}" href="/f/{{ feed_menu_item.ap_id if feed_menu_item.ap_id else feed_menu_item.name }}">{{ feed_menu_item.title }}</a><br>
+                                        <a class="{% if feed and feed.id == feed_menu_item.id%} active{% endif %}" href="/f/{{ feed_menu_item.link() }}">{{ feed_menu_item.title }}</a><br>
                                    {% endfor -%}
                                    {% for feed_menu_item in menu_subscribed_feeds -%}
-                                        <a class="{% if feed and feed.id == feed_menu_item.id%} active{% endif %}" href="/f/{{ feed_menu_item.ap_id if feed_menu_item.ap_id else feed_menu_item.name }}">{{ feed_menu_item.title }}</a><br>
+                                        <a class="{% if feed and feed.id == feed_menu_item.id%} active{% endif %}" href="/f/{{ feed_menu_item.link() }}">{{ feed_menu_item.title }}</a><br>
                                    {% endfor -%}
                                     <a class="{% if active_child == 'public_feeds' %} active{% endif %}" href="/feeds">{{ _('Public Feeds') }}</a></p>
                               {% else -%}
