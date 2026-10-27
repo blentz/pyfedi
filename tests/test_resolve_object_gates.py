@@ -1,5 +1,6 @@
 """Follow-up F5: every way `resolve_object` can return a post, reply, community, user or feed applies the viewer gate
 the matching page applies, and a thing the caller may not see is answered exactly as one that does not exist."""
+import ast
 import inspect
 
 import pytest
@@ -486,7 +487,9 @@ def test_a_banned_account_the_reply_mentions_does_not_stop_it_resolving(world, p
 
 
 def test_the_not_found_text_is_one_shared_value():
-    assert inspect.getsource(misc).count("'No object found.'") == 1 and misc.NOT_FOUND == 'No object found.'
+    literals = [node for node in ast.walk(ast.parse(inspect.getsource(misc)))
+                if isinstance(node, ast.Constant) and node.value == 'No object found.']
+    assert len(literals) == 1 and misc.NOT_FOUND == 'No object found.'
 
 
 # ---- a post fetched from a peer is gated like a stored one ----------------------------------------------------------
@@ -691,3 +694,14 @@ def test_a_reply_to_an_account_community_or_feed_is_answered_as_a_reply_to_nothi
         answers[key] = _answer(_get(app, user, CHILD))
     assert answers['missing'][0] == 400 and b'No object found.' in answers['missing'][1]
     assert answers[name] == answers['missing']
+
+
+def test_a_followers_only_reply_is_refused_to_a_non_follower_as_a_missing_one(app, world, no_fetch, monkeypatch):
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    post = peer_post(world)
+    reply = peer_reply(post)
+    post.visibility = reply.visibility = VISIBILITY_FOLLOWERS
+    db.session.commit()
+    user = caller()
+    assert refused(user, reply.ap_id) == 'No object found.'
+    assert _answer(_get(app, user, reply.ap_id)) == _answer(_get(app, user, f"{app.config['SERVER_URL']}/comment/424242"))
