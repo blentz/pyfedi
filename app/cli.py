@@ -65,7 +65,9 @@ from app.shared.tasks.maintenance import (
     archive_old_posts, archive_old_users, cleanup_old_read_posts, refresh_instance_chooser, clean_up_tmp
 )
 from app.utils import move_file_to_s3
+from app.hidden_routes import notification_hidden
 from app.local_names import local_named
+from app.local_only import without_local_only
 from app.storefront import default_domain, domain_base_url, home_storefront, hosted_instance_ids, instance_id_of
 from app.discovery.cli import register_discovery_commands
 from app.relays.cli import register_relay_commands
@@ -1663,10 +1665,14 @@ def register(app):
                             if community_ids:
                                 posts = posts.filter(Post.community_id.not_in(community_ids))
                             posts = posts.filter(Post.posted_at > user.last_seen).order_by(desc(Post.score))
-                            posts = posts.limit(20).all()
 
-                            # Send email! Its links name the domain the user logs in on
+                            # Send email! Its links name the domain the user logs in on, and it shows nothing that
+                            # domain hides: off the onion, none of the onion's posts or notifications (follow-up F6)
                             with home_storefront(user):
+                                notifications = [n for n in notifications if not notification_hidden(n)]
+                                if not notifications:
+                                    continue
+                                posts = without_local_only(posts, Post, True).limit(20).all()
                                 text_body = flask.render_template('email/unread_notifications.txt', user=user,
                                                                   notifications=notifications, site=site)
                                 html_body = flask.render_template('email/unread_notifications.html', user=user,
