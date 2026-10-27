@@ -17,6 +17,7 @@ from app.storefront import clear_domain_cache, domain_for_host
 from app.utils import feed_tree_public, menu_instance_feeds
 from tests.conftest import forget_login
 from tests.factories import make_feed
+from tests.test_onion_guard_limits import a_session, onion_get
 from tests.three_domains import FIRST, ONION, SHOP, get, peer, request_on, three_domains, two_domains  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -81,7 +82,6 @@ def signed_get(app, user, path, host):
         return get(app, path, host=host)
     client = app.test_client()
     if host == ONION:
-        from tests.test_onion_guard_limits import a_session, onion_get
         a_session(client)
         login(client, user, host)
         return onion_get(client, path)

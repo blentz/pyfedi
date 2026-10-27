@@ -10,6 +10,7 @@ from app import db
 from app.activitypub import routes as ap_routes
 from app.activitypub.routes import process_inbox_request
 from app.models import FeedMember, File
+from app.storefront import acting_domain
 from app.utils import utcnow
 from tests.conftest import forget_login
 from tests.factories import a_keypair, inbox_activity, make_user
@@ -240,7 +241,6 @@ def test_webfinger_does_not_answer_a_private_or_banned_shop_feed(app, three_doma
 def test_a_follow_of_a_shop_feed_arriving_on_the_first_domain_is_accepted_as_shop(app, three_domains, shopnews, peer,
                                                                                    monkeypatch):  # noqa: F811
     """The Accept is the feed's domain's whichever host the Follow came in on."""
-    from app.storefront import acting_domain
     acting = []
     monkeypatch.setattr(ap_routes, 'send_post_request',
                         lambda uri, body, private_key, key_id, **kw: acting.append((acting_domain().domain, key_id)))

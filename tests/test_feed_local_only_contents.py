@@ -4,7 +4,7 @@ A clearnet feed may hold an onion community. Off the onion the shared local-only
 hides that community, its posts and the posts an onion account wrote elsewhere, for every viewer: on the feed page, in
 its RSS, in the API's `feed_view` and post list, and in the community pickers. Adding such a community is refused as
 a missing one is, and no Add or Remove for a local-only community is sent to another server."""
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from flask import g
@@ -12,6 +12,7 @@ from flask_login import login_user
 from sqlalchemy import select
 
 from app import db
+from app.api.alpha.utils.post import get_post_list, get_post_list2
 from app.api.alpha.views import feed_view
 from app.constants import SRC_API
 from app.feed.util import feed_communities_for_edit
@@ -128,7 +129,6 @@ def test_the_api_view_omits_hidden_communities(app, world):
 
 @pytest.mark.parametrize('endpoint', ['list', 'list2'])
 def test_the_api_post_list_omits_hidden_communities_and_posts(app, world, endpoint):
-    from app.api.alpha.utils.post import get_post_list, get_post_list2
     function = {'list': get_post_list, 'list2': get_post_list2}[endpoint]
     with request_on(app, world.d.first):
         g.admin_ids = []
@@ -202,7 +202,6 @@ def test_an_onion_community_in_a_clearnet_feed_is_never_announced(app, world, pe
 @pytest.fixture
 def subscribed(monkeypatch):
     """The actors a join, an auto-follow or a copy would subscribe to; nothing is subscribed."""
-    from unittest.mock import MagicMock
     recorder = MagicMock()
     monkeypatch.setattr('app.community.routes.do_subscribe', recorder)
     return lambda: {c.args[0] for c in recorder.call_args_list + recorder.delay.call_args_list}
