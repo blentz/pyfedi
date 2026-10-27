@@ -34,10 +34,6 @@ ALLOWED = {
                                                     "admin's are stored on row 1"),
     ('app/activitypub/util.py', 'lemmy_site_data'): (3, "row 1 is the default domain's: the Lemmy site document "
                                                         "describes the default domain's site, its emoji and admins"),
-    ('app/feed/routes.py', 'feed_copy'): (1, "row 1 is the default domain's: feed names stay unique across the site "
-                                             '(plan C1 ruling), so a local feed is stored on row 1'),
-    ('app/shared/feed.py', 'make_feed'): (1, "row 1 is the default domain's: feed names stay unique across the site "
-                                             '(plan C1 ruling), so a local feed is stored on row 1'),
     ('app/utils.py', '<module>'): (1, "row 1 is the default domain's: JOINED_SERVER_SQL reads the microblogs "
                                       "community, which is the default domain's"),
     ('app/activitypub/util.py', 'find_microblogging_community'): (1, "row 1 is the default domain's: the "

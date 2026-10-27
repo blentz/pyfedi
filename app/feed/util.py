@@ -3,7 +3,7 @@ from time import sleep
 from typing import List, Tuple
 
 import httpx
-from flask import current_app
+from flask import abort, current_app
 from flask_babel import _
 from sqlalchemy import func, text
 
@@ -12,19 +12,27 @@ from app.activitypub.util import actor_json_to_model, canonical_handle, webfinge
 from app.community.util import search_for_community, retrieve_mods_and_backfill
 from app.constants import AP_FETCH_ACCEPT
 from app.models import BannedInstances, Feed, FeedItem, Community, _as_dict
-from app.storefront import is_hosted_server, is_local_host
+from app.storefront import DomainInfo, is_hosted_server, is_local_host
 from app.utils import feed_tree, get_request
 
 
-def feeds_for_form(current_feed: int, user_id: int) -> List[Tuple[int, str]]:
+def feeds_for_form(current_feed: int, user_id: int, domain: DomainInfo) -> List[Tuple[int, str]]:
+    """The parent choices for a feed of `domain`: the owner's feeds on that domain only."""
     result = [(0, _('None'))]
-    feeds = feed_tree(user_id)
+    feeds = feed_tree(user_id, domain)
     for feed in feeds:
         if feed['feed'].id != current_feed:
             result.append((feed['feed'].id, feed['feed'].title))
         if feed['children']:
             result.extend(feeds_for_form_children(feed['children'], current_feed, 1))
     return result
+
+
+def refuse_bad_parent(form):
+    """abort(400) when a submitted feed form names a parent the form does not offer: another domain's feed, a missing
+    one or no integer, rather than the form shown again."""
+    if form.is_submitted() and form.parent_feed_id.errors:
+        abort(400)
 
 
 def feeds_for_form_children(feeds, current_feed: int, depth: int) -> List[Tuple[int, str]]:

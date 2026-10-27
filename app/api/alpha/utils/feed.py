@@ -168,7 +168,7 @@ def post_feed_follow(auth, data):
     return feed
 
 
-def _require_own_parent_feed(parent_feed_id, current_feed_id, user_id):
+def _require_own_parent_feed(parent_feed_id, current_feed_id, user_id, domain):
     # The web form offers only the feed owner's own feeds (feeds_for_form), and for an
     # edit not the feed itself; the API holds to the same list. None/0 means no parent.
     # `user_id` is the owner: the caller creating a feed, the feed's owner when an admin edits it.
@@ -178,7 +178,7 @@ def _require_own_parent_feed(parent_feed_id, current_feed_id, user_id):
         parent_feed_id = int(parent_feed_id)
     except (TypeError, ValueError):
         raise Exception('parent_feed_not_allowed')
-    if parent_feed_id not in {feed_id for feed_id, _title in feeds_for_form(current_feed_id, user_id)}:
+    if parent_feed_id not in {feed_id for feed_id, _title in feeds_for_form(current_feed_id, user_id, domain)}:
         raise Exception('parent_feed_not_allowed')
 
 
@@ -201,7 +201,7 @@ def post_feed(auth, data):
     parent_feed_id = data['parent_feed_id'] if 'parent_feed_id' in data else None
 
     if 'parent_feed_id' in data:
-        _require_own_parent_feed(parent_feed_id, 0, user.id)
+        _require_own_parent_feed(parent_feed_id, 0, user.id, user.home_domain())
 
     # D708: the site's NSFW/NSFL switches apply here as on the web, refused out loud rather than quietly dropped
     if nsfw and g.site.enable_nsfw is False:
@@ -242,7 +242,7 @@ def put_feed(auth, data):
     show_child_posts = data['show_child_posts'] if 'show_child_posts' in data else feed.show_posts_in_children
     parent_feed_id = data['parent_feed_id'] if 'parent_feed_id' in data else feed.parent_feed_id
     if 'parent_feed_id' in data:
-        _require_own_parent_feed(parent_feed_id, feed.id, feed.user_id)   # as the web edit form: the owner's feeds
+        _require_own_parent_feed(parent_feed_id, feed.id, feed.user_id, feed.home_domain())   # as the web edit form: the owner's feeds
     if 'communities' in data:
         communities = data['communities']
     else:

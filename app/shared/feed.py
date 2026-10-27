@@ -21,7 +21,7 @@ from app.shared.tasks import task_selector
 import app.shared.community as shared_community
 from app.shared.upload import process_upload
 from app.local_names import actor_handle
-from app.storefront import acting_domain, canonical_link, default_domain, domain_authority, domain_base_url, \
+from app.storefront import acting_domain, canonical_link, domain_authority, domain_base_url, \
     instance_id_of
 from app.utils import authorise_api_user, feed_membership, get_request, menu_subscribed_feeds, joined_communities, \
     community_membership, gibberish, get_task_session, instance_banned, menu_instance_feeds, \
@@ -236,14 +236,40 @@ def feed_machine_name(url, public, user):
     return url[:50]
 
 
-def store_icon_and_banner(uploaded_icon_file, uploaded_banner_file):
-    """process_upload's urls for a feed form's icon and banner, None for one not given. The icon is stored first, so
+def parent_feed_on(domain, parent_feed_id) -> int | None:
+    """The id of the parent feed a caller named, for a feed of `domain`: None for no parent (a falsy id), the id when it
+    names a feed whose home domain is `domain` (a feed tree lives on one domain), else ValueError('parent_feed_invalid')
+    -- a missing feed, an id that is no integer, or a feed of another domain. The caller turns it into its own 400."""
+    if not parent_feed_id:
+        return None
+    try:
+        parent_id = int(parent_feed_id)
+    except (TypeError, ValueError):
+        raise ValueError('parent_feed_invalid')
+    parent = db.session.get(Feed, parent_id) if 0 < parent_id <= 2 ** 31 - 1 else None   # a larger id names no row
+    if parent is None or parent.home_domain() != domain:
+        raise ValueError('parent_feed_invalid')
+    return parent.id
+
+
+def _parent_or_refuse(domain, parent_feed_id, src) -> int | None:
+    """`parent_feed_on`, refused as the caller's source refuses: the API's existing 400, or the web's abort(400)."""
+    try:
+        return parent_feed_on(domain, parent_feed_id)
+    except ValueError as refusal:
+        if src == SRC_API:
+            raise Exception(str(refusal))
+        abort(400)
+
+
+def store_icon_and_banner(uploaded_icon_file, uploaded_banner_file, owner):
+    """process_upload's urls for a feed form's icon and banner, None for one not given, stored on `owner`, the feed's
+    home domain. The icon is stored first, so
     when the banner then raises -- refused as 'filetype not allowed', say -- the icon is deleted again, locally or
     from S3, before the exception goes on: the form is refused, and nothing would ever refer to it."""
-    # feeds are the default domain's (C1 ruling), whoever uploads their images
-    icon_url = process_upload(uploaded_icon_file, destination='feeds', owner=default_domain()) if uploaded_icon_file else None
+    icon_url = process_upload(uploaded_icon_file, destination='feeds', owner=owner) if uploaded_icon_file else None
     try:
-        banner_url = process_upload(uploaded_banner_file, destination='feeds', owner=default_domain()) \
+        banner_url = process_upload(uploaded_banner_file, destination='feeds', owner=owner) \
             if uploaded_banner_file else None
     except Exception:
         if icon_url:
@@ -287,7 +313,6 @@ def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_fi
         title = input.title.data
         public = input.public.data
         description = piefed_markdown_to_lemmy_markdown(input.description.data)
-        icon_url, banner_url = store_icon_and_banner(uploaded_icon_file, uploaded_banner_file)
         nsfw = input.nsfw.data
         nsfl = input.nsfl.data
         communities = input.communities.data
@@ -295,6 +320,12 @@ def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_fi
         show_child_posts = input.show_child_posts.data
         parent_feed_id = input.parent_feed_id.data
         user = current_user
+
+    # the feed is made on its creator's home domain: its ids, its images and its parent are that domain's
+    home = user.home_domain()
+    parent_feed_id = _parent_or_refuse(home, parent_feed_id, src)
+    if src != SRC_API:
+        icon_url, banner_url = store_icon_and_banner(uploaded_icon_file, uploaded_banner_file, home)
 
     # An instance feed is published in the instance-wide menu (menu_instance_feeds),
     # so only an admin may mint one. Nothing checked this before: the web form's
@@ -325,7 +356,6 @@ def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_fi
     # Feed.name is unique: refuse a taken one here, not as an IntegrityError at commit (D681)
     if db.session.query(Feed).filter_by(name=url).first() is not None:
         raise Exception('A feed with that url already exists')
-    base = f"https://{current_app.config['SERVER_NAME']}/f/{url}"
 
     private_key, public_key = RsaKeys.generate_keypair()
     feed = Feed(user_id=user.id, title=title, name=url, machine_name=url,
@@ -336,17 +366,9 @@ def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_fi
                 private_key=private_key,
                 public_key=public_key,
                 public=public, is_instance_feed=is_instance_feed,
-                ap_profile_id=base,
-                ap_public_url=base,
-                ap_followers_url=f'{base}/followers',
-                ap_following_url=f'{base}/following',
-                ap_outbox_url=f'{base}/outbox',
-                ap_domain=current_app.config['SERVER_NAME'],
-                subscriptions_count=1, instance_id=1)
-    if parent_feed_id:
-        feed.parent_feed_id = parent_feed_id
-    else:
-        feed.parent_feed_id = None
+                **feed_identity(home, url),
+                subscriptions_count=1)
+    feed.parent_feed_id = parent_feed_id
 
     if icon_url and is_image_url(icon_url):
         file = File(source_url=icon_url)
@@ -414,7 +436,7 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
         title = input.title.data
         public = input.public.data
         description = piefed_markdown_to_lemmy_markdown(input.description.data)
-        icon_url, banner_url = store_icon_and_banner(uploaded_icon_file, uploaded_banner_file)
+        icon_url, banner_url = store_icon_and_banner(uploaded_icon_file, uploaded_banner_file, feed.home_domain())
         nsfw = input.nsfw.data
         nsfl = input.nsfl.data
         communities = input.communities.data
@@ -455,23 +477,18 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
         # name carries a `/<owner>` suffix, which is not a path `/f/<actor>` can
         # serve.
         if feed.name != url and feed.is_local() and public:
-            base = f"https://{current_app.config['SERVER_NAME']}/f/{url}"
-            feed.ap_profile_id = base
-            feed.ap_public_url = base
-            feed.ap_followers_url = f'{base}/followers'
-            feed.ap_following_url = f'{base}/following'
-            feed.ap_outbox_url = f'{base}/outbox'
-            feed.ap_domain = current_app.config['SERVER_NAME']
+            # the feed's home domain never changes, so only the name-derived columns are rewritten
+            identity = feed_identity(feed.home_domain(), url)
+            for column in ('ap_profile_id', 'ap_public_url', 'ap_followers_url', 'ap_following_url', 'ap_outbox_url',
+                           'ap_domain'):
+                setattr(feed, column, identity[column])
         feed.name = url
         feed.machine_name = url
     feed.title = title
     feed.description = piefed_markdown_to_lemmy_markdown(description)
     feed.description_html = markdown_to_html(description)
     feed.show_posts_in_children = show_child_posts
-    if parent_feed_id:
-        feed.parent_feed_id = parent_feed_id
-    else:
-        feed.parent_feed_id = None
+    feed.parent_feed_id = _parent_or_refuse(feed.home_domain(), parent_feed_id, src)
 
     # Store the old banner id before processing new URLs. The icon has no
     # equivalent any more: since the new icon is attached through the
