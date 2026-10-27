@@ -4,10 +4,11 @@ Off the onion, a route whose arguments name an onion row answers as a route nami
 and the same body, so no route is an oracle for what exists on the onion. The gate is one table of argument names
 (app/hidden_routes.py): tests/test_hidden_routes_table.py walks the URL map against it."""
 import pytest
+from sqlalchemy.exc import NoResultFound
 
 from app import db
 from app.hidden_routes import _value_hidden, hidden_notifications
-from app.local_only import found_here
+from app.local_only import found_here, hidden_message_clause, one_here
 from app.models import ChatMessage, Conversation, utcnow
 from tests.test_instance_visible_here import get, scene  # noqa: F401 -- scene is a fixture
 from tests.test_local_only_actors_hidden import world  # noqa: F401 -- world is a fixture
@@ -269,3 +270,22 @@ def test_a_message_goes_with_its_conversation_for_the_gate_the_finder_and_the_ba
                 hidden_notifications([notice])) == (True, None, [True])
     with onion_request(app):
         assert not _value_hidden('message_id', message.id, rule)
+
+
+def test_a_message_whose_conversation_cannot_be_read_is_hidden_wherever_anything_is(app, talking):
+    """N4 (re-review 3): a message with no conversation (a legacy row) was shown everywhere; it fails closed, as a
+    reply whose ancestry cannot be read does (N-m3)."""
+    message = ChatMessage(conversation_id=None, sender_id=talking.admin.id, recipient_id=talking.first_bob.id,
+                          body='LEGACY', body_html='<p>LEGACY</p>')
+    db.session.add(message)
+    db.session.commit()
+    rule = '/private_message/<int:message_id>'
+    notice = type('Notice', (), {'url': f'/private_message/{message.id}', 'targets': {}, 'author_id': None})()
+    with default_request(app):
+        assert (_value_hidden('message_id', message.id, rule), found_here(ChatMessage, message.id),
+                hidden_notifications([notice])) == (True, None, [True])
+        with pytest.raises(NoResultFound):
+            one_here(ChatMessage.query.filter_by(id=message.id), ChatMessage)
+        assert ChatMessage.query.filter_by(id=message.id).filter(hidden_message_clause()).count() == 1
+    with onion_request(app):   # nothing is hidden on the onion
+        assert found_here(ChatMessage, message.id) is not None
