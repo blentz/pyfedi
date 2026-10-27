@@ -225,7 +225,7 @@ def _plan_path(plan: _Plan, url: str | None) -> None:
 # The ids a notification's `targets` may hold of what it is about
 _NOTIFIED = (('post_id', Post), ('comment_id', PostReply), ('suspect_post_id', Post),
              ('suspect_comment_id', PostReply), ('community_id', Community), ('author_id', User),
-             ('suspect_user_id', User))
+             ('suspect_user_id', User), ('feed_id', Feed))   # a feed's notification names the feed (task 7)
 # the name-built links a notification stored before follow-up F1: the model, and the targets key of its id
 _STORED_LINKS = {'/c/': (Community, 'community_id'), '/u/': (User, 'suspect_user_id')}
 

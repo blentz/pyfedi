@@ -639,7 +639,7 @@ _STAMP_PATHS = ((re.compile(f'/post/{_STAMP_ID}(?:/comment/{_STAMP_ID})?'), ('po
                 (re.compile(f'/chat/ban_from_mod/{_STAMP_ID}/{_STAMP_ID}'), ('user', 'community')))
 _STAMP_TARGETS = (('post_id', 'post'), ('suspect_post_id', 'post'), ('comment_id', 'reply'),
                   ('suspect_comment_id', 'reply'), ('author_id', 'user'), ('suspect_user_id', 'user'),
-                  ('community_id', 'community'))
+                  ('community_id', 'community'), ('feed_id', 'feed'))
 # An account or community (aliased u) is local-only by its home domain; one whose domain has no row is the default's
 _STAMP_ACTOR = ('u.ap_id IS NULL AND (u.site_domain_id = ANY(CAST(:closed AS integer[])) OR (CAST(:default_closed AS '
                 'boolean) AND (u.site_domain_id IS NULL OR u.site_domain_id <> ALL(CAST(:hosted AS integer[])))))')
@@ -649,6 +649,10 @@ _STAMP_ROWS = {
     'user': f'SELECT \'user\', u.id FROM "user" u WHERE u.id = ANY(CAST(:user AS integer[])) AND {_STAMP_ACTOR}',
     'community': f"SELECT 'community', u.id FROM community u WHERE u.id = ANY(CAST(:community AS integer[])) "
                  f"AND {_STAMP_ACTOR}",
+    # a local feed is local-only by its home domain, or by its owner's (per-domain feeds Task 7, ruling N-m8)
+    'feed': f"SELECT 'feed', f.id FROM feed f WHERE f.id = ANY(CAST(:feed AS integer[])) AND f.ap_id IS NULL AND "
+            f"(EXISTS (SELECT 1 FROM feed u WHERE u.id = f.id AND {_STAMP_ACTOR}) OR "
+            f"EXISTS (SELECT 1 FROM \"user\" u WHERE u.id = f.user_id AND {_STAMP_ACTOR}))",
     'conversation': f'SELECT \'conversation\', m.conversation_id FROM conversation_member m JOIN "user" u ON '
                     f'u.id = m.user_id WHERE m.conversation_id = ANY(CAST(:conversation AS integer[])) '
                     f'AND {_STAMP_ACTOR}',
