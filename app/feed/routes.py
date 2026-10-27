@@ -401,14 +401,16 @@ def feed_copy(feed_id: int):
 def feed_notification(feed_id: int):
     # Toggle whether the current user is subscribed to notifications about this feed's posts or not
     feed = db.session.get(Feed, feed_id) or abort(404)
-    if not feed_readable_by(feed, current_user.id):
-        abort(404)   # as for a feed nobody holds, and no subscription (task 7, review I3)
     existing_notification = NotificationSubscription.query.filter(NotificationSubscription.entity_id == feed.id,
                                                                   NotificationSubscription.user_id == current_user.id,
                                                                   NotificationSubscription.type == NOTIF_FEED).first()
     if existing_notification:
+        # Removing one is always allowed, even when the feed has gone private or the user was banned since: its holder
+        # already knows the feed exists, so this tells nothing (task 7, review m3)
         db.session.delete(existing_notification)
         db.session.commit()
+    elif not feed_readable_by(feed, current_user.id):
+        abort(404)   # as for a feed nobody holds, and no subscription (task 7, review I3)
     else:  # no subscription yet, so make one
         new_notification = NotificationSubscription(name=feed.name, user_id=current_user.id, entity_id=feed.id,
                                                     type=NOTIF_FEED)

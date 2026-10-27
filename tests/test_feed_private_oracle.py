@@ -12,7 +12,7 @@ from tests.factories import make_feed_member, make_post
 from tests.test_onion_feeds_hidden import answer, login, signed_get
 from tests.test_per_domain_feed_routes import csrf
 from tests.test_onion_hidden_api_ids import call
-from tests.three_domains import FIRST, three_domains, two_domains  # noqa: F401
+from tests.three_domains import FIRST, ONION, three_domains, two_domains  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -137,3 +137,50 @@ def test_a_subscriber_who_may_no_longer_read_a_private_feed_is_not_notified(app,
     notify_about_post_task(post.id)
     notified = {row.user_id for row in Notification.query.filter_by(notif_type=NOTIF_FEED)}
     assert notified == {member.id}
+
+
+def test_a_reader_who_may_no_longer_read_a_feed_can_still_turn_its_notifications_off(app, secret):
+    """Review m3: a subscription made while the feed was public, or while its holder was a member, outlives that. The
+    toggle removes it, and does not 404; a stranger with no subscription still gets the missing feed's answer."""
+    feed, owner, member, stranger = secret
+    banned = FeedMember.query.filter_by(feed_id=feed.id, user_id=member.id).one()
+    banned.is_banned = True
+    for reader in (stranger, member):
+        db.session.add(NotificationSubscription(name=feed.name, type=NOTIF_FEED, entity_id=feed.id, user_id=reader.id))
+    db.session.add(NotificationSubscription(name=feed.name, type=NOTIF_FEED, entity_id=feed.id, user_id=owner.id))
+    db.session.commit()
+    client = app.test_client()
+    for reader in (stranger, member):
+        login(client, reader, FIRST)
+        token = csrf(app, client)
+        toggled = client.post(f'/feed/{feed.id}/notification', base_url=f'https://{FIRST}', data={'csrf_token': token})
+        assert toggled.status_code == 200, reader.user_name
+        assert NotificationSubscription.query.filter_by(entity_id=feed.id, user_id=reader.id).count() == 0
+        again = client.post(f'/feed/{feed.id}/notification', base_url=f'https://{FIRST}', data={'csrf_token': token})
+        assert again.status_code == 404 and NotificationSubscription.query.filter_by(user_id=reader.id).count() == 0
+    assert NotificationSubscription.query.filter_by(entity_id=feed.id, user_id=owner.id).count() == 1
+
+
+def test_the_feed_alerts_list_leaves_out_a_feed_its_subscriber_may_no_longer_read(app, secret):
+    feed, owner, member, stranger = secret
+    for reader in (stranger, member, owner):
+        db.session.add(NotificationSubscription(name=feed.name, type=NOTIF_FEED, entity_id=feed.id, user_id=reader.id))
+    db.session.commit()
+    assert 'secretfeed' not in signed_get(app, stranger, '/alerts/feeds/all', FIRST).get_data(as_text=True)
+    for reader in (member, owner):
+        assert 'secretfeed' in signed_get(app, reader, '/alerts/feeds/all', FIRST).get_data(as_text=True)
+    FeedMember.query.filter_by(feed_id=feed.id, user_id=member.id).one().is_banned = True
+    db.session.commit()
+    assert 'secretfeed' not in signed_get(app, member, '/alerts/feeds/all', FIRST).get_data(as_text=True)
+
+
+def test_a_clearnet_account_that_subscribed_on_the_onion_sees_no_onion_feed_in_its_alerts_on_the_first_domain(
+        app, three_domains):  # noqa: F811
+    d = three_domains
+    bob = d.account('clearbob', d.first)
+    onion_feed = d.local_feed('onionpublic', d.onion, d.account('onionowner', d.onion))
+    db.session.add(NotificationSubscription(name=onion_feed.name, type=NOTIF_FEED, entity_id=onion_feed.id,
+                                            user_id=bob.id))
+    db.session.commit()
+    assert 'onionpublic' not in signed_get(app, bob, '/alerts/feeds/all', FIRST).get_data(as_text=True)
+    assert 'onionpublic' in signed_get(app, bob, '/alerts/feeds/all', ONION).get_data(as_text=True)

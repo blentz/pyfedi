@@ -4536,6 +4536,13 @@ def feed_open_to(feed: Feed, user_id) -> bool:
     return feed.subscribed(user_id) >= SUBSCRIPTION_MEMBER
 
 
+def feed_open_to_clause(user_id):
+    """`feed_open_to` as a filter on Feed: public, owned by `user_id`, or with an unbanned member row for it."""
+    member = db.select(FeedMember.id).where(FeedMember.feed_id == Feed.id, FeedMember.user_id == user_id,
+                                            or_(FeedMember.is_banned == False, FeedMember.is_banned == None))
+    return or_(Feed.public == True, Feed.user_id == user_id, member.exists())
+
+
 def feed_tree(user_id, domain: DomainInfo | None = None) -> List[dict]:
     """`user_id`'s feeds as a tree; with `domain`, only the ones on that domain (a feed tree lives on one domain).
     Never one this storefront hides (`hidden_here`): an onion account's onion feeds are listed on the onion only. The
