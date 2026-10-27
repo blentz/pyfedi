@@ -136,7 +136,7 @@ class AddCommunityForm(PodcastCategoryMixin, FlaskForm):
                 else:
                     self.url.errors.append(_l('This name is in use already.'))
                 return False
-            feed = Feed.query.filter(Feed.name == self.url.data.strip().lower(), Feed.ap_id == None).first()
+            feed = Feed.query.filter(local_named(Feed, self.url.data.strip(), domain)).first()
             if feed is not None:
                 self.url.errors.append(_('This name is in use already.'))
                 return False

@@ -22,7 +22,7 @@ from app.shared.tasks import task_selector
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
 from app.shared.upload import process_upload
-from app.local_names import actor_handle
+from app.local_names import actor_handle, local_named
 from app.storefront import acting_domain, acting_for, canonical_link, domain_authority, domain_base_url, \
     instance_id_of
 from app.utils import authorise_api_user, feed_membership, get_request, menu_subscribed_feeds, joined_communities, \
@@ -354,8 +354,8 @@ def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_fi
     # these three copies all carried was dead text; a mutant that removed it could
     # not be killed, which is how it was found.
     url = feed_machine_name(url, public, user)
-    # Feed.name is unique: refuse a taken one here, not as an IntegrityError at commit (D681)
-    if db.session.query(Feed).filter_by(name=url).first() is not None:
+    # a feed name is unique on its domain: refuse a taken one here, not as an IntegrityError at commit (D681)
+    if db.session.query(Feed).filter(local_named(Feed, url, home)).first() is not None:
         raise Exception('A feed with that url already exists')
 
     private_key, public_key = RsaKeys.generate_keypair()

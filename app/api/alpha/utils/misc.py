@@ -2,7 +2,7 @@ import re
 
 from urllib.parse import urlparse
 
-from flask import current_app, g
+from flask import g
 from sqlalchemy import desc, not_
 
 from app.activitypub.util import find_actor_or_create, remote_object_to_json, actor_json_to_model, is_user_actor, \
@@ -17,7 +17,8 @@ from app.community.util import search_for_community
 from app.discovery.podcast import PODCAST_DROP, podcast_route_for, podcast_twin_named_by_other
 from app.models import Post, PostReply, User, Community, BannedInstances, Feed, ModLog
 from app.post.util import post_refusal
-from app.storefront import default_domain, domain_authority, domain_for_host, is_local_host
+from app.storefront import current_storefront, default_domain, domain_authority, domain_for_host, domain_of_url, \
+    is_local_host, link_host
 from app.user.utils import search_for_user
 from app.local_only import hidden_here, without_local_only_actors
 from app.visibility import can_view, is_open, modlog_local_only_clause, modlog_open_clause
@@ -393,7 +394,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             if query.startswith("~"):
                 # This feed is specified using ~ notation
                 object = search_for_feed(query.lower(), allow_fetch=False)
-                
+
                 if object and feed_dict:
                     return _feed_result(object, feed_dict, user_id)
                 else:
@@ -404,9 +405,9 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             matches = re.search(feed_pattern, query)
             feed_name = "~" + matches.group(1)
 
-            if "@" not in feed_name:
-                feed_name = feed_name + "@" + current_app.config['SERVER_NAME']
-            
+            if "@" not in feed_name:   # a bare `/f/name` is on the domain the URL is on, as `/u/` and `/c/` are
+                feed_name = feed_name + "@" + link_host(domain_of_url(query) or current_storefront())
+
             object = search_for_feed(feed_name, allow_fetch=bool(user_id))
 
             if object and feed_dict:

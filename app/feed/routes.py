@@ -34,7 +34,7 @@ import app.shared.community as shared_community
 # The module, not the names: app.shared.feed reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.feed)
 import app.shared.feed as shared_feed
-from app.local_names import actor_handle
+from app.local_names import actor_handle, local_named
 from app.storefront import current_storefront, domain_for_host, path_name, storefront_link, storefront_url
 from app.shared.upload import is_refused_upload
 from app.local_only import found_here, hidden_here, local_only_visible_rss
@@ -178,6 +178,7 @@ def feed_edit(feed_id: int):
     edit_feed_form = EditFeedForm()
     edit_feed_form.parent_feed_id.choices = feeds_for_form(feed_id, feed_to_edit.user_id, feed_to_edit.home_domain())
     edit_feed_form.feed_id = feed_id
+    edit_feed_form.feed_domain = feed_to_edit.home_domain()   # a rename keeps the feed's home domain, and is checked there
     edit_feed_form.owner_user_name = db.session.get(User, feed_to_edit.user_id).user_name
 
     if not current_user.is_admin():
@@ -295,13 +296,12 @@ def feed_copy(feed_id: int):
             copy_feed_form.nsfw.data = False
         if g.site.enable_nsfl is False:
             copy_feed_form.nsfl.data = False
-        # Feed.name is unique: refuse a taken one here, not as an IntegrityError at commit (D681)
-        if db.session.query(Feed).filter_by(name=copy_feed_form.url.data).first() is not None:
-            flash(_('A Feed with this url already exists.'), 'error')
-            return redirect(url_for('feed.feed_copy', feed_id=feed_id))
-
         # the copy is made on the copier's home domain, as feed_new's feed is
         home = current_user.home_domain()
+        # a feed name is unique on its domain: refuse a taken one here, not as an IntegrityError at commit (D681)
+        if db.session.query(Feed).filter(local_named(Feed, copy_feed_form.url.data, home)).first() is not None:
+            flash(_('A Feed with this url already exists.'), 'error')
+            return redirect(url_for('feed.feed_copy', feed_id=feed_id))
         try:
             parent_feed_id = shared_feed.parent_feed_on(home, copy_feed_form.parent_feed_id.data)
         except ValueError:

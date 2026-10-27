@@ -1,8 +1,8 @@
 """A local name is unique per domain at creation, through every path (plan C1 task 5).
 
 `bob` on the first domain and `bob` on the onion are two accounts: a name another domain holds no longer refuses a
-creation, and a name the same domain holds still does. Feed names stay unique across the site. Every test asserts the
-effect, the second row existing or the refusal happening, not a mock of the check."""
+creation, and a name the same domain holds still does. Feed names are per domain too (per-domain feeds, task 9).
+Every test asserts the effect, the second row existing or the refusal happening, not a mock of the check."""
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -241,17 +241,19 @@ def _feed_form(app, user, url):
         return accepted, [str(message) for message in form.url.errors]
 
 
-def test_a_feed_name_is_still_global(app, two_domains):
+def test_a_feed_name_is_per_domain(app, two_domains):
+    """Per-domain feeds (task 9) made feed names unique per domain, as user and community names already were."""
     first, onion = two_domains.domains
     owner = two_domains.local_user('feedowner', onion)
+    # a row with no domain stamped on it is the default domain's
     db.session.add(Feed(user_id=owner.id, title='f', name='shared', public=True, instance_id=two_domains.instance.id))
     db.session.commit()
     first_user = two_domains.local_user('firstfeeder', first)
     assert _feed_form(app, first_user, 'shared') == (False, ['A Feed with this url already exists.'])
-    assert _feed_form(app, owner, 'shared') == (False, ['A Feed with this url already exists.'])
+    assert _feed_form(app, owner, 'shared') == (True, [])
     assert _feed_form(app, owner, 'fresh') == (True, [])
-    # a user or community name taken as a feed name is global too
-    assert user_name_is_taken('shared', onion.id) and user_name_is_taken('shared', first.id)
+    # a feed name blocks a user or community name on its own domain only
+    assert user_name_is_taken('shared', first.id) and not user_name_is_taken('shared', onion.id)
 
 
 def test_a_feed_url_is_checked_against_names_on_the_owners_home_domain(app, two_domains):

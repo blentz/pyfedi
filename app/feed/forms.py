@@ -43,11 +43,11 @@ class AddCopyFeedForm(FlaskForm):
             # apply_feed_url_rules compares the url as typed, but make_feed stores it
             # slugified, so 'afeed_' passed there and collided with 'afeed' (D681)
             name = shared_feed.feed_machine_name(self.url.data, self.public.data, current_user)
-            if Feed.query.filter(Feed.name == name).first() is not None:
+            # a feed's name, and the user and community names it may not take, are unique on the owner's home domain
+            domain = current_user.home_domain()
+            if Feed.query.filter(local_named(Feed, name, domain)).first() is not None:
                 self.url.errors.append(_l('A Feed with this url already exists.'))
                 return False
-            # the feed name is global (checked above); a feed's user and community name is on the owner's home domain
-            domain = current_user.home_domain()
             community = Community.query.filter(local_named(Community, self.url.data.strip(), domain)).first()
             if community is not None:
                 self.url.errors.append(_l('A community with this url already exists.'))
@@ -74,6 +74,7 @@ class AddCopyFeedForm(FlaskForm):
 
 class EditFeedForm(FlaskForm):
     feed_id = 0
+    feed_domain = None   # the edited feed's home domain (the route sets it): a new name is unique there
     title = StringField(_l('Name'), validators=[DataRequired()])
     url = StringField(_l('Url'), validators=[Length(max=50)])
     description = TextAreaField(_l('Description'))

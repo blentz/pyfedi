@@ -6823,8 +6823,8 @@ RESERVED_USER_NAMES = ('admin',)
 
 
 def user_name_is_taken(user_name: str, site_domain_id: int | None) -> bool:
-    """True when a LOCAL user or community already answers to this name on the domain `site_domain_id` (None is the
-    default domain), or any feed does: local names are unique per domain, feed names across the site.
+    """True when a LOCAL user, community or feed already answers to this name on the domain `site_domain_id` (None is
+    the default domain): all three names are unique per domain, and a name another domain holds takes nothing here.
 
     `RegistrationForm.validate_user_name` asks this question one query at a
     time. The OAuth signup path asked a narrower, CASE-SENSITIVE version of
@@ -6838,8 +6838,7 @@ def user_name_is_taken(user_name: str, site_domain_id: int | None) -> bool:
         return True
     if Community.query.filter(local_named(Community, name, domain)).first() is not None:
         return True
-    return Feed.query.filter(func.lower(Feed.name) == func.lower(name),
-                             Feed.ap_id == None).first() is not None
+    return Feed.query.filter(local_named(Feed, name, domain)).first() is not None
 
 
 def apply_feed_url_rules(self):
@@ -6875,12 +6874,14 @@ def apply_feed_url_rules(self):
         self.url.errors.append(_l('Feed urls can only contain letters, numbers, and underscores.'))
         return False
 
+    # a feed name is unique on one domain: an edited feed's own (the route sets feed_domain), else the creator's home
+    domain = getattr(self, 'feed_domain', None) or current_user.home_domain()
     try:
         self.feed_id
     except AttributeError:
-        feed = Feed.query.filter(Feed.name == self.url.data).first()
+        feed = Feed.query.filter(local_named(Feed, self.url.data, domain)).first()
     else:
-        feed = Feed.query.filter(Feed.name == self.url.data).filter(Feed.id != self.feed_id).first()
+        feed = Feed.query.filter(local_named(Feed, self.url.data, domain)).filter(Feed.id != self.feed_id).first()
     if feed is not None:
         self.url.errors.append(_l('A Feed with this url already exists.'))
         return False
