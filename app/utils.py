@@ -6735,7 +6735,10 @@ def on_unread_notifications_set(target, value, oldvalue, initiator):
 @event.listens_for(Session, 'after_commit')
 def publish_changed_notification_counts(session):
     """One event per account whose count the committed transaction changed. An account taken out of the session
-    before it was ever written has no row to announce."""
+    before it was ever written has no row to announce. A savepoint's release is not the commit: the events wait for
+    the outermost one (re-review 5, m2)."""
+    if session.in_nested_transaction():
+        return
     for target in session.info.pop(_NOTIFS_CHANGED, {}).values():
         identity = inspect(target).identity
         if identity:
@@ -6747,9 +6750,10 @@ def publish_changed_notification_counts(session):
 
 @event.listens_for(Session, 'after_soft_rollback')
 def forget_changed_notification_counts(session, previous_transaction):
-    """A rolled-back change is never announced. A savepoint's rollback forgets the transaction's others too: the
-    badge then waits for the next event."""
-    session.info.pop(_NOTIFS_CHANGED, None)
+    """A rolled-back change is never announced. Only the outermost rollback forgets the pending events: a
+    savepoint's rollback leaves the outer transaction's alone (re-review 5, m2)."""
+    if previous_transaction.parent is None:
+        session.info.pop(_NOTIFS_CHANGED, None)
 
 
 def publish_sse_event(key, value):

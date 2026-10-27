@@ -340,3 +340,24 @@ class TestUnreadNotificationsListener:
         assert not db.session().in_transaction()
         assert db.session.execute(text('SELECT unread_notifications FROM "user" WHERE id = :id'),
                                   {'id': user.id}).scalar() == 5
+
+    def test_a_savepoint_released_publishes_nothing_until_the_outer_commit(self, app, db_session, published):
+        user = make_user(make_instance('test.instance.example'), 'notified', local=True)
+        db.session.commit()
+        published.clear()
+        user.unread_notifications = 5
+        with db.session.begin_nested():
+            user.unread_notifications = 6
+        assert published == []
+        db.session.commit()
+        assert published == [(f'notifications:{user.id}', {'notifs_changed': True}, 6)]
+
+    def test_a_savepoint_rolled_back_keeps_the_outer_transactions_events(self, app, db_session, published):
+        user = make_user(make_instance('test.instance.example'), 'notified', local=True)
+        db.session.commit()
+        published.clear()
+        user.unread_notifications = 5
+        savepoint = db.session.begin_nested()
+        savepoint.rollback()
+        db.session.commit()
+        assert published == [(f'notifications:{user.id}', {'notifs_changed': True}, 5)]
