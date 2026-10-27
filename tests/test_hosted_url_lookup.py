@@ -26,7 +26,7 @@ from app.discovery.filters import host_is_excluded
 from app.feed.util import initialise_new_communities
 from app.models import DiscoveryEntry, DiscoverySync, InstanceChooser, PostBoost, SiteDomain, UserExtraField, utcnow
 from app.relays import inbound
-from app.storefront import clear_domain_cache
+from app.storefront import clear_domain_cache, domain_for_host
 from app.user.routes import import_settings_task
 from tests.factories import make_community, make_feed_item, make_follow, make_instance, make_local_feed, make_post, \
     make_post_reply, make_user
@@ -71,9 +71,10 @@ def env(db_session):
     legacy = make_post(first_den, first_alice, f'https://{SERVER}/p/legacy', title='a legacy post')
     reply = make_post_reply(post, first_alice)
     feed = make_local_feed('reads')
+    shop_feed = make_local_feed('reads', domain=domain_for_host(SHOP))
     yield SimpleNamespace(local=local, shop=shop, peer=peer, shop_row=shop_row, first_alice=first_alice,
                           shop_alice=shop_alice, first_den=first_den, shop_den=shop_den, post=post, legacy=legacy,
-                          reply=reply, feed=feed)
+                          reply=reply, feed=feed, shop_feed=shop_feed)
     clear_domain_cache()
 
 
@@ -100,7 +101,7 @@ def test_every_path_form_resolves_to_its_row_on_either_domain(env, wire):
         f'https://{SERVER}/c/Den': env.first_den,
         f'https://{SHOP}/c/den': env.shop_den,                # its stored ap_profile_id
         f'https://{SERVER}/f/reads': env.feed,
-        f'https://{SHOP}/f/Reads': env.feed,                  # feeds are named site-wide
+        f'https://{SHOP}/f/Reads': env.shop_feed,             # a feed is named on its own domain, as a community is
         f'HTTP://SHOP.EXAMPLE/post/{p}/': env.post,
     }
     for url, row in expected.items():

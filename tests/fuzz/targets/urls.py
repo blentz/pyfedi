@@ -582,6 +582,7 @@ class _Lookups:
     """Stands in for User, Community and Feed in app.activitypub.routes: records a query and finds nothing."""
 
     user_name = 'user_name'
+    name = 'name'
 
     def __init__(self, record):
         self._record = record

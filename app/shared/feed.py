@@ -21,7 +21,8 @@ from app.shared.tasks import task_selector
 import app.shared.community as shared_community
 from app.shared.upload import process_upload
 from app.local_names import actor_handle
-from app.storefront import acting_domain, canonical_link, default_domain, domain_authority
+from app.storefront import acting_domain, canonical_link, default_domain, domain_authority, domain_base_url, \
+    instance_id_of
 from app.utils import authorise_api_user, feed_membership, get_request, menu_subscribed_feeds, joined_communities, \
     community_membership, gibberish, get_task_session, instance_banned, menu_instance_feeds, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, is_image_url
@@ -206,6 +207,15 @@ def leave_feed(feed: int | Feed, src, auth=None, bulk_leave=False):
     # overwrote a real id with None -- app/api/alpha/utils/community.py:189.
     if src == SRC_API:
         return user_id
+
+
+def feed_identity(domain, name: str) -> dict:
+    """The columns that make a new local feed `name` the property of `domain`: its ActivityPub URLs on the domain's own
+    base (the onion's on the onion's), its authority, its home domain and its instance row."""
+    base = f'{domain_base_url(domain)}/f/{name}'
+    return {'ap_profile_id': base, 'ap_public_url': base, 'ap_followers_url': f'{base}/followers',
+            'ap_following_url': f'{base}/following', 'ap_outbox_url': f'{base}/outbox',
+            'ap_domain': domain_authority(domain), 'site_domain_id': domain.id, 'instance_id': instance_id_of(domain)}
 
 
 def feed_machine_name(url, public, user):
