@@ -9,7 +9,7 @@ from app import db
 import app.api.alpha.utils.misc as misc
 from app.api.alpha.utils.misc import get_resolve_object
 from app.constants import POST_STATUS_DRAFT, VISIBILITY_FOLLOWERS
-from app.models import CommunityMember, Post, Site
+from app.models import CommunityMember, Post, Site, UserFollower
 from app.storefront import domain_for_host
 from tests.factories import make_community, make_instance, make_local_feed, make_post, make_post_reply, make_user
 from tests.test_local_only_invisible import _post, world  # noqa: F401
@@ -373,12 +373,37 @@ def test_the_protocol_handler_opens_a_visible_peer_post(app, world):
     assert response.status_code == 302 and response.headers['Location'].endswith(f'/post/{post.id}')
 
 
-def test_a_reply_under_a_followers_only_post_still_resolves(app, world):
+@pytest.fixture
+def no_fetch(monkeypatch):
+    """Resolving a stored object asks no peer for anything."""
+    def refuse(*args, **kwargs):
+        raise AssertionError('an outbound fetch')
+    monkeypatch.setattr(misc, 'remote_object_to_json', refuse)
+    monkeypatch.setattr(misc, 'find_actor_or_create', refuse)
+
+
+def test_a_reply_under_a_followers_only_post_still_resolves_and_its_post_is_a_stub(app, world, no_fetch):
     post = peer_post(world)
     reply = peer_reply(post)
     post.visibility = VISIBILITY_FOLLOWERS
     db.session.commit()
-    assert resolve(caller(), reply.ap_id)['comment']['comment']['id'] == reply.id
+    answer = resolve(caller(), reply.ap_id)
+    assert answer['comment']['comment']['id'] == reply.id
+    assert answer['comment']['post']['title'] == '' and post.title != ''
+
+
+def test_a_follower_of_the_author_resolves_the_reply_and_sees_its_followers_only_post(app, world, no_fetch):
+    post = peer_post(world)
+    reply = peer_reply(post)
+    post.visibility = VISIBILITY_FOLLOWERS
+    follower = caller()
+    db.session.add(UserFollower(local_user_id=follower.id, remote_user_id=post.user_id, is_accepted=True,
+                               is_inward=False))
+    db.session.commit()
+    answer = resolve(follower, reply.ap_id)
+    assert answer['comment']['comment']['id'] == reply.id
+    assert answer['comment']['post']['title'] == post.title
+    assert resolve(follower, post.ap_id)['post']['post']['id'] == post.id
 
 
 # ---- a parent fetched on the way: only the child's own gates decide (follow-up F5) -------------------------------
