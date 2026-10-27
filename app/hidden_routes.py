@@ -222,6 +222,8 @@ def _plan_notification(notification) -> _Plan:
     """`notification`'s plan: its link as stored and as following it resolves it (notification_href), its author,
     and its targets' ids."""
     plan, targets = _Plan(), notification.targets or {}
+    if getattr(notification, 'local_only', True) is False:
+        return plan   # stamped as naming no local-only row: hidden nowhere (notification_names_local_only)
     _plan_path(plan, notification.url)
     stored = _STORED_LINKS.get((notification.url or '')[:3])
     if stored is not None and not isinstance(targets.get(stored[1]), int):
@@ -314,12 +316,14 @@ def notification_hidden(notification) -> bool:
 def _hidden_counts(user_id: int, unread_only: bool) -> Counter:
     """The notifications of the account `user_id` hidden here (`hidden_notifications`), only the unread ones when
     `unread_only` says so, counted by `(read, notif_type, subtype)`. Nothing, and no query, where nothing is hidden.
-    Elsewhere one query reads the columns the batch looks at, and the batch costs one per model, whatever the number of
-    notifications (re-review 2, R4)."""
+    Elsewhere one query, on the partial index of the stamped ones, reads the columns the batch looks at, of only the
+    notifications stamped as naming a local-only row; the batch costs one query per model. So the rows read are the
+    onion-related ones, whatever the number of others (re-review 3, I1)."""
     if not hides_anything_here():
         return Counter()
     query = select(Notification.url, Notification.targets, Notification.author_id, Notification.read,
-                   Notification.notif_type, Notification.subtype).where(Notification.user_id == user_id)
+                   Notification.notif_type, Notification.subtype).where(Notification.user_id == user_id,
+                                                                        Notification.local_only.is_(True))
     if unread_only:
         query = query.where(Notification.read.is_(False))
     rows = db.session.execute(query).all()

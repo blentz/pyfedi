@@ -5,14 +5,16 @@ onion target as plain text, with a note to open it on the onion.
 On the first domain a signed-in user and an admin alike get the 404 a name nobody holds gets for the onion's accounts,
 communities, posts and replies, and every list and search leaves them out. On the onion the same viewers see them all.
 The first domain's own rows are the control."""
+import importlib.util
 import re
 from collections import Counter
+from pathlib import Path
 from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
 from flask import render_template
-from sqlalchemy import event
+from sqlalchemy import event, text
 from werkzeug.exceptions import NotFound
 
 from app import db
@@ -33,6 +35,12 @@ from tests.two_domains import FIRST, ONION, onion_request, default_request, two_
 from tests.conftest import forget_login
 
 pytestmark = pytest.mark.usefixtures('site')
+
+# the notification stamp's migration, whose backfill is tested against the stamp new notifications get
+_SPEC = importlib.util.spec_from_file_location(
+    'notification_local_only', Path(__file__).parents[1] / 'migrations/versions/c6e2a8f4b1d9_notification_local_only.py')
+MIGRATION = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(MIGRATION)
 
 TOKEN = 'f6-rss-token'
 NOTE = 'Open this on the onion to see it.'
@@ -890,6 +898,126 @@ def test_the_unread_count_costs_the_same_queries_for_any_number_where_something_
     many, answer = unread_count_cost(app, alpha.first_bob)
     assert answer['other'] == 8
     assert len(many.statements) == len(few.statements), Counter(many.statements) - Counter(few.statements)
+
+
+def cost_of(ask):
+    """The SELECTs `ask()` runs, but domain_rows()'s, and the rows they fetch: after one warm-up call, so what a visit
+    writes is written already, and with nothing of the rows already in the session."""
+    ask()
+    db.session.expire_all()
+    cost = Rows()
+    event.listen(db.engine, 'after_cursor_execute', cost)
+    try:
+        ask()
+    finally:
+        event.remove(db.engine, 'after_cursor_execute', cost)
+    return cost
+
+
+def ordinary(onion, count):
+    """`count` unread notifications for the first domain's bob that have nothing to do with the onion."""
+    for _ in range(count):
+        db.session.add(Notification(user_id=onion.first_bob.id, title='t', url=f'/post/{onion.first_post.id}',
+                                    notif_type=4, subtype='new_reply_on_followed_comment',
+                                    author_id=onion.first_bob.id, targets={'post_id': onion.first_post.id}))
+    onion.first_bob.unread_notifications += count
+    db.session.commit()
+
+
+COUNTED = {
+    'unread_count': lambda app, onion: api(app, '/api/alpha/user/unread_count', onion.first_bob),
+    'notifications': lambda app, onion: api(app, '/api/alpha/user/notifications?status=All&limit=1', onion.first_bob),
+    'notifications_count': lambda app, onion: api(app, '/api/alpha/user/notifications_count', onion.first_bob),
+    'a page with the badge': lambda app, onion: Visitor(app, onion.first_bob, FIRST).get('/communities'),
+}
+
+
+@pytest.mark.parametrize('what', COUNTED)
+def test_a_count_reads_no_row_of_the_notifications_that_have_nothing_to_do_with_the_onion(app, alpha, what):
+    """I1 (re-review 3): with something hidden, each count read every notification of the account, and the badge made
+    that the cost of every page. The queries and the rows read do not grow with the ordinary notifications."""
+    many_notices(alpha, 2)   # one about the onion, one not
+    alpha.first_bob.unread_notifications = 2
+    db.session.commit()
+    ordinary(alpha, 3)
+    few = cost_of(lambda: COUNTED[what](app, alpha))
+    ordinary(alpha, 30)
+    many = cost_of(lambda: COUNTED[what](app, alpha))
+    assert (len(many.statements), many.rows) == (len(few.statements), few.rows), \
+        (Counter(many.statements) - Counter(few.statements), few.rows, many.rows)
+
+
+def stamped_notice(user, url=None, author=None, **targets):
+    notification = Notification(user_id=user.id, title='t', url=url, notif_type=4, subtype='x',
+                                author_id=author.id if author else None, targets=targets)
+    db.session.add(notification)
+    db.session.commit()
+    return notification
+
+
+def test_a_notification_is_stamped_whenever_it_may_name_an_onion_row(app, alpha):
+    """The stamp is the counts' narrowing, so it must cover every notification the per-link rule hides on a storefront:
+    hidden there implies stamped. One that names only the first domain's rows is not stamped."""
+    bob, onion_bob, onion_reply = alpha.first_bob, alpha.onion_bob, alpha.reply
+    alpha.onion_bob.alt_user_name = 'quietotter'
+    alpha.with_onion, alpha.with_admin = Conversation(user_id=bob.id), Conversation(user_id=bob.id)
+    alpha.with_onion.members.extend([bob, onion_bob])
+    alpha.with_admin.members.extend([bob, alpha.admin])
+    db.session.add_all([alpha.with_onion, alpha.with_admin])
+    db.session.commit()
+    clean = [stamped_notice(bob, f'/post/{alpha.first_post.id}', bob, post_id=alpha.first_post.id),
+             stamped_notice(bob, f'https://{FIRST}/post/{alpha.first_post.id}#comment_1'),
+             stamped_notice(bob, f'/chat/{alpha.with_admin.id}'),
+             stamped_notice(bob, '/admin/reports'),
+             stamped_notice(bob, 'https://elsewhere.example/users/x/statuses/9', community_id=alpha.first_art.id),
+             stamped_notice(bob, None)]
+    onion_related = [
+        stamped_notice(bob, None, onion_bob),                                         # its author
+        stamped_notice(bob, None, post_id=alpha.post.id),                             # its targets
+        stamped_notice(bob, None, comment_id=onion_reply.id),
+        stamped_notice(bob, None, suspect_user_id=onion_bob.id),
+        stamped_notice(bob, None, community_id=alpha.onion_art.id),
+        stamped_notice(bob, f'/post/{alpha.post.id}'),                                # its link
+        stamped_notice(bob, f'/post/{alpha.first_post.id}/comment/{onion_reply.id}'),
+        stamped_notice(bob, f'/comment/{onion_reply.id}#comment_{onion_reply.id}'),
+        stamped_notice(bob, f'/chat/{alpha.with_onion.id}'),
+        stamped_notice(bob, f'/user/{onion_bob.id}'),
+        stamped_notice(bob, f'/community/{alpha.onion_art.id}'),
+        stamped_notice(bob, f'/chat/ban_from_mod/{onion_bob.id}/{alpha.first_art.id}'),
+        stamped_notice(bob, f'http://{ONION}/post/in-first'),                          # an onion host
+        stamped_notice(bob, f'/u/{ONION_BOB}'),                                       # a link it cannot read
+        stamped_notice(bob, '/u/quietotter'),
+        stamped_notice(bob, f'/c/{ONION_ART}')]
+    assert [n.local_only for n in clean] == [False] * len(clean)
+    assert [n.local_only for n in onion_related] == [True] * len(onion_related)
+    rows = clean + onion_related
+    db.session.expire_all()
+    for request in (default_request, onion_request):
+        with request(app):
+            loaded = Notification.query.filter(Notification.id.in_([n.id for n in rows])).order_by(Notification.id).all()
+            unjudged = [SimpleNamespace(url=n.url, targets=n.targets, author_id=n.author_id) for n in loaded]   # no stamp
+            judged = hidden_notifications(unjudged)
+            unstamped = [n.url for n, hidden in zip(loaded, judged) if hidden and not n.local_only]
+        if request is default_request:   # the rule did judge them: every onion-related one is hidden here
+            assert judged == [False] * len(clean) + [True] * len(onion_related), judged
+        assert unstamped == []
+
+
+def test_the_backfill_stamps_existing_notifications_as_new_ones_are(app, alpha):
+    rows = [stamped_notice(alpha.first_bob, f'/post/{alpha.first_post.id}'),
+            stamped_notice(alpha.first_bob, f'/post/{alpha.post.id}'),
+            stamped_notice(alpha.first_bob, f'/u/{ONION_BOB}')]
+    stamps = [row.local_only for row in rows]
+    db.session.execute(text('UPDATE notification SET local_only = false'))
+    db.session.execute(text(MIGRATION.BACKFILL), {'default_host': FIRST})
+    db.session.commit()
+    db.session.expire_all()
+    assert [db.session.get(Notification, row.id).local_only for row in rows] == stamps == [False, True, True]
+
+
+def test_no_notification_is_stamped_where_every_domain_federates(app, monkeypatch):
+    alice = make_user(make_instance(app.config['SERVER_NAME']), 'alice', local=True)
+    assert stamped_notice(alice, '/u/whoever').local_only is False
 
 
 def test_the_hidden_counts_by_read_state_cost_the_same_queries_for_any_number(app, onion):
