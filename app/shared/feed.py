@@ -12,7 +12,7 @@ from app import db, cache, celery
 from app.activitypub.signature import send_post_request, default_context, RsaKeys
 from app.activitypub.util import find_actor_or_create, make_image_sizes
 from app.constants import *
-from app.federation_urls import activity_id, owner_base
+from app.federation_urls import activity_id, owner_base, owner_domain
 from app.models import User, Feed, FeedMember, FeedItem, Community, FeedJoinRequest, CommunityMember, \
     CommunityJoinRequest, Instance, File, _as_url
 from app.shared.tasks import task_selector
@@ -21,7 +21,7 @@ from app.shared.tasks import task_selector
 import app.shared.community as shared_community
 from app.shared.upload import process_upload
 from app.local_names import actor_handle
-from app.storefront import acting_domain, canonical_link, domain_authority, domain_base_url, \
+from app.storefront import acting_domain, acting_for, canonical_link, domain_authority, domain_base_url, \
     instance_id_of
 from app.utils import authorise_api_user, feed_membership, get_request, menu_subscribed_feeds, joined_communities, \
     community_membership, gibberish, get_task_session, instance_banned, menu_instance_feeds, \
@@ -775,57 +775,59 @@ def announce_feed_add_remove_to_subscribers(action: str, feed_id: int, community
     try:
         # find the feed
         feed = session.get(Feed, feed_id)
-        # find the community
-        community = session.get(Community, community_id)
-        # build the Announce json
-        activity_json = {
-            "@context": default_context(),
-            "type": "Announce",
-            "actor": feed.ap_public_url,
-            "id": f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}",
-        }
-
-        # build the object json
-        object_json = {
-            "@context": "https://www.w3.org/ns/activitystreams",
-            "type": action,
-            "actor": feed.ap_public_url,
-            "id": f"{current_app.config['SERVER_URL']}/activities/feedadd/{gibberish(15)}",
-            "object": {
-                "type": "Group",
-                "id": community.ap_public_url
-            },
-            "target": {
-                "type": "Collection",
-                "id": feed.ap_following_url
+        # the feed's own domain acts for it: its instance-level requests are signed and named there
+        with acting_for(owner_domain(feed)):
+            # find the community
+            community = session.get(Community, community_id)
+            # build the Announce json
+            activity_json = {
+                "@context": default_context(),
+                "type": "Announce",
+                "actor": feed.ap_public_url,
+                "id": activity_id('announce', feed),
             }
-        }
 
-        # embed the object json in the Announce json
-        activity_json['object'] = object_json
+            # build the object json
+            object_json = {
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "type": action,
+                "actor": feed.ap_public_url,
+                "id": activity_id('feedadd', feed),
+                "object": {
+                    "type": "Group",
+                    "id": community.ap_public_url
+                },
+                "target": {
+                    "type": "Collection",
+                    "id": feed.ap_following_url
+                }
+            }
 
-        # look up the feedmembers
-        feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
+            # embed the object json in the Announce json
+            activity_json['object'] = object_json
 
-        # for each member
-        #  - if its the owner, skip
-        #  - if its a local server user, skip
-        #  - if its a remote user
-        for fm in feed_members:
-            fm_user = session.get(User, fm.user_id)
-            if fm_user.id == feed.user_id:
-                continue
-            if fm_user.is_local():
-                # user is local so lets auto-subscribe them to the community, if they opted in
-                if fm_user.feed_auto_follow:
-                    actor = actor_handle(community)   # its own domain: a worker has no storefront
-                    community_routes.do_subscribe(actor, fm_user.id, joined_via_feed=True)
-                continue
+            # look up the feedmembers
+            feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
 
-            # if we get here the feedmember is a remote user
-            instance: Instance = session.get(Instance, fm_user.instance_id)
-            if instance.inbox and instance.online() and not instance_banned(instance.domain):
-                send_post_request(instance.inbox, activity_json, feed.private_key, feed.ap_profile_id + '#main-key', timeout=10)
+            # for each member
+            #  - if its the owner, skip
+            #  - if its a local server user, skip
+            #  - if its a remote user
+            for fm in feed_members:
+                fm_user = session.get(User, fm.user_id)
+                if fm_user.id == feed.user_id:
+                    continue
+                if fm_user.is_local():
+                    # user is local so lets auto-subscribe them to the community, if they opted in
+                    if fm_user.feed_auto_follow:
+                        actor = actor_handle(community)   # its own domain: a worker has no storefront
+                        community_routes.do_subscribe(actor, fm_user.id, joined_via_feed=True)
+                    continue
+
+                # if we get here the feedmember is a remote user
+                instance: Instance = session.get(Instance, fm_user.instance_id)
+                if instance.inbox and instance.online() and not instance_banned(instance.domain):
+                    send_post_request(instance.inbox, activity_json, feed.private_key, feed.ap_profile_id + '#main-key', timeout=10)
     except Exception:
         session.rollback()
         raise

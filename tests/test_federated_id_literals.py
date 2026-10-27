@@ -30,8 +30,7 @@ from tests.app_source import APP, app_trees
 
 RENDERED = 'rendered link'
 RELAYS = 'default-only by ruling: relays'
-FEEDS = 'default-only by ruling: feeds'
-REASONS = (RENDERED, RELAYS, FEEDS)
+REASONS = (RENDERED, RELAYS)
 
 ALLOWED = {
     # (path under the repo, enclosing function): {reason: findings in it}
@@ -51,11 +50,6 @@ ALLOWED = {
     # relays are subscribed by the default domain only (spec), so their activities are its instance actor's
     ('app/relays/subscribe.py', 'remove_relay'): {RELAYS: 1},
     ('app/relays/subscribe.py', 'send_follow_accept'): {RELAYS: 1},
-    # feeds stay on the default domain (global names, C1 ruling)
-    ('app/activitypub/routes.py', 'feed_followers'): {FEEDS: 1},
-    ('app/activitypub/routes.py', 'feed_moderators_route'): {FEEDS: 1},
-    ('app/activitypub/routes.py', 'feed_profile'): {FEEDS: 6},
-    ('app/shared/feed.py', 'announce_feed_add_remove_to_subscribers'): {FEEDS: 2},
 }
 
 _CONFIG_KEYS = frozenset(('SERVER_URL', 'SERVER_NAME'))

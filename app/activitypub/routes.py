@@ -169,6 +169,13 @@ def webfinger():
         abort(404)
 
 
+def _federating_feed_named(actor: str, domain: str):
+    """The public local feed `actor` names on `domain`, or None: not a banned or deleted one, nor one a local-only
+    account owns."""
+    return Feed.query.filter(local_clause(Feed, f'{actor.strip()}@{domain}')).filter_by(
+        public=True, banned=False, ap_deleted_at=None).filter(federating_feed_clause()).first()
+
+
 @cache.memoize(timeout=60)
 def process_webfinger_request(resource, host):
     """WebFinger's answer to `resource` asked of `host`, one of our domains. Each federating domain answers only for
@@ -239,13 +246,11 @@ def process_webfinger_request(resource, host):
                                                                        ap_deleted_at=None).filter(
                 federating_clause(Community)).first()
             type = 'Group'
-            if object is None and served.is_default:   # feeds stay on the default domain (C1 ruling)
-                object = Feed.query.filter_by(name=actor.strip().lower(), ap_id=None, public=True,
-                                              banned=False, ap_deleted_at=None).filter(federating_feed_clause()).first()
+            if object is None:
+                object = _federating_feed_named(actor, domain)
                 type = 'Feed'
-    elif served.is_default:
-        object = Feed.query.filter_by(name=actor.strip().lower(), ap_id=None, public=True,
-                                      banned=False, ap_deleted_at=None).filter(federating_feed_clause()).first()
+    else:
+        object = _federating_feed_named(actor, domain)
         type = 'Feed'
 
     if object is None:
@@ -3783,32 +3788,32 @@ def feed_profile(actor, feed_owner=None):
     if feed is not None:
         if is_activitypub_request():
             if feed_local_only(feed) or owned_elsewhere(feed):
-                abort(404)   # a local-only account's feed does not exist to other servers, a feed is the default's
+                abort(404)   # a local-only account's feed does not exist to other servers; a feed is its own domain's
             # check if feed is public, if not abort
             # with 403 (forbidden)
             if not feed.public:
                 abort(403)
-            server = current_app.config['SERVER_NAME']
+            base = f'{owner_base(feed)}/f/{actor}'
             actor_data = {"@context": default_context(),
                           "type": "Feed",
-                          "id": f"https://{server}/f/{actor}",
+                          "id": base,
                           "name": feed.title,
                           "sensitive": True if feed.nsfw or feed.nsfl else False,
                           "preferredUsername": actor,
-                          "inbox": f"https://{server}/f/{actor}/inbox",
-                          "outbox": f"https://{server}/f/{actor}/outbox",
-                          "followers": f"https://{server}/f/{actor}/followers",
-                          "following": f"https://{server}/f/{actor}/following",
-                          "moderators": f"https://{server}/f/{actor}/moderators",
-                          "attributedTo": f"https://{server}/f/{actor}/moderators",
-                          "url": f"https://{server}/f/{actor}",
+                          "inbox": f"{base}/inbox",
+                          "outbox": f"{base}/outbox",
+                          "followers": f"{base}/followers",
+                          "following": f"{base}/following",
+                          "moderators": f"{base}/moderators",
+                          "attributedTo": f"{base}/moderators",
+                          "url": base,
                           "publicKey": {
-                              "id": f"https://{server}/f/{actor}#main-key",
-                              "owner": f"https://{server}/f/{actor}",
+                              "id": f"{base}#main-key",
+                              "owner": base,
                               "publicKeyPem": feed.public_key
                           },
                           "endpoints": {
-                              "sharedInbox": f"{current_app.config['SERVER_URL']}/inbox"
+                              "sharedInbox": f"{owner_base(feed)}/inbox"
                           },
                           "published": ap_datetime(feed.created_at),
                           "updated": ap_datetime(feed.last_edit),
@@ -3826,7 +3831,7 @@ def feed_profile(actor, feed_owner=None):
                 else:
                     actor_data["icon"] = {
                         "type": "Image",
-                        "url": f"{current_app.config['SERVER_URL']}{feed.icon_image()}"
+                        "url": f"{owner_base(feed)}{feed.icon_image()}"
                     }
             if feed.image_id is not None:
                 header_image = feed.header_image()
@@ -3838,7 +3843,7 @@ def feed_profile(actor, feed_owner=None):
                 else:
                     actor_data["image"] = {
                         "type": "Image",
-                        "url": f"{current_app.config['SERVER_URL']}{feed.header_image()}"
+                        "url": f"{owner_base(feed)}{feed.header_image()}"
                     }
             actor_data['childFeeds'] = []
             # a local-only account's feed can be a child of a federated one; its URL is not given out
@@ -3849,7 +3854,7 @@ def feed_profile(actor, feed_owner=None):
             resp.headers.set('Cache-Control', AP_CACHE_ACTOR)
             resp.headers.set('Vary', 'Accept')
             resp.headers.set('Link',
-                             f'<https://{current_app.config["SERVER_NAME"]}/f/{actor}>; rel="alternate"; type="text/html"')
+                             f'<{base}>; rel="alternate"; type="text/html"')
             return resp
         else:  # browser request - return html
             return feed_routes.show_feed(feed)
@@ -3973,7 +3978,7 @@ def feed_moderators_route(actor):
         moderators_data = {
             "@context": default_context(),
             "type": "OrderedCollection",
-            "id": f"{current_app.config['SERVER_URL']}/f/{actor.lower()}/moderators",  # D184: canonical, whatever the caller's casing
+            "id": f"{owner_base(feed)}/f/{actor.lower()}/moderators",  # D184: canonical, whatever the caller's casing
             "totalItems": len(moderators),
             "orderedItems": []
         }
@@ -4009,7 +4014,7 @@ def feed_followers(actor):
         if feed is not None:
             result = {
                 "@context": default_context(),
-                "id": f'{current_app.config["SERVER_URL"]}/f/{actor.lower()}/followers',  # D184, as feed_moderators_route
+                "id": f'{owner_base(feed)}/f/{actor.lower()}/followers',  # D184, as feed_moderators_route
                 "type": "Collection",
                 # a local-only member does not exist to other servers
                 "totalItems": db.session.query(FeedMember).join(User, User.id == FeedMember.user_id).filter(

@@ -68,7 +68,8 @@ from app.models import Community, CommunityMember, Post, Site, User, utcnow, Top
     Notification, Language, community_language, ModLog, Feed, FeedItem, CmsPage, BannedInstances, BotChallenge
 from app.ldap_utils import test_ldap_connection, sync_user_to_ldap, login_with_ldap
 import boto3
-from app.activitypub.routes import replay_inbox_request, paged_outbox, AP_CACHE_COLLECTION, ap_media_type
+from app.activitypub.routes import replay_inbox_request, paged_outbox, AP_CACHE_COLLECTION, ap_media_type, \
+    feed_local_only
 import app as app_pkg
 
 
@@ -1473,14 +1474,11 @@ def list_feeds():
 
     # respond with json collection of public feeds for curl/AP requests
     if is_activitypub_request():
-        # feeds stay on the default domain (C1 ruling): another domain's answer would be the default domain's site
-        if not current_storefront().is_default:
-            abort(404)
-        site_data = lemmy_site_data(default_domain())
-        feeds_list = []
-        for f in public_feeds:
-            if f['feed'].is_local():
-                feeds_list.append(f"{current_app.config['SERVER_URL']}/f/{f['feed'].machine_name}")
+        served = federating_storefront()   # the onion lists none to another server
+        site_data = lemmy_site_data(served)
+        # this domain's own feeds, never one a local-only account owns (ruling a2: such a feed is no server's to see)
+        feeds_list = [f"{domain_base_url(served)}/f/{f['feed'].machine_name}" for f in public_feeds
+                      if f['feed'].is_local() and not feed_local_only(f['feed'])]
         site_data['site_view']['public_feeds'] = feeds_list
         site_data['site_view']['counts']['public_feeds'] = len(feeds_list)
         resp = jsonify(site_data)

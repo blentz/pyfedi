@@ -81,6 +81,7 @@ def _seed():
     make_feed_factory(instance, name='idparitybreaker2')
     feed = make_feed_factory(instance, name='wiringfeed')
     feed.user_id = owner.id
+    feed.ap_id = feed.ap_domain = None   # a feed we announce for is ours: its activities are named on its domain (F4)
     db.session.commit()
 
     assert len({community.id, feed.id, actor.id, bystander_feed.id}) == 4
@@ -572,6 +573,7 @@ def test_announce_add_remove_closes_the_task_session_on_success(app, db_session)
     # every one of which passed in isolation. Stop only what this test started.
     _task_session_patcher = patch('app.shared.feed.get_task_session')
     fake_session = _task_session_patcher.start()
+    fake_session.return_value.get.side_effect = lambda model, ident: s.feed if model is Feed else s.community
 
     try:
         announce_feed_add_remove_to_subscribers('Add', s.feed.id, s.community.id)

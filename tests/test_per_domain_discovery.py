@@ -332,9 +332,10 @@ def test_the_site_lists_are_cached_per_host(app, path, shop_first):
     assert get(app, path, host=first).data == before.data
 
 
-def test_the_feeds_document_is_first_domains_only(app):
-    """M4: /feeds as ActivityPub is the default domain's site document: another domain answers it 404."""
-    assert app.test_client().get('/feeds', headers=AP, base_url=SHOP_BASE).status_code == 404
+def test_the_feeds_document_is_each_federating_domains_own(app):
+    """/feeds as ActivityPub is the asked domain's site document (F4, task 6: feeds are per domain); the onion has none."""
+    shop = app.test_client().get('/feeds', headers=AP, base_url=SHOP_BASE)
+    assert shop.status_code == 200 and json.loads(shop.data)['site_view']['site']['actor_id'] == f'{SHOP_BASE}/'
     first = app.test_client().get('/feeds', headers=AP, base_url=f'https://{FIRST}')
     assert first.status_code == 200 and json.loads(first.data)['site_view']['site']['actor_id'] == f'https://{FIRST}/'
 
