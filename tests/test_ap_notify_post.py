@@ -1441,7 +1441,8 @@ def test_a_subscriber_to_a_feed_containing_the_community_is_notified(app, db_ses
                                     'community_id': post.community_id,
                                     'community_name': f'microblogs@{PEER}',
                                     'feed_id': feed.id,
-                                    'feed_name': 'A Feed'}
+                                    'feed_name': 'A Feed',
+                                    'feed_link': feed.stored_link()}
     assert _notifications_for(unrelated) == []
     db.session.refresh(subscriber)
     assert subscriber.unread_notifications == 8
