@@ -138,10 +138,7 @@ def feed_communities_for_edit(feed_id: int) -> str:
     return_value = []
     shown = shown_feed_communities(Community.query.filter(Community.banned == False), True)   # not one hidden here
     for community in shown.join(FeedItem, FeedItem.community_id == Community.id).filter(FeedItem.feed_id == feed_id).all():
-        ap_id = community.link()
-        if '@' not in ap_id:
-            ap_id = f'{ap_id}@{current_app.config["SERVER_NAME"]}'
-        return_value.append(ap_id)
+        return_value.append(community.lemmy_link().lstrip('!'))   # named by its own home domain, whichever storefront this is
     return "\n".join(sorted(return_value))
 
 

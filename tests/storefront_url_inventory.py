@@ -68,7 +68,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'hosted_domain_names': 1,   # the hosts a fan-out never sends to
     },
     'app/feed/util.py': {
-        'feed_communities_for_edit': 1,
     },
     'app/local_names.py': {
         'default_domain_user_url': 1,   # a bare name on the default domain is found by the actor URL SERVER_URL builds
