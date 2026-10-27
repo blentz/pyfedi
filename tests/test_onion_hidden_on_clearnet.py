@@ -892,6 +892,24 @@ def test_the_unread_count_costs_the_same_queries_for_any_number_where_something_
     assert len(many.statements) == len(few.statements), Counter(many.statements) - Counter(few.statements)
 
 
+def test_the_hidden_counts_by_read_state_cost_the_same_queries_for_any_number(app, onion):
+    """The counts of /user/notifications, read and unread, keep to R4's rule: one query and the batch's."""
+    def cost():
+        db.session.expire_all()
+        with default_request(app):
+            return [statement for statement in queries_in(lambda: hidden_routes.hidden_by_read_state(onion.first_bob.id))
+                    if not statement.startswith('SELECT site_domain')]
+    many_notices(onion, 4)
+    few = cost()
+    for notification in many_notices(onion, 12)[::3]:
+        notification.read = True
+    db.session.commit()
+    many = cost()
+    assert len(few) == len(many), Counter(many) - Counter(few)
+    with default_request(app):
+        assert hidden_routes.hidden_by_read_state(onion.first_bob.id) == Counter({False: 6, True: 2})
+
+
 def a_notice(url, **targets):
     """A notification as the batch reads one: its link, its targets and no author."""
     return SimpleNamespace(url=url, targets=targets, author_id=None)

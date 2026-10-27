@@ -316,17 +316,35 @@ def notification_hidden(notification) -> bool:
     return hidden_notifications([notification])[0]
 
 
-def hidden_unread(user_id: int) -> Counter:
-    """The unread notifications of the account `user_id` that are hidden here (`hidden_notifications`), counted by
-    `(notif_type, subtype)`. Nothing, and no query, where nothing is hidden. Elsewhere one query reads the columns the
-    batch looks at, and the batch costs one per model, whatever the number of notifications (re-review 2, R4)."""
+def _hidden_counts(user_id: int, unread_only: bool) -> Counter:
+    """The notifications of the account `user_id` hidden here (`hidden_notifications`), only the unread ones when
+    `unread_only` says so, counted by `(read, notif_type, subtype)`. Nothing, and no query, where nothing is hidden.
+    Elsewhere one query reads the columns the batch looks at, and the batch costs one per model, whatever the number of
+    notifications (re-review 2, R4)."""
     if not hides_anything_here():
         return Counter()
-    rows = db.session.execute(select(Notification.url, Notification.targets, Notification.author_id,
-                                     Notification.notif_type, Notification.subtype).where(
-        Notification.user_id == user_id, Notification.read.is_(False))).all()
-    return Counter((row.notif_type, row.subtype) for row, hidden in zip(rows, hidden_notifications(rows)) if hidden)
+    query = select(Notification.url, Notification.targets, Notification.author_id, Notification.read,
+                   Notification.notif_type, Notification.subtype).where(Notification.user_id == user_id)
+    if unread_only:
+        query = query.where(Notification.read.is_(False))
+    rows = db.session.execute(query).all()
+    return Counter((bool(row.read), row.notif_type, row.subtype)
+                   for row, hidden in zip(rows, hidden_notifications(rows)) if hidden)
 
+
+def hidden_unread(user_id: int) -> Counter:
+    """The unread notifications of the account `user_id` hidden here, counted by `(notif_type, subtype)`."""
+    return Counter({(notif_type, subtype): count
+                    for (_, notif_type, subtype), count in _hidden_counts(user_id, True).items()})
+
+
+def hidden_by_read_state(user_id: int) -> Counter:
+    """All the notifications of the account `user_id` hidden here, counted by whether they are read, so a total
+    counts none of them, read or not (round 4 security scan)."""
+    counts = Counter()
+    for (read, _, _), count in _hidden_counts(user_id, False).items():
+        counts[read] += count
+    return counts
 
 
 def unread_shown(user) -> int:

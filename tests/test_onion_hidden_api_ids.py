@@ -420,3 +420,24 @@ def test_a_post_list_of_a_private_onion_community_answers_as_one_nobody_holds(ap
         assert (found.status_code, found.get_data()) == (absent.status_code, absent.get_data()), hidden
     on_onion = call(app, alpha.first_bob, 'GET', f'{path}?community_id={alpha.onion_art.id}', host=ONION)
     assert 'membership required' in on_onion.get_data(as_text=True)
+
+
+def test_the_notification_counts_match_a_world_without_the_onion_ones(app, replied):
+    """Security scan, round 4: read onion notifications counted in `total` and `read`, so the total told how many
+    there were. A mix of hidden read, hidden unread and visible rows counts as if the hidden ones did not exist."""
+    bob = replied.first_bob
+    hidden_read = Notification(user_id=bob.id, title='t', url=f'/comment/{replied.theirs.id}', notif_type=4,
+                               subtype='new_reply_on_followed_comment', author_id=replied.onion_bob.id, read=True,
+                               targets={'comment_id': replied.theirs.id, 'post_id': replied.post.id})
+    visible = [Notification(user_id=bob.id, title='t', url=f'/comment/{replied.mine.id}', notif_type=4,
+                            subtype='new_reply_on_followed_comment', author_id=bob.id, read=read,
+                            targets={'comment_id': replied.mine.id, 'post_id': replied.first_post.id})
+               for read in (True, True, False)]
+    db.session.add_all([hidden_read, *visible])
+    bob.unread_notifications = 3   # the two hidden unread from `replied`, and one visible
+    db.session.commit()
+    counts = call(app, bob, 'GET', '/api/alpha/user/notifications?status=All').get_json()['counts']
+    assert (counts['total'], counts['unread'], counts['read']) == (3, 1, 2), counts
+    assert call(app, bob, 'GET', '/api/alpha/user/notifications_count').get_json()['count'] == 1
+    counts = call(app, bob, 'GET', '/api/alpha/user/notifications?status=All', host=ONION).get_json()['counts']
+    assert (counts['total'], counts['unread'], counts['read']) == (6, 3, 3), counts
