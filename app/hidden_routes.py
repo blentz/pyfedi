@@ -1,4 +1,5 @@
-"""One gate, in front of every view, for the routes that name an account, community, post or reply (follow-up F6).
+"""One gate, in front of every view, for the routes that name an account, community, feed, post or reply (follow-up
+F6; feeds from per-domain feeds Task 7).
 
 Off its own domain a local-only domain's rows are hidden from every reader (`hidden_here`). A route whose arguments
 name one must answer exactly as a route naming a row nobody holds, or the difference tells a clearnet reader what
@@ -17,6 +18,9 @@ view's own answer. When nothing is hidden on this storefront it asks nothing at 
 domain, and the onion itself, keep every answer they had. Any string argument holding a NUL is 404 everywhere, on
 every route: it names no row, and Postgres refuses it in a string; so is a host argument that names no host.
 
+A feed name is judged by its host alone, as an account's or a community's is: whether a bare name is held is the
+view's to answer, through the one resolver (`actor_to_feed`), which answers a hidden feed as one nobody holds.
+
 Every argument of every route is either in the table or on `NON_OBJECT_ARGUMENTS`, the arguments that name nothing a
 reader could be hidden from; tests/test_hidden_routes_table.py walks the URL map and fails on any other."""
 from collections import Counter
@@ -30,7 +34,7 @@ from app import db
 from app.local_names import default_domain_user, default_domain_users
 from app.local_only import conversation_hidden_here, hidden_conversation_clause, hidden_default_domain, hidden_here, \
     hidden_here_clause, hidden_message_clause, hides_anything_here, keep_for_request, message_hidden_here
-from app.models import ChatMessage, Community, Conversation, Instance, Notification, Post, PostReply, User
+from app.models import ChatMessage, Community, Conversation, Feed, Instance, Notification, Post, PostReply, User
 from app.storefront import current_storefront, default_domain, domain_for_host, host_hidden_here, instance_visible_here, \
     normalise_host, on_domain
 
@@ -45,6 +49,12 @@ def _host_hidden(host: str) -> bool:
 def _handle_hidden(name: str) -> bool:
     """Whether the name or handle `name` is on a domain hidden here: `bob@<onion>`, `!art@<onion>`."""
     return any(_host_hidden(part) for part in name.split('@')[1:])
+
+
+def _feed_path_hidden(path: str) -> bool:
+    """`_handle_hidden` for each segment of a feed's path (`parent/child@<onion>.rss`): a feed of a hidden domain is
+    named by any of them."""
+    return any(_handle_hidden(segment) for segment in path.split('/'))
 
 
 def _user_name_hidden(name: str) -> bool:
@@ -66,6 +76,7 @@ def _row_hidden(row) -> bool:
 _IDS = {
     'user_id': (User, _row_hidden), 'to': (User, _row_hidden), 'new_owner': (User, _row_hidden),
     'community_id': (Community, _row_hidden),
+    'feed_id': (Feed, _row_hidden),   # with its home domain and its owner (per-domain feeds Task 7)
     'post_id': (Post, _row_hidden),
     'comment_id': (PostReply, _row_hidden), 'post_reply_id': (PostReply, _row_hidden),
     'conversation_id': (Conversation, conversation_hidden_here),   # it names its members: the onion side, off the onion
@@ -75,7 +86,8 @@ _IDS = {
 # A name or host argument: whether its value is hidden here
 _NAMES = {
     'person': _handle_hidden, 'community': _handle_hidden, 'community_name': _handle_hidden,
-    'feed_owner': _handle_hidden,
+    'feed_owner': _handle_hidden, 'feed_name': _handle_hidden, 'feedname': _handle_hidden,
+    'feed_path': _feed_path_hidden,
     'domain': _host_hidden, 'instance_domain': _host_hidden,
 }
 _HOSTS = frozenset({'domain', 'instance_domain'})
@@ -86,7 +98,7 @@ _ACTORS = {'/u/': _user_name_hidden, '/c/': _handle_hidden, '/community/': _hand
 ID_ARGUMENTS = frozenset(_IDS)   # each an `int:` argument wherever it is used (tests/test_hidden_routes_table.py)
 OBJECT_ARGUMENTS = ID_ARGUMENTS | frozenset(_NAMES)
 
-# The arguments that name no account, community, post or reply, or name one that an argument above already names
+# The arguments that name no account, community, feed, post or reply, or name one that an argument above already names
 # (a page of a community, a revision of its wiki page). A value is None, or the rule prefixes it is allowed under.
 NON_OBJECT_ARGUMENTS = {
     # what to show, and how
@@ -95,9 +107,9 @@ NON_OBJECT_ARGUMENTS = {
     'offer_markdown_source': None, 'whatever': None,
     # secrets and one-time values: a token, a nonce, a signature
     'token': None, 'nonce': None, 'sig': None, 'key': None, 'uuid': None,
-    # rows that are not an account, community, post or reply
+    # rows that are not an account, community, feed, post or reply
     'tag': None, 'tag_id': None, 'topic_id': None, 'topic_path': None, 'topic_name': None, 'flair_id': None,
-    'feed_id': None, 'feed_name': None, 'feedname': None, 'feed_path': None, 'emoji_id': None, 'filter_id': None,
+    'emoji_id': None, 'filter_id': None,
     'image_id': None, 'file_id': None, 'passkey_id': None, 'entry_id': None, 'category_id': None,
     'activity_id': None, 'page_id': None, 'revision_id': None, 'slug': None, 'plan': None, 'subscription': None,
     'account_id': None,   # a Stripe customer, compared with the reader's own

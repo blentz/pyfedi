@@ -4,6 +4,9 @@ from app import db
 from app.api.alpha.views import feed_view
 from app.constants import *
 from app.feed.util import feeds_for_form
+from app.feed_domains import feeds_shown_here_clause
+from app.api.alpha.utils.found import a_feed
+from app.local_only import found_here
 from app.local_names import actor_handle
 from app.models import User, Feed, FeedItem, Community
 # The module, not the names: app.shared.feed reaches this file through a blueprint
@@ -11,7 +14,7 @@ from app.models import User, Feed, FeedItem, Community
 import app.shared.feed as shared_feed
 from app.utils import authorise_api_user, blocked_communities, blocked_or_banned_instances, filtered_out_communities, \
     communities_banned_from, moderating_communities_ids, joined_or_modding_communities, feed_tree_public, feed_tree, \
-    subscribed_feeds
+    feed_readable_by, subscribed_feeds
 
 
 def get_feed_list(auth, data, user_id=None) -> dict:
@@ -106,7 +109,7 @@ def get_feed(auth, data, user_id=None):
         blocked_instance_ids = []
 
     if id:
-        feed = db.session.get(Feed, id)
+        feed = found_here(Feed, id)   # one hidden here is as one nobody holds (task 7)
     elif name:
         # D1174. `parts[1]` on a name carrying no `@` was `IndexError: list
         # index out of range` -- and `name` is whatever the caller sent, so
@@ -114,20 +117,19 @@ def get_feed(auth, data, user_id=None):
         parts = name.split('@')
         if len(parts) != 2:
             raise Exception('invalid_request')
-        feed = Feed.query.filter(Feed.name == parts[0], Feed.ap_domain == parts[1]).first()
+        feed = Feed.query.filter(Feed.name == parts[0], Feed.ap_domain == parts[1],
+                                 feeds_shown_here_clause(True)).first()
     else:
         raise Exception('invalid_request')
-    if feed:
-        if feed.public or feed.user_id == user_id:
-            return feed_view(feed, variant=2, user_id=user_id, subscribed=subscribed,
-                                     include_communities=True, communities_moderating=communities_moderating,
-                                     banned_from=banned_from, communities_joined=communities_joined,
-                                     blocked_community_ids=blocked_community_ids,
-                                     blocked_instance_ids=blocked_instance_ids)['feed']
-        else:
-            raise Exception('access_denied')
-    else:
+    # a feed this caller may not read answers as one nobody holds (task 7): one hidden here, and a private one that is
+    # not the caller's, which the API shows its owner alone (feed_view)
+    if not feed_readable_by(feed, user_id) or not (feed.public or feed.user_id == user_id):
         raise Exception('feed_not_found')
+    return feed_view(feed, variant=2, user_id=user_id, subscribed=subscribed,
+                     include_communities=True, communities_moderating=communities_moderating,
+                     banned_from=banned_from, communities_joined=communities_joined,
+                     blocked_community_ids=blocked_community_ids,
+                     blocked_instance_ids=blocked_instance_ids)['feed']
 
 
 def post_feed_follow(auth, data):
@@ -135,10 +137,7 @@ def post_feed_follow(auth, data):
     follow = data['follow']
 
     user = authorise_api_user(auth, return_type='model')
-    feed = db.session.get(Feed, feed_id)
-
-    if not feed:
-        raise Exception('could not find feed')
+    feed = a_feed(feed_id, 'could not find feed')
 
     # D1173. Nothing here asked whether this account may see the feed at all.
     # `get_feed` refuses a private one to anybody but its owner --
@@ -223,9 +222,7 @@ def post_feed(auth, data):
 
 def put_feed(auth, data):
     feed_id = data['feed_id']
-    feed = db.session.get(Feed, feed_id)
-    if not feed:
-        raise Exception('not_found')
+    feed = a_feed(feed_id, 'not_found')
     # edit_feed's own refusal, made before the parent is checked: checked first, the parent's answer told a stranger
     # which feed ids are the owner's
     user = authorise_api_user(auth, return_type='model')
@@ -266,8 +263,8 @@ def post_feed_delete(auth, data):
     deleted = data['deleted']
 
     user_id = authorise_api_user(auth)
-    feed = db.session.get(Feed, feed_id)
-    if not feed or feed.user_id != user_id:
+    feed = a_feed(feed_id, 'not_found')
+    if feed.user_id != user_id:
         raise Exception('not_found')
 
     # Capture view before deletion since delete_feed removes the record

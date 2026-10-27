@@ -33,7 +33,7 @@ from app.utils import can_moderate, authorise_api_user, blocked_users, blocked_c
 from app.shared.tasks import task_selector
 from app.local_only import hidden_here, hidden_here_sql, prime_reporters, without_hidden_here, without_hidden_reports, \
     without_local_only, without_local_only_actors
-from app.api.alpha.utils.found import a_community, a_post, a_reply, a_report
+from app.api.alpha.utils.found import a_community, a_feed, a_post, a_reply, a_report
 from app.visibility import can_view, listable_clause, listable_sql, visible_to_clause, visible_to_sql
 
 
@@ -294,9 +294,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         elif feed_id:
             use_faster_query = False
             segregate_instance_stickies = False
-            feed = db.session.get(Feed, feed_id)
-            if not feed:
-                raise Exception('feed not found')
+            feed = a_feed(feed_id, 'feed not found')
             # D1394, and D1173's shape again in the same package: this asked
             # nothing about whether the caller may see the feed, so naming a
             # private one by id listed the posts of every community inside it.
@@ -975,9 +973,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
             # chain and could therefore never run -- thirty-one lines
             # of dead code, removed with this comment in their place.
             segregate_instance_stickies = False
-            feed = db.session.get(Feed, feed_id)
-            if not feed:
-                raise Exception('feed not found')
+            feed = a_feed(feed_id, 'feed not found')
             # D1394, and D1173's shape again in the same package: this asked
             # nothing about whether the caller may see the feed, so naming a
             # private one by id listed the posts of every community inside it.

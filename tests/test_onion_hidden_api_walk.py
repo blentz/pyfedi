@@ -11,10 +11,10 @@ from sqlalchemy import text
 
 import app.storefront as storefront
 from app import db
-from app.models import ChatMessage, CommunityFlair, CommunityMember, Conversation, Notification, Report, \
+from app.models import ChatMessage, CommunityFlair, CommunityMember, Conversation, FeedMember, Notification, Report, \
     UserRegistration
 from tests.conftest import forget_login
-from tests.factories import grant_permission, make_post, make_post_reply
+from tests.factories import grant_permission, make_feed_item, make_local_feed, make_post, make_post_reply
 from tests.test_api_routes_gate_sweep import documented_routes, minimal_payload
 from tests.test_hidden_routes import talking  # noqa: F401 -- a fixture
 from tests.test_instance_visible_here import HOSTS, scene  # noqa: F401 -- scene is a fixture
@@ -24,6 +24,8 @@ from tests.test_onion_hidden_on_clearnet import onion  # noqa: F401 -- a fixture
 from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
 from tests.two_domains import FIRST, ONION, two_domains  # noqa: F401
 
+ONION_FEED = f'onionfeed@{ONION}'
+
 pytestmark = pytest.mark.usefixtures('site')
 
 # Every field of every request schema that is not in CASES or EXEMPT is here, by name, with why it names no account,
@@ -32,8 +34,6 @@ pytestmark = pytest.mark.usefixtures('site')
 NON_OBJECT_FIELDS = {
     'language_id': 'a language', 'language': 'a language', 'discussion_languages': 'languages',
     'topic_id': 'a topic: an onion community in it is filtered from the posts listed',
-    'feed_id': 'a feed: feeds owned by onion accounts are deferred to per-domain feeds Task 7 (ruling N-m8)',
-    'parent_feed_id': 'a feed (ruling N-m8)',
     'instance_id': 'an instance: site/block is accepted by ruling',
     'choice_id': 'a poll choice, read only after its post went through the finder',
     'domain': 'a link domain (/d/), never a hosted domain',
@@ -76,11 +76,9 @@ NON_OBJECT_FIELDS = {
 }
 # Endpoint fields that name an object but are not looked up by a caller's id or name
 EXEMPT = {
-    ('GET', '/api/alpha/feed', 'id'): 'a feed (ruling N-m8)',
-    ('GET', '/api/alpha/feed', 'name'): 'a feed (ruling N-m8)',
     ('POST', '/api/alpha/feed', 'name'): 'the name of a feed being created',
-    ('POST', '/api/alpha/feed', 'communities'): 'a feed being created (ruling N-m8)',
-    ('PUT', '/api/alpha/feed', 'communities'): 'a feed being edited (ruling N-m8)',
+    ('POST', '/api/alpha/feed', 'communities'): "the handles of a new feed's communities (per-domain feeds Task 8)",
+    ('PUT', '/api/alpha/feed', 'communities'): "the handles of a feed's communities (per-domain feeds Task 8)",
     ('POST', '/api/alpha/community', 'name'): 'the name of a community being created, on this storefront',
     ('POST', '/api/alpha/user/login', 'username'): "a login names this storefront's own account",
     ('POST', '/api/alpha/user/verify_credentials', 'username'): "as login: this storefront's own account",
@@ -219,6 +217,15 @@ def _cases():
         ('POST', '/post/assign_flair', 'flair_id_list'): ('flairs', {'post_id': 'first_post'}),
         ('GET', '/resolve_object', 'q'): ('post_url', {}),
         ('GET', '/suggest_completion', 'q'): ('person_prefix', {}),
+        ('GET', '/feed', 'id'): ('feed', {}),
+        ('GET', '/feed', 'name'): ('feed_name', {}),
+        ('POST', '/feed/follow', 'feed_id'): ('feed', {'follow': ('literal', False)}),   # a join ends the session
+        ('PUT', '/feed', 'feed_id'): ('feed', {}),
+        ('POST', '/feed/delete', 'feed_id'): ('feed', {}),
+        ('POST', '/feed', 'parent_feed_id'): ('feed', {}),
+        ('PUT', '/feed', 'parent_feed_id'): ('feed', {'feed_id': 'first_feed'}),
+        ('GET', '/post/list', 'feed_id'): ('feed', {}),
+        ('GET', '/post/list2', 'feed_id'): ('feed', {}),
     }
     return {(method, p + path, field): case for (method, path, field), case in rows.items()}
 
@@ -271,6 +278,7 @@ def hidden_and_missing(world, viewer, kind):
         'flairs': ([world.flair.id], [NOBODY]), 'notification': (world.notifications[viewer.id], NOBODY),
         'post_url': (f'{HOSTS[ONION]}/post/{world.post.id}', f'{HOSTS[ONION]}/post/{NOBODY}'),
         'person_prefix': ('@onlyonion', '@nosuchbob'),
+        'feed': (world.onion_feed.id, NOBODY), 'feed_name': (ONION_FEED, f'nosuchfeed@{ONION}'),
     }
     return values[kind]
 
@@ -302,6 +310,12 @@ def visible(world, viewer, kind, key):
             db.session.add(UserRegistration(user_id=user.id, answer='FRESH', status=0))
             db.session.commit()
         return user.id if kind == 'person' else user.user_name
+    if kind in ('feed', 'feed_name'):
+        feed = make_local_feed(f'freshfeed{fresh}', public=True, domain=first, user=viewer)
+        db.session.add(FeedMember(feed_id=feed.id, user_id=viewer.id, is_owner=True))
+        db.session.commit()
+        make_feed_item(feed, world.first_art)   # for the lists of a feed's posts
+        return feed.id if kind == 'feed' else f'{feed.name}@{FIRST}'
     if kind in ('conversation', 'message', 'message_report'):
         other = world.admin if viewer is world.first_bob else world.first_bob
         conversation = Conversation(user_id=viewer.id)
@@ -381,6 +395,10 @@ def walk(reports, two_domains, monkeypatch):  # noqa: F811
     two_domains.local_user('onlyonion', next(domain for domain in two_domains.domains if not domain.federates))
     onion.onion_message = ChatMessage.query.filter_by(conversation_id=onion.with_onion.id,
                                                       recipient_id=onion.first_bob.id).first()
+    onion_domain = next(domain for domain in two_domains.domains if not domain.federates)
+    onion.onion_feed = make_local_feed('onionfeed', public=True, domain=onion_domain, user=onion.onion_bob)
+    make_feed_item(onion.onion_feed, onion.first_art)
+    onion.first_feed = make_local_feed('firstfeed', public=True, domain=two_domains.domains[0], user=onion.first_bob)
     onion.flair = CommunityFlair(community_id=onion.onion_art.id, flair='ONIONFLAIR')
     db.session.add(onion.flair)
     db.session.add(UserRegistration(user_id=onion.onion_bob.id, answer='ONIONANSWER', status=0))
@@ -401,7 +419,7 @@ def request_for(routes, world, method, path, field, value, also):
     `routes` maps each endpoint to the required fields its schemas take."""
     payload = dict(routes[(method, path)])
     named = {'first_art': world.first_art.id, 'first_bob': world.first_bob.id, 'admin': world.admin.id,
-             'first_post': world.first_post.id}
+             'first_post': world.first_post.id, 'first_feed': world.first_feed.id}
     payload.update({key: name[1] if isinstance(name, tuple) else named[name] for key, name in also.items()})
     payload[field] = value
     return payload
