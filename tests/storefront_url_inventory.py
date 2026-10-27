@@ -41,9 +41,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/admin/util.py': {
         'move_community_images_to_here': 2,
     },
-    'app/api/alpha/utils/misc.py': {
-        'get_resolve_object': 1,
-    },
     'app/api/alpha/views.py': {
         '_neutral_post': 1,
         'private_message_view': 1,
