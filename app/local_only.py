@@ -296,6 +296,85 @@ def without_hidden_conversations(query, conversation_id):
     return query if hides_nothing(clause) else query.filter(not_(clause))
 
 
+# The ids a report names its target by, and the model each names (a Report is hidden here when any one is)
+_REPORT_TARGETS = (('suspect_post_reply_id', 'PostReply'), ('suspect_post_id', 'Post'), ('suspect_user_id', 'User'),
+                   ('suspect_community_id', 'Community'))
+
+
+def report_hidden_here(report) -> bool:
+    """Whether the report `report` is about a row hidden here (a signed-in reader, `hidden_here`): its post, reply,
+    account or community, or a conversation one of whose members is. Off the onion such a report is no one's: its
+    lists leave it out and its id answers as one nobody holds (follow-up F6). `hidden_report_clause` is the query form."""
+    for column, name in _REPORT_TARGETS:
+        id_ = getattr(report, column)
+        if id_ and (row := db.session.get(getattr(models, name), id_)) is not None and hidden_here(row, True):
+            return True
+    conversation = db.session.get(models.Conversation, report.suspect_conversation_id) \
+        if report.suspect_conversation_id else None
+    return conversation is not None and conversation_hidden_here(conversation)
+
+
+def hidden_report_clause():
+    """`report_hidden_here` as a condition on Report, never NULL; `false()` when nothing is hidden."""
+    report = models.Report
+    parts = []
+    for column, name in _REPORT_TARGETS:
+        model = getattr(models, name)
+        clause = hidden_here_clause(model, True)
+        if not hides_nothing(clause):
+            ids = getattr(report, column)
+            parts.append(and_(ids.isnot(None), ids.in_(db.select(model.id).where(clause).correlate(None))))
+    conversation = hidden_conversation_clause(report.suspect_conversation_id)
+    if not hides_nothing(conversation):
+        parts.append(conversation)
+    return or_(*parts) if parts else false()
+
+
+def without_hidden_reports(query):
+    """`query` over Report without the reports `report_hidden_here` hides."""
+    clause = hidden_report_clause()
+    return query if hides_nothing(clause) else query.filter(not_(clause))
+
+
+def _message_hidden_here(message) -> bool:
+    conversation = db.session.get(models.Conversation, message.conversation_id) if message.conversation_id else None
+    return conversation is not None and conversation_hidden_here(conversation)
+
+
+def _row_hidden_here(row) -> bool:
+    if isinstance(row, models.Conversation):
+        return conversation_hidden_here(row)
+    if isinstance(row, models.ChatMessage):
+        return _message_hidden_here(row)
+    if isinstance(row, models.Report):
+        return report_hidden_here(row)
+    return hidden_here(row, True)
+
+
+def found_here(model, id_):
+    """The `model` row `id_` names, or None: for an id nobody holds and for a row hidden here alike, so a lookup by an
+    id a caller sent (a JSON body, a form field, a query string) answers both one way (follow-up F6). `model` is User,
+    Community, Post, PostReply, Conversation, ChatMessage or Report; a conversation, a message or a report is hidden
+    with its member or its target. Only the storefront's part of the rule is asked (`signed_in=True`). An id that is
+    not a whole number in Postgres's range names nothing."""
+    try:
+        id_ = int(id_)
+    except (TypeError, ValueError):
+        return None
+    if not 0 < id_ <= _PG_INT_MAX:
+        return None
+    row = db.session.get(model, id_)
+    return None if row is None or _row_hidden_here(row) else row
+
+
+def one_here(query, model):
+    """`query.one()` without the rows hidden here: the same NoResultFound for a hidden row as for none. `model` is the
+    query's entity: User, Community, Post, PostReply (by `hidden_here`) or ChatMessage (by its conversation)."""
+    if model is models.ChatMessage:
+        return without_hidden_conversations(query, models.ChatMessage.conversation_id).one()
+    return without_hidden_here(query, model, True).one()
+
+
 def hides_anything_here() -> bool:
     """Whether this storefront hides any local-only domain's accounts, communities or content from a signed-in reader:
     on a storefront that federates, whenever some domain does not; on a local-only one, whenever another does not."""
