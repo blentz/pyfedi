@@ -17,7 +17,7 @@ import pytest
 from flask import current_app
 
 from app import cache, db
-from app.models import Community, CommunityMember, Feed, File, Language, Site, SiteDomain, User, UserExtraField
+from app.models import Community, CommunityMember, Feed, FeedItem, File, Language, Site, SiteDomain, User, UserExtraField
 from app.storefront import clear_domain_cache, domain_for_host
 from tests.two_domains import FIRST, two_domains  # noqa: F401
 
@@ -77,11 +77,15 @@ def golden_site(app, two_domains):
     db.session.flush()
     db.session.add(CommunityMember(user_id=user.id, community_id=community.id, is_moderator=True, is_owner=True))
 
-    db.session.add(Feed(name='goldfeed', title='Golden feed', description='About *feeds*',
-                        description_html='<p>About <em>feeds</em></p>', public=True, user_id=user.id,
-                        instance_id=first.instance_id, public_key=pem('FEED'), created_at=CREATED, last_edit=UPDATED,
-                        ap_profile_id=f'{base}/f/goldfeed', ap_public_url=f'{base}/f/goldfeed',
-                        icon_id=feed_icon.id, image_id=feed_banner.id))
+    feed = Feed(name='goldfeed', title='Golden feed', description='About *feeds*',
+                description_html='<p>About <em>feeds</em></p>', public=True, user_id=user.id,
+                instance_id=first.instance_id, public_key=pem('FEED'), created_at=CREATED, last_edit=UPDATED,
+                site_domain_id=first.id, ap_profile_id=f'{base}/f/goldfeed', ap_public_url=f'{base}/f/goldfeed',
+                ap_followers_url=f'{base}/f/goldfeed/followers', ap_following_url=f'{base}/f/goldfeed/following',
+                ap_outbox_url=f'{base}/f/goldfeed/outbox', icon_id=feed_icon.id, image_id=feed_banner.id)
+    db.session.add(feed)
+    db.session.flush()
+    db.session.add(FeedItem(feed_id=feed.id, community_id=community.id))
     db.session.commit()
     cache.clear()   # icon_image, header_image and the Application document are memoized
     yield
@@ -123,6 +127,10 @@ GOLDEN_PATHS = {
     'community_moderators.json': '/c/goldart/moderators',
     'community_featured.json': '/c/goldart/featured',
     'feed.json': '/f/goldfeed',
+    'feed_outbox.json': '/f/goldfeed/outbox',
+    'feed_following.json': '/f/goldfeed/following',
+    'feed_followers.json': '/f/goldfeed/followers',
+    'feed_moderators.json': '/f/goldfeed/moderators',
     'instance_actor.json': '/actor',
     'instance_actor_outbox.json': '/actor/outbox',
     'application.json': '/',

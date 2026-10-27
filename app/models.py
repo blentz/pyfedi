@@ -5977,7 +5977,7 @@ class Feed(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), index=True)
     title = db.Column(db.String(256))  # Human name
-    name = db.Column(db.String(256), index=True, unique=True)  # url
+    name = db.Column(db.String(256), index=True)  # url; unique per hosted domain (ix_feed_domain_lower_name)
     machine_name = db.Column(db.String(50), index=True)  # url also?!
     description = db.Column(db.Text)  # markdown
     description_html = db.Column(db.Text)  # html equivalent of above markdown
@@ -5988,6 +5988,7 @@ class Feed(db.Model):
     subscriptions_count = db.Column(db.Integer, default=0)
     instance_id = db.Column(db.Integer, db.ForeignKey('instance.id'), index=True)
     instance = db.relationship('Instance', lazy='joined', foreign_keys=[instance_id])
+    site_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id', name='fk_feed_site_domain_id'))  # the hosted domain it belongs to; NULL for remote rows
 
     icon_id = db.Column(db.Integer, db.ForeignKey('file.id'))
     image_id = db.Column(db.Integer, db.ForeignKey('file.id'))
@@ -6024,6 +6025,21 @@ class Feed(db.Model):
     icon = db.relationship('File', lazy='joined', foreign_keys=[icon_id], single_parent=True, backref='feed', cascade="all, delete-orphan")
     image = db.relationship('File', lazy='joined', foreign_keys=[image_id], single_parent=True, cascade="all, delete-orphan")
     parent = db.relationship('Feed', remote_side=[id], backref=db.backref('children', lazy='dynamic'))
+
+    __table_args__ = (
+        # a local feed name is unique per hosted domain, ignoring case; remote rows are not held to it
+        db.Index(
+            'ix_feed_domain_lower_name',
+            'site_domain_id',
+            db.text('lower(name)'),
+            unique=True,
+            postgresql_where=db.text('ap_id IS NULL')
+        ),
+    )
+
+    def home_domain(self):
+        """The hosted domain this feed belongs to (the default domain when it has none)."""
+        return storefront.domain_by_id(self.site_domain_id)
 
     def __repr__(self):
         return '<Feed {}_{}>'.format(self.name, self.id)
