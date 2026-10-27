@@ -298,6 +298,15 @@ def test_feed_path_names_the_last_segment_for_its_domain(app, three_domains):  #
         assert child.path() == 'parent/kid@shop.example'
 
 
+def test_a_remote_feeds_path_names_it_as_remote_never_as_a_local_namesake(app, three_domains, peer):  # noqa: F811
+    remote = make_feed(peer, 'news', public=True)
+    remote.machine_name = 'news'
+    three_domains.local_feed('news', three_domains.first, three_domains.account('firstowner', three_domains.first))
+    for domain in (three_domains.first, three_domains.shop):
+        with request_on(app, domain):
+            assert remote.path() == remote.ap_id.lower() == 'news@peer.example'
+
+
 def test_rss_of_a_public_child_is_not_hidden_by_a_private_feed_of_the_same_path(app, three_domains):  # noqa: F811
     """A private feed is named `parent/kid` (parent, owned by user kid); a public child `kid` under `parent` has the
     same path. A reader who may not read the private row gets the public child. Its owner gets the private feed: the

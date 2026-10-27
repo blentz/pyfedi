@@ -6090,8 +6090,10 @@ class Feed(db.Model):
 
     def path(self):
         """The feed's path: its parents' machine names, then its own, written for the current storefront
-        (`name@domain` when the feed belongs to another hosted domain)."""
-        return_value = [storefront.path_name(self.machine_name, self.site_domain_id)]
+        (`name@domain` when the feed belongs to another hosted domain), and a remote feed's own segment is its handle, so
+        a path never names a local namesake."""
+        return_value = [storefront.path_name(self.machine_name, self.site_domain_id) if self.ap_id is None
+                        else self.ap_id.lower()]
         parent_id = self.parent_feed_id
         while parent_id is not None:
             parent_feed = db.session.get(Feed, parent_id)
