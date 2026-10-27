@@ -1640,7 +1640,7 @@ def register(app):
                                                                        'time (UTC).')
     @click.option('--all', 'everything', is_flag=True, help='Every notification.')
     def restamp_notifications_command(since_id, since_time, everything):
-        """ Restamp notification.local_only, a batch at a time. Idempotent. Run once after deploying migration
+        """ Set notification.local_only where the rule says so, a batch at a time; it never clears a stamp. Idempotent. Run once after deploying migration
         c6e2a8f4b1d9, for the notifications code without the stamp wrote during the deploy (follow-up F6) """
         if [since_id is not None, since_time is not None, everything].count(True) != 1:
             raise click.UsageError('Give exactly one of --since-id, --since and --all.')

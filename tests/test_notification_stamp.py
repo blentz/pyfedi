@@ -267,16 +267,24 @@ def test_restamp_notifications_since_a_time_or_all_of_them(commands, alpha):
     db.session.execute(text("UPDATE notification SET created_at = '2026-01-01' WHERE id = :id"), {'id': ids[1]})
     db.session.commit()
     since = commands.invoke(args=['restamp-notifications', '--since', '2026-06-01'])
-    assert (since.exit_code, since.output, stamps_of(ids)) == (0, 'notifications restamped: 2\n', [False, False, True])
+    assert (since.exit_code, since.output, stamps_of(ids)) == (0, 'notifications restamped: 1\n', [True, False, True])
     everything = commands.invoke(args=['restamp-notifications', '--all'])
     assert (everything.exit_code, everything.output, stamps_of(ids)) == \
-        (0, 'notifications restamped: 1\n', [False, True, True])
+        (0, 'notifications restamped: 1\n', [True, True, True])
+
+
+def test_restamping_never_clears_a_stamp(commands, alpha):
+    """Re-review 5, m3: over-including is the safe side, so a stamp the rule no longer gives (a stale domain list, a
+    rule regression) stays."""
+    ids = corrupted(alpha)
+    result = commands.invoke(args=['restamp-notifications', '--all'])
+    assert (result.exit_code, stamps_of(ids)[0]) == (0, True)   # the first names only the first domain's post
 
 
 def test_restamping_goes_a_batch_at_a_time(app, alpha):
     ids = corrupted(alpha)
     statements = queries_in(lambda: local_only.restamp_notifications(batch=2))
-    assert stamps_of(ids) == [False, True, True]
+    assert stamps_of(ids) == [True, True, True]
     assert len([statement for statement in statements if statement.startswith('SELECT notification.id')]) == 3
 
 
