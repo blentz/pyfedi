@@ -23,6 +23,7 @@ from app.onion_guard import require_onion_session, resolve_onion_api_rate_key
 from app.hidden_routes import refuse_hidden_route, unread_shown
 from app.local_names import content_hidden, content_link, hidden_note, instance_link, report_target_hidden, \
     reporter_link, target_hidden, target_link
+from app.feed_domains import shown_community_count
 from app.local_only import user_local_only
 from app.storefront import adopt_host_storefront, check_default_domain, current_storefront, hosted_instance_ids, \
     is_local_link, resolve_storefront, rewrite_response_for_storefront, storefront_host, storefront_link, storefront_url
@@ -176,6 +177,7 @@ def register_request_hooks(app):
     app.jinja_env.filters['feed_links'] = feed_link_to_href
     app.jinja_env.filters['person_links'] = person_link_to_href
     app.jinja_env.filters['shorten'] = shorten_string
+    app.jinja_env.filters['shown_community_count'] = shown_community_count
     app.jinja_env.filters['shorten_url'] = shorten_url
     app.jinja_env.filters['storefront_link'] = storefront_link   # a stored URL of ours, shown on this storefront
     app.jinja_env.filters['remove_images'] = remove_images

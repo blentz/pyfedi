@@ -4,6 +4,8 @@ A clearnet feed may hold an onion community. Off the onion the shared local-only
 hides that community, its posts and the posts an onion account wrote elsewhere, for every viewer: on the feed page, in
 its RSS, in the API's `feed_view` and post list, and in the community pickers. Adding such a community is refused as
 a missing one is, and no Add or Remove for a local-only community is sent to another server."""
+from unittest.mock import patch
+
 import pytest
 from flask import g
 from flask_login import login_user
@@ -13,12 +15,14 @@ from app import db
 from app.api.alpha.views import feed_view
 from app.constants import SRC_API
 from app.feed.util import feed_communities_for_edit
-from app.feed_domains import community_shown_here, shown_feed_communities
+from app.feed_domains import community_shown_here, shown_community_count, shown_feed_communities
 import app.shared.feed as shared_feed
 from app.models import Community, Feed, FeedItem, FeedJoinRequest, FeedMember
-from app.shared.feed import announce_feed_add_remove_to_subscribers, edit_feed, form_communities_to_ids
+from app.local_names import actor_handle
+from app.shared.feed import announce_feed_add_remove_to_subscribers, edit_feed, form_communities_to_ids, join_feed
 from app.utils import feed_open_to, feed_open_to_clause
 from tests.factories import make_feed_item, make_feed_member, make_post, make_user
+from tests.test_feed_copy_routes import _copy_payload, login
 from tests.test_onion_feeds_hidden import signed_get
 from tests.test_per_domain_feed_creation import api_input, api_site, token  # noqa: F401
 from tests.test_per_domain_html_routes import Visitor
@@ -191,6 +195,90 @@ def test_an_onion_community_in_a_clearnet_feed_is_never_announced(app, world, pe
     announce_feed_add_remove_to_subscribers(action, world.feed.id, getattr(world, group).id)
 
     assert len(sends) == expected   # the first-domain community is announced, so the silence above is the rule's
+
+
+# --- membership: a feed never joins a member to a community outside the member's domain -----------------------------
+
+@pytest.fixture
+def subscribed(monkeypatch):
+    """The actors a join, an auto-follow or a copy would subscribe to; nothing is subscribed."""
+    from unittest.mock import MagicMock
+    recorder = MagicMock()
+    monkeypatch.setattr('app.community.routes.do_subscribe', recorder)
+    return lambda: {c.args[0] for c in recorder.call_args_list + recorder.delay.call_args_list}
+
+
+def auto_follower(account):
+    account.feed_auto_follow = True
+    db.session.commit()
+    return account
+
+
+def test_joining_a_clearnet_feed_does_not_join_an_onion_community(app, world, subscribed):
+    member = auto_follower(world.d.account('joiner', world.d.first))
+    with request_on(app, world.d.first):
+        join_feed('mixed', member.id)
+    assert subscribed() == {actor_handle(world.first_group)}
+
+
+def test_an_onion_account_joining_on_the_onion_gets_both(app, world, subscribed):
+    member = auto_follower(world.d.account('onionjoiner', world.d.onion))
+    with request_on(app, world.d.onion):
+        join_feed(f'mixed@{FIRST}', member.id)
+    assert subscribed() == {actor_handle(world.first_group), actor_handle(world.onion_group)}
+
+
+@pytest.mark.parametrize('home, expected', [('first', ['first_group']), ('onion', ['first_group', 'onion_group'])])
+def test_an_add_auto_follows_a_local_member_only_into_communities_of_their_domain(app, world, subscribed, home,
+                                                                                  expected):
+    member = auto_follower(world.d.account('follower', getattr(world.d, home)))
+    db.session.add(FeedMember(feed_id=world.feed.id, user_id=member.id))
+    db.session.commit()
+    for group in (world.first_group, world.onion_group):
+        announce_feed_add_remove_to_subscribers('Add', world.feed.id, group.id)
+    assert subscribed() == {actor_handle(getattr(world, name)) for name in expected}
+
+
+def test_an_onion_feed_does_not_join_a_clearnet_member_to_an_onion_community(app, world, subscribed):
+    """The reverse case: an onion feed can hold a clearnet community and an onion one. A first-domain account that joins
+    it on the onion gets the clearnet community, as it could by joining that directly, and not the onion one."""
+    onion_feed = world.d.local_feed('onionmixed', world.d.onion, world.onion_account)
+    for group in (world.first_group, world.onion_group):
+        make_feed_item(onion_feed, group)
+    member = auto_follower(world.d.account('visitor', world.d.first))
+    with request_on(app, world.d.onion):
+        join_feed('onionmixed', member.id)
+    assert subscribed() == {actor_handle(world.first_group)}
+
+
+def copy(app, user, source):
+    client = app.test_client()
+    login(client, user)
+    with patch('app.feed.routes.render_template', return_value='rendered'):
+        client.post(f'/feed/{source.id}/copy', data=_copy_payload(app, client))
+    return Feed.query.filter_by(name='copiedfeed').first()
+
+
+def test_copying_a_clearnet_feed_leaves_out_and_does_not_join_its_onion_community(app, world, subscribed):
+    copier = auto_follower(world.d.account('copier', world.d.first))
+    copied = copy(app, copier, world.feed)
+    assert {item.community_id for item in FeedItem.query.filter_by(feed_id=copied.id)} == {world.first_group.id}
+    assert copied.num_communities == 1
+    assert subscribed() == {actor_handle(world.first_group)}
+
+
+# --- counts --------------------------------------------------------------------------------------------------------------
+
+def test_a_feeds_community_count_off_the_onion_leaves_out_hidden_communities(app, world):
+    world.feed.num_communities = 2
+    db.session.commit()
+    with request_on(app, world.d.first):
+        assert shown_community_count(world.feed, True) == 1
+        g.admin_ids = []
+        assert feed_view(world.feed, 1, None, [], False, [], [], [], [], [])['communities_count'] == 1
+    with request_on(app, world.d.onion):
+        login_user(world.onion_account)
+        assert shown_community_count(world.feed) == 2
 
 
 # --- parity -----------------------------------------------------------------------------------------------------------

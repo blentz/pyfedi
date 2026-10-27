@@ -44,7 +44,7 @@
                     <a href="/f/{{ feed['feed'].link() }}">{{ feed['feed'].display_name() }}</a>
                 {% if depth == 0 %}</strong>{% endif %}
             </td>
-            <td>{{ feed['feed'].num_communities }}</td>
+            <td>{{ feed["feed"]|shown_community_count }}</td>
             <td>{{ feed['feed'].subscriptions_count }}</td>
             <td><a href="/u/{{ feed['feed'].creator() }}">{{ feed['feed'].creator() }}</a></td>
             {% if current_user.is_authenticated %}

@@ -5,10 +5,12 @@ domain's rows are `on_domain`, and a local-only domain's rows are shown only whe
 feed is never listed off the onion, whoever is looking (anti-goal 2).
 """
 from flask_login import current_user
-from sqlalchemy import and_, not_, or_, true
+from sqlalchemy import and_, func, not_, or_, true
 
-from app.local_only import hidden_here, hidden_here_clause, hides_nothing, without_hidden_here
-from app.models import Community, Feed
+from app import db
+from app.local_only import community_local_only, hidden_here, hidden_here_clause, hides_anything_here, hides_nothing, \
+    without_hidden_here
+from app.models import Community, Feed, FeedItem, User
 from app.storefront import DomainInfo, current_storefront, default_domain, on_domain
 
 
@@ -93,3 +95,20 @@ def shown_feed_communities(query, signed_in: bool | None = None):
 def community_shown_here(community: Community, signed_in: bool | None = None) -> bool:
     """`shown_feed_communities` for one row."""
     return not hidden_here(community, signed_in)
+
+
+def shown_community_count(feed: Feed, signed_in: bool | None = None) -> int:
+    """`feed.num_communities` without the communities this storefront hides from its reader, so a count never tells that
+    one is there (`signed_in` as in `hidden_here`). The stored count when nothing is hidden here (no query)."""
+    if not hides_anything_here():
+        return feed.num_communities or 0
+    held = db.session.query(func.count(FeedItem.id)).filter(FeedItem.feed_id == feed.id)
+    shown = shown_feed_communities(held.join(Community, Community.id == FeedItem.community_id), signed_in)
+    return max(0, (feed.num_communities or 0) - (held.scalar() - shown.scalar()))
+
+
+def feed_may_join(community: Community, member: User) -> bool:
+    """Whether a feed may join `member` to `community` for them. Never a local-only community outside the member's home
+    domain: the membership would tie that account to a domain it does not use (an onion community and a clearnet
+    account, or the reverse). A worker has no storefront, so it asks the domains and not `hidden_here`."""
+    return not community_local_only(community) or community.home_domain().id == member.home_domain().id
