@@ -79,7 +79,7 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     RevokedToken, CommunityFavorite, UserFollower, CommunityFlairBlock, s3_key_from_url, Role, RolePermission, \
     ServerViewMember
 from app.local_names import local_named
-from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, current_storefront, canonicalise_links, canonicalise_text, domain_base_url, \
+from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, DomainInfo, current_storefront, canonicalise_links, canonicalise_text, domain_base_url, \
     act_in_this_request, acting_as_default, acting_domain, domain_authority, \
     boosted_order_by, boosted_top_sql, domain_by_id, hosted_instance_ids, is_hosted_uri, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
 from app.branding import branding_for
@@ -4525,8 +4525,11 @@ def feed_readable_by(feed: Feed, user_id) -> bool:
     return feed.subscribed(user_id) >= SUBSCRIPTION_MEMBER
 
 
-def feed_tree(user_id) -> List[dict]:
+def feed_tree(user_id, domain: DomainInfo | None = None) -> List[dict]:
+    """`user_id`'s feeds as a tree; with `domain`, only the ones on that domain (a feed tree lives on one domain)."""
     feeds = Feed.query.filter(Feed.user_id == user_id).order_by(Feed.name)
+    if domain is not None:
+        feeds = feeds.filter(on_domain(domain, Feed))
 
     feeds_dict = {feed.id: {'feed': feed, 'children': []} for feed in feeds.all()}
 

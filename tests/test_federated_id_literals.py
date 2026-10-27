@@ -55,10 +55,7 @@ ALLOWED = {
     ('app/activitypub/routes.py', 'feed_followers'): {FEEDS: 1},
     ('app/activitypub/routes.py', 'feed_moderators_route'): {FEEDS: 1},
     ('app/activitypub/routes.py', 'feed_profile'): {FEEDS: 6},
-    ('app/feed/routes.py', 'feed_copy'): {FEEDS: 3},
     ('app/shared/feed.py', 'announce_feed_add_remove_to_subscribers'): {FEEDS: 2},
-    ('app/shared/feed.py', 'edit_feed'): {FEEDS: 3},
-    ('app/shared/feed.py', 'make_feed'): {FEEDS: 3},
 }
 
 _CONFIG_KEYS = frozenset(('SERVER_URL', 'SERVER_NAME'))

@@ -73,9 +73,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/federation_urls.py': {
         'hosted_domain_names': 1,   # the hosts a fan-out never sends to
     },
-    'app/feed/routes.py': {
-        'feed_copy': 2,
-    },
     'app/feed/util.py': {
         'feed_communities_for_edit': 1,
     },
@@ -129,8 +126,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     },
     'app/shared/feed.py': {
         'announce_feed_add_remove_to_subscribers': 2,
-        'edit_feed': 2,
-        'make_feed': 2,
     },
     'app/shared/post.py': {
         'report_post': 1,

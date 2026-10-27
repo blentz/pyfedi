@@ -16,6 +16,7 @@ from app import db
 from app.feed.util import (actor_to_feed, feed_communities_for_edit, feeds_for_form,
                            initialise_new_communities, search_for_feed)
 from app.models import BannedInstances, Community, Feed, FeedItem
+from app.storefront import default_domain
 from tests.factories import make_community, make_instance, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -331,7 +332,7 @@ def test_the_form_choices_list_every_feed_but_the_current_one(app, db_session):
     _feed(owner, 'grandchildfeed', title='Grandchild', parent_feed_id=child.id)
 
     with app.test_request_context('/'):
-        choices = feeds_for_form(child.id, owner.id)
+        choices = feeds_for_form(child.id, owner.id, default_domain())
 
     labels = [label for _, label in choices]
     assert labels[0] == 'None'
@@ -349,7 +350,7 @@ def test_the_form_choices_skip_the_current_feed_at_the_top_level(app, db_session
     _feed(owner, 'otherfeed', title='Other')
 
     with app.test_request_context('/'):
-        labels = [label for _, label in feeds_for_form(top.id, owner.id)]
+        labels = [label for _, label in feeds_for_form(top.id, owner.id, default_domain())]
 
     assert 'Top' not in labels
     assert 'Other' in labels

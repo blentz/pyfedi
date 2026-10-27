@@ -301,7 +301,7 @@ def test_the_copy_form_disables_the_instance_feed_box_for_non_admins(
             client.get(f'/feed/{source.id}/copy')
 
     assert (captured['form'].is_instance_feed.render_kw == {'disabled': True}) is expect_disabled
-    assert choices.call_args.args == (0, owner.id)
+    assert choices.call_args.args == (0, owner.id, owner.home_domain())
 
 
 @pytest.mark.parametrize('public, expected_name', [

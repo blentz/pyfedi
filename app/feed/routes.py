@@ -23,7 +23,7 @@ from app.constants import SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, POST_TYPE_
 from app.federation_urls import activity_id, domain_site_name
 from app.feed import bp
 from app.feed.forms import AddCopyFeedForm, EditFeedForm, SearchRemoteFeed
-from app.feed.util import feeds_for_form, search_for_feed, actor_to_feed, feed_communities_for_edit
+from app.feed.util import feeds_for_form, refuse_bad_parent, search_for_feed, actor_to_feed, feed_communities_for_edit
 from app.inoculation import inoculation
 from app.models import Feed, FeedMember, FeedItem, Community, NotificationSubscription, \
     CommunityMember, User, FeedJoinRequest, Instance, Topic, CommunityJoinRequest
@@ -36,7 +36,7 @@ import app.shared.feed as shared_feed
 from app.local_names import actor_handle
 from app.storefront import current_storefront, is_local_host, storefront_link, storefront_url
 from app.shared.upload import is_refused_upload
-from app.local_only import found_here, local_only_visible_rss, without_local_only_actors
+from app.local_only import found_here, hidden_here, local_only_visible_rss, without_local_only_actors
 from app.utils import etag_stamp, back, show_ban_message, piefed_markdown_to_lemmy_markdown, markdown_to_html, render_template, \
     user_filters_posts, joined_communities, menu_instance_feeds, validation_required, feed_membership, \
     gibberish, get_task_session, instance_banned, menu_subscribed_feeds, referrer, community_membership, \
@@ -63,7 +63,7 @@ def feed_new():
         form.nsfl.render_kw = {'disabled': True}
     if not current_user.is_admin():
         form.is_instance_feed.render_kw = {'disabled': True}
-    form.parent_feed_id.choices = feeds_for_form(0, current_user.id)
+    form.parent_feed_id.choices = feeds_for_form(0, current_user.id, current_user.home_domain())
 
     if form.validate_on_submit():
         form.url.data = slugify(form.url.data.strip().split('/')[0], separator='_').lower()
@@ -91,6 +91,8 @@ def feed_new():
         else:
             flash(_('Your new Feed has been created.'))
             return redirect(url_for('user.user_myfeeds', actor=current_user.link()))
+
+    refuse_bad_parent(form)
 
     # Create Feed from a topic
     # D1395. `type=int`, and read ONCE rather than twice. A 404 rather than an
@@ -173,7 +175,7 @@ def feed_edit(feed_id: int):
     if feed_to_edit.user_id != current_user.id and not current_user.is_admin():
         abort(404)
     edit_feed_form = EditFeedForm()
-    edit_feed_form.parent_feed_id.choices = feeds_for_form(feed_id, feed_to_edit.user_id)
+    edit_feed_form.parent_feed_id.choices = feeds_for_form(feed_id, feed_to_edit.user_id, feed_to_edit.home_domain())
     edit_feed_form.feed_id = feed_id
     edit_feed_form.owner_user_name = db.session.get(User, feed_to_edit.user_id).user_name
 
@@ -205,6 +207,8 @@ def feed_edit(feed_id: int):
                 return redirect(referrer())
         else:
             return redirect(referrer())
+
+    refuse_bad_parent(edit_feed_form)
 
     # add the current data to the form
     edit_feed_form.title.data = feed_to_edit.title
@@ -259,10 +263,12 @@ def feed_copy(feed_id: int):
     # description and every FeedItem in it. Only the id was needed, so any
     # logged-in account could take a copy of a private feed it cannot open and
     # then read the copy, which is its own.
-    if not feed_readable_by(feed_to_copy, current_user.id if current_user.is_authenticated else None):
+    # nor is a feed this storefront hides (an onion feed, off the onion) one to copy: the answer for a missing feed
+    if not feed_readable_by(feed_to_copy, current_user.id if current_user.is_authenticated else None) \
+            or hidden_here(feed_to_copy):
         abort(404)
     copy_feed_form = AddCopyFeedForm()
-    copy_feed_form.parent_feed_id.choices = feeds_for_form(0, current_user.id)
+    copy_feed_form.parent_feed_id.choices = feeds_for_form(0, current_user.id, current_user.home_domain())
 
     if not current_user.is_admin():
         copy_feed_form.is_instance_feed.render_kw = {'disabled': True}
@@ -293,8 +299,12 @@ def feed_copy(feed_id: int):
             flash(_('A Feed with this url already exists.'), 'error')
             return redirect(url_for('feed.feed_copy', feed_id=feed_id))
 
-        # D722: every actor url from one base, as make_feed builds them; only ap_profile_id was lowercased
-        base = f"https://{current_app.config['SERVER_NAME']}/f/{copy_feed_form.url.data}"
+        # the copy is made on the copier's home domain, as feed_new's feed is
+        home = current_user.home_domain()
+        try:
+            parent_feed_id = shared_feed.parent_feed_on(home, copy_feed_form.parent_feed_id.data)
+        except ValueError:
+            abort(400)
         private_key, public_key = RsaKeys.generate_keypair()
         feed = Feed(user_id=current_user.id, title=copy_feed_form.title.data, name=copy_feed_form.url.data,
                     machine_name=copy_feed_form.url.data,
@@ -305,20 +315,9 @@ def feed_copy(feed_id: int):
                     private_key=private_key,
                     public_key=public_key,
                     public=copy_feed_form.public.data, is_instance_feed=copy_feed_form.is_instance_feed.data,
-                    ap_profile_id=base,
-                    ap_public_url=base,
-                    ap_followers_url=f'{base}/followers',
-                    ap_following_url=f'{base}/following',
-                    # As make_feed builds it. Without this the feed's outbox
-                    # document is served with a null id
-                    # (app/activitypub/routes.py:2770).
-                    ap_outbox_url=f'{base}/outbox',
-                    ap_domain=current_app.config['SERVER_NAME'],
-                    subscriptions_count=1, instance_id=1)
-        if copy_feed_form.parent_feed_id.data:
-            feed.parent_feed_id = copy_feed_form.parent_feed_id.data
-        else:
-            feed.parent_feed_id = None
+                    **shared_feed.feed_identity(home, copy_feed_form.url.data),
+                    subscriptions_count=1)
+        feed.parent_feed_id = parent_feed_id
         icon_file = request.files.get('icon_file')
         if icon_file and icon_file.filename != '':
             file = save_icon_file(icon_file, directory='feeds')
@@ -371,6 +370,8 @@ def feed_copy(feed_id: int):
 
         flash(_('Your new Feed has been created.'))
         return redirect(url_for('user.user_myfeeds', actor=current_user.link()))  # D721: as feed_new does
+
+    refuse_bad_parent(copy_feed_form)
 
         # add the current data to the form
     copy_feed_form.title.data = feed_to_copy.title

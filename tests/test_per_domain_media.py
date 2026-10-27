@@ -109,11 +109,13 @@ def test_the_api_community_image_upload_is_the_callers_domains(app, sites, monke
     assert url.startswith(f'{SHOP_BASE}/static/media/communities/')
 
 
-def test_a_feeds_upload_is_the_default_domains(app, sites):
-    """Feeds are the default domain's (C1 ruling), whoever uploads their images."""
-    with request_on(app, sites.shop):   # acting as the shop: a plain upload here would be the shop's
-        icon, banner = store_icon_and_banner(an_image(), an_image())
-    assert icon.startswith(f'{FIRST_BASE}/static/media/feeds/') and banner.startswith(f'{FIRST_BASE}/static/media/feeds/')
+def test_a_feeds_upload_is_its_domains(app, sites):
+    """A feed's images are stored on the feed's home domain (per-domain feeds), wherever the upload is made."""
+    with request_on(app, sites.first):
+        shop_icon, shop_banner = store_icon_and_banner(an_image(), an_image(), sites.shop)
+        first_icon, first_banner = store_icon_and_banner(an_image(), an_image(), sites.first)
+    assert shop_icon.startswith(f'{SHOP_BASE}/static/media/feeds/') and shop_banner.startswith(f'{SHOP_BASE}/static/media/feeds/')
+    assert first_icon.startswith(f'{FIRST_BASE}/static/media/feeds/') and first_banner.startswith(f'{FIRST_BASE}/static/media/feeds/')
 
 
 def test_a_shop_users_own_upload_can_be_deleted(app, sites):
