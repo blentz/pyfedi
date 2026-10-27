@@ -16,7 +16,7 @@ from app.api.alpha.views import user_view, reply_view, post_view, community_view
 # find_user is defined (import cycle: app.auth.util)
 import app.auth.util as auth_util
 from app.api.alpha.utils.found import a_community, a_person
-from app.hidden_routes import hidden_notifications
+from app.hidden_routes import hidden_notifications, notification_hidden
 from app.local_names import local_clause, local_named
 from app.local_only import without_hidden_conversations, without_hidden_here, without_local_only_actors
 from app.constants import *
@@ -871,6 +871,8 @@ def put_user_notification_state(auth, data):
 
     # get the notification from the data.notif_id
     notif = Notification.query.filter_by(id=notif_id, user_id=user_id).one()
+    if notification_hidden(notif):   # about a row hidden here: answered as one nobody holds, before any write (F6, R1)
+        raise NoResultFound('No row was found when one was required')
 
     try:
         # make a json for the specific notification and return that one item
