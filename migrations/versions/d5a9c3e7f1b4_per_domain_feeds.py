@@ -6,6 +6,9 @@ a first-domain account every feed lands on the first domain and its documents do
 The unique index on the feed name becomes a plain one, and a unique index on (domain, lower(name)) over local feeds
 takes its place.
 
+Creating the unique index aborts the upgrade if two legacy local feeds on one domain differ only by case (the old
+unique index held names case-sensitively). Rename one first.
+
 The downgrade cannot always run: recreating the unique `ix_feed_name` fails while two domains share a feed name (or
 two names differ only by case). Rename the duplicates first.
 

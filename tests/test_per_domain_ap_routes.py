@@ -11,8 +11,8 @@ from app import cache, db
 from app.activitypub.actor import find_actor_by_url
 from app.models import CommunityMember, SiteDomain
 from app.storefront import clear_domain_cache, domain_for_host
-from tests.test_onion_guard_limits import PROXY, a_session, onion_get
-from tests.two_domains import FIRST, ONION, default_request, no_http, onion_request, two_domains  # noqa: F401
+from tests.test_onion_guard_limits import PROXY
+from tests.two_domains import FIRST, ONION, default_request, no_http, onion_request, routed_get, two_domains  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -40,11 +40,7 @@ def twins(app, two_domains):
 
 
 def get(app, path, host=FIRST, headers=AP):
-    client = app.test_client()
-    if host == ONION:   # through the onion guard: a session first, as a browser does it
-        a_session(client)
-        return onion_get(client, path, headers=headers)
-    return client.get(path, headers=headers, base_url=f'https://{host}')
+    return routed_get(app, path, host, headers)
 
 
 @pytest.fixture(autouse=True)

@@ -14,12 +14,13 @@ from app import db
 from app.models import Feed, FeedMember, SiteDomain, User
 from app.storefront import DomainInfo, clear_domain_cache, domain_for_host
 from tests.factories import a_keypair, make_instance, make_local_feed
-from tests.test_per_domain_ap_routes import get as _routed_get
-from tests.two_domains import FIRST, ONION, request_on, two_domains  # noqa: F401
+from tests.test_onion_guard_limits import PROXY
+from tests.two_domains import FIRST, ONION, request_on, routed_get, two_domains  # noqa: F401
 
+AP = {'Accept': 'application/activity+json'}
 SHOP = 'shop.example'
 PEER = 'peer.example'
-__all__ = ['FIRST', 'ONION', 'SHOP', 'PEER', 'ThreeDomains', 'three_domains', 'request_on', 'get', 'ap_get', 'urls_in',
+__all__ = ['two_domains', 'FIRST', 'ONION', 'SHOP', 'PEER', 'ThreeDomains', 'three_domains', 'request_on', 'get', 'ap_get', 'urls_in',
            'sent', 'peer']
 
 
@@ -33,7 +34,8 @@ class ThreeDomains(NamedTuple):
 
 
 @pytest.fixture
-def three_domains(app, two_domains):  # noqa: F811
+def three_domains(app, two_domains, monkeypatch):  # noqa: F811
+    monkeypatch.setitem(app.config, 'ONION_PROXY_IP', PROXY)   # so `get(..., host=ONION)` is an onion request
     db.session.add(SiteDomain(domain=SHOP, scheme='https', federates=True))
     db.session.commit()
     clear_domain_cache()
@@ -59,12 +61,12 @@ def three_domains(app, two_domains):  # noqa: F811
 
 def ap_get(app, path: str, host: str = FIRST):
     """GET `path` on `host` as an ActivityPub client (through the onion guard for the onion)."""
-    return _routed_get(app, path, host)
+    return routed_get(app, path, host, headers=AP)
 
 
 def get(app, path: str, host: str = FIRST):
     """GET `path` on `host` as a browser (no Accept header)."""
-    return _routed_get(app, path, host, headers={})
+    return routed_get(app, path, host, headers={})
 
 
 def urls_in(document) -> list[str]:
