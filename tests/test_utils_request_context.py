@@ -324,3 +324,19 @@ class TestUnreadNotificationsListener:
         db.session.expunge(user)
         db.session.commit()
         assert published == []
+
+    def test_a_redis_failure_while_publishing_is_logged_and_swallowed(self, app, db_session, monkeypatch, caplog):
+        """Re-review 5, m1: the data is committed, so the caller gets no error and a retry cannot write it twice."""
+        monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'https://notif.example')
+
+        def broken(key, value):
+            raise ConnectionError('redis is down')
+        monkeypatch.setattr(app_utils, 'publish_sse_event', broken)
+        user = make_user(make_instance('test.instance.example'), 'notified', local=True)
+        user.unread_notifications = 5
+        with caplog.at_level('WARNING', logger=app_utils.logger.name):
+            db.session.commit()
+        assert [record.levelname for record in caplog.records if 'redis is down' in record.getMessage()] == ['WARNING']
+        assert not db.session().in_transaction()
+        assert db.session.execute(text('SELECT unread_notifications FROM "user" WHERE id = :id'),
+                                  {'id': user.id}).scalar() == 5

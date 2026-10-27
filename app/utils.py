@@ -6739,7 +6739,10 @@ def publish_changed_notification_counts(session):
     for target in session.info.pop(_NOTIFS_CHANGED, {}).values():
         identity = inspect(target).identity
         if identity:
-            _publish_notifs_changed(identity[0])
+            try:
+                _publish_notifs_changed(identity[0])
+            except Exception as error:   # the data is committed: a Redis failure must not reach the caller
+                logger.warning('Could not publish the notification change for account %s: %s', identity[0], error)
 
 
 @event.listens_for(Session, 'after_soft_rollback')
