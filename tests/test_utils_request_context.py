@@ -247,7 +247,8 @@ class TestUnreadNotificationsListener:
 
             message = pubsub.get_message(timeout=1)
             assert message is not None, 'no SSE event was published'
-            assert json.loads(message['data']) == {'num_notifs': 5}
+            # a change only: the page asks its own storefront for the count it may show (follow-up F6, N1)
+            assert json.loads(message['data']) == {'notifs_changed': True}
         finally:
             app.config['NOTIF_SERVER'] = original
 
