@@ -243,13 +243,13 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
         try:
             parsed_url = urlparse(query)
         except ValueError:   # an unbalanced bracket in the host: a URL that names nothing, not a server error
-            raise Exception('No object found.')
+            raise Exception(NOT_FOUND)
         server = parsed_url.netloc.lower()
     elif query.startswith('!') or query.startswith('@') or query.startswith('~'):
         name, server = normalise_actor_string(query)
 
     if not server:  # can't find server
-        raise Exception('No object found.')
+        raise Exception(NOT_FOUND)
     
     if is_local_host(server):   # a link on any of this site's domains
         local_request = True
@@ -267,11 +267,11 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             local_request = False
     
     if not user_id and not local_request:  # not logged in
-        raise Exception('No object found.')
+        raise Exception(NOT_FOUND)
 
     banned = db.session.query(BannedInstances).filter_by(domain=server).first()
     if banned:
-        raise Exception('No object found.')
+        raise Exception(NOT_FOUND)
     
     # Request for something on the local instance already, check local db instead of fetching remote info
     if local_request:
@@ -301,7 +301,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                 if object:
                     return _community_result(object, user_id)
                 else:
-                    raise Exception('No object found.')
+                    raise Exception(NOT_FOUND)
             
             # This is a community specified by url
             # D1193. A `try: ... except: comm_name = None` and an
@@ -323,7 +323,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             if object:
                 return _community_result(object, user_id)
             else:
-                raise Exception('No object found.')
+                raise Exception(NOT_FOUND)
 
         # Users
         if query.startswith("@") or "/u/" in query:
@@ -336,7 +336,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                 if object:
                     return _user_result(object, user_id)
                 else:
-                    raise Exception('No object found.')
+                    raise Exception(NOT_FOUND)
             
             # This is a user specified by url
             user_pattern = re.compile(r"/u/(.*?)(/|$)")  # D1193, as above
@@ -349,7 +349,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             if object:
                 return _user_result(object, user_id)
             else:
-                raise Exception('No object found.')
+                raise Exception(NOT_FOUND)
         
         # Posts
         post_patterns = ["/post/", "/p/", "/t/"]
@@ -379,7 +379,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                 post_id = None
                 
             if not post_id:
-                raise Exception('No object found.')
+                raise Exception(NOT_FOUND)
             
             # Since this is a local request, just search for the post by id
             object = db.session.get(Post, post_id)
@@ -401,7 +401,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                 comment_id = None
             
             if not comment_id:
-                raise Exception('No object found.')
+                raise Exception(NOT_FOUND)
             
             # Since this is a local request, just search for the comment by id
             object = db.session.get(PostReply, comment_id)
@@ -419,7 +419,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                 if object and feed_dict:
                     return _feed_result(object, feed_dict, user_id)
                 else:
-                    raise Exception('No object found.')
+                    raise Exception(NOT_FOUND)
             
             # This is a feed specified by url
             feed_pattern = re.compile(r"/[f]/(.*?)($)")  # D1193, as above
@@ -434,7 +434,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             if object and feed_dict:
                 return _feed_result(object, feed_dict, user_id)
             else:
-                raise Exception('No object found.')
+                raise Exception(NOT_FOUND)
 
     # use hints first in query first
     # assume that queries starting with ! are for a community
@@ -469,9 +469,9 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
     # no more hints from query
     ap_json = remote_object_to_json(query, retry_delay=0)   # a request path: no sleep, no retry (D738)
     if not ap_json:
-        raise Exception('No object found.')
+        raise Exception(NOT_FOUND)
     if not 'id' in ap_json:
-        raise Exception('No object found.')
+        raise Exception(NOT_FOUND)
     if query != ap_json['id']:
         # query URL doesn't match original author's URL, so call this function with that URL instead
         # 'recursive' is (incorrectly) set to False to get the view, not the object
@@ -479,7 +479,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
 
     # a user or a community
     if not 'type' in ap_json:
-        raise Exception('No object found.')
+        raise Exception(NOT_FOUND)
 
     # D1191. This read `... == 'Person' or ... == 'Service' or ... == 'Group'
     # or ... == 'Feed' and 'preferredUsername' in ap_json`, and `and` binds
@@ -507,7 +507,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
         # D24: a top-level episode from a Castopod podcast belongs in the podcast's community, as in the inbox
         route = podcast_route_for(db.session.query(User).filter_by(ap_profile_id=author.lower()).first())
         if route is PODCAST_DROP:   # a banned podcast's episode is dropped
-            raise Exception('No object found.')
+            raise Exception(NOT_FOUND)
         community = route
     # if community doesn't already exist, call this function recursively to create it
     if not community:
@@ -547,7 +547,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                     community = object.community
 
         if not community:
-            raise Exception('No object found.')
+            raise Exception(NOT_FOUND)
 
     # pretend this was Announced in, so an existing function can be re-used
     announce_id = f"https://{server}/activities/announce/{gibberish(15)}"
@@ -565,7 +565,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             return _reply_result(object, user_id, recursive)
 
     # failed to resolve if here.
-    raise Exception('No object found.')
+    raise Exception(NOT_FOUND)
 
 
 def get_suggestion(data, auth=None):

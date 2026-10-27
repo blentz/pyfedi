@@ -408,3 +408,8 @@ def test_a_banned_account_the_reply_mentions_does_not_stop_it_resolving(world, p
     mia.banned = True
     db.session.commit()
     assert resolve(caller(), CHILD)['comment']['comment']['id']
+
+
+def test_the_not_found_text_is_one_shared_value():
+    import inspect
+    assert inspect.getsource(misc).count("'No object found.'") == 1 and misc.NOT_FOUND == 'No object found.'
