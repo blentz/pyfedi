@@ -7,8 +7,8 @@ feed is never listed off the onion, whoever is looking (anti-goal 2).
 from flask_login import current_user
 from sqlalchemy import and_, not_, or_, true
 
-from app.local_only import hidden_here, hidden_here_clause, hides_nothing
-from app.models import Feed
+from app.local_only import hidden_here, hidden_here_clause, hides_nothing, without_hidden_here
+from app.models import Community, Feed
 from app.storefront import DomainInfo, current_storefront, default_domain, on_domain
 
 
@@ -81,3 +81,15 @@ def federating_feed_clause():
     while every domain federates."""
     clause = hidden_here_clause(Feed, signed_in=False)
     return true() if hides_nothing(clause) else not_(clause)
+
+
+def shown_feed_communities(query, signed_in: bool | None = None):
+    """`query` over Community (or over rows joined to it) without the communities this storefront hides from its reader,
+    `hidden_here` as a filter (ruling a3: no feed-only copy of the rule). A clearnet feed that holds an onion community
+    never shows it off the onion. `signed_in` as in `hidden_here`."""
+    return without_hidden_here(query, Community, signed_in)
+
+
+def community_shown_here(community: Community, signed_in: bool | None = None) -> bool:
+    """`shown_feed_communities` for one row."""
+    return not hidden_here(community, signed_in)

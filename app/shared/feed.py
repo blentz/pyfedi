@@ -13,7 +13,8 @@ from app.activitypub.signature import send_post_request, default_context, RsaKey
 from app.activitypub.util import find_actor_or_create, make_image_sizes
 from app.constants import *
 from app.federation_urls import activity_id, owner_base, owner_domain
-from app.feed_domains import feed_local_only
+from app.feed_domains import community_shown_here, feed_local_only
+from app.local_only import community_local_only
 from app.models import User, Feed, FeedMember, FeedItem, Community, FeedJoinRequest, CommunityMember, \
     CommunityJoinRequest, Instance, File, _as_url
 from app.shared.tasks import task_selector
@@ -583,7 +584,11 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
         existing_communities(feed.id))  # the communities that were in the feed before the edit was made
     new_communities = form_communities_to_ids(communities)  # the communities that are in the feed now
     added_communities = new_communities - old_communities
+    # an editor never saw a community hidden here, so naming none of them is not removing them
     removed_communities = old_communities - new_communities
+    if removed_communities:
+        removed_communities -= {row.id for row in Community.query.filter(Community.id.in_(removed_communities))
+                                if not community_shown_here(row, True)}
 
     for added_community in added_communities:
         _feed_add_community(added_community, 0, feed.id, user.id)
@@ -811,7 +816,7 @@ def announce_feed_add_remove_to_subscribers(action: str, feed_id: int, community
             feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
             # a feed that does not exist to other servers (an onion feed, or one an onion account owns) is announced
             # to none of them; its local members still follow the community (task 7)
-            federates = not feed_local_only(feed)
+            federates = not feed_local_only(feed) and not community_local_only(community)
 
             # for each member
             #  - if its the owner, skip
@@ -919,6 +924,6 @@ def form_communities_to_ids(form_communities: str) -> set:
         if not '@' in community_ap_id:
             community_ap_id = community_ap_id + '@' + domain_authority(acting_domain())
         community = search_for_community(community_ap_id.strip())
-        if community:
+        if community and community_shown_here(community, True):   # a writer is signed in; a hidden one is skipped as a missing one is
             result.add(community.id)
     return result

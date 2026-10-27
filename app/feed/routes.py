@@ -24,7 +24,7 @@ from app.federation_urls import activity_id, domain_site_name
 from app.feed import bp
 from app.feed.forms import AddCopyFeedForm, EditFeedForm, SearchRemoteFeed
 from app.feed.util import feeds_for_form, refuse_bad_parent, search_for_feed, actor_to_feed, feed_communities_for_edit
-from app.feed_domains import feeds_shown_here_clause
+from app.feed_domains import community_shown_here, feeds_shown_here_clause, shown_feed_communities
 from app.inoculation import inoculation
 from app.models import Feed, FeedMember, FeedItem, Community, NotificationSubscription, \
     CommunityMember, User, FeedJoinRequest, Instance, Topic, CommunityJoinRequest
@@ -37,7 +37,7 @@ import app.shared.feed as shared_feed
 from app.local_names import actor_handle
 from app.storefront import current_storefront, domain_for_host, path_name, storefront_link, storefront_url
 from app.shared.upload import is_refused_upload
-from app.local_only import found_here, hidden_here, local_only_visible_rss, without_local_only_actors
+from app.local_only import found_here, hidden_here, local_only_visible_rss
 from app.utils import etag_stamp, back, show_ban_message, piefed_markdown_to_lemmy_markdown, markdown_to_html, render_template, \
     user_filters_posts, joined_communities, menu_instance_feeds, validation_required, feed_membership, \
     gibberish, get_task_session, instance_banned, menu_subscribed_feeds, referrer, community_membership, \
@@ -454,7 +454,8 @@ def feed_add_community():
     # exist, and the insert was a ForeignKeyViolation -- the post-level twin of
     # D1125, and a 500 rather than the 404 this route gives for everything else
     # it cannot resolve.
-    if found_here(Community, community_id) is None:   # hidden here or nobody's: one answer (follow-up F6)
+    community = found_here(Community, community_id)   # hidden here or nobody's: one answer (follow-up F6)
+    if community is None or not community_shown_here(community, True):
         abort(404)
 
     shared_feed._feed_add_community(community_id, current_feed_id, feed_id, user_id)
@@ -586,8 +587,8 @@ def show_feed(feed):
         for fid in feed_ids:
             feed_items = FeedItem.query.filter_by(feed_id=fid).\
                 join(Community, Community.id == FeedItem.community_id).\
-                filter(or_(Community.private == False, Community.id.in_(community_membership_private(current_user.get_id())))).all()
-            for item in feed_items:
+                filter(or_(Community.private == False, Community.id.in_(community_membership_private(current_user.get_id()))))
+            for item in shown_feed_communities(feed_items):   # a community hidden here takes its posts with it
                 feed_community_ids.append(item.community_id)
 
         post_ids = get_deduped_post_ids(result_id, feed_community_ids, sort, tag)
@@ -601,7 +602,7 @@ def show_feed(feed):
             filter(Community.id.not_in(blocked_communities(current_user.get_id()))). \
             filter(or_(Community.private == False, Community.id.in_(community_membership_private(current_user.get_id())))). \
             order_by(desc(Community.total_subscriptions_count))
-        feed_communities = without_local_only_actors(feed_communities, Community)   # logged out: none local-only
+        feed_communities = shown_feed_communities(feed_communities)
 
         next_url = url_for('activitypub.feed_profile', actor=feed.link(),
                            page=page + 1, sort=sort, layout=post_layout, result_id=result_id) if has_next_page else None
@@ -683,16 +684,16 @@ def feed_create_post(feed_name):
     for item in FeedItem.query.filter_by(feed_id=feed.id).all():
         feed_community_ids.append(item.community_id)
 
-    communities = without_local_only_actors(Community.query.filter(Community.id.in_(feed_community_ids)).filter_by(
-        banned=False), Community).order_by(Community.title).all()   # none hidden here (follow-up F6)
+    communities = shown_feed_communities(Community.query.filter(Community.id.in_(feed_community_ids)).filter_by(
+        banned=False)).order_by(Community.title).all()
     sub_feed_community_ids = []
     child_feeds = [feed.id for feed in Feed.query.filter(Feed.parent_feed_id == feed.id).all()]
     for cf_id in child_feeds:
         for item in FeedItem.query.filter_by(feed_id=cf_id).all():
             sub_feed_community_ids.append(item.community_id)
 
-    sub_communities = without_local_only_actors(Community.query.filter_by(banned=False).filter(
-        Community.id.in_(sub_feed_community_ids)), Community).order_by(Community.title).all()
+    sub_communities = shown_feed_communities(Community.query.filter_by(banned=False).filter(
+        Community.id.in_(sub_feed_community_ids))).order_by(Community.title).all()
     # D1389. `int(request.form.get('community_id'))` behind a `!= ''` test, which
     # only rules out absent and empty -- a form field is whatever the caller sends.
     # Measured: `'abc'`, `'1.5'` and `'null'` were
@@ -881,7 +882,8 @@ def show_feed_rss(feed_path):
         # For each feed get the community ids (FeedItem) in the feed
         feed_community_ids = []
         for fid in feed_ids:
-            for item in FeedItem.query.filter_by(feed_id=fid).all():
+            items = FeedItem.query.filter_by(feed_id=fid).join(Community, Community.id == FeedItem.community_id)
+            for item in shown_feed_communities(items, local_only_visible_rss()):
                 feed_community_ids.append(item.community_id)
 
         post_ids = get_deduped_post_ids('', feed_community_ids, 'new', show_local_only=local_only_visible_rss(),

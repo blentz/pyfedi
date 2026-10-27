@@ -31,6 +31,7 @@ from app.utils import can_moderate, authorise_api_user, blocked_users, blocked_c
     community_membership_private, paginate_post_ids, post_ids_to_models, user_access, moderating_communities_ids, \
     user_filters_languages, feed_readable_by
 from app.shared.tasks import task_selector
+from app.feed_domains import shown_feed_communities
 from app.local_only import hidden_here, hidden_here_sql, prime_reporters, without_hidden_here, without_hidden_reports, \
     without_local_only, without_local_only_actors
 from app.api.alpha.utils.found import a_community, a_feed, a_post, a_reply, a_report
@@ -322,7 +323,8 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
                 # them to `db.session.execute(...)`, which does not uniquify,
                 # would have inherited the duplicates. D1394 removed the last
                 # ten copies of this idiom.
-                for item in FeedItem.query.filter_by(feed_id=fid).all():
+                items = FeedItem.query.filter_by(feed_id=fid).join(Community, Community.id == FeedItem.community_id)
+                for item in shown_feed_communities(items, user_id is not None):   # one hidden here lists no posts
                     feed_community_ids.append(item.community_id)
 
             posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
@@ -1001,7 +1003,8 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
                 # them to `db.session.execute(...)`, which does not uniquify,
                 # would have inherited the duplicates. D1394 removed the last
                 # ten copies of this idiom.
-                for item in FeedItem.query.filter_by(feed_id=fid).all():
+                items = FeedItem.query.filter_by(feed_id=fid).join(Community, Community.id == FeedItem.community_id)
+                for item in shown_feed_communities(items, user_id is not None):   # one hidden here lists no posts
                     feed_community_ids.append(item.community_id)
 
             posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,

@@ -32,7 +32,8 @@ from app.federation_urls import domain_site_name, owner_domain
 from app.storefront import DomainInfo, current_storefront, default_domain, domain_base_url, hosted_instance_ids, registration_mode_on, storefront_link, storefront_memo_name, storefront_url
 from app.local_names import hidden_note_text
 from app.local_only import hidden_here, hidden_here_clause, hidden_here_sql, hides_nothing, reporter_hidden_here, \
-    shown_here, without_local_only_actors
+    shown_here
+from app.feed_domains import shown_feed_communities
 from app.visibility import can_view, visible_to_sql
 
 
@@ -1238,7 +1239,7 @@ def feed_view(feed: Feed | int, variant: int, user_id, subscribed, include_commu
         if include_communities:
             listed = Community.query.filter(Community.banned == False, Community.private == False).\
                 join(FeedItem, FeedItem.community_id == Community.id).filter(FeedItem.feed_id == feed.id)
-            for community in without_local_only_actors(listed, Community, visible=user_id is not None):
+            for community in shown_feed_communities(listed, signed_in=user_id is not None):
                 if community.id not in blocked_community_ids and \
                         community.instance_id not in blocked_instance_ids and \
                         community.id not in banned_from:
@@ -1422,7 +1423,7 @@ def topic_view(topic: Topic | int, variant: int, communities_moderating, banned_
         if include_communities:
             listed = Community.query.filter(Community.banned == False, Community.topic_id == topic.id,
                                             Community.private == False)
-            for community in without_local_only_actors(listed, Community, visible=user_id is not None):
+            for community in shown_feed_communities(listed, signed_in=user_id is not None):
                 if community.id not in blocked_community_ids and \
                         community.instance_id not in blocked_instance_ids and \
                         community.id not in banned_from:
