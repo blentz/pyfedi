@@ -1,8 +1,10 @@
+from collections import Counter
+
 from flask import current_app, abort
 from flask_smorest import abort as api_abort
 from flask_login import current_user
 from furl import furl
-from sqlalchemy import text, desc, func, asc
+from sqlalchemy import text, desc, func, asc, select
 from sqlalchemy.orm.exc import NoResultFound
 import jwt
 from datetime import datetime
@@ -16,7 +18,7 @@ from app.api.alpha.views import user_view, reply_view, post_view, community_view
 # find_user is defined (import cycle: app.auth.util)
 import app.auth.util as auth_util
 from app.api.alpha.utils.found import a_community, a_person
-from app.hidden_routes import hidden_notifications, notification_hidden
+from app.hidden_routes import hidden_notifications, hidden_unread, notification_hidden
 from app.local_names import local_clause, local_named
 from app.local_only import without_hidden_conversations, without_hidden_here, without_local_only_actors
 from app.constants import *
@@ -156,18 +158,22 @@ def get_user_unread_count(auth):
     unread_replies = unread_messages = unread_mentions = 0
     unread_notifications = user.unread_notifications
     if unread_notifications > 0:
-        # counted from the rows, so a notification or message about something hidden here counts nowhere (F6)
-        rows = Notification.query.filter_by(user_id=user.id, read=False).all()
-        unread = [n for n, hidden in zip(rows, hidden_notifications(rows)) if not hidden]
+        # counted in SQL, less those about something hidden here, which count nowhere (follow-up F6, R4)
+        counts = Counter({(notif_type, subtype): count for notif_type, subtype, count in db.session.execute(
+            select(Notification.notif_type, Notification.subtype, func.count()).where(
+                Notification.user_id == user.id, Notification.read.is_(False)).group_by(
+                Notification.notif_type, Notification.subtype))})
+        hidden = hidden_unread(user.id)
+        counts.subtract(hidden)
 
         def counted(notif_type, subtype):
-            return sum(1 for n in unread if n.notif_type == notif_type and n.subtype == subtype)
+            return max(0, counts[(notif_type, subtype)])
         unread_replies = counted(NOTIF_REPLY, 'new_reply_on_followed_comment') + \
             counted(NOTIF_POST, 'top_level_comment_on_followed_post')
         unread_mentions = counted(NOTIF_MENTION, 'comment_mention') + counted(NOTIF_MENTION, 'post_mention')
         unread_messages = without_hidden_conversations(ChatMessage.query.filter_by(recipient_id=user.id, read=False),
                                                        ChatMessage.conversation_id).count()
-        unread_notifications = max(0, unread_notifications - (len(rows) - len(unread)))
+        unread_notifications = max(0, unread_notifications - sum(hidden.values()))
 
     # "other" is things like reports and activity alerts that this endpoint isn't really intended to support
 
