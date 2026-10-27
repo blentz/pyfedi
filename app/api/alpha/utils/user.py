@@ -18,7 +18,7 @@ import app.auth.util as auth_util
 from app.api.alpha.utils.found import a_community, a_person
 from app.hidden_routes import notification_hidden
 from app.local_names import local_clause, local_named
-from app.local_only import without_local_only_actors
+from app.local_only import without_hidden_conversations, without_hidden_here, without_local_only_actors
 from app.constants import *
 from app.federation_urls import owner_base
 from app.onion import stamp_activity
@@ -156,27 +156,18 @@ def get_user_unread_count(auth):
     unread_replies = unread_messages = unread_mentions = 0
     unread_notifications = user.unread_notifications
     if unread_notifications > 0:
-        unread_comment_replies = db.session.execute(text(
-            "SELECT COUNT(*) as c FROM notification WHERE user_id = :user_id AND read = false \
-                AND notif_type = :notif_type AND subtype = 'new_reply_on_followed_comment'"),
-            {'user_id': user.id, 'notif_type': NOTIF_REPLY}).scalar()
-        unread_post_replies = db.session.execute(text(
-            "SELECT COUNT(*) as c FROM notification WHERE user_id = :user_id AND read = false \
-                AND notif_type = :notif_type AND subtype = 'top_level_comment_on_followed_post'"),
-            {'user_id': user.id, 'notif_type': NOTIF_POST}).scalar()
-        unread_replies = unread_comment_replies + unread_post_replies
-        unread_comment_mentions = db.session.execute(text(
-            "SELECT COUNT(*) as c FROM notification WHERE user_id = :user_id AND read = false \
-                AND notif_type = :notif_type AND subtype = 'comment_mention'"),
-            {'user_id': user.id, 'notif_type': NOTIF_MENTION}).scalar()
-        unread_post_mentions = db.session.execute(text(
-            "SELECT COUNT(*) as c FROM notification WHERE user_id = :user_id AND read = false \
-                AND notif_type = :notif_type AND subtype = 'post_mention'"),
-            {"user_id": user.id, "notif_type": NOTIF_MENTION}).scalar()
-        unread_mentions = unread_comment_mentions + unread_post_mentions
-        unread_messages = db.session.execute(
-            text("SELECT COUNT(*) as c FROM chat_message WHERE recipient_id = :user_id AND read = false"),
-            {'user_id': user.id}).scalar()
+        # counted from the rows, so a notification or message about something hidden here counts nowhere (F6)
+        rows = Notification.query.filter_by(user_id=user.id, read=False).all()
+        unread = [n for n in rows if not notification_hidden(n)]
+
+        def counted(notif_type, subtype):
+            return sum(1 for n in unread if n.notif_type == notif_type and n.subtype == subtype)
+        unread_replies = counted(NOTIF_REPLY, 'new_reply_on_followed_comment') + \
+            counted(NOTIF_POST, 'top_level_comment_on_followed_post')
+        unread_mentions = counted(NOTIF_MENTION, 'comment_mention') + counted(NOTIF_MENTION, 'post_mention')
+        unread_messages = without_hidden_conversations(ChatMessage.query.filter_by(recipient_id=user.id, read=False),
+                                                       ChatMessage.conversation_id).count()
+        unread_notifications = max(0, unread_notifications - (len(rows) - len(unread)))
 
     # "other" is things like reports and activity alerts that this endpoint isn't really intended to support
 
@@ -238,7 +229,9 @@ def get_user_replies(auth, data, mentions=False):
                 if result[1] == True:
                     read_comment_ids.append(result[0]['comment_id'])
 
-    replies = PostReply.query.filter(PostReply.id.in_(all_comment_ids), visible_to_clause(PostReply, user_id))
+    replies = without_hidden_here(PostReply.query.filter(PostReply.id.in_(all_comment_ids),
+                                                         visible_to_clause(PostReply, user_id)),
+                                  PostReply, True)   # none hidden here (follow-up F6)
     if sort == "Hot":
         replies = replies.order_by(desc(PostReply.ranking)).order_by(desc(PostReply.posted_at))
     elif sort == "Top":
