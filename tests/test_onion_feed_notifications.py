@@ -80,10 +80,21 @@ def test_the_unread_email_leaves_it_out_off_the_onion(app, notified):
     notified.notification.created_at = utcnow() - timedelta(hours=1)
     db.session.commit()
     sent = {}
-    with patch('app.cli.send_email', lambda *a, **k: sent.update({k['recipients'][0]: k['html_body']})):
-        cli.register(current_app)
-        current_app.test_cli_runner().invoke(args=['send_missed_notifs'])
-    assert TITLE not in sent.get('bob@example.com', '')
+
+    def run_the_command():
+        with patch('app.cli.send_email', lambda *a, **k: sent.update({k['recipients'][0]: k['html_body']})):
+            cli.register(current_app)
+            current_app.test_cli_runner().invoke(args=['send_missed_notifs'])
+
+    run_the_command()   # the email lists notification titles (a post's, not the feed's); the only one is hidden here
+    assert 'bob@example.com' not in sent
+    db.session.add(Notification(user_id=bob.id, title='VISIBLEPOST', url='/notifications', notif_type=NOTIF_FEED,
+                                created_at=utcnow() - timedelta(hours=1)))   # control: the command does send mail
+    db.session.commit()
+    run_the_command()
+    visible = Notification.query.filter_by(user_id=bob.id, title='VISIBLEPOST').one()
+    listed = sent['bob@example.com']   # NEWINART is a first-domain post, so "recent posts" may list it: look at the links
+    assert f'/notification/{visible.id}/goto' in listed and f'/notification/{notified.notification.id}/goto' not in listed
 
 
 def test_the_stamp_and_the_per_row_rule_agree_on_feed_targets(app, alpha, two_domains):  # noqa: F811
