@@ -691,3 +691,30 @@ def notification_stamps(notifications, session=None) -> list[bool]:
         query = ' UNION ALL '.join(_STAMP_ROWS[kind] for kind in sorted(wanted))
         local = {(kind, id_) for kind, id_ in (session or db.session).execute(text(query), params)}
     return [plan is True or any(row in local for row in plan) for plan in plans]
+
+
+_RESTAMP = text('UPDATE notification SET local_only = (id = ANY(:stamped)) WHERE id = ANY(:ids)')
+
+
+def restamp_notifications(since_id: int | None = None, since=None, batch: int = 1000) -> int:
+    """Set `notification.local_only` by `notification_stamps` for the notifications from id `since_id` on, or created
+    at or after `since` (naive UTC), or for all of them when neither is given: `batch` at a time in id order, each
+    batch committed. Returns how many stamps changed, so a second run returns 0. `flask restamp-notifications` runs it
+    once after the deploy of migration c6e2a8f4b1d9, for what code without the hook wrote meanwhile (re-review 4,
+    M3)."""
+    notification = models.Notification
+    query = select(notification.id, notification.url, notification.targets, notification.author_id,
+                   notification.local_only).order_by(notification.id).limit(batch)
+    if since_id is not None:
+        query = query.where(notification.id >= since_id)
+    if since is not None:
+        query = query.where(notification.created_at >= since)
+    changed, last = 0, 0
+    while rows := db.session.execute(query.where(notification.id > last)).all():
+        differ = [(row.id, stamp) for row, stamp in zip(rows, notification_stamps(rows)) if row.local_only is not stamp]
+        if differ:
+            db.session.execute(_RESTAMP, {'stamped': [id_ for id_, stamp in differ if stamp],
+                                          'ids': [id_ for id_, _ in differ]})
+        db.session.commit()
+        changed, last = changed + len(differ), rows[-1].id
+    return changed

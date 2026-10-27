@@ -67,7 +67,7 @@ from app.shared.tasks.maintenance import (
 from app.utils import move_file_to_s3
 from app.hidden_routes import hidden_notifications
 from app.local_names import local_named
-from app.local_only import without_local_only
+from app.local_only import restamp_notifications, without_local_only
 from app.storefront import default_domain, domain_base_url, home_storefront, hosted_instance_ids, instance_id_of
 from app.discovery.cli import register_discovery_commands
 from app.relays.cli import register_relay_commands
@@ -1633,6 +1633,19 @@ def register(app):
             ErrorCount.query.filter(ErrorCount.day < utcnow().date() - timedelta(days=KEEP_DAYS)).delete()
             db.session.commit()
             log_cron_task_to_db("prune_error_counts")
+
+    @app.cli.command("restamp-notifications")
+    @click.option('--since-id', type=click.IntRange(min=1), help='The notifications from this id on.')
+    @click.option('--since', 'since_time', type=click.DateTime(), help='The notifications written at or after this '
+                                                                       'time (UTC).')
+    @click.option('--all', 'everything', is_flag=True, help='Every notification.')
+    def restamp_notifications_command(since_id, since_time, everything):
+        """ Restamp notification.local_only, a batch at a time. Idempotent. Run once after deploying migration
+        c6e2a8f4b1d9, for the notifications code without the stamp wrote during the deploy (follow-up F6) """
+        if [since_id is not None, since_time is not None, everything].count(True) != 1:
+            raise click.UsageError('Give exactly one of --since-id, --since and --all.')
+        with app.app_context():
+            click.echo(f'notifications restamped: {restamp_notifications(since_id, since_time)}')
 
     @app.cli.command("send_missed_notifs")
     def send_missed_notifs():
