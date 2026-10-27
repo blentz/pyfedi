@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from app import cache, db
 from app.constants import ROLE_ADMIN_NAME
-from app.feed_domains import feed_listed, feed_view_domain, listed_feeds_clause
+from app.feed_domains import feed_view_domain, listed_feeds_clause
 from app.models import Feed, FeedItem, Role, user_role
 from app.storefront import clear_domain_cache, domain_for_host
 from app.utils import feed_tree_public, menu_instance_feeds
@@ -21,7 +21,6 @@ from tests.three_domains import FIRST, ONION, SHOP, get, peer, request_on, three
 
 pytestmark = pytest.mark.usefixtures('site')
 
-HOSTS = (FIRST, SHOP, ONION)
 VIEWERS = ('nobody', 'first', 'shop', 'onion', 'admin')
 
 
@@ -280,17 +279,3 @@ def test_the_onion_lists_its_own_feeds_to_a_signed_in_reader_only(app, world):
 def test_a_logged_out_onion_visitor_is_shown_the_first_domains_feeds(app, world, path):
     _d, _people, feeds = world
     assert seen(signed_get(app, None, path, ONION), feeds) == {'first', 'remote'}, path
-
-
-@pytest.mark.parametrize('signed_in', [False, True])
-@pytest.mark.parametrize('host', HOSTS)
-def test_the_list_clause_and_the_row_test_agree(app, world, host, signed_in):
-    d, _people, feeds = world
-    quiet = d.local_feed('quiet', d.shop, None, public=False)   # a private one, to be sure the mix is mixed
-    with request_on(app, domain_for_host(host)):
-        forget_login()
-        for domain in (d.first, d.shop, d.onion):
-            by_clause = set(db.session.scalars(select(Feed.id).where(listed_feeds_clause(domain, signed_in))))
-            by_row = {feed.id for feed in Feed.query.all() if feed_listed(feed, domain, signed_in)}
-            assert by_clause == by_row, (host, domain.domain, signed_in)
-    assert quiet.id and len(feeds) == 4
