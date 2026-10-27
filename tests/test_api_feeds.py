@@ -196,15 +196,25 @@ def test_a_feed_can_be_read_by_name(app, env):
     assert answer['id'] == public.id
 
 
-def test_a_bare_feed_name_is_a_bad_request_not_a_crash(app, env):
-    """D1174. `parts[1]` on a name carrying no `@`. Measured: `PROBE bb4
-    outcome: IndexError: list index out of range`."""
+def test_a_bare_feed_name_is_the_storefronts_own_feed(app, env):
+    """D1174. `parts[1]` on a name carrying no `@` was `IndexError: list
+    index out of range` (PROBE bb4). A bare name is now the request host's
+    own feed (per-domain feeds, spec goal 11)."""
+    from app.api.alpha.utils.feed import get_feed
+
+    owner, stranger, public, private = env
+
+    with app.test_request_context('/'):
+        assert get_feed(token(stranger), {'name': 'publicfeed'})['id'] == public.id
+
+
+def test_a_feed_name_with_two_at_signs_is_a_bad_request_not_a_crash(app, env):
     from app.api.alpha.utils.feed import get_feed
 
     owner, stranger, public, private = env
 
     with pytest.raises(Exception) as refused:
-        get_feed(token(stranger), {'name': 'publicfeed'})
+        get_feed(token(stranger), {'name': 'publicfeed@test.piefed.local@x'})
 
     assert str(refused.value) == 'invalid_request'
 
@@ -301,7 +311,8 @@ def test_an_anonymous_reader_sees_the_public_list(app, env):
 
     owner, stranger, public, private = env
 
-    listed = get_feed_list(None, {})
+    with app.test_request_context('/'):   # no token: the list is the request's storefront's (per-domain feeds)
+        listed = get_feed_list(None, {})
 
     assert [f['name'] for f in listed['feeds']] == ['publicfeed']
 

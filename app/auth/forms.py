@@ -83,7 +83,7 @@ class RegistrationForm(FlaskForm):
         if community is not None:
             raise ValidationError(_l('This name is in use already.'))
 
-        feed = Feed.query.filter(Feed.name == user_name.data.lower(), Feed.ap_id == None).first()
+        feed = Feed.query.filter(local_named(Feed, user_name.data.strip(), domain)).first()
         if feed is not None:
             raise ValidationError(_('This name is in use already.'))
 

@@ -1,14 +1,16 @@
 from flask import current_app, g
+from sqlalchemy import and_
 
 from app import db
 from app.api.alpha.views import feed_view
 from app.constants import *
 from app.feed.util import feeds_for_form
-from app.feed_domains import feeds_shown_here_clause
+from app.feed_domains import feed_view_domain, feeds_shown_here_clause
 from app.api.alpha.utils.found import a_feed
 from app.local_only import found_here
-from app.local_names import actor_handle
+from app.local_names import actor_handle, local_named
 from app.models import User, Feed, FeedItem, Community
+from app.storefront import current_storefront, domain_for_host
 # The module, not the names: app.shared.feed reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.feed)
 import app.shared.feed as shared_feed
@@ -39,7 +41,9 @@ def get_feed_list(auth, data, user_id=None) -> dict:
     if user_id and mine_only:
         feeds = feed_tree(user_id)
     else:
-        feeds = feed_tree_public(signed_in=bool(user_id))   # the API has no session
+        # the domain whose feeds the list shows: the token user's home, else the request's storefront (goal 11)
+        domain = feed_view_domain(user if user_id else None)
+        feeds = feed_tree_public(domain=domain, signed_in=bool(user_id))   # the API has no session
 
     if user_id:
         subscribed = subscribed_feeds(user_id)
@@ -82,6 +86,19 @@ def get_feed_list(auth, data, user_id=None) -> dict:
     return list_json
 
 
+def _feed_named(name: str):
+    """The clause for the feed the API's `name` names. Raises invalid_request for one with more than one `@`."""
+    feed_name, *host = name.split('@')
+    if len(host) > 1:
+        raise Exception('invalid_request')
+    if not host:
+        return local_named(Feed, feed_name, current_storefront())
+    hosted = domain_for_host(host[0])
+    if hosted is not None:
+        return local_named(Feed, feed_name, hosted)
+    return and_(Feed.name == feed_name, Feed.ap_domain == host[0])
+
+
 def get_feed(auth, data, user_id=None):
     id = data['id'] if 'id' in data else False
     name = data['name'] if 'name' in data else ''
@@ -111,14 +128,9 @@ def get_feed(auth, data, user_id=None):
     if id:
         feed = found_here(Feed, id)   # one hidden here is as one nobody holds (task 7)
     elif name:
-        # D1174. `parts[1]` on a name carrying no `@` was `IndexError: list
-        # index out of range` -- and `name` is whatever the caller sent, so
-        # every bare feed name reached it. Measured as PROBE bb4.
-        parts = name.split('@')
-        if len(parts) != 2:
-            raise Exception('invalid_request')
-        feed = Feed.query.filter(Feed.name == parts[0], Feed.ap_domain == parts[1],
-                                 feeds_shown_here_clause(True)).first()
+        # D1174: more than one `@` names nothing. A bare name is the request host's own feed, `name@host` that hosted
+        # domain's, and any other `name@host` the remote feed (goal 11). Never one hidden here (task 7).
+        feed = Feed.query.filter(_feed_named(name), feeds_shown_here_clause(True)).first()
     else:
         raise Exception('invalid_request')
     # a feed this caller may not read answers as one nobody holds (task 7): one hidden here, and a private one that is

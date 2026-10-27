@@ -312,17 +312,19 @@ def test_a_user_name_that_is_a_remote_feeds_name_is_allowed(app, db_session):
     assert _user_name_error(app, 'remotefeed') is None
 
 
-def test_a_feeds_name_is_matched_in_lower_case(app, db_session):
-    """The feed lookup differs from the two above it: it lowercases the INPUT
-    (`Feed.name == user_name.data.lower()`) rather than both sides, so a feed
-    stored with capitals is not found. Pinned as the behaviour it is.
+def test_a_feeds_name_is_matched_in_any_case(app, db_session):
+    """The feed lookup lowercased the INPUT alone (`Feed.name ==
+    user_name.data.lower()`), so a feed stored with capitals was not found. It
+    is `local_named` now, as the two above it are: both sides lowered, on the
+    domain being registered on (per-domain feeds, task 9).
     """
     _seed()
     feed = make_local_feed('MixedCase')
     db.session.commit()
 
     assert feed.name == 'MixedCase'
-    assert _user_name_error(app, 'MixedCase') is None
+    assert _user_name_error(app, 'mixedcase') == 'This name is in use already.'
+    assert _user_name_error(app, 'MixedCase') == 'This name is in use already.'
 
 
 def test_an_unused_user_name_raises_nothing(app, db_session):
