@@ -67,3 +67,36 @@ def test_the_api_answers_a_reader_who_is_not_its_owner_as_for_a_missing_feed(app
     shown = call(app, owner, 'GET', f'/api/alpha/feed?id={feed.id}')
     assert shown.status_code == 200 and shown.json['id'] == feed.id
     assert FeedMember.query.filter_by(feed_id=feed.id).count() == 2   # owner and member, as made
+
+
+@pytest.mark.parametrize('method, path, body', [
+    ('POST', '/api/alpha/feed/follow', {'follow': True}),
+    ('POST', '/api/alpha/feed/follow', {'follow': False}),
+    ('PUT', '/api/alpha/feed', {'title': 'Taken'}),
+    ('POST', '/api/alpha/feed/delete', {'deleted': True}),
+])
+def test_a_feed_action_answers_a_stranger_of_a_private_feed_as_for_a_missing_one(app, secret, monkeypatch, method,
+                                                                                   path, body):
+    """Review I2: following a private feed answered `access_denied` and editing one `incorrect_login`, where an id
+    nobody holds answers its own not-found text: which ids were private feeds showed."""
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    feed, owner, member, stranger = secret
+    hidden = call(app, stranger, method, path, {**body, 'feed_id': feed.id})
+    missing = call(app, stranger, method, path, {**body, 'feed_id': 2147483000})
+    assert answer(hidden) == answer(missing)
+    assert hidden.status_code == 400
+    assert FeedMember.query.filter_by(feed_id=feed.id).count() == 2 and feed.title == 'secretfeed'
+
+
+def test_a_member_thrown_out_of_a_private_feed_may_still_leave_it_and_a_stranger_may_not_edit_a_public_one(
+        app, secret, monkeypatch):
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    feed, owner, member, stranger = secret
+    FeedMember.query.filter_by(feed_id=feed.id, user_id=member.id).one().is_banned = True
+    db.session.commit()
+    call(app, member, 'POST', '/api/alpha/feed/follow', {'feed_id': feed.id, 'follow': False})
+    assert FeedMember.query.filter_by(feed_id=feed.id, user_id=member.id).first() is None
+    feed.public = True
+    db.session.commit()
+    refused = call(app, stranger, 'PUT', '/api/alpha/feed', {'feed_id': feed.id, 'title': 'Taken'})
+    assert refused.status_code == 400 and refused.json['message'] == 'incorrect_login'
