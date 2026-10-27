@@ -73,6 +73,21 @@ def test_the_onion_still_shows_it(app, notified):
     assert call(app, bob, 'GET', '/api/alpha/user/notifications_count', host=ONION).get_json()['count'] == 1
 
 
+def test_the_notification_links_the_feed_by_its_stored_link_not_its_title(app, notified):
+    feed, row = notified.feed, notified.notification
+    assert row.targets['feed_link'] == feed.stored_link() and row.targets['feed_name'] == TITLE
+    body = Visitor(app, notified.first_bob, ONION).get('/notifications').get_data(as_text=True)
+    expected = feed.stored_link() if '@' in feed.stored_link() else f'{feed.stored_link()}@{FIRST}'   # a bare name is the first domain's
+    assert f'href="/f/{expected}"' in body and f'href="/f/{TITLE}"' not in body
+
+
+def test_a_notification_stored_before_the_link_was_kept_still_renders(app, notified):
+    notified.notification.targets = {k: v for k, v in notified.notification.targets.items() if k != 'feed_link'}
+    db.session.commit()
+    body = Visitor(app, notified.first_bob, ONION).get('/notifications').get_data(as_text=True)
+    assert f'href="/f/{TITLE}"' in body
+
+
 def test_the_unread_email_leaves_it_out_off_the_onion(app, notified):
     bob = db.session.get(User, notified.first_bob.id)
     bob.email_unread, bob.email_unread_sent, bob.email = True, False, 'bob@example.com'

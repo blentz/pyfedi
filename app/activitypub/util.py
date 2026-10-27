@@ -4610,7 +4610,8 @@ def notify_about_post_task(post_id):
                                         'community_id': community.id,
                                         'community_name': community.stored_link(),
                                         'feed_id': feed.id,
-                                        'feed_name': feed.title
+                                        'feed_name': feed.title,
+                                        'feed_link': feed.stored_link()
                                         }
                         new_notification = Notification(title=shorten_string(post.title, 150), url=f"/post/{post.id}",
                                                         user_id=notify_id, author_id=post.user_id,
