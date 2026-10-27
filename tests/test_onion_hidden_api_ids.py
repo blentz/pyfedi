@@ -338,3 +338,17 @@ def test_a_report_list_names_no_onion_reporter_on_the_first_domain(app, reported
 def test_on_the_onion_the_report_list_names_the_reporter(app, reported_by_onion):
     body = call(app, reported_by_onion.admin, 'GET', LISTS[2], host=ONION).get_data(as_text=True)
     assert f'"id":{reported_by_onion.onion_bob.id},' in body.replace(' ', '')
+
+
+# --- round 4 ------------------------------------------------------------------------------------------------------
+
+def test_setting_an_onion_notifications_state_answers_as_one_nobody_holds(app, replied):
+    """R1: the answer rendered the notification in full, with the onion author and the reply."""
+    notification = Notification.query.filter_by(user_id=replied.first_bob.id).first()
+    assert_same(app, replied.first_bob, 'PUT', '/api/alpha/user/notification_state',
+                {'notif_id': notification.id, 'read_state': True}, {'notif_id': NOBODY, 'read_state': True})
+    db.session.expire_all()
+    assert not notification.read   # nothing written
+    on_onion = call(app, replied.first_bob, 'PUT', '/api/alpha/user/notification_state',
+                    {'notif_id': notification.id, 'read_state': True}, host=ONION)
+    assert on_onion.status_code == 200 and 'ONIONANSWER' in on_onion.get_data(as_text=True)
