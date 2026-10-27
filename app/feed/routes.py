@@ -38,7 +38,7 @@ import app.shared.feed as shared_feed
 from app.local_names import actor_handle, local_named
 from app.storefront import current_storefront, domain_for_host, path_name, storefront_link, storefront_url
 from app.shared.upload import is_refused_upload
-from app.local_only import found_here, hidden_here, local_only_visible_rss
+from app.local_only import found_here, local_only_visible_rss
 from app.utils import etag_stamp, back, show_ban_message, piefed_markdown_to_lemmy_markdown, markdown_to_html, render_template, \
     user_filters_posts, joined_communities, menu_instance_feeds, validation_required, feed_membership, \
     gibberish, get_task_session, instance_banned, menu_subscribed_feeds, referrer, community_membership, \
@@ -267,8 +267,7 @@ def feed_copy(feed_id: int):
     # logged-in account could take a copy of a private feed it cannot open and
     # then read the copy, which is its own.
     # nor is a feed this storefront hides (an onion feed, off the onion) one to copy: the answer for a missing feed
-    if not feed_readable_by(feed_to_copy, current_user.id if current_user.is_authenticated else None) \
-            or hidden_here(feed_to_copy):
+    if not feed_readable_by(feed_to_copy, current_user.id if current_user.is_authenticated else None):
         abort(404)
     copy_feed_form = AddCopyFeedForm()
     copy_feed_form.parent_feed_id.choices = feeds_for_form(0, current_user.id, current_user.home_domain())
