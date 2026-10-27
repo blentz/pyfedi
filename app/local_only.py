@@ -587,3 +587,107 @@ def refused_outbound(body, uri, session=None) -> bool:
         logger.debug('local-only activity not sent to %s: %s', storefront.normalise_host(
             urlsplit(uri or '').hostname or ''), reason)
     return bool(reason)
+
+
+# --- the notification stamp (follow-up F6) ---------------------------------------------------------------------------
+# `notification.local_only` says a notification may name a local-only domain's row; one without it names none, on any
+# storefront, so a count of the shown notifications reads only the stamped ones (app.hidden_routes._hidden_counts).
+# Migration c6e2a8f4b1d9 backfilled it with a frozen SQL copy of this rule, which it dropped once done; the parity test
+# (tests/test_notification_stamp.py) holds this rule to stamping at least what that copy stamps.
+
+_ABSOLUTE = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://([^/?#]*)(.*)', re.DOTALL)
+_QUERY_OR_FRAGMENT = re.compile(r'[?#].*', re.DOTALL)
+_NAMES_NOTHING = frozenset(('', '/', '/admin/reports', '/notifications', '/user/follow_requests'))
+_STAMP_ID = '([0-9]{1,18})'
+_STAMP_PATHS = ((re.compile(f'/post/{_STAMP_ID}(?:/comment/{_STAMP_ID})?'), ('post', 'reply')),
+                (re.compile(f'/comment/{_STAMP_ID}'), ('reply',)),
+                (re.compile(f'/user/{_STAMP_ID}'), ('user',)),
+                (re.compile(f'/community/{_STAMP_ID}'), ('community',)),
+                (re.compile(f'/chat/{_STAMP_ID}'), ('conversation',)),
+                (re.compile(f'/chat/ban_from_mod/{_STAMP_ID}/{_STAMP_ID}'), ('user', 'community')))
+_STAMP_TARGETS = (('post_id', 'post'), ('suspect_post_id', 'post'), ('comment_id', 'reply'),
+                  ('suspect_comment_id', 'reply'), ('author_id', 'user'), ('suspect_user_id', 'user'),
+                  ('community_id', 'community'))
+# An account or community (aliased u) is local-only by its home domain; one whose domain has no row is the default's
+_STAMP_ACTOR = ('u.ap_id IS NULL AND (u.site_domain_id = ANY(CAST(:closed AS integer[])) OR (CAST(:default_closed AS '
+                'boolean) AND (u.site_domain_id IS NULL OR u.site_domain_id <> ALL(CAST(:hosted AS integer[])))))')
+_STAMP_ROWS = {
+    'post': "SELECT 'post', id FROM post WHERE id = ANY(CAST(:post AS integer[])) AND local_only",
+    'reply': "SELECT 'reply', id FROM post_reply WHERE id = ANY(CAST(:reply AS integer[])) AND local_only",
+    'user': f'SELECT \'user\', u.id FROM "user" u WHERE u.id = ANY(CAST(:user AS integer[])) AND {_STAMP_ACTOR}',
+    'community': f"SELECT 'community', u.id FROM community u WHERE u.id = ANY(CAST(:community AS integer[])) "
+                 f"AND {_STAMP_ACTOR}",
+    'conversation': f'SELECT \'conversation\', m.conversation_id FROM conversation_member m JOIN "user" u ON '
+                    f'u.id = m.user_id WHERE m.conversation_id = ANY(CAST(:conversation AS integer[])) '
+                    f'AND {_STAMP_ACTOR}',
+}
+
+
+def _stamp_plan(notification, closed_hosts: list, our_hosts: list):
+    """True when `notification` names a local-only row whatever the rows hold (a local-only host, a link the rule
+    cannot read), else the `(kind, id)` rows whose being local-only decides it: its author, its targets' ids and the
+    ids its link names. A link on another site's host names none of our rows."""
+    named = []
+
+    def add(kind: str, value) -> None:
+        if isinstance(value, int) and not isinstance(value, bool) and 0 < value <= _PG_INT_MAX:
+            named.append((kind, value))   # a larger id names no row
+
+    add('user', notification.author_id)
+    targets = notification.targets
+    if isinstance(targets, dict):
+        for key, kind in _STAMP_TARGETS:
+            add(kind, targets.get(key))
+    link = notification.url or ''
+    absolute = _ABSOLUTE.match(link)
+    if absolute:
+        host = absolute.group(1).lower()
+        if any(closed in host for closed in closed_hosts):
+            return True
+        if not any(ours in host for ours in our_hosts):
+            return named   # another site's page names none of our rows
+        link = absolute.group(2)
+    path = _QUERY_OR_FRAGMENT.sub('', link, count=1)
+    if path in _NAMES_NOTHING:
+        return named
+    for pattern, kinds in _STAMP_PATHS:
+        found = pattern.fullmatch(path)
+        if found:
+            for kind, digits in zip(kinds, found.groups()):
+                if digits is not None:
+                    add(kind, int(digits))
+            return named
+    return True   # a link this rule cannot read (a name, another page): the per-link rule decides it
+
+
+def notification_stamps(notifications, session=None) -> list[bool]:
+    """Whether each of `notifications` (rows with `url`, `targets` and `author_id`) may name a local-only domain's row,
+    so `notification.local_only` must be set: its author, a row its `targets` name (only integer ids count), or a row
+    or host its link names is local-only, or its link is one this rule cannot read (`/u/<name>`, `/c/<name>`, a page
+    it does not know), which the per-link rule (`app.hidden_routes.hidden_notifications`) judges when it is shown.
+
+    Every one is False at once, with no query, on a site where every domain federates. Otherwise the rows they name
+    are looked up in one query through `session` (db.session when None), whatever their number, and none when they
+    name none."""
+    notifications = list(notifications)
+    if not notifications or not any_domain_closed():
+        return [False] * len(notifications)
+    rows = storefront.domain_rows()
+    server_host = (current_app.config.get('SERVER_NAME') or '').split(':')[0].strip('.')
+    our_hosts = [host.lower() for host in [row.domain for row in rows] + [storefront.default_domain().domain,
+                                                                          server_host] if host]
+    closed_hosts = [row.domain.lower() for row in rows if not row.federates]
+    plans = [_stamp_plan(notification, closed_hosts, our_hosts) for notification in notifications]
+    wanted = {}
+    for plan in plans:
+        for kind, id_ in plan if plan is not True else ():
+            wanted.setdefault(kind, set()).add(id_)
+    local = set()
+    if wanted:
+        closed, default_closed = _closed_domains()
+        params = {kind: sorted(ids) for kind, ids in wanted.items()}
+        params.update(closed=closed, default_closed=default_closed,
+                      hosted=[row.id for row in rows if row.id is not None])
+        query = ' UNION ALL '.join(_STAMP_ROWS[kind] for kind in sorted(wanted))
+        local = {(kind, id_) for kind, id_ in (session or db.session).execute(text(query), params)}
+    return [plan is True or any(row in local for row in plan) for plan in plans]

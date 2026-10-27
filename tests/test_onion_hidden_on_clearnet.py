@@ -1010,7 +1010,7 @@ def test_the_backfill_stamps_existing_notifications_as_new_ones_are(app, alpha):
             stamped_notice(alpha.first_bob, f'/u/{ONION_BOB}')]
     stamps = [row.local_only for row in rows]
     db.session.execute(text('UPDATE notification SET local_only = false'))
-    db.session.execute(text(MIGRATION.BACKFILL), {'default_host': FIRST})
+    MIGRATION.backfill(db.session.connection(), FIRST)
     db.session.commit()
     db.session.expire_all()
     assert [db.session.get(Notification, row.id).local_only for row in rows] == stamps == [False, True, True]
