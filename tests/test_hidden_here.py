@@ -70,6 +70,12 @@ def world(app, twins, two_domains):  # noqa: F811
     rows.first_under_onion.local_only = content_local_only(first_bob, first_art, None, rows.onion_in_first)
     # review I6: the onion's reply under the first's post, and the first's reply to that one, deeper down
     rows.onion_under_first, rows.first_under_onion_reply = reply_chain(rows.first_post, onion_bob, first_bob)
+    # N-m3: a local-only reply whose path names an ancestor nobody holds any more
+    rows.orphaned = reply_to(rows.first_post, None, first_bob)
+    rows.orphaned.local_only, rows.orphaned.path = True, [0, 2 ** 30, rows.orphaned.id]
+    # and one built under a parent that had no path: `[0, id]` though it answers a reply
+    rows.parentless = reply_to(rows.first_post, rows.first_under_onion_reply, first_bob)
+    rows.parentless.path = [0, rows.parentless.id]
     db.session.commit()
     rows.two_domains = two_domains
     return rows
@@ -153,11 +159,11 @@ def named(world, *names):
 
 ALL = ('first_bob', 'first_art', 'onion_bob', 'onion_art', 'shop_bob', 'remote', 'legacy', 'onion_post',
        'onion_reply', 'onion_in_first', 'onion_in_first_reply', 'first_in_onion', 'first_post', 'first_reply',
-       'remote_post', 'first_under_onion', 'onion_under_first', 'first_under_onion_reply')
+       'remote_post', 'first_under_onion', 'onion_under_first', 'first_under_onion_reply', 'orphaned', 'parentless')
 # a reply to an onion post goes with its post (follow-up F5's rule), and one further down an onion reply goes with
 # that reply (review I6): it could only have been written on the onion
 ONIONS = {'onion_bob', 'onion_art', 'onion_post', 'onion_reply', 'onion_in_first', 'onion_in_first_reply',
-          'first_in_onion', 'first_under_onion', 'onion_under_first', 'first_under_onion_reply'}
+          'first_in_onion', 'first_under_onion', 'onion_under_first', 'first_under_onion_reply', 'orphaned', 'parentless'}
 
 
 @pytest.mark.parametrize('host', [FIRST, SHOP])
@@ -249,9 +255,30 @@ def test_a_reply_further_down_an_onion_reply_is_hidden_with_it(app, world):
     assert_parity(app, (FIRST, ONION))
 
 
-def test_a_reply_with_no_path_is_judged_by_its_own_rows(app, world):
-    """A reply stored before paths were kept: its author, community and post decide, as before."""
-    world.first_under_onion_reply.path = None
+@pytest.mark.parametrize('path', [None, [], [0], 'self only', 'no self'])
+def test_a_local_only_reply_whose_path_cannot_be_read_is_hidden_off_the_onion(app, world, path):
+    """Fail closed (ruling, N-m3): a clearnet reply is only ever stamped local-only under an onion ancestor, so one
+    whose ancestry is unreadable is hidden off the onion. A reply that is not local-only is not touched."""
+    reply = world.first_under_onion_reply
+    if isinstance(path, str):   # it answers a reply
+        path = [0, reply.id] if path == 'self only' else [0, reply.parent_id]
+    reply.path = path
+    world.first_reply.path = path   # not local-only: the control
     db.session.commit()
-    assert hidden(app, FIRST, True, named(world, 'first_under_onion_reply')) == set()
-    assert_parity(app, (FIRST,))
+    rows = named(world, 'first_under_onion_reply', 'first_reply')
+    assert hidden(app, FIRST, True, rows) == {'first_under_onion_reply'}
+    assert hidden(app, ONION, True, rows) == set()
+    assert_parity(app, (FIRST, ONION, SHOP))
+
+
+def test_a_local_only_reply_whose_ancestor_was_purged_is_hidden_off_the_onion(app, world):
+    """The onion reply above it is gone, so nothing can say whose thread it was: fail closed (N-m3)."""
+    deeper = reply_to(world.first_post, world.first_under_onion_reply, world.first_bob)
+    gone = world.onion_under_first.id
+    world.first_under_onion_reply.path = [0, 2 ** 30, world.first_under_onion_reply.id]   # an ancestor nobody holds
+    db.session.commit()
+    assert gone   # the chain's own onion reply still stands; the purged id is the one in the path
+    rows = {'reply': world.first_under_onion_reply, 'deeper': deeper}
+    assert hidden(app, FIRST, True, rows) == {'reply', 'deeper'}
+    assert hidden(app, ONION, True, rows) == set()
+    assert_parity(app, (FIRST, ONION, SHOP))

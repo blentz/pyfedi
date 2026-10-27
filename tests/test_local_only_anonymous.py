@@ -34,6 +34,7 @@ from tests.factories import bearer, make_community, make_domain, make_feed_item,
     make_user
 from tests.test_community_lifecycle import login
 from tests.test_local_only_invisible import _post, _reply, world  # noqa: F401 -- world is a fixture
+from tests.two_domains import onion_request
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -839,8 +840,13 @@ def test_an_archive_from_before_local_only_content_works_out_which_replies_are(a
     tree = mark_restricted(convert_archived_replies_to_tree(archived, scene.public), None)
     assert _shown(tree) == {901: True, 902: True, 903: False, 904: False, 905: False, 906: False, 907: False,
                            908: False, 909: True}
-    member = mark_restricted(convert_archived_replies_to_tree(archived, scene.public), scene.alice.id)
+    with onion_request(app):   # a member sees them on the onion
+        member = mark_restricted(convert_archived_replies_to_tree(archived, scene.public), scene.alice.id)
     assert _shown(member)[903] and _shown(member)[904]
+    # follow-up F6, N-m3: off the onion an archived local-only reply's ancestry cannot be read from the database, so
+    # it is hidden from a member too (fail closed)
+    member = mark_restricted(convert_archived_replies_to_tree(archived, scene.public), scene.alice.id)
+    assert not _shown(member)[903] and not _shown(member)[904]
 
 
 def test_one_archived_branch_works_its_root_out_from_its_real_parent(app, scene, monkeypatch):
@@ -857,5 +863,7 @@ def test_one_archived_branch_works_its_root_out_from_its_real_parent(app, scene,
     scene.public.archived = 'archived.json.gz'
     for root, expected in ((912, {912: False, 913: False}), (915, {915: False}), (917, {917: True})):
         assert _shown(post_util.get_comment_branch(scene.public, root, 'top', None)) == expected, root
-    assert _shown(post_util.get_comment_branch(scene.public, 912, 'top', scene.alice)) == {912: True, 913: True}
+    with onion_request(app):   # a member sees it on the onion; off it, fail closed (follow-up F6, N-m3)
+        assert _shown(post_util.get_comment_branch(scene.public, 912, 'top', scene.alice)) == {912: True, 913: True}
+    assert _shown(post_util.get_comment_branch(scene.public, 912, 'top', scene.alice)) == {912: False, 913: False}
     assert post_util.get_comment_branch(scene.public, 999, 'top', None) == []

@@ -10,7 +10,7 @@ from urllib.parse import unquote, urlsplit
 from flask import current_app
 from flask_babel import _
 from flask_login import current_user
-from sqlalchemy import and_, any_, bindparam, exists, false, not_, or_, text, true
+from sqlalchemy import and_, any_, bindparam, exists, false, func, not_, or_, select, text, true
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import False_
 
@@ -189,15 +189,25 @@ def _content_hidden(content, signed_in: bool) -> bool:
         return True
     if not isinstance(content, models.PostReply):
         return False
-    return _actor_hidden(content.post.author, True) or any(
-        _actor_hidden(ancestor.author, True) for ancestor in _ancestors(content))
+    if _actor_hidden(content.post.author, True):
+        return True
+    ancestors = _ancestors(content)
+    if ancestors is None:   # fail closed (ruling, N-m3): only an onion ancestor makes a clearnet reply local-only
+        return hides_anything_here()
+    return any(_actor_hidden(ancestor.author, True) for ancestor in ancestors)
 
 
-def _ancestors(reply) -> list:
-    """The replies `reply` answers, from its thread's top down: the ids in its `path` but the 0 the path starts with
-    and its own."""
-    ids = [id_ for id_ in reply.path or () if id_ and id_ != reply.id]
-    return [row for row in (db.session.get(models.PostReply, id_) for id_ in ids) if row is not None]
+def _ancestors(reply) -> list | None:
+    """The replies `reply` answers, from its thread's top down: the rows its `path` names but the 0 it starts with and
+    its own. None when the ancestry cannot be read: no path, a path without the reply itself or its parent, or an
+    ancestor that is gone."""
+    ids = [id_ for id_ in reply.path or () if id_]
+    if reply.id not in ids or (reply.parent_id is not None and reply.parent_id not in ids):
+        return None   # a path without itself or its parent: one built under a parent that had none
+    rows = [db.session.get(models.PostReply, id_) for id_ in ids]
+    if any(row is None for row in rows):
+        return None
+    return [row for row in rows if row.id != reply.id]
 
 
 def hidden_here(obj, signed_in: bool | None = None) -> bool:
@@ -213,8 +223,10 @@ def hidden_here(obj, signed_in: bool | None = None) -> bool:
     `federates` setting is locked once it owns rows, so whatever an onion account writes, or is written in an onion
     community, is stamped local-only. So is a clearnet account's reply further down an onion reply, in a clearnet
     community under a clearnet post: it could only have been written where the onion reply is seen, so it goes with
-    that reply, everywhere (review I6), or listing it would tell that its author uses the onion. A reply stored with
-    no path is judged by its own rows. A remote row is never hidden."""
+    that reply, everywhere (review I6), or listing it would tell that its author uses the onion. That is the only way
+    such a reply is stamped, so a local-only reply whose ancestry cannot be read (no path, one without itself or its
+    parent, or one naming a purged reply) is hidden wherever anything is: fail closed (ruling, N-m3). A remote row
+    is never hidden."""
     signed_in = _signed_in(signed_in)
     if isinstance(obj, (models.Post, models.PostReply)):
         return _content_hidden(obj, signed_in)
@@ -264,7 +276,22 @@ def hidden_here_clause(model, signed_in: bool | None = None):
         ancestor, ancestor_author = aliased(models.PostReply), aliased(models.User)
         owners.append(exists().where(ancestor.id == any_(model.path), ancestor_author.id == ancestor.user_id,
                                      _actor_hidden_clause(ancestor_author, True)))
+        owners.append(_unreadable_path_clause(model))   # fail closed (ruling, N-m3)
     return and_(model.local_only.is_(True), or_(*owners))
+
+
+def _unreadable_path_clause(model):
+    """True for a reply whose ancestry cannot be read (`_ancestors` is None): no path, a path without the reply itself
+    or its parent, a path naming no reply, or one
+    naming a reply that is gone. Never NULL."""
+    step = func.unnest(model.path).table_valued('id').render_derived(name='hidden_step')
+    gone = aliased(models.PostReply)
+    named = select(1).select_from(step).where(step.c.id != 0)
+    missing = named.where(~exists().where(gone.id == step.c.id))
+    has_self = func.coalesce(model.id == any_(model.path), False)
+    has_parent = func.coalesce(model.parent_id == any_(model.path), False)
+    return or_(model.path.is_(None), ~has_self, and_(model.parent_id.isnot(None), ~has_parent), ~named.exists(),
+               missing.exists())
 
 
 def without_hidden_here(query, model, signed_in: bool | None = None):
@@ -415,6 +442,12 @@ def hidden_here_sql(alias: str, model, signed_in: bool | None = None) -> str:
         owners.append(f'EXISTS (SELECT 1 FROM post_reply hidden_ancestor JOIN "user" hidden_ancestor_author ON '
                       f'hidden_ancestor_author.id = hidden_ancestor.user_id WHERE hidden_ancestor.id = '
                       f'ANY({alias}.path) AND {_actor_hidden_sql("hidden_ancestor_author", True)})')
+        owners.append(f'({alias}.path IS NULL OR NOT COALESCE({alias}.id = ANY({alias}.path), false) '
+                      f'OR ({alias}.parent_id IS NOT NULL AND NOT COALESCE({alias}.parent_id = ANY({alias}.path), false)) '
+                      f'OR NOT EXISTS (SELECT 1 FROM unnest({alias}.path) AS hidden_step(id) '
+                      f'WHERE hidden_step.id <> 0) OR EXISTS (SELECT 1 FROM unnest({alias}.path) AS hidden_step(id) '
+                      f'WHERE hidden_step.id <> 0 AND NOT EXISTS (SELECT 1 FROM post_reply hidden_gone '
+                      f'WHERE hidden_gone.id = hidden_step.id)))')   # fail closed (ruling, N-m3)
     return f'({alias}.local_only AND ({" OR ".join(owners)}))'
 
 
