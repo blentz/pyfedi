@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 from app import db
 from app.branding import own_value
 from app.local_names import local_named, named_by_actor
+from app.local_only import hidden_here
 from app.storefront import DomainInfo, current_storefront, default_domain, domain_authority, domain_base_url, \
     federating_base, hosted_instance_ids, is_hosted_uri
 # Defined in app.storefront, which app.models can import (this module imports app.models); named here too, as the
@@ -218,7 +219,7 @@ def local_object_for_url(url: str):
     Then the path: `/post/<id>[/<slug>]` (not a sub-resource such as `/post/<id>/replies`), `/c/<name>/p/<id>[/<slug>]`
     and `/comment/<id>` by primary key, whichever of our domains the URL is on, as the database is shared (only
     serving a document is per domain); `/u/<name>`, `/c/<name>` and `/f/<name>` on the URL's own domain, where local
-    names are unique (C1)."""
+    names are unique (C1). A feed this storefront hides (`hidden_here`: an onion feed, off the onion) names nothing."""
     if not is_hosted_uri(url):
         return None
     try:
@@ -226,8 +227,15 @@ def local_object_for_url(url: str):
     except ValueError:   # httpx reads a host in it that urllib refuses (an unbalanced bracket): it names nothing
         return None
     found = _stored_row(parts)
-    if found is not None:
-        return found
+    if found is None:
+        found = _row_at_path(url, parts)
+    if isinstance(found, models.Feed) and hidden_here(found, True):
+        return None   # an onion feed names nothing off the onion, as a feed nobody holds (task 7, task 2 review I1)
+    return found
+
+
+def _row_at_path(url: str, parts):
+    """`local_object_for_url`'s lookup by the path of `url` (split into `parts`)."""
     path = unquote(parts.path).rstrip('/')   # as the router reads it
     if '\x00' in path:   # names no row, and Postgres refuses it in a string
         return None
