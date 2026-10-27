@@ -89,7 +89,7 @@ def test_a_search_in_an_onion_community_answers_as_one_in_a_community_nobody_hol
     assert found.status_code == absent.status_code
     equal(normalised(found, ONION_ART), normalised(absent, f'nope@{ONION}'))
     found, absent = ask(f'/search?community_id={onion.onion_art.id}'), ask(f'/search?community_id={NOBODY}')
-    assert found.status_code == absent.status_code
+    assert found.status_code == absent.status_code == 200   # the landing page, never a server error (round 3)
     equal(normalised(found, '\x00'), normalised(absent, '\x00'))   # the page does not echo the id
 
 

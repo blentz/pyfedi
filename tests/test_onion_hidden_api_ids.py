@@ -49,7 +49,7 @@ def assert_same(app, viewer, method, path, hidden, missing):
         found, absent = call(app, viewer, method, path, hidden), call(app, viewer, method, path, missing)
     assert (found.status_code, found.get_data()) == (absent.status_code, absent.get_data()), \
         (path, found.status_code, found.get_data()[:300], absent.get_data()[:300])
-    assert found.status_code >= 400, path
+    assert 400 <= found.status_code < 500, path   # accepted (round 3): an id nobody holds is 400- or 404-shaped
     return found
 
 
