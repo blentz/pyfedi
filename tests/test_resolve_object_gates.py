@@ -329,3 +329,82 @@ def test_a_reply_under_a_followers_only_post_still_resolves(app, world):
     post.visibility = VISIBILITY_FOLLOWERS
     db.session.commit()
     assert resolve(caller(), reply.ap_id)['comment']['comment']['id'] == reply.id
+
+
+# ---- a parent fetched on the way: only the child's own gates decide (follow-up F5) -------------------------------
+
+PARENT = 'https://peer.example/post/9'
+CHILD = 'https://peer.example/comment/9'
+MENTIONED = 'https://peer.example/u/mia'
+MENTIONED2 = 'https://peer.example/u/nobody'
+
+
+class FakePeer:
+    """The peer's documents, and the stored rows its fetches leave. `community_known` is whether `find_community`
+    names the child's community without the parent."""
+
+    def __init__(self, world, hide, community_known):
+        self.world, self.hide, self.community_known = world, hide, community_known
+        self.fetched = []
+        self.instance = make_instance('peer.example')
+        db.session.commit()
+
+    def remote_object_to_json(self, url, **kwargs):
+        self.fetched.append(url)
+        return {'id': url, 'type': 'Page' if url == PARENT else 'Note',
+                **({'inReplyTo': PARENT, 'cc': [MENTIONED2, MENTIONED]} if url == CHILD else {})}
+
+    def find_actor_or_create(self, url, **kwargs):
+        self.fetched.append(url)
+        return None
+
+    def find_community(self, ap_json, **kwargs):
+        return self.world.clearnet if ap_json['id'] == PARENT or self.community_known else None
+
+    def create_resolved_object(self, query, ap_json, server, community, announce_id, store_ap_json):
+        if query == PARENT:
+            post = make_post(self.world.clearnet, make_user(self.instance, 'pat'), PARENT)
+            self.hide(post, self.world)
+            db.session.commit()
+            return post
+        parent = Post.get_by_ap_id(PARENT)
+        if parent is None:
+            return None
+        reply = make_post_reply(parent, parent.author)
+        reply.ap_id = CHILD
+        db.session.commit()
+        return reply
+
+
+@pytest.fixture
+def peer(world, monkeypatch):
+    def install(hide=_followers_only, community_known=False):
+        fake = FakePeer(world, hide, community_known)
+        for name in ('remote_object_to_json', 'find_actor_or_create', 'find_community', 'create_resolved_object'):
+            monkeypatch.setattr(misc, name, getattr(fake, name))
+        return fake
+    return install
+
+
+@pytest.mark.parametrize('community_known', [False, True])
+def test_a_reply_resolves_when_its_fetched_parent_is_followers_only(peer, community_known):
+    fake = peer(_followers_only, community_known)
+    answer = resolve(caller(), CHILD)
+    assert answer['comment']['comment']['id'] == Post.get_by_ap_id(PARENT).replies[0].id
+    assert PARENT in fake.fetched
+
+
+@pytest.mark.parametrize('community_known', [False, True])
+@pytest.mark.parametrize('hide', [_draft, _banned_community, _private_community, _deleted])
+def test_a_reply_whose_fetched_parent_the_caller_may_not_open_is_not_found(peer, hide, community_known):
+    peer(hide, community_known)
+    assert refused(caller(), CHILD) == 'No object found.'
+
+
+def test_a_banned_account_the_reply_mentions_does_not_stop_it_resolving(world, peer):
+    fake = peer(_followers_only, community_known=False)
+    mia = make_user(fake.instance, 'mia')
+    mia.ap_profile_id = MENTIONED
+    mia.banned = True
+    db.session.commit()
+    assert resolve(caller(), CHILD)['comment']['comment']['id']
