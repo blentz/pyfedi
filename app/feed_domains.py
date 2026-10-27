@@ -4,6 +4,7 @@ A list shows the feeds of one domain, the viewer's, and every remote feed. The r
 domain's rows are `on_domain`, and a local-only domain's rows are shown only where `hidden_here` allows, so an onion
 feed is never listed off the onion, whoever is looking (anti-goal 2).
 """
+from flask import has_request_context, request
 from flask_login import current_user
 from sqlalchemy import and_, func, not_, or_, true
 
@@ -90,14 +91,25 @@ def community_shown_here(community: Community, signed_in: bool | None = None) ->
     return not hidden_here(community, signed_in)
 
 
+def _hidden_community_counts(signed_in: bool | None) -> dict[int, int]:
+    """How many communities each feed holds that this storefront hides from its reader, for the feeds that hold any: one
+    grouped query, kept for the rest of the request so a list of feeds costs one, not two per feed."""
+    key = f'feed_hidden_community_counts:{signed_in}'
+    kept = request.environ if has_request_context() else {}
+    if key not in kept:
+        rows = db.session.query(FeedItem.feed_id, func.count(FeedItem.id)).join(
+            Community, Community.id == FeedItem.community_id).filter(
+            hidden_here_clause(Community, signed_in)).group_by(FeedItem.feed_id).all()
+        kept[key] = dict(rows)
+    return kept[key]
+
+
 def shown_community_count(feed: Feed, signed_in: bool | None = None) -> int:
     """`feed.num_communities` without the communities this storefront hides from its reader, so a count never tells that
     one is there (`signed_in` as in `hidden_here`). The stored count when nothing is hidden here (no query)."""
     if not hides_anything_here():
         return feed.num_communities or 0
-    held = db.session.query(func.count(FeedItem.id)).filter(FeedItem.feed_id == feed.id)
-    shown = shown_feed_communities(held.join(Community, Community.id == FeedItem.community_id), signed_in)
-    return max(0, (feed.num_communities or 0) - (held.scalar() - shown.scalar()))
+    return max(0, (feed.num_communities or 0) - _hidden_community_counts(signed_in).get(feed.id, 0))
 
 
 def feed_may_join(community: Community, member: User) -> bool:
