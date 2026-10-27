@@ -28,6 +28,57 @@ def same(found, absent):
         (found.status_code, found.headers.get('Location'), absent.status_code, absent.headers.get('Location'))
 
 
+# --- N7: form-field community ids -------------------------------------------------------------------------------
+
+@pytest.fixture
+def feed(onion):
+    feed = Feed(user_id=onion.first_bob.id, title='Mine', name='mine', machine_name='mine', public=True)
+    db.session.add(feed)
+    db.session.commit()
+    for community in (onion.onion_art, onion.first_art):
+        db.session.add(FeedItem(feed_id=feed.id, community_id=community.id))
+    db.session.commit()
+    onion.feed = feed
+    return onion
+
+
+def test_a_feeds_submit_answers_an_onion_community_as_one_nobody_holds(app, feed):
+    viewer = Visitor(app, feed.first_bob, FIRST)
+    found = viewer.post('/f/mine/submit', {'community_id': str(feed.onion_art.id)})
+    absent = viewer.post('/f/mine/submit', {'community_id': str(NOBODY)})
+    same(found, absent)
+    assert found.status_code == 404
+    body = viewer.get('/f/mine/submit').get_data(as_text=True)
+    assert 'Onion art' not in body and 'First art' in body
+
+
+def test_a_topics_submit_answers_an_onion_community_as_one_nobody_holds(app, onion):
+    viewer = Visitor(app, onion.first_bob, FIRST)
+    same(viewer.post('/topic/arts/submit', {'community_id': str(onion.onion_art.id)}),
+         viewer.post('/topic/arts/submit', {'community_id': str(NOBODY)}))
+    assert 'Onion art' not in viewer.get('/topic/arts/submit').get_data(as_text=True)
+
+
+def test_adding_an_onion_community_to_a_feed_answers_as_one_nobody_holds(app, feed):
+    viewer = Visitor(app, feed.first_bob, FIRST)
+    same(viewer.post('/feed/add_community', {'new_feed_id': str(feed.feed.id), 'community_id': str(feed.onion_art.id)}),
+         viewer.post('/feed/add_community', {'new_feed_id': str(feed.feed.id), 'community_id': str(NOBODY)}))
+
+
+def test_blocking_a_community_from_an_onion_posts_page_answers_as_for_a_post_nobody_holds(app, onion):
+    viewer = Visitor(app, onion.first_bob, FIRST)
+    headers = {'HX-Request': 'true', 'HX-Current-Url': f'https://{FIRST}/post/1'}
+    answers = [viewer.client.post(f'/community/community/{onion.first_art.id}/block?post_id={post_id}',
+                                  data={'csrf_token': viewer.token}, base_url=viewer.base, headers=headers)
+               for post_id in (onion.post.id, NOBODY)]
+    same(*answers)
+
+
+def test_on_the_onion_the_submit_redirects_to_it(app, feed):
+    response = Visitor(app, feed.first_bob, ONION).post('/f/mine/submit', {'community_id': str(feed.onion_art.id)})
+    assert response.status_code == 307 and response.headers['Location'].endswith('/community/art/join_then_add')
+
+
 # --- N6: the community's banned list on its moderation page --------------------------------------------------------
 
 def test_a_communitys_banned_list_on_its_page_names_no_onion_account_on_the_first_domain(app, onion):
