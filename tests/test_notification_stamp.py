@@ -229,3 +229,58 @@ def test_the_upgrade_commits_the_column_before_the_backfill(app, monkeypatch):
         'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_notification_user_local_only ON notification (user_id) '
         'WHERE local_only',
         'end of autocommit']
+
+
+def corrupted(alpha):
+    """Three notifications whose stamps are all wrong, as code without the hook leaves them (the first stamped though
+    it names only the first domain's post, the others unstamped though they name the onion's)."""
+    rows = [stamped_notice(alpha.first_bob, url) for url in
+            (f'/post/{alpha.first_post.id}', f'/post/{alpha.post.id}', f'/u/{ONION_BOB}')]
+    db.session.execute(text('UPDATE notification SET local_only = (id = :id)'), {'id': rows[0].id})
+    db.session.commit()
+    return [row.id for row in rows]
+
+
+@pytest.fixture
+def commands(app):
+    cli.register(app)   # pyfedi.py registers the commands; the test app has none
+    return app.test_cli_runner()
+
+
+def stamps_of(ids):
+    db.session.expire_all()
+    return [db.session.get(Notification, id_).local_only for id_ in ids]
+
+
+def test_restamp_notifications_since_an_id_stamps_those_and_is_idempotent(commands, alpha):
+    """M3 (re-review 4): run once after the deploy, it stamps what code without the hook wrote meanwhile."""
+    ids = corrupted(alpha)
+    first = commands.invoke(args=['restamp-notifications', '--since-id', str(ids[1])])
+    again = commands.invoke(args=['restamp-notifications', '--since-id', str(ids[1])])
+    assert (first.exit_code, first.output, again.exit_code, again.output) == \
+        (0, 'notifications restamped: 2\n', 0, 'notifications restamped: 0\n')
+    assert stamps_of(ids) == [True, True, True]   # the one before the id is left as it was
+
+
+def test_restamp_notifications_since_a_time_or_all_of_them(commands, alpha):
+    ids = corrupted(alpha)
+    db.session.execute(text("UPDATE notification SET created_at = '2026-01-01' WHERE id = :id"), {'id': ids[1]})
+    db.session.commit()
+    since = commands.invoke(args=['restamp-notifications', '--since', '2026-06-01'])
+    assert (since.exit_code, since.output, stamps_of(ids)) == (0, 'notifications restamped: 2\n', [False, False, True])
+    everything = commands.invoke(args=['restamp-notifications', '--all'])
+    assert (everything.exit_code, everything.output, stamps_of(ids)) == \
+        (0, 'notifications restamped: 1\n', [False, True, True])
+
+
+def test_restamping_goes_a_batch_at_a_time(app, alpha):
+    ids = corrupted(alpha)
+    statements = queries_in(lambda: local_only.restamp_notifications(batch=2))
+    assert stamps_of(ids) == [False, True, True]
+    assert len([statement for statement in statements if statement.startswith('SELECT notification.id')]) == 3
+
+
+@pytest.mark.parametrize('arguments', [[], ['--all', '--since-id', '1'], ['--since', '2026-01-01', '--all']])
+def test_restamp_notifications_wants_exactly_one_range(commands, arguments):
+    result = commands.invoke(args=['restamp-notifications', *arguments])
+    assert result.exit_code == 2 and 'exactly one of --since-id, --since and --all' in result.output

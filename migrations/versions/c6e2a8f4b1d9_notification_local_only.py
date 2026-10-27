@@ -183,6 +183,8 @@ def upgrade():
     # ADD COLUMN takes an ACCESS EXCLUSIVE lock until its transaction ends, so it is committed first, on its own; with
     # a constant default it is a catalog change, not a rewrite. The backfill and the index then run outside any
     # transaction: a batch at a time, and the index CONCURRENTLY, so readers and writers of notification go on.
+    # What code without the stamp writes meanwhile (a worker not yet restarted) is left unstamped: run
+    # `flask restamp-notifications --all` once after the deploy (re-review 4, M3). It is idempotent.
     op.execute('ALTER TABLE notification ADD COLUMN IF NOT EXISTS local_only boolean NOT NULL DEFAULT false')
     with op.get_context().autocommit_block():
         backfill(op.get_bind(), default_host())
