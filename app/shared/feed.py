@@ -28,20 +28,17 @@ from app.utils import authorise_api_user, feed_membership, get_request, menu_sub
     piefed_markdown_to_lemmy_markdown, markdown_to_html, is_image_url
 import app.community.routes as community_routes
 from app.community.util import search_for_community
+from app.feed.util import actor_to_feed
 
 
 def join_feed(actor, user_id, src=SRC_WEB):
     member_id = join_request_id = None
     follow_sent = False
     try:
-        remote = False
         actor = actor.strip()
         user = db.session.get(User, user_id)
-        if '@' in actor:
-            feed = Feed.query.filter_by(ap_id=actor).first()
-            remote = True
-        else:
-            feed = Feed.query.filter_by(name=actor, ap_id=None).first()
+        feed = actor_to_feed(actor)
+        remote = feed is not None and not feed.is_local()
 
         if feed is not None:
             if feed_membership(user, feed) == SUBSCRIPTION_NONMEMBER:

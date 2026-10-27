@@ -34,7 +34,7 @@ import app.shared.community as shared_community
 # package before they are defined (import cycle: app.shared.feed)
 import app.shared.feed as shared_feed
 from app.local_names import actor_handle
-from app.storefront import current_storefront, is_local_host, storefront_link, storefront_url
+from app.storefront import current_storefront, domain_for_host, path_name, storefront_link, storefront_url
 from app.shared.upload import is_refused_upload
 from app.local_only import found_here, hidden_here, local_only_visible_rss, without_local_only_actors
 from app.utils import etag_stamp, back, show_ban_message, piefed_markdown_to_lemmy_markdown, markdown_to_html, render_template, \
@@ -202,7 +202,7 @@ def feed_edit(feed_id: int):
         flash(_('Settings saved.'))
         if url_changed:
             if referrer().endswith(old_url):
-                return redirect('/f/' + feed_to_edit.name)
+                return redirect('/f/' + feed_to_edit.link())
             else:
                 return redirect(referrer())
         else:
@@ -520,12 +520,12 @@ def show_feed(feed):
         if current_app.config['CONTENT_WARNING']:
             if feed.nsfl:
                 flash(_("This feed is only visible to logged in users."))
-                next_url = "/f/" + (feed.ap_id if feed.ap_id else feed.machine_name)
+                next_url = "/f/" + feed.link()
                 return redirect(url_for("auth.login", next=next_url))
         else:
             if feed.nsfw or feed.nsfl:
                 flash(_("This feed is only visible to logged in users."))
-                next_url = "/f/" + (feed.ap_id if feed.ap_id else feed.machine_name)
+                next_url = "/f/" + feed.link()
                 return redirect(url_for("auth.login", next=next_url))
 
     page = request.args.get('page', 0, type=int)
@@ -597,9 +597,9 @@ def show_feed(feed):
             order_by(desc(Community.total_subscriptions_count))
         feed_communities = without_local_only_actors(feed_communities, Community)   # logged out: none local-only
 
-        next_url = url_for('activitypub.feed_profile', actor=feed.ap_id if feed.ap_id is not None else feed.name,
+        next_url = url_for('activitypub.feed_profile', actor=feed.link(),
                            page=page + 1, sort=sort, layout=post_layout, result_id=result_id) if has_next_page else None
-        prev_url = url_for('activitypub.feed_profile', actor=feed.ap_id if feed.ap_id is not None else feed.name,
+        prev_url = url_for('activitypub.feed_profile', actor=feed.link(),
                            page=page - 1, sort=sort, layout=post_layout,
                            result_id=result_id if page > 1 else None) if page > 0 else None
 
@@ -664,7 +664,7 @@ def get_all_child_feed_ids(feed: Feed) -> List[int]:
 @validation_required
 @approval_required
 def feed_create_post(feed_name):
-    feed = Feed.query.filter(Feed.machine_name == feed_name.strip().lower()).first()
+    feed = actor_to_feed(feed_name)
     if not feed:
         abort(404)
     # D1394. `show_feed` refuses a private feed to anybody but its owner and its
@@ -734,7 +734,7 @@ def feed_unsubscribe(actor):
             if subscription != SUBSCRIPTION_OWNER:
                 proceed = True
                 # Undo the Follow
-                if '@' in actor:  # this is a remote feed, so activitypub is needed
+                if not feed.is_local():  # this is a remote feed, so activitypub is needed
                     if not feed.instance.gone_forever:
                         follow_id = activity_id('follow', current_user)
                         # D89 (owner ruling): the original Follow's id, for every peer rather than only ovo.st
@@ -804,8 +804,9 @@ def feed_unsubscribe(actor):
 
 @bp.route('/feed/lookup/<feedname>/<domain>')
 def lookup(feedname, domain):
-    if is_local_host(domain):
-        return redirect('/f/' + feedname)
+    hosted = domain_for_host(domain)
+    if hosted is not None:   # one of ours: that domain's feed, named as this storefront names it
+        return redirect('/f/' + path_name(feedname, hosted.id))
 
     feedname = feedname.lower()
     domain = domain.lower()
@@ -852,9 +853,10 @@ def lookup(feedname, domain):
 @refuse_if_private_instance
 @as_rss_reader
 def show_feed_rss(feed_path):
+    # the last segment names the feed (a private feed's name is `slug/owner`, so the last two are tried first)
     feed_url_parts = feed_path.split('/')
-    last_feed_machine_name = feed_url_parts[-1]
-    feed = Feed.query.filter(Feed.machine_name == last_feed_machine_name.strip().lower()).first()
+    feed = next((found for found in (actor_to_feed('/'.join(feed_url_parts[-2:])), actor_to_feed(feed_url_parts[-1]))
+                 if found is not None), None)
 
     # D1394. The RSS twin of `show_feed`, which refuses a private feed. This one
     # asked only that the name resolve, so a private feed was readable as RSS:
@@ -882,12 +884,12 @@ def show_feed_rss(feed_path):
         posts = post_ids_to_models(post_ids, 'new')
 
         fg = FeedGenerator()
-        fg.id(f"{storefront_url()}/f/{last_feed_machine_name}")
+        fg.id(f"{storefront_url()}/f/{feed.link()}")
         fg.title(f'{feed.title} on {domain_site_name(current_storefront(), g.site)}')
-        fg.link(href=f"{storefront_url()}/f/{last_feed_machine_name}", rel='alternate')
+        fg.link(href=f"{storefront_url()}/f/{feed.link()}", rel='alternate')
         fg.logo(f"{storefront_url()}/static/images/apple-touch-icon.png")
         fg.subtitle(' ')
-        fg.link(href=f"{storefront_url()}/f/{last_feed_machine_name}.rss", rel='self')
+        fg.link(href=f"{storefront_url()}/f/{feed.link()}.rss", rel='self')
         fg.language('en')
 
         for post in posts:

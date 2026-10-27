@@ -5,14 +5,15 @@ from typing import List, Tuple
 import httpx
 from flask import abort, current_app
 from flask_babel import _
-from sqlalchemy import func, text
+from sqlalchemy import text
 
 from app import db
 from app.activitypub.util import actor_json_to_model, canonical_handle, webfinger_self_link_allowed
 from app.community.util import search_for_community, retrieve_mods_and_backfill
 from app.constants import AP_FETCH_ACCEPT
 from app.models import BannedInstances, Feed, FeedItem, Community, _as_dict
-from app.storefront import DomainInfo, is_hosted_server, is_local_host
+from app.local_names import local_named, named_by_actor
+from app.storefront import DomainInfo, domain_for_host, is_hosted_server
 from app.utils import feed_tree, get_request
 
 
@@ -62,9 +63,9 @@ def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False)
             reason = f" Reason: {banned.reason}" if banned.reason is not None else ''
             raise Exception(f"{server} is blocked.{reason}")  # todo: create custom exception class hierarchy
 
-        if is_local_host(server):   # one of ours: never fetched (it would be a self-request)
-            already_exists = Feed.query.filter_by(name=name, ap_id=None).first()
-            return already_exists
+        hosted = domain_for_host(server)
+        if hosted:   # one of ours: that domain's own feed, or none. Never fetched (it would be a self-request)
+            return Feed.query.filter(local_named(Feed, name, hosted)).first()
 
         already_exists = Feed.query.filter_by(ap_id=address[1:]).first()
         if already_exists:
@@ -118,13 +119,11 @@ def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False)
         return None
 
 
-def actor_to_feed(actor) -> Feed:
-    actor = actor.strip()
-    if '@' in actor:
-        feed = Feed.query.filter_by(ap_id=actor).first()
-    else:
-        feed = Feed.query.filter(func.lower(Feed.name) == func.lower(actor)).filter_by(ap_id=None).first()
-    return feed
+def actor_to_feed(actor) -> Feed | None:
+    """The unbanned feed a `/f/<actor>` path segment names: a local name on its domain (a bare name is the
+    storefront's, `name@host` that hosted domain's, never fetched), else the remote feed whose `ap_id` the handle is.
+    The one resolver for every path that names a feed."""
+    return Feed.query.filter(named_by_actor(Feed, actor.strip().lower()), Feed.banned.is_(False)).first()
 
 
 def feed_communities_for_edit(feed_id: int) -> str:

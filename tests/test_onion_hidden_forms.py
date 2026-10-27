@@ -75,7 +75,7 @@ def test_blocking_a_community_from_an_onion_posts_page_answers_as_for_a_post_nob
 
 
 def test_on_the_onion_the_submit_redirects_to_it(app, feed):
-    response = Visitor(app, feed.first_bob, ONION).post('/f/mine/submit', {'community_id': str(feed.onion_art.id)})
+    response = Visitor(app, feed.first_bob, ONION).post(f'/f/mine@{FIRST}/submit', {'community_id': str(feed.onion_art.id)})
     assert response.status_code == 307 and response.headers['Location'].endswith('/community/art/join_then_add')
 
 

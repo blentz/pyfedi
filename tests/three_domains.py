@@ -15,13 +15,13 @@ from app.models import Feed, FeedMember, SiteDomain, User
 from app.storefront import DomainInfo, clear_domain_cache, domain_for_host
 from tests.factories import a_keypair, make_instance, make_local_feed
 from tests.test_onion_guard_limits import PROXY
-from tests.two_domains import FIRST, ONION, request_on, routed_get, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, no_http, request_on, routed_get, two_domains  # noqa: F401
 
 AP = {'Accept': 'application/activity+json'}
 SHOP = 'shop.example'
 PEER = 'peer.example'
 __all__ = ['two_domains', 'FIRST', 'ONION', 'SHOP', 'PEER', 'ThreeDomains', 'three_domains', 'request_on', 'get', 'ap_get', 'urls_in',
-           'sent', 'peer']
+           'sent', 'peer', 'no_http']
 
 
 class ThreeDomains(NamedTuple):

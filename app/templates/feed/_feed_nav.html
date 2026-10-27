@@ -138,7 +138,7 @@
                 {% if current_user.is_authenticated %}
                     <div class="dropdown-divider"></div>
                     <li>
-                        <a class="dropdown-item" href="{{ url_for('feed.feed_create_post', feed_name=feed.machine_name) }}">
+                        <a class="dropdown-item" href="{{ url_for('feed.feed_create_post', feed_name=feed.link()) }}">
                             {{ _('Create post') }}
                         </a>
                     </li>

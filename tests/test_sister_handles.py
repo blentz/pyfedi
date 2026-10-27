@@ -138,7 +138,7 @@ def test_a_port_none_of_our_domains_names_is_on_the_ban_list_like_any_server(env
     assert search_for_community(f'!den@{SHOP}:8443') is None
     with pytest.raises(Exception, match='blocked'):
         search_for_feed(f'~reads@{SHOP}:8443')
-    assert search_for_feed(f'~reads@{SHOP}') is env.feed
+    assert search_for_feed(f'~reads@{SHOP}') is env.shop_feed
     assert wire.calls.call_count == 0
 
 
@@ -165,7 +165,7 @@ def test_a_banned_own_host_still_resolves_in_every_gate(env, wire, host):
     den = env.shop_den if host == SHOP else env.first_den
     assert validate_remote_actor(f'https://{host}/u/alice') is True
     assert search_for_community(f'!den@{host}') is den
-    assert search_for_feed(f'~reads@{host}') is env.feed
+    assert search_for_feed(f'~reads@{host}') is (env.shop_feed if host == SHOP else env.feed)
     assert wire.calls.call_count == 0
 
 
