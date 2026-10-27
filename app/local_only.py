@@ -328,6 +328,12 @@ _REPORT_TARGETS = (('suspect_post_reply_id', 'PostReply'), ('suspect_post_id', '
                    ('suspect_community_id', 'Community'))
 
 
+def reporter_hidden_here(report) -> bool:
+    """Whether the account that filed `report` is hidden here, so no report view names it (ruling, F6 round 3)."""
+    reporter = db.session.get(models.User, report.reporter_id) if report.reporter_id else None
+    return reporter is not None and hidden_here(reporter, True)
+
+
 def report_hidden_here(report) -> bool:
     """Whether the report `report` is about a row hidden here (a signed-in reader, `hidden_here`): its post, reply,
     account or community, or a conversation one of whose members is. Off the onion such a report is no one's: its

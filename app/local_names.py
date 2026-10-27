@@ -113,9 +113,22 @@ def hidden_target(model, id_: int | None) -> bool:
     return row is not None and hidden_here(row, True)
 
 
+def hidden_note_text() -> str:
+    """`hidden_note`'s words alone, for a client API's plain-text field."""
+    return _('Open this on the onion to see it.')
+
+
 def hidden_note() -> Markup:
     """What a report or notification says beside a target hidden here (owner ruling, follow-up F6)."""
-    return Markup(' <small class="text-body-secondary">{}</small>').format(_('Open this on the onion to see it.'))
+    return Markup(' <small class="text-body-secondary">{}</small>').format(hidden_note_text())
+
+
+def reporter_link(targets: dict | None) -> Markup:
+    """A report's reporter: `target_link`, or, when that account is hidden here, the note alone. An onion account
+    that reports clearnet content is not named off the onion, not even as text (ruling, F6 round 3)."""
+    if _target(targets, 'reporter_user_name')[1]:
+        return hidden_note()
+    return target_link(targets, 'reporter_user_name')
 
 
 def _target(targets: dict | None, name_key: str) -> tuple[str | None, bool]:
