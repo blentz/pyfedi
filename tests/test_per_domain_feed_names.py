@@ -244,7 +244,9 @@ def news(app, three_domains, peer):  # noqa: F811
 
 @pytest.mark.parametrize('name, host, expected', [('news', SHOP, 'shop'), ('news', FIRST, 'first'),
                                                   (f'news@{FIRST}', SHOP, 'first'), (f'NEWS@{SHOP}', FIRST, 'shop'),
-                                                  (f'peerfeed@{PEER}', FIRST, 'remote')])
+                                                  (f'peerfeed@{PEER}', FIRST, 'remote'),
+                                                  (' news ', SHOP, 'shop'), (f'@news@{FIRST}', SHOP, 'first'),
+                                                  (f'PeerFeed@{PEER.upper()}', FIRST, 'remote')])   # the one resolver's spelling
 def test_get_feed_by_name_follows_the_request_host(app, alpha, news, name, host, expected):
     response = api(app, '/feed', host, name=name)
     assert response.status_code == 200, response.data
