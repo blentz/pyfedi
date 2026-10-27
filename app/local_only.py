@@ -258,8 +258,16 @@ def hidden_here(obj, signed_in: bool | None = None) -> bool:
 
 def shown_here(rows, signed_in: bool | None = None) -> list:
     """`rows` without the ones `hidden_here` hides: for a list read from a cache shared by every storefront (a user's
-    joined or moderated communities, a sidebar), which is narrowed when it is shown rather than when it is built."""
-    return [row for row in rows if not hidden_here(row, signed_in)]
+    joined or moderated communities, a sidebar), which is narrowed when it is shown rather than when it is built. The
+    owners of the local feeds among them are read in one query, not one each, when something is hidden here."""
+    rows = list(rows)
+    owner_ids = {row.user_id for row in rows if isinstance(row, models.Feed) and row.ap_id is None and row.user_id is not None}
+    owners = models.User.query.filter(models.User.id.in_(owner_ids)).all() if owner_ids and hides_anything_here() else []
+    # `owners` stays referenced while the rows are judged: the session's identity map holds its rows weakly, and
+    # `_feed_hidden` reads each owner through it
+    hidden = [hidden_here(row, signed_in) for row in rows]
+    del owners
+    return [row for row, is_hidden in zip(rows, hidden) if not is_hidden]
 
 
 def hides_nothing(clause) -> bool:
