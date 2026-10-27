@@ -629,3 +629,22 @@ def test_an_admin_is_refused_a_community_the_page_refuses_to_an_admin(world, sta
     setattr(world.clearnet, state, True)
     db.session.commit()
     assert refused(an_admin(), world.clearnet.ap_profile_id) == 'No object found.'
+
+
+# ---- what the inner fetch leaves alone ---------------------------------------------------------------------------------
+
+def test_a_failure_other_than_not_found_on_the_way_is_not_swallowed(peer, monkeypatch):
+    fake = peer(_followers_only, community_known=False)
+
+    def broken(url, **kwargs):
+        if url == PARENT:
+            raise Exception('peer down')
+        return FakePeer.remote_object_to_json(fake, url)
+    monkeypatch.setattr(misc, 'remote_object_to_json', broken)
+    assert refused(caller(), CHILD) == 'peer down'
+
+
+def test_a_caller_with_no_id_is_not_found_for_what_is_not_stored_here():
+    with pytest.raises(Exception) as caught:
+        get_resolve_object(None, {'q': 'https://peer.example/post/5'}, user_id=0)
+    assert str(caught.value) == 'No object found.'
