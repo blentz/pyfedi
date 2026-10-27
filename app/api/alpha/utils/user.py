@@ -15,6 +15,7 @@ from app.api.alpha.views import user_view, reply_view, post_view, community_view
 # The module, not the name: app.auth.util reaches this file, through the activitypub and api blueprints, before
 # find_user is defined (import cycle: app.auth.util)
 import app.auth.util as auth_util
+from app.api.alpha.utils.found import a_community, a_person
 from app.hidden_routes import notification_hidden
 from app.local_names import local_clause, local_named
 from app.local_only import without_local_only_actors
@@ -142,7 +143,7 @@ def get_user_list(auth, data):
 
 
 def post_user_block(auth, data):
-    person_id = data['person_id']
+    person_id = a_person(data['person_id']).id   # hidden here or nobody's: one answer (follow-up F6)
     block = data['block']
 
     user_id = shared_user.block_another_user(person_id, SRC_API, auth) if block else shared_user.unblock_another_user(person_id, SRC_API, auth)
@@ -984,8 +985,7 @@ def post_user_set_flair(auth, data):
     # carries it into `user_flair.community_id`, which is a foreign key:
     # `psycopg2.errors.ForeignKeyViolation ... user_flair_community_id_fkey`,
     # measured as PROBE bf1.
-    if db.session.get(Community, community_id) is None:
-        raise Exception('community not found')
+    a_community(community_id)   # hidden here or nobody's: one answer (follow-up F6)
 
     try:
         if flair_text is not None:
@@ -1029,8 +1029,7 @@ def post_user_set_note(auth, data):
     # D1176. `user_note.target_id` is a foreign key and `person_id` is
     # whatever the caller sent: `psycopg2.errors.ForeignKeyViolation ...
     # user_note_target_id_fkey`, measured as PROBE bf3.
-    if db.session.get(User, target_user_id) is None:
-        raise Exception('person not found')
+    a_person(target_user_id)   # hidden here or nobody's: one answer (follow-up F6)
 
     if note_text:
         note_text = note_text.strip()
@@ -1068,9 +1067,7 @@ def post_user_ban(auth, data):
         # `to_ban.banned = True`, so an id that does not resolve was
         # `AttributeError: 'NoneType' object has no attribute 'banned'`.
         # Measured as PROBE bf5.
-        target = db.session.get(User, target_user_id)
-        if target is None:
-            raise Exception('person not found')
+        target = a_person(target_user_id)   # hidden here or nobody's: one answer (follow-up F6)
         # D1178: only an admin may ban an admin, and nobody may ban user 1.
         if target.is_ban_exempt() or (target.is_admin() and not user.is_admin()):
             raise Exception('cannot_ban_admin')
@@ -1093,8 +1090,7 @@ def post_user_unban(auth, data):
         if user.id == target_user_id:
             raise Exception('cannot_unban_self')
 
-        if db.session.get(User, target_user_id) is None:  # D1177's twin
-            raise Exception('person not found')
+        a_person(target_user_id)  # D1177's twin; hidden here or nobody's: one answer (follow-up F6)
 
         shared_user.unban_user({'person_id': target_user_id}, SRC_API, auth)
     else:

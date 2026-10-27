@@ -405,6 +405,8 @@ def user_view(user: User | int, variant, stub=False, user_id=None, flair_communi
     if variant == 3 and hidden_here(user, user_id is not None):
         raise NoResultFound   # a logged-out caller is never shown a local-only account (owner ruling 2026-10-21), nor
         # anyone off its own domain (follow-up F6)
+    if variant in (2, 4, 5) and hidden_here(user, True):
+        raise NoResultFound   # the profile an action answers with: none off its own domain (follow-up F6, review N2)
 
     # Variant 1 - models/person/person.dart
     if variant == 1:

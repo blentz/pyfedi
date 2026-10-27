@@ -21,7 +21,7 @@ from app.community.util import community_theme_list, save_banner_file, save_icon
 from app.constants import *
 from app.email import send_email
 from app.federation_urls import object_base
-from app.local_only import community_local_only, user_local_only
+from app.local_only import community_local_only, one_here, user_local_only
 from app.local_names import local_named
 from app.models import CommunityBlock, CommunityMember, Notification, NotificationSubscription, User, Conversation, \
     Community, Language, File, CommunityFlair, utcnow, CommunityInvitation, CommunityFavorite, \
@@ -769,8 +769,9 @@ def add_mod_to_community(community_id: int, person_id: int, src, auth=None):
     else:
         user = current_user
 
-    community = db.session.query(Community).filter_by(id=community_id).one()
-    new_moderator = User.query.filter_by(id=person_id, banned=False).one()
+    # a row hidden here is as one nobody holds: the same NoResultFound (follow-up F6)
+    community = one_here(db.session.query(Community).filter_by(id=community_id), Community)
+    new_moderator = one_here(User.query.filter_by(id=person_id, banned=False), User)
     if not community.is_owner(user) and not user.is_admin_or_staff():
         raise Exception('no_permission')
     # a local-only account does not exist to other servers, so it cannot moderate a community they follow
@@ -839,8 +840,9 @@ def remove_mod_from_community(community_id: int, person_id: int, src, auth=None)
     else:
         user = current_user
 
-    community = db.session.query(Community).filter_by(id=community_id).one()
-    old_moderator = User.query.filter_by(id=person_id).one()
+    # a row hidden here is as one nobody holds: the same NoResultFound (follow-up F6)
+    community = one_here(db.session.query(Community).filter_by(id=community_id), Community)
+    old_moderator = one_here(User.query.filter_by(id=person_id), User)
     if not community.is_owner(user) and not user.is_admin_or_staff():
         raise Exception('incorrect_login')
 

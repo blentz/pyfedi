@@ -12,8 +12,8 @@ from app.federation_urls import object_base
 from app.models import ChatMessage, Conversation, User, Notification, Report, Site
 from app.storefront import canonicalise_text
 from app.utils import authorise_api_user, markdown_to_html, user_access
-from app.local_only import REMOTE_CONTACT_REFUSAL, conversation_hidden_here, refuses_remote_contact, without_hidden_conversations, \
-    without_local_only_actors
+from app.local_only import REMOTE_CONTACT_REFUSAL, conversation_hidden_here, found_here, one_here, \
+    refuses_remote_contact, without_hidden_conversations, without_hidden_reports, without_local_only_actors
 from app.shared.tasks import task_selector
 
 
@@ -136,7 +136,7 @@ def _get_single_conversation_history(conversation: int | Conversation, limit: in
 def post_leave_conversation(auth, data):
     user = authorise_api_user(auth, return_type="model")
     conversation_id = data["conversation_id"]
-    conversation = db.session.get(Conversation, conversation_id)
+    conversation = found_here(Conversation, conversation_id)   # hidden here or nobody's: one answer (follow-up F6)
 
     # D1170. A second `if conversation.is_member(user):` wrapped the body,
     # immediately below the guard that has already refused everyone it would
@@ -184,7 +184,7 @@ def post_private_message_mark_as_read(auth, data):
     message_id = data['private_message_id']
     read = data['read']
 
-    private_message = ChatMessage.query.filter_by(id=message_id, recipient_id=user.id).one()
+    private_message = one_here(ChatMessage.query.filter_by(id=message_id, recipient_id=user.id), ChatMessage)
     private_message.read = read
 
     notif_read = not read
@@ -209,7 +209,8 @@ def put_private_message(auth, data):
 
     user_id = authorise_api_user(auth)
     # User may only edit own messages
-    private_message = ChatMessage.query.filter_by(sender_id=user_id, id=chat_message_id, deleted=False).one()
+    private_message = one_here(ChatMessage.query.filter_by(sender_id=user_id, id=chat_message_id, deleted=False),
+                               ChatMessage)
     base = object_base(private_message)   # the sender's federating base (plan C3)
     private_message.body = content = canonicalise_text(content, base)
     private_message.body_html = markdown_to_html(content, link_base=base)
@@ -225,7 +226,7 @@ def post_private_message_delete(auth, data):
     deleted = data['deleted']
 
     user_id = authorise_api_user(auth)
-    private_message = ChatMessage.query.filter_by(sender_id=user_id, id=chat_message_id).one()
+    private_message = one_here(ChatMessage.query.filter_by(sender_id=user_id, id=chat_message_id), ChatMessage)
     private_message.deleted = deleted
     db.session.commit()
 
@@ -244,7 +245,7 @@ def post_private_message_report(auth, data):
     user_id = authorise_api_user(auth)
 
     # user may only report received messages
-    private_message = ChatMessage.query.filter_by(recipient_id=user_id, id=chat_message_id).one()
+    private_message = one_here(ChatMessage.query.filter_by(recipient_id=user_id, id=chat_message_id), ChatMessage)
     private_message.reported = True
 
     targets_data = {
@@ -284,7 +285,7 @@ def post_private_message_conversation_report(auth, data):
     user = authorise_api_user(auth, return_type="model")
     conversation_id = data["conversation_id"]
     reason = data["reason"]
-    conversation = db.session.get(Conversation, conversation_id)
+    conversation = found_here(Conversation, conversation_id)   # hidden here or nobody's: one answer (follow-up F6)
 
     # D1167. This was
     #
@@ -359,7 +360,8 @@ def get_private_message_report_list(auth, data):
     
     if unresolved_only:
         reports = reports.filter(Report.status < REPORT_STATE_RESOLVED)
-    
+    reports = without_hidden_reports(reports)   # none about a row hidden here (follow-up F6)
+
     reports = reports.paginate(page=page, per_page=limit, error_out=False)
 
     report_list = []
@@ -393,7 +395,8 @@ def get_private_message_conversation_report_list(auth, data):
     
     if unresolved_only:
         reports = reports.filter(Report.status < REPORT_STATE_RESOLVED)
-    
+    reports = without_hidden_reports(reports)   # none about a row hidden here (follow-up F6)
+
     reports = reports.paginate(page=page, per_page=limit, error_out=False)
 
     report_list = []
@@ -425,7 +428,7 @@ def put_private_message_report_resolve(auth, data):
     # D1169. `db.session.get` answers None for an id that does not resolve,
     # and the line below it read `.targets` off that None: `AttributeError:
     # 'NoneType' object has no attribute 'targets'`, measured as PROBE ba7.
-    report = db.session.get(Report, report_id)
+    report = found_here(Report, report_id)   # hidden here or nobody's: one answer (follow-up F6)
 
     if report is None or "suspect_message_id" not in report.targets:
         raise Exception("invalid target of resolution")
@@ -451,7 +454,7 @@ def put_private_message_conversation_report_resolve(auth, data):
     if not user_access("administer all users", user.id):
         raise Exception("incorrect login")
     
-    report = db.session.get(Report, report_id)  # D1169's twin
+    report = found_here(Report, report_id)  # D1169's twin; hidden here or nobody's: one answer (follow-up F6)
 
     if report is None or not report.suspect_conversation_id:
         raise Exception("invalid target of resolution")

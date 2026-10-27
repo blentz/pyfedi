@@ -1,0 +1,240 @@
+"""The alpha API's actions on an id in the body or query answer an onion row off the onion exactly as an id nobody
+holds (follow-up F6, re-review N1 to N5, N-m5, N-m6). Ruling: one shared API finder applies `hidden_here` and raises
+what a missing row raises, so the two answers are one; no endpoint keeps its own copy of the rule."""
+import pytest
+
+from app import db
+from app.models import ChatMessage, CommunityBan, PostReply, Report, UserBlock, UserFlair, \
+    UserFollower, UserNote, read_posts
+from tests.conftest import forget_login
+from tests.factories import grant_permission, make_post_reply
+from tests.test_hidden_routes import talking  # noqa: F401 -- a fixture
+from tests.test_instance_visible_here import HOSTS, scene  # noqa: F401 -- scene is a fixture
+from tests.test_local_only_actors_hidden import ONION_BOB, world  # noqa: F401 -- world is a fixture
+from tests.test_onion_hidden_on_clearnet import onion  # noqa: F401 -- a fixture
+from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
+from tests.two_domains import FIRST, ONION, two_domains  # noqa: F401
+
+pytestmark = pytest.mark.usefixtures('site')
+
+NOBODY = 2 ** 30   # an id no row holds
+
+
+@pytest.fixture
+def alpha(app, onion, monkeypatch):
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    grant_permission(onion.admin, 'ban users')
+    grant_permission(onion.admin, 'administer all communities')
+    grant_permission(onion.admin, 'administer all users')
+    return onion
+
+
+def call(app, viewer, method, path, json=None, host=FIRST):
+    forget_login()
+    client = app.test_client()
+    headers = {'Authorization': f'Bearer {viewer.encode_jwt_token()}'}
+    if method == 'GET':
+        return client.get(path, base_url=HOSTS[host], headers=headers)
+    return client.open(path, method=method, base_url=HOSTS[host], headers=headers, json=json)
+
+
+def assert_same(app, viewer, method, path, hidden, missing):
+    """`hidden` and `missing` are the bodies (or for a GET, the query strings) naming a hidden row and no row."""
+    if method == 'GET':
+        found, absent = call(app, viewer, 'GET', f'{path}?{hidden}'), call(app, viewer, 'GET', f'{path}?{missing}')
+    else:
+        found, absent = call(app, viewer, method, path, hidden), call(app, viewer, method, path, missing)
+    assert (found.status_code, found.get_data()) == (absent.status_code, absent.get_data()), \
+        (path, found.status_code, found.get_data()[:300], absent.get_data()[:300])
+    assert found.status_code >= 400, path
+    return found
+
+
+def body_ids(world):
+    """Each listed endpoint, who calls it, and the body naming the hidden row and the one naming no row."""
+    bob, art, post, reply = world.onion_bob.id, world.onion_art.id, world.post.id, world.reply.id
+    first_art = world.first_art.id
+    admin, user = world.admin, world.first_bob
+    return [
+        ('N1 comment', user, 'POST', '/api/alpha/comment', {'post_id': post, 'body': 'PROBE'},
+         {'post_id': NOBODY, 'body': 'PROBE'}),
+        ('N1 comment under', user, 'POST', '/api/alpha/comment',
+         {'post_id': world.first_post.id, 'parent_id': reply, 'body': 'PROBE'},
+         {'post_id': world.first_post.id, 'parent_id': NOBODY, 'body': 'PROBE'}),
+        ('N2 block', user, 'POST', '/api/alpha/user/block', {'person_id': bob, 'block': True},
+         {'person_id': NOBODY, 'block': True}),
+        ('N2 unblock', user, 'POST', '/api/alpha/user/block', {'person_id': bob, 'block': False},
+         {'person_id': NOBODY, 'block': False}),
+        ('N2 note', user, 'POST', '/api/alpha/user/note', {'person_id': bob, 'note': 'PROBE'},
+         {'person_id': NOBODY, 'note': 'PROBE'}),
+        ('N2 ban', admin, 'POST', '/api/alpha/user/ban', {'person_id': bob}, {'person_id': NOBODY}),
+        ('N2 unban', admin, 'POST', '/api/alpha/user/unban', {'person_id': bob}, {'person_id': NOBODY}),
+        ('N3 follow', user, 'POST', '/api/alpha/user/follow', {'user_id': bob}, {'user_id': NOBODY}),
+        ('N3 unfollow', user, 'POST', '/api/alpha/user/unfollow', {'user_id': bob}, {'user_id': NOBODY}),
+        ('N3 mod a person', admin, 'POST', '/api/alpha/community/mod',
+         {'community_id': first_art, 'person_id': bob, 'added': True},
+         {'community_id': first_art, 'person_id': NOBODY, 'added': True}),
+        ('N3 unmod a person', admin, 'POST', '/api/alpha/community/mod',
+         {'community_id': first_art, 'person_id': bob, 'added': False},
+         {'community_id': first_art, 'person_id': NOBODY, 'added': False}),
+        ('N3 mod a community', admin, 'POST', '/api/alpha/community/mod',
+         {'community_id': art, 'person_id': admin.id, 'added': True},
+         {'community_id': NOBODY, 'person_id': admin.id, 'added': True}),
+        ('N3 set_flair', user, 'POST', '/api/alpha/user/set_flair', {'community_id': art, 'flair_text': 'PROBE'},
+         {'community_id': NOBODY, 'flair_text': 'PROBE'}),
+        ('N3 replies', user, 'GET', '/api/alpha/post/replies', f'parent_id={reply}', f'parent_id={NOBODY}'),
+    ]
+
+
+@pytest.mark.parametrize('index', range(14))
+def test_a_body_id_naming_an_onion_row_answers_as_one_nobody_holds(app, alpha, index):
+    name, viewer, method, path, hidden, missing = body_ids(alpha)[index]
+    assert_same(app, viewer, method, path, hidden, missing)
+
+
+def test_nothing_is_written_for_an_onion_row(app, alpha):
+    for _, viewer, method, path, hidden, _missing in body_ids(alpha):
+        call(app, viewer, method, path, hidden)
+    bob, art = alpha.onion_bob.id, alpha.onion_art.id
+    assert PostReply.query.filter_by(body='PROBE').count() == 0
+    assert UserBlock.query.filter_by(blocked_id=bob).count() == 0
+    assert UserNote.query.filter_by(target_id=bob).count() == 0
+    assert UserFollower.query.filter_by(remote_user_id=bob).count() == 0
+    assert UserFlair.query.filter_by(community_id=art).count() == 0
+    db.session.expire_all()
+    assert not alpha.onion_bob.banned
+
+
+def test_on_the_onion_the_same_actions_reach_them(app, alpha):
+    assert call(app, alpha.first_bob, 'POST', '/api/alpha/user/note', {'person_id': alpha.onion_bob.id, 'note': 'n'},
+                host=ONION).status_code == 200
+    assert call(app, alpha.first_bob, 'GET', f'/api/alpha/post/replies?parent_id={alpha.reply.id}',
+                host=ONION).status_code == 200
+    assert call(app, alpha.first_bob, 'POST', '/api/alpha/comment', {'post_id': alpha.post.id, 'body': 'ONIONSIDE'},
+                host=ONION).status_code == 200
+
+
+def test_marking_onion_posts_read_writes_nothing_on_the_first_domain(app, alpha):
+    """N-m6: the batch form."""
+    call(app, alpha.first_bob, 'POST', '/api/alpha/post/mark_as_read',
+         {'post_ids': [alpha.post.id, alpha.first_post.id], 'read': True})
+    read = {row.read_post_id for row in db.session.execute(read_posts.select().where(
+        read_posts.c.user_id == alpha.first_bob.id))}
+    assert read == {alpha.first_post.id}
+
+
+# --- N3: the moderator list a mod change answers ---------------------------------------------------------------
+
+def test_a_mod_change_answers_a_moderator_list_without_onion_accounts(app, alpha):
+    db.session.execute(db.text('INSERT INTO community_member (user_id, community_id, is_moderator, is_owner, is_banned)'
+                               ' VALUES (:u, :c, true, false, false)'),
+                       {'u': alpha.onion_bob.id, 'c': alpha.first_art.id})
+    db.session.commit()
+    response = call(app, alpha.admin, 'POST', '/api/alpha/community/mod',
+                    {'community_id': alpha.first_art.id, 'person_id': alpha.first_bob.id, 'added': True})
+    assert response.status_code == 200 and ONION not in response.get_data(as_text=True)
+
+
+# --- N4: report lists -------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def onion_in_reply(alpha):
+    alpha.onion_in_reply = make_post_reply(alpha.first_post, alpha.onion_bob, 'ONIONCOMMENT')
+    alpha.onion_in_reply.local_only = True
+    db.session.commit()
+    return alpha
+
+
+@pytest.fixture
+def reports(onion_in_reply, talking):  # noqa: F811
+    onion = onion_in_reply
+    message = ChatMessage.query.filter_by(conversation_id=onion.with_onion.id).first()
+    rows = [Report(reasons='spam', description='REPORTED', type=1, reporter_id=onion.first_bob.id, status=0,
+                   suspect_post_id=onion.in_first.id, in_community_id=onion.first_art.id, source_instance_id=1,
+                   suspect_user_id=onion.onion_bob.id, targets={'suspect_post_id': onion.in_first.id}),
+            Report(reasons='spam', description='REPORTED', type=2, reporter_id=onion.first_bob.id, status=0,
+                   suspect_post_id=onion.first_post.id, suspect_post_reply_id=onion.onion_in_reply.id,
+                   in_community_id=onion.first_art.id, source_instance_id=1, suspect_user_id=onion.onion_bob.id,
+                   targets={'suspect_comment_id': onion.onion_in_reply.id}),
+            Report(reasons='spam', description='REPORTED', type=4, reporter_id=onion.first_bob.id, status=0,
+                   suspect_conversation_id=onion.with_onion.id, source_instance_id=1, suspect_user_id=onion.onion_bob.id,
+                   targets={'suspect_message_id': message.id}),
+            Report(reasons='spam', description='CONTROL', type=1, reporter_id=onion.first_bob.id, status=0,
+                   suspect_post_id=onion.first_post.id, in_community_id=onion.first_art.id, source_instance_id=1,
+                   suspect_user_id=onion.first_bob.id, targets={'suspect_post_id': onion.first_post.id})]
+    db.session.add_all(rows)
+    db.session.commit()
+    onion.reports = rows
+    return onion
+
+
+LISTS = ['/api/alpha/post/report/list', '/api/alpha/comment/report/list', '/api/alpha/private_message/report/list',
+         '/api/alpha/private_message/conversation/report/list']
+
+
+@pytest.mark.parametrize('path', LISTS)
+def test_the_report_lists_leave_out_reports_about_onion_rows_on_the_first_domain(app, reports, path):
+    body = call(app, reports.admin, 'GET', path).get_data(as_text=True)
+    for mark in (ONION, 'ONIONINFIRST', 'ONIONCOMMENT', 'ONIONCHAT', f'"id":{reports.reports[0].id},'):
+        assert mark not in body, (path, mark)
+    if path == LISTS[0]:
+        assert 'CONTROL' in body or 'FIRSTPOST' in body   # the control
+
+
+def test_on_the_onion_the_report_lists_show_them(app, reports):
+    body = call(app, reports.admin, 'GET', LISTS[0], host=ONION).get_data(as_text=True)
+    assert 'ONIONINFIRST' in body
+
+
+def test_resolving_a_report_about_an_onion_row_answers_as_a_report_nobody_holds(app, reports):
+    for path, report in (('/api/alpha/post/report/resolve', reports.reports[0]),
+                         ('/api/alpha/comment/report/resolve', reports.reports[1]),
+                         ('/api/alpha/private_message/report/resolve', reports.reports[2])):
+        assert_same(app, reports.admin, 'PUT', path, {'report_id': report.id, 'resolved': True},
+                    {'report_id': NOBODY, 'resolved': True})
+
+
+# --- N-m5: a message of a conversation with an onion account, by its id -------------------------------------------------
+
+def message_ids(world):
+    sent = ChatMessage.query.filter_by(conversation_id=world.with_onion.id, sender_id=world.first_bob.id).first()
+    got = ChatMessage.query.filter_by(conversation_id=world.with_onion.id, recipient_id=world.first_bob.id).first()
+    conversation = world.with_onion.id
+    return [('/api/alpha/private_message/mark_as_read', 'POST', {'private_message_id': got.id, 'read': True}),
+            ('/api/alpha/private_message', 'PUT', {'private_message_id': sent.id, 'content': 'PROBE'}),
+            ('/api/alpha/private_message/delete', 'POST', {'private_message_id': sent.id, 'deleted': True}),
+            ('/api/alpha/private_message/report', 'POST', {'private_message_id': got.id, 'reason': 'PROBE'}),
+            ('/api/alpha/private_message/conversation/leave', 'POST', {'conversation_id': conversation}),
+            ('/api/alpha/private_message/conversation/report', 'POST',
+             {'conversation_id': conversation, 'reason': 'PROBE'})]
+
+
+@pytest.fixture
+def chatted(alpha, talking):  # noqa: F811
+    db.session.add(ChatMessage(conversation_id=alpha.with_onion.id, sender_id=alpha.first_bob.id,
+                               recipient_id=alpha.onion_bob.id, body='MINE', body_html='<p>MINE</p>'))
+    db.session.commit()
+    return alpha
+
+
+@pytest.mark.parametrize('index', range(6))
+def test_a_message_of_a_conversation_with_an_onion_account_answers_as_one_nobody_holds(app, chatted, index):
+    path, method, hidden = message_ids(chatted)[index]
+    key = 'conversation_id' if 'conversation_id' in hidden else 'private_message_id'
+    assert_same(app, chatted.first_bob, method, path, hidden, {**hidden, key: NOBODY})
+
+
+# --- N6: the community's banned lists ------------------------------------------------------------------------
+
+def test_a_communitys_banned_list_names_no_onion_account_on_the_first_domain(app, alpha, monkeypatch):
+    db.session.add(CommunityBan(community_id=alpha.first_art.id, user_id=alpha.onion_bob.id, banned_by=alpha.admin.id,
+                                reason='BANNEDONION'))
+    db.session.add(CommunityBan(community_id=alpha.first_art.id, user_id=alpha.first_bob.id, banned_by=alpha.admin.id,
+                                reason='BANNEDFIRST'))
+    db.session.commit()
+    body = call(app, alpha.admin, 'GET', f'/api/alpha/community/moderate/bans?community_id={alpha.first_art.id}'
+                ).get_data(as_text=True)
+    assert ONION not in body and f'"id":{alpha.first_bob.id}' in body.replace(' ', '')
+    on_onion = call(app, alpha.admin, 'GET', f'/api/alpha/community/moderate/bans?community_id={alpha.first_art.id}',
+                    host=ONION).get_data(as_text=True)
+    assert f'"id":{alpha.onion_bob.id}' in on_onion.replace(' ', '')

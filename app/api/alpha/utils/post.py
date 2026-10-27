@@ -31,23 +31,10 @@ from app.utils import can_moderate, authorise_api_user, blocked_users, blocked_c
     community_membership_private, paginate_post_ids, post_ids_to_models, user_access, moderating_communities_ids, \
     user_filters_languages, feed_readable_by
 from app.shared.tasks import task_selector
-from app.local_only import hidden_here, hidden_here_sql, without_local_only, without_local_only_actors
+from app.local_only import hidden_here, hidden_here_sql, without_hidden_here, without_hidden_reports, without_local_only, \
+    without_local_only_actors
+from app.api.alpha.utils.found import a_community, a_post, a_reply, a_report
 from app.visibility import can_view, listable_clause, listable_sql, visible_to_clause, visible_to_sql
-
-
-def a_post(post_id):
-    """The post `post_id` names, or a clean refusal.
-
-    `db.session.get(Post, ...)` answers None for an id nobody holds, and the
-    alpha API turns every exception into a 400 carrying `str(e)` -- so reading
-    an attribute off that None handed the caller `'NoneType' object has no
-    attribute 'community'` after logging a traceback and, where one is
-    configured, filing a Sentry event. The same shape as D1194 and D1202.
-    """
-    post = db.session.get(Post, post_id)
-    if not post or hidden_here(post, True):   # off its own domain, as unknown as an id nobody holds (follow-up F6)
-        raise Exception('post not found')
-    return post
 
 
 def a_visible_post(post_id, auth):
@@ -68,22 +55,6 @@ def a_moderatable_post(post_id, auth):
     if user is not None and can_moderate(post.community, user):
         return post
     return a_visible_post(post_id, auth)
-
-
-def a_community(community_id):
-    """The community `community_id` names, or a clean refusal. See `a_post`."""
-    community = db.session.get(Community, community_id)
-    if not community or hidden_here(community, True):   # off its own domain, as unknown as an id nobody holds (follow-up F6)
-        raise Exception('community not found')
-    return community
-
-
-def a_report(report_id):
-    """The report `report_id` names, or a clean refusal. See `a_post`."""
-    report = db.session.get(Report, report_id)
-    if not report:
-        raise Exception('report not found')
-    return report
 
 
 def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
@@ -1450,9 +1421,7 @@ def get_post_replies(auth, data):
         user = None
 
     if parent_id:
-        parent = db.session.get(PostReply, parent_id)
-        if not parent:
-            raise Exception('comment not found')
+        parent = a_reply(parent_id)   # hidden here or nobody's: one answer (follow-up F6)
         if post_id is None:
             post_id = parent.post_id
         post = a_visible_post(post_id, auth)
@@ -1884,7 +1853,8 @@ def get_post_report_list(auth, data):
     
     if unresolved_only:
         reports = reports.filter(Report.status < REPORT_STATE_RESOLVED)
-    
+    reports = without_hidden_reports(reports)   # none about a row hidden here (follow-up F6)
+
     reports = reports.paginate(page=page, per_page=limit, error_out=False)
 
     report_list = []
@@ -2022,7 +1992,8 @@ def post_post_mark_as_read(auth, data):
         # this function already refused a request carrying neither. A batch
         # skips ids nobody holds or the caller may not see, so one of them
         # neither fails the rest nor tells the two cases apart.
-        posts = Post.query.filter(Post.id.in_(data['post_ids']), visible_to_clause(Post, user_id))
+        posts = without_hidden_here(Post.query.filter(Post.id.in_(data['post_ids']), visible_to_clause(Post, user_id)),
+                                    Post, True)   # none hidden here (follow-up F6)
         post_ids = [post.id for post in posts]
     try:
         shared_post.mark_post_read(post_ids, data['read'], user_id)

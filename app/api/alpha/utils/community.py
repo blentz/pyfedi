@@ -6,10 +6,12 @@ from sqlalchemy import desc, or_, text, asc
 from sqlalchemy.orm.exc import NoResultFound
 
 from app import db, cache
-from app.api.alpha.views import community_view, user_view, post_view, cached_modlist_for_community, flair_view
+from app.api.alpha.views import community_view, user_view, post_view, cached_modlist_for_community, flair_view, \
+    shown_modlist
 from app.community.util import search_for_community
 from app.constants import *
 from app.local_only import hidden_here, without_local_only_actors
+from app.api.alpha.utils.found import a_community, a_post, a_user
 from app.storefront import acting_domain, current_storefront, domain_authority, domain_boost_expr, on_domain
 from app.models import Community, CommunityMember, User, CommunityBan, Notification, CommunityJoinRequest, \
     NotificationSubscription, Post, CommunityFlair, Feed, utcnow
@@ -26,40 +28,6 @@ from app.utils import user_banned_from_community, authorise_api_user, communitie
 from app.utils import communities_banned_from, blocked_instances, blocked_communities, shorten_string, \
     joined_communities, moderating_communities, expand_hex_color, community_membership, subscribed_feeds, \
     feed_membership
-
-
-def a_community(community_id):
-    """The community `community_id` names, or a clean refusal.
-
-    `Community.query.filter_by(id=...).one()` answers NoResultFound for an id
-    nobody holds, and `db.session.get(Community, ...)` answers None, whose
-    first attribute access is an AttributeError. Either way the API's shared
-    error handler (app/api/alpha/__init__.py) hands the caller a 400 carrying
-    "No row was found when one was required" or "'NoneType' object has no
-    attribute 'is_owner'" -- after logging a traceback and, where one is
-    configured, reporting it to Sentry. An id that is simply wrong is not an
-    application error and should not be filed as one.
-    """
-    community = db.session.get(Community, community_id)
-    if not community or hidden_here(community, True):   # off its own domain, as unknown as an id nobody holds (follow-up F6)
-        raise Exception('community not found')
-    return community
-
-
-def a_user(user_id):
-    """The account `user_id` names, or a clean refusal. See `a_community`."""
-    user = db.session.get(User, user_id)
-    if not user or hidden_here(user, True):   # off its own domain, as unknown as an id nobody holds (follow-up F6)
-        raise Exception('user not found')
-    return user
-
-
-def a_post(post_id):
-    """The post `post_id` names, or a clean refusal. See `a_community`."""
-    post = db.session.get(Post, post_id)
-    if not post or hidden_here(post, True):   # off its own domain, as unknown as an id nobody holds (follow-up F6)
-        raise Exception('post not found')
-    return post
 
 
 def a_ban_expiry(expires_at):
@@ -439,7 +407,9 @@ def get_community_moderate_bans(auth, data):
         raise Exception('Community not local to this instance.')
 
     # get the list of all banned users and their stats
-    community_bans = CommunityBan.query.filter_by(community_id=community_id).paginate(page=page, per_page=limit, error_out=False)
+    community_bans = without_local_only_actors(   # none hidden here (follow-up F6)
+        CommunityBan.query.filter_by(community_id=community_id).join(User, User.id == CommunityBan.user_id),
+        User, True).paginate(page=page, per_page=limit, error_out=False)
 
     # setup the items for the json
     items = []
@@ -668,8 +638,8 @@ def post_community_mod(auth, data):
     else:
         shared_community.remove_mod_from_community(community_id, person_id, SRC_API, auth)
     cache.delete_memoized(cached_modlist_for_community)
-    community_json = {
-        'moderators': cached_modlist_for_community(community_id)
+    community_json = {   # without the moderators hidden here (follow-up F6)
+        'moderators': shown_modlist(cached_modlist_for_community(community_id), authorise_api_user(auth))
     }
     return community_json
 

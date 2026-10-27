@@ -5,7 +5,7 @@ from sqlalchemy import text
 
 from app import db, cache, plugins
 from app.constants import *
-from app.local_only import REMOTE_CONTACT_REFUSAL, hidden_here, refuses_remote_contact
+from app.local_only import REMOTE_CONTACT_REFUSAL, found_here, hidden_here, refuses_remote_contact
 from app.onion import has_real_ip
 from app.models import UserBlock, NotificationSubscription, User, IpBan, UserFollower, Notification, BotChallenge, \
     Conversation
@@ -241,7 +241,9 @@ def follow_user(follow_id: int, src, auth=None):
     else:
         user = current_user
 
-    to_follow: User = db.session.get(User, follow_id)
+    to_follow: User = found_here(User, follow_id)
+    if to_follow is None:   # nobody's, or hidden here: one answer (follow-up F6)
+        raise Exception('user not found')
     if refuses_remote_contact(user, to_follow):
         raise Exception(REMOTE_CONTACT_REFUSAL)
 
@@ -299,7 +301,9 @@ def unfollow_user(follow_id: int, src, auth=None):
     else:
         user = current_user
 
-    to_unfollow: User = db.session.get(User, follow_id)
+    to_unfollow: User = found_here(User, follow_id)
+    if to_unfollow is None:   # nobody's, or hidden here: one answer (follow-up F6)
+        raise Exception('user not found')
 
     removed = db.session.execute(text(
         'DELETE FROM "user_follower" WHERE local_user_id = :local_user_id AND remote_user_id = :remote_user_id AND is_inward is false RETURNING is_accepted'),

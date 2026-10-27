@@ -13,7 +13,8 @@ from app.shared.reply import vote_for_reply, bookmark_reply, remove_bookmark_rep
     edit_reply, \
     delete_reply, restore_reply, report_reply, mod_remove_reply, mod_restore_reply, lock_post_reply, choose_answer, \
     unchoose_answer
-from app.local_only import hidden_here, without_local_only, without_local_only_actors
+from app.local_only import found_here, hidden_here, without_hidden_reports, without_local_only, without_local_only_actors
+from app.api.alpha.utils.found import a_post, a_reply
 from app.visibility import can_view, listable_clause, visible_to_clause
 from app.utils import authorise_api_user, blocked_users, blocked_or_banned_instances, site_language_id, \
     communities_banned_from, in_sorted_list, moderating_communities_ids, joined_communities, user_access, \
@@ -486,13 +487,6 @@ def get_reply_list(auth, data, user_details=None):
 #     PROBE bm get_reply_report_list: ... 'community'
 #
 # One helper, so the ten cannot drift apart again.
-def a_reply(reply_id):
-    reply = db.session.get(PostReply, reply_id)
-    if reply is None or hidden_here(reply, True):   # off its own domain, as unknown as an id nobody holds (F6)
-        raise Exception('comment not found')
-    return reply
-
-
 def a_visible_reply(reply_id, auth):
     """a_reply for an action: a comment the caller may not see is `comment not found`, as if nobody held the id.
     Checked before the action runs. Moderators get no exemption (D19)."""
@@ -582,8 +576,8 @@ def post_reply(auth, data):
         language_id = site_language_id()
 
     input = {'body': body, 'notify_author': True, 'language_id': language_id}
-    post = db.session.get(Post, post_id)
-    if post is None or not can_view(post, authorise_api_user(auth)):
+    post = a_post(post_id)   # off its own domain an onion post is as unknown as an id nobody holds (follow-up F6)
+    if not can_view(post, authorise_api_user(auth)):
         raise Exception('post not found')
     if parent_id is not None:
         a_visible_reply(parent_id, auth)
@@ -689,7 +683,8 @@ def get_reply_report_list(auth, data):
     
     if unresolved_only:
         reports = reports.filter(Report.status < REPORT_STATE_RESOLVED)
-    
+    reports = without_hidden_reports(reports)   # none about a row hidden here (follow-up F6)
+
     reports = reports.paginate(page=page, per_page=limit, error_out=False)
 
     report_list = []
@@ -716,7 +711,7 @@ def put_reply_report_resolve(auth, data):
     # it never answers a falsy user. Three of these, plus a fourth spelled
     # `if not user_id`.
     
-    report = db.session.get(Report, report_id)
+    report = found_here(Report, report_id)   # hidden here or nobody's: one answer (follow-up F6)
 
     # The community is tested BEFORE the lookup: `db.session.get(Community,
     # None)` warns `SAWarning: fully NULL primary key identity cannot load
