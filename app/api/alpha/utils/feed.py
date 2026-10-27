@@ -171,6 +171,8 @@ def post_feed_follow(auth, data):
 def _require_own_parent_feed(parent_feed_id, current_feed_id, user_id, domain):
     # The web form offers only the feed owner's own feeds (feeds_for_form), and for an
     # edit not the feed itself; the API holds to the same list. None/0 means no parent.
+    # This is the API's first guard and answers parent_feed_not_allowed alike for a missing, non-integer, other-domain
+    # or other-owner parent; shared make_feed/edit_feed's parent_feed_invalid is the second, which no HTTP caller reaches.
     # `user_id` is the owner: the caller creating a feed, the feed's owner when an admin edits it.
     if not parent_feed_id:
         return

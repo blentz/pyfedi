@@ -457,6 +457,10 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
     if not (feed.user_id == user.id or user.is_admin()):
         raise Exception('incorrect_login')
 
+    # Resolve the parent here too, before any field is assigned to the live feed: a refusal raises without rolling
+    # back, so the next commit would persist whatever was assigned first.
+    parent_feed_id = _parent_or_refuse(feed.home_domain(), parent_feed_id, src)
+
     if url:
         # D697: an admin may edit someone else's feed, and a private feed's name carries its owner's suffix
         owner = user if feed.user_id == user.id else db.session.get(User, feed.user_id)
@@ -488,7 +492,7 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
     feed.description = piefed_markdown_to_lemmy_markdown(description)
     feed.description_html = markdown_to_html(description)
     feed.show_posts_in_children = show_child_posts
-    feed.parent_feed_id = _parent_or_refuse(feed.home_domain(), parent_feed_id, src)
+    feed.parent_feed_id = parent_feed_id
 
     # Store the old banner id before processing new URLs. The icon has no
     # equivalent any more: since the new icon is attached through the
