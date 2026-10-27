@@ -7,13 +7,13 @@ from sqlalchemy.exc import NoResultFound
 from app import db
 from app.api.alpha.views import user_view
 from app.local_only import found_here
-from app.models import ChatMessage, CommunityBan, Conversation, Post, Notification, PostReply, Report, User, UserBlock, \
+from app.models import ChatMessage, CommunityBan, CommunityMember, Conversation, Post, Notification, PostReply, Report, User, UserBlock, \
     UserFlair, UserFollower, UserNote, UserRegistration, read_posts
 from tests.conftest import forget_login
 from tests.factories import grant_permission, make_post_reply
 from tests.test_hidden_routes import talking  # noqa: F401 -- a fixture
 from tests.test_instance_visible_here import HOSTS, scene  # noqa: F401 -- scene is a fixture
-from tests.test_local_only_actors_hidden import ONION_BOB, world  # noqa: F401 -- world is a fixture
+from tests.test_local_only_actors_hidden import ONION_ART, ONION_BOB, world  # noqa: F401 -- world is a fixture
 from tests.test_onion_hidden_on_clearnet import onion  # noqa: F401 -- a fixture
 from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
 from tests.test_per_domain_html_routes import Visitor
@@ -405,3 +405,18 @@ def test_the_web_badge_leaves_out_onion_notifications_on_the_first_domain(app, r
     body = Visitor(app, replied.first_bob, FIRST).get('/communities').get_data(as_text=True)
     assert badge not in body and 'unreadNotifications = 0;' in body
     assert badge in Visitor(app, replied.first_bob, ONION).get('/communities').get_data(as_text=True)
+
+
+@pytest.mark.parametrize('path', ['/api/alpha/post/list', '/api/alpha/post/list2'])
+def test_a_post_list_of_a_private_onion_community_answers_as_one_nobody_holds(app, alpha, path):
+    """m2: a private onion community answered `membership required` where one nobody holds listed nothing."""
+    alpha.onion_art.private = True
+    CommunityMember.query.filter_by(user_id=alpha.first_bob.id, community_id=alpha.onion_art.id).delete()
+    db.session.commit()
+    for hidden, missing in ((f'community_id={alpha.onion_art.id}', f'community_id={NOBODY}'),
+                            (f'community_name={ONION_ART}', 'community_name=nosuchart')):
+        found, absent = call(app, alpha.first_bob, 'GET', f'{path}?{hidden}'), \
+            call(app, alpha.first_bob, 'GET', f'{path}?{missing}')
+        assert (found.status_code, found.get_data()) == (absent.status_code, absent.get_data()), hidden
+    on_onion = call(app, alpha.first_bob, 'GET', f'{path}?community_id={alpha.onion_art.id}', host=ONION)
+    assert 'membership required' in on_onion.get_data(as_text=True)
