@@ -152,6 +152,8 @@ def test_an_unread_email_with_only_onion_items_is_not_sent_off_the_onion(app, on
         cli.register(current_app)
         current_app.test_cli_runner().invoke(args=['send_missed_notifs'])
     assert sent == {}
+    db.session.expire_all()
+    assert bob.email_unread_sent   # m6: settled, so the next run does not select and re-read this account
 
 
 def test_an_onion_accounts_email_keeps_them(app, onion):
