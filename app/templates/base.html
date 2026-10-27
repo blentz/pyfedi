@@ -173,12 +173,12 @@
                 {%- endif %}{{ branding.name }}</a>
             {% if current_user.is_authenticated -%}
                 <a class="nav-link ms-auto d-lg-none" href="/notifications" aria-label="{{ _('Notifications') }}">
-                    {% if current_user.unread_notifications -%}
-                        <span class="fe fe-bell red"></span> <span class="red unreadNotificationDisplay">{{ current_user.unread_notifications }}</span>
+                    {% if unread_shown(current_user) -%}
+                        <span class="fe fe-bell red"></span> <span class="red unreadNotificationDisplay">{{ unread_shown(current_user) }}</span>
                         <script type="text/javascript" nonce="{{ nonce }}">
-                            let unreadNotifications = {{ current_user.unread_notifications }};
+                            let unreadNotifications = {{ unread_shown(current_user) }};
                             if ('setAppBadge' in navigator) { // Show a number badge on pwa icon
-                              navigator.setAppBadge({{ current_user.unread_notifications }});
+                              navigator.setAppBadge({{ unread_shown(current_user) }});
                             }
                         </script>
                     {% else -%}
@@ -285,9 +285,9 @@
                             {% endif %}
                             <li class="nav-item"><a class="nav-link" href="/donate">{{ _('Donate') }}</a></li>
                             <li class="nav-item right d-none d-md-inline-block">
-                                <a class="nav-link" href="/notifications" title="{{ ngettext('%(num)d unread notification', '%(num)d unread notifications', current_user.unread_notifications) if current_user.unread_notifications else _('Notifications') }}" aria-label="{{ ngettext('%(num)d unread notification', '%(num)d unread notifications', current_user.unread_notifications) if current_user.unread_notifications else _('Notifications') }}">
-                                    {% if current_user.unread_notifications %}
-                                        <span class="fe fe-bell red"></span> <span class="red unreadNotificationDisplay">{{ current_user.unread_notifications }}</span>
+                                <a class="nav-link" href="/notifications" title="{{ ngettext('%(num)d unread notification', '%(num)d unread notifications', unread_shown(current_user)) if unread_shown(current_user) else _('Notifications') }}" aria-label="{{ ngettext('%(num)d unread notification', '%(num)d unread notifications', unread_shown(current_user)) if unread_shown(current_user) else _('Notifications') }}">
+                                    {% if unread_shown(current_user) %}
+                                        <span class="fe fe-bell red"></span> <span class="red unreadNotificationDisplay">{{ unread_shown(current_user) }}</span>
                                     {% else %}
                                         <span class="fe fe-bell"></span> <span class="red unreadNotificationDisplay"></span>
                                     {% endif %}

@@ -733,6 +733,8 @@ def get_user_notifications(auth, data):
     counts = {}
     counts['total'] = Notification.query.with_entities(func.count()).where(Notification.user_id == user.id).scalar()
     counts['unread'] = Notification.query.with_entities(func.count()).where(Notification.user_id == user.id).where(Notification.read == False).scalar()
+    hidden = sum(hidden_unread(user.id).values())   # the unread ones the list leaves out count nowhere (F6, m1)
+    counts['total'], counts['unread'] = counts['total'] - hidden, counts['unread'] - hidden
     counts['read'] = counts['total'] - counts['unread']
 
     # make dicts of that and pass back
@@ -914,6 +916,7 @@ def get_user_notifications_count(auth):
     # get the user's unread notifications count
     unread_notifs_count = Notification.query.with_entities(func.count()).where(Notification.user_id == user.id).\
         where(Notification.read == False).scalar()
+    unread_notifs_count -= sum(hidden_unread(user.id).values())   # those hidden here count nowhere (F6, m1)
     # make the dict and add that info, then return it
     res = {}
     res['count'] = unread_notifs_count

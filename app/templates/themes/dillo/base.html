@@ -58,9 +58,9 @@
             <td valign="top" align="left" width="20%">
                 {% block navbar -%}
                     {% if current_user.is_authenticated -%}
-                        {% if current_user.unread_notifications -%}
+                        {% if unread_shown(current_user) -%}
                         <p><a class="nav-link d-lg-none" href="/notifications" aria-label="{{ _('Notifications') }}">
-                            <span class="fe fe-bell red"></span>{{ _('Unread notifications') }}: <span class="red">{{ current_user.unread_notifications }}</span>
+                            <span class="fe fe-bell red"></span>{{ _('Unread notifications') }}: <span class="red">{{ unread_shown(current_user) }}</span>
                         </a></p>
                         {% endif -%}
                     {% endif -%}

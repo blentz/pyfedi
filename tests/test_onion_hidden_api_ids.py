@@ -16,6 +16,7 @@ from tests.test_instance_visible_here import HOSTS, scene  # noqa: F401 -- scene
 from tests.test_local_only_actors_hidden import ONION_BOB, world  # noqa: F401 -- world is a fixture
 from tests.test_onion_hidden_on_clearnet import onion  # noqa: F401 -- a fixture
 from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
+from tests.test_per_domain_html_routes import Visitor
 from tests.two_domains import FIRST, ONION, default_request, onion_request, two_domains  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -386,3 +387,21 @@ def test_approving_or_denying_an_onion_applicant_answers_as_one_nobody_holds(app
     db.session.expire_all()
     assert db.session.get(User, applied.onion_bob.id) is not None   # not denied, so not deleted
     assert UserRegistration.query.filter_by(user_id=applied.onion_bob.id, status=0).count() == 1
+
+
+def test_the_unread_totals_leave_out_onion_notifications_on_the_first_domain(app, replied):
+    """m1: a count the list never fills tells that someone on the onion addressed this account."""
+    bob = replied.first_bob
+    assert call(app, bob, 'GET', '/api/alpha/user/notifications_count').get_json()['count'] == 0
+    counts = call(app, bob, 'GET', '/api/alpha/user/notifications?status=All').get_json()['counts']
+    assert (counts['total'], counts['unread'], counts['read']) == (0, 0, 0), counts
+    assert call(app, bob, 'GET', '/api/alpha/user/notifications_count', host=ONION).get_json()['count'] == 2
+    counts = call(app, bob, 'GET', '/api/alpha/user/notifications?status=All', host=ONION).get_json()['counts']
+    assert (counts['total'], counts['unread']) == (2, 2), counts
+
+
+def test_the_web_badge_leaves_out_onion_notifications_on_the_first_domain(app, replied):
+    badge = 'unreadNotificationDisplay">2<'
+    body = Visitor(app, replied.first_bob, FIRST).get('/communities').get_data(as_text=True)
+    assert badge not in body and 'unreadNotifications = 0;' in body
+    assert badge in Visitor(app, replied.first_bob, ONION).get('/communities').get_data(as_text=True)
