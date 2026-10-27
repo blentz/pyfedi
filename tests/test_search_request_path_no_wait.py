@@ -175,10 +175,10 @@ def test_search_for_feed_asks_each_url_once(env, http_mock, sleeps, webfinger_fa
     actor = http_mock.get(ACTOR).mock(side_effect=refused()) if not webfinger_fails else None
 
     if webfinger_fails:
-        assert search_for_feed(f'~news@{SERVER}') is None
+        assert search_for_feed(f'~news@{SERVER}', signed_in=True) is None
     else:
         with pytest.raises(httpx.HTTPError):
-            search_for_feed(f'~news@{SERVER}')
+            search_for_feed(f'~news@{SERVER}', signed_in=True)
     assert webfinger.call_count == 1
     assert webfinger_fails or actor.call_count == 1
     sleeps.assert_not_called()
@@ -287,7 +287,7 @@ def test_a_feed_search_asks_for_its_owners_once(env, http_mock, sleeps):
     owners = http_mock.get(FEED_OWNERS).mock(side_effect=refused())
 
     with pytest.raises(httpx.HTTPError):
-        search_for_feed(f'~news@{SERVER}')
+        search_for_feed(f'~news@{SERVER}', signed_in=True)
     assert owners.call_count == 1
     sleeps.assert_not_called()
 

@@ -129,7 +129,7 @@ def feed_add_remote():
 
         if address.startswith('~') and '@' in address:
             try:
-                new_feed = search_for_feed(address)
+                new_feed = search_for_feed(address, signed_in=current_user.is_authenticated)
             except Exception as e:
                 # D720: a blocked instance and an unreachable one each get their own message, not also 'not found'
                 lookup_failed = True
@@ -142,10 +142,10 @@ def feed_add_remote():
             # todo: the user is searching for a person instead
             ...
         elif '@' in address:
-            new_feed = search_for_feed('~' + address)
+            new_feed = search_for_feed('~' + address, signed_in=current_user.is_authenticated)
         elif address.startswith('https://') or address.startswith('http://'):
             server, feed = extract_domain_and_actor(address)
-            new_feed = search_for_feed('~' + feed + '@' + server)
+            new_feed = search_for_feed('~' + feed + '@' + server, signed_in=current_user.is_authenticated)
         else:
             message = Markup(
                 _('Accepted address formats: ~feedname@server.name or https://server.name/f/feedname.'))
@@ -830,7 +830,7 @@ def lookup(feedname, domain):
             lookup_failed = False
 
             try:
-                new_feed = search_for_feed(address)
+                new_feed = search_for_feed(address, signed_in=current_user.is_authenticated)
             except Exception as e:
                 # D720: a blocked instance and an unreachable one each get their own message, not also 'not found'
                 lookup_failed = True

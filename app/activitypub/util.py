@@ -6633,7 +6633,8 @@ def populate_child_feed_worker(feed_id, child_feed):
     try:
         from app.feed.util import search_for_feed  # cycle: importing app.feed runs app.feed.routes, which imports from this module
         server, feed = extract_domain_and_actor(child_feed)
-        new_feed = search_for_feed('~' + feed + '@' + server, retry=True)
+        # a worker has no session: the default domain's signed-in reader, who is never shown an onion feed
+        new_feed = search_for_feed('~' + feed + '@' + server, retry=True, signed_in=True)
         new_feed.parent_feed_id = feed_id
         db.session.commit()
     except Exception:

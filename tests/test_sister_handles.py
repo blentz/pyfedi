@@ -137,8 +137,8 @@ def test_a_port_none_of_our_domains_names_is_on_the_ban_list_like_any_server(env
     assert validate_remote_actor(f'https://{SHOP}:8443/u/alice') is False
     assert search_for_community(f'!den@{SHOP}:8443') is None
     with pytest.raises(Exception, match='blocked'):
-        search_for_feed(f'~reads@{SHOP}:8443')
-    assert search_for_feed(f'~reads@{SHOP}') is env.shop_feed
+        search_for_feed(f'~reads@{SHOP}:8443', signed_in=True)
+    assert search_for_feed(f'~reads@{SHOP}', signed_in=True) is env.shop_feed
     assert wire.calls.call_count == 0
 
 
@@ -165,7 +165,7 @@ def test_a_banned_own_host_still_resolves_in_every_gate(env, wire, host):
     den = env.shop_den if host == SHOP else env.first_den
     assert validate_remote_actor(f'https://{host}/u/alice') is True
     assert search_for_community(f'!den@{host}') is den
-    assert search_for_feed(f'~reads@{host}') is (env.shop_feed if host == SHOP else env.feed)
+    assert search_for_feed(f'~reads@{host}', signed_in=True) is (env.shop_feed if host == SHOP else env.feed)
     assert wire.calls.call_count == 0
 
 
@@ -173,7 +173,7 @@ def test_a_banned_remote_feed_host_is_still_refused(env, wire):
     db.session.add(BannedInstances(domain='peer.example', reason='spam'))
     db.session.commit()
     with pytest.raises(Exception, match='peer.example is blocked. Reason: spam'):
-        search_for_feed('~x@peer.example')
+        search_for_feed('~x@peer.example', signed_in=True)
     assert wire.calls.call_count == 0
 
 
@@ -182,6 +182,6 @@ def test_a_handle_whose_server_is_no_authority_is_never_fetched(env, wire, serve
     """httpx reads https://shop.example#x/.well-known/webfinger as a GET of shop.example's root, which no discovery
     guard knows as WebFinger: a server with a path, query or fragment character names no host, and is not looked up."""
     assert search_for_community(f'!den@{server}') is None
-    assert search_for_feed(f'~reads@{server}') is None
+    assert search_for_feed(f'~reads@{server}', signed_in=True) is None
     assert find_actor_or_create(f'@alice@{server}') is None
     assert wire.calls.call_count == 0

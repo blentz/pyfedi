@@ -176,7 +176,7 @@ def test_the_feed_webfinger_walk_skips_a_self_link_without_an_href(app, db_sessi
          patch('app.feed.util.actor_json_to_model', return_value=None):
         # actor_json_to_model returning None is the cheapest way to stop after
         # the walk: what is under test is that the broken link did not raise
-        result = search_for_feed('~news@remote.example')
+        result = search_for_feed('~news@remote.example', signed_in=True)
 
     assert result is None
 

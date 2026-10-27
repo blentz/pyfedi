@@ -55,7 +55,7 @@ def test_searching_for_a_feed_rejects_an_address_that_is_not_one(app, db_session
     """
     _seed()
     with app.test_request_context('/'):
-        assert search_for_feed(address) is None
+        assert search_for_feed(address, signed_in=True) is None
 
 
 def test_searching_for_a_local_feed_returns_it_without_fetching(app, db_session):
@@ -68,7 +68,7 @@ def test_searching_for_a_local_feed_returns_it_without_fetching(app, db_session)
 
     with app.test_request_context('/'):
         with patch('app.feed.util.get_request') as get:
-            found = search_for_feed(f'~localfeed@{server}')
+            found = search_for_feed(f'~localfeed@{server}', signed_in=True)
 
     assert found.id == feed.id
     assert get.call_count == 0
@@ -84,9 +84,9 @@ def test_a_banned_instance_is_refused_with_its_reason(app, db_session):
 
     with app.test_request_context('/'):
         with pytest.raises(Exception) as with_reason:
-            search_for_feed('~afeed@blocked.example')
+            search_for_feed('~afeed@blocked.example', signed_in=True)
         with pytest.raises(Exception) as without_reason:
-            search_for_feed('~afeed@quiet.example')
+            search_for_feed('~afeed@quiet.example', signed_in=True)
 
     # EXACT messages, not a regex search: 'quiet.example is blocked.' is a
     # prefix of the message a mutant that always appends the reason produces
@@ -107,7 +107,7 @@ def test_a_known_remote_feed_is_returned_without_fetching(app, db_session):
 
     with app.test_request_context('/'):
         with patch('app.feed.util.get_request') as get:
-            found = search_for_feed('~remotefeed@remote.example')
+            found = search_for_feed('~remotefeed@remote.example', signed_in=True)
 
     assert found.id == feed.id
     assert get.call_count == 0
@@ -119,7 +119,7 @@ def test_an_unknown_feed_is_not_fetched_when_fetching_is_off(app, db_session):
     _seed()
     with app.test_request_context('/'):
         with patch('app.feed.util.get_request') as get:
-            assert search_for_feed('~unknown@remote.example', allow_fetch=False) is None
+            assert search_for_feed('~unknown@remote.example', allow_fetch=False, signed_in=True) is None
     assert get.call_count == 0
 
 
@@ -157,7 +157,7 @@ def test_an_unknown_feed_is_fetched_through_webfinger(app, db_session):
                    side_effect=[_webfinger_response(), _actor_response()]) as get, \
                 patch('app.feed.util.actor_json_to_model', return_value=feed) as to_model, \
                 patch('app.feed.util.initialise_new_communities') as initialise:
-            found = search_for_feed('~remotefeed@remote.example')
+            found = search_for_feed('~remotefeed@remote.example', signed_in=True)
 
     assert found.id == feed.id
     assert get.call_args_list[0].args == ('https://remote.example/.well-known/webfinger',)
@@ -196,7 +196,7 @@ def test_a_webfinger_document_this_shape_cannot_walk(app, db_session, document):
 
     with app.test_request_context('/'):
         with patch('app.feed.util.get_request', side_effect=[response]) as get:
-            assert search_for_feed('~remotefeed@remote.example') is None
+            assert search_for_feed('~remotefeed@remote.example', signed_in=True) is None
 
     assert get.call_count == 1
 
@@ -220,7 +220,7 @@ def test_a_links_entry_that_is_not_an_object_is_skipped(app, db_session):
                    side_effect=[response, _actor_response()]), \
                 patch('app.feed.util.actor_json_to_model', return_value=feed), \
                 patch('app.feed.util.initialise_new_communities'):
-            found = search_for_feed('~remotefeed@remote.example')
+            found = search_for_feed('~remotefeed@remote.example', signed_in=True)
 
     assert found.id == feed.id
 
@@ -234,7 +234,7 @@ def test_a_webfinger_failure_on_the_request_path_is_not_retried(app, db_session)
         with patch('app.feed.util.sleep') as slept, \
                 patch('app.feed.util.get_request',
                       side_effect=httpx.HTTPError('boom')) as get:
-            assert search_for_feed('~remotefeed@remote.example') is None
+            assert search_for_feed('~remotefeed@remote.example', signed_in=True) is None
         assert slept.call_count == 0
         assert get.call_count == 1
 
@@ -251,7 +251,7 @@ def test_a_webfinger_failure_is_retried_once_after_a_sleep_when_asked(app, db_se
                       side_effect=[httpx.HTTPError('boom'), _webfinger_response(),
                                    _actor_response()]) as get, \
                 patch('app.feed.util.actor_json_to_model', return_value=None):
-            assert search_for_feed('~remotefeed@remote.example', retry=True) is None
+            assert search_for_feed('~remotefeed@remote.example', retry=True, signed_in=True) is None
         assert slept.call_count == 1
         assert get.call_count == 3
 
@@ -259,7 +259,7 @@ def test_a_webfinger_failure_is_retried_once_after_a_sleep_when_asked(app, db_se
         with patch('app.feed.util.sleep') as slept, \
                 patch('app.feed.util.get_request',
                       side_effect=httpx.HTTPError('boom')) as get:
-            assert search_for_feed('~remotefeed@remote.example', retry=True) is None
+            assert search_for_feed('~remotefeed@remote.example', retry=True, signed_in=True) is None
         assert slept.call_count == 1
         assert get.call_count == 2
 
@@ -293,7 +293,7 @@ def test_the_webfinger_walk_gives_up_at_each_step(app, db_session, webfinger_sta
                       side_effect=[_webfinger_response(webfinger_status, links),
                                    _actor_response(actor_status, actor_type)]), \
                 patch('app.feed.util.actor_json_to_model') as to_model:
-            assert search_for_feed('~remotefeed@remote.example') is None
+            assert search_for_feed('~remotefeed@remote.example', signed_in=True) is None
 
     if description in ('webfinger says no', 'no rel', 'wrong rel'):
         assert to_model.call_count == 0
@@ -310,7 +310,7 @@ def test_a_feed_the_actor_model_refuses_is_not_returned(app, db_session):
                    side_effect=[_webfinger_response(), _actor_response()]), \
                 patch('app.feed.util.actor_json_to_model', return_value=None), \
                 patch('app.feed.util.initialise_new_communities') as initialise:
-            assert search_for_feed('~remotefeed@remote.example') is None
+            assert search_for_feed('~remotefeed@remote.example', signed_in=True) is None
 
     assert initialise.call_count == 0
 
@@ -404,7 +404,7 @@ def test_a_remote_feed_does_not_answer_a_local_name_lookup(app, db_session, look
             if lookup == 'bare':
                 assert actor_to_feed('onlyremote') is None
             else:
-                assert search_for_feed(f'~onlyremote@{server}') is None
+                assert search_for_feed(f'~onlyremote@{server}', signed_in=True) is None
     assert get.call_count == 0
 
 
@@ -540,7 +540,7 @@ def test_searching_for_an_address_without_a_tilde_returns_nothing(app, db_sessio
 
     with app.test_request_context('/'):
         with patch('app.feed.util.get_request') as get:
-            assert search_for_feed('localfeed') is None
-            assert search_for_feed('localfeed@remote.example') is None
+            assert search_for_feed('localfeed', signed_in=True) is None
+            assert search_for_feed('localfeed@remote.example', signed_in=True) is None
 
     assert get.call_count == 0
