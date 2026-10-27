@@ -204,6 +204,8 @@ def notification_hidden(notification) -> bool:
     """Whether `notification` is about something hidden here (follow-up F6): its link, as stored or as following it
     resolves it (notification_href), names a hidden row, or its author, or its targets name a hidden post, reply,
     community or account. Its page then shows only the note (`hidden_note`): no link, name, title or body."""
+    if not hides_anything_here():
+        return False   # nothing to hide here: no lookups, which a page of notifications would make for each (N-m4)
     targets = notification.targets or {}
     author_id = getattr(notification, 'author_id', None)
     return (path_hidden_here(notification.url) or path_hidden_here(notification_href(notification))
