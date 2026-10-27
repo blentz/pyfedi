@@ -11,8 +11,10 @@ from wtforms.validators import ValidationError
 
 from app import db
 from app.api.alpha.utils.feed import get_feed
+from app.api.alpha.utils.misc import get_resolve_object
 from app.auth.forms import RegistrationForm
 from app.constants import SRC_API
+from app.feed.util import search_for_feed
 from app.models import Feed
 import app.shared.feed as shared_feed
 from app.utils import user_name_is_taken
@@ -25,6 +27,9 @@ from tests.three_domains import FIRST, ONION, PEER, SHOP, no_http, peer, request
     two_domains  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
+
+MISSING = 'No object found.'
+
 
 @pytest.fixture
 def alpha(app, monkeypatch):
@@ -265,6 +270,36 @@ def test_mine_only_lists_the_token_users_own_feeds(app, alpha, three_domains):
 
 # --- resolve_object -------------------------------------------------------------------------------------------------
 
+@pytest.mark.parametrize('host', [FIRST, SHOP])
+@pytest.mark.parametrize('query, missing', [
+    (f'http://{ONION}/f/onionfeed', f'http://{ONION}/f/nosuchfeed'),                      # the ap_profile_id
+    (f'http://{ONION}/f/onionfeed@{ONION}', f'http://{ONION}/f/nosuchfeed@{ONION}'),      # a URL naming it
+    (f'https://{FIRST}/f/onionfeed@{ONION}', f'https://{FIRST}/f/nosuchfeed@{ONION}'),
+    (f'http://{ONION}:80/f/onionfeed', f'http://{ONION}:80/f/nosuchfeed'),
+    (f'~onionfeed@{ONION}', f'~nosuchfeed@{ONION}'),
+])
+def test_resolve_object_never_returns_an_onion_feed_off_the_onion(app, alpha, news, three_domains, no_http,  # noqa: F811
+                                                                  host, query, missing):
+    """Review Focus 4: by `ap_profile_id`, by URL and by handle, an onion feed answers off the onion exactly as a
+    feed nobody holds, to every reader, an admin too."""
+    admin = three_domains.account(f'boss{host.split(".")[0]}', three_domains.first)
+    make_admin(admin)
+    for user in (three_domains.account(f'reader{host.split(".")[0]}', three_domains.first), admin):
+        hidden, nobody = api(app, '/resolve_object', host, user, q=query), \
+            api(app, '/resolve_object', host, user, q=missing)
+        assert hidden.status_code == 400, hidden.data
+        assert (hidden.status_code, hidden.data) == (nobody.status_code, nobody.data)
+        assert MISSING.encode() in hidden.data
+
+
+def test_resolve_object_finds_an_onion_feed_on_the_onion(app, news, three_domains):
+    """The positive control: a signed-in onion reader resolves it by every spelling."""
+    with request_on(app, three_domains.onion):
+        reader = three_domains.account('onionreader', three_domains.onion)
+        for query in (f'http://{ONION}/f/onionfeed', f'http://{ONION}/f/onionfeed@{ONION}', f'~onionfeed@{ONION}'):
+            assert get_resolve_object(None, {'q': query}, user_id=reader.id)['feed']['id'] == news['onion'].id
+
+
 @pytest.mark.parametrize('query, expected', [(f'https://{SHOP}/f/news', 'shop'), (f'https://{FIRST}/f/news', 'first'),
                                              (f'https://{FIRST}/f/news@{SHOP}', 'shop'),
                                              # not the stored ap_profile_id: read by its path, on the URL's domain
@@ -276,3 +311,12 @@ def test_resolve_object_by_url_names_the_urls_domain(app, alpha, news, three_dom
     response = api(app, '/resolve_object', host, reader, q=query)
     assert response.status_code == 200, response.data
     assert response.json['feed']['id'] == news[expected].id
+
+
+def test_search_for_feed_takes_signed_in_from_its_caller(app, news, three_domains):
+    """Task 7 review M5: a logged-out caller on the onion is not given an onion feed."""
+    with request_on(app, three_domains.onion):
+        assert search_for_feed(f'~onionfeed@{ONION}', allow_fetch=False, signed_in=True) == news['onion']
+        assert search_for_feed(f'~onionfeed@{ONION}', allow_fetch=False, signed_in=False) is None
+    with request_on(app, three_domains.first):
+        assert search_for_feed(f'~onionfeed@{ONION}', allow_fetch=False, signed_in=True) is None
