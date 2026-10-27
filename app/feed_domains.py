@@ -51,13 +51,6 @@ def listed_feeds_clause(domain: DomainInfo, signed_in: bool | None = None):
     return and_(feeds_on_domain_clause(domain), not_(hidden_here_clause(Feed, signed_in)))
 
 
-def feed_listed(feed: Feed, domain: DomainInfo, signed_in: bool | None = None) -> bool:
-    """`listed_feeds_clause(domain)` for one row."""
-    if feed.ap_id is None and feed.home_domain().id != domain.id:
-        return False
-    return not hidden_here(feed, signed_in)
-
-
 def feed_shown_here(feed: Feed, signed_in: bool | None = None) -> bool:
     """Whether this storefront shows `feed` to its reader: `hidden_here`, the shared local-only rule, which hides a
     local feed with its home domain and with its owner (ruling a3: no feed-only copy of the rule). An onion feed is
