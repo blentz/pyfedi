@@ -31,8 +31,8 @@ from app.utils import can_moderate, authorise_api_user, blocked_users, blocked_c
     community_membership_private, paginate_post_ids, post_ids_to_models, user_access, moderating_communities_ids, \
     user_filters_languages, feed_readable_by
 from app.shared.tasks import task_selector
-from app.local_only import hidden_here, hidden_here_sql, without_hidden_here, without_hidden_reports, without_local_only, \
-    without_local_only_actors
+from app.local_only import hidden_here, hidden_here_sql, prime_reporters, without_hidden_here, without_hidden_reports, \
+    without_local_only, without_local_only_actors
 from app.api.alpha.utils.found import a_community, a_post, a_reply, a_report
 from app.visibility import can_view, listable_clause, listable_sql, visible_to_clause, visible_to_sql
 
@@ -1843,6 +1843,7 @@ def get_post_report_list(auth, data):
     reports = without_hidden_reports(reports)   # none about a row hidden here (follow-up F6)
 
     reports = reports.paginate(page=page, per_page=limit, error_out=False)
+    prime_reporters(reports.items)   # one query for the page's reporters (follow-up F6, m5)
 
     report_list = []
     for report in reports.items:

@@ -328,6 +328,14 @@ _REPORT_TARGETS = (('suspect_post_reply_id', 'PostReply'), ('suspect_post_id', '
                    ('suspect_community_id', 'Community'))
 
 
+def prime_reporters(reports) -> None:
+    """Read the accounts that filed `reports` in one query, so `reporter_hidden_here` finds each in the session: a
+    report list costs one query for its reporters, not one per report (re-review 2, m5)."""
+    ids = {report.reporter_id for report in reports if report.reporter_id}
+    if ids:
+        db.session.scalars(select(models.User).where(models.User.id.in_(ids))).unique().all()
+
+
 def reporter_hidden_here(report) -> bool:
     """Whether the account that filed `report` is hidden here, so no report view names it (ruling, F6 round 3)."""
     reporter = db.session.get(models.User, report.reporter_id) if report.reporter_id else None
@@ -348,15 +356,16 @@ def report_hidden_here(report) -> bool:
 
 
 def hidden_report_clause():
-    """`report_hidden_here` as a condition on Report, never NULL; `false()` when nothing is hidden."""
+    """`report_hidden_here` as a condition on Report, never NULL; `false()` when nothing is hidden. Each part is an
+    EXISTS correlated with the report's own row, so a list costs the hidden test of its own targets only, not of every
+    hidden row (re-review 2, m5)."""
     report = models.Report
     parts = []
     for column, name in _REPORT_TARGETS:
         model = getattr(models, name)
         clause = hidden_here_clause(model, True)
         if not hides_nothing(clause):
-            ids = getattr(report, column)
-            parts.append(and_(ids.isnot(None), ids.in_(db.select(model.id).where(clause).correlate(None))))
+            parts.append(select(1).where(model.id == getattr(report, column), clause).correlate(report).exists())
     conversation = hidden_conversation_clause(report.suspect_conversation_id)
     if not hides_nothing(conversation):
         parts.append(conversation)

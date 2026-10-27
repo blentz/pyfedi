@@ -6,7 +6,7 @@ from sqlalchemy.exc import NoResultFound
 
 from app import db
 from app.api.alpha.views import user_view
-from app.local_only import found_here
+from app.local_only import found_here, hidden_report_clause, prime_reporters, reporter_hidden_here
 from app.models import ChatMessage, CommunityBan, CommunityMember, Conversation, Post, Notification, PostReply, Report, User, UserBlock, \
     UserFlair, UserFollower, UserNote, UserRegistration, read_posts
 from tests.conftest import forget_login
@@ -17,6 +17,7 @@ from tests.test_local_only_actors_hidden import ONION_ART, ONION_BOB, world  # n
 from tests.test_onion_hidden_on_clearnet import onion  # noqa: F401 -- a fixture
 from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
 from tests.test_per_domain_html_routes import Visitor
+from tests.test_onion_hidden_on_clearnet import queries_in
 from tests.two_domains import FIRST, ONION, default_request, onion_request, two_domains  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -441,3 +442,36 @@ def test_the_notification_counts_match_a_world_without_the_onion_ones(app, repli
     assert call(app, bob, 'GET', '/api/alpha/user/notifications_count').get_json()['count'] == 1
     counts = call(app, bob, 'GET', '/api/alpha/user/notifications?status=All', host=ONION).get_json()['counts']
     assert (counts['total'], counts['unread'], counts['read']) == (6, 3, 3), counts
+
+
+def test_the_report_clause_tests_each_reports_own_targets(app, reports):
+    """m5: an uncorrelated IN (SELECT id FROM post_reply WHERE hidden) ran the hidden test over every local-only
+    reply on each list. The clause is EXISTS correlated with the report's own row, and still finds the same reports."""
+    with default_request(app):
+        clause = hidden_report_clause()
+        assert ' IN (SELECT' not in str(clause.compile()).replace('\n', ' ')
+        hidden = {report.id for report in Report.query.filter(clause)}
+    assert hidden == {report.id for report in reports.reports[:3]}
+
+
+REPORTERS = {LISTS[0]: 'app.api.alpha.utils.post.prime_reporters', LISTS[1]: 'app.api.alpha.utils.reply.prime_reporters',
+             LISTS[2]: 'app.api.alpha.utils.private_message.prime_reporters',
+             LISTS[3]: 'app.api.alpha.utils.private_message.prime_reporters'}
+
+
+@pytest.mark.parametrize('path', LISTS)
+def test_a_report_list_reads_its_reporters_in_one_query(app, reported_by_onion, path, monkeypatch):
+    """m5: reporter_hidden_here read each report's reporter with its own query."""
+    calls = []
+    monkeypatch.setattr(REPORTERS[path], lambda items: calls.append(len(list(items))) or prime_reporters(items))
+    assert call(app, reported_by_onion.admin, 'GET', path).status_code == 200
+    assert calls == [1], calls   # once for the page
+
+
+def test_primed_reporters_cost_no_query_each(app, reported_by_onion):
+    db.session.expire_all()
+    with default_request(app):
+        rows = Report.query.all()
+        prime_reporters(rows)
+        cost = queries_in(lambda: [reporter_hidden_here(report) for report in rows])
+    assert [statement for statement in cost if not statement.startswith('SELECT site_domain')] == []   # cached

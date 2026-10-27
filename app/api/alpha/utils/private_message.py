@@ -12,7 +12,7 @@ from app.federation_urls import object_base
 from app.models import ChatMessage, Conversation, User, Notification, Report, Site
 from app.storefront import canonicalise_text
 from app.utils import authorise_api_user, markdown_to_html, user_access
-from app.local_only import REMOTE_CONTACT_REFUSAL, conversation_hidden_here, found_here, one_here, \
+from app.local_only import REMOTE_CONTACT_REFUSAL, conversation_hidden_here, found_here, one_here, prime_reporters, \
     refuses_remote_contact, without_hidden_conversations, without_hidden_reports, without_local_only_actors
 from app.shared.tasks import task_selector
 
@@ -363,6 +363,7 @@ def get_private_message_report_list(auth, data):
     reports = without_hidden_reports(reports)   # none about a row hidden here (follow-up F6)
 
     reports = reports.paginate(page=page, per_page=limit, error_out=False)
+    prime_reporters(reports.items)   # one query for the page's reporters (follow-up F6, m5)
 
     report_list = []
     for report in reports.items:
@@ -398,6 +399,7 @@ def get_private_message_conversation_report_list(auth, data):
     reports = without_hidden_reports(reports)   # none about a row hidden here (follow-up F6)
 
     reports = reports.paginate(page=page, per_page=limit, error_out=False)
+    prime_reporters(reports.items)   # one query for the page's reporters (follow-up F6, m5)
 
     report_list = []
     for report in reports.items:
