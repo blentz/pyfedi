@@ -19,6 +19,7 @@ every route: it names no row, and Postgres refuses it in a string; so is a host 
 
 Every argument of every route is either in the table or on `NON_OBJECT_ARGUMENTS`, the arguments that name nothing a
 reader could be hidden from; tests/test_hidden_routes_table.py walks the URL map and fails on any other."""
+from collections import Counter
 from urllib.parse import urlsplit
 
 from flask import abort, current_app, request
@@ -29,7 +30,7 @@ from app import db
 from app.local_names import default_domain_user, default_domain_users
 from app.local_only import conversation_hidden_here, hidden_conversation_clause, hidden_default_domain, hidden_here, \
     hidden_here_clause, hides_anything_here
-from app.models import ChatMessage, Community, Conversation, Instance, Post, PostReply, User
+from app.models import ChatMessage, Community, Conversation, Instance, Notification, Post, PostReply, User
 from app.storefront import current_storefront, default_domain, domain_for_host, host_hidden_here, instance_visible_here, \
     normalise_host, on_domain
 
@@ -313,3 +314,16 @@ def hidden_notifications(notifications) -> list:
 def notification_hidden(notification) -> bool:
     """`hidden_notifications` for one notification."""
     return hidden_notifications([notification])[0]
+
+
+def hidden_unread(user_id: int) -> Counter:
+    """The unread notifications of the account `user_id` that are hidden here (`hidden_notifications`), counted by
+    `(notif_type, subtype)`. Nothing, and no query, where nothing is hidden. Elsewhere one query reads the columns the
+    batch looks at, and the batch costs one per model, whatever the number of notifications (re-review 2, R4)."""
+    if not hides_anything_here():
+        return Counter()
+    rows = db.session.execute(select(Notification.url, Notification.targets, Notification.author_id,
+                                     Notification.notif_type, Notification.subtype).where(
+        Notification.user_id == user_id, Notification.read.is_(False))).all()
+    return Counter((row.notif_type, row.subtype) for row, hidden in zip(rows, hidden_notifications(rows)) if hidden)
+

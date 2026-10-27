@@ -18,9 +18,9 @@ from werkzeug.exceptions import NotFound
 from app import db
 from app.constants import ROLE_ADMIN_NAME
 from app.local_only import content_local_only, hidden_default_domain
-from app.models import ChatMessage, CommunityMember, Conversation, Domain, File, Notification, Post, PostBookmark, PostReplyBookmark, PostVote, \
-    Report, Role, Topic, UserRegistration, read_posts, user_file, utcnow
-from tests.factories import grant_permission, make_post, make_post_reply
+from app.models import ChatMessage, CommunityMember, Conversation, Domain, File, Notification, Post, PostBookmark, \
+    PostReplyBookmark, PostVote, Report, Role, Topic, UserRegistration, read_posts, user_file, utcnow
+from tests.factories import grant_permission, make_instance, make_post, make_post_reply, make_user
 import app.hidden_routes as hidden_routes
 from app.hidden_routes import hidden_notifications, notification_hidden
 from app.post.routes import refuse_invisible_unless_moderating
@@ -823,6 +823,73 @@ def test_the_apis_notification_list_costs_the_same_hidden_checks_for_any_number_
     many_notices(onion, 6)
     api(app, '/api/alpha/user/notifications?status=All&limit=50', onion.first_bob)
     assert calls == [6]   # one batched call for the page, never one per notification
+
+
+class Rows:
+    """The statements run, and the rows the SELECTs among them fetched."""
+    def __init__(self):
+        self.statements, self.rows = [], 0
+
+    def __call__(self, connection, cursor, statement, *args, **kwargs):
+        if statement.lstrip().upper().startswith('SELECT') and not statement.lstrip().startswith('SELECT site_domain'):
+            self.statements.append(' '.join(statement.split())[:90])
+            self.rows += max(cursor.rowcount, 0)
+
+
+def unread_count_cost(app, viewer, host=FIRST):
+    """The SELECTs one call of /user/unread_count runs, but domain_rows()'s, and the rows they fetch."""
+    def ask():
+        if host is None:
+            forget_login()
+            return app.test_client().get('/api/alpha/user/unread_count',
+                                         headers={'Authorization': f'Bearer {viewer.encode_jwt_token()}'})
+        return api(app, '/api/alpha/user/unread_count', viewer, host=host)
+    assert ask().status_code == 200
+    db.session.expire_all()
+    cost = Rows()
+    event.listen(db.engine, 'after_cursor_execute', cost)
+    try:
+        answer = ask().get_json()
+    finally:
+        event.remove(db.engine, 'after_cursor_execute', cost)
+    return cost, answer
+
+
+def unread(user, count):
+    for index in range(count):
+        db.session.add(Notification(user_id=user.id, title='t', url=f'/post/{index + 1}', notif_type=4,
+                                    subtype='new_reply_on_followed_comment', author_id=user.id,
+                                    targets={'post_id': index + 1}))
+    user.unread_notifications = (user.unread_notifications or 0) + count
+    db.session.commit()
+
+
+def test_the_unread_count_reads_no_notification_row_where_nothing_is_hidden(app, monkeypatch):
+    """R4: on a site with no local-only domain it counts in SQL, whatever the number of notifications."""
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    alice = make_user(make_instance(app.config['SERVER_NAME']), 'alice', local=True)
+    unread(alice, 3)
+    few, answer = unread_count_cost(app, alice, host=None)
+    assert answer['replies'] == 3
+    unread(alice, 30)
+    many, answer = unread_count_cost(app, alice, host=None)
+    assert answer['replies'] == 33
+    assert (len(many.statements), many.rows) == (len(few.statements), few.rows), (few.statements, many.statements)
+
+
+def test_the_unread_count_costs_the_same_queries_for_any_number_where_something_is_hidden(app, alpha):
+    """R4: where something is hidden, one query reads what the batch looks at, and the batch one per model."""
+    many_notices(alpha, 4)
+    alpha.first_bob.unread_notifications = 4
+    db.session.commit()
+    few, answer = unread_count_cost(app, alpha.first_bob)
+    assert answer['other'] == 2   # the two about the onion count nowhere
+    many_notices(alpha, 12)
+    alpha.first_bob.unread_notifications = 16
+    db.session.commit()
+    many, answer = unread_count_cost(app, alpha.first_bob)
+    assert answer['other'] == 8
+    assert len(many.statements) == len(few.statements), Counter(many.statements) - Counter(few.statements)
 
 
 def a_notice(url, **targets):
