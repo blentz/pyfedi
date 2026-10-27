@@ -32,9 +32,9 @@ def split_local_name(raw: str) -> tuple[str, DomainInfo] | None:
 
 
 def local_named(model, name: str, domain: DomainInfo, exact_case: bool = False):
-    """The clause for the local `model` (User or Community) called `name`, any case, on `domain`. `exact_case` keeps
+    """The clause for the local `model` (User, Community or Feed) called `name`, any case, on `domain`. `exact_case` keeps
     a lookup that has always matched the stored case alone as it was: passkey login, and stored_user's bare name."""
-    column = User.user_name if model is User else Community.name
+    column = User.user_name if model is User else model.name
     named = column == name if exact_case else func.lower(column) == name.lower()
     return and_(named, model.ap_id.is_(None), on_domain(domain, model))
 
@@ -96,13 +96,13 @@ def default_domain_users(actors) -> dict:
     return {actor: found(url) for actor, url in urls.items()}
 
 def local_path_name(obj) -> str:
-    """How a local user or community is named in a path: bare on its own domain's storefront, else `name@domain`."""
+    """How a local user, community or feed is named in a path: bare on its own domain's storefront, else `name@domain`."""
     name = obj.user_name if isinstance(obj, User) else obj.name
     return path_name(name, obj.site_domain_id)
 
 
 def actor_handle(obj) -> str:
-    """The handle naming a user or community on any storefront and outside a request: a remote row's `ap_id`, a local
+    """The handle naming a user, community or feed on any storefront and outside a request: a remote row's `ap_id`, a local
     row's `name@domain` for its own domain. For work queued with a name, which a worker has no storefront to read."""
     if obj.ap_id:
         return obj.ap_id

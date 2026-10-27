@@ -6075,14 +6075,16 @@ class Feed(db.Model):
             return f"{self.title}@{self.ap_domain}"
 
     def link(self) -> str:
-        if self.ap_id is None:
-            return self.name
-        else:
-            return self.ap_id.lower()
+        return storefront.path_name(self.name, self.site_domain_id) if self.ap_id is None else self.ap_id.lower()
+
+    def stored_link(self) -> str:
+        """`link()` for stored data: the same on any storefront and outside a request, a local feed's name bare on the
+        default domain and `name@domain` on another."""
+        return storefront.stored_path_name(self.name, self.site_domain_id) if self.ap_id is None else self.ap_id.lower()
 
     def lemmy_link(self) -> str:
         if self.ap_id is None:
-            return f"~{self.name}@{current_app.config['SERVER_NAME']}"
+            return f"~{self.name}@{storefront.link_host(self.home_domain())}"
         else:
             return f"~{self.ap_id.lower()}"
 
@@ -6130,12 +6132,16 @@ class Feed(db.Model):
             else:
                 return SUBSCRIPTION_NONMEMBER
 
+    # A local feed with no stored URL is named on its home domain. home_domain, not owner_base: is_local reads
+    # profile_id, so asking whether the feed is local here would never return.
     def profile_id(self):
-        retval = self.ap_profile_id if self.ap_profile_id else f"{current_app.config['SERVER_URL']}/f/{self.name}"
+        retval = self.ap_profile_id if self.ap_profile_id else \
+            f"{storefront.domain_base_url(self.home_domain())}/f/{self.name}"
         return retval.lower()
 
     def public_url(self):
-        result = self.ap_public_url if self.ap_public_url else f"{current_app.config['SERVER_URL']}/f/{self.name}"
+        result = self.ap_public_url if self.ap_public_url else \
+            f"{storefront.domain_base_url(self.home_domain())}/f/{self.name}"
         return result
 
     def is_local(self):

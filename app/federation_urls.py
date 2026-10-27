@@ -31,19 +31,16 @@ import app.utils as utils
 
 def owner_domain(obj) -> DomainInfo | None:
     """The hosted domain `obj` is federated from, or None when it is not ours to federate (a remote account or
-    community, or a row a remote account made). A local account or community is its home domain's; a post, reply or
-    private message its author's (the sender's); a vote its voter's, not the voted-on author's; a local feed the
-    default domain's, as feeds have no domain of their own. A DomainInfo is its own owner. TypeError for anything
+    community, or a row a remote account made). A local account or community or feed is its home domain's; a post,
+    reply or private message its author's (the sender's); a vote its voter's, not the voted-on author's. A DomainInfo is its own owner. TypeError for anything
     else, a row with no author among them.
 
     The domain may be a local-only one (an onion-homed account's): a caller deciding federation checks `.federates`
     (or relies on `local_only.refused_outbound`) before it sends anything named by it."""
     if isinstance(obj, DomainInfo):
         return obj
-    if isinstance(obj, (models.User, models.Community)):
+    if isinstance(obj, (models.User, models.Community, models.Feed)):
         return obj.home_domain() if obj.is_local() else None
-    if isinstance(obj, models.Feed):
-        return default_domain() if obj.is_local() else None
     if isinstance(obj, (models.Post, models.PostReply)):
         return owner_domain(obj.author)
     if isinstance(obj, models.ChatMessage):
@@ -203,11 +200,7 @@ def _stored_row(parts):
 
 def _named_row(model, name: str, domain: DomainInfo | None):
     """The row `/u/<name>`, `/c/<name>` or `/f/<name>` names on `domain`, as those routes look it up: a bare name is
-    the local row on the URL's own domain, `name@host` the row that handle names (`named_by_actor`). A feed is named
-    across the site, as feeds have no domain of their own."""
-    if model is models.Feed:
-        return db.session.query(models.Feed).filter(func.lower(models.Feed.name) == name.lower(),
-                                                    models.Feed.ap_id.is_(None)).first()
+    the local row on the URL's own domain, `name@host` the row that handle names (`named_by_actor`)."""
     if '@' in name:
         return db.session.query(model).filter(named_by_actor(model, name)).first()
     if domain is None:   # a URL whose authority names no domain row (userinfo): its names are nobody's

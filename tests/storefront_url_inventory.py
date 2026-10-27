@@ -93,10 +93,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     },
     'app/models.py': {
         'Community.local_url': 1,
-        'Feed.lemmy_link': 1,
         'Feed.local_url': 1,
-        'Feed.profile_id': 1,
-        'Feed.public_url': 1,
         'File.delete_from_disk': 2,
         'File.local_path_for_url': 2,
         'Post.generate_slug': 1,
