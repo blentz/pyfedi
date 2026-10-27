@@ -25,8 +25,9 @@ from flask_login import UserMixin, current_user
 from flask_sqlalchemy.query import Query
 from furl import furl
 from slugify import slugify
-from sqlalchemy import or_, text, desc, Index, func, and_, CheckConstraint, event, select
-from sqlalchemy.orm import validates
+from sqlalchemy import or_, text, desc, Index, func, and_, CheckConstraint, event, inspect, select
+from sqlalchemy.orm import Session, validates
+from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.dialects.postgresql import BIT
 from sqlalchemy.exc import IntegrityError
@@ -5441,6 +5442,27 @@ class Notification(db.Model):
     notif_type = db.Column(db.Integer, default=NOTIF_DEFAULT, index=True)  # see constants.py for possible values: NOTIF_*
     subtype = db.Column(db.String(50), index=True)
     targets = db.Column(db.JSON)
+    # Whether it may name a local-only domain's row (notification_names_local_only, stamped as it is flushed): one
+    # that does not is hidden on no storefront, so a count reads only the stamped ones (follow-up F6, round 5)
+    local_only = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+
+
+@event.listens_for(Session, 'after_flush')
+def stamp_new_notifications(session, flush_context):
+    """Stamp each notification this flush inserted, or whose link, targets or author it changed, with
+    `notification_names_local_only`, the rule its migration (c6e2a8f4b1d9) keeps in the database: one UPDATE per flush,
+    and none on a site where every domain federates."""
+    new = [row for row in session.new if isinstance(row, Notification)]
+    new += [row for row in session.dirty if isinstance(row, Notification) and any(   # one whose link changed too
+        inspect(row).attrs[name].history.has_changes() for name in ('url', 'targets', 'author_id'))]
+    if not new or not local_only.any_domain_closed():
+        return
+    stamped = dict(session.execute(text(
+        'UPDATE notification SET local_only = notification_names_local_only(notification, :host) '
+        'WHERE id = ANY(:ids) RETURNING id, local_only'),
+        {'host': storefront.default_domain().domain, 'ids': [row.id for row in new]}).all())
+    for row in new:
+        set_committed_value(row, 'local_only', stamped.get(row.id, True))
 
 
 class Report(db.Model):
