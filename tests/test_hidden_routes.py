@@ -6,13 +6,15 @@ and the same body, so no route is an oracle for what exists on the onion. The ga
 import pytest
 
 from app import db
+from app.hidden_routes import _value_hidden, hidden_notifications
+from app.local_only import found_here
 from app.models import ChatMessage, Conversation, utcnow
 from tests.test_instance_visible_here import get, scene  # noqa: F401 -- scene is a fixture
 from tests.test_local_only_actors_hidden import world  # noqa: F401 -- world is a fixture
 from tests.test_onion_hidden_on_clearnet import api, onion  # noqa: F401 -- onion is a fixture
 from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
 from tests.test_per_domain_html_routes import Visitor
-from tests.two_domains import FIRST, ONION, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, default_request, onion_request, two_domains  # noqa: F401
 from tests.conftest import forget_login
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -247,3 +249,23 @@ def test_an_accounts_own_name_wins_over_an_onion_accounts_alternate_name(app, on
     db.session.commit()
     response = visit(app, onion.first_bob, 'GET', '/u/bob')
     assert response.status_code == 200 and ONION not in response.get_data(as_text=True)
+
+
+def test_a_message_goes_with_its_conversation_for_the_gate_the_finder_and_the_batch(app, talking):
+    """m4: the gate asked about the sender and recipient, the finder and the batch about the conversation's members.
+    In a group conversation with an onion member, a message between two clearnet accounts is hidden by all three."""
+    group = Conversation(user_id=talking.first_bob.id)
+    group.members.extend([talking.first_bob, talking.admin, talking.onion_bob])
+    db.session.add(group)
+    db.session.commit()
+    message = ChatMessage(conversation_id=group.id, sender_id=talking.admin.id, recipient_id=talking.first_bob.id,
+                          body='GROUP', body_html='<p>GROUP</p>')
+    db.session.add(message)
+    db.session.commit()
+    rule = '/private_message/<int:message_id>'
+    notice = type('Notice', (), {'url': f'/private_message/{message.id}', 'targets': {}, 'author_id': None})()
+    with default_request(app):
+        assert (_value_hidden('message_id', message.id, rule), found_here(ChatMessage, message.id),
+                hidden_notifications([notice])) == (True, None, [True])
+    with onion_request(app):
+        assert not _value_hidden('message_id', message.id, rule)

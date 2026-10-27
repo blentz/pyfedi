@@ -29,7 +29,7 @@ from werkzeug.exceptions import HTTPException
 from app import db
 from app.local_names import default_domain_user, default_domain_users
 from app.local_only import conversation_hidden_here, hidden_conversation_clause, hidden_default_domain, hidden_here, \
-    hidden_here_clause, hides_anything_here
+    hidden_here_clause, hides_anything_here, message_hidden_here
 from app.models import ChatMessage, Community, Conversation, Instance, Notification, Post, PostReply, User
 from app.storefront import current_storefront, default_domain, domain_for_host, host_hidden_here, instance_visible_here, \
     normalise_host, on_domain
@@ -58,11 +58,6 @@ def _user_name_hidden(name: str) -> bool:
     return user is not None and hidden_here(user, True)
 
 
-def _message_hidden(message) -> bool:
-    return any(user is not None and hidden_here(user, True)
-               for user in (db.session.get(User, message.sender_id), db.session.get(User, message.recipient_id)))
-
-
 def _row_hidden(row) -> bool:
     return hidden_here(row, True)
 
@@ -74,7 +69,7 @@ _IDS = {
     'post_id': (Post, _row_hidden),
     'comment_id': (PostReply, _row_hidden), 'post_reply_id': (PostReply, _row_hidden),
     'conversation_id': (Conversation, conversation_hidden_here),   # it names its members: the onion side, off the onion
-    'message_id': (ChatMessage, _message_hidden),
+    'message_id': (ChatMessage, message_hidden_here),   # with its conversation's members (m4)
     'instance_id': (Instance, lambda row: not instance_visible_here(row.id)),
 }
 # A name or host argument: whether its value is hidden here

@@ -369,7 +369,9 @@ def without_hidden_reports(query):
     return query if hides_nothing(clause) else query.filter(not_(clause))
 
 
-def _message_hidden_here(message) -> bool:
+def message_hidden_here(message) -> bool:
+    """Whether the message `message` is hidden here: with its conversation, when one of its members is (the one rule
+    for a message, for the gate, the finder and the batch alike, re-review 2 m4)."""
     conversation = db.session.get(models.Conversation, message.conversation_id) if message.conversation_id else None
     return conversation is not None and conversation_hidden_here(conversation)
 
@@ -378,7 +380,7 @@ def _row_hidden_here(row) -> bool:
     if isinstance(row, models.Conversation):
         return conversation_hidden_here(row)
     if isinstance(row, models.ChatMessage):
-        return _message_hidden_here(row)
+        return message_hidden_here(row)
     if isinstance(row, models.Report):
         return report_hidden_here(row)
     return hidden_here(row, True)
