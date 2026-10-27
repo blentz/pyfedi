@@ -901,13 +901,13 @@ def test_a_non_public_feed_has_no_followers_collection(app, db_session):
     ORIGINAL PINNED CLAIM, now false: "`feed_followers` never reads
     `feed.public` at all", while `feed_outbox` and `feed_following` both guard
     `if not feed.public: abort(403)` right after the same lookup -- proved on
-    both sides here by `test_a_non_public_feed_outbox_is_403` and
-    `test_a_non_public_feed_following_is_403`.
+    both sides here by `test_a_non_public_feed_outbox_is_404` and
+    `test_a_non_public_feed_following_is_404`.
 
     What it served was `totalItems`: the number of accounts subscribed to a feed
     the visitor may not open. `feed_moderators_route` was the fourth of the five
     and served the owner's `ap_profile_id`; it is guarded now too, and
-    `test_a_non_public_feed_moderators_is_403` below is its row.
+    `test_a_non_public_feed_moderators_is_404` below is its row.
 
     `public=False` is passed explicitly: it is also `Feed.public`'s column
     default, and `make_local_feed`'s own default, so leaving it implicit would
@@ -918,10 +918,10 @@ def test_a_non_public_feed_has_no_followers_collection(app, db_session):
 
     response = collection_get(app, '/f/news/followers')
 
-    assert response.status_code == 403
+    assert response.status_code == 404   # as for a feed nobody holds (per-domain feeds Task 7)
 
 
-def test_a_non_public_feed_moderators_is_403(app, db_session):
+def test_a_non_public_feed_moderators_is_404(app, db_session):
     """D1394, the fifth endpoint and the second of the two that did not ask.
     What it served was the owner's `ap_profile_id`, so a visitor who may not open
     a private feed was told who made it.
@@ -940,7 +940,7 @@ def test_a_non_public_feed_moderators_is_403(app, db_session):
 
     response = collection_get(app, '/f/news/moderators')
 
-    assert response.status_code == 403
+    assert response.status_code == 404   # as for a feed nobody holds (per-domain feeds Task 7)
     assert owner.ap_profile_id not in response.get_data(as_text=True)
 
 
@@ -1146,16 +1146,16 @@ def test_an_unknown_feed_outbox_is_404(app, db_session):
     assert response.status_code == 404
 
 
-def test_a_non_public_feed_outbox_is_403(app, db_session):
-    """`if not feed.public: abort(403)`. `public=False` passed explicitly --
-    it is also the column default, so relying on it would hide the premise.
+def test_a_non_public_feed_outbox_is_404(app, db_session):
+    """`if not feed.public: abort(404)` (a 403 until per-domain feeds Task 7, which told that the feed exists).
+    `public=False` passed explicitly -- it is also the column default, so relying on it would hide the premise.
     """
     seed_actors()
     _seed_local_feed('news', public=False)
 
     response = collection_get(app, '/f/news/outbox')
 
-    assert response.status_code == 403
+    assert response.status_code == 404   # as for a feed nobody holds (per-domain feeds Task 7)
 
 
 def test_the_feed_outbox_withholds_local_only_communities(app, db_session):
@@ -1300,16 +1300,16 @@ def test_an_unknown_feed_following_is_404(app, db_session):
     assert response.status_code == 404
 
 
-def test_a_non_public_feed_following_is_403(app, db_session):
-    """`if not feed.public: abort(403)`. `public=False` passed explicitly --
-    it is also the column default, so relying on it would hide the premise.
+def test_a_non_public_feed_following_is_404(app, db_session):
+    """`if not feed.public: abort(404)` (a 403 until per-domain feeds Task 7, which told that the feed exists).
+    `public=False` passed explicitly -- it is also the column default, so relying on it would hide the premise.
     """
     seed_actors()
     _seed_local_feed('news', public=False)
 
     response = collection_get(app, '/f/news/following')
 
-    assert response.status_code == 403
+    assert response.status_code == 404   # as for a feed nobody holds (per-domain feeds Task 7)
 
 
 def test_feed_following_skips_local_only_communities(app, db_session):

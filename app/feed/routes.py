@@ -513,9 +513,10 @@ def show_feed(feed):
     # membership, and that call answers -1 for an unapproved join request and -2
     # for a member the owner banned: asking to join a private feed was enough to
     # read it, and being thrown out of one did not stop you.
+    # A feed this reader may not read answers as one nobody holds, not with a redirect a missing one does not get
+    # (task 7: the oracle parked in task 4's review).
     if not feed_readable_by(feed, current_user.id if current_user.is_authenticated else None):
-        flash(_('Could not find that feed or it is not public. Try one of these instead...'))
-        return redirect(url_for('main.list_feeds'))
+        abort(404)
     
     if current_user.is_anonymous:
         if current_app.config['CONTENT_WARNING']:

@@ -736,9 +736,11 @@ def test_a_banned_local_feed_is_not_found(app, db_session, monkeypatch):
 
 
 def test_a_non_public_feed_refuses_an_activitypub_request(app, db_session, monkeypatch):
-    """`if not feed.public: abort(403)`. `public=False` is passed EXPLICITLY --
-    it is also the column default (app/models.py), so relying on the default
-    would make the test's premise invisible.
+    """`if not feed.public: abort(404)`: a private feed answers as a feed nobody
+    holds (per-domain feeds Task 7; it was a 403, which told that it exists).
+    `public=False` is passed EXPLICITLY -- it is also the column default
+    (app/models.py), so relying on the default would make the test's premise
+    invisible.
     """
     seed_actors()
     make_local_feed('news', public=False)
@@ -746,12 +748,13 @@ def test_a_non_public_feed_refuses_an_activitypub_request(app, db_session, monke
 
     response = profile_get(app, '/f/news', accept=AP_ACCEPT)
 
-    assert response.status_code == 403
+    assert response.status_code == 404
 
 
-def test_a_non_public_feed_still_serves_html(app, db_session, monkeypatch):
-    """The 403 sits inside the AP branch, so a browser still gets the page --
-    the same scoping community_profile has for local_only.
+def test_a_non_public_feed_is_404_to_a_stranger_before_its_page(app, db_session, monkeypatch):
+    """A browser that may not read it gets the missing feed's 404 before
+    show_feed (and its decorators) run (Task 7). Its owner and members still
+    get the page: tests/test_feed_private_oracle.py.
     """
     seed_actors()
     make_local_feed('news', public=False)
@@ -759,8 +762,8 @@ def test_a_non_public_feed_still_serves_html(app, db_session, monkeypatch):
 
     response = profile_get(app, '/f/news', accept='text/html')
 
-    assert response.status_code == 200
-    assert len(calls['show_feed']) == 1
+    assert response.status_code == 404
+    assert calls['show_feed'] == []
 
 
 def test_an_unknown_feed_is_404(app, db_session, monkeypatch):

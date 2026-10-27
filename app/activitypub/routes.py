@@ -85,7 +85,7 @@ from app.user.utils import search_for_user
 from app.utils import FETCH_MAX_BYTES, user_banned_from_community, gibberish, get_setting, community_membership, ap_datetime, ip_address, can_downvote, \
     can_upvote, can_create_post, awaken_dormant_instance, shorten_string, can_create_post_reply, sha256_digest, \
     community_moderators, html_to_text, add_to_modlog, instance_banned, get_redis_connection, \
-    feed_membership, get_task_session, patch_db_session, \
+    feed_membership, feed_readable_by, get_task_session, patch_db_session, \
     blocked_phrases, orjson_response, moderating_communities, joined_communities, moderating_communities_ids, \
     moderating_communities_ids_all_users, publish_sse_event, blocked_users, block_honey_pot, instance_allowed, \
     requestor_domain, accepted_media_ranges, url_host
@@ -3773,12 +3773,10 @@ def feed_profile(actor, feed_owner=None):
     feed: Feed = actor_to_feed(actor)
     if feed is not None:
         if is_activitypub_request():
-            if feed_local_only(feed) or owned_elsewhere(feed):
-                abort(404)   # a local-only account's feed does not exist to other servers; a feed is its own domain's
-            # check if feed is public, if not abort
-            # with 403 (forbidden)
-            if not feed.public:
-                abort(403)
+            # a local-only feed does not exist to other servers, a feed is its own domain's, and a private one answers
+            # as one nobody holds: no AP client is a member (task 7, the oracle parked in task 4)
+            if feed_local_only(feed) or owned_elsewhere(feed) or not feed.public:
+                abort(404)
             base = f'{owner_base(feed)}/f/{actor}'
             actor_data = {"@context": default_context(),
                           "type": "Feed",
@@ -3843,6 +3841,8 @@ def feed_profile(actor, feed_owner=None):
                              f'<{base}>; rel="alternate"; type="text/html"')
             return resp
         else:  # browser request - return html
+            if not feed_readable_by(feed, current_user.id if current_user.is_authenticated else None):
+                abort(404)   # as for a feed nobody holds, before show_feed's own decorators answer (task 7)
             return feed_routes.show_feed(feed)
     else:
         abort(404)
@@ -3868,14 +3868,10 @@ def feed_outbox(actor):
     else:
         feed: Feed = actor_to_feed(actor)
 
-    # unknown feed - 404 rather than crashing on feed.public below; a local-only account's feed is unknown there too
-    if feed is None or feed_local_only(feed) or owned_elsewhere(feed):
+    # unknown feed - 404 rather than crashing on feed.public below; a local-only feed is unknown there too, and a
+    # private one answers as one nobody holds (task 7)
+    if feed is None or feed_local_only(feed) or owned_elsewhere(feed) or not feed.public:
         abort(404)
-
-    # check if feed is public, if not abort
-    # with 403 (forbidden)
-    if not feed.public:
-        abort(403)
 
     # the feed's communities, newest item first, withholding local-only and private ones
     listed = db.session.query(Community).join(FeedItem, FeedItem.community_id == Community.id).filter(
@@ -3904,14 +3900,10 @@ def feed_following(actor):
     else:
         feed: Feed = actor_to_feed(actor)
 
-    # unknown feed - 404 rather than crashing on feed.public below; a local-only account's feed is unknown there too
-    if feed is None or feed_local_only(feed) or owned_elsewhere(feed):
+    # unknown feed - 404 rather than crashing on feed.public below; a local-only feed is unknown there too, and a
+    # private one answers as one nobody holds (task 7)
+    if feed is None or feed_local_only(feed) or owned_elsewhere(feed) or not feed.public:
         abort(404)
-
-    # check if feed is public, if not abort
-    # with 403 (forbidden)
-    if not feed.public:
-        abort(403)
 
         # get the feed items
     feed_items = db.session.query(FeedItem).filter_by(feed_id=feed.id).order_by(desc(FeedItem.id)).all()
@@ -3947,14 +3939,11 @@ def feed_moderators_route(actor):
         abort(400)
     else:
         feed: Feed = actor_to_feed(actor)
-    # D1394. Two of the five AP feed endpoints checked `public` and two did not.
-    # `feed_profile`, `/outbox` and `/following` all answer 403 for a private
-    # feed; this one named its owner and `/followers` counted its members. Same
-    # 403, so a private feed is private at all five.
-    if feed is not None and (feed_local_only(feed) or owned_elsewhere(feed)):
+    # D1394. Two of the five AP feed endpoints checked `public` and two did not;
+    # this one named its owner and `/followers` counted its members. A private
+    # feed is private at all five, and answers as one nobody holds (task 7).
+    if feed is not None and (feed_local_only(feed) or owned_elsewhere(feed) or not feed.public):
         abort(404)   # as feed_profile
-    if feed is not None and not feed.public:
-        abort(403)
     if feed is not None:
         # currently feeds only have the one owner, but lets make this a list in case we want to 
         # expand that in the future
@@ -3992,11 +3981,9 @@ def feed_followers(actor):
         abort(400)
     else:
         feed: Feed = actor_to_feed(actor)
-        if feed is not None and (feed_local_only(feed) or owned_elsewhere(feed)):
+        # D1394, as feed_moderators_route above
+        if feed is not None and (feed_local_only(feed) or owned_elsewhere(feed) or not feed.public):
             abort(404)   # as feed_profile
-        # D1394, as feed_moderators_route above.
-        if feed is not None and not feed.public:
-            abort(403)
         if feed is not None:
             result = {
                 "@context": default_context(),

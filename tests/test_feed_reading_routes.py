@@ -13,6 +13,7 @@ Facts 292-294 apply: render_template is patched for anything that renders, POST
 routes need a real CSRF token, and the site fixture supplies g.site.
 """
 import pytest
+from werkzeug.exceptions import NotFound
 from unittest.mock import patch
 
 from flask import session
@@ -282,8 +283,9 @@ def test_showing_a_public_feed_to_a_member_uses_a_private_cache(app, db_session)
 
 
 def test_a_private_feed_is_hidden_from_a_stranger(app, db_session):
-    """:438-445. A private feed redirects a stranger to the feed list with a
-    flash; the owner and a subscriber fall through to the render.
+    """:438-445. A private feed answers a stranger with the missing feed's 404,
+    and no flash (per-domain feeds Task 7: the redirect told that it exists); the
+    owner and a subscriber fall through to the render.
 
     The three arms are separate tests rather than one parametrisation because
     the two `...` arms at :440 and :442 are no-ops -- their only observable
@@ -298,8 +300,8 @@ def test_a_private_feed_is_hidden_from_a_stranger(app, db_session):
         with patch('app.feed.routes.flash') as flash_stub:
             response = client.get('/f/privatefeed')
 
-    assert response.status_code == 302
-    assert flash_stub.call_count == 1
+    assert response.status_code == 404
+    assert flash_stub.call_count == 0
 
 
 def test_a_private_feed_is_visible_to_its_owner(app, db_session):
@@ -518,9 +520,9 @@ def test_show_feeds_final_abort_is_unreachable(app, db_session):
     UPDATED BY D1394, which changed how. The gate used to read `feed.public`
     directly, so `show_feed(None)` raised `AttributeError` there; it now asks
     `feed_readable_by`, which answers False for None, so the same call takes the
-    'could not find that feed' redirect. The claim is unchanged and the manner
-    of leaving is better: a name that resolves to nothing is a redirect rather
-    than a 500.
+    'could not find that feed' redirect, and since per-domain feeds Task 7 the
+    404 a missing feed gets. The claim is unchanged and the manner of leaving is
+    better: a name that resolves to nothing is a 404 rather than a 500.
 
     Fact 75 CAUSE 9's shape -- a guard that cannot discriminate -- with the
     discrimination removed by an earlier statement rather than by a constant.
@@ -531,10 +533,8 @@ def test_show_feeds_final_abort_is_unreachable(app, db_session):
     with app.test_request_context('/f/nothing'):
         from flask import g
         g.site = db.session.get(Site, 1)
-        response = show_feed(None)
-
-    assert response.status_code == 302
-    assert '/feeds' in response.headers['Location']
+        with pytest.raises(NotFound):
+            show_feed(None)
 
 
 # --------------------------------------------------------------------------

@@ -1,8 +1,9 @@
 """D1394: a feed id from the request, read without asking who is asking.
 
 `show_feed` (app/feed/routes.py) refuses a private feed to anybody but its owner
-and its members, `/f/<name>/following` and `/f/<name>/outbox` answer 403 for one,
-and the API's `get_feed` raises `access_denied` -- so a private feed's membership
+and its members, `/f/<name>/following` and `/f/<name>/outbox` answered 403 for one,
+and the API's `get_feed` raised `access_denied` (since per-domain feeds Task 7
+each answers as for a feed nobody holds) -- so a private feed's membership
 is a thing this codebase protects, and D1173 has already repaired one endpoint
 that took a feed id and joined without asking.
 
@@ -482,10 +483,10 @@ class TestShowFeedItself:
         with patch('app.feed.routes.render_template', return_value='rendered'):
             return client.get('/f/secretfeed')
 
-    def test_a_stranger_is_still_redirected(self, app, env):
+    def test_a_stranger_gets_the_missing_feeds_404(self, app, env):
+        """It was a redirect to /feeds, which a missing feed did not get: per-domain feeds Task 7."""
         response = self._get(app, env.stranger)
-        assert response.status_code == 302
-        assert '/feeds' in response.headers['Location']
+        assert response.status_code == 404
 
     def test_the_owner_is_still_served(self, app, env):
         assert self._get(app, env.owner).status_code == 200
@@ -500,7 +501,7 @@ class TestShowFeedItself:
         anything."""
         make_feed_join_request(env.stranger, env.secret)
         response = self._get(app, env.stranger)
-        assert response.status_code == 302
+        assert response.status_code == 404
 
     def test_a_banned_member_no_longer_admits(self, app, env):
         """-2, likewise truthy. The owner threw this account out of the feed."""
@@ -508,7 +509,7 @@ class TestShowFeedItself:
         member.is_banned = True
         db.session.commit()
         response = self._get(app, env.stranger)
-        assert response.status_code == 302
+        assert response.status_code == 404
 
     def test_the_owner_is_served_even_when_banned_from_their_own_feed(
             self, app, env):
@@ -594,13 +595,15 @@ class TestTheActivityPubEndpoints:
     """`feed_profile`, `/outbox` and `/following` answered 403 for a private
     feed. `/moderators` named its owner and `/followers` counted its members,
     both with 200. These are peer-facing and unauthenticated, so the test is
-    `public` alone, as the three siblings already had it."""
+    `public` alone, as the three siblings already had it. Since per-domain feeds
+    Task 7 all five answer 404, as for a feed nobody holds: a 403 told that it
+    exists."""
 
     @pytest.mark.parametrize('suffix', ['', '/outbox', '/following',
                                         '/moderators', '/followers'])
-    def test_a_private_feed_is_forbidden_at_all_five(self, app, env, suffix):
+    def test_a_private_feed_is_not_found_at_all_five(self, app, env, suffix):
         response = app.test_client().get(f'/f/secretfeed{suffix}', headers=AP)
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     @pytest.mark.parametrize('suffix', ['', '/outbox', '/following',
                                         '/moderators', '/followers'])
@@ -614,8 +617,7 @@ class TestTheActivityPubEndpoints:
     @pytest.mark.parametrize('suffix', ['/outbox', '/following', '/moderators',
                                         '/followers'])
     def test_a_name_naming_no_feed_is_still_a_404(self, app, env, suffix):
-        """404, not 403: the refusal must not turn an absent feed into one that
-        exists and is private."""
+        """404, as a private one gets: neither answer tells the two apart."""
         response = app.test_client().get(f'/f/nosuchfeed{suffix}', headers=AP)
         assert response.status_code == 404
 
@@ -623,7 +625,7 @@ class TestTheActivityPubEndpoints:
         """What `/moderators` answered: the `ap_profile_id` of whoever owns the
         feed."""
         response = app.test_client().get('/f/secretfeed/moderators', headers=AP)
-        assert response.status_code == 403
+        assert response.status_code == 404
         assert env.owner.ap_profile_id not in response.get_data(as_text=True)
 
     def test_a_private_feeds_membership_is_not_counted(self, app, env):
@@ -631,7 +633,7 @@ class TestTheActivityPubEndpoints:
         subscribed to it."""
         make_feed_member(env.stranger, env.secret)
         response = app.test_client().get('/f/secretfeed/followers', headers=AP)
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_a_public_feeds_membership_is_still_counted(self, app, env):
         make_feed_member(env.stranger, env.open_feed)
