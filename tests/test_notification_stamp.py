@@ -10,9 +10,11 @@ from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 
 import app.cli as cli
+import app.hidden_routes as hidden_routes
 from app import db
 import app.local_only as local_only
 from app.models import Conversation, Instance, Notification, SiteDomain, User
@@ -150,3 +152,16 @@ def test_the_python_stamp_covers_every_notification_the_migrations_backfill_stam
     clean = [(row.url, row.targets, row.author_id) for row, by_python in zip(rows, python) if not by_python]
     assert len(clean) > 20 and frozen.count(True) > 30, (clean, frozen)   # the shapes judge both ways
     db.session.rollback()
+
+
+@pytest.mark.parametrize('unread_only', [True, False])
+def test_the_count_reads_the_partial_index_of_the_stamped_notifications(app, alpha, unread_only):
+    """M1 (re-review 4): the counts' predicate must be the index's own, `WHERE local_only`, or the planner cannot use
+    the partial index and reads every notification of the account from the heap. The suite never ANALYZEs, so the
+    sequential scan is turned off: what is left to choose is which index."""
+    query = hidden_routes._stamped_notifications(alpha.first_bob.id, unread_only)
+    sql = str(query.compile(dialect=postgresql.dialect(), compile_kwargs={'literal_binds': True}))
+    db.session.execute(text('SET LOCAL enable_seqscan = off'))
+    plan = '\n'.join(db.session.execute(text(f'EXPLAIN {sql}')).scalars())
+    db.session.rollback()
+    assert 'ix_notification_user_local_only' in plan, plan

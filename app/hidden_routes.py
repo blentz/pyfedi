@@ -313,6 +313,19 @@ def notification_hidden(notification) -> bool:
     return hidden_notifications([notification])[0]
 
 
+def _stamped_notifications(user_id: int, unread_only: bool):
+    """The columns `hidden_notifications` reads of the stamped notifications of the account `user_id`, only the unread
+    ones when `unread_only` says so. The predicate is the partial index's own, the bare `local_only`: Postgres uses a
+    partial index only when the query's WHERE implies the index's, and it does not read `local_only IS TRUE` as
+    implying it (re-review 4, M1)."""
+    query = select(Notification.url, Notification.targets, Notification.author_id, Notification.read,
+                   Notification.notif_type, Notification.subtype).where(Notification.user_id == user_id,
+                                                                        Notification.local_only)
+    if unread_only:
+        query = query.where(Notification.read.is_(False))
+    return query
+
+
 def _hidden_counts(user_id: int, unread_only: bool) -> Counter:
     """The notifications of the account `user_id` hidden here (`hidden_notifications`), only the unread ones when
     `unread_only` says so, counted by `(read, notif_type, subtype)`. Nothing, and no query, where nothing is hidden.
@@ -321,12 +334,7 @@ def _hidden_counts(user_id: int, unread_only: bool) -> Counter:
     onion-related ones, whatever the number of others (re-review 3, I1)."""
     if not hides_anything_here():
         return Counter()
-    query = select(Notification.url, Notification.targets, Notification.author_id, Notification.read,
-                   Notification.notif_type, Notification.subtype).where(Notification.user_id == user_id,
-                                                                        Notification.local_only.is_(True))
-    if unread_only:
-        query = query.where(Notification.read.is_(False))
-    rows = db.session.execute(query).all()
+    rows = db.session.execute(_stamped_notifications(user_id, unread_only)).all()
     return Counter((bool(row.read), row.notif_type, row.subtype)
                    for row, hidden in zip(rows, hidden_notifications(rows)) if hidden)
 
