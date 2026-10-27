@@ -56,7 +56,7 @@ from app.local_only import any_domain_closed, community_local_only, federated_me
 from app.local_names import actor_handle, local_clause, split_local_name
 from app.federation_urls import activity_id, domain_site_name, federating_storefront, instance_actor_url, \
     is_federating_url, object_base, owned_elsewhere, owner_base, owner_domain
-from app.storefront import current_storefront, domain_authority, domain_base_url, domain_for_host, federating_base, \
+from app.storefront import acting_for, current_storefront, domain_authority, domain_base_url, domain_for_host, federating_base, \
     hosted_instance_ids, is_served_name, registration_mode_on, storefront_cache_key
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
@@ -1464,8 +1464,9 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                                  "type": "Follow", "id": follow_id},
                                       "type": "Accept",
                                       "id": activity_id('accept', feed, gibberish(32))}
-                            send_post_request(follow_answer_inbox(user), accept, feed.private_key,
-                                              f"{feed.public_url()}#main-key")
+                            with acting_for(owner_domain(feed)):   # the feed's domain answers, whichever host the Follow came in on
+                                send_post_request(follow_answer_inbox(user), accept, feed.private_key,
+                                                  f"{feed.public_url()}#main-key")
                             log_incoming_ap(id, APLOG_FOLLOW, APLOG_SUCCESS, saved_json,
                                             'Already a member, Accept re-sent' if already_member else None)
                         return

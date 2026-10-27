@@ -43,7 +43,7 @@ from app.main.util import sidebar_active_communities, sidebar_new_instances, sid
     sidebar_new_communities, _base_list_communities_context, reload_url
 from app.translation import LibreTranslateAPI
 from app.feed_domains import feed_view_domain, listed_feeds_clause
-from app.local_only import hidden_here, hidden_here_sql, shown_here, without_local_only, without_local_only_actors
+from app.local_only import any_domain_closed, hidden_here, hidden_here_sql, shown_here, without_local_only, without_local_only_actors
 from app.local_names import local_named, split_local_name
 from app.visibility import listable_clause, modlog_local_only_clause, modlog_open_clause, visible_to_clause
 from app.federation_urls import domain_site_name, federating_storefront, instance_actor_public_key, instance_actor_url
@@ -1461,10 +1461,24 @@ def list_feeds():
     server_has_feeds = False
     search_param = request.args.get('search', '')
 
+    if is_activitypub_request():
+        # the domain asked tells other servers its own feeds, whoever's session came with the request
+        served = federating_storefront()   # the onion lists none to another server
+        public_feeds = feed_tree_public(search_param or None, served, signed_in=False)
+        site_data = lemmy_site_data(served)
+        # never a feed a local-only account owns (ruling a2: it is no server's to see); no domain closed: none is
+        closed = any_domain_closed()
+        feeds_list = [f"{domain_base_url(served)}/f/{f['feed'].machine_name}" for f in public_feeds
+                      if f['feed'].is_local() and not (closed and feed_local_only(f['feed']))]
+        site_data['site_view']['public_feeds'] = feeds_list
+        site_data['site_view']['counts']['public_feeds'] = len(feeds_list)
+        resp = jsonify(site_data)
+        resp.content_type = ap_media_type()
+        return resp
+
     if search_param == '':
         # find all the feeds marked as public
         public_feeds = feed_tree_public(domain=feed_view_domain())
-        
     else:
         # find all the feeds marked as public that match the search param
         public_feeds = feed_tree_public(search_param, feed_view_domain())
@@ -1472,24 +1486,11 @@ def list_feeds():
     if len(public_feeds) > 0:
         server_has_feeds = True
 
-    # respond with json collection of public feeds for curl/AP requests
-    if is_activitypub_request():
-        served = federating_storefront()   # the onion lists none to another server
-        site_data = lemmy_site_data(served)
-        # this domain's own feeds, never one a local-only account owns (ruling a2: such a feed is no server's to see)
-        feeds_list = [f"{domain_base_url(served)}/f/{f['feed'].machine_name}" for f in public_feeds
-                      if f['feed'].is_local() and not feed_local_only(f['feed'])]
-        site_data['site_view']['public_feeds'] = feeds_list
-        site_data['site_view']['counts']['public_feeds'] = len(feeds_list)
-        resp = jsonify(site_data)
-        resp.content_type = ap_media_type()
-        return resp
-    else:
-        # render the page
-        return render_template('feed/public_feeds.html', server_has_feeds=server_has_feeds,
-                               public_feeds_list=public_feeds,
-                               subscribed_feeds=subscribed_feeds(current_user.get_id()),
-                               search_hint=search_param)
+    # render the page
+    return render_template('feed/public_feeds.html', server_has_feeds=server_has_feeds,
+                           public_feeds_list=public_feeds,
+                           subscribed_feeds=subscribed_feeds(current_user.get_id()),
+                           search_hint=search_param)
 
 
 @bp.route('/explore')
