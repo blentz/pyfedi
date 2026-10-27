@@ -47,7 +47,12 @@ def feeds_for_form_children(feeds, current_feed: int, depth: int) -> List[Tuple[
     return result
 
 
-def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False):
+def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False, signed_in: bool = True):
+    """The feed `~name@server` names: one of ours on that hosted domain (never fetched), else the stored remote feed,
+    else, with `allow_fetch`, the one WebFinger finds. Never one this storefront hides from its reader
+    (`feed_shown_here`), who is signed in when `signed_in` says so. The API passes its caller's (Task 7 review M5);
+    the default is a signed-in reader, as the web callers are (login required), and a worker reads as one on the
+    default domain."""
     if address.startswith('~'):
         # Exactly two parts, or the address is not one: '~a@b@c' used to raise
         # ValueError out of this unpacking, and feed_add_remote's first arm
@@ -67,7 +72,7 @@ def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False)
         hosted = domain_for_host(server)
         if hosted:   # one of ours: that domain's own feed, or none. Never fetched (it would be a self-request)
             # nor one hidden here: an onion feed is found on the onion only (task 7)
-            return Feed.query.filter(local_named(Feed, name, hosted), feeds_shown_here_clause(True)).first()
+            return Feed.query.filter(local_named(Feed, name, hosted), feeds_shown_here_clause(signed_in)).first()
 
         already_exists = Feed.query.filter_by(ap_id=address[1:]).first()
         if already_exists:

@@ -20,6 +20,7 @@ from app.post.util import post_refusal
 from app.storefront import current_storefront, default_domain, domain_authority, domain_for_host, domain_of_url, \
     is_local_host, link_host
 from app.user.utils import search_for_user
+from app.feed_domains import feed_shown_here
 from app.local_only import hidden_here, without_local_only_actors
 from app.visibility import can_view, is_open, modlog_local_only_clause, modlog_open_clause
 from app.feed.util import search_for_feed
@@ -140,9 +141,11 @@ def _user_open_to(user: User, user_id: int | None) -> bool:
     return not (user.deleted or user.banned or hidden_here(user, user_id is not None))
 
 
-def _feed_open_to(feed: Feed, user_id: int) -> bool:
-    """A banned feed is not shown; a private feed is its owner's and an admin's alone (as `feed_view` has it)."""
-    if feed.banned:
+def _feed_open_to(feed: Feed, user_id: int | None) -> bool:
+    """A banned feed is not shown, nor one hidden here (`feed_shown_here`: an onion feed, off the onion, to everyone,
+    an admin too), whichever way the query found it; a private feed is its owner's and an admin's alone (as
+    `feed_view` has it)."""
+    if feed.banned or not feed_shown_here(feed, user_id is not None):
         return False
     return feed.public or user_id == feed.user_id or db.session.get(User, user_id).is_admin()
 
@@ -241,7 +244,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             local_request = bool(search_for_user(query.lower(), allow_fetch=False))
         elif query.startswith('~'):
             # Check if this feed is already federated
-            local_request = bool(search_for_feed(query.lower(), allow_fetch=False))
+            local_request = bool(search_for_feed(query.lower(), allow_fetch=False, signed_in=user_id is not None))
         else:
             local_request = False
     
@@ -393,7 +396,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
         if "/f/" in query or query.startswith("~"):
             if query.startswith("~"):
                 # This feed is specified using ~ notation
-                object = search_for_feed(query.lower(), allow_fetch=False)
+                object = search_for_feed(query.lower(), allow_fetch=False, signed_in=user_id is not None)
 
                 if object and feed_dict:
                     return _feed_result(object, feed_dict, user_id)
@@ -408,7 +411,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             if "@" not in feed_name:   # a bare `/f/name` is on the domain the URL is on, as `/u/` and `/c/` are
                 feed_name = feed_name + "@" + link_host(domain_of_url(query) or current_storefront())
 
-            object = search_for_feed(feed_name, allow_fetch=bool(user_id))
+            object = search_for_feed(feed_name, allow_fetch=bool(user_id), signed_in=user_id is not None)
 
             if object and feed_dict:
                 return _feed_result(object, feed_dict, user_id)
@@ -428,7 +431,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             return _user_result(object, user_id)
     # assume that queries starting with ~ are for a feed
     if not recursive and query.startswith('~'):
-        object = search_for_feed(query.lower())
+        object = search_for_feed(query.lower(), signed_in=user_id is not None)
         if object and feed_dict:
             return _feed_result(object, feed_dict, user_id)
     # if the instance is following the lemmy convention, a '/u/' means user and '/c/' means community
