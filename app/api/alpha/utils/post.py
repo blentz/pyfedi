@@ -57,6 +57,33 @@ def a_moderatable_post(post_id, auth):
     return a_visible_post(post_id, auth)
 
 
+
+def _refuse_private_community(community_id, community_name, user_id, user):
+    """Refuse a post list of the private community `community_id` or `community_name` names to a caller who is not a
+    member. A community nobody holds, and one hidden here (`hidden_here`), list nothing and are not refused, so the
+    answer tells neither from the other (follow-up F6, m2)."""
+    if community_id:
+        community = db.session.get(Community, community_id)
+    else:
+        # parse community_name to get the community
+        if '@' not in community_name:
+            community_name_lookup = f"{community_name}@{domain_authority(current_storefront())}"   # the storefront's
+        else:
+            community_name_lookup = community_name
+        name, ap_domain = normalise_actor_string(community_name_lookup)
+        if not name or not ap_domain:
+            raise Exception('invalid_request')
+        community = Community.query.filter_by(name=name, ap_domain=ap_domain).first()
+
+    if community is None or not community.private or hidden_here(community, user_id is not None):
+        return
+    # community is private, check if user is a member
+    if not user_id:
+        raise Exception('Private community - authentication required')
+    if not community.is_member(user):
+        raise Exception('Private community - membership required')
+
+
 def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
     type = data['type_'] if 'type_' in data else "All"
     sort = data['sort'] if 'sort' in data else "Hot"
@@ -109,27 +136,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
 
     if community_id or community_name:
         search_by_community = True
-        # check private community access
-        if community_id:
-            community = db.session.get(Community, community_id)
-        else:
-            # parse community_name to get the community
-            if '@' not in community_name:
-                community_name_lookup = f"{community_name}@{domain_authority(current_storefront())}"   # the storefront's
-            else:
-                community_name_lookup = community_name
-            name, ap_domain = normalise_actor_string(community_name_lookup)
-            if not name or not ap_domain:
-                raise Exception('invalid_request')
-            community = Community.query.filter_by(name=name, ap_domain=ap_domain).first()
-
-        if community and community.private:
-            # community is private, check if user is a member
-            if not user_id:
-                raise Exception('Private community - authentication required')
-            else:
-                if not community.is_member(user):
-                    raise Exception('Private community - membership required')
+        _refuse_private_community(community_id, community_name, user_id, user if user_id else None)
     else:
         search_by_community = False
 
@@ -862,27 +869,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
 
     if community_id or community_name:
         search_by_community = True
-        # check private community access
-        if community_id:
-            community = db.session.get(Community, community_id)
-        else:
-            # parse community_name to get the community
-            if '@' not in community_name:
-                community_name_lookup = f"{community_name}@{domain_authority(current_storefront())}"   # the storefront's
-            else:
-                community_name_lookup = community_name
-            name, ap_domain = normalise_actor_string(community_name_lookup)
-            if not name or not ap_domain:
-                raise Exception('invalid_request')
-            community = Community.query.filter_by(name=name, ap_domain=ap_domain).first()
-
-        if community and community.private:
-            # community is private, check if user is a member
-            if not user_id:
-                raise Exception('Private community - authentication required')
-            else:
-                if not community.is_member(user):
-                    raise Exception('Private community - membership required')
+        _refuse_private_community(community_id, community_name, user_id, user if user_id else None)
     else:
         search_by_community = False
 
