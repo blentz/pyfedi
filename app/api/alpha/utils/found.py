@@ -4,7 +4,7 @@ A row hidden on this storefront (app.local_only.found_here) is refused with the 
 gets, so an action's answer never tells the two apart, nor carries the hidden row. Every endpoint that reads an id
 from its body or query string asks one of these, and none keeps its own copy of the rule."""
 from app.local_only import found_here
-from app.models import Community, Post, PostReply, Report, User
+from app.models import Community, Feed, Post, PostReply, Report, User
 
 
 def a_row(model, id_, missing: str):
@@ -36,6 +36,12 @@ def a_user(user_id) -> User:
 def a_person(person_id) -> User:
     """a_user for the endpoints whose text for an id nobody holds has always been `person not found`."""
     return a_row(User, person_id, 'person not found')
+
+
+def a_feed(feed_id, missing: str) -> Feed:
+    """The feed `feed_id` names, or `Exception(missing)`: the feed endpoints each have their own text for an id nobody
+    holds. A feed hidden here (an onion feed off the onion, per-domain feeds Task 7) gets the same."""
+    return a_row(Feed, feed_id, missing)
 
 
 def a_report(report_id) -> Report:

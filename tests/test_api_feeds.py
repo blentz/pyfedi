@@ -75,7 +75,7 @@ def env(app, api_baseline):
 
 def test_a_stranger_may_not_read_a_private_feed(app, env):
     """The end that was guarded. Measured: `PROBE bb1 outcome: Exception:
-    access_denied`."""
+    access_denied`; since per-domain feeds Task 7 the missing feed's answer."""
     from app.api.alpha.utils.feed import get_feed
 
     owner, stranger, public, private = env
@@ -83,7 +83,7 @@ def test_a_stranger_may_not_read_a_private_feed(app, env):
     with pytest.raises(Exception) as refused:
         get_feed(token(stranger), {'id': private.id})
 
-    assert str(refused.value) == 'access_denied'
+    assert str(refused.value) == 'feed_not_found'   # as for a feed nobody holds (per-domain feeds Task 7)
 
 
 def test_a_stranger_may_not_follow_a_private_feed(app, env):
@@ -257,7 +257,7 @@ def test_an_anonymous_reader_is_refused_a_private_feed(app, env):
     with pytest.raises(Exception) as refused:
         get_feed(None, {'id': private.id})
 
-    assert str(refused.value) == 'access_denied'
+    assert str(refused.value) == 'feed_not_found'   # as for a feed nobody holds (per-domain feeds Task 7)
 
 
 # --------------------------------------------------------------------------
