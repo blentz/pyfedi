@@ -8,8 +8,8 @@ from flask import g
 from app import db
 import app.api.alpha.utils.misc as misc
 from app.api.alpha.utils.misc import get_resolve_object
-from app.constants import POST_STATUS_DRAFT, VISIBILITY_FOLLOWERS
-from app.models import CommunityMember, Post, Site, UserFollower
+from app.constants import POST_STATUS_DRAFT, ROLE_ADMIN, VISIBILITY_FOLLOWERS
+from app.models import CommunityMember, Feed, Post, Role, Site, User, UserFollower, user_role
 from app.storefront import domain_for_host
 from tests.factories import make_community, make_instance, make_local_feed, make_post, make_post_reply, make_user
 from tests.test_local_only_invisible import _post, world  # noqa: F401
@@ -487,3 +487,145 @@ def test_a_banned_account_the_reply_mentions_does_not_stop_it_resolving(world, p
 
 def test_the_not_found_text_is_one_shared_value():
     assert inspect.getsource(misc).count("'No object found.'") == 1 and misc.NOT_FOUND == 'No object found.'
+
+
+# ---- a post fetched from a peer is gated like a stored one ----------------------------------------------------------
+
+@pytest.mark.parametrize('hide', HIDDEN)
+def test_a_post_fetched_from_a_peer_is_gated_before_it_is_returned(peer, hide):
+    fake = peer(hide)
+    assert refused(caller(), PARENT) == 'No object found.'
+    assert PARENT in fake.fetched and Post.get_by_ap_id(PARENT) is not None   # it was fetched, and then refused
+
+
+def test_a_post_fetched_from_a_peer_resolves_when_the_caller_may_open_it(peer):
+    peer(lambda post, world: None)
+    assert resolve(caller(), PARENT)['post']['post']['id'] == Post.get_by_ap_id(PARENT).id
+
+
+@pytest.mark.parametrize('hide', [_draft, _banned_community, _private_community, _deleted])
+def test_a_reply_fetched_from_a_peer_is_gated_by_its_post(peer, hide):
+    fake = peer(hide, community_known=True)
+    fake.create_resolved_object(PARENT, {}, 'peer.example', None, '', False)   # the parent is already stored
+    assert refused(caller(), CHILD) == 'No object found.'
+    assert CHILD in fake.fetched
+
+
+def test_a_reply_fetched_from_a_peer_resolves_when_the_caller_may_open_it(peer):
+    fake = peer(lambda post, world: None, community_known=True)
+    fake.create_resolved_object(PARENT, {}, 'peer.example', None, '', False)
+    assert resolve(caller(), CHILD)['comment']['comment']['id'] == Post.get_by_ap_id(PARENT).replies[0].id
+
+
+# ---- recursive users and feeds ----------------------------------------------------------------------------------------
+
+def _banned_user(world):
+    world.bob.banned = True
+    return world.bob
+
+
+def _deleted_user(world):
+    world.bob.deleted = True
+    return world.bob
+
+
+def _onion_user(world):
+    return world.onionite
+
+
+@pytest.mark.parametrize('pick', [_banned_user, _deleted_user, _onion_user])
+def test_a_recursive_call_is_gated_for_a_user(app, world, pick):
+    user = pick(world)
+    user.ap_profile_id = user.ap_profile_id or f"{app.config['SERVER_URL']}/u/{user.user_name}"
+    db.session.commit()
+    assert refused(caller(), user.ap_profile_id, recursive=True) == 'No object found.'
+
+
+def test_a_recursive_call_returns_the_user_object_for_a_visible_one(app, world):
+    world.bob.ap_profile_id = f"{app.config['SERVER_URL']}/u/bob"
+    db.session.commit()
+    assert resolve(caller(), world.bob.ap_profile_id, recursive=True) == world.bob
+
+
+def _banned_feed(feed, owner):
+    feed.banned = True
+
+
+def _private_feed(feed, owner):
+    feed.public = False
+
+
+def _onion_feed(feed, owner):
+    feed.site_domain_id = domain_for_host('abc.onion').id
+
+
+@pytest.mark.parametrize('hide', [_banned_feed, _private_feed, _onion_feed])
+def test_a_recursive_call_is_gated_for_a_feed(world, hide):
+    feed = make_local_feed('inner', public=True, user=world.bob)
+    hide(feed, world.bob)
+    db.session.commit()
+    assert refused(caller(), feed.ap_profile_id, recursive=True) == 'No object found.'
+
+
+def test_a_recursive_call_returns_the_feed_object_for_a_visible_one(world):
+    feed = make_local_feed('inner', public=True, user=world.bob)
+    assert resolve(caller(), feed.ap_profile_id, recursive=True) == feed
+    assert isinstance(feed, Feed)
+
+
+# ---- who sees what others cannot ------------------------------------------------------------------------------------
+
+def moderator_of(community):
+    user = caller('mona')
+    db.session.add(CommunityMember(user_id=user.id, community_id=community.id, is_moderator=True))
+    db.session.commit()
+    return user
+
+
+def an_admin():
+    user = caller('adam')
+    role = db.session.get(Role, ROLE_ADMIN) or Role(id=ROLE_ADMIN, name='Admin', weight=0)
+    db.session.add(role)
+    db.session.commit()
+    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.commit()
+    assert user.id != 1 and db.session.get(User, user.id).is_admin()
+    return user
+
+
+def test_a_moderator_resolves_what_a_private_community_keeps_from_others(world):
+    post = peer_post(world)
+    post.community.private = True
+    mona = moderator_of(post.community)
+    db.session.commit()
+    assert resolve(mona, post.ap_id)['post']['post']['id'] == post.id
+    assert resolve(mona, world.clearnet.ap_profile_id)['community']['community']['id'] == world.clearnet.id
+    assert refused(caller(), post.ap_id) == refused(caller('nobody'), world.clearnet.ap_profile_id) == 'No object found.'
+
+
+def test_a_moderator_resolves_a_post_a_moderator_removed_and_a_reader_does_not(app, world):
+    post = peer_post(world)
+    post.deleted = True
+    post.deleted_by = world.alice.id
+    mona = moderator_of(post.community)
+    assert [resolve(mona, url)['post']['post']['id'] for url in _urls(app, post)] == [post.id] * 2
+    assert [refused(caller(), url) for url in _urls(app, post)] == ['No object found.'] * 2
+
+
+def test_an_admin_resolves_a_removed_post_and_a_private_feed_and_a_reader_does_not(app, world):
+    post = peer_post(world)
+    post.deleted = True
+    post.deleted_by = world.alice.id
+    feed = make_local_feed('closed', public=False, user=world.bob)
+    db.session.commit()
+    admin = an_admin()
+    assert [resolve(admin, url)['post']['post']['id'] for url in _urls(app, post)] == [post.id] * 2
+    assert resolve(admin, feed.ap_profile_id)['feed']['id'] == feed.id
+    assert [refused(caller(), url) for url in (*_urls(app, post), feed.ap_profile_id)] == ['No object found.'] * 3
+
+
+@pytest.mark.parametrize('state', ['private', 'banned'])
+def test_an_admin_is_refused_a_community_the_page_refuses_to_an_admin(world, state):
+    setattr(world.clearnet, state, True)
+    db.session.commit()
+    assert refused(an_admin(), world.clearnet.ap_profile_id) == 'No object found.'
