@@ -17,8 +17,8 @@ from werkzeug.exceptions import NotFound
 
 from app import db
 from app.constants import ROLE_ADMIN_NAME
-from app.local_only import content_local_only
-from app.models import CommunityMember, Domain, File, Notification, Post, PostBookmark, PostReplyBookmark, PostVote, \
+from app.local_only import content_local_only, hidden_default_domain
+from app.models import ChatMessage, CommunityMember, Conversation, Domain, File, Notification, Post, PostBookmark, PostReplyBookmark, PostVote, \
     Report, Role, Topic, UserRegistration, read_posts, user_file, utcnow
 from tests.factories import grant_permission, make_post, make_post_reply
 import app.hidden_routes as hidden_routes
@@ -823,3 +823,51 @@ def test_the_apis_notification_list_costs_the_same_hidden_checks_for_any_number_
     many_notices(onion, 6)
     api(app, '/api/alpha/user/notifications?status=All&limit=50', onion.first_bob)
     assert calls == [6]   # one batched call for the page, never one per notification
+
+
+def a_notice(url, **targets):
+    """A notification as the batch reads one: its link, its targets and no author."""
+    return SimpleNamespace(url=url, targets=targets, author_id=None)
+
+
+def test_the_batch_reads_each_kind_of_link_as_the_gate_does(app, onion):
+    onion.onion_bob.alt_user_name = 'quietotter'
+    onion.with_onion, onion.with_admin = Conversation(user_id=onion.first_bob.id), Conversation(user_id=onion.first_bob.id)
+    onion.with_onion.members.extend([onion.first_bob, onion.onion_bob])
+    onion.with_admin.members.extend([onion.first_bob, onion.admin])
+    db.session.add_all([onion.with_onion, onion.with_admin])
+    db.session.commit()
+    message = ChatMessage(conversation_id=onion.with_onion.id, sender_id=onion.onion_bob.id,
+                          recipient_id=onion.first_bob.id, body='x', body_html='<p>x</p>')
+    db.session.add(message)
+    db.session.commit()
+    cases = [
+        ('/notifications', {}, False),                                   # a page naming nothing
+        ('/topic/arts', {}, False),                                      # an argument that names no row
+        ('/u/%00', {}, False),                                           # junk names nothing
+        ('/post/0', {}, False),                                          # an id no row can have
+        ('/u/quietotter', {}, True),                                     # an onion account's alternate name
+        ('/u/nobodyatall', {}, False),
+        (f'/u/{ONION_BOB}', {}, True),                                   # a handle on the onion
+        (f'/chat/{onion.with_onion.id}', {}, True),                      # a conversation with the onion's bob
+        (f'/chat/{onion.with_admin.id}', {}, False),
+        (f'/private_message/{message.id}', {}, True),
+        (f'/admin/instance/{onion.onion_bob.instance_id}/edit', {}, True),   # the onion's instance row
+        ('/admin/instance/1/edit', {}, False),
+        ('/c/art', {}, False),                                           # a stored name: the default domain's
+        (f'/u/{ONION_BOB}', {'suspect_user_id': None}, True),            # a stored handle on the onion
+        ('/notifications', {'post_id': 0}, False),                       # a target id no row can have
+    ]
+    with default_request(app):
+        flags = hidden_notifications([a_notice(url, **targets) for url, targets, _ in cases])
+        assert hidden_default_domain() is False
+    assert flags == [expected for *_, expected in cases], [(url, flag) for (url, *_), flag in zip(cases, flags)]
+
+
+def test_a_stored_bare_name_is_hidden_where_the_default_domain_is(app, onion, monkeypatch):
+    """Only where the default domain itself does not federate and this is another storefront; its rows are then
+    hidden, and a stored bare name is one of them."""
+    monkeypatch.setattr(hidden_routes, 'hidden_default_domain', lambda: True)
+    with default_request(app):
+        assert hidden_notifications([a_notice('/c/art'), a_notice('/c/nothing'), a_notice('/u/bob')]) == \
+            [True, False, True]
