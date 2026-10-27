@@ -2418,8 +2418,8 @@ def community_moderate_subscribers(actor):
     prev_url = url_for('community.community_moderate_subscribers', actor=actor, page=subscribers.prev_num,
                        sort_by=sort_by, search=search) if subscribers.has_prev and page != 1 else None
 
-    banned_people = User.query.join(CommunityBan, CommunityBan.user_id == User.id).filter(
-        CommunityBan.community_id == community.id).all()
+    banned_people = without_local_only_actors(User.query.join(CommunityBan, CommunityBan.user_id == User.id).filter(
+        CommunityBan.community_id == community.id), User).all()   # none hidden here (follow-up F6)
 
     return render_template('community/community_moderate_subscribers.html',
                            title=_('Moderation of %(community)s', community=community.display_name()),
