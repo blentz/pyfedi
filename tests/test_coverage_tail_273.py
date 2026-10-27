@@ -184,8 +184,10 @@ class TestAFeedsPath:
         """`path()` builds the url a feed is served at, parent-first."""
         parent = make_feed(env.baseline.instance_local, 'parentthere')
         parent.machine_name = 'parentthere'
+        parent.ap_id = None   # a local feed, as `path()` writes one for this storefront
         child = make_feed(env.baseline.instance_local, 'childthere')
         child.machine_name = 'childthere'
+        child.ap_id = None
         db.session.commit()
         child.parent_feed_id = parent.id
         db.session.commit()
@@ -204,6 +206,7 @@ class TestAFeedsPath:
         """
         feed = make_feed(env.baseline.instance_local, 'aloneatthetop')
         feed.machine_name = 'aloneatthetop'
+        feed.ap_id = None   # a local feed (a remote one is pathed by its handle)
         feed.parent_feed_id = None
         db.session.commit()
 
