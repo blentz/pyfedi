@@ -727,3 +727,19 @@ def test_a_notification_whose_link_cannot_be_parsed_is_shown_and_followed_to_the
     assert NOTE not in body and 'ONIONTITLE' in body
     response = Visitor(app, onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
     assert response.status_code == 302 and response.headers['Location'].endswith('/notifications')
+
+
+# --- an onion account's report names no reporter off the onion (round 3) ------------------------------------------
+
+@pytest.mark.parametrize('template', ['post_report', 'comment_report', 'user_report', 'community_report'])
+def test_a_report_by_an_onion_account_shows_its_reporter_as_the_note_on_the_first_domain(app, onion, template):
+    report = report_of(template, reporter_user_name=ONION_BOB, reporter_id=onion.onion_bob.id,
+                       source_instance_domain=FIRST, suspect_post_id=onion.first_post.id, orig_post_title='a title',
+                       suspect_user_user_name='bob', suspect_user_id=onion.first_bob.id,
+                       suspect_community_name='art', suspect_community_id=onion.first_art.id)
+    with default_request(app):
+        html = render_template(f'admin/reports/{template}.html', report=report)
+    assert ONION_BOB not in html and f'/user/{onion.onion_bob.id}"' not in html and NOTE in html
+    with onion_request(app):
+        html = render_template(f'admin/reports/{template}.html', report=report)
+    assert f'href="/user/{onion.onion_bob.id}"' in html

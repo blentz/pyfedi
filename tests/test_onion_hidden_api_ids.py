@@ -298,3 +298,43 @@ def test_the_profile_an_action_answers_with_is_refused_for_a_hidden_account(app,
     with default_request(app):
         with pytest.raises(NoResultFound):
             user_view(alpha.onion_bob.id, variant=variant, user_id=alpha.first_bob.id)
+
+
+# --- an onion account's report names no reporter off the onion (round 3, concern 4) -----------------------------
+
+@pytest.fixture
+def reported_by_onion(alpha, talking):  # noqa: F811
+    onion = alpha
+    reply = make_post_reply(onion.first_post, onion.first_bob, 'FIRSTCOMMENT')
+    message = ChatMessage.query.filter_by(conversation_id=onion.with_admin.id).first()
+    targets = {'reporter_user_name': ONION_BOB, 'reporter_id': onion.onion_bob.id}
+    onion.by_onion = [
+        Report(reasons='spam', description='BYONION', type=1, reporter_id=onion.onion_bob.id, status=0,
+               suspect_post_id=onion.first_post.id, suspect_user_id=onion.first_bob.id,
+               in_community_id=onion.first_art.id, source_instance_id=1,
+               targets={**targets, 'suspect_post_id': onion.first_post.id}),
+        Report(reasons='spam', description='BYONION', type=2, reporter_id=onion.onion_bob.id, status=0,
+               suspect_post_id=onion.first_post.id, suspect_post_reply_id=reply.id, suspect_user_id=onion.first_bob.id,
+               in_community_id=onion.first_art.id, source_instance_id=1,
+               targets={**targets, 'suspect_comment_id': reply.id}),
+        Report(reasons='spam', description='BYONION', type=4, reporter_id=onion.onion_bob.id, status=0,
+               suspect_conversation_id=onion.with_admin.id, suspect_user_id=onion.admin.id, source_instance_id=1,
+               targets={**targets, 'suspect_message_id': message.id})]
+    db.session.add_all(onion.by_onion)
+    db.session.commit()
+    return onion
+
+
+@pytest.mark.parametrize('path', LISTS)
+def test_a_report_list_names_no_onion_reporter_on_the_first_domain(app, reported_by_onion, path):
+    response = call(app, reported_by_onion.admin, 'GET', path)
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200 and 'spam' in body, (path, body[:300])   # listed, but by no one named
+    bob = reported_by_onion.onion_bob.id
+    for mark in (ONION, f'"creator_id":{bob},', f'"creator_id":{bob}}}'):
+        assert mark not in body.replace(' ', ''), (path, mark)
+
+
+def test_on_the_onion_the_report_list_names_the_reporter(app, reported_by_onion):
+    body = call(app, reported_by_onion.admin, 'GET', LISTS[2], host=ONION).get_data(as_text=True)
+    assert f'"id":{reported_by_onion.onion_bob.id},' in body.replace(' ', '')

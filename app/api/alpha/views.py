@@ -30,8 +30,9 @@ import app.shared.community as shared_community
 import app.shared.post as shared_post
 from app.federation_urls import domain_site_name, owner_domain
 from app.storefront import DomainInfo, current_storefront, default_domain, domain_base_url, hosted_instance_ids, registration_mode_on, storefront_link, storefront_memo_name, storefront_url
-from app.local_only import hidden_here, hidden_here_clause, hidden_here_sql, hides_nothing, shown_here, \
-    without_local_only_actors
+from app.local_names import hidden_note_text
+from app.local_only import hidden_here, hidden_here_clause, hidden_here_sql, hides_nothing, reporter_hidden_here, \
+    shown_here, without_local_only_actors
 from app.visibility import can_view, visible_to_sql
 
 
@@ -970,6 +971,19 @@ def reply_view(reply: PostReply | int, variant: int, user_id=None,
 NEUTRAL_TIME = '1970-01-01T00:00:00.000000Z'
 
 
+def shown_reporter_id(report) -> int:
+    """The id a report view names its reporter by: 0 for an account hidden here (ruling, F6 round 3)."""
+    return 0 if reporter_hidden_here(report) else report.reporter_id
+
+
+def reporter_person(report) -> dict:
+    """The reporter as a report view shows it: the account, or, hidden here, a neutral person whose title is the
+    note, so the view names nobody."""
+    if reporter_hidden_here(report):
+        return {**neutral_person(), 'title': hidden_note_text()}
+    return user_view(report.reporter_id, variant=1)
+
+
 def neutral_person() -> dict:
     return {'actor_id': '', 'banned': False, 'bot': False, 'deleted': False, 'id': 0, 'instance_id': 0, 'local': False,
             'user_name': ''}
@@ -1054,10 +1068,11 @@ def reply_report_view(report, reply_id, user_id, variant=1) -> dict:
     # /comment/report api endpoint
     # similar to a reply_view in many ways, except that the 'creator' is the report creator,
     # not the reported comment's creator.
-    is_creator_blocked = report.reporter_id in blocked_users(user_id)
-    is_creator_banned_from_community = report.suspect_community_id in communities_banned_from(report.reporter_id)
-    is_creator_moderator = report.suspect_community_id in moderating_communities_ids(report.reporter_id)
-    is_creator_admin = report.reporter_id in g.admin_ids
+    reporter_id = shown_reporter_id(report)
+    is_creator_blocked = reporter_id in blocked_users(user_id)
+    is_creator_banned_from_community = report.suspect_community_id in communities_banned_from(reporter_id)
+    is_creator_moderator = report.suspect_community_id in moderating_communities_ids(reporter_id)
+    is_creator_admin = reporter_id in g.admin_ids
     report_json = reply_view(reply=reply_id, variant=3, user_id=user_id,
                              is_creator_blocked=is_creator_blocked,
                              is_creator_banned_from_community=is_creator_banned_from_community,
@@ -1068,7 +1083,7 @@ def reply_report_view(report, reply_id, user_id, variant=1) -> dict:
 
     report_json['comment_report'] = {
         'id': report.id,
-        'creator_id': report.reporter_id,
+        'creator_id': reporter_id,
         'comment_id': report.suspect_post_reply_id,
         'original_comment_text': report_json['comment']['body'],
         'reason': report.reasons,
@@ -1095,15 +1110,16 @@ def post_report_view(report, post_id, user_id, variant=1) -> dict:
     # views/post_report_view.dart - /post/report api endpoint
     post_json = post_view(post=post_id, variant=2, user_id=user_id, report_queue=True)
     community_json = community_view(community=post_json['post']['community_id'], variant=1, stub=True)
+    reporter_id = shown_reporter_id(report)
 
     banned = db.session.execute(
         text('SELECT user_id FROM "community_ban" WHERE user_id = :user_id and community_id = :community_id'),
-        {'user_id': report.reporter_id, 'community_id': community_json['id']}).scalar()
+        {'user_id': reporter_id, 'community_id': community_json['id']}).scalar()
     moderator = db.session.execute(
         text('SELECT is_moderator FROM "community_member" WHERE user_id = :user_id and community_id = :community_id'),
-        {'user_id': report.reporter_id, 'community_id': community_json['id']}).scalar()
+        {'user_id': reporter_id, 'community_id': community_json['id']}).scalar()
     admin = db.session.execute(text('SELECT user_id FROM "user_role" WHERE user_id = :user_id and role_id = 4'),
-                               {'user_id': report.reporter_id}).scalar()
+                               {'user_id': reporter_id}).scalar()
 
     creator_banned_from_community = True if banned else False
     creator_is_moderator = True if moderator else False
@@ -1112,7 +1128,7 @@ def post_report_view(report, post_id, user_id, variant=1) -> dict:
     report_json = {
         "post_report": {
             "id": report.id,
-            "creator_id": report.reporter_id,
+            "creator_id": reporter_id,
             "post_id": report.suspect_post_id,
             "original_post_name": post_json["post"]["title"],
             "original_post_body": "",
@@ -1289,7 +1305,7 @@ def private_message_view(cm: ChatMessage, variant, report=None) -> dict:
     v3 = {
         "private_message_report": {
             "id": report.id,
-            "creator_id": report.reporter_id,
+            "creator_id": shown_reporter_id(report),
             "private_message_id": cm.id,
             "original_pm_text": cm.body,
             "reason": report.reasons,
@@ -1308,7 +1324,7 @@ def private_message_view(cm: ChatMessage, variant, report=None) -> dict:
             "local": is_local,
         },
         "private_message_creator": creator,
-        "creator": user_view(report.reporter_id, variant=1),
+        "creator": reporter_person(report),
     }
 
     if variant == 3:
@@ -1350,7 +1366,7 @@ def conversation_report_view(report: int | Report, variant=1) -> dict:
         raise Exception("report is not for a conversation")
     
     report_id = report.id
-    creator_id = report.reporter_id
+    creator_id = shown_reporter_id(report)
     conversation_id = report.suspect_conversation_id
     reason = report.reasons
     description = report.description
@@ -1374,7 +1390,7 @@ def conversation_report_view(report: int | Report, variant=1) -> dict:
     v2 = dict()
     v2["conversation_report"] = v1
     v2["conversation_information"] = conversation_information_view(conversation)
-    v2["creator"] = user_view(creator_id, variant=1)
+    v2["creator"] = reporter_person(report)
 
     if variant == 2:
         # ConversationReportView schema
