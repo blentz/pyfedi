@@ -62,7 +62,8 @@ def find_local_user(actor_url: str, allow_banned: bool = False) -> User:
                                          User.ap_id == None)
     if not allow_banned:
         user = user.filter_by(banned=False)
-    return user.first()
+    # the account the URL is, before one whose alternate name happens to match: one answer, whoever asks (F6, N-m2)
+    return user.order_by((User.ap_profile_id == actor_url).desc(), User.id).first()
 
 
 def default_domain_user(actor: str, allow_banned: bool = False) -> User | None:

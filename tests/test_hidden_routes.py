@@ -230,3 +230,20 @@ def test_an_alternate_name_in_any_case_or_spacing_answers_as_a_name_nobody_holds
 ])
 def test_a_name_on_the_onion_in_any_case_or_spacing_answers_as_a_name_nobody_holds(app, onion, hidden, missing):
     assert_same(app, onion.first_bob, 'GET', hidden, missing)
+
+
+# --- N-m7: a NUL in any string argument; N-m2: an alternate name that is also an account's name --------------------
+
+@pytest.mark.parametrize('path', ['/f/%00/submit', '/topic/%00/submit', '/tag/%00', '/f/a%00b', '/topic/a%00b',
+                                  '/feed/lookup/%00/x'])
+@pytest.mark.parametrize('signed_in', [False, True])
+def test_a_nul_in_any_string_argument_is_not_a_server_error(app, onion, path, signed_in):
+    response = visit(app, onion.first_bob, 'GET', path) if signed_in else get(app, path)
+    assert response.status_code in (302, 400, 404), (path, response.status_code)
+
+
+def test_an_accounts_own_name_wins_over_an_onion_accounts_alternate_name(app, onion):
+    onion.onion_bob.alt_user_name = 'bob'   # the first domain's bob's own name
+    db.session.commit()
+    response = visit(app, onion.first_bob, 'GET', '/u/bob')
+    assert response.status_code == 200 and ONION not in response.get_data(as_text=True)
