@@ -79,6 +79,29 @@ def test_on_the_onion_the_submit_redirects_to_it(app, feed):
     assert response.status_code == 307 and response.headers['Location'].endswith('/community/art/join_then_add')
 
 
+# --- N8: /search?community= ---------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize('signed_in', [False, True])
+def test_a_search_in_an_onion_community_answers_as_one_in_a_community_nobody_holds(app, onion, signed_in):
+    def ask(path):
+        return Visitor(app, onion.first_bob, FIRST).get(path) if signed_in else get(app, path)
+    found, absent = ask(f'/search?community={ONION_ART}'), ask(f'/search?community=nope@{ONION}')
+    assert found.status_code == absent.status_code
+    equal(normalised(found, ONION_ART), normalised(absent, f'nope@{ONION}'))
+    found, absent = ask(f'/search?community_id={onion.onion_art.id}'), ask(f'/search?community_id={NOBODY}')
+    assert found.status_code == absent.status_code
+    equal(normalised(found, '\x00'), normalised(absent, '\x00'))   # the page does not echo the id
+
+
+def equal(found, absent):
+    at = next((i for i, (a, b) in enumerate(zip(found, absent)) if a != b), min(len(found), len(absent)))
+    assert found == absent, (found[at - 100:at + 60], absent[at - 100:at + 60])
+
+
+def normalised(response, term):
+    return strip_volatile(response.get_data(), term)
+
+
 # --- N6: the community's banned list on its moderation page --------------------------------------------------------
 
 def test_a_communitys_banned_list_on_its_page_names_no_onion_account_on_the_first_domain(app, onion):
