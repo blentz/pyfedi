@@ -21,9 +21,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'find_actor_by_url': 2,
     },
     'app/activitypub/routes.py': {
-        'feed_followers': 1,
-        'feed_moderators_route': 1,
-        'feed_profile': 5,
         'rerun_parked_request': 1,
         'user_profile': 1,
     },
@@ -84,7 +81,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'notification_stamps': 1,   # the canonical host is ours: its links' paths are read (follow-up F6, stamp)
     },
     'app/main/routes.py': {
-        'list_feeds': 1,
         'modlog_shown_name': 1,   # a handle on SERVER_NAME is shown back as its bare name on the default storefront
         'test_hashing': 1,
     },
@@ -125,7 +121,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'invite_with_email': 1,
     },
     'app/shared/feed.py': {
-        'announce_feed_add_remove_to_subscribers': 2,
     },
     'app/shared/post.py': {
         'report_post': 1,
