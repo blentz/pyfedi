@@ -543,7 +543,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             # if parent doesn't already exist, call this function recursively to create it, and use parent's community
             if not post_being_replied_to and not comment_being_replied_to:
                 object = _fetch_inner(ap_json['inReplyTo'], user_id)
-                if object:
+                if isinstance(object, (Post, PostReply)):   # not an account, community or feed, nor a view
                     community = object.community
 
         if not community:

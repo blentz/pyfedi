@@ -648,3 +648,46 @@ def test_a_caller_with_no_id_is_not_found_for_what_is_not_stored_here():
     with pytest.raises(Exception) as caught:
         get_resolve_object(None, {'q': 'https://peer.example/post/5'}, user_id=0)
     assert str(caught.value) == 'No object found.'
+
+
+# ---- a reply whose inReplyTo names no post or reply (follow-up F5) ----------------------------------------------------
+
+def _targets(app, world):
+    """What an inReplyTo can name instead of a post: nothing stored, or an account, community or feed, hidden or not."""
+    base = app.config['SERVER_URL']
+    onion = domain_for_host('abc.onion')
+    banned = make_user(None, 'banned', local=True)
+    banned.banned = True
+    banned.ap_profile_id = f'{base}/u/banned'
+    closed = make_community('closed', host=app.config['SERVER_NAME'])
+    closed.private = True
+    private_feed = make_local_feed('closed', public=False)
+    onion_feed = make_local_feed('onionfeed', public=True, domain=onion, user=world.onionite)
+    world.bob.ap_profile_id = f'{base}/u/bob'
+    db.session.commit()
+    return {'missing': 'https://peer.example/post/424242', 'onion user': world.onionite.ap_profile_id,
+            'banned user': banned.ap_profile_id, 'private community': closed.ap_profile_id,
+            'private feed': private_feed.ap_profile_id, 'onion feed': onion_feed.ap_profile_id,
+            'visible user': world.bob.ap_profile_id, 'visible community': world.clearnet.ap_profile_id}
+
+
+@pytest.mark.parametrize('name', ['onion user', 'banned user', 'private community', 'private feed', 'onion feed',
+                                  'visible user', 'visible community'])
+def test_a_reply_to_an_account_community_or_feed_is_answered_as_a_reply_to_nothing(app, world, monkeypatch, name):
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    targets = _targets(app, world)
+    in_reply_to = {}
+
+    def document(url, **kwargs):
+        return {'id': url, 'type': 'Note', 'inReplyTo': in_reply_to['to']} if url == CHILD else None
+    monkeypatch.setattr(misc, 'remote_object_to_json', document)
+    monkeypatch.setattr(misc, 'find_actor_or_create', lambda *a, **k: None)
+    monkeypatch.setattr(misc, 'find_community', lambda *a, **k: None)
+    monkeypatch.setattr(misc, 'create_resolved_object', lambda *a, **k: None)
+    user = caller()
+    answers = {}
+    for key in ('missing', name):
+        in_reply_to['to'] = targets[key]
+        answers[key] = _answer(_get(app, user, CHILD))
+    assert answers['missing'][0] == 400 and b'No object found.' in answers['missing'][1]
+    assert answers[name] == answers['missing']
