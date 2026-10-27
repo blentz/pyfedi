@@ -64,10 +64,10 @@ def run_search():
             if not "@" in community:
                 community = community + "@" + current_app.config['SERVER_NAME']
             community_obj = search_for_community(community, allow_fetch=False)
-            if community_obj and not hidden_here(community_obj, True):   # one hidden here names none (follow-up F6)
+            if community_obj and not hidden_here(community_obj):   # one hidden from this reader names none (F6, m7)
                 community_id = community_obj.id
-    elif community_id and found_here(Community, community_id) is None:
-        community_id = 0   # an id hidden here, or nobody's, names no community to search in (follow-up F6)
+    elif community_id and ((row := found_here(Community, community_id)) is None or hidden_here(row)):
+        community_id = 0   # an id hidden from this reader, or nobody's, names no community to search in (F6, m7)
 
     if q != '' or type != 0 or language_id != 0 or community_id != 0 or nsfw != '' or minimum_upvote != '' or media:
         posts = None

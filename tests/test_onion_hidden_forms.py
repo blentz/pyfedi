@@ -93,6 +93,19 @@ def test_a_search_in_an_onion_community_answers_as_one_in_a_community_nobody_hol
     equal(normalised(found, '\x00'), normalised(absent, '\x00'))   # the page does not echo the id
 
 
+def test_a_logged_out_search_on_the_onion_answers_its_community_as_one_nobody_holds(app, onion):
+    """m7: a logged-out reader is not shown local-only communities (C2), so on the onion too a held name or id must
+    answer as one nobody holds."""
+    found, absent = get(app, f'/search?community={ONION_ART}', host=ONION), \
+        get(app, f'/search?community=nope@{ONION}', host=ONION)
+    assert found.status_code == absent.status_code
+    equal(normalised(found, ONION_ART), normalised(absent, f'nope@{ONION}'))
+    found, absent = get(app, f'/search?community_id={onion.onion_art.id}', host=ONION), \
+        get(app, f'/search?community_id={NOBODY}', host=ONION)
+    assert found.status_code == absent.status_code == 200
+    equal(normalised(found, '\x00'), normalised(absent, '\x00'))
+
+
 def equal(found, absent):
     at = next((i for i, (a, b) in enumerate(zip(found, absent)) if a != b), min(len(found), len(absent)))
     assert found == absent, (found[at - 100:at + 60], absent[at - 100:at + 60])
