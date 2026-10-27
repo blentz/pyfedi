@@ -7,8 +7,8 @@ from sqlalchemy.exc import NoResultFound
 from app import db
 from app.api.alpha.views import user_view
 from app.local_only import found_here
-from app.models import ChatMessage, CommunityBan, Conversation, Post, Notification, PostReply, Report, UserBlock, UserFlair, \
-    UserFollower, UserNote, read_posts
+from app.models import ChatMessage, CommunityBan, Conversation, Post, Notification, PostReply, Report, User, UserBlock, \
+    UserFlair, UserFollower, UserNote, UserRegistration, read_posts
 from tests.conftest import forget_login
 from tests.factories import grant_permission, make_post_reply
 from tests.test_hidden_routes import talking  # noqa: F401 -- a fixture
@@ -359,3 +359,30 @@ def test_the_comment_report_list_of_an_onion_community_answers_as_one_nobody_hol
     for viewer in (alpha.admin, alpha.first_bob):
         assert_same(app, viewer, 'GET', '/api/alpha/comment/report/list', f'community_id={alpha.onion_art.id}',
                     f'community_id={NOBODY}')
+
+
+@pytest.fixture
+def applied(alpha):
+    grant_permission(alpha.admin, 'approve registrations')
+    db.session.add_all([UserRegistration(user_id=alpha.onion_bob.id, answer='ONIONAPPLIES', status=0),
+                        UserRegistration(user_id=alpha.first_bob.id, answer='FIRSTAPPLIES', status=0)])
+    db.session.commit()
+    return alpha
+
+
+@pytest.mark.parametrize('pending_only', ['true', 'false'])
+def test_the_apis_registration_queue_lists_no_onion_applicant_on_the_first_domain(app, applied, pending_only):
+    """R3: the queue carried each onion applicant's email beside the onion name."""
+    path = f'/api/alpha/admin/registration_application/list?pending_only={pending_only}&sort=Old'
+    body = call(app, applied.admin, 'GET', path).get_data(as_text=True)
+    assert 'FIRSTAPPLIES' in body and 'ONIONAPPLIES' not in body and ONION not in body
+    assert 'ONIONAPPLIES' in call(app, applied.admin, 'GET', path, host=ONION).get_data(as_text=True)
+
+
+def test_approving_or_denying_an_onion_applicant_answers_as_one_nobody_holds(app, applied):
+    for approve in (True, False):
+        assert_same(app, applied.admin, 'PUT', '/api/alpha/admin/registration_application/approve',
+                    {'user_id': applied.onion_bob.id, 'approve': approve}, {'user_id': NOBODY, 'approve': approve})
+    db.session.expire_all()
+    assert db.session.get(User, applied.onion_bob.id) is not None   # not denied, so not deleted
+    assert UserRegistration.query.filter_by(user_id=applied.onion_bob.id, status=0).count() == 1

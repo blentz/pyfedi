@@ -5,6 +5,7 @@ from app.api.alpha.views import registration_view
 from app.utils import authorise_api_user, user_access, finalize_user_setup, \
     decrement_unread_counts
 from app.email import send_registration_approved_email
+from app.local_only import found_here, without_local_only_actors
 from app.models import utcnow, UserRegistration, User, Notification
 
 
@@ -19,14 +20,13 @@ def get_registration_list(auth, data):
     pending_only = data["pending_only"] if "pending_only" in data else True
     sort = data["sort"] if "sort" in data else "New"
 
-    if pending_only and sort == "New":
-        registrations = UserRegistration.query.filter_by(status=0).order_by(desc(UserRegistration.created_at))
-    elif pending_only and sort == "Old":
-        registrations = UserRegistration.query.filter_by(status=0).order_by(asc(UserRegistration.created_at))
-    elif sort == "New":
-        registrations = UserRegistration.query.order_by(desc(UserRegistration.created_at))
-    else:
-        registrations = UserRegistration.query.order_by(asc(UserRegistration.created_at))
+    # the onion's applicants are approved on the onion, as in the web queue (follow-up F6, R3)
+    registrations = without_local_only_actors(UserRegistration.query.join(User, User.id == UserRegistration.user_id),
+                                              User, True)
+    if pending_only:
+        registrations = registrations.filter(UserRegistration.status == 0)
+    order = desc if sort == "New" else asc
+    registrations = registrations.order_by(order(UserRegistration.created_at))
     
     registrations = registrations.paginate(page=page, per_page=limit, error_out=False)
 
@@ -46,8 +46,8 @@ def put_registration_approve(auth, data):
     new_user_id = data["user_id"]
     approve = data["approve"]
     
-    new_user = db.session.get(User, new_user_id)
-    registration = UserRegistration.query.filter_by(status=0, user_id=new_user_id).first()
+    new_user = found_here(User, new_user_id)   # hidden here or nobody's: one answer (follow-up F6, R3)
+    registration = UserRegistration.query.filter_by(status=0, user_id=new_user.id).first() if new_user else None
 
     if not registration:
         raise Exception("Problem finding registration for this user")
