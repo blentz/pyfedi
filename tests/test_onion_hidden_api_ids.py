@@ -352,3 +352,10 @@ def test_setting_an_onion_notifications_state_answers_as_one_nobody_holds(app, r
     on_onion = call(app, replied.first_bob, 'PUT', '/api/alpha/user/notification_state',
                     {'notif_id': notification.id, 'read_state': True}, host=ONION)
     assert on_onion.status_code == 200 and 'ONIONANSWER' in on_onion.get_data(as_text=True)
+
+
+def test_the_comment_report_list_of_an_onion_community_answers_as_one_nobody_holds(app, alpha):
+    """R2: a non-moderator got `incorrect login` for an onion community and `community not found` for none."""
+    for viewer in (alpha.admin, alpha.first_bob):
+        assert_same(app, viewer, 'GET', '/api/alpha/comment/report/list', f'community_id={alpha.onion_art.id}',
+                    f'community_id={NOBODY}')
