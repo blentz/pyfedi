@@ -328,28 +328,20 @@ def _seed_follow_of_feed(name='peerfeed', public=False, local=False, with_keys=F
     return follower, feed
 
 
-def test_a_follow_of_a_non_public_feed_is_rejected_and_logged(app, db_session, monkeypatch):
-    """D65, fixed. `if not feed.public` sends a Reject, but unlike either
-    Community reject reason nothing was logged. It now logs a failure before
-    sending, as the Community reasons do.
+def test_a_follow_of_a_non_public_feed_is_logged_and_gets_no_answer(app, db_session, monkeypatch):
+    """D65, fixed: it is logged as a failure. Since per-domain feeds Task 7 (review M1) it gets no Reject either: a
+    Follow of a feed nobody holds gets no answer, so a Reject told that a private feed exists.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     sends = record_sends(monkeypatch)
     follower, feed = _seed_follow_of_feed(local=True)   # only our own feed is answered
 
     activity = inbox_activity(follower, activity_type='Follow', object_uri=feed.ap_profile_id)
-    follow_id = activity['id']
 
     dispatch(activity)
 
-    assert len(sends) == 1
-    uri, body, key_id = sends[0]
-    assert uri == follower.ap_inbox_url
-    assert body['type'] == 'Reject'
-    assert body['object']['id'] == follow_id
-    assert body['actor'] == feed.public_url()
-    assert key_id == f'{feed.public_url()}#main-key'
-
+    assert sends == []
+    assert FeedMember.query.filter_by(feed_id=feed.id, user_id=follower.id).first() is None
     log = ActivityPubLog.query.one()
     assert log.result == 'failure'
     assert log.exception_message == 'Feed is not public'
