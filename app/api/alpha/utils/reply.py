@@ -14,7 +14,7 @@ from app.shared.reply import vote_for_reply, bookmark_reply, remove_bookmark_rep
     delete_reply, restore_reply, report_reply, mod_remove_reply, mod_restore_reply, lock_post_reply, choose_answer, \
     unchoose_answer
 from app.local_only import found_here, hidden_here, without_hidden_reports, without_local_only, without_local_only_actors
-from app.api.alpha.utils.found import a_post, a_reply
+from app.api.alpha.utils.found import a_community, a_post, a_reply
 from app.visibility import can_view, listable_clause, visible_to_clause
 from app.utils import authorise_api_user, blocked_users, blocked_or_banned_instances, site_language_id, \
     communities_banned_from, in_sorted_list, moderating_communities_ids, joined_communities, user_access, \
@@ -661,9 +661,7 @@ def get_reply_report_list(auth, data):
             raise Exception('incorrect login')
     elif community_id:
         # Just get reports for a single community
-        community = db.session.get(Community, community_id)
-        if community is None:
-            raise Exception('community not found')
+        community = a_community(community_id)   # hidden here or nobody's: one answer (follow-up F6, R2)
         mods = community.moderators()
         mod_ids = [mod.user_id for mod in mods]
 
