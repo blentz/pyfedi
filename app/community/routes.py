@@ -2258,18 +2258,18 @@ def community_rss_feeds(actor):
                                randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None)
 
 
-@bp.route('/community/<int:community_id>/feed/<int:feed_id>', methods=['GET', 'POST'])
+@bp.route('/community/<int:community_id>/feed/<int:rss_feed_id>', methods=['GET', 'POST'])
 @bp.route('/community/<int:community_id>/feed/new', methods=['GET', 'POST'])
 @login_required
-def community_rss_feed_edit(community_id, feed_id=None):
+def community_rss_feed_edit(community_id, rss_feed_id=None):
     if current_user.banned:
         return show_ban_message()
     community = db.session.get(Community, community_id) or abort(404)
 
     if community is not None:
         if (community.is_moderator() or current_user.is_admin()) and current_app.config['RSS_FEEDS']:
-            rss_feed = db.session.get(RssFeed, feed_id) if feed_id else None
-            # D1010. `feed_id` came straight from the URL and nothing tied it
+            rss_feed = db.session.get(RssFeed, rss_feed_id) if rss_feed_id else None
+            # D1010. `rss_feed_id` came straight from the URL and nothing tied it
             # to `community_id`, which comes from the same URL -- so a
             # moderator of ANY community could rewrite another community's
             # feed by pairing their own community id with its feed id.
@@ -2280,12 +2280,12 @@ def community_rss_feed_edit(community_id, feed_id=None):
             # check also answers 404 for a feed id that does not exist at all,
             # which used to be `AttributeError: 'NoneType' object has no
             # attribute 'title'` (D1011).
-            if feed_id and (rss_feed is None or rss_feed.community_id != community.id):
+            if rss_feed_id and (rss_feed is None or rss_feed.community_id != community.id):
                 abort(404)
             form = CommunityRssFeedEdit()
             form.flair.choices = [(-1, _('None'))] + flair_for_form(community_id)
             if form.validate_on_submit():
-                if feed_id:
+                if rss_feed_id:
                     rss_feed.title = form.name.data
                     rss_feed.url = form.url.data
                     rss_feed.check_frequency = int(form.check_frequency.data)
@@ -2307,21 +2307,22 @@ def community_rss_feed_edit(community_id, feed_id=None):
                     form.flair.data = str(rss_feed.flair_id)
 
             return render_template('community/community_rss_feed_edit.html', form=form,
-                                   title=_('Edit rss feed %(name)s', name=rss_feed.title) if feed_id else _('Add RSS feed'),
+                                   title=_('Edit rss feed %(name)s', name=rss_feed.title) if rss_feed_id
+                                   else _('Add RSS feed'),
                                    current='rss_feeds')
         else:
             abort(403)
 
 
-@bp.route('/community/<int:community_id>/feed/<int:feed_id>/delete', methods=['GET', 'POST'])
+@bp.route('/community/<int:community_id>/feed/<int:rss_feed_id>/delete', methods=['GET', 'POST'])
 @login_required
-def community_rss_feed_delete(community_id, feed_id):
+def community_rss_feed_delete(community_id, rss_feed_id):
     if current_user.banned:
         return show_ban_message()
     community = db.session.get(Community, community_id) or abort(404)
 
     if community.is_moderator() or current_user.is_admin():
-        rss_feed = db.session.get(RssFeed, feed_id) or abort(404)
+        rss_feed = db.session.get(RssFeed, rss_feed_id) or abort(404)
         # D1010's second site, and the more destructive one:
         # `delete_dependencies()` deletes every post this feed created. A
         # moderator of one community could delete another community's feed and
