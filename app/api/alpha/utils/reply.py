@@ -13,7 +13,8 @@ from app.shared.reply import vote_for_reply, bookmark_reply, remove_bookmark_rep
     edit_reply, \
     delete_reply, restore_reply, report_reply, mod_remove_reply, mod_restore_reply, lock_post_reply, choose_answer, \
     unchoose_answer
-from app.local_only import found_here, hidden_here, without_hidden_reports, without_local_only, without_local_only_actors
+from app.local_only import found_here, hidden_here, prime_reporters, without_hidden_reports, without_local_only, \
+    without_local_only_actors
 from app.api.alpha.utils.found import a_community, a_post, a_reply
 from app.visibility import can_view, listable_clause, visible_to_clause
 from app.utils import authorise_api_user, blocked_users, blocked_or_banned_instances, site_language_id, \
@@ -684,6 +685,7 @@ def get_reply_report_list(auth, data):
     reports = without_hidden_reports(reports)   # none about a row hidden here (follow-up F6)
 
     reports = reports.paginate(page=page, per_page=limit, error_out=False)
+    prime_reporters(reports.items)   # one query for the page's reporters (follow-up F6, m5)
 
     report_list = []
     for report in reports.items:
