@@ -23,7 +23,8 @@ from app.constants import SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, POST_TYPE_
 from app.federation_urls import activity_id, domain_site_name
 from app.feed import bp
 from app.feed.forms import AddCopyFeedForm, EditFeedForm, SearchRemoteFeed
-from app.feed.util import feeds_for_form, refuse_bad_parent, search_for_feed, actor_to_feed, feed_communities_for_edit
+from app.feed.util import feeds_for_form, refuse_bad_parent, search_for_feed, actor_to_feed, feed_communities_for_edit, \
+    feed_to_leave
 from app.feed_domains import community_shown_here, feed_may_join, feeds_shown_here_clause, shown_feed_communities
 from app.inoculation import inoculation
 from app.models import Feed, FeedMember, FeedItem, Community, NotificationSubscription, \
@@ -735,7 +736,7 @@ def subscribe(actor):
 @login_required
 def feed_unsubscribe(actor):
     # POST only, so login_required checks the CSRF token; it changed state on a GET
-    feed = actor_to_feed(actor)
+    feed = feed_to_leave(actor)
 
     if feed is not None:
         subscription = feed_membership(current_user, feed)

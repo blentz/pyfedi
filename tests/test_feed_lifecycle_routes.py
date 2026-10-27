@@ -392,6 +392,24 @@ def test_unsubscribing_never_drives_the_feeds_counter_negative(app, db_session):
     assert db.session.get(Feed, feed.id).subscriptions_count == 0
 
 
+@pytest.mark.parametrize('banned', [True, None])
+def test_a_member_can_unsubscribe_from_a_banned_feed(app, db_session, banned):
+    """A banned feed is gone from every page, but its member can still leave it (final review M5). The column is
+    nullable, so a NULL `banned` is as unbanned as False."""
+    instance, owner, member = _seed()
+    feed, community = _subscribed_feed_with_community(owner, member)
+    feed.banned = banned
+    db.session.commit()
+
+    with app.test_client() as client:
+        login(client, member)
+        with patch('app.shared.community.leave_community'):
+            response = client.post(f'/feed/{feed.name}/unsubscribe', data={'csrf_token': csrf(app, client)})
+
+    assert response.status_code == 302
+    assert FeedMember.query.filter_by(user_id=member.id, feed_id=feed.id).count() == 0
+
+
 def test_unsubscribing_leaves_alone_a_community_the_user_joined_themselves(app, db_session):
     """D673's guard, which the repaired route inherits: a community the user
     joined on their own -- joined_via_feed False -- is not left when the feed

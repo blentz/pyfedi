@@ -134,6 +134,12 @@ def actor_to_feed(actor, signed_in: bool | None = None) -> Feed | None:
                              feeds_shown_here_clause(signed_in)).first()
 
 
+def feed_to_leave(actor, signed_in: bool | None = None) -> Feed | None:
+    """The feed a member's unsubscribe names: `actor_to_feed`'s, banned or not, so a member can still leave a banned
+    feed. The hidden-here rule applies as there: a feed this storefront hides is as one nobody holds."""
+    return Feed.query.filter(named_by_actor(Feed, actor.strip().lower()), feeds_shown_here_clause(signed_in)).first()
+
+
 def feed_communities_for_edit(feed_id: int) -> str:
     return_value = []
     shown = shown_feed_communities(Community.query.filter(Community.banned == False), True)   # not one hidden here
