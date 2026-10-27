@@ -16,7 +16,7 @@ from app.discovery.search import viewer_allows_nsfw
 from app.models import Post, Language, Community, Instance, PostReply
 from app.search import bp
 from app.storefront import domain_boost_expr
-from app.local_only import without_local_only, without_local_only_actors
+from app.local_only import found_here, hidden_here, without_local_only, without_local_only_actors
 from app.visibility import listable_clause
 from app.utils import render_template, blocked_domains, blocked_or_banned_instances, \
     communities_banned_from, recently_upvoted_posts, recently_downvoted_posts, blocked_users, blocked_communities, \
@@ -64,8 +64,10 @@ def run_search():
             if not "@" in community:
                 community = community + "@" + current_app.config['SERVER_NAME']
             community_obj = search_for_community(community, allow_fetch=False)
-            if community_obj:
+            if community_obj and not hidden_here(community_obj, True):   # one hidden here names none (follow-up F6)
                 community_id = community_obj.id
+    elif community_id and found_here(Community, community_id) is None:
+        community_id = 0   # an id hidden here, or nobody's, names no community to search in (follow-up F6)
 
     if q != '' or type != 0 or language_id != 0 or community_id != 0 or nsfw != '' or minimum_upvote != '' or media:
         posts = None
