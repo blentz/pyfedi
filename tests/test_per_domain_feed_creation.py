@@ -153,6 +153,14 @@ def test_a_bad_parent_is_refused_on_the_web(app, three_domains, bad_parent):
     assert Feed.query.count() == before and own.parent_feed_id is None
 
 
+def test_a_bad_parent_is_refused_on_the_web_copy(app, three_domains, bad_parent):
+    shopper = three_domains.account('shopper', three_domains.shop)
+    source = three_domains.local_feed('source', three_domains.shop, owner=shopper)
+    before = Feed.query.count()
+    assert post(app, shopper, f'/feed/{source.id}/copy', url='copied', parent_feed_id=bad_parent).status_code == 400
+    assert Feed.query.count() == before
+
+
 def test_a_bad_parent_is_refused_by_the_api(app, three_domains, api_site, bad_parent):
     shopper = three_domains.account('shopper', three_domains.shop)
     own = three_domains.local_feed('own', three_domains.shop, owner=shopper)
@@ -170,6 +178,24 @@ def test_a_bad_parent_is_refused_by_the_api(app, three_domains, api_site, bad_pa
         edit_feed(api_input('own', parent_feed_id=parent), own, SRC_API, token(shopper))
     db.session.refresh(own)
     assert Feed.query.count() == before and own.parent_feed_id is None
+
+
+def test_a_refused_parent_changes_nothing_of_the_feed(app, three_domains, api_site, bad_parent):
+    """edit_feed resolves the parent before it assigns anything: a raise does not roll back, so the next commit in the
+    session would otherwise persist the rejected edit."""
+    shopper = three_domains.account('shopper', three_domains.shop)
+    own = three_domains.local_feed('own', three_domains.shop, owner=shopper)
+    before = {column: getattr(own, column) for column in
+              ('name', 'machine_name', 'title', 'description', 'ap_profile_id', 'ap_public_url', 'ap_followers_url',
+               'ap_following_url', 'ap_outbox_url', 'ap_domain', 'parent_feed_id', 'show_posts_in_children')}
+    parent = int(bad_parent) if bad_parent.isdigit() else bad_parent
+    with pytest.raises(Exception, match='parent_feed_invalid'):
+        edit_feed(api_input('renamed', title='Retitled', description='New words', show_child_posts=True,
+                            parent_feed_id=parent), own, SRC_API, token(shopper))
+    db.session.commit()   # what the next request in the session does
+    db.session.expire_all()
+    own = db.session.get(Feed, own.id)
+    assert {column: getattr(own, column) for column in before} == before
 
 
 def test_a_bad_parent_the_form_let_through_is_still_a_400(app, three_domains, bad_parent):
@@ -263,8 +289,9 @@ def test_a_copy_of_a_feed_the_copier_may_not_see_answers_as_a_missing_one(app, t
     missing = hit_copy(app, copier, 987654)
     assert missing.status_code == 404
     assert hit_copy(app, copier, public.id).status_code == 200   # control: a visible feed is copyable
-    assert hit_copy(app, copier, private.id).status_code == missing.status_code
-    assert hit_copy(app, copier, onion_feed.id).status_code == missing.status_code
+    for hidden in (private, onion_feed):   # the same answer as for a missing id: status and body
+        answer = hit_copy(app, copier, hidden.id)
+        assert (answer.status_code, answer.data) == (missing.status_code, missing.data)
     # a member of the private feed may copy it
     db.session.add(FeedMember(feed_id=private.id, user_id=copier.id, is_owner=False))
     db.session.commit()
