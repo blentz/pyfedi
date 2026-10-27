@@ -4,7 +4,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
-from flask import redirect, url_for, flash, request, make_response, session, current_app, abort, json, g, send_file
+from flask import redirect, url_for, flash, request, make_response, session, current_app, abort, json, g, send_file, \
+    jsonify
 from flask_babel import _, lazy_gettext as _l
 from flask_login import logout_user, current_user
 from markupsafe import Markup
@@ -62,7 +63,7 @@ from app.utils import user_banned_from_community, back, render_template, markdow
 from app.rss_extras import RSSFeed
 import app.api.alpha.views as alpha_views
 from app.utils import user_filters_languages
-from app.hidden_routes import hidden_notifications, notification_hidden, off_this_host, path_hidden_here
+from app.hidden_routes import hidden_notifications, notification_hidden, off_this_host, path_hidden_here, unread_shown
 from app.local_names import local_clause, local_named, named_by_actor, notification_href
 from app.storefront import current_storefront, domain_for_host, hosted_instance_ids, is_local_host, path_name, storefront_query_cache_key, \
     storefront_url
@@ -1331,6 +1332,14 @@ def send_deletion_requests(user_id):
         user.deleted = True
 
         db.session.commit()
+
+
+@bp.route('/notifications/unread_count', methods=['GET'])
+@login_required
+def notifications_unread_count():
+    """The badge's count on this storefront (unread_shown), for the live badge, which an SSE event tells only that the
+    count changed (follow-up F6, N1)."""
+    return jsonify({'num_notifs': unread_shown(current_user)})
 
 
 @bp.route('/notifications', methods=['GET', 'POST'])

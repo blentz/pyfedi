@@ -6714,7 +6714,9 @@ class SqlKeysetPagination:
 @event.listens_for(User.unread_notifications, 'set')
 def on_unread_notifications_set(target, value, oldvalue, initiator):
     if value != oldvalue and current_app.config['NOTIF_SERVER']:
-        publish_sse_event(f"notifications:{target.id}", json.dumps({'num_notifs': value}))
+        # a change, not the count: the count shown depends on the storefront the page is on, which an event for the
+        # account cannot know, so the page asks its own (/notifications/unread_count, follow-up F6)
+        publish_sse_event(f"notifications:{target.id}", json.dumps({'notifs_changed': True}))
 
 
 def publish_sse_event(key, value):

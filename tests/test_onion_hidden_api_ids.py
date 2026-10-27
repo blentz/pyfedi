@@ -493,3 +493,10 @@ def test_editing_or_deleting_an_onion_communitys_flair_answers_as_a_flair_nobody
             (absent.status_code, absent.get_data().replace(str(NOBODY).encode(), str(flair.id).encode()))
     db.session.expire_all()
     assert db.session.get(CommunityFlair, flair.id).flair == 'ONIONFLAIR'   # neither edited nor deleted
+
+
+def test_the_live_badge_asks_the_storefront_for_the_count_it_may_show(app, replied):
+    """N1 (re-review 3): the SSE event carried the raw count, onion notifications included, into the clearnet tab."""
+    on_first = Visitor(app, replied.first_bob, FIRST).get('/notifications/unread_count')
+    assert on_first.status_code == 200 and on_first.get_json() == {'num_notifs': 0}
+    assert Visitor(app, replied.first_bob, ONION).get('/notifications/unread_count').get_json() == {'num_notifs': 2}
