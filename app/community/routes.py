@@ -55,7 +55,7 @@ from app.post.util import form_tags_string
 # The module, not the names: app.shared.community reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
-from app.local_only import community_local_only, hidden_here, hidden_here_sql, local_only_visible_rss, \
+from app.local_only import community_local_only, found_here, hidden_here, hidden_here_sql, local_only_visible_rss, \
     without_local_only, without_local_only_actors
 from app.visibility import is_open, listable_clause, visible_to_clause
 from app.utils import etag_stamp
@@ -1951,7 +1951,7 @@ def community_block(community_id: int):
         if "/post/" in curr_url or ("/c/" in curr_url and "/p/" in curr_url):
             post_id = request.args.get('post_id', None)
             if post_id:
-                post = db.session.get(Post, post_id) or abort(404)
+                post = found_here(Post, post_id) or abort(404)   # hidden here or nobody's: one answer (F6)
                 if post:
                     if post.community.id != community_id:
                         resp.headers['HX-Redirect'] = curr_url

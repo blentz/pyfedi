@@ -21,7 +21,7 @@ from app.federation_urls import domain_site_name
 from app.storefront import current_storefront, storefront_link, storefront_query_cache_key, storefront_url
 from app.topic import bp
 from app.topic.forms import SuggestTopicsForm
-from app.local_only import local_only_visible_rss, without_local_only, without_local_only_actors
+from app.local_only import found_here, local_only_visible_rss, without_local_only, without_local_only_actors
 from app.visibility import listable_clause
 from app.utils import etag_stamp, render_template, user_filters_posts, validation_required, mimetype_from_url, feed_entry_body, login_required, \
     gibberish, get_deduped_post_ids, paginate_post_ids, post_ids_to_models, blocked_communities, \
@@ -284,13 +284,15 @@ def topic_create_post(topic_name):
     topic = Topic.query.filter(Topic.machine_name == topic_name.strip().lower()).first()
     if not topic:
         abort(404)
-    communities = Community.query.filter_by(topic_id=topic.id, banned=False).order_by(Community.title).all()
+    communities = without_local_only_actors(Community.query.filter_by(topic_id=topic.id, banned=False),
+                                            Community).order_by(Community.title).all()   # none hidden here (F6)
     child_topics = [topic.id for topic in Topic.query.filter(Topic.parent_id == topic.id).all()]
-    sub_communities = Community.query.filter_by(banned=False).filter(Community.topic_id.in_(child_topics)).order_by(
-        Community.title).all()
+    sub_communities = without_local_only_actors(Community.query.filter_by(banned=False).filter(
+        Community.topic_id.in_(child_topics)), Community).order_by(Community.title).all()
     community_id = request.form.get('community_id', type=int)
     if community_id:
-        community = db.session.get(Community, community_id) or abort(404)
+        # one hidden here is as one nobody holds, and its name never reaches the Location (follow-up F6)
+        community = found_here(Community, community_id) or abort(404)
         # 307 keeps the POST and its CSRF token: join_then_add is POST-only (D994)
         return redirect(url_for('community.join_then_add', actor=community.link()), code=307)
     return render_template('topic/topic_create_post.html', communities=communities, sub_communities=sub_communities,

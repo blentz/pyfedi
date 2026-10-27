@@ -36,7 +36,7 @@ import app.shared.feed as shared_feed
 from app.local_names import actor_handle
 from app.storefront import current_storefront, is_local_host, storefront_link, storefront_url
 from app.shared.upload import is_refused_upload
-from app.local_only import local_only_visible_rss, without_local_only_actors
+from app.local_only import found_here, local_only_visible_rss, without_local_only_actors
 from app.utils import etag_stamp, back, show_ban_message, piefed_markdown_to_lemmy_markdown, markdown_to_html, render_template, \
     user_filters_posts, joined_communities, menu_instance_feeds, validation_required, feed_membership, \
     gibberish, get_task_session, instance_banned, menu_subscribed_feeds, referrer, community_membership, \
@@ -448,7 +448,7 @@ def feed_add_community():
     # exist, and the insert was a ForeignKeyViolation -- the post-level twin of
     # D1125, and a 500 rather than the 404 this route gives for everything else
     # it cannot resolve.
-    if db.session.get(Community, community_id) is None:
+    if found_here(Community, community_id) is None:   # hidden here or nobody's: one answer (follow-up F6)
         abort(404)
 
     shared_feed._feed_add_community(community_id, current_feed_id, feed_id, user_id)
@@ -676,16 +676,16 @@ def feed_create_post(feed_name):
     for item in FeedItem.query.filter_by(feed_id=feed.id).all():
         feed_community_ids.append(item.community_id)
 
-    communities = Community.query.filter(Community.id.in_(feed_community_ids)).filter_by(banned=False).\
-        order_by(Community.title).all()
+    communities = without_local_only_actors(Community.query.filter(Community.id.in_(feed_community_ids)).filter_by(
+        banned=False), Community).order_by(Community.title).all()   # none hidden here (follow-up F6)
     sub_feed_community_ids = []
     child_feeds = [feed.id for feed in Feed.query.filter(Feed.parent_feed_id == feed.id).all()]
     for cf_id in child_feeds:
         for item in FeedItem.query.filter_by(feed_id=cf_id).all():
             sub_feed_community_ids.append(item.community_id)
 
-    sub_communities = Community.query.filter_by(banned=False).filter(Community.id.in_(sub_feed_community_ids)).\
-        order_by(Community.title).all()
+    sub_communities = without_local_only_actors(Community.query.filter_by(banned=False).filter(
+        Community.id.in_(sub_feed_community_ids)), Community).order_by(Community.title).all()
     # D1389. `int(request.form.get('community_id'))` behind a `!= ''` test, which
     # only rules out absent and empty -- a form field is whatever the caller sends.
     # Measured: `'abc'`, `'1.5'` and `'null'` were
@@ -701,7 +701,8 @@ def feed_create_post(feed_name):
     if posted_community_id != '':
         if not posted_community_id.strip().isdigit():
             abort(404)
-        community = db.session.get(Community, int(posted_community_id)) or abort(404)
+        # one hidden here is as one nobody holds, and its name never reaches the Location (follow-up F6)
+        community = found_here(Community, posted_community_id) or abort(404)
         # 307 keeps the POST and its CSRF token: join_then_add is POST-only (D994)
         return redirect(url_for('community.join_then_add', actor=community.link()), code=307)
     return render_template('feed/feed_create_post.html', communities=communities, sub_communities=sub_communities,
