@@ -3,7 +3,7 @@ import re
 from urllib.parse import urlparse
 
 from flask import current_app, g
-from sqlalchemy import desc
+from sqlalchemy import desc, not_
 
 from app.activitypub.util import find_actor_or_create, remote_object_to_json, actor_json_to_model, is_user_actor, \
     find_community, create_resolved_object, normalise_actor_string, host_of
@@ -609,8 +609,7 @@ def get_modlog(auth, data):
     base_q = ModLog.query
     if not is_admin:
         base_q = base_q.filter(ModLog.public == True)
-    if (unhidden := modlog_local_only_clause(user is not None)) is not None:   # as the web modlog (spec §3.4, F6)
-        base_q = base_q.filter(unhidden)
+    unhidden = modlog_local_only_clause(user is not None)   # as the web modlog (spec §3.4, F6)
     if mod_person_id:
         base_q = base_q.filter(ModLog.user_id == mod_person_id)
     if community_id:
@@ -623,6 +622,12 @@ def get_modlog(auth, data):
         base_q = base_q.filter(ModLog.post_id == post_id)
     if comment_id:
         base_q = base_q.filter(ModLog.reply_id == comment_id)
+    if unhidden is not None:
+        # the entries that name something hidden, read once: the clause is large, and planning it for each of the
+        # categories' eighteen queries cost about a second a call (follow-up F6, round 5)
+        hidden_ids = [id_ for id_, in base_q.filter(not_(unhidden)).with_entities(ModLog.id)]
+        if hidden_ids:
+            base_q = base_q.filter(ModLog.id.notin_(hidden_ids))
 
     # Each category is (action_strings, community_id_required)
     # community_id_required: True = must have community_id, False = must not, None = don't care

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from urllib.parse import quote
 
 import pytest
+from sqlalchemy import event
 
 import app.api.alpha.utils.misc as misc_utils
 from app import db
@@ -101,6 +102,23 @@ def test_the_api_modlog_follows_the_same_rule(app, world, entries, monkeypatch, 
     assert len(from_api.get_json()['added_to_community']) == listed
     if host == FIRST:
         assert ONION not in from_api.get_data(as_text=True)
+
+
+def test_the_api_modlog_plans_the_hidden_clause_once(app, world, entries, monkeypatch):
+    """Round 5: each of the nine categories' paginated queries carried the whole hidden-here clause, and planning it
+    eighteen times cost about a second a call. The hidden entries are read once; the categories filter by their ids."""
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    forget_login()
+    statements = []
+    listener = lambda conn, cursor, statement, *args: statements.append(statement)  # noqa: E731
+    event.listen(db.engine, 'before_cursor_execute', listener)
+    try:
+        answer = app.test_client().get('/api/alpha/modlog', base_url=HOSTS[FIRST],
+                                       headers={'Authorization': f'Bearer {world.first_bob.encode_jwt_token()}'})
+    finally:
+        event.remove(db.engine, 'before_cursor_execute', listener)
+    assert answer.status_code == 200 and len(answer.get_json()['added_to_community']) == 1
+    assert sum('unnest' in statement for statement in statements) == 1
 
 
 def test_the_modlog_name_suggestions_leave_out_local_only_accounts_when_logged_out(app, world):
