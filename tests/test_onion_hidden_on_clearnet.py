@@ -5,6 +5,7 @@ onion target as plain text, with a note to open it on the onion.
 On the first domain a signed-in user and an admin alike get the 404 a name nobody holds gets for the onion's accounts,
 communities, posts and replies, and every list and search leaves them out. On the onion the same viewers see them all.
 The first domain's own rows are the control."""
+import gc
 import importlib.util
 import re
 from collections import Counter
@@ -1036,6 +1037,23 @@ def test_the_hidden_counts_by_read_state_cost_the_same_queries_for_any_number(ap
     assert len(few) == len(many), Counter(many) - Counter(few)
     with default_request(app):
         assert hidden_routes.hidden_by_read_state(onion.first_bob.id) == Counter({False: 6, True: 2})
+
+
+def test_the_rows_the_batch_reads_stay_for_the_pages_own_lookups(app, onion):
+    """N2 (re-review 3): the batch reads the rows its notifications name so target_link finds them in the session; the
+    identity map holds rows weakly, so they are kept for the request, or each is read again."""
+    notices = many_notices(onion, 6)
+    post_ids = [n.targets['post_id'] for n in notices if n.local_only]   # the batch reads only the stamped ones'
+    assert len(post_ids) == 3
+    ids = [n.id for n in notices]
+    del notices
+    db.session.expire_all()
+    gc.collect()
+    with default_request(app):
+        hidden_notifications(Notification.query.filter(Notification.id.in_(ids)).all())
+        gc.collect()
+        cost = queries_in(lambda: [db.session.get(Post, id_) for id_ in post_ids])
+    assert [statement for statement in cost if not statement.startswith('SELECT site_domain')] == []
 
 
 def a_notice(url, **targets):
