@@ -32,8 +32,9 @@ def split_local_name(raw: str) -> tuple[str, DomainInfo] | None:
 
 
 def local_named(model, name: str, domain: DomainInfo, exact_case: bool = False):
-    """The clause for the local `model` (User, Community or Feed) called `name`, any case, on `domain`. `exact_case` keeps
-    a lookup that has always matched the stored case alone as it was: passkey login, and stored_user's bare name."""
+    """The clause for the local `model` (User, Community or Feed) called `name`, any case, on `domain`.
+    `exact_case` keeps a lookup that has always matched the stored case alone as it was: passkey login, and
+    stored_user's bare name."""
     column = User.user_name if model is User else model.name
     named = column == name if exact_case else func.lower(column) == name.lower()
     return and_(named, model.ap_id.is_(None), on_domain(domain, model))

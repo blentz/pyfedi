@@ -6149,7 +6149,8 @@ class Feed(db.Model):
 
     def local_url(self):
         if self.is_local():
-            return self.ap_profile_id
+            # a local feed with no stored URL is named on its home domain, as profile_id names it
+            return self.ap_profile_id or f"{storefront.domain_base_url(self.home_domain())}/f/{self.name}"
         else:
             return f"{current_app.config['SERVER_URL']}/f/{self.ap_id}"
 

@@ -27,8 +27,23 @@ def test_feed_identity_for_the_first_domain_is_todays_strings(app, three_domains
 
 
 def test_feed_identity_for_shop_and_the_onion_is_on_their_own_base(app, three_domains):
-    assert feed_identity(three_domains.shop, 'news')['ap_profile_id'] == f'https://{SHOP}/f/news'
-    assert feed_identity(three_domains.onion, 'news')['ap_profile_id'] == f'http://{ONION}/f/news'
+    for domain, base, authority in ((three_domains.shop, f'https://{SHOP}/f/news', SHOP),
+                                    (three_domains.onion, f'http://{ONION}/f/news', ONION)):
+        assert feed_identity(domain, 'news') == {
+            'ap_profile_id': base, 'ap_public_url': base, 'ap_followers_url': f'{base}/followers',
+            'ap_following_url': f'{base}/following', 'ap_outbox_url': f'{base}/outbox', 'ap_domain': authority,
+            'site_domain_id': domain.id, 'instance_id': domain.instance_id}
+
+
+def test_an_onion_feed_is_local_only_and_named_on_the_onion(app, three_domains):
+    feed = three_domains.local_feed('news', three_domains.onion)
+    assert not owner_domain(feed).federates
+    assert feed.stored_link() == f'news@{ONION}'
+    assert feed.lemmy_link() == f'~news@{ONION}'
+
+
+def test_an_unstored_local_feed_url_is_on_its_home_domain(app, three_domains):
+    assert Feed(name='bare', site_domain_id=three_domains.shop.id).local_url() == f'https://{SHOP}/f/bare'
 
 
 def test_each_domains_feed_url_names_its_own_row(app, three_domains):

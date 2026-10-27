@@ -31,9 +31,9 @@ import app.utils as utils
 
 def owner_domain(obj) -> DomainInfo | None:
     """The hosted domain `obj` is federated from, or None when it is not ours to federate (a remote account or
-    community, or a row a remote account made). A local account or community or feed is its home domain's; a post,
-    reply or private message its author's (the sender's); a vote its voter's, not the voted-on author's. A DomainInfo is its own owner. TypeError for anything
-    else, a row with no author among them.
+    community, or a row a remote account made). A local account, community or feed is its home domain's; a post,
+    reply or private message its author's (the sender's); a vote its voter's, not the voted-on author's. A DomainInfo
+    is its own owner. TypeError for anything else, a row with no author among them.
 
     The domain may be a local-only one (an onion-homed account's): a caller deciding federation checks `.federates`
     (or relies on `local_only.refused_outbound`) before it sends anything named by it."""
