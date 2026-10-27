@@ -1671,9 +1671,9 @@ def register(app):
                             with home_storefront(user):
                                 notifications = [n for n, hidden in zip(notifications, hidden_notifications(notifications))
                                                  if not hidden]
-                                if not notifications:   # nothing to tell: settled, so not re-read each run (m6)
-                                    user.email_unread_sent = True
-                                    db.session.commit()
+                                if not notifications:
+                                    # nothing to tell this run; not settled, so a visible one before the next login
+                                    # still gets its email (N3). Each run's check looks up only the stamped ones.
                                     continue
                                 posts = without_local_only(posts, Post, True).limit(20).all()
                                 text_body = flask.render_template('email/unread_notifications.txt', user=user,

@@ -165,8 +165,14 @@ def test_an_unread_email_with_only_onion_items_is_not_sent_off_the_onion(app, on
         cli.register(current_app)
         current_app.test_cli_runner().invoke(args=['send_missed_notifs'])
     assert sent == {}
-    db.session.expire_all()
-    assert bob.email_unread_sent   # m6: settled, so the next run does not select and re-read this account
+    # N3 (re-review 3): not settled, so a visible notification before the next login still gets its email
+    db.session.add(Notification(user_id=bob.id, title='FIRSTTITLE', url=f'/post/{onion.first_post.id}',
+                                notif_type=NOTIF_POST, created_at=utcnow() - timedelta(minutes=5),
+                                targets={'post_id': onion.first_post.id}))
+    db.session.commit()
+    with patch('app.cli.send_email', lambda *a, **k: sent.update({k['recipients'][0]: k['html_body']})):
+        current_app.test_cli_runner().invoke(args=['send_missed_notifs'])
+    assert 'FIRSTTITLE' in sent['bob@example.com'] and 'ONIONTITLE' not in sent['bob@example.com']
 
 
 def test_an_onion_accounts_email_keeps_them(app, onion):
