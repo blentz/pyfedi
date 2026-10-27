@@ -11,8 +11,9 @@ from app.activitypub import routes as ap_routes
 from app.activitypub.routes import process_inbox_request
 from app.models import FeedMember, File
 from app.utils import utcnow
+from tests.conftest import forget_login
 from tests.factories import a_keypair, inbox_activity, make_user
-from tests.three_domains import FIRST, ONION, SHOP, ap_get, peer, three_domains, two_domains, urls_in  # noqa: F401
+from tests.three_domains import FIRST, ONION, SHOP, ap_get, peer, request_on, three_domains, two_domains, urls_in  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -208,3 +209,45 @@ def test_an_onion_owned_feed_on_the_first_domain_is_not_in_its_federated_list(ap
     d.local_feed('firstnews', d.first, d.account('firstowner', d.first))
     listed = ap_get(app, '/feeds', host=FIRST).json['site_view']['public_feeds']
     assert listed == [f'https://{FIRST}/f/firstnews']
+
+
+def test_a_shop_readers_session_does_not_change_the_first_domains_federated_list(app, three_domains):
+    """The list a domain tells other servers is that domain's, whoever's cookie came with the request."""
+    d = three_domains
+    d.local_feed('firstnews', d.first, d.account('firstowner', d.first))
+    d.local_feed('shopnews', d.shop, d.account('shopowner', d.shop))
+    reader = d.account('shopreader', d.shop)
+    forget_login()
+    client = app.test_client()
+    with client.session_transaction(base_url=f'https://{FIRST}') as sess:
+        sess['_user_id'] = str(reader.id)
+        sess['_fresh'] = True
+    response = client.get('/feeds', headers={'Accept': 'application/activity+json'}, base_url=f'https://{FIRST}')
+    forget_login()
+    assert response.json['site_view']['public_feeds'] == [f'https://{FIRST}/f/firstnews']
+
+
+@pytest.mark.parametrize('flag', ['private', 'banned'])
+def test_webfinger_does_not_answer_a_private_or_banned_shop_feed(app, three_domains, shopnews, flag):
+    if flag == 'private':
+        shopnews.public = False
+    else:
+        shopnews.banned = True
+    db.session.commit()
+    assert ap_get(app, f'/.well-known/webfinger?resource=acct:~shopnews@{SHOP}', host=SHOP).status_code == 404
+
+
+def test_a_follow_of_a_shop_feed_arriving_on_the_first_domain_is_accepted_as_shop(app, three_domains, shopnews, peer,
+                                                                                   monkeypatch):  # noqa: F811
+    """The Accept is the feed's domain's whichever host the Follow came in on."""
+    from app.storefront import acting_domain
+    acting = []
+    monkeypatch.setattr(ap_routes, 'send_post_request',
+                        lambda uri, body, private_key, key_id, **kw: acting.append((acting_domain().domain, key_id)))
+    follower = make_user(peer, 'alice')
+    follower.ap_fetched_at = utcnow()
+    db.session.commit()
+    with request_on(app, three_domains.first):
+        process_inbox_request(inbox_activity(follower, activity_type='Follow', object_uri=f'{SHOP_BASE}/f/shopnews'),
+                              True)
+    assert acting == [(SHOP, f'{SHOP_BASE}/f/shopnews#main-key')]
