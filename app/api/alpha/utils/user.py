@@ -20,7 +20,7 @@ import app.auth.util as auth_util
 from app.api.alpha.utils.found import a_community, a_person
 from app.hidden_routes import hidden_by_read_state, hidden_notifications, hidden_unread, notification_hidden
 from app.local_names import local_clause, local_named
-from app.local_only import without_hidden_conversations, without_hidden_here, without_local_only_actors
+from app.local_only import one_here, without_hidden_conversations, without_hidden_here, without_local_only_actors
 from app.constants import *
 from app.federation_urls import owner_base
 from app.onion import stamp_activity
@@ -54,7 +54,7 @@ def get_user(auth, data):
                 found = User.query.filter(local_named(User, name, hosted))
             else:
                 found = User.query.filter(func.lower(User.user_name) == name, func.lower(User.ap_domain) == ap_domain)
-        person = found.filter(User.deleted == False).one()
+        person = one_here(found.filter(User.deleted == False), User)   # hidden here or nobody's: one answer (F6)
         data['person_id'] = person.id
     include_content = data['include_content'] if 'include_content' in data else False
     saved_only = data['saved_only'] if 'saved_only' in data else False

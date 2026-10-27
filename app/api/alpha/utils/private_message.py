@@ -12,7 +12,7 @@ from app.federation_urls import object_base
 from app.models import ChatMessage, Conversation, User, Notification, Report, Site
 from app.storefront import canonicalise_text
 from app.utils import authorise_api_user, markdown_to_html, user_access
-from app.local_only import REMOTE_CONTACT_REFUSAL, conversation_hidden_here, found_here, one_here, prime_reporters, \
+from app.local_only import REMOTE_CONTACT_REFUSAL, found_here, one_here, prime_reporters, \
     refuses_remote_contact, without_hidden_conversations, without_hidden_reports, without_local_only_actors
 from app.shared.tasks import task_selector
 
@@ -88,8 +88,8 @@ def get_private_message_conversation(auth, data):
         {"user_id": user_id, "state": True}).scalars().all()
 
     if 'conversation_id' in data:
-        conversation = db.session.get(Conversation, data['conversation_id'])
-        if conversation is None or conversation_hidden_here(conversation):
+        conversation = found_here(Conversation, data['conversation_id'])
+        if conversation is None:
             raise Exception("User is not a member of this conversation")   # one hidden here is as none (F6)
         conversation_ids = [conversation.id]
         if conversation.id not in joined_conversations:
