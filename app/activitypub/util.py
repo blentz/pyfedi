@@ -68,7 +68,7 @@ import app.activitypub.serializers.microblog as microblog_serializer   # the mod
 import app.activitypub.serializers.peertube as peertube_serializer   # likewise
 import app.activitypub.serializers.podcast as podcast_serializer   # likewise
 import urllib.parse
-from app.utils import random_chars, site_language_id, is_hex_color, save_image_without_metadata, \
+from app.utils import feed_open_to, random_chars, site_language_id, is_hex_color, save_image_without_metadata, \
     refuse_over_remote_thumbnail_cap
 from app.visibility import OPEN_VISIBILITIES, can_view, is_open, post_served_to_any_peer, post_title_for, \
     post_withheld_from_peers
@@ -4602,7 +4602,8 @@ def notify_about_post_task(post_id):
                             post.user_id not in blocked_senders and \
                             post.community_id not in blocked_comms and \
                             post.instance_id not in blocked_ints and \
-                            can_view(post, notify_id):
+                            can_view(post, notify_id) and \
+                            feed_open_to(feed, notify_id):   # not one who may no longer read it (task 7, review I3)
                         targets_data = {'gen': '0',
                                         'post_id': post.id,
                                         'post_title': post.title,

@@ -1301,7 +1301,8 @@ def _seed_feed(community, instance, name, feed_id, title):
     `.filter(FeedItem.community_id == post.community_id)`
     (app/activitypub/util.py:2902) exists to exclude.
     """
-    feed = make_feed(instance, name=name)
+    # public: a subscriber who may not read a private feed is not notified of it (per-domain feeds Task 7, I3)
+    feed = make_feed(instance, name=name, public=True)
     feed.title = title
     feed.id = feed_id
     db.session.commit()

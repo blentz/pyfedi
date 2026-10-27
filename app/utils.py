@@ -4521,6 +4521,12 @@ def feed_readable_by(feed: Feed, user_id) -> bool:
         return False
     if hidden_here(feed, bool(user_id)):   # an onion feed is unreadable off the onion, as one nobody holds (task 7)
         return False
+    return feed_open_to(feed, user_id)
+
+
+def feed_open_to(feed: Feed, user_id) -> bool:
+    """`feed_readable_by` without the storefront's part: whether `feed` is public, or `user_id` owns it or is a
+    member. For a reader with no storefront, a task notifying the feed's subscribers wherever they read it."""
     if feed.public:
         return True
     if not user_id:

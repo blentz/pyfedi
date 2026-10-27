@@ -4,9 +4,13 @@ its members still open it."""
 import pytest
 
 from app import db
-from app.models import FeedMember
-from tests.factories import make_feed_member
-from tests.test_onion_feeds_hidden import answer, signed_get
+from app.activitypub.util import notify_about_post_task
+from app.constants import NOTIF_FEED
+from app.models import FeedItem, FeedMember, Notification, NotificationSubscription
+from tests.conftest import forget_login
+from tests.factories import make_feed_member, make_post
+from tests.test_onion_feeds_hidden import answer, login, signed_get
+from tests.test_per_domain_feed_routes import csrf
 from tests.test_onion_hidden_api_ids import call
 from tests.three_domains import FIRST, three_domains, two_domains  # noqa: F401
 
@@ -100,3 +104,36 @@ def test_a_member_thrown_out_of_a_private_feed_may_still_leave_it_and_a_stranger
     db.session.commit()
     refused = call(app, stranger, 'PUT', '/api/alpha/feed', {'feed_id': feed.id, 'title': 'Taken'})
     assert refused.status_code == 400 and refused.json['message'] == 'incorrect_login'
+
+
+def test_turning_on_a_private_feeds_notifications_answers_a_stranger_as_a_missing_feed(app, secret):
+    """Review I3: a stranger got the toggle (200) for a private feed and 404 for an id nobody holds, and the
+    subscription it made was real."""
+    feed, owner, member, stranger = secret
+    client = app.test_client()
+    login(client, stranger, FIRST)
+    token = csrf(app, client)
+    hidden = client.post(f'/feed/{feed.id}/notification', base_url=f'https://{FIRST}', data={'csrf_token': token})
+    missing = client.post('/feed/2147483000/notification', base_url=f'https://{FIRST}', data={'csrf_token': token})
+    assert hidden.status_code == 404
+    assert answer(hidden) == (missing.status_code, missing.get_data().replace(b'2147483000', str(feed.id).encode()))
+    assert NotificationSubscription.query.filter_by(entity_id=feed.id, type=NOTIF_FEED).count() == 0
+    forget_login()
+    login(client, member, FIRST)
+    assert client.post(f'/feed/{feed.id}/notification', base_url=f'https://{FIRST}',
+                       data={'csrf_token': token}).status_code == 200
+
+
+def test_a_subscriber_who_may_no_longer_read_a_private_feed_is_not_notified(app, secret, two_domains):  # noqa: F811
+    """The feed was made private after the stranger turned its notifications on: a new post in it tells the member,
+    and not the stranger."""
+    feed, owner, member, stranger = secret
+    community = two_domains.local_community('inside', two_domains.domains[0])
+    db.session.add(FeedItem(feed_id=feed.id, community_id=community.id))
+    for reader in (member, stranger):
+        db.session.add(NotificationSubscription(name=feed.name, type=NOTIF_FEED, entity_id=feed.id, user_id=reader.id))
+    db.session.commit()
+    post = make_post(community, owner, f'https://{FIRST}/post/inside', title='INSIDE')
+    notify_about_post_task(post.id)
+    notified = {row.user_id for row in Notification.query.filter_by(notif_type=NOTIF_FEED)}
+    assert notified == {member.id}
