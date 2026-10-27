@@ -41,7 +41,7 @@
 ### Task 1: Feeds have a home domain column, backfilled to the first domain
 
 **Files:**
-- Create: `migrations/versions/d5a9c3e7f1b4_per_domain_feeds.py` (revision `d5a9c3e7f1b4`, down_revision `a9c4e6b2d8f1`, the current head).
+- Create: `migrations/versions/d5a9c3e7f1b4_per_domain_feeds.py` (revision `d5a9c3e7f1b4`, down_revision `c6e2a8f4b1d9`, the current head after follow-up F6).
 - Modify: `app/models.py:5946-5960` Feed: `site_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id', name='fk_feed_site_domain_id'))` with the comment Community carries at `:1631`; `name` becomes `db.Column(db.String(256), index=True)` (no `unique`); `__table_args__` with `ix_feed_domain_lower_name` exactly as Community's `:1706-1713`; `home_domain()` as `Community.home_domain()` (`:1717-1719`).
 - Modify: `tests/factories.py:237` `make_local_feed(name='localfeed', public=False, domain: DomainInfo | None = None, user=None)`: with a domain, stamps `site_domain_id`, `instance_id_of(domain)`, `ap_domain=domain_authority(domain)` and the five URLs on `domain_base_url(domain)`; without one, today's row plus the default domain's id.
 - Create: `tests/three_domains.py`: fixture `three_domains(app, db_session)` built on `tests/two_domains.two_domains`, adding a federating `SiteDomain(domain='shop.example', scheme='https', federates=True)`; yields `ThreeDomains(first, shop, onion, account, local_feed, local_community)` where `account(name, domain) -> User` is `two_domains.local_user` plus keys and `verified=True`, `local_feed(name, domain, owner=None, public=True) -> Feed` wraps `make_local_feed` (owner gets a `FeedMember(is_owner=True)`), and `local_community` is `two_domains.local_community`. Re-export `request_on`.
