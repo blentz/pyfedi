@@ -196,10 +196,10 @@ def get_reply_list(auth, data, user_details=None):
         # max_depth for parent_id query
         if 'parent_id' in data:
             parent_id = int(data['parent_id'])
-            parent_depth = db.session.execute(text('SELECT depth FROM "post_reply" WHERE id = :id'),
-                                              {"id": parent_id}).scalar()
-            if parent_depth is None:
+            parent = found_here(PostReply, parent_id)   # hidden here or nobody's: one answer (follow-up F6, round 4)
+            if parent is None:
                 raise Exception('Comment with parent_id not found.')
+            parent_depth = parent.depth
             if 'max_depth' in data:
                 relative_depth = int(data['max_depth'])
                 max_depth = parent_depth + relative_depth
