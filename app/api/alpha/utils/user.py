@@ -18,7 +18,7 @@ from app.api.alpha.views import user_view, reply_view, post_view, community_view
 # find_user is defined (import cycle: app.auth.util)
 import app.auth.util as auth_util
 from app.api.alpha.utils.found import a_community, a_person
-from app.hidden_routes import hidden_notifications, hidden_unread, notification_hidden
+from app.hidden_routes import hidden_by_read_state, hidden_notifications, hidden_unread, notification_hidden
 from app.local_names import local_clause, local_named
 from app.local_only import without_hidden_conversations, without_hidden_here, without_local_only_actors
 from app.constants import *
@@ -733,8 +733,9 @@ def get_user_notifications(auth, data):
     counts = {}
     counts['total'] = Notification.query.with_entities(func.count()).where(Notification.user_id == user.id).scalar()
     counts['unread'] = Notification.query.with_entities(func.count()).where(Notification.user_id == user.id).where(Notification.read == False).scalar()
-    hidden = sum(hidden_unread(user.id).values())   # the unread ones the list leaves out count nowhere (F6, m1)
-    counts['total'], counts['unread'] = counts['total'] - hidden, counts['unread'] - hidden
+    hidden = hidden_by_read_state(user.id)   # those the list leaves out count nowhere, read or not (F6, m1)
+    counts['total'] -= hidden[True] + hidden[False]
+    counts['unread'] -= hidden[False]
     counts['read'] = counts['total'] - counts['unread']
 
     # make dicts of that and pass back
