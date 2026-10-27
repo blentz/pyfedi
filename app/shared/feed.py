@@ -13,7 +13,7 @@ from app.activitypub.signature import send_post_request, default_context, RsaKey
 from app.activitypub.util import find_actor_or_create, make_image_sizes
 from app.constants import *
 from app.federation_urls import activity_id, owner_base, owner_domain
-from app.feed_domains import community_shown_here, feed_local_only
+from app.feed_domains import community_shown_here, feed_local_only, feed_may_join
 from app.local_only import community_local_only
 from app.models import User, Feed, FeedMember, FeedItem, Community, FeedJoinRequest, CommunityMember, \
     CommunityJoinRequest, Instance, File, _as_url
@@ -59,6 +59,8 @@ def join_feed(actor, user_id, src=SRC_WEB):
                     feed_items = FeedItem.query.filter_by(feed_id=feed.id).all()
                     for fi in feed_items:
                         community = db.session.get(Community, fi.community_id)
+                        if not feed_may_join(community, user):
+                            continue
                         actor = actor_handle(community)   # its own domain: a worker has no storefront
                         if current_app.debug:
                             community_routes.do_subscribe(actor, user.id, joined_via_feed=True)
@@ -828,7 +830,7 @@ def announce_feed_add_remove_to_subscribers(action: str, feed_id: int, community
                     continue
                 if fm_user.is_local():
                     # user is local so lets auto-subscribe them to the community, if they opted in
-                    if fm_user.feed_auto_follow:
+                    if fm_user.feed_auto_follow and feed_may_join(community, fm_user):
                         actor = actor_handle(community)   # its own domain: a worker has no storefront
                         community_routes.do_subscribe(actor, fm_user.id, joined_via_feed=True)
                     continue

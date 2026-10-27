@@ -15,7 +15,7 @@
     {% if active_child == 'user_feeds' %}
         <td>{{ feed.parent_feed_name() }}</td>
     {% endif %}
-    <td>{{ feed.num_communities }}</td>
+    <td>{{ feed|shown_community_count }}</td>
     <td><a href="/u/{{ feed.creator() }}">{{ feed.creator() }}</a></td>
     {% if active_child == 'user_feeds' %}
         <td>{{ feed.public }}</td>

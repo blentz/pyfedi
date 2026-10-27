@@ -24,7 +24,7 @@ from app.federation_urls import activity_id, domain_site_name
 from app.feed import bp
 from app.feed.forms import AddCopyFeedForm, EditFeedForm, SearchRemoteFeed
 from app.feed.util import feeds_for_form, refuse_bad_parent, search_for_feed, actor_to_feed, feed_communities_for_edit
-from app.feed_domains import community_shown_here, feeds_shown_here_clause, shown_feed_communities
+from app.feed_domains import community_shown_here, feed_may_join, feeds_shown_here_clause, shown_feed_communities
 from app.inoculation import inoculation
 from app.models import Feed, FeedMember, FeedItem, Community, NotificationSubscription, \
     CommunityMember, User, FeedJoinRequest, Instance, Topic, CommunityJoinRequest
@@ -341,7 +341,9 @@ def feed_copy(feed_id: int):
 
         # get the FeedItems from the feed being copied and 
         # make sure they all come over to the new Feed
-        old_feed_items = FeedItem.query.filter_by(feed_id=feed_to_copy.id).all()
+        # (a community hidden from the copier here is not copied: their feed would hold one they cannot see)
+        old_feed_items = [item for item in FeedItem.query.filter_by(feed_id=feed_to_copy.id)
+                          if community_shown_here(db.session.get(Community, item.community_id), True)]
         for item in old_feed_items:
             fi = FeedItem(feed_id=feed.id, community_id=item.community_id)
             db.session.add(fi)
@@ -353,8 +355,9 @@ def feed_copy(feed_id: int):
         for cm in member_of:
             member_of_ids.append(cm.community_id)
         for item in old_feed_items:
-            if item.community_id not in member_of_ids and current_user.feed_auto_follow:
-                community = db.session.get(Community, item.community_id)
+            community = db.session.get(Community, item.community_id)
+            if item.community_id not in member_of_ids and current_user.feed_auto_follow \
+                    and feed_may_join(community, current_user):
                 actor = actor_handle(community)   # its own domain: a worker has no storefront
                 if current_app.debug:  # D719: dispatch, as join_feed does
                     community_routes.do_subscribe(actor, current_user.id, joined_via_feed=True)
@@ -454,8 +457,7 @@ def feed_add_community():
     # exist, and the insert was a ForeignKeyViolation -- the post-level twin of
     # D1125, and a 500 rather than the 404 this route gives for everything else
     # it cannot resolve.
-    community = found_here(Community, community_id)   # hidden here or nobody's: one answer (follow-up F6)
-    if community is None or not community_shown_here(community, True):
+    if found_here(Community, community_id) is None:   # hidden here or nobody's: one answer (follow-up F6)
         abort(404)
 
     shared_feed._feed_add_community(community_id, current_feed_id, feed_id, user_id)
