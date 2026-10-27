@@ -1,10 +1,14 @@
 import json
 
 import pytest
+from sqlalchemy import text
 
 from app.utils import (block_bots, compaction_level, debug_mode_only,
                        display_back_button, referrer, requestor_domain,
                        show_ban_message, user_cookie_banned)
+import app.utils as app_utils
+from app import db
+from app.models import User
 from tests.factories import make_instance, make_user
 
 
@@ -244,6 +248,7 @@ class TestUnreadNotificationsListener:
             pubsub.get_message(timeout=1)          # the subscribe confirmation
 
             user.unread_notifications = 5
+            db.session.commit()
 
             message = pubsub.get_message(timeout=1)
             assert message is not None, 'no SSE event was published'
@@ -261,12 +266,61 @@ class TestUnreadNotificationsListener:
             instance = make_instance('test.instance.example')
             user = make_user(instance, 'unchanged', local=True)
             user.unread_notifications = 5
+            db.session.commit()   # its event goes out here, before the subscription
             pubsub = redis_double.pubsub()
             pubsub.subscribe(f'notifications:{user.id}')
             pubsub.get_message(timeout=1)
 
             user.unread_notifications = 5
+            db.session.commit()
 
             assert pubsub.get_message(timeout=1) is None
         finally:
             app.config['NOTIF_SERVER'] = original
+
+    @pytest.fixture
+    def published(self, app, monkeypatch):
+        """The events published, each with the count another connection reads at that moment: what the page's
+        fetch of /notifications/unread_count would find."""
+        monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'https://notif.example')
+        events = []
+
+        def publish(key, value):
+            with db.engine.connect() as connection:
+                count = connection.execute(text('SELECT unread_notifications FROM "user" WHERE id::text = :id'),
+                                           {'id': key.split(':')[1]}).scalar()
+            events.append((key, json.loads(value), count))
+        monkeypatch.setattr(app_utils, 'publish_sse_event', publish)
+        return events
+
+    def test_the_event_is_published_after_the_commit(self, app, db_session, published):
+        """Re-review 4, M4: the event says only that the count changed, and the page then asks the server for it. Sent
+        before the commit, that fetch could read the old count, and the badge stayed stale until the next event."""
+        user = make_user(make_instance('test.instance.example'), 'notified', local=True)
+        user.unread_notifications = 5
+        user.unread_notifications = 6   # one event per account and commit
+        db.session.flush()
+        assert published == []
+        db.session.commit()
+        assert published == [(f'notifications:{user.id}', {'notifs_changed': True}, 6)]
+
+    def test_a_rolled_back_change_is_not_published(self, app, db_session, published):
+        user = make_user(make_instance('test.instance.example'), 'notified', local=True)
+        user.unread_notifications = 5
+        db.session.rollback()
+        db.session.commit()
+        assert published == []
+
+    def test_an_account_in_no_session_is_published_at_once(self, app, db_session, published):
+        user = User(user_name='loose')
+        user.unread_notifications = 5
+        assert published == [('notifications:None', {'notifs_changed': True}, None)]
+
+    def test_an_account_taken_out_of_the_session_before_the_commit_is_not_published(self, app, db_session,
+                                                                                      published):
+        user = User(user_name='pending')
+        db.session.add(user)
+        user.unread_notifications = 5
+        db.session.expunge(user)
+        db.session.commit()
+        assert published == []

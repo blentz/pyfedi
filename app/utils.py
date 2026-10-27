@@ -50,8 +50,8 @@ from flask import current_app, json, redirect, url_for, request, make_response, 
 from flask_babel import _, lazy_gettext as _l
 from flask_login import current_user, logout_user
 from flask_wtf.csrf import validate_csrf
-from sqlalchemy import text, or_, desc, asc, event, select, func, update
-from sqlalchemy.orm import Session
+from sqlalchemy import text, or_, desc, asc, event, inspect, select, func, update
+from sqlalchemy.orm import Session, object_session
 from wtforms.fields import SelectMultipleField, StringField
 from wtforms.widgets import ListWidget, CheckboxInput, TextInput
 from wtforms.validators import ValidationError
@@ -6711,12 +6711,42 @@ class SqlKeysetPagination:
         return self._page_obj.paging.bookmark_previous if self.has_prev else None
 
 
+_NOTIFS_CHANGED = 'notifs_changed'   # session.info: the accounts whose unread count this transaction changed
+
+
+def _publish_notifs_changed(user_id) -> None:
+    # a change, not the count: the count shown depends on the storefront the page is on, which an event for the
+    # account cannot know, so the page asks its own (/notifications/unread_count, follow-up F6)
+    publish_sse_event(f"notifications:{user_id}", json.dumps({'notifs_changed': True}))
+
+
 @event.listens_for(User.unread_notifications, 'set')
 def on_unread_notifications_set(target, value, oldvalue, initiator):
+    """Publish the change once its transaction commits, so the page's fetch of the count reads the new one
+    (re-review 4, M4). An account in no session has no transaction to wait for."""
     if value != oldvalue and current_app.config['NOTIF_SERVER']:
-        # a change, not the count: the count shown depends on the storefront the page is on, which an event for the
-        # account cannot know, so the page asks its own (/notifications/unread_count, follow-up F6)
-        publish_sse_event(f"notifications:{target.id}", json.dumps({'notifs_changed': True}))
+        session = object_session(target)
+        if session is None:
+            _publish_notifs_changed(target.id)
+        else:
+            session.info.setdefault(_NOTIFS_CHANGED, {})[id(target)] = target
+
+
+@event.listens_for(Session, 'after_commit')
+def publish_changed_notification_counts(session):
+    """One event per account whose count the committed transaction changed. An account taken out of the session
+    before it was ever written has no row to announce."""
+    for target in session.info.pop(_NOTIFS_CHANGED, {}).values():
+        identity = inspect(target).identity
+        if identity:
+            _publish_notifs_changed(identity[0])
+
+
+@event.listens_for(Session, 'after_soft_rollback')
+def forget_changed_notification_counts(session, previous_transaction):
+    """A rolled-back change is never announced. A savepoint's rollback forgets the transaction's others too: the
+    badge then waits for the next event."""
+    session.info.pop(_NOTIFS_CHANGED, None)
 
 
 def publish_sse_event(key, value):
