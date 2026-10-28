@@ -159,7 +159,7 @@ def test_a_genuinely_signed_activity_is_accepted(app, signing_peer, monkeypatch)
     assert len(dispatched) == 1
 
 
-def test_a_signature_verified_against_the_wrong_key_is_refused(app, signing_peer, monkeypatch):
+def test_a_signature_verified_against_the_wrong_key_is_refused(app, signing_peer, http_mock, monkeypatch):
     """routes.py:714-716/737-739: `HttpSignature.verify_request` checks the
     request's Signature header against `actor.public_key`, read fresh from
     the database (CACHE_TYPE=NullCache defeats find_actor_or_create_cached's
@@ -189,6 +189,7 @@ def test_a_signature_verified_against_the_wrong_key_is_refused(app, signing_peer
     _wrong_private_key, wrong_public_key = RsaKeys.generate_keypair()
     signing_peer.public_key = wrong_public_key
     db.session.commit()
+    http_mock.get(signing_peer.ap_profile_id).respond(404)   # the key refetch finds no newer key
 
     with app.test_client() as client:
         response = signed_inbox_post(client, activity, signing_peer)

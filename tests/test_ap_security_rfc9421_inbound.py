@@ -59,9 +59,10 @@ class TestInbox:
             response = rfc9421_inbox_post(client, inbox_activity(signing_peer), signing_peer, date=date)
         assert response.status_code == 200 and len(dispatched) == 1
 
-    def test_the_wrong_key_is_refused(self, app, signing_peer, dispatched):
+    def test_the_wrong_key_is_refused(self, app, signing_peer, http_mock, dispatched):
         signing_peer.public_key = next(p for _, p in (a_keypair() for _ in range(16)) if p != signing_peer.public_key)
         db.session.commit()
+        http_mock.get(signing_peer.ap_profile_id).respond(404)   # the key refetch finds no newer key
         with app.test_client() as client:
             response = rfc9421_inbox_post(client, inbox_activity(signing_peer), signing_peer)
         assert response.status_code == 400 and dispatched == []

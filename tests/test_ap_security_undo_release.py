@@ -571,8 +571,9 @@ def test_a_parked_body_holds_only_what_the_rerun_needs(app, inline, scene, redis
     assert json.loads(base64.b64decode(parked['body'])) == follow
 
 
-def test_a_parked_follow_failing_its_signature_on_the_rerun_is_discarded(app, inline, scene, redis_double):
+def test_a_parked_follow_failing_its_signature_on_the_rerun_is_discarded(app, inline, scene, redis_double, http_mock):
     community, _, _, carol, _ = scene
+    http_mock.get(carol.ap_profile_id).respond(404)   # the rerun's key refetch finds no newer key
     follow = _follow(carol, community.ap_profile_id)
     now = int(time.time())
     _post(app, follow, carol, at=now - 900)
