@@ -32,7 +32,7 @@ from sqlalchemy import text
 from app import db, request_hooks
 from app.constants import ROLE_ADMIN, ROLE_ADMIN_NAME
 from app.models import Role, Settings, Site
-from app.utils import etag_stamp
+from app.utils import etag_stamp, get_site_as_dict
 from tests.factories import make_community, make_instance, make_post, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -576,7 +576,6 @@ def test_a_missing_site_row_is_created_with_defaults_and_a_warning(app, db_sessi
     all could be served. It now creates Site(id=1) with the model defaults
     and logs a warning."""
     from unittest.mock import patch
-    from app.utils import get_site_as_dict
 
     db.session.execute(text('DELETE FROM "site"'))
     db.session.commit()
@@ -594,7 +593,6 @@ def test_a_missing_site_row_is_created_with_defaults_and_a_warning(app, db_sessi
 def test_a_missing_site_row_is_created_with_a_keypair(app, db_session):
     """The Site row is the instance actor, and its keypair signs the instance's fetches. A row made here, ahead of
     `flask init-db`, had neither key: the instance actor then published `publicKeyPem: null`."""
-    from app.utils import get_site_as_dict
 
     db.session.execute(text('DELETE FROM "site"'))
     db.session.commit()
