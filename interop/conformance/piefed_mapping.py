@@ -16,8 +16,15 @@ def acct_to_userid(acct_uri: str, host: str = 'piefed.test') -> str:
 
 
 def microblog_title(content: str) -> str:
-    """The title PieFed requires for a post made of `content`: its first 50 characters."""
-    return content[:TITLE_LIMIT].strip()
+    """The title PieFed requires for a post made of `content`: its first 50 characters, cut back to whole words, so the
+    body starts with the title as whole words and PieFed federates the body alone (note_content). One word past the limit is cut."""
+    content = content.strip()
+    if len(content) <= TITLE_LIMIT:
+        return content
+    cut = TITLE_LIMIT
+    while cut > 0 and content[cut].isalnum():
+        cut -= 1
+    return content[:cut].strip() or content[:TITLE_LIMIT]
 
 
 class _Paragraphs(HTMLParser):
