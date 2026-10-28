@@ -49,7 +49,7 @@
   },
   "aptest/conf-feed/liked-collection-must-be-a-collection": {
     "outcome": "inapplicable",
-    "reason": "Inapplicable: no `liked` property; PYFEDI_GAPS §1 Actors and collections (§4-5) `liked`, `streams` missing"
+    "reason": "Inapplicable: no `liked` property; PYFEDI_GAPS §1 Actors and collections (§4-5) `liked` on Group, Feed and instance actor; `streams` missing"
   },
   "aptest/conf-feed/likes-collection-must-be-a-collection": {
     "outcome": "inapplicable",
@@ -97,7 +97,7 @@
   },
   "aptest/instance/liked-collection-must-be-a-collection": {
     "outcome": "inapplicable",
-    "reason": "Inapplicable: no `liked` property; PYFEDI_GAPS §1 Actors and collections (§4-5) `liked`, `streams` missing"
+    "reason": "Inapplicable: no `liked` property; PYFEDI_GAPS §1 Actors and collections (§4-5) `liked` on Group, Feed and instance actor; `streams` missing"
   },
   "aptest/instance/likes-collection-must-be-a-collection": {
     "outcome": "inapplicable",
@@ -137,7 +137,7 @@
   },
   "aptest/microblogs/liked-collection-must-be-a-collection": {
     "outcome": "inapplicable",
-    "reason": "Inapplicable: no `liked` property; PYFEDI_GAPS §1 Actors and collections (§4-5) `liked`, `streams` missing"
+    "reason": "Inapplicable: no `liked` property; PYFEDI_GAPS §1 Actors and collections (§4-5) `liked` on Group, Feed and instance actor; `streams` missing"
   },
   "aptest/microblogs/likes-collection-must-be-a-collection": {
     "outcome": "inapplicable",
