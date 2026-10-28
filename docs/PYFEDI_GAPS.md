@@ -45,38 +45,38 @@ Abbreviations: `R` = `app/activitypub/routes.py`, `U` = `app/activitypub/util.py
 
 ### Delivery (§7)
 
-- `bto`/`bcc` are not supported ✓. pyfedi never produces, strips or honours them.
-- Recipients come from database relations (instance followers, mentions, user followers), not from expanding the `to`/`cc` addresses. A Like, Dislike or Undo of one also goes to the author's own inbox (commit 45d948185; `follow_answer_inbox()`, `app/shared/tasks/likes.py`), but only when the author is remote, the content is in a local community and the content is open (public or unlisted), and the author's instance is online and not banned and the voter has not blocked it. The community must not be local-only or private, and the voter not banned from it. Otherwise a vote reaches only the instances following the community.
-- Bulk delivery always goes to each instance's shared inbox. The shared inbox comes from the instance's Application actor, or falls back to a guessed `https://domain/inbox`. Per-actor inboxes are used only for the answer to a Follow and for a vote to a remote author (above).
+- `bto`/`bcc` are never produced or stripped. They are read only when deciding who a stored activity entitles (`ADDRESS_FIELDS`, `app/activitypub/entitlement.py:23`), and a received activity is served back as stored, so a `bto`/`bcc` it arrived with is served too.
+- Recipients come from database relations (instance followers, mentions, parent authors, community followers), not from expanding the `to`/`cc` addresses, which are built from the same relations. A Like, Dislike or Undo of one also goes to the author's own inbox (commit 45d948185; `follow_answer_inbox()`, `app/shared/tasks/likes.py`), but only when the author is remote, the content is in a local community and the content is open (public or unlisted), and the author's instance is online and not banned and the voter has not blocked it. The community must not be local-only or private, and the voter not banned from it. Otherwise a vote reaches only the instances following the community.
+- Bulk fan-out goes to each instance's inbox: its Application actor's, or a guessed `https://domain/inbox` (U:3567-3626). A send aimed at one actor (Follow and its Undo, a post, reply, vote or moderation action sent to a community, a chat message) goes to that actor's stored `ap_inbox_url`, which is its shared inbox when it advertises one (`shared_inbox_of`, U:1237). The answer to a Follow and a vote to a remote author go to the actor's own `inbox` (`follow_answer_inbox`, `app/models.py:2618`). Flag reports go to the instance inbox.
 - There is no general inbox forwarding (§7.1.2). Only a local Group re-Announces to its followers. Replies to a local user's followers-only post are not forwarded to that user's followers.
 - Duplicate detection lasts 24 hours ✓. `claim_activity` (U:945) sets a Redis key scoped to the actor's host with a 86400-second TTL (`ACTIVITY_DEDUPE_SECONDS`, U:936), after the signature has verified (R:985). After that, a replayed activity is caught only if the handler for that activity is idempotent.
-- Retries: SendQueue retries with exponential backoff, from 1 minute up to 4 hours. Votes sent via `piefed_notifs` are not retried.
+- Retries: a POST that fails in transport or with a 429 or 5xx is queued in SendQueue and retried after `60 * 2**retries` seconds, capped at 15360 (about 4h17m), up to 40 times (`app/activitypub/signature.py:230-238`); entries older than 7 days are purged. Deliveries published through `piefed_notifs` (votes, when `NOTIF_SERVER` is set) are not retried.
 
 ### Handling received activities (§7.2–7.12)
 
-- **Create:** Page, Article, Link, Note, Question and Event objects are accepted. Audio, Image and Document are rejected as "Unacceptable type". Video is handled only as an Update that refreshes the score of a known PeerTube post.
+- **Create:** Page, Article, Link, Note, Question, Event, Audio, Document, Image and Video objects are accepted (`NEW_CONTENT_TYPES`, U:347). Any other type is rejected as "Unacceptable type". An Update of a media object pyfedi does not hold is ignored (PeerTube sends many).
 - **Update:**
-  - Update of a Person or Service is not handled. Remote profiles and keys are refreshed only by a daily refetch.
+  - An Update of a Person, Service, Application or Podcast sent by the actor itself is applied (`ACTOR_UPDATE_TYPES`, U:7141). One that is Announced or accepted only on an LD signature is refused. A signature that fails under the stored key triggers one rate-limited refetch of the key (`verify_refreshing_key`, `app/activitypub/signature.py:500`).
   - Update merges fields one by one instead of replacing the whole object (`update_post_reply_from_activity` U:4709, `update_post_from_activity` U:4880).
-- **Delete:** Delete of a remote Group is not handled.
+- **Delete:** a Delete of a remote Group is applied only when it comes from the Group, one of its moderators or an admin of its host (`may_delete_group`, U:7065).
 - **Block:** Block is handled only as a site or community ban. A Block from one actor to another is not modelled.
-- **Undo:** Undo of EmojiReact, Flag, Add and Remove has no handler.
+- **Undo:** Undo is handled for Follow, Delete, Like, Dislike, EmojiReact, Announce, Lock, Block, ChooseAnswer, Add, Remove and Flag. Any other inner type has no handler.
 - **Move:** Move means moving a post between communities. An account Move is not supported.
-- **Announce:** pyfedi trusts the inner object on the Group's signature. Domain matching applies only to Creates that arrive without an Announce wrapper.
-- **AS2 activity types handled in neither direction:** Arrive, Ignore, Invite, Join, Leave, Listen, Offer, Read, TentativeAccept, TentativeReject, Travel, View. `Question` is handled only as a poll object, not as an activity.
-- **AS2 object types not supported:** Place, Profile, Relationship. Image and Audio are supported only as attachments.
+- **Announce:** an inner activity whose id is on the Group's own host is trusted on the Group's signature. One from another host must name an actor on that host; an inner Create or Update is then refetched from its origin, and an inner Delete needs the origin to answer 404 or 410. Under an LD-signed Announce, every inner Create, Update and Delete is checked that way (`verify_announced_inner`, U:7180).
+- **AS2 activity types handled in neither direction:** Arrive, Ignore, Invite, Join, Leave, Listen, Offer, Read, TentativeAccept, TentativeReject, Travel, View. `Question` is handled only as a poll or post object, not as an activity.
+- **AS2 object types not supported:** Place, Profile, Relationship.
 
 ### JSON-LD and properties
 
 - Payloads are processed as plain JSON with fixed key names. Prefixed terms such as `as:content` and terms aliased by a custom `@context` are not recognised. pyld is used only to normalize documents for LD-signature checks.
-- An array-valued `type` is probably not handled.
-- `contentMap`: pyfedi emits a single language, and on input uses only the first key's language. `nameMap` and `summaryMap` are ignored.
-- `generator` and `preview` are ignored. For `icon`, pyfedi takes `icon[-1]`. `location` is kept only on Events. Incoming `replies` is read only for poll vote counts.
+- ✓ An array-valued `type` on the activity, its object or an Announce's inner object is reduced to one type for dispatch, and refused if it names more than one type pyfedi dispatches on (`normalise_activity_types`, U:1423).
+- `contentMap`: pyfedi emits a single language. On input it reads every `contentMap`, `nameMap` and `summaryMap` entry as a per-language variant; the default is the key whose text matches `content`, else the `language` property, else the first key (`language_variants_from`, U:304).
+- `generator` and `preview` are ignored. For `icon`, pyfedi takes the last entry (`image_url_from(..., prefer_last=True)`, `app/models.py:173`). `location` is kept only on Events. Incoming `replies` is read only for poll vote counts.
 
 ### Verification
 
-- HTTP Signatures support only draft-cavage-12, with the `rsa-sha256` or `hs2019` algorithm (RSA keys only).
-- LD Signatures (`RsaSignature2017`) are used as a fallback when the HTTP signature check fails.
+- HTTP Signatures: inbound, both draft-cavage-12 (`rsa-sha256` or `hs2019`, RSA keys) and RFC 9421 (`rsa-v1_5-sha256`, `rsa-pss-sha512`, and ed25519 keys) are verified (`app/activitypub/signature_rfc9421.py`). Outbound, pyfedi signs cavage with `rsa-sha256` or RFC 9421 with `rsa-v1_5-sha256`, in the format it remembers for the peer, and on a 401 retries once in the other (`double_knock`, `app/activitypub/signature.py:463`). ed25519 is verify-only.
+- LD Signatures (`RsaSignature2017`) are used as a fallback when the HTTP signature check fails, or when its keyId is on another host than the actor. Content accepted on one is refetched from its origin rather than taken from the body.
 - FEP-8b32 object-integrity proofs are not supported.
 
 ## 2. SWICG task-force reports
