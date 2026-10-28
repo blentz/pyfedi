@@ -23,7 +23,8 @@ from app.activitypub import bp
 from app.onion import apply_audit, audit_field, is_onion_request
 from app.onion_store import onion_store_optional
 from app.activitypub.actor import find_actor_by_url
-from app.activitypub.entitlement import PRIVATE_HEADERS, actor_document, addressees_of, audience_entitles, signed_requester_actor
+from app.activitypub.entitlement import PRIVATE_HEADERS, actor_document, addressees_of, audience_entitles, signed_requester_actor, \
+    without_blind_addressing
 from app.activitypub.signature import POST_REQUIRED, HttpSignature, publish_async_posts, signed_at, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request, verify_with_key_refresh, request_key_id
 from app.activitypub.util import MEDIA_OBJECT_TYPES, NEW_CONTENT_TYPES, follow_answer_inbox, MEDIA_URL_KIND, media_url_from, activity_dedupe_key, community_actor_data, refresh_community_profile_task, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
@@ -2520,9 +2521,9 @@ def announce_activity_to_followers(community: Community, creator: User, activity
     if creator.banned:
         return
 
-    # remove context from what will be inner object, on a copy so the caller's dict is untouched (D138)
-    if '@context' in activity:
-        activity = {key: value for key, value in activity.items() if key != '@context'}
+    # remove context from what will be inner object, on a copy so the caller's dict is untouched (D138), and a peer's
+    # bto and bcc with it: AS2 §7 removes them before delivery, or every follower instance reads them
+    activity = {key: value for key, value in without_blind_addressing(activity).items() if key != '@context'}
 
     announce_activity = {
         '@context': default_context(),
@@ -3078,8 +3079,9 @@ def activities_json(type, id):
     activity_json = json.loads(activity.activity_json) if activity and activity.activity_json else None
     if isinstance(activity_json, dict) and activity_json:
         addressees = addressees_of(activity_json)
+        served = without_blind_addressing(activity_json)   # AS2 §7; a row logged before the Announce dropped them
         if audience_entitles(addressees, None):
-            resp = jsonify(activity_json)
+            resp = jsonify(served)
             resp.content_type = ap_media_type()
             resp.headers['Cache-Control'] = AP_CACHE_CONTENT
             return resp
@@ -3088,7 +3090,7 @@ def activities_json(type, id):
         # only OUR actor has followers we can enumerate; a stored remote one must not open rule 4
         local_actor = named_actor if named_actor and named_actor.is_local() else None
         if audience_entitles(addressees, signed_requester_actor(), local_actor):
-            resp = jsonify(activity_json)
+            resp = jsonify(served)
             resp.content_type = ap_media_type()
             resp.headers.update(PRIVATE_HEADERS)
             return resp

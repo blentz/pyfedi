@@ -21,6 +21,16 @@ from app.models import Community, CommunityMember, User, UserFollower
 from app.utils import is_activitypub_request
 
 ADDRESS_FIELDS = ('to', 'cc', 'audience', 'bto', 'bcc')
+BLIND_FIELDS = ('bto', 'bcc')   # AS2 §7: removed before an activity is delivered or shown
+
+
+def without_blind_addressing(activity: dict) -> dict:
+    """A copy of `activity` with bto and bcc removed from it and from each `object` nested in it, for delivery or for
+    serving. The original keeps them: who it entitles is read from there."""
+    copy = {key: value for key, value in activity.items() if key not in BLIND_FIELDS}
+    if isinstance(copy.get('object'), dict):
+        copy['object'] = without_blind_addressing(copy['object'])
+    return copy
 
 # A response whose content depends on who signed the request must never be stored by a shared cache.
 PRIVATE_HEADERS = {'Cache-Control': 'private, no-store', 'Vary': 'Accept, Signature'}
