@@ -14,7 +14,7 @@ Abbreviations: `R` = `app/activitypub/routes.py`, `U` = `app/activitypub/util.py
 
 ### Client-to-server API (§6): not implemented ✓
 
-- Every inbox route is POST-only (R:706, 856, 863, 868, 873, 3104). The owner cannot read their inbox over ActivityPub.
+- Every inbox route is POST-only (R:827, 1029, 1036, 1041, 1046, 3850). The owner cannot read their inbox over ActivityPub.
 - Outbox routes are GET-only. Clients cannot POST activities to them.
 - None of the following exist: the OAuth authorization server, the `oauthAuthorizationEndpoint` and `oauthTokenEndpoint` endpoints, `uploadMedia`, `proxyUrl`, and `provideClientKey`/`signClientKey`.
 - Clients use the Lemmy-style REST API at `/api/alpha` instead, with HS256 JWT bearer tokens.
@@ -24,11 +24,11 @@ Abbreviations: `R` = `app/activitypub/routes.py`, `U` = `app/activitypub/util.py
 | Item | Status | Evidence / note |
 |---|---|---|
 | Person outbox | Served ✓ | `user_outbox` (R:739) returns a paged collection of Create activities for the local user's public posts and comments (`user_outbox_rows`); nothing in a private, local-only or banned community, nothing local-only, deleted or under review |
-| Person `followers` / `following` | Advertised, count-only | The Person document (R:566-572 as of 2026-10-28) lists both, and `user_followers` / `user_following` serve an OrderedCollection with `totalItems` and no items. The aptest `followers` and `following` checks pass for a Person. The instance actor (Application) advertises neither. |
-| `following` on Group | Served, count-only | The Group document advertises it (`app/activitypub/util.py:1105`) and `community_following` (R:2712) answers a collection with `totalItems` 0, since a community follows nothing. Feeds (`/f/`) have it too (R:3890). |
-| `liked` on Person | Served, count-only | Advertised on the Person document (R:572) and served by `user_liked` (R:2746) as an OrderedCollection with `totalItems`. The aptest `liked` check passes for a Person. |
+| Person `followers` / `following` | Advertised, count-only | The Person document (R:570-572 as of 2026-10-28) lists both, and `user_followers` / `user_following` serve an OrderedCollection with `totalItems` and no items. The aptest `followers` and `following` checks pass for a Person. The instance actor (Application) advertises neither. |
+| `following` on Group | Served, count-only | The Group document advertises it (`app/activitypub/util.py:1105`) and `community_following` (R:2712) answers a collection with `totalItems` 0, since a community follows nothing. Feeds (`/f/`) have it too (R:3891). |
+| `liked` on Person | Served, count-only | Advertised on the Person document (R:572) and served by `user_liked` (R:2747) as an OrderedCollection with `totalItems`. The aptest `liked` check passes for a Person. |
 | `liked` on Group, Feed and instance actor; `streams` | Missing | The aptest `liked` check is inapplicable for them. |
-| `likes`, `shares` on objects | Missing | `post_to_page` emits only `replies` |
+| `likes`, `dislikes`, `shares` on objects | Served, count-only | A local post embeds `likes`, `dislikes` and `shares` (`post_count_collections`, U:396) and serves them at `post_count_collection_ap` (R:3029); a local comment has `likes` and `dislikes` (U:405, `comment_count_collection_ap` R:2797). Totals only, no items. |
 | Group followers | Partial | Returns `totalItems` only, with empty items (by design, D175) |
 | Group outbox | Full | Paged OrderedCollection |
 | Instance actor outbox | Served, empty | `/actor` advertises `/actor/outbox`, which `instance_actor_outbox` (`app/main/routes.py:1383`) serves as an empty OrderedCollection; the aptest outbox check passes. The site Application document at `/` advertises `/site_outbox`, which `site_outbox` (`app/main/routes.py`) serves the same way, empty and per domain. |
@@ -36,12 +36,12 @@ Abbreviations: `R` = `app/activitypub/routes.py`, `U` = `app/activitypub/util.py
 
 ### Fetching objects (§3)
 
-- Private messages cannot be fetched ✓. Their ids are `/private_message/<id>`, but no route serves that path.
-- Followers-only content returns 404 even to a follower who sends a signed fetch, so authorized fetch is not possible.
-- Only posts and comments return 410 with a `Tombstone`, and `formerType` is hard-coded to `Page`/`Note` (R:2474-2479). Deleted or banned actors and communities return a plain 404.
-- `/activities/<type>/<id>` (R:2612) serves logged activities with no visibility check.
-- Responses always use the content type `application/activity+json`, never the `application/ld+json; profile="https://www.w3.org/ns/activitystreams"` form. Most outgoing fetches send only `application/activity+json` as their Accept header.
-- Uncertain: the community outbox (R:2297) does not check `private`/`local_only`, but the community actor document does.
+- Private messages are fetchable only by a party to them. `private_message_ap` (R:2896) serves `/private_message/<id>` to the recipient, or to a signer on the recipient's host; anyone else gets 404.
+- Followers-only posts and comments return 404 to an unsigned fetch, but a signed fetch by an entitled signer is served (`followers_entitled`, R:2848; `post_ap_refusal` R:2935, `comment_ap_refusal` R:2756). Entitled means an accepted follower or a signer on a follower's host, or a user it answers or mentions.
+- Deleted posts, comments and local users return 410 with a `Tombstone`. A post's `formerType` comes from `post_to_page` (`former_type_of_post`, R:2810), a comment's is `Note` (R:2766), and a deleted local user's is `Person` or `Service` (R:543). A banned user, a banned or unknown community and a feed return a plain 404 (`user_profile` R:516, `community_profile` R:762, `feed_profile` R:3761).
+- `/activities/<type>/<id>` (`activities_json`, R:3072) serves a logged activity only to whoever its addressing entitles: anyone if it is public, else an entitled signer. A refusal is the same 404 as a miss.
+- Responses use `application/activity+json`, or the `application/ld+json; profile="https://www.w3.org/ns/activitystreams"` form when the Accept header prefers it (`ap_media_type`, R:2867). Outgoing fetches send both `application/activity+json` and `application/ld+json` (`AP_FETCH_ACCEPT`, `app/constants.py:216`).
+- ✓ The community outbox (`community_outbox`, R:2581) refuses a `local_only` or `private` community with 403, as the community actor document does (R:2590-2591).
 
 ### Delivery (§7)
 
@@ -49,7 +49,7 @@ Abbreviations: `R` = `app/activitypub/routes.py`, `U` = `app/activitypub/util.py
 - Recipients come from database relations (instance followers, mentions, user followers), not from expanding the `to`/`cc` addresses. A Like, Dislike or Undo of one also goes to the author's own inbox (commit 45d948185; `follow_answer_inbox()`, `app/shared/tasks/likes.py`), but only when the author is remote, the content is in a local community and the content is open (public or unlisted), and the author's instance is online and not banned and the voter has not blocked it. The community must not be local-only or private, and the voter not banned from it. Otherwise a vote reaches only the instances following the community.
 - Bulk delivery always goes to each instance's shared inbox. The shared inbox comes from the instance's Application actor, or falls back to a guessed `https://domain/inbox`. Per-actor inboxes are used only for the answer to a Follow and for a vote to a remote author (above).
 - There is no general inbox forwarding (§7.1.2). Only a local Group re-Announces to its followers. Replies to a local user's followers-only post are not forwarded to that user's followers.
-- Duplicate detection lasts only 90 seconds ✓. It is a Redis key with a 90-second TTL (R:762). After that, a replayed activity is caught only if the handler for that activity is idempotent.
+- Duplicate detection lasts 24 hours ✓. `claim_activity` (U:945) sets a Redis key scoped to the actor's host with a 86400-second TTL (`ACTIVITY_DEDUPE_SECONDS`, U:936), after the signature has verified (R:985). After that, a replayed activity is caught only if the handler for that activity is idempotent.
 - Retries: SendQueue retries with exponential backoff, from 1 minute up to 4 hours. Votes sent via `piefed_notifs` are not retried.
 
 ### Handling received activities (§7.2–7.12)
@@ -57,7 +57,7 @@ Abbreviations: `R` = `app/activitypub/routes.py`, `U` = `app/activitypub/util.py
 - **Create:** Page, Article, Link, Note, Question and Event objects are accepted. Audio, Image and Document are rejected as "Unacceptable type". Video is handled only as an Update that refreshes the score of a known PeerTube post.
 - **Update:**
   - Update of a Person or Service is not handled. Remote profiles and keys are refreshed only by a daily refetch.
-  - Update merges fields one by one instead of replacing the whole object (U:3833-3870).
+  - Update merges fields one by one instead of replacing the whole object (`update_post_reply_from_activity` U:4709, `update_post_from_activity` U:4880).
 - **Delete:** Delete of a remote Group is not handled.
 - **Block:** Block is handled only as a site or community ban. A Block from one actor to another is not modelled.
 - **Undo:** Undo of EmojiReact, Flag, Add and Remove has no handler.
