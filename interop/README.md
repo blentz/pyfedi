@@ -35,7 +35,8 @@ access tokens last a day; `up` renews them), and the URLs `castopod_podcast` and
 
 `interop/run.sh conformance` brings the stack up and runs `interop/conformance/run.sh` in the `conformance-runner`
 container (`interop/conformance/Containerfile`; the base image is pinned by digest and each tool to an exact SHA or version, but
-FediTest's own dependencies resolve when the image is built). It is a local gate,
+what those tools pull in is not: FediTest's and httpx's own Python dependencies, activitypub-testing's npm tree
+(it ships no shrinkwrap) and the apt packages `nodejs`, `npm`, `jq` and `git` all resolve when the image is built). It is a local gate,
 not wired to CI, like `test`. It runs three suites and then `python -m interop.conformance.baseline`, which exits 0
 only when every result matches `interop/conformance/baseline.json`:
 
