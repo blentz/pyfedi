@@ -34,3 +34,11 @@ def test_conformance_run_script_fails_without_a_webfinger_transcript():
     assert '</dev/null' in feditest   # a plan regression fails instead of waiting on a prompt
     assert '|| true' in feditest
     assert '[ -s results/webfinger.json ]' in script
+
+
+def test_conformance_run_script_runs_from_its_own_directory():
+    """The script's paths are relative to interop/conformance, so it moves there itself instead of assuming the caller
+    stands in the repository root."""
+    script = (ROOT / 'interop/conformance/run.sh').read_text()
+    assert 'cd "$(dirname "$0")"' in script
+    assert 'cd interop/conformance' not in script
