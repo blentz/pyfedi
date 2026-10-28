@@ -24,15 +24,17 @@ from datetime import datetime
 
 import logging
 import re
+from unittest.mock import patch
 
 import pytest
 from flask import g, render_template_string
+from flask.globals import app_ctx as app_ctx_proxy
 from sqlalchemy import text
 
 from app import db, request_hooks
 from app.constants import ROLE_ADMIN, ROLE_ADMIN_NAME
 from app.models import Role, Settings, Site
-from app.utils import etag_stamp, get_site_as_dict
+from app.utils import etag_stamp, get_site_as_dict, set_setting
 from tests.factories import make_community, make_instance, make_post, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -159,7 +161,6 @@ def test_admin_ids_computed_and_persisted_when_setting_absent(app, db_session):
 
 
 def test_admin_ids_read_from_setting_when_present(app, db_session):
-    from app.utils import set_setting
     make_instance('test.piefed.local', software='piefed')
     set_setting('admin_ids', [42])
     db.session.commit()
@@ -562,8 +563,6 @@ def test_context_processor_supplies_site_from_g(app, db_session):
     make_instance('test.piefed.local', software='piefed')
 
     with app.test_request_context('/'):
-        from app.utils import get_site_as_dict
-        from app.models import Site
         g.site = Site(**get_site_as_dict())
         rendered = render_template_string('{{ site.name }}')
 
@@ -575,8 +574,6 @@ def test_a_missing_site_row_is_created_with_defaults_and_a_warning(app, db_sessi
     by before_request for every view -- dereferenced None and no request at
     all could be served. It now creates Site(id=1) with the model defaults
     and logs a warning."""
-    from unittest.mock import patch
-
     db.session.execute(text('DELETE FROM "site"'))
     db.session.commit()
     assert db.session.get(Site, 1) is None
@@ -662,8 +659,6 @@ def test_teardown_removes_the_session_for_the_popped_context(app, db_session):
     not a "companion" to this one; it is currently the sole thing protecting the
     hook.
     """
-    from flask.globals import app_ctx as app_ctx_proxy
-
     with app.app_context():
         key = id(app_ctx_proxy._get_current_object())
         db.session.execute(text('SELECT 1'))
