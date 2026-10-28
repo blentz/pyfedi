@@ -34,6 +34,7 @@ import pytest
 from flask import current_app
 
 from app import db
+from app.constants import VISIBILITY_FOLLOWERS
 from app.models import ActivityBatch, ActivityPubLog, PostReplyVote, PostVote, SiteDomain
 from app.shared.tasks.likes import vote_for_poll, vote_for_post, vote_for_reply
 from app.storefront import clear_domain_cache
@@ -1166,11 +1167,11 @@ def test_a_sent_dislike_marks_the_vote_not_a_federated_like(db_session, http_moc
 AUTHOR_INBOX = 'https://origin.example/users/origin/inbox'
 
 
-def _remote_authored(s, http_mock, delivered=True, **origin_flags):
+def _remote_authored(s, http_mock, delivered=True, followed=True, **origin_flags):
     """A local community with a follower, and a post and reply by a user on origin.example. The author's inbox gets a
     route only when `delivered`: a route that is never called fails the test. Returns (author_route, follower_route, origin)."""
     _make_deliverable(s)
-    follower_route, _inst = _follower(s, http_mock)
+    follower_route = _follower(s, http_mock)[0] if followed else None   # a route nothing calls fails the test
     origin = _peer('origin.example')
     for flag, value in origin_flags.items():
         setattr(origin, flag, value)
@@ -1221,13 +1222,40 @@ def test_a_local_author_gets_no_direct_vote(db_session, http_mock):
     assert len(http_mock.calls) == 1
 
 
-def test_an_offline_author_instance_gets_no_direct_vote(db_session, http_mock):
+@pytest.mark.parametrize('flag', ['dormant', 'gone_forever'])
+def test_an_offline_author_instance_gets_no_direct_vote(db_session, http_mock, flag):
     s = _seed(with_keys=True)
-    _author_route, follower_route, _origin = _remote_authored(s, http_mock, delivered=False, dormant=True, gone_forever=True)
+    _author_route, follower_route, _origin = _remote_authored(s, http_mock, delivered=False, **{flag: True})
 
     vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
 
     assert _delivered_inboxes(follower_route) == {PEER_INBOX} and len(http_mock.calls) == 1
+
+
+def test_an_author_without_an_instance_row_gets_no_direct_vote_and_the_task_still_succeeds(db_session, http_mock):
+    s = _seed(with_keys=True)
+    _author_route, follower_route, _origin = _remote_authored(s, http_mock, delivered=False)
+    s.post.author.instance_id = None
+    db.session.commit()
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert _delivered_inboxes(follower_route) == {PEER_INBOX} and len(http_mock.calls) == 1
+
+
+@pytest.mark.parametrize('hide', ['followers_only', 'private', 'local_only'])
+def test_a_remote_authors_hidden_content_gets_no_direct_vote(db_session, http_mock, hide):
+    s = _seed(with_keys=True)
+    _remote_authored(s, http_mock, delivered=False, followed=False)
+    if hide == 'followers_only':
+        s.post.visibility = VISIBILITY_FOLLOWERS
+    else:
+        setattr(s.community, hide, True)
+    db.session.commit()
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert len(http_mock.calls) == 0
 
 
 def test_a_banned_author_domain_gets_no_direct_vote(db_session, http_mock):
