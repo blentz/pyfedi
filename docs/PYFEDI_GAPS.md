@@ -24,13 +24,14 @@ Abbreviations: `R` = `app/activitypub/routes.py`, `U` = `app/activitypub/util.py
 | Item | Status | Evidence / note |
 |---|---|---|
 | Person outbox | Empty ✓ | R:578 returns a paged collection built from `lambda offset, limit: []` |
-| Person `followers` / `following` | Not advertised ✓ | The Person document (R:473-494) lists neither. A `followers` route exists (R:2409), but it is not paged and is not an OrderedCollection. |
+| Person `followers` / `following` | Advertised, count-only | The Person document (R:566-572 as of 2026-10-28) lists both, and `user_followers` / `user_following` serve an OrderedCollection with `totalItems` and no items. The aptest `followers` and `following` checks pass for a Person. The instance actor (Application) advertises neither. |
 | `following` on Group | Missing | Only feeds (`/f/`) have it (R:3046) |
-| `liked`, `streams` | Missing | |
+| `liked` on Person | Served, count-only | Advertised on the Person document (R:572) and served by `user_liked` (R:2746) as an OrderedCollection with `totalItems`. The aptest `liked` check passes for a Person. |
+| `liked` on Group, Feed and instance actor; `streams` | Missing | The aptest `liked` check is inapplicable for them. |
 | `likes`, `shares` on objects | Missing | `post_to_page` emits only `replies` |
 | Group followers | Partial | Returns `totalItems` only, with empty items (by design, D175) |
 | Group outbox | Full | Paged OrderedCollection |
-| Instance actor outbox | Broken | `/site_outbox` and `/actor/outbox` are advertised but have no route, so they return 404 |
+| Instance actor outbox | Served, empty | `/actor` advertises `/actor/outbox`, which `instance_actor_outbox` (`app/main/routes.py:1383`) serves as an empty OrderedCollection; the aptest outbox check passes. The site Application document at `/` still advertises `/site_outbox`, which has no route (404). |
 | `endpoints` | Partial | Only `sharedInbox` |
 
 ### Fetching objects (§3)
@@ -45,7 +46,7 @@ Abbreviations: `R` = `app/activitypub/routes.py`, `U` = `app/activitypub/util.py
 ### Delivery (§7)
 
 - `bto`/`bcc` are not supported ✓. pyfedi never produces, strips or honours them.
-- Recipients come from database relations (instance followers, mentions, user followers), not from expanding the `to`/`cc` addresses.
+- Recipients come from database relations (instance followers, mentions, user followers), not from expanding the `to`/`cc` addresses. A Like, Dislike or Undo of one on a remote author's content also goes to the author's inbox (commit 45d948185), unless their instance is offline or banned or the voter blocked it; before, a vote in a local community such as `microblogs` reached only the instances following it.
 - Bulk delivery always goes to each instance's shared inbox. The shared inbox comes from the instance's Application actor, or falls back to a guessed `https://domain/inbox`. Per-actor inboxes are not used.
 - There is no general inbox forwarding (§7.1.2). Only a local Group re-Announces to its followers. Replies to a local user's followers-only post are not forwarded to that user's followers.
 - Duplicate detection lasts only 90 seconds ✓. It is a Redis key with a 90-second TTL (R:762). After that, a replayed activity is caught only if the handler for that activity is idempotent.
@@ -105,7 +106,8 @@ All of these reports are still drafts or living documents. The test-suite task f
 
 ### WebFinger report
 
-- Mostly supported, including the FEP-3b86 links.
+- Mostly supported, including the FEP-3b86 links. FediTest's WebFinger server tests pass (no baseline entry).
+- A request with no `resource` parameter answers 400 (RFC 7033 4.2). A well-formed resource of a scheme this server does not serve (`mailto:`, `foo://`) answers 404, not 400; only a resource with no scheme is malformed.
 - Reverse discovery is not checked: pyfedi does not verify that the actor links back to the handle it was found by.
 - host-meta is served only as XRD, with no JSON variant.
 
@@ -128,6 +130,59 @@ All of these reports are still drafts or living documents. The test-suite task f
 - E2EE / MLS: not supported.
 - Geosocial: only an Event's `location`. `Place` is not supported.
 - Handles: only WebFinger handles.
+
+### External conformance suites
+
+`interop/run.sh conformance` runs three third-party suites against the interop stack and diffs every non-pass against `interop/conformance/baseline.json` (see `interop/README.md`, "Conformance suites"). Each entry there is an expected failure, error or skip, and each carries the reason below. A test that is not in the table passes. Rows marked **Upstream** are bugs in FediTest's Mastodon node driver or in the test itself, cited by file and line at the pinned feditest-tests-fediverse `cdbb467` and feditest `41cfd61`; PieFed's behaviour is correct there. The other rows are gaps in this document: each points at its §1 section.
+
+| Test id | Outcome | Reason |
+|---|---|---|
+| `aptest/alice/create-then-update-modifies-object-checked-by-get` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); the outbox POST answers 405 |
+| `aptest/alice/inbox-must-be-an-orderedcollection` | skipped | Inapplicable: every inbox route is POST-only and answers GET with 405 (404 on a feed); PYFEDI_GAPS §1 Client-to-server API (§6) |
+| `aptest/alice/likes-collection-must-be-a-collection` | skipped | Inapplicable: no `likes` property; PYFEDI_GAPS §1 Actors and collections (§4-5) `likes`, `shares` missing |
+| `aptest/alice/outbox-post-must-accept-non-activity-object` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); the outbox answers POST with 405 |
+| `aptest/alice/outbox-post-server-adds-to-outbox-collection-checked-by-outbox-get` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); no outbox POST, so no Location header |
+| `aptest/alice/outbox-post-servers-must-return-a-201-created-http-code` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6) |
+| `aptest/alice/outbox-wraps-object-with-create-checked-using-get-location` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); no outbox POST, so no Location header |
+| `aptest/alice/post-outbox-server-overwrites-id-property` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); no outbox POST, so no Location header |
+| `aptest/alice/shares-collection-must-be-a-collection` | skipped | Inapplicable: no `shares` property; PYFEDI_GAPS §1 Actors and collections (§4-5) `likes`, `shares` missing |
+| `aptest/conf-feed/actor-objects-must-have-inbox-outbox-properties` | skipped | Inapplicable: the test does not recognise the PieFed `Feed` actor type; `isActorObject` accepts only Application, Group, Organization, Person and Service (activitypub-testing@0.16.1 src/activitypub-tests/actor-objects-must-have-inbox-outbox-properties/actor-objects-must-have-inbox-outbox-properties.js:122 and :131-139), so the test answers inapplicable at :80-85. A test limitation, not a PieFed defect |
+| `aptest/conf-feed/create-then-update-modifies-object-checked-by-get` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); the outbox POST answers 405 |
+| `aptest/conf-feed/inbox-must-be-an-orderedcollection` | skipped | Inapplicable: every inbox route is POST-only and answers GET with 405 (404 on a feed); PYFEDI_GAPS §1 Client-to-server API (§6) |
+| `aptest/conf-feed/liked-collection-must-be-a-collection` | skipped | Inapplicable: no `liked` property; PYFEDI_GAPS §1 Actors and collections (§4-5) `liked`, `streams` missing |
+| `aptest/conf-feed/likes-collection-must-be-a-collection` | skipped | Inapplicable: no `likes` property; PYFEDI_GAPS §1 Actors and collections (§4-5) `likes`, `shares` missing |
+| `aptest/conf-feed/outbox-post-must-accept-non-activity-object` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); the outbox answers POST with 405 |
+| `aptest/conf-feed/outbox-post-server-adds-to-outbox-collection-checked-by-outbox-get` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); no outbox POST, so no Location header |
+| `aptest/conf-feed/outbox-post-servers-must-return-a-201-created-http-code` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6) |
+| `aptest/conf-feed/outbox-wraps-object-with-create-checked-using-get-location` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); no outbox POST, so no Location header |
+| `aptest/conf-feed/post-outbox-server-overwrites-id-property` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); no outbox POST, so no Location header |
+| `aptest/conf-feed/shares-collection-must-be-a-collection` | skipped | Inapplicable: no `shares` property; PYFEDI_GAPS §1 Actors and collections (§4-5) `likes`, `shares` missing |
+| `aptest/instance/create-then-update-modifies-object-checked-by-get` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); the outbox POST answers 405 |
+| `aptest/instance/followers-collection-must-be-a-collection` | skipped | Inapplicable: the instance actor advertises no `followers`; PYFEDI_GAPS §1 Actors and collections (§4-5) |
+| `aptest/instance/following-collection-must-be-a-collection` | skipped | Inapplicable: the instance actor advertises no `following`; PYFEDI_GAPS §1 Actors and collections (§4-5) |
+| `aptest/instance/inbox-must-be-an-orderedcollection` | skipped | Inapplicable: every inbox route is POST-only and answers GET with 405 (404 on a feed); PYFEDI_GAPS §1 Client-to-server API (§6) |
+| `aptest/instance/liked-collection-must-be-a-collection` | skipped | Inapplicable: no `liked` property; PYFEDI_GAPS §1 Actors and collections (§4-5) `liked`, `streams` missing |
+| `aptest/instance/likes-collection-must-be-a-collection` | skipped | Inapplicable: no `likes` property; PYFEDI_GAPS §1 Actors and collections (§4-5) `likes`, `shares` missing |
+| `aptest/instance/outbox-post-must-accept-non-activity-object` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); the outbox answers POST with 405 |
+| `aptest/instance/outbox-post-server-adds-to-outbox-collection-checked-by-outbox-get` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); no outbox POST, so no Location header |
+| `aptest/instance/outbox-post-servers-must-return-a-201-created-http-code` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6) |
+| `aptest/instance/outbox-wraps-object-with-create-checked-using-get-location` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); no outbox POST, so no Location header |
+| `aptest/instance/post-outbox-server-overwrites-id-property` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); no outbox POST, so no Location header |
+| `aptest/instance/shares-collection-must-be-a-collection` | skipped | Inapplicable: no `shares` property; PYFEDI_GAPS §1 Actors and collections (§4-5) `likes`, `shares` missing |
+| `aptest/microblogs/create-then-update-modifies-object-checked-by-get` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); the outbox POST answers 405 |
+| `aptest/microblogs/inbox-must-be-an-orderedcollection` | skipped | Inapplicable: every inbox route is POST-only and answers GET with 405 (404 on a feed); PYFEDI_GAPS §1 Client-to-server API (§6) |
+| `aptest/microblogs/liked-collection-must-be-a-collection` | skipped | Inapplicable: no `liked` property; PYFEDI_GAPS §1 Actors and collections (§4-5) `liked`, `streams` missing |
+| `aptest/microblogs/likes-collection-must-be-a-collection` | skipped | Inapplicable: no `likes` property; PYFEDI_GAPS §1 Actors and collections (§4-5) `likes`, `shares` missing |
+| `aptest/microblogs/outbox-post-must-accept-non-activity-object` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); the outbox answers POST with 405 |
+| `aptest/microblogs/outbox-post-server-adds-to-outbox-collection-checked-by-outbox-get` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); no outbox POST, so no Location header |
+| `aptest/microblogs/outbox-post-servers-must-return-a-201-created-http-code` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6) |
+| `aptest/microblogs/outbox-wraps-object-with-create-checked-using-get-location` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); no outbox POST, so no Location header |
+| `aptest/microblogs/post-outbox-server-overwrites-id-property` | skipped | C2S not implemented: PYFEDI_GAPS §1 Client-to-server API (§6); no outbox POST, so no Location header |
+| `aptest/microblogs/shares-collection-must-be-a-collection` | skipped | Inapplicable: no `shares` property; PYFEDI_GAPS §1 Actors and collections (§4-5) `likes`, `shares` missing |
+| `system2-mastodon-to-piefed/system2.follow_receive::FollowReceiveTest` | error | **Upstream** (FediTest defect, not PieFed): follow_receive.py:81 asks the Mastodon sender node whether the PieFed receiver account follows, and the stock MastodonSaasNodeDriver raises "failed to find account" for an account on another node; test bug, PieFed behaviour correct (feditest-tests-fediverse cdbb467, feditest 41cfd61) |
+| `system2-mastodon-to-piefed/system2.reply_single_hop::ReplyTest` | failed | **Upstream** (FediTest defect, not PieFed): stock MastodonSaasNodeDriver returns note HTML where the test compares plain text (reply_single_hop.py:76 equal_to between the two nodes and :79 equal_to the plain reply cannot both hold with one Mastodon side); the reply is imported and delivered, PieFed behaviour correct (feditest-tests-fediverse cdbb467, feditest 41cfd61) |
+| `system2-piefed-to-mastodon/system2.direct_addressing::SendNoteToTest` | failed | **Upstream** (FediTest defect, not PieFed): stock MastodonSaasNodeDriver returns note HTML (<p>..</p> plus the mention) where the test compares plain text (direct_addressing.py:56 equal_to); unsatisfiable for any Mastodon receiver, PieFed behaviour correct (feditest-tests-fediverse cdbb467, feditest 41cfd61) |
+| `system2-piefed-to-mastodon/system2.reply_single_hop::ReplyTest` | failed | **Upstream** (FediTest defect, not PieFed): stock MastodonSaasNodeDriver returns note HTML where the test compares plain text (reply_single_hop.py:76 equal_to between the two nodes and :79 equal_to the plain reply cannot both hold with one Mastodon side); PieFed behaviour correct (feditest-tests-fediverse cdbb467, feditest 41cfd61) |
 
 ## 3. Bugs found during the audit
 

@@ -37,7 +37,7 @@
   },
   "aptest/conf-feed/actor-objects-must-have-inbox-outbox-properties": {
     "outcome": "skipped",
-    "reason": "Inapplicable: the test does not recognise the PieFed `Feed` actor type"
+    "reason": "Inapplicable: the test does not recognise the PieFed `Feed` actor type; `isActorObject` accepts only Application, Group, Organization, Person and Service (activitypub-testing@0.16.1 src/activitypub-tests/actor-objects-must-have-inbox-outbox-properties/actor-objects-must-have-inbox-outbox-properties.js:122 and :131-139) and answers inapplicable at :80-85; a limit of the test, not a PieFed defect"
   },
   "aptest/conf-feed/create-then-update-modifies-object-checked-by-get": {
     "outcome": "skipped",
