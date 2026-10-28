@@ -18,7 +18,7 @@ from feditest.protocols.fediverse import (ROLE_ACCOUNT_FIELD, ROLE_NON_EXISTING_
 from feditest.testplan import TestPlanConstellationNode, TestPlanNodeAccountField, TestPlanNodeNonExistingAccountField
 
 from interop.clients import PieFed
-from interop.conformance.piefed_mapping import acct_to_userid, libpq_dsn, microblog_title, note_text, received_ap_id
+from interop.conformance.piefed_mapping import acct_to_userid, libpq_dsn, microblog_title, note_text, received_ap_id, without_mention
 
 POLL_DEADLINE = 30    # seconds a read waits for federation to deliver what it asks about; the tests poll for 5
 POLL_INTERVAL = 0.5
@@ -155,14 +155,18 @@ class PieFedNode(FediverseNode):
         else:
             client.like_post(target['post']['post']['id'], score)
 
-    def _text(self, object_uri: str) -> str | None:
+    def _text(self, object_uri: str, addressee_url: str | None = None) -> str | None:
         rows = self._rows('SELECT ap_id, body_html FROM post WHERE ap_id = %s AND NOT deleted UNION ALL '
                           'SELECT ap_id, body_html FROM post_reply WHERE ap_id = %s AND NOT deleted', object_uri, object_uri)
-        return None if received_ap_id(rows) is None else note_text(rows[0][1] or '', '')   # a stored body has no title paragraph
+        if received_ap_id(rows) is None:
+            return None
+        text = note_text(rows[0][1] or '', '')   # a stored body has no title paragraph
+        return without_mention(text, addressee_url) if addressee_url else text
 
     def actor_has_received_object(self, actor_acct_uri: str, object_uri: str) -> str | None:
         """The text of the object when PieFed holds it. Holding it is all PieFed records: it keeps no per-recipient inbox."""
-        return self._await(lambda: self._text(object_uri), lambda text: text is not None)
+        addressee_url = f'https://{self.hostname}/u/{acct_to_userid(actor_acct_uri, self.hostname)}'   # the Mention a sender driver appended
+        return self._await(lambda: self._text(object_uri, addressee_url), lambda text: text is not None)
 
     def note_content(self, actor_acct_uri: str, note_uri: str) -> str | None:
         return self._text(note_uri)

@@ -3,7 +3,7 @@ import html
 
 import pytest
 
-from interop.conformance.piefed_mapping import acct_to_userid, libpq_dsn, microblog_title, note_text, received_ap_id
+from interop.conformance.piefed_mapping import acct_to_userid, libpq_dsn, microblog_title, note_text, received_ap_id, without_mention
 
 
 def _rendered(content, title):
@@ -91,3 +91,13 @@ def test_microblog_title_ends_on_a_whole_word_so_piefed_federates_the_body_alone
 
 def test_microblog_title_cuts_a_single_long_word_at_the_limit():
     assert microblog_title('x' * 500) == 'x' * 50
+
+
+def test_without_mention_drops_the_address_a_sender_driver_appended():
+    assert without_mention('hello https://piefed.test/u/alice', 'https://piefed.test/u/alice') == 'hello'
+
+
+def test_without_mention_leaves_other_text_alone():
+    assert without_mention('hello https://piefed.test/u/alice there', 'https://piefed.test/u/alice') == 'hello https://piefed.test/u/alice there'
+    assert without_mention('hello', 'https://piefed.test/u/alice') == 'hello'
+    assert without_mention('https://piefed.test/u/alice', 'https://piefed.test/u/alice') == 'https://piefed.test/u/alice'
