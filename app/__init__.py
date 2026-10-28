@@ -125,7 +125,7 @@ def rate_limit_key() -> str:
 Image.MAX_IMAGE_PIXELS = IMAGE_PIXEL_CAP // 2
 warnings.filterwarnings('ignore', category=Image.DecompressionBombWarning)
 
-db = SQLAlchemy(session_options={"autoflush": False}, engine_options={'pool_size': Config.DB_POOL_SIZE, 'max_overflow': Config.DB_MAX_OVERFLOW, 'pool_recycle': 3600})
+db = SQLAlchemy(session_options={"autoflush": False}, engine_options={'pool_size': Config.DB_POOL_SIZE, 'max_overflow': Config.DB_MAX_OVERFLOW, 'pool_recycle': 3600, 'pool_pre_ping': True})
 make_searchable(db.metadata)
 migrate = Migrate()
 login = StorefrontLoginManager()
