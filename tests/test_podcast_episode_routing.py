@@ -141,6 +141,29 @@ def test_the_api_keeps_a_third_partys_note_naming_a_podcast_out_of_its_community
     assert Post.query.filter_by(community_id=podcast_community_for(world.podcast).id).count() == 0
 
 
+def test_the_api_resolves_a_persons_note_into_microblogs_as_the_inbox_does(world, http_mock):
+    note_id = f'https://{PEER}/@alice/posts/12'
+    http_mock.get(note_id).respond(json=create(world.alice, note_id)['object'])
+
+    post = get_resolve_object(None, {'q': note_id}, user_id=1, recursive=True)
+
+    assert isinstance(post, Post)
+    assert post.community.name == 'microblogs'
+    assert post.user_id == world.alice.id
+
+
+def test_the_api_does_not_put_a_reply_whose_parent_cannot_be_fetched_into_microblogs(world, http_mock):
+    note_id = f'https://{PEER}/@alice/posts/13'
+    parent = f'https://{PEER}/@alice/posts/gone'
+    http_mock.get(note_id).respond(json=create(world.alice, note_id, in_reply_to=parent)['object'])
+    http_mock.get(parent).respond(404)
+
+    with pytest.raises(Exception, match='No object found'):
+        get_resolve_object(None, {'q': note_id}, user_id=1, recursive=True)
+
+    assert Post.query.count() == 0 and PostReply.query.count() == 0
+
+
 # ---- D3: a podcast owns its community; a restricted or private twin still takes its episodes -------------------
 
 @pytest.mark.parametrize('restriction', ['restricted_to_mods', 'private'])
