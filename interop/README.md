@@ -46,6 +46,8 @@ only when every result matches `interop/conformance/baseline.json`:
 - FediTest's `system2` tests run PieFed against Mastodon once in each direction, with PieFed as the sender and then as
   the receiver (`feditest/system2.testplan.template.json`, with the in-repo node driver `feditest/nodedrivers/piefed.py`
   and the stock Mastodon driver), into `results/system2-<piefed-to-mastodon|mastodon-to-piefed>.{tap,json,html}`.
+  The driver is also unit-tested against the test database (`tests/test_piefed_node_driver.py`): the unit-test image
+  installs FediTest at the same pinned commit (`requirements-test.txt`), so a change to the pin goes in both places.
 
 `results/` is gitignored and rebuilt on every run. Read `results/*.html` for the FediTest runs. For the actors, list
 what did not pass:
