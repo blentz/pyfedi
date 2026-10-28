@@ -303,3 +303,21 @@ def test_a_test_the_plan_skips_is_a_skip():
 
 def test_a_baselined_test_that_goes_missing_fails():
     assert compare({'p/t::two': 'missing'}, {'p/t::two': FAILED}) == ['p/t::two: baselined as failed but is now missing']
+
+
+def test_a_malformed_transcript_names_its_file(tmp_path, capsys):
+    (tmp_path / 'p.json').write_text(json.dumps({'sessions': []}))
+    assert main([str(tmp_path)]) == 1
+    assert capsys.readouterr().out.strip() == "p.json: not a feditest transcript (KeyError: 'plan')"
+
+
+def test_a_transcript_that_is_not_json_names_its_file(tmp_path, capsys):
+    (tmp_path / 'p.json').write_text('{')
+    assert main([str(tmp_path)]) == 1
+    assert capsys.readouterr().out.strip().startswith('p.json: not a feditest transcript (JSONDecodeError: ')
+
+
+def test_a_malformed_aptest_line_names_its_file(tmp_path, capsys):
+    (tmp_path / 'aptest-alice.ndjson').write_text('{"test": {}}\n')
+    assert main([str(tmp_path)]) == 1
+    assert capsys.readouterr().out.strip() == "aptest-alice.ndjson: not an activitypub-testing result (KeyError: 'url')"

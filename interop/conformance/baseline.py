@@ -139,20 +139,34 @@ def compare(results: dict[str, Outcome], baseline: dict[str, dict], locations: d
     return problems
 
 
+class MalformedResults(Exception):
+    pass
+
+
 def collect(results_dir: Path) -> tuple[dict[str, Outcome], dict[str, str]]:
     results: dict[str, Outcome] = {}
     locations: dict[str, str] = {}
     for path in sorted(results_dir.glob('*.json')):
         if not path.name.startswith('aptest-'):
-            results |= parse_feditest_json(path.read_text(), path.stem)
-            locations |= parse_feditest_locations(path.read_text(), path.stem)
+            try:
+                results |= parse_feditest_json(path.read_text(), path.stem)
+                locations |= parse_feditest_locations(path.read_text(), path.stem)
+            except (ValueError, KeyError, TypeError, IndexError) as e:   # json.JSONDecodeError is a ValueError
+                raise MalformedResults(f'{path.name}: not a feditest transcript ({type(e).__name__}: {e})') from e
     for path in sorted(results_dir.glob('aptest-*.ndjson')):
-        results |= parse_aptest_ndjson(path.read_text(), path.stem.removeprefix('aptest-'))
+        try:
+            results |= parse_aptest_ndjson(path.read_text(), path.stem.removeprefix('aptest-'))
+        except (ValueError, KeyError, TypeError) as e:
+            raise MalformedResults(f'{path.name}: not an activitypub-testing result ({type(e).__name__}: {e})') from e
     return results, locations
 
 
 def main(argv: list[str]) -> int:
-    results, locations = collect(Path(argv[0]))
+    try:
+        results, locations = collect(Path(argv[0]))
+    except MalformedResults as e:
+        print(e)
+        return 1
     problems = compare(results, json.loads(BASELINE.read_text()), locations)
     for problem in problems:
         print(problem)
