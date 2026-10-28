@@ -31,6 +31,48 @@ access tokens last a day; `up` renews them), and the URLs `castopod_podcast` and
   file URL, thumbnail), a PeerTube like comes back as an upvote, an edit renames it, a delete removes it, and a
   restore creates it again.
 
+## Conformance suites
+
+`interop/run.sh conformance` brings the stack up and runs `interop/conformance/run.sh` in the `conformance-runner`
+container (`interop/conformance/Containerfile`; every tool is pinned to an exact SHA or version). It is a local gate,
+not wired to CI, like `test`. It runs three suites and then `python -m interop.conformance.baseline`, which exits 0
+only when every result matches `interop/conformance/baseline.json`:
+
+- `activitypub-testing@0.16.1` checks four actors, `alice`, the `microblogs` community, the feed `conf-feed` and the
+  instance actor, into `results/aptest-<actor>.ndjson`.
+- FediTest's WebFinger server tests write `results/webfinger.{tap,json,html}`.
+- FediTest's `system2` tests run PieFed against Mastodon once in each direction, with PieFed as the sender and then as
+  the receiver (`feditest/system2.testplan.template.json`, with the in-repo node driver `feditest/nodedrivers/piefed.py`
+  and the stock Mastodon driver), into `results/system2-<piefed-to-mastodon|mastodon-to-piefed>.{tap,json,html}`.
+
+`results/` is gitignored and rebuilt on every run. Read `results/*.html` for the FediTest runs. For the actors, list
+what did not pass:
+
+    jq 'select(.result.outcome != "passed")' interop/conformance/results/aptest-alice.ndjson
+
+The gate reads FediTest's JSON, not its TAP, because the TAP writer reports a skipped test as `ok`.
+
+Between the two `system2` directions `reset_state.py` undoes every follow between alice and bob (a Mastodon note reaches
+PieFed only through a follow, so one direction's follows would change what the other sees) and ages bob: PieFed refuses
+a post from a remote account under a day old once it has more than 3 posts (`app.utils.can_create_post`), and the tests
+make a dozen. It sets bob's `created` 30 days back.
+
+A missing transcript fails the run: `run.sh` exits 1 when `results/webfinger.json` or a `system2` JSON is absent or
+empty, since a run that wrote nothing has nothing to compare and could otherwise pass on the actor results alone.
+
+FediTest prints its own `FAILED.` lines while baselined failures exist, and its exit code is ignored. The checker's exit
+code is the verdict. It exits 1, naming the test, when:
+
+- a test fails or errors and is not in the baseline (a skip must be baselined too, so new skips are noticed),
+- a baselined test now passes (remove the entry), did not run, or ended in another outcome than the entry records, or
+- there are no results at all, or an entry has no `reason`.
+
+To change the baseline, edit `baseline.json`: the key is the test id as the checker prints it, `outcome` is `failed`,
+`error` or `skipped`, and `reason` is required. A reason for a deliberate gap cites its section of
+`docs/PYFEDI_GAPS.md`; one for a bug in FediTest says `upstream:` and gives the file and line at the pinned SHA. A real
+PieFed failure is a defect to fix, not to baseline. Add the same row to the "External conformance suites" table in
+`docs/PYFEDI_GAPS.md` §2. `tests/test_conformance_baseline.py` pins the checker itself.
+
 ## Needs
 
 - podman and podman-compose; about 6 GB RAM; the first `up` pulls images and builds PieFed (a few minutes).
