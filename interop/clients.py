@@ -41,6 +41,12 @@ class Mastodon:
     def follow(self, account_id):
         return self.http.post(f'/api/v1/accounts/{account_id}/follow').raise_for_status().json()
 
+    def unfollow(self, account_id):
+        return self.http.post(f'/api/v1/accounts/{account_id}/unfollow').raise_for_status().json()
+
+    def remove_follower(self, account_id):
+        return self.http.post(f'/api/v1/accounts/{account_id}/remove_from_followers').raise_for_status().json()
+
     def relationship(self, account_id):
         return self.http.get('/api/v1/accounts/relationships', params={'id[]': account_id}).raise_for_status().json()[0]
 
@@ -67,11 +73,33 @@ class Mastodon:
         self.http.post(f'/api/v1/statuses/{status_id}/reblog').raise_for_status()
 
 
+class RetryAfterTransport(httpx.BaseTransport):
+    """Retries a 429 once the server's Retry-After has passed (5s when it sends none), for at most `patience` seconds.
+    Some PieFed routes are rate limited (POST /comment: 3 a minute); the limit stays, the caller waits."""
+
+    def __init__(self, inner, patience=90, sleep=time.sleep):
+        self.inner, self.patience, self.sleep = inner, patience, sleep
+
+    def handle_request(self, request):
+        waited = 0.0
+        while True:
+            response = self.inner.handle_request(request)
+            if response.status_code != 429:
+                return response
+            response.read()
+            delay = float(response.headers.get('Retry-After', 5))
+            if waited + delay > self.patience:
+                return response
+            self.sleep(delay)
+            waited += delay
+
+
 class PieFed:
     """Alpha API routes and payload names checked against app/api/alpha/routes.py and schema.py."""
 
     def __init__(self, user, password):
-        self.http = httpx.Client(base_url='https://piefed.test/api/alpha', verify=ssl.create_default_context(cafile=CA), timeout=10)
+        transport = RetryAfterTransport(httpx.HTTPTransport(verify=ssl.create_default_context(cafile=CA)))
+        self.http = httpx.Client(base_url='https://piefed.test/api/alpha', transport=transport, timeout=10)
         jwt = self.http.post('/user/login', json={'username': user, 'password': password}).raise_for_status().json()['jwt']
         self.http.headers['Authorization'] = f'Bearer {jwt}'
 
