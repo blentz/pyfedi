@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from interop.conformance.baseline import compare, main, parse_aptest_ndjson, parse_feditest_json, parse_tap
@@ -116,3 +117,71 @@ def test_cli_reads_results_dir(tmp_path, capsys):
     out = capsys.readouterr().out
     assert 'piefed/activitypub::inbox_rejects_unsigned' in out
     assert 'aptest/alice/inbox-must-be-an-orderedcollection' in out
+
+
+def feditest_transcript(*run_tests, run_result=None, session_result=None):
+    """A minimal transcript of one session over one test, in the shape of a real feditest --json file."""
+    return json.dumps({
+        'plan': {'session_template': {'tests': [{'name': 't::one', 'rolemapping': None, 'skip': None}]}},
+        'test_meta': {'t::one': {'name': 't::one'}},
+        'result': run_result,
+        'sessions': [{'result': session_result, 'run_tests': list(run_tests)}],
+    })
+
+
+def run_test(result=None, run_steps=None):
+    return {'plan_test_index': 0, 'result': result, 'run_steps': run_steps}
+
+
+FAILURE = {'type': 'AssertionFailure'}
+SOFT = {'type': 'SoftAssertionFailure'}
+SKIP = {'type': 'SkipTestException'}
+
+
+def test_real_feditest_json_outcomes():
+    results = parse_feditest_json((FIXTURES / 'real.feditest.json').read_text(), 'webfinger')
+    assert len(results) == 18
+    assert results['webfinger/webfinger.server.4_2__3_requires_resource_uri::requires_resource_uri_http_status'] == 'failed'
+    assert results['webfinger/webfinger.server.4_5__1_any_uri_scheme_for_resource_identifiers::any_uri_scheme_for_resource_identifiers'] == 'failed'
+    assert sorted(set(results.values())) == ['failed', 'passed']
+    assert list(results.values()).count('failed') == 2
+
+
+def test_a_set_test_result_wins_over_a_passing_step():
+    text = feditest_transcript(run_test(FAILURE, [{'result': None}]))
+    assert parse_feditest_json(text, 'p') == {'p/t::one': 'failed'}
+
+
+def test_a_set_test_result_wins_over_a_step_error():
+    text = feditest_transcript(run_test(SKIP, [{'result': {'type': 'ValueError'}}]))
+    assert parse_feditest_json(text, 'p') == {'p/t::one': 'skipped'}
+
+
+def test_a_failing_step_fails_a_test_with_no_result():
+    text = feditest_transcript(run_test(None, [{'result': None}, {'result': FAILURE}]))
+    assert parse_feditest_json(text, 'p') == {'p/t::one': 'failed'}
+
+
+def test_a_soft_step_failure_still_counts_when_it_is_all_there_is():
+    text = feditest_transcript(run_test(None, [{'result': SOFT}]))
+    assert parse_feditest_json(text, 'p') == {'p/t::one': 'failed'}
+
+
+def test_a_later_hard_step_failure_replaces_a_soft_one():
+    text = feditest_transcript(run_test(None, [{'result': SOFT}, {'result': SKIP}]))
+    assert parse_feditest_json(text, 'p') == {'p/t::one': 'skipped'}
+
+
+def test_steps_that_all_pass_leave_the_test_passed():
+    text = feditest_transcript(run_test(None, [{'result': None}, {'result': None}]))
+    assert parse_feditest_json(text, 'p') == {'p/t::one': 'passed'}
+
+
+def test_a_run_level_result_is_an_error_entry():
+    text = feditest_transcript(run_test(), run_result=FAILURE)
+    assert parse_feditest_json(text, 'p')['p/__run__'] == 'error'
+
+
+def test_a_session_level_result_is_an_error_entry():
+    text = feditest_transcript(run_test(), session_result=FAILURE)
+    assert parse_feditest_json(text, 'p')['p/__session_0__'] == 'error'
