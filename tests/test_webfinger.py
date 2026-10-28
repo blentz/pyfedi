@@ -182,15 +182,15 @@ def test_use_allowlist_off_falls_through_to_the_ban_check_even_at_intense_mode(a
     assert response.status_code != 403
 
 
-def test_a_request_without_a_resource_argument_is_404(app, db_session):
-    """`abort(404)` when `request.args.get('resource')` is falsy. No User-Agent,
-    so the access guards are skipped and this isolates the resource check.
+def test_a_request_without_a_resource_argument_is_400(app, db_session):
+    """RFC 7033 4.2: an absent `resource` parameter is a bad request, MUST be 400. No User-Agent, so the access
+    guards are skipped and this isolates the resource check.
     """
     seed_local_actors()
 
     response = webfinger_get(app)
 
-    assert response.status_code == 404
+    assert response.status_code == 400
 
 
 def test_an_acct_resource_resolves_a_local_user(app, db_session):
