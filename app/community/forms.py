@@ -21,6 +21,7 @@ from app.constants import APPLE_PODCAST_CATEGORIES, COMMUNITY_KIND_DISCUSSION, C
 from app.local_names import local_named
 from app.models import Community, Site, utcnow, User, Feed
 from app.utils import domain_from_url, MultiCheckboxField, get_timezones, url_is_parseable, is_hex_color
+from app.form_choices import select_choices
 
 MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 
@@ -45,7 +46,7 @@ def image_upload_too_large(field, uploaded_file) -> bool:
 
 class PodcastCategoryMixin:
     """The category a podcast community's RSS feed declares; both community forms carry it."""
-    podcast_category = SelectField(_l('Podcast category'), choices=PODCAST_CATEGORY_CHOICES, default='',
+    podcast_category = SelectField(_l('Podcast category'), choices=select_choices(PODCAST_CATEGORY_CHOICES), default='',
                                    validators=[Optional()], render_kw={'class': 'form-select'},
                                    description=_l('Used by the RSS feed of a podcast community'))
 
@@ -70,8 +71,8 @@ class AddCommunityForm(PodcastCategoryMixin, FlaskForm):
         (3, _l('Invitation by moderator required')),
         (4, _l('Invitation by owner required')),
     ]
-    invitations = SelectField(_l('Joining process'), coerce=int, choices=joining_options)
-    kind = SelectField(_l('Kind'), choices=KIND_CHOICES, default=COMMUNITY_KIND_DISCUSSION,
+    invitations = SelectField(_l('Joining process'), coerce=int, choices=select_choices(joining_options))
+    kind = SelectField(_l('Kind'), choices=select_choices(KIND_CHOICES), default=COMMUNITY_KIND_DISCUSSION,
                        render_kw={'class': 'form-select'})
     publicize = BooleanField(_l('Announce this community to newcommunities@lemmy.world'))
     question_answer = BooleanField(_l('Question & answer community'))
@@ -162,8 +163,8 @@ class EditCommunityForm(PodcastCategoryMixin, FlaskForm):
         (3, _l('Invitation by moderator required')),
         (4, _l('Invitation by owner required')),
     ]
-    invitations = SelectField(_l('Joining process'), coerce=int, choices=joining_options)
-    kind = SelectField(_l('Kind'), choices=KIND_CHOICES, default=COMMUNITY_KIND_DISCUSSION, validators=[Optional()],
+    invitations = SelectField(_l('Joining process'), coerce=int, choices=select_choices(joining_options))
+    kind = SelectField(_l('Kind'), choices=select_choices(KIND_CHOICES), default=COMMUNITY_KIND_DISCUSSION, validators=[Optional()],
                        render_kw={'class': 'form-select'})
     question_answer = BooleanField(_l('Question & answer community'))
     restricted_to_mods = BooleanField(_l('Only moderators can post'))
@@ -175,7 +176,7 @@ class EditCommunityForm(PodcastCategoryMixin, FlaskForm):
                              (DOWNVOTE_ACCEPT_TRUSTED, _l('Trusted instances')),
 
                              ]
-    downvote_accept_mode = SelectField(_l('Accept downvotes from'), coerce=int, choices=downvote_accept_modes,
+    downvote_accept_mode = SelectField(_l('Accept downvotes from'), coerce=int, choices=select_choices(downvote_accept_modes),
                                        validators=[Optional()], render_kw={'class': 'form-select'})
     topic = SelectField(_l('Topic'), coerce=int, validators=[Optional()], render_kw={'class': 'form-select'})
     languages = MultiCheckboxField(_l('Languages'), coerce=int, validators=[Optional()],
@@ -183,7 +184,7 @@ class EditCommunityForm(PodcastCategoryMixin, FlaskForm):
     layouts = [('', _l('List')),
                ('masonry', _l('Masonry')),
                ('masonry_wide', _l('Wide masonry'))]
-    default_layout = SelectField(_l('Layout'), coerce=str, choices=layouts, validators=[Optional()],
+    default_layout = SelectField(_l('Layout'), coerce=str, choices=select_choices(layouts), validators=[Optional()],
                                  render_kw={'class': 'form-select'})
     post_types = [('link', _l('Link')),
                   ('discussion', _l('Discussion')),
@@ -192,11 +193,11 @@ class EditCommunityForm(PodcastCategoryMixin, FlaskForm):
                   ('poll', _l('Poll')),
                   ('event', _l('Event')),
                  ]
-    default_post_type = SelectField(_l('Default post type'), coerce=str, choices=post_types, validators=[Optional()],
+    default_post_type = SelectField(_l('Default post type'), coerce=str, choices=select_choices(post_types), validators=[Optional()],
                                  render_kw={'class': 'form-select'})
     url_types = [('friendly', _l('Friendly urls')),
                  ('post_id', _l('Post ids only'))]
-    post_url_type = SelectField(_l('Post url structure to use in this community'), choices=url_types, coerce=str,
+    post_url_type = SelectField(_l('Post url structure to use in this community'), choices=select_choices(url_types), coerce=str,
                                 validators=[Optional()], render_kw={'class': 'form-select'})
     submit = SubmitField(_l('Save'))
 
@@ -210,7 +211,7 @@ class EditCommunityWikiPageForm(FlaskForm):
                     (2, _l('Community members')),
                     (3, _l('Any account'))
                     ]
-    who_can_edit = SelectField(_l('Who can edit'), coerce=int, choices=edit_options, validators=[Optional()],
+    who_can_edit = SelectField(_l('Who can edit'), coerce=int, choices=select_choices(edit_options), validators=[Optional()],
                                render_kw={'class': 'form-select'})
     submit = SubmitField(_l('Save'))
 
@@ -287,7 +288,7 @@ class CreatePostForm(FlaskForm):
     nsfw = BooleanField(_l('NSFW'))
     # Amendment B (S7.1): offered only in the local microblogs community (add_post passes show_visibility), and
     # deleted from the edit form -- visibility is fixed when the post is created
-    visibility = SelectField(_l('Visibility'), choices=[('public', _l('Public')), ('followers', _l('Followers only'))],
+    visibility = SelectField(_l('Visibility'), choices=select_choices([('public', _l('Public')), ('followers', _l('Followers only'))]),
                              default='public', render_kw={'class': 'form-select'})
     nsfl = BooleanField(_l('Gore/gross'))
     ai_generated = BooleanField(_l('AI generated'))
@@ -296,15 +297,15 @@ class CreatePostForm(FlaskForm):
                               render_kw={'class': 'form-select'})
     scheduled_for = DateTimeLocalField(_l('Publish at'), validators=[Optional()], format="%Y-%m-%dT%H:%M")
     repeat = SelectField(_l('Repeat'), validators=[Optional()],
-                         choices=[('none', _l('None')), ('daily', _l('Daily')),
-                                  ('weekly', _l('Weekly')), ('monthly', _l('Monthly'))],
+                         choices=select_choices([('none', _l('None')), ('daily', _l('Daily')),
+                                  ('weekly', _l('Weekly')), ('monthly', _l('Monthly'))]),
                          render_kw={'class': 'form-select'})
     timezone = SelectField(_l('Timezone'), validators=[DataRequired()], render_kw={'id': 'timezone', "class": "form-control"})
     submit = SubmitField(_l('Publish'))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.timezone.choices = get_timezones()
+        self.timezone.choices = select_choices(get_timezones())
 
     def validate_nsfw(self, field):
         if g.site.enable_nsfw is False:
@@ -542,8 +543,8 @@ class CreateEventForm(SubmittedUrlMixin, CreatePostForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.event_timezone.choices = get_timezones()
-        self.join_mode.choices = [('free', _('Free')), ('donation', _('Donation')), ('paid', _('Paid'))]
+        self.event_timezone.choices = select_choices(get_timezones())
+        self.join_mode.choices = select_choices([('free', _('Free')), ('donation', _('Donation')), ('paid', _('Paid'))])
 
     # These two replace a `validate_link_url` hook that was DEAD: WTForms
     # resolves a `validate_<name>` hook by field name, and CreateEventForm has
@@ -635,8 +636,8 @@ class CreateEventForm(SubmittedUrlMixin, CreatePostForm):
 
 
 class CreatePollForm(CreatePostForm):
-    mode = SelectField(_l('Mode'), validators=[DataRequired()], choices=[('single', _l('Voters choose one option')),
-                                                                        ('multiple', _l('Voters choose many options'))],
+    mode = SelectField(_l('Mode'), validators=[DataRequired()], choices=select_choices([('single', _l('Voters choose one option')),
+                                                                        ('multiple', _l('Voters choose many options'))]),
                        render_kw={'class': 'form-select'})
     finish_choices = [
         ('30m', _l('30 minutes')),
@@ -647,7 +648,7 @@ class CreatePollForm(CreatePostForm):
         ('3d', _l('3 days')),
         ('7d', _l('7 days')),
     ]
-    finish_in = SelectField(_l('End voting in'), validators=[DataRequired()], choices=finish_choices,
+    finish_in = SelectField(_l('End voting in'), validators=[DataRequired()], choices=select_choices(finish_choices),
                             render_kw={'class': 'form-select'})
     local_only = BooleanField(_l('Accept votes from this instance only'))
     choice_1 = StringField('Choice')  # intentionally left out of internationalization (no _l()) as this label is not used
@@ -713,7 +714,7 @@ class ReportCommunityForm(FlaskForm):
                       ('6', _l('Hate / genocide')),
                       ('7', _l('Other')),
                       ]
-    reasons = MultiCheckboxField(_l('Reason'), choices=reason_choices)
+    reasons = MultiCheckboxField(_l('Reason'), choices=select_choices(reason_choices))
     description = StringField(_l('More info'), validators=[Length(max=256)])
     report_remote = BooleanField('Also send report to originating instance')
     submit = SubmitField(_l('Report'))
@@ -815,7 +816,7 @@ class CommunityRssFeedEdit(FlaskForm):
         ('4320', _l('3 days')),
         ('10080', _l('7 days')),
     ]
-    check_frequency = SelectField(_l('Polling frequency'), validators=[DataRequired()], choices=polling_choices,
+    check_frequency = SelectField(_l('Polling frequency'), validators=[DataRequired()], choices=select_choices(polling_choices),
                                   render_kw={'class': 'form-select'})
     submit = SubmitField(_l('Save'))
 

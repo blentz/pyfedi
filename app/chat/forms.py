@@ -4,6 +4,7 @@ from wtforms import StringField, SubmitField, TextAreaField, BooleanField
 from wtforms.validators import DataRequired, Length
 
 from app.utils import MultiCheckboxField
+from app.form_choices import select_choices
 
 
 class AddReply(FlaskForm):
@@ -25,7 +26,7 @@ class ReportConversationForm(FlaskForm):
                       ('11', _l('Copyright violation')), ('12', _l('Trademark violation')),
                       ('13', _l('Self-harm or suicide')),
                       ('14', _l('Other'))]
-    reasons = MultiCheckboxField(_l('Reason'), choices=reason_choices)
+    reasons = MultiCheckboxField(_l('Reason'), choices=select_choices(reason_choices))
     description = StringField(_l('More info'), validators=[Length(max=256)])
     report_remote = BooleanField('Also send report to originating instance')
     submit = SubmitField(_l('Report'))

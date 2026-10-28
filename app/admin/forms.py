@@ -20,6 +20,7 @@ from app.storefront import default_domain, domain_by_id, domain_rows
 from app.onion_guard import MAX_POW_DIFFICULTY
 from app.utils import REDIRECT_POLICY_ALL_REFERRERS, REDIRECT_POLICY_FEDERATED_SERVERS, \
     REDIRECT_POLICY_SAME_ORIGIN, REDIRECT_POLICY_TRUSTED_SERVERS, validate_user_name_charset
+from app.form_choices import select_choices
 
 
 def no_nul(form, field):
@@ -69,9 +70,9 @@ class SiteMiscForm(FlaskForm):
                ('admins', _l('Admins and staff')),
                ('users', _l('Any user')),
                ]
-    allow_video_file_uploads = SelectField(_l('Allow video file uploads'), choices=video_upload_options,
+    allow_video_file_uploads = SelectField(_l('Allow video file uploads'), choices=select_choices(video_upload_options),
                                            validators=[DataRequired()], render_kw={'class': 'form-select'})
-    allow_audio_file_uploads = SelectField(_l('Allow audio file uploads'), choices=video_upload_options,
+    allow_audio_file_uploads = SelectField(_l('Allow audio file uploads'), choices=select_choices(video_upload_options),
                                            validators=[DataRequired()], render_kw={'class': 'form-select'})
     max_video_upload_mb = IntegerField(_l('Largest video upload (MB)'),
                                        validators=[Optional(), NumberRange(min=1, max=10240)])
@@ -83,7 +84,7 @@ class SiteMiscForm(FlaskForm):
         (REDIRECT_POLICY_FEDERATED_SERVERS, _l('This server and every server we federate with')),
         (REDIRECT_POLICY_ALL_REFERRERS, _l('Any server at all - DANGEROUS, turns this site into an open redirect that phishing links can hide behind')),
     ]
-    redirect_policy = SelectField(_l('Send people back to'), choices=redirect_policy_options,
+    redirect_policy = SelectField(_l('Send people back to'), choices=select_choices(redirect_policy_options),
                                   validators=[DataRequired()], render_kw={'class': 'form-select'})
     enable_nsfw = BooleanField(_l('Allow NSFW communities'))
     enable_nsfl = BooleanField(_l('Allow NSFL communities and posts'))
@@ -93,7 +94,7 @@ class SiteMiscForm(FlaskForm):
     email_verification = BooleanField(_l('Require new accounts to verify their email address'))
     captcha_enabled = BooleanField(_l('Require CAPTCHA for new account registration'))
     types = [('Open', _l('Open')), ('RequireApplication', _l('Require application')), ('Closed', _l('Closed'))]
-    registration_mode = SelectField(_l('Registration mode'), choices=types, default=1, coerce=str, render_kw={'class': 'form-select'})
+    registration_mode = SelectField(_l('Registration mode'), choices=select_choices(types), default=1, coerce=str, render_kw={'class': 'form-select'})
     application_question = TextAreaField(_l('Question to ask people applying for an account'))
     registration_approved_email = TextAreaField(_l('Registration approved email'), render_kw={'rows': '5'})
 
@@ -116,7 +117,7 @@ class SiteMiscForm(FlaskForm):
                ('popular', _l('Popular')),
                ('all', _l('All')),
                ]
-    default_filter = SelectField(_l('Default home filter'), choices=filters, validators=[DataRequired()], coerce=str,
+    default_filter = SelectField(_l('Default home filter'), choices=select_choices(filters), validators=[DataRequired()], coerce=str,
                                  render_kw={'class': 'form-select'})
     cache_remote_images_locally = BooleanField(_l('Cache remote images locally'))
     enable_report_em_dash_replies = BooleanField(_l('Report comments containing an em dash (—) from newly created users - likely spam / AI.'))
@@ -152,16 +153,16 @@ class InstanceChooserForm(FlaskForm):
 
 
 class FederationForm(FlaskForm):
-    federation_mode = RadioField(_l('Federation mode'), choices=[
+    federation_mode = RadioField(_l('Federation mode'), choices=select_choices([
         ('blocklist', _l('Blocklist - deny federation with specified instances')),
         ('allowlist', _l('Allowlist - only allow federation with specified instances'))
-    ], default='blocklist')
+    ]), default='blocklist')
     allowlist = TextAreaField(_l('Allow federation with these instances'))
-    allowlist_mode = RadioField(_l('Allowlist mode'), choices=[
+    allowlist_mode = RadioField(_l('Allowlist mode'), choices=select_choices([
         (0, _l('Weak')),
         (1, _l('Strong')),
         (2, _l('Intense'))
-    ], default=0)
+    ]), default=0)
     blocklist = TextAreaField(_l('Deny federation with these instances'))
     defederation_subscription = TextAreaField(_l('Auto-defederate from any instance defederated by'))
     blocked_phrases = TextAreaField(_l('Discard all posts, comments and PMs with these phrases (one per line)'))
@@ -254,7 +255,7 @@ class EditCommunityForm(FlaskForm):
                              (DOWNVOTE_ACCEPT_TRUSTED, _l('Trusted instances')),
 
                              ]
-    downvote_accept_mode = SelectField(_l('Accept downvotes from'), coerce=int, choices=downvote_accept_modes,
+    downvote_accept_mode = SelectField(_l('Accept downvotes from'), coerce=int, choices=select_choices(downvote_accept_modes),
                                        validators=[Optional()], render_kw={'class': 'form-select'})
     show_popular = BooleanField(_l('Posts can be popular'))
     show_all = BooleanField(_l('Posts show in All list'))
@@ -271,12 +272,12 @@ class EditCommunityForm(FlaskForm):
                (1825, _l('5 years')),
                (3650, _l('10 years')),
              ]
-    content_retention = SelectField(_l('Retain content'), choices=options, default=1, coerce=int, render_kw={'class': 'form-select'})
+    content_retention = SelectField(_l('Retain content'), choices=select_choices(options), default=1, coerce=int, render_kw={'class': 'form-select'})
     topic = SelectField(_l('Topic'), coerce=int, validators=[Optional()], render_kw={'class': 'form-select'})
     layouts = [('', _l('List')),
                ('masonry', _l('Masonry')),
                ('masonry_wide', _l('Wide masonry'))]
-    default_layout = SelectField(_l('Layout'), coerce=str, choices=layouts, validators=[Optional()], render_kw={'class': 'form-select'})
+    default_layout = SelectField(_l('Layout'), coerce=str, choices=select_choices(layouts), validators=[Optional()], render_kw={'class': 'form-select'})
     posting_warning = StringField(_l('Posting warning'), validators=[Optional(), Length(min=3, max=512)])
     languages = SelectMultipleField(_l('Languages'), coerce=int, validators=[Optional()], render_kw={'class': 'form-select'})
     ignore_remote_language = BooleanField(_l('Override remote language setting'))
@@ -373,18 +374,18 @@ class AddUserForm(FlaskForm):
                          (1, _l('Hide completely')),
                          (2, _l('Blur')),
                          (3, _l('Make semi-transparent'))]
-    ignore_bots = SelectField(_l('Posts by bots'), choices=hide_type_choices,
+    ignore_bots = SelectField(_l('Posts by bots'), choices=select_choices(hide_type_choices),
                                  default=0, coerce=int, render_kw={'class': 'form-select'})
-    hide_nsfw = SelectField(_l('NSFW posts'), choices=hide_type_choices, default=1,
+    hide_nsfw = SelectField(_l('NSFW posts'), choices=select_choices(hide_type_choices), default=1,
                             coerce=int, render_kw={'class': 'form-select'})
-    hide_nsfl = SelectField(_l('NSFL posts'), choices=hide_type_choices, default=1,
+    hide_nsfl = SelectField(_l('NSFL posts'), choices=select_choices(hide_type_choices), default=1,
                             coerce=int, render_kw={'class': 'form-select'})
 
     role_options = [(2, _l('User')),
                (3, _l('Staff')),
                (4, _l('Admin')),
                ]
-    role = SelectField(_l('Role'), choices=role_options, default=2, coerce=int, render_kw={'class': 'form-select'})
+    role = SelectField(_l('Role'), choices=select_choices(role_options), default=2, coerce=int, render_kw={'class': 'form-select'})
     site_domain = SelectField(_l('Domain'), choices=[], coerce=int, render_kw={'class': 'form-select'})
     submit = SubmitField(_l('Save'))
 
@@ -392,7 +393,7 @@ class AddUserForm(FlaskForm):
         super().__init__(*args, **kwargs)
         rows = [row for row in domain_rows() if row.id is not None]
         # 0 stands for the synthesised default of an install whose site_domain table is empty
-        self.site_domain.choices = [(row.id, row.domain) for row in rows] or [(0, default_domain().domain)]
+        self.site_domain.choices = select_choices([(row.id, row.domain) for row in rows] or [(0, default_domain().domain)])
         if self.site_domain.data is None:
             self.site_domain.data = default_domain().id or 0
 
@@ -463,15 +464,15 @@ class EditUserForm(FlaskForm):
                          (1, _l('Hide completely')),
                          (2, _l('Blur')),
                          (3, _l('Make semi-transparent'))]
-    hide_nsfw = SelectField(_l('NSFW posts'), choices=hide_type_choices, default=1,
+    hide_nsfw = SelectField(_l('NSFW posts'), choices=select_choices(hide_type_choices), default=1,
                             coerce=int, render_kw={'class': 'form-select'})
-    hide_nsfl = SelectField(_l('NSFL posts'), choices=hide_type_choices, default=1,
+    hide_nsfl = SelectField(_l('NSFL posts'), choices=select_choices(hide_type_choices), default=1,
                             coerce=int, render_kw={'class': 'form-select'})
     role_options = [(2, _l('User')),
                (3, _l('Staff')),
                (4, _l('Admin')),
                ]
-    role = SelectField(_l('Role'), choices=role_options, default=2, coerce=int, render_kw={'class': 'form-select'})
+    role = SelectField(_l('Role'), choices=select_choices(role_options), default=2, coerce=int, render_kw={'class': 'form-select'})
     remove_avatar = BooleanField(_l('Remove avatar'))
     remove_banner = BooleanField(_l('Remove banner'))
     admin_note = TextAreaField(_l('Notes about this user (only visible to other admins)'))
@@ -546,12 +547,12 @@ _DOMAIN_CHARS = re.compile(r'[a-z0-9.-]+')
 class SiteDomainForm(FlaskForm):
     domain = StringField(_l('Domain'), validators=[DataRequired(), Length(max=255)],
                          description=_l('A host name only: no scheme, no port.'))
-    scheme = SelectField(_l('Scheme'), choices=[('https', 'https'), ('http', 'http')], default='https')
+    scheme = SelectField(_l('Scheme'), choices=select_choices([('https', 'https'), ('http', 'http')]), default='https')
     federates = BooleanField(_l('Federates'), default=False,
                              description=_l('Fixed once the domain has accounts or communities.'))
     registration = SelectField(_l('Who may register'),
-                               choices=[('anyone', _l('Anyone')), ('staff', _l('Staff only')),
-                                        ('admin', _l('Admins only'))], default='anyone',
+                               choices=select_choices([('anyone', _l('Anyone')), ('staff', _l('Staff only')),
+                                        ('admin', _l('Admins only'))]), default='anyone',
                                description=_l('Registration per domain takes effect in a later release.'))
     submit = SubmitField(_l('Add domain'))
 

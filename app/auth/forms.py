@@ -9,6 +9,7 @@ from app.local_names import local_named
 from app.models import User, Community, Feed
 from app.storefront import current_storefront
 from app.utils import MultiCheckboxField, CaptchaField, get_setting, validate_user_name_charset
+from app.form_choices import select_choices
 
 
 class LoginForm(FlaskForm):
@@ -139,7 +140,7 @@ class FilterSetupForm(FlaskForm):
                (0, _l('A little is ok')),
                (-1, _l('Bring it on')),
                ]
-    trump_musk_level = RadioField(_l('How tired of Trump and Musk news are you?'), choices=options, default=1, coerce=int,
+    trump_musk_level = RadioField(_l('How tired of Trump and Musk news are you?'), choices=select_choices(options), default=1, coerce=int,
                                   render_kw={'class': 'form-select'})
     hide_type_choices = [(0, _l('Show')),
                          (1, _l('Hide completely')),
@@ -149,13 +150,13 @@ class FilterSetupForm(FlaskForm):
                          (1, _l('Hide completely')),
                          (2, _l('Label as AI')),
                          (3, _l('Make post semi-transparent'))]
-    ignore_bots = SelectField(_l('Posts by bots'), choices=hide_type_choices,
+    ignore_bots = SelectField(_l('Posts by bots'), choices=select_choices(hide_type_choices),
                               default=0, coerce=int, render_kw={'class': 'form-select'})
-    hide_nsfw = SelectField(_l('NSFW posts'), choices=hide_type_choices,
+    hide_nsfw = SelectField(_l('NSFW posts'), choices=select_choices(hide_type_choices),
                             default=0, coerce=int, render_kw={'class': 'form-select'})
-    hide_nsfl = SelectField(_l('NSFL posts'), choices=hide_type_choices,
+    hide_nsfl = SelectField(_l('NSFL posts'), choices=select_choices(hide_type_choices),
                             default=1, coerce=int, render_kw={'class': 'form-select'})
-    hide_gen_ai = SelectField(_l('AI-generated posts'), choices=ai_hide_type_choices,
+    hide_gen_ai = SelectField(_l('AI-generated posts'), choices=select_choices(ai_hide_type_choices),
                             default=1, coerce=int, render_kw={'class': 'form-select'})
     submit = SubmitField(_l('Save'))
 

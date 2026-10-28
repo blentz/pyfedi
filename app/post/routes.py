@@ -84,6 +84,7 @@ import dateparser
 import pendulum
 from sqlalchemy import or_
 import app as app_pkg
+from app.form_choices import select_choices
 
 def visibility_name(post) -> str:
     """The audience of a post as the edit form tells it: visibility is chosen at creation and never edited."""
@@ -246,7 +247,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
 
         # handle top-level comments/replies
         form = NewReplyForm()
-        form.language_id.choices = languages_for_form() if current_user.is_authenticated else []
+        form.language_id.choices = select_choices(languages_for_form() if current_user.is_authenticated else [])
 
         if post.status == POST_STATUS_SCHEDULED:
             flash(_('This post is scheduled to be published at %(when)s in %(_tz)s', when=str(post.scheduled_for), _tz=str(post.timezone)))
@@ -1077,7 +1078,7 @@ def add_reply(post_id: int, comment_id: int):
         return redirect(post.slug if post.slug else url_for('activitypub.post_ap', post_id=post_id))
 
     form = NewReplyForm()
-    form.language_id.choices = languages_for_form()
+    form.language_id.choices = select_choices(languages_for_form())
     if form.validate_on_submit():
         stamp_activity(current_user)
         apply_audit(current_user, 'ip_address', audit_ip(current_user, ip_address()))
@@ -1350,7 +1351,7 @@ def post_edit(post_id: int):
 
     flair_choices = flair_for_form(post.community_id)
     if len(flair_choices):
-        form.flair.choices = flair_choices
+        form.flair.choices = select_choices(flair_choices)
     else:
         del form.flair
 
@@ -1378,7 +1379,7 @@ def post_edit(post_id: int):
             # community left its own box editable and locked the wrong one.
             form.nsfl.render_kw = {'disabled': True}
 
-        form.language_id.choices = languages_for_form()
+        form.language_id.choices = select_choices(languages_for_form())
 
         if form.validate_on_submit() and not refused_media_change(post, media_url_field):
             try:
@@ -2065,7 +2066,7 @@ def post_set_flair(post_id):
         form = FlairPostForm()
         flair_choices = flair_for_form(post.community.id)
         if len(flair_choices):
-            form.flair.choices = flair_choices
+            form.flair.choices = select_choices(flair_choices)
 
         if form.validate_on_submit():
             post.flair.clear()
@@ -2428,7 +2429,7 @@ def post_reply_edit(post_id: int, comment_id: int):
     else:
         comment = None
     form = EditReplyForm()
-    form.language_id.choices = languages_for_form()
+    form.language_id.choices = select_choices(languages_for_form())
     if post_reply.user_id == current_user.id:
         if form.validate_on_submit():
             edit_reply(form, post_reply, post, SRC_WEB)

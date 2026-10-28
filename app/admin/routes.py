@@ -72,6 +72,7 @@ from app.admin import bp
 import app as app_pkg
 import time
 from app.plugins import get_loaded_plugins, get_plugin_hooks
+from app.form_choices import select_choices
 
 
 @cache.memoize(timeout=3600, cache_none=True)
@@ -504,7 +505,7 @@ def admin_domain_branding(domain_id):
         return redirect(url_for('admin.admin_site'))
     branding = db.session.get(DomainBranding, row.id)
     form = DomainBrandingForm()
-    form.default_theme.choices = [('', _('The site default'))] + theme_list()
+    form.default_theme.choices = select_choices([('', _('The site default'))] + theme_list())
     if form.validate_on_submit():
         # A field the post leaves out is blank, as an emptied one is: it inherits
         values = {field: getattr(form, field).data or '' for field in BRANDING_TEXT_FIELDS}
@@ -569,8 +570,8 @@ def admin_misc():
     site = db.session.get(Site, 1)
     if site is None:
         site = Site()
-    form.default_theme.choices = theme_list()
-    form.language_id.choices = languages_for_form(all_languages=True)
+    form.default_theme.choices = select_choices(theme_list())
+    form.language_id.choices = select_choices(languages_for_form(all_languages=True))
     if close_form.close_submit.data and close_form.validate():
         app_pkg.redis_client.set('pause_federation', '666', ex=86400 * 365 * 10)
         site.registration_mode = 'Closed'
@@ -1851,8 +1852,8 @@ def admin_community_edit(community_id):
     form = EditCommunityForm()
     community = db.session.get(Community, community_id) or abort(404)
     old_topic_id = community.topic_id if community.topic_id else None
-    form.topic.choices = topics_for_form(0)
-    form.languages.choices = languages_for_form(all_languages=True)
+    form.topic.choices = select_choices(topics_for_form(0))
+    form.languages.choices = select_choices(languages_for_form(all_languages=True))
     if form.validate_on_submit():
         # D1370. `community.name` is half of a local community's ActivityPub identity:
         # `admin_community_move`, which the template links to from this very page,
@@ -2100,7 +2101,7 @@ def admin_topics_import():
 @permission_required('administer all communities')
 def admin_topic_add():
     form = EditTopicForm()
-    form.parent_id.choices = topics_for_form(0)
+    form.parent_id.choices = select_choices(topics_for_form(0))
     if form.validate_on_submit():
         countries = form.countries.data.split('\n')
         countries = [c.strip() for c in countries if c.strip()]
@@ -2127,7 +2128,7 @@ def admin_topic_add():
 def admin_topic_edit(topic_id):
     form = EditTopicForm()
     topic = db.session.get(Topic, topic_id) or abort(404)
-    form.parent_id.choices = topics_for_form(topic_id)
+    form.parent_id.choices = select_choices(topics_for_form(topic_id))
     if form.validate_on_submit():
         countries = form.countries.data.split('\n')
         countries = [c.strip() for c in countries if c.strip()]

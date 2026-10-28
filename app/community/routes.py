@@ -96,6 +96,7 @@ from app.local_names import local_named, split_local_name
 from app.rss_extras import RSSFeed, PodcastChannel, itunes_image_ok
 from datetime import timezone, timedelta
 from flask import render_template as flask_render_template
+from app.form_choices import select_choices
 
 
 def _forget_sidebar_new_communities(user_id):
@@ -131,8 +132,8 @@ def add_local():
     if site.enable_nsfl is False:
         form.nsfl.render_kw = {'disabled': True}
 
-    form.languages.choices = languages_for_form(all_languages=True)
-    form.theme.choices = community_theme_list()
+    form.languages.choices = select_choices(languages_for_form(all_languages=True))
+    form.theme.choices = select_choices(community_theme_list())
 
     if form.validate_on_submit():
         # No slugify here any more: AddCommunityForm.validate normalises before
@@ -1352,11 +1353,11 @@ def add_post(actor, type=None):
     if not (community.is_moderator() or community.is_owner() or current_user.is_admin()):
         form.sticky.render_kw = {'disabled': True}
 
-    form.communities.choices = possible_communities()
-    form.language_id.choices = languages_for_form()
+    form.communities.choices = select_choices(possible_communities())
+    form.language_id.choices = select_choices(languages_for_form())
     flair_choices = flair_for_form(community.id)
     if len(flair_choices):
-        form.flair.choices = flair_choices
+        form.flair.choices = select_choices(flair_choices)
     else:
         del form.flair
 
@@ -1600,9 +1601,9 @@ def community_edit(community_id: int):
     community = db.session.get(Community, community_id) or abort(404)
     if can_moderate(community, current_user):
         form = EditCommunityForm()
-        form.topic.choices = topics_for_form(0)
-        form.theme.choices = community_theme_list()
-        form.languages.choices = languages_for_form(all_languages=True)
+        form.topic.choices = select_choices(topics_for_form(0))
+        form.theme.choices = select_choices(community_theme_list())
+        form.languages.choices = select_choices(languages_for_form(all_languages=True))
         if g.site.enable_nsfw is False:
             form.nsfw.render_kw = {'disabled': True}
         if g.site.enable_nsfl is False:
@@ -1611,7 +1612,7 @@ def community_edit(community_id: int):
         # changes it (A15.2). A disabled select is not submitted, so the POST below keeps the stored kind.
         locked = db.session.query(Post.id).filter(Post.community_id == community.id).first() is not None
         if community.kind == COMMUNITY_KIND_MICROBLOGS:
-            form.kind.choices = [(COMMUNITY_KIND_MICROBLOGS, _('Microblogs'))]
+            form.kind.choices = select_choices([(COMMUNITY_KIND_MICROBLOGS, _('Microblogs'))])
             locked = True
         if not community.is_local():   # a remote community keeps 'discussion' (§3.1)
             locked = True
@@ -2283,7 +2284,7 @@ def community_rss_feed_edit(community_id, rss_feed_id=None):
             if rss_feed_id and (rss_feed is None or rss_feed.community_id != community.id):
                 abort(404)
             form = CommunityRssFeedEdit()
-            form.flair.choices = [(-1, _('None'))] + flair_for_form(community_id)
+            form.flair.choices = select_choices([(-1, _('None'))] + flair_for_form(community_id))
             if form.validate_on_submit():
                 if rss_feed_id:
                     rss_feed.title = form.name.data
@@ -3347,7 +3348,7 @@ def community_membership_manage(community_id: int):
     flair_choices = []
     for flair in CommunityFlair.query.filter_by(community_id=community_id).order_by(CommunityFlair.flair).all():
         flair_choices.append((flair.id, flair.flair))
-    form.block_flair.choices = flair_choices
+    form.block_flair.choices = select_choices(flair_choices)
 
     if form.validate_on_submit():
         CommunityFlairBlock.query.filter(CommunityFlairBlock.user_id == current_user.id,

@@ -460,8 +460,7 @@ def test_a_community_with_flair_offers_it(app, poster):
 
     form = render.call_args.kwargs['form']
     assert form.flair is not None
-    assert form.flair.choices == [(0, ''), (1, 'Question')] or \
-        ('Question' in [label for _value, label in form.flair.choices])
+    assert 'Question' in [choice.label for choice in form.flair.choices]
 
 
 def test_a_community_without_flair_drops_the_field(app, poster):

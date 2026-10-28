@@ -71,6 +71,7 @@ from app.storefront import current_storefront, domain_for_host, hosted_instance_
 from app.utils import ap_alternate_url
 from app.utils import canonical_host
 import app as app_pkg
+from app.form_choices import select_choices
 
 # D1042. A settings export is a few kilobytes; this is two orders of magnitude
 # above the largest real one, and the application sets no MAX_CONTENT_LENGTH of
@@ -618,8 +619,8 @@ def user_settings():
     if user is None:
         abort(404)
     form = SettingsForm()
-    form.theme.choices = theme_list()
-    form.interface_language.choices = [
+    form.theme.choices = select_choices(theme_list())
+    form.interface_language.choices = select_choices([
         ('', _l('Auto-detect')),
         ('eu', _l('Basque')),
         ('ca', _l('Catalan')),
@@ -638,8 +639,8 @@ def user_settings():
         ('pl', _l('Polish')),
         ('ru', _l('Russian')),
         ('uk', _l('Ukrainian')),
-    ]
-    form.read_languages.choices = read_language_choices()
+    ])
+    form.read_languages.choices = select_choices(read_language_choices())
     if form.validate_on_submit():
         old_read_languages = current_user.read_language_ids
         propagate_indexable = form.indexable.data != current_user.indexable

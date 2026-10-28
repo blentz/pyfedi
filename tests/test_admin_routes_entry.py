@@ -24,6 +24,7 @@ import pytest
 from unittest.mock import patch
 
 from app import db
+from app.form_choices import select_choices
 from app.models import CronJobLog, Language, Site, utcnow
 from tests.factories import grant_permission, make_instance, make_user
 
@@ -91,9 +92,9 @@ def _valid_misc_payload(language):
     from app.utils import theme_list
 
     form = SiteMiscForm(formdata=None, meta={'csrf': False})
-    form.default_theme.choices = theme_list()
+    form.default_theme.choices = select_choices(theme_list())
     # Not languages_for_form(): that reads current_user, which needs a request.
-    form.language_id.choices = [(language.id, language.name)]
+    form.language_id.choices = select_choices([(language.id, language.name)])
     data = {}
     for field in form:
         if isinstance(field, SelectField):
@@ -103,7 +104,7 @@ def _valid_misc_payload(language):
             # test silently never runs -- the row would pass its own POST and
             # assert nothing.
             assert field.choices, f'{field.name} has no choices; seed its table'
-            data[field.name] = str(field.choices[0][0])
+            data[field.name] = str(field.choices[0].value)
         elif isinstance(field, IntegerField):
             # The upload limits and the onion media sizes have a minimum above 0; the rest take 0.
             data[field.name] = ('1' if field.name.endswith('_upload_mb') or field.name.endswith('_max_mb') else

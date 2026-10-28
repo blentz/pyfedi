@@ -70,6 +70,7 @@ from app.ldap_utils import test_ldap_connection, sync_user_to_ldap, login_with_l
 import boto3
 from app.activitypub.routes import replay_inbox_request, paged_outbox, AP_CACHE_COLLECTION, ap_media_type
 import app as app_pkg
+from app.form_choices import select_choices
 
 
 @bp.route('/', methods=['HEAD', 'GET'])
@@ -1074,7 +1075,7 @@ def share():
         abort(400)
     url = remove_tracking_from_link(url.strip())
     form = ShareLinkForm()
-    form.which_community.choices = possible_communities()
+    form.which_community.choices = select_choices(possible_communities())
     if form.validate_on_submit():
         community = db.session.get(Community, form.which_community.data) or abort(404)
         response = make_response(redirect(url_for('community.add_post', actor=community.link(), type='link', link=url,

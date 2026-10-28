@@ -50,6 +50,7 @@ from app.utils import etag_stamp, back, show_ban_message, piefed_markdown_to_lem
     refuse_if_private_instance, as_rss_reader
 from app.utils import ap_alternate_url
 import app.community.routes as community_routes
+from app.form_choices import select_choices
 
 
 @bp.route('/feed/new', methods=['GET', 'POST'])
@@ -65,7 +66,7 @@ def feed_new():
         form.nsfl.render_kw = {'disabled': True}
     if not current_user.is_admin():
         form.is_instance_feed.render_kw = {'disabled': True}
-    form.parent_feed_id.choices = feeds_for_form(0, current_user.id, current_user.home_domain())
+    form.parent_feed_id.choices = select_choices(feeds_for_form(0, current_user.id, current_user.home_domain()))
 
     if form.validate_on_submit():
         form.url.data = slugify(form.url.data.strip().split('/')[0], separator='_').lower()
@@ -177,7 +178,7 @@ def feed_edit(feed_id: int):
     if feed_to_edit.user_id != current_user.id and not current_user.is_admin():
         abort(404)
     edit_feed_form = EditFeedForm()
-    edit_feed_form.parent_feed_id.choices = feeds_for_form(feed_id, feed_to_edit.user_id, feed_to_edit.home_domain())
+    edit_feed_form.parent_feed_id.choices = select_choices(feeds_for_form(feed_id, feed_to_edit.user_id, feed_to_edit.home_domain()))
     edit_feed_form.feed_id = feed_id
     edit_feed_form.feed_domain = feed_to_edit.home_domain()   # a rename keeps the feed's home domain, and is checked there
     edit_feed_form.owner_user_name = db.session.get(User, feed_to_edit.user_id).user_name
@@ -270,7 +271,7 @@ def feed_copy(feed_id: int):
     if not feed_readable_by(feed_to_copy, current_user.id if current_user.is_authenticated else None):
         abort(404)
     copy_feed_form = AddCopyFeedForm()
-    copy_feed_form.parent_feed_id.choices = feeds_for_form(0, current_user.id, current_user.home_domain())
+    copy_feed_form.parent_feed_id.choices = select_choices(feeds_for_form(0, current_user.id, current_user.home_domain()))
 
     if not current_user.is_admin():
         copy_feed_form.is_instance_feed.render_kw = {'disabled': True}

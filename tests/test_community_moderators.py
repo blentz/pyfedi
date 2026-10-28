@@ -633,8 +633,8 @@ def test_the_membership_form_offers_this_communitys_flair(app, env):
             f'/community/{first.id}/membership')
 
     assert response.status_code == 200
-    assert render.call_args.kwargs['form'].block_flair.choices == [(mine.id,
-                                                                   'Question')]
+    assert [(choice.value, choice.label) for choice in render.call_args.kwargs['form'].block_flair.choices] == \
+        [(mine.id, 'Question')]
 
 
 def test_the_membership_form_shows_only_this_communitys_blocks(app, env):
