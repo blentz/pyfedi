@@ -163,13 +163,16 @@ class PieFedNode(FediverseNode):
         text = note_text(rows[0][1] or '', '')   # a stored body has no title paragraph
         return without_mention(text, addressee_url) if addressee_url else text
 
+    def _text_for(self, actor_acct_uri: str, object_uri: str) -> str | None:
+        """The text as `actor_acct_uri` reads it, without the Mention a sender driver appended to address that actor."""
+        return self._text(object_uri, f'https://{self.hostname}/u/{acct_to_userid(actor_acct_uri, self.hostname)}')
+
     def actor_has_received_object(self, actor_acct_uri: str, object_uri: str) -> str | None:
         """The text of the object when PieFed holds it. Holding it is all PieFed records: it keeps no per-recipient inbox."""
-        addressee_url = f'https://{self.hostname}/u/{acct_to_userid(actor_acct_uri, self.hostname)}'   # the Mention a sender driver appended
-        return self._await(lambda: self._text(object_uri, addressee_url), lambda text: text is not None)
+        return self._await(lambda: self._text_for(actor_acct_uri, object_uri), lambda text: text is not None)
 
     def note_content(self, actor_acct_uri: str, note_uri: str) -> str | None:
-        return self._text(note_uri)
+        return self._text_for(actor_acct_uri, note_uri)
 
     def update_note(self, actor_acct_uri: str, note_uri: str, new_content: str) -> None:
         client = self._client(actor_acct_uri)
