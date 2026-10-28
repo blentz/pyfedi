@@ -103,6 +103,9 @@ AP_CACHE_MISS = 'no-store'
 # D173 (owner ruling): an outbox is an OrderedCollection naming its pages, each ?page=N an OrderedCollectionPage
 OUTBOX_PAGE_SIZE = 50
 
+# a WebFinger resource in a URI scheme this server does not serve is a 404 (RFC 7033 4.5)
+URI_SCHEME = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*:')
+
 def paged_outbox(outbox_id: str, total: int, items_from) -> dict:
     """The outbox document a request asks for. `items_from(offset, limit)` lists one page's items. The collection
     itself keeps its first page inline, as before paging, for peers that read no further than it."""
@@ -176,9 +179,6 @@ def _federating_feed_named(actor: str, domain: str):
     account owns."""
     return Feed.query.filter(local_clause(Feed, f'{actor.strip()}@{domain}')).filter_by(
         public=True, banned=False, ap_deleted_at=None).filter(federating_feed_clause()).first()
-
-
-URI_SCHEME = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*:')
 
 
 @cache.memoize(timeout=60)
@@ -1793,7 +1793,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                 return
 
                         object_type = core_activity['object']['type']
-                        if object_type in NEW_CONTENT_TYPES:  # C4  # create or update a post
+                        if object_type in NEW_CONTENT_TYPES:  # create or update a post (C4)
                             process_new_content(user, community, store_ap_json, request_json, announced)
                             return
                         elif object_type == 'Group' and core_activity['type'] == 'Update':  # update community/category info
