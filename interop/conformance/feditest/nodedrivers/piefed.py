@@ -3,9 +3,11 @@ come from the database, because the alpha API shows neither follows nor who like
 PieFed cannot do through those, and FediverseNode records it as skipped: announce (the alpha API has no boost),
 update and delete of notes, accept and reject of follow requests."""
 import os
+import time
 from contextlib import closing
 from typing import Any
 
+import httpx
 import psycopg2
 from feditest import nodedriver
 from feditest.nodedrivers import Account, AccountManager, DefaultAccountManager, NodeConfiguration, NodeDriver, NonExistingAccount
@@ -17,6 +19,9 @@ from feditest.testplan import TestPlanConstellationNode, TestPlanNodeAccountFiel
 
 from interop.clients import PieFed
 from interop.conformance.piefed_mapping import acct_to_userid, libpq_dsn, microblog_title, note_text, received_ap_id
+
+POLL_DEADLINE = 30    # seconds a read waits for federation to deliver what it asks about; the tests poll for 5
+POLL_INTERVAL = 0.5
 
 PASSWORD_ACCOUNT_FIELD = TestPlanNodeAccountField(
     'password',
@@ -57,17 +62,40 @@ class PieFedNode(FediverseNode):
             cur.execute(sql, params)
             return cur.fetchall()
 
+    @staticmethod
+    def _await(read, ready=bool):
+        """read() until ready(answer) or POLL_DEADLINE: federation is asynchronous, and the tests' own polling is far shorter.
+        The last answer is returned either way, so an absent object is still an answer."""
+        deadline = time.monotonic() + POLL_DEADLINE
+        answer = read()
+        while not ready(answer) and time.monotonic() < deadline:
+            time.sleep(POLL_INTERVAL)
+            answer = read()
+        return answer
+
+    def _resolve(self, client: PieFed, query: str) -> dict:
+        """Resolve a remote object. It answers 400 until the object has been delivered or fetched, so retry until POLL_DEADLINE."""
+        deadline = time.monotonic() + POLL_DEADLINE
+        while True:
+            try:
+                return client.resolve(query)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code != 400 or time.monotonic() >= deadline:
+                    raise
+                time.sleep(POLL_INTERVAL)
+
     def _user_id(self, acct_uri: str) -> int | None:
-        """The user row of an account: a local one by name, a remote one by the `name@host` PieFed stores in ap_id."""
-        handle = acct_uri.removeprefix('acct:')
-        if handle.rpartition('@')[2] == self.hostname:
-            rows = self._rows('SELECT id FROM "user" WHERE ap_id IS NULL AND lower(user_name) = lower(%s)', acct_to_userid(acct_uri, self.hostname))
+        """The user row of an account: a local one by name, a remote one by name and domain. Not by ap_id: that is the
+        last segment of the actor URL, which is a numeric id on Mastodon."""
+        user_name, _, host = acct_uri.removeprefix('acct:').rpartition('@')
+        if host == self.hostname:
+            rows = self._rows('SELECT id FROM "user" WHERE ap_id IS NULL AND lower(user_name) = lower(%s)', user_name)
         else:
-            rows = self._rows('SELECT id FROM "user" WHERE lower(ap_id) = lower(%s)', handle)
+            rows = self._rows('SELECT id FROM "user" WHERE lower(user_name) = lower(%s) AND lower(ap_domain) = lower(%s)', user_name, host)
         return rows[0][0] if rows else None
 
-    def _acct_uri(self, user_name: str, ap_id: str | None) -> str:
-        return f'acct:{ap_id or f"{user_name}@{self.hostname}"}'
+    def _acct_uri(self, user_name: str, ap_domain: str | None) -> str:
+        return f'acct:{user_name}@{ap_domain or self.hostname}'
 
     # From FediverseNode
 
@@ -76,25 +104,26 @@ class PieFedNode(FediverseNode):
 
     def make_follow(self, actor_acct_uri: str, to_follow_actor_acct_uri: str) -> None:
         client = self._client(actor_acct_uri)
-        client.follow_user(client.resolve('@' + to_follow_actor_acct_uri.removeprefix('acct:'))['person']['person']['id'])
+        client.follow_user(self._resolve(client, '@' + to_follow_actor_acct_uri.removeprefix('acct:'))['person']['person']['id'])
 
     def make_unfollow(self, actor_acct_uri: str, following_actor_acct_uri: str) -> None:
         client = self._client(actor_acct_uri)
-        client.unfollow_user(client.resolve('@' + following_actor_acct_uri.removeprefix('acct:'))['person']['person']['id'])
+        client.unfollow_user(self._resolve(client, '@' + following_actor_acct_uri.removeprefix('acct:'))['person']['person']['id'])
+
+    def _follows(self, follower_acct_uri: str, leader_acct_uri: str) -> bool:
+        """An accepted follow, whichever of the two is local: user_follower keeps the local user in local_user_id and is_inward says which way it points."""
+        follower, leader = self._user_id(follower_acct_uri), self._user_id(leader_acct_uri)
+        if follower is None or leader is None:
+            return False
+        return bool(self._rows('SELECT 1 FROM user_follower WHERE is_accepted AND ('
+                               '(NOT is_inward AND local_user_id = %s AND remote_user_id = %s) OR '
+                               '(is_inward AND local_user_id = %s AND remote_user_id = %s))', follower, leader, leader, follower))
 
     def actor_is_following_actor(self, actor_acct_uri: str, leader_actor_acct_uri: str) -> bool:
-        follower, leader = self._user_id(actor_acct_uri), self._user_id(leader_actor_acct_uri)
-        if follower is None or leader is None:
-            return False
-        return bool(self._rows('SELECT 1 FROM user_follower WHERE local_user_id = %s AND remote_user_id = %s '
-                               'AND is_inward = false AND is_accepted', follower, leader))
+        return self._await(lambda: self._follows(actor_acct_uri, leader_actor_acct_uri))
 
     def actor_is_followed_by_actor(self, actor_acct_uri: str, follower_actor_acct_uri: str) -> bool:
-        leader, follower = self._user_id(actor_acct_uri), self._user_id(follower_actor_acct_uri)
-        if follower is None or leader is None:
-            return False
-        return bool(self._rows('SELECT 1 FROM user_follower WHERE local_user_id = %s AND remote_user_id = %s '
-                               'AND is_inward = true AND is_accepted', leader, follower))
+        return self._await(lambda: self._follows(follower_actor_acct_uri, actor_acct_uri))
 
     def make_create_note(self, actor_acct_uri: str, content: str, deliver_to: list[str] | None = None) -> str:
         for to in deliver_to or []:   # a Mention in the text is the only way to address someone
@@ -104,7 +133,7 @@ class PieFedNode(FediverseNode):
 
     def make_reply_note(self, actor_acct_uri: str, to_be_replied_to_object_uri: str, reply_content: str) -> str:
         client = self._client(actor_acct_uri)
-        target = client.resolve(to_be_replied_to_object_uri)
+        target = self._resolve(client, to_be_replied_to_object_uri)
         if 'comment' in target:
             comment = target['comment']['comment']
             reply = client.reply(comment['post_id'], reply_content, comment['id'])
@@ -120,25 +149,42 @@ class PieFedNode(FediverseNode):
 
     def _vote(self, actor_acct_uri: str, object_uri: str, score: int) -> None:
         client = self._client(actor_acct_uri)
-        target = client.resolve(object_uri)
+        target = self._resolve(client, object_uri)
         if 'comment' in target:
             client.like_comment(target['comment']['comment']['id'], score)
         else:
             client.like_post(target['post']['post']['id'], score)
 
-    def actor_has_received_object(self, actor_acct_uri: str, object_uri: str) -> str | None:
-        """The text of the object when PieFed holds it. Holding it is all PieFed records: it keeps no per-recipient inbox."""
+    def _text(self, object_uri: str) -> str | None:
         rows = self._rows('SELECT ap_id, body_html FROM post WHERE ap_id = %s AND NOT deleted UNION ALL '
                           'SELECT ap_id, body_html FROM post_reply WHERE ap_id = %s AND NOT deleted', object_uri, object_uri)
         return None if received_ap_id(rows) is None else note_text(rows[0][1] or '', '')   # a stored body has no title paragraph
 
+    def actor_has_received_object(self, actor_acct_uri: str, object_uri: str) -> str | None:
+        """The text of the object when PieFed holds it. Holding it is all PieFed records: it keeps no per-recipient inbox."""
+        return self._await(lambda: self._text(object_uri), lambda text: text is not None)
+
+    def note_content(self, actor_acct_uri: str, note_uri: str) -> str | None:
+        return self._text(note_uri)
+
+    def update_note(self, actor_acct_uri: str, note_uri: str, new_content: str) -> None:
+        client = self._client(actor_acct_uri)
+        client.edit(self._resolve(client, note_uri)['post']['post']['id'], title=microblog_title(new_content), body=new_content)
+
+    def delete_object(self, actor_acct_uri: str, object_uri: str) -> None:
+        client = self._client(actor_acct_uri)
+        client.delete(self._resolve(client, object_uri)['post']['post']['id'])   # a note made by make_create_note is a post
+
     def object_author(self, actor_acct_uri: str, object_uri: str) -> str | None:
-        rows = self._rows('SELECT u.user_name, u.ap_id FROM post p JOIN "user" u ON u.id = p.user_id WHERE p.ap_id = %s UNION ALL '
-                          'SELECT u.user_name, u.ap_id FROM post_reply r JOIN "user" u ON u.id = r.user_id WHERE r.ap_id = %s',
+        rows = self._rows('SELECT u.user_name, u.ap_domain FROM post p JOIN "user" u ON u.id = p.user_id WHERE p.ap_id = %s UNION ALL '
+                          'SELECT u.user_name, u.ap_domain FROM post_reply r JOIN "user" u ON u.id = r.user_id WHERE r.ap_id = %s',
                           object_uri, object_uri)
         return self._acct_uri(*rows[0]) if rows else None
 
     def direct_replies_to_object(self, actor_acct_uri: str, object_uri: str) -> list[str]:
+        return self._await(lambda: self._replies(object_uri))
+
+    def _replies(self, object_uri: str) -> list[str]:
         rows = self._rows('SELECT c.ap_id FROM post_reply c JOIN post p ON p.id = c.post_id WHERE p.ap_id = %s '
                           'AND c.parent_id IS NULL AND NOT c.deleted UNION ALL '
                           'SELECT c.ap_id FROM post_reply c JOIN post_reply r ON r.id = c.parent_id WHERE r.ap_id = %s AND NOT c.deleted',
@@ -146,9 +192,12 @@ class PieFedNode(FediverseNode):
         return [row[0] for row in rows]
 
     def object_likers(self, actor_acct_uri: str, object_uri: str) -> list[str]:
-        rows = self._rows('SELECT u.user_name, u.ap_id FROM post_vote v JOIN post p ON p.id = v.post_id '
+        return self._await(lambda: self._likers(object_uri))
+
+    def _likers(self, object_uri: str) -> list[str]:
+        rows = self._rows('SELECT u.user_name, u.ap_domain FROM post_vote v JOIN post p ON p.id = v.post_id '
                           'JOIN "user" u ON u.id = v.user_id WHERE p.ap_id = %s AND v.effect > 0 UNION ALL '
-                          'SELECT u.user_name, u.ap_id FROM post_reply_vote v JOIN post_reply r ON r.id = v.post_reply_id '
+                          'SELECT u.user_name, u.ap_domain FROM post_reply_vote v JOIN post_reply r ON r.id = v.post_reply_id '
                           'JOIN "user" u ON u.id = v.user_id WHERE r.ap_id = %s AND v.effect > 0', object_uri, object_uri)
         return [self._acct_uri(*row) for row in rows]
 
