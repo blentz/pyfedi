@@ -383,7 +383,7 @@ class TestWebfingerIdentifiesItsCaller:
 
         assert response.status_code == 200
 
-    def test_a_request_with_no_resource_is_a_404(self, env):
+    def test_a_request_with_no_resource_is_a_400(self, env):
         response = env.client.get('/.well-known/webfinger')
 
-        assert response.status_code == 404
+        assert response.status_code == 400
