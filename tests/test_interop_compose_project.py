@@ -24,3 +24,11 @@ def test_conformance_runner_is_in_the_interop_project():
     runner = services['conformance-runner']
     assert runner['profiles'] == ['conformance']
     assert runner['networks'] == services['interop-runner']['networks']
+
+
+def test_conformance_run_script_fails_without_a_webfinger_transcript():
+    script = (ROOT / 'interop/conformance/run.sh').read_text()
+    feditest = script[script.index('feditest run'):]
+    assert '</dev/null' in feditest.split('\n', 2)[1]   # a plan regression fails instead of waiting on a prompt
+    assert '|| true' in feditest.split('\n', 2)[1]
+    assert '[ -s results/webfinger.json ]' in script
