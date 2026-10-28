@@ -182,8 +182,12 @@ def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
             author = object.author
             if not author.is_local() and author.follow_answer_inbox() and author.instance_id and author.instance.online() and \
                     not instance_banned(author.instance.domain) and not user.has_blocked_instance(author.instance_id):
-                send_post_request(author.follow_answer_inbox(), undo_public if vote_to_undo else vote_public,
-                                  user.private_key, public_actor + '#main-key')
+                direct = undo_public if vote_to_undo else vote_public
+                if current_app.config['NOTIF_SERVER']:   # as the Announce above: votes go without retry when they can
+                    publish_async_posts([HttpSignature.signed_request(author.follow_answer_inbox(), direct, user.private_key,
+                                                                      public_actor + '#main-key', send_via_async=True)])
+                else:
+                    send_post_request(author.follow_answer_inbox(), direct, user.private_key, public_actor + '#main-key')
         else:
             # For remote communities, select appropriate payload
             if vote_to_undo:
