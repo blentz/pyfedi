@@ -7,16 +7,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libc6-dev \
     libpq-dev \
     pkg-config \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN python -m venv /venv
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m venv /venv
 ENV PATH="/venv/bin:$PATH"
 
+# COPY, not RUN --mount=source: podman (which builds the production image, .woodpecker.yaml) leaves a mounted file
+# out of the layer's cache key, so an edited requirements file reused the old install. A COPY keys the install on
+# the file's contents. The same holds for requirements-test.txt in `test` below.
+COPY requirements.txt /tmp/requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py314-slim \
-    --mount=source=requirements.txt,target=/tmp/requirements.txt \
-    pip install -r /tmp/requirements.txt
-RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py314-slim \
-    pip install gunicorn
+    pip install -r /tmp/requirements.txt gunicorn
 
 # Test dependencies go here and NOWHERE ELSE. This stage is what
 # compose.test.yaml builds; `runtime` below copies /venv from `builder`, which
@@ -34,24 +34,21 @@ RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py314-slim \
 # LAST stage, and that has to remain the production image.
 FROM builder AS test
 
-# git: deploy/autodeploy's tests drive real throwaway repositories.
-RUN apt-get update && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/*
-
-# COPY, not RUN --mount=source: podman leaves a mounted file out of the layer's cache key, so an edited
-# requirements-test.txt reused the old layer. A COPY keys the install below on the file's contents.
+# git: deploy/autodeploy's tests drive real throwaway repositories, and FediTest installs from a git commit.
 COPY requirements-test.txt /tmp/requirements-test.txt
 RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py314-slim \
-    pip install -r /tmp/requirements-test.txt
+    apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install -r /tmp/requirements-test.txt
 
 FROM python:3.14-slim AS runtime
 
 ARG TARGETARCH
 ARG SUPERCRONIC_VERSION=v0.2.49
 
-RUN adduser --disabled-password --gecos "" python
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN adduser --disabled-password --gecos "" python && \
+    apt-get update && apt-get install -y --no-install-recommends \
     tini \
     ffmpeg \
     curl \
@@ -77,11 +74,8 @@ COPY --chown=python:python . /app
 
 WORKDIR /app
 
-RUN pybabel compile -d app/translations || true
-
-RUN chmod u+x ./entrypoint.sh
-RUN chmod u+x ./entrypoint_celery.sh
-RUN chmod u+x ./entrypoint_async.sh
+RUN (pybabel compile -d app/translations || true) && \
+    chmod u+x ./entrypoint.sh ./entrypoint_celery.sh ./entrypoint_async.sh
 
 USER python
 EXPOSE 5000
