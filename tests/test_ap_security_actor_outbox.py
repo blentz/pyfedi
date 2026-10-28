@@ -40,3 +40,41 @@ def test_instance_actor_outbox_pages_like_every_other_outbox(app, db_session):
     assert page.json['orderedItems'] == []
     assert 'next' not in page.json
     assert bad.status_code == 400
+
+
+def test_site_outbox_is_an_empty_ordered_collection(app, db_session):
+    make_site()
+    with app.test_client() as client:
+        response = client.get('/site_outbox', headers=AP)
+
+    assert response.status_code == 200
+    assert response.content_type == 'application/activity+json'
+    assert response.headers['Cache-Control'] == 'public, max-age=60'
+    body = response.json
+    assert body['type'] == 'OrderedCollection'
+    assert body['id'] == 'https://test.piefed.local/site_outbox'
+    assert body['totalItems'] == 0
+    assert body['orderedItems'] == []
+
+
+def test_site_outbox_matches_what_the_site_document_advertises(app, db_session):
+    make_site()
+    with app.test_client() as client:
+        site = client.get('/', headers=AP).json
+        advertised = client.get(site['outbox'], headers=AP)
+
+    assert advertised.status_code == 200
+    assert advertised.json['id'] == site['outbox']
+
+
+def test_site_outbox_pages_like_every_other_outbox(app, db_session):
+    make_site()
+    with app.test_client() as client:
+        page = client.get('/site_outbox?page=1', headers=AP)
+        bad = client.get('/site_outbox?page=x', headers=AP)
+
+    assert page.status_code == 200
+    assert page.json['type'] == 'OrderedCollectionPage'
+    assert page.json['partOf'] == 'https://test.piefed.local/site_outbox'
+    assert page.json['orderedItems'] == []
+    assert bad.status_code == 400
