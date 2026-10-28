@@ -264,7 +264,7 @@ class TestHowARefreshIsDispatched:
     """
 
     def test_a_community_refresh_runs_inline_under_debug(self, db_session, monkeypatch):
-        monkeypatch.setattr(ap_util.current_app, 'debug', True, raising=False)
+        monkeypatch.setitem(ap_util.current_app.config, 'DEBUG', True)
         called = []
 
         with patch.object(ap_util, 'refresh_community_profile_task',
@@ -275,7 +275,7 @@ class TestHowARefreshIsDispatched:
 
     def test_a_community_refresh_is_queued_with_a_countdown_otherwise(self, db_session,
                                                                      monkeypatch):
-        monkeypatch.setattr(ap_util.current_app, 'debug', False, raising=False)
+        monkeypatch.setitem(ap_util.current_app.config, 'DEBUG', False)
         queued = []
 
         class Task:
@@ -292,7 +292,7 @@ class TestHowARefreshIsDispatched:
         assert 1 <= countdown <= 10
 
     def test_a_feed_refresh_runs_inline_under_debug(self, db_session, monkeypatch):
-        monkeypatch.setattr(ap_util.current_app, 'debug', True, raising=False)
+        monkeypatch.setitem(ap_util.current_app.config, 'DEBUG', True)
         called = []
 
         with patch.object(ap_util, 'refresh_feed_profile_task',
@@ -302,7 +302,7 @@ class TestHowARefreshIsDispatched:
         assert called == [(9, {'type': 'Feed'})]  # D223: the document is passed on
 
     def test_a_feed_refresh_is_queued_with_a_countdown_otherwise(self, db_session, monkeypatch):
-        monkeypatch.setattr(ap_util.current_app, 'debug', False, raising=False)
+        monkeypatch.setitem(ap_util.current_app.config, 'DEBUG', False)
         queued = []
 
         class Task:
