@@ -158,6 +158,12 @@ def test_the_shops_instance_actor_outbox_is_the_shops(app, shop_rows):
     assert json.loads(response.data)['id'] == f'{SHOP_BASE}/actor/outbox'
 
 
+def test_the_shops_site_outbox_is_the_shops(app, shop_rows):
+    response = served(app, '/site_outbox')
+    assert_on_shop(response.data)
+    assert json.loads(response.data)['id'] == f'{SHOP_BASE}/site_outbox'
+
+
 @pytest.mark.parametrize('first', [FIRST, SHOP])
 def test_the_application_document_is_cached_per_host(app, shop_rows, site_named_first, real_cache, first):
     """With a working cache (conftest's NullCache stores nothing), whichever host is asked first, the other's copy
@@ -186,7 +192,7 @@ def test_the_shops_application_document_is_the_shops(app, shop_rows, site_named_
     assert served(app, '/', host=FIRST).data == first_first   # and the shop's never answers the first domain
 
 
-@pytest.mark.parametrize('path', ['/actor', '/actor/outbox', '/'])
+@pytest.mark.parametrize('path', ['/actor', '/actor/outbox', '/', '/site_outbox'])
 def test_the_onions_instance_actor_answers_no_other_server(app, path):
     client = app.test_client()
     a_session(client)

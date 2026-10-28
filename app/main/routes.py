@@ -1390,6 +1390,16 @@ def instance_actor_outbox():
     return resp
 
 
+@bp.route('/site_outbox', methods=['GET'])
+def site_outbox():
+    """The outbox the site document at / advertises. Like the instance actor's, it publishes nothing, so it is empty."""
+    outbox = paged_outbox(f"{domain_base_url(federating_storefront())}/site_outbox", 0, lambda offset, limit: [])
+    resp = jsonify(outbox)
+    resp.content_type = ap_media_type()
+    resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
+    return resp
+
+
 @bp.route('/service_worker.js', methods=['GET'])
 def service_worker():
     js_path = os.path.join('static', 'service_worker.js')
