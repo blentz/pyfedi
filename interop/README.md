@@ -53,3 +53,8 @@ access tokens last a day; `up` renews them), and the URLs `castopod_podcast` and
   The runner mounts `tests/fixtures/media` for the media uploads.
 - Logs: `podman-compose -f compose.interop.yaml logs piefed-celery` (also `piefed-celery-background`, `piefed-web`, `mastodon-web`, `mastodon-sidekiq`, `peertube-web`, `castopod-web`, `caddy`). Castopod's application log is
   `/var/www/html/writable/logs/log-<date>.log` inside `castopod-web`.
+- The conformance gate runs FediTest's `system2` tests (PieFed and Mastodon, once in each direction) but not
+  `system3`. Its tests need three nodes, and a PieFed in two roles on one host would share one database: the
+  note node1 posts is already in node3's PieFed, so `actor_has_received_object` for node3 is true at once and
+  the delivery it should prove (`announce.py` line 93, `delete_double_hop.py` lines 93 and 104) is not tested. Running
+  `system3` needs a second PieFed stack.
