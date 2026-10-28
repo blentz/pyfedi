@@ -421,7 +421,8 @@ def make_site() -> Site:
     db_session, which only truncates tables -- callers that exercise the
     post-creation path must call this first.
     """
-    site = Site(name='Test Site', blocked_phrases='')
+    private_key, public_key = a_keypair()   # get_site_as_dict fills a keyless row, at ~96ms a pair
+    site = Site(name='Test Site', blocked_phrases='', private_key=private_key, public_key=public_key)
     db.session.add(site)
     db.session.commit()
     return site

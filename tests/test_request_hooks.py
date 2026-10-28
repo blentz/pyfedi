@@ -34,8 +34,9 @@ from sqlalchemy import text
 from app import db, request_hooks
 from app.constants import ROLE_ADMIN, ROLE_ADMIN_NAME
 from app.models import Role, Settings, Site
+from app.rsa_keys import RsaKeys
 from app.utils import etag_stamp, get_site_as_dict, set_setting
-from tests.factories import make_community, make_instance, make_post, make_user
+from tests.factories import a_keypair, make_community, make_instance, make_post, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -600,6 +601,61 @@ def test_a_missing_site_row_is_created_with_a_keypair(app, db_session):
     row = db.session.get(Site, 1)
     assert row.private_key.startswith('-----BEGIN') and row.public_key.startswith('-----BEGIN')
     assert site['public_key'] == row.public_key
+
+
+def test_a_keyless_site_row_is_given_a_keypair(app, db_session):
+    """A Site row made before 78d58efd3 by get_site_as_dict ahead of `flask init-db` has neither key, and nothing else
+    ever fills them: the instance actor kept publishing `publicKeyPem: null`."""
+    row = db.session.get(Site, 1)
+    row.private_key = row.public_key = None
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        site = get_site_as_dict()
+
+    db.session.refresh(row)
+    assert row.private_key.startswith('-----BEGIN PRIVATE KEY') and row.public_key.startswith('-----BEGIN PUBLIC KEY')
+    assert site['public_key'] == row.public_key
+    assert RsaKeys.public_key_for(row.private_key) == row.public_key
+
+
+def test_a_site_row_with_only_its_private_key_gets_that_keys_public_half(app, db_session):
+    """The private key is what the instance has signed with, so it is kept and its public half derived."""
+    private_key, public_key = a_keypair()
+    row = db.session.get(Site, 1)
+    row.private_key, row.public_key = private_key, None
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        get_site_as_dict()
+
+    db.session.refresh(row)
+    assert (row.private_key, row.public_key) == (private_key, public_key)
+
+
+def test_a_published_public_key_is_never_replaced(app, db_session):
+    """Peers may hold the public key already; a new pair would make every fetch they verify against it fail."""
+    _private_key, public_key = a_keypair()
+    row = db.session.get(Site, 1)
+    row.private_key, row.public_key = None, public_key
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        get_site_as_dict()
+
+    db.session.refresh(row)
+    assert (row.private_key, row.public_key) == (None, public_key)
+
+
+def test_a_site_row_with_keys_keeps_them(app, db_session):
+    row = db.session.get(Site, 1)
+    before = (row.private_key, row.public_key)
+
+    with app.test_request_context('/'):
+        get_site_as_dict()
+
+    db.session.refresh(row)
+    assert (row.private_key, row.public_key) == before and before[0]
 
 
 # ---------------------------------------------------------------------------
