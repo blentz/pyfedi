@@ -97,6 +97,26 @@ class PieFed:
     def replies(self, post_id):
         return self.http.get('/comment/list', params={'post_id': post_id}).raise_for_status().json()['comments']
 
+    def resolve(self, q):
+        """Fetch a remote object by URL or handle ('@bob@mastodon.test'); the response holds person, post or comment."""
+        return self.http.get('/resolve_object', params={'q': q}).raise_for_status().json()
+
+    def follow_user(self, user_id):
+        self.http.post('/user/follow', json={'user_id': user_id}).raise_for_status()
+
+    def unfollow_user(self, user_id):
+        self.http.post('/user/unfollow', json={'user_id': user_id}).raise_for_status()
+
+    def like_post(self, post_id, score):
+        self.http.post('/post/like', json={'post_id': post_id, 'score': score}).raise_for_status()
+
+    def like_comment(self, comment_id, score):
+        self.http.post('/comment/like', json={'comment_id': comment_id, 'score': score}).raise_for_status()
+
+    def reply(self, post_id, body, parent_id=None):
+        payload = {'post_id': post_id, 'body': body, **({'parent_id': parent_id} if parent_id else {})}
+        return self.http.post('/comment', json=payload).raise_for_status().json()['comment_view']
+
 
 _FIELD_ERROR = re.compile(r'class="invalid-feedback[^"]*"[^>]*>\s*([^<]+?)\s*<')
 
