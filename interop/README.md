@@ -7,6 +7,7 @@ See `compose.interop.yaml`; spec 2026-10-14 section 8.1.
 ## Use
 
     interop/run.sh up            start and seed the stack (users alice, bob and carol; tokens in interop/.tokens.json)
+    interop/run.sh conformance [args]   up, then interop/conformance/run.sh in the conformance-runner container
     interop/run.sh test [args]   up, then pytest interop/ in the interop-runner container (args pass through)
     interop/run.sh down          remove the stack and its volumes
 

@@ -2,6 +2,7 @@
 # Interop harness (spec 2026-10-14 §8.1).
 #   interop/run.sh up            start and seed the stack
 #   interop/run.sh test [args]   up, then pytest interop/ in the runner (args pass through)
+#   interop/run.sh conformance [args]   up, then interop/conformance/run.sh in the conformance-runner (args pass through)
 #   interop/run.sh down          remove the stack and its volumes
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -66,6 +67,8 @@ case "${1:-}" in
     up)   up ;;
     test) shift; up; $COMPOSE --profile runner run --rm interop-runner \
               python -m pytest -c interop/pytest.ini interop "$@" ;;
+    conformance) shift; up; $COMPOSE --profile conformance run --rm conformance-runner \
+              interop/conformance/run.sh "$@" ;;
     down) $COMPOSE down -v ;;
-    *)    echo "usage: interop/run.sh up|test|down" >&2; exit 2 ;;
+    *)    echo "usage: interop/run.sh up|test|conformance|down" >&2; exit 2 ;;
 esac

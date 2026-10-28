@@ -17,3 +17,10 @@ def _project(compose_file):
 def test_the_interop_stack_is_its_own_project():
     assert _project('compose.interop.yaml') == 'pyfedi-interop'
     assert _project('compose.interop.yaml') != _project('compose.test.yaml')
+
+
+def test_conformance_runner_is_in_the_interop_project():
+    services = yaml.safe_load((ROOT / 'compose.interop.yaml').read_text())['services']
+    runner = services['conformance-runner']
+    assert runner['profiles'] == ['conformance']
+    assert runner['networks'] == services['interop-runner']['networks']

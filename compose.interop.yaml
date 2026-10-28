@@ -194,6 +194,21 @@ services:
       - ./tests/fixtures/media:/app/tests/fixtures/media:ro   # test_media_pipeline uploads these
     profiles: [runner]
 
+  conformance-runner:
+    <<: *trust
+    environment:
+      DATABASE_URL: postgresql+psycopg2://piefed:piefed@piefed-db/piefed   # not in .env.interop: Mastodon reads DATABASE_URL too
+      NODE_EXTRA_CA_CERTS: /caddy-data/harness-root.crt   # node adds this to its built-in roots; trust_ca.sh sets the Python variables
+    build: {context: ., dockerfile: interop/conformance/Containerfile}
+    image: localhost/piefed-conformance-runner:latest
+    entrypoint: ["/trust_ca.sh"]
+    working_dir: /app
+    volumes:
+      - caddy-data:/caddy-data:ro
+      - ./interop/trust_ca.sh:/trust_ca.sh:ro
+      - ./interop:/app/interop   # read-write: the results land in interop/conformance/results
+    profiles: [conformance]
+
 volumes:
   caddy-data:
   piefed-media:
