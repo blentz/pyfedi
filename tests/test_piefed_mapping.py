@@ -80,3 +80,14 @@ def test_received_ap_id_is_the_first_rows_first_column():
 def test_libpq_dsn_drops_the_sqlalchemy_driver():
     assert libpq_dsn('postgresql+psycopg2://piefed:pw@piefed-db/piefed') == 'postgresql://piefed:pw@piefed-db/piefed'
     assert libpq_dsn('postgresql://piefed:pw@piefed-db/piefed') == 'postgresql://piefed:pw@piefed-db/piefed'
+
+
+def test_microblog_title_ends_on_a_whole_word_so_piefed_federates_the_body_alone():
+    content = 'Testing sender_creates_note 2026-10-28 03:42:37.047348 @bob@mastodon.test'
+    title = microblog_title(content)
+    assert title == 'Testing sender_creates_note 2026-10-28 03:42:37'
+    assert _rendered(content, title) == f'<p>{content}</p>'
+
+
+def test_microblog_title_cuts_a_single_long_word_at_the_limit():
+    assert microblog_title('x' * 500) == 'x' * 50
