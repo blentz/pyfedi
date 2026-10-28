@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Interop harness (spec 2026-10-14 §8.1).
-#   interop/run.sh up            start and seed the stack
-#   interop/run.sh test [args]   up, then pytest interop/ in the runner (args pass through)
+#   interop/run.sh up                   start and seed the stack
+#   interop/run.sh test [args]          up, then pytest interop/ in the runner (args pass through)
 #   interop/run.sh conformance [args]   up, then interop/conformance/run.sh in the conformance-runner (args pass through)
-#   interop/run.sh down          remove the stack and its volumes
+#   interop/run.sh down                 remove the stack and its volumes
 set -euo pipefail
 cd "$(dirname "$0")/.."
 COMPOSE="podman-compose -f compose.interop.yaml"
