@@ -327,7 +327,7 @@ class TestTheOutbox:
         assert titles(env.community) == set()
 
     def test_no_more_than_the_cap_is_taken(self, env, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', True)   # the cap is 2 there
+        monkeypatch.setitem(current_app.config, 'DEBUG', True)   # the cap is 2 there
         announces = [an_announce(a_post(f'https://remote.test/p/{index}',
                                         name=f'post {index}'))
                      for index in range(1, 6)]

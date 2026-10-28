@@ -148,14 +148,14 @@ class TestDeletingAnAccount:
                 unsubscribe_from_everything_then_delete_task(env.member.id)
 
     def test_in_debug_it_runs_here_and_now(self, env, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', True)
+        monkeypatch.setitem(current_app.config, 'DEBUG', True)
         with patch('app.admin.util.unsubscribe_from_everything_then_delete_task') \
                 as task:
             unsubscribe_from_everything_then_delete(7)
         task.assert_called_once_with(7)
 
     def test_otherwise_it_is_queued(self, env, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', False)
+        monkeypatch.setitem(current_app.config, 'DEBUG', False)
         with patch('app.admin.util.unsubscribe_from_everything_then_delete_task') \
                 as task:
             unsubscribe_from_everything_then_delete(7)

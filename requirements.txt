@@ -3,7 +3,6 @@ urllib3~=2.8.0
 Flask==3.1.3
 python-dotenv==1.2.4
 flask-wtf==1.3.0
-WTForms==3.3.1   # app.form_choices needs SelectChoice (3.3); 3.4 drops the tuple choices it replaces
 flask-sqlalchemy==3.1.1
 flask-migrate~=4.1.0
 # create_index(if_not_exists=...) in migration f4b8d2a6c1e7 needs Alembic 1.12 or later

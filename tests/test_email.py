@@ -85,14 +85,14 @@ def a_service(use_tls=True):
 
 class TestWhereAMessageIsHandedOff:
     def test_in_debug_it_is_sent_here_and_now(self, env, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', True)
+        monkeypatch.setitem(current_app.config, 'DEBUG', True)
         with patch('app.email.send_async_email') as task:
             send_email('a subject', 'a@b.test', ['c@d.test'], 'text', '<p>x</p>')
         task.assert_called_once_with('a subject', 'a@b.test', ['c@d.test'],
                                      'text', '<p>x</p>', None)
 
     def test_otherwise_it_is_queued(self, env, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', False)
+        monkeypatch.setitem(current_app.config, 'DEBUG', False)
         with patch('app.email.send_async_email') as task:
             send_email('a subject', 'a@b.test', ['c@d.test'], 'text',
                        '<p>x</p>', reply_to='e@f.test')
@@ -223,7 +223,7 @@ class TestWhatIsSentToAnAccount:
     def test_a_password_reset_in_development_prints_the_link(self, env,
                                                              monkeypatch,
                                                              capsys):
-        monkeypatch.setattr(current_app, 'debug', True)
+        monkeypatch.setitem(current_app.config, 'DEBUG', True)
         with env.app.test_request_context('/'):
             g.site = db.session.get(Site, 1)
             with patch('app.email.send_email'):

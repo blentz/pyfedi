@@ -120,13 +120,13 @@ class TestLookingAnInstanceUpByName:
 
 class TestHowTheLookupIsDispatched:
     def test_in_debug_it_runs_here_and_now(self, env, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', True)
+        monkeypatch.setitem(current_app.config, 'DEBUG', True)
         with patch('app.activitypub.util.new_instance_profile_task') as task:
             new_instance_profile(env.instance.id)
         task.assert_called_once_with(env.instance.id)
 
     def test_otherwise_it_is_queued_with_a_delay(self, env, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', False)
+        monkeypatch.setitem(current_app.config, 'DEBUG', False)
         with patch('app.activitypub.util.new_instance_profile_task') as task:
             new_instance_profile(env.instance.id)
         assert task.apply_async.call_args.kwargs['args'] == (env.instance.id,)

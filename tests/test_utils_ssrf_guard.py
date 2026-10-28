@@ -48,7 +48,7 @@ def not_debugging(app, monkeypatch):
     """`is_invalid_get_request_uri` returns False immediately under DEBUG, so the
     whole function is unreachable while it is on -- which is why other test files
     set DEBUG to get PAST this guard rather than to exercise it."""
-    monkeypatch.setattr(current_app, 'debug', False, raising=False)
+    monkeypatch.setitem(current_app.config, 'DEBUG', False)
 
 
 @pytest.fixture
@@ -279,7 +279,7 @@ class TestDebugTurnsTheGuardOff:
         """Asserted so the `not_debugging` fixture above is known to be doing
         something: in a development instance this function refuses nothing, which
         is what lets a developer point their instance at localhost."""
-        monkeypatch.setattr(current_app, 'debug', True, raising=False)
+        monkeypatch.setitem(current_app.config, 'DEBUG', True)
 
         assert is_invalid_get_request_uri('https://127.0.0.1/actor') is False
         assert is_invalid_get_request_uri('file:///etc/passwd') is False

@@ -395,14 +395,14 @@ class TestDeletingAReply:
 
 class TestHowADeleteIsDispatched:
     def test_in_debug_it_runs_here_and_now(self, env, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', True)
+        monkeypatch.setitem(current_app.config, 'DEBUG', True)
         with patch('app.community.util.delete_post_reply_from_community_task') \
                 as task:
             delete_post_reply_from_community(7, 3)
         task.assert_called_once_with(7, 3)
 
     def test_otherwise_it_is_queued(self, env, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', False)
+        monkeypatch.setitem(current_app.config, 'DEBUG', False)
         with patch('app.community.util.delete_post_reply_from_community_task') \
                 as task:
             delete_post_reply_from_community(7, 3)
@@ -474,13 +474,13 @@ class TestSendingAnAnnounceToOneInstance:
                                              {'type': 'x'})
 
     def test_in_debug_it_runs_here_and_now(self, env, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', True)
+        monkeypatch.setitem(current_app.config, 'DEBUG', True)
         with patch('app.community.util.send_to_remote_instance_task') as task:
             send_to_remote_instance(1, 2, {'type': 'x'})
         task.assert_called_once_with(1, 2, {'type': 'x'})
 
     def test_otherwise_it_is_queued(self, env, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', False)
+        monkeypatch.setitem(current_app.config, 'DEBUG', False)
         with patch('app.community.util.send_to_remote_instance_task') as task:
             send_to_remote_instance(1, 2, {'type': 'x'})
         task.delay.assert_called_once_with(1, 2, {'type': 'x'})
@@ -498,14 +498,14 @@ class TestSendingOneWithoutTouchingTheDatabase:
         assert send.call_args.kwargs == {'timeout': 10, 'new_task': False}
 
     def test_in_debug_it_runs_here_and_now(self, env, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', True)
+        monkeypatch.setitem(current_app.config, 'DEBUG', True)
         with patch('app.community.util.send_to_remote_instance_fast_task') \
                 as task:
             send_to_remote_instance_fast('inbox', 'key', 'id', {'type': 'x'})
         task.assert_called_once_with('inbox', 'key', 'id', {'type': 'x'})
 
     def test_otherwise_it_is_queued(self, env, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', False)
+        monkeypatch.setitem(current_app.config, 'DEBUG', False)
         with patch('app.community.util.send_to_remote_instance_fast_task') \
                 as task:
             send_to_remote_instance_fast('inbox', 'key', 'id', {'type': 'x'})
@@ -811,7 +811,7 @@ class TestTheCommunityAWebfingerNames:
         actor.status_code = 200
         actor.json.return_value = {'type': 'Group', 'preferredUsername': 'books'}
         with app.test_request_context('/'):
-            monkeypatch.setattr(current_app, 'debug', debug)
+            monkeypatch.setitem(current_app.config, 'DEBUG', debug)
             with patch('app.community.util.get_request', side_effect=[webfinger, actor]), \
                     patch('app.community.util.actor_json_to_model', return_value=model), \
                     patch('app.community.util.retrieve_mods_and_backfill') as backfill:
