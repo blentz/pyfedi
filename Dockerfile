@@ -38,8 +38,10 @@ FROM builder AS test
 RUN apt-get update && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
 
+# COPY, not RUN --mount=source: podman leaves a mounted file out of the layer's cache key, so an edited
+# requirements-test.txt reused the old layer. A COPY keys the install below on the file's contents.
+COPY requirements-test.txt /tmp/requirements-test.txt
 RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py314-slim \
-    --mount=source=requirements-test.txt,target=/tmp/requirements-test.txt \
     pip install -r /tmp/requirements-test.txt
 
 FROM python:3.14-slim AS runtime

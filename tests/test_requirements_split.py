@@ -100,6 +100,17 @@ def test_the_dockerfile_installs_the_test_requirements_in_a_stage_of_its_own():
         '`test` would put atheris and pytest into production.')
 
 
+def test_a_change_to_the_test_requirements_rebuilds_their_layer():
+    """podman leaves the files a RUN --mount=source reads out of its cache key, so with requirements-test.txt mounted
+    an edit to it reused the old layer: the pins changed and the image did not. A COPY puts the file's contents in the
+    key, so the install below it runs again whenever the file changes."""
+    dockerfile = (REPO_ROOT / 'Dockerfile').read_text()
+    test_stage = dockerfile.split('FROM builder AS test', 1)[1].split('\nFROM ', 1)[0]
+    assert 'COPY requirements-test.txt /tmp/requirements-test.txt' in test_stage
+    assert 'pip install -r /tmp/requirements-test.txt' in test_stage
+    assert 'source=requirements-test.txt' not in test_stage
+
+
 def test_the_test_container_builds_the_test_stage():
     compose = (REPO_ROOT / 'compose.test.yaml').read_text()
     assert 'target: test' in compose, (
