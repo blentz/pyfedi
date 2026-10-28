@@ -74,11 +74,19 @@ class Mastodon:
 
 
 class RetryAfterTransport(httpx.BaseTransport):
-    """Retries a 429 once the server's Retry-After has passed (5s when it sends none), for at most `patience` seconds.
+    """Retries a 429 once the server's Retry-After has passed (at least 1s; 5s when it sends none or an HTTP date), for at most `patience` seconds.
     Some PieFed routes are rate limited (POST /comment: 3 a minute); the limit stays, the caller waits."""
 
     def __init__(self, inner, patience=90, sleep=time.sleep):
         self.inner, self.patience, self.sleep = inner, patience, sleep
+
+    @staticmethod
+    def retry_after(response):
+        """Seconds the server asked for; 5 when it sent none or sent an HTTP date, which is not worth parsing here."""
+        try:
+            return float(response.headers.get('Retry-After', 5))
+        except ValueError:
+            return 5.0
 
     def handle_request(self, request):
         waited = 0.0
@@ -87,7 +95,7 @@ class RetryAfterTransport(httpx.BaseTransport):
             if response.status_code != 429:
                 return response
             response.read()
-            delay = float(response.headers.get('Retry-After', 5))
+            delay = max(1.0, self.retry_after(response))
             if waited + delay > self.patience:
                 return response
             self.sleep(delay)
