@@ -5,11 +5,11 @@ import sys
 from pathlib import Path
 from typing import Literal
 
-Outcome = Literal['passed', 'failed', 'skipped', 'error']
+Outcome = Literal['passed', 'failed', 'skipped', 'error', 'inapplicable', 'cantTell']   # the last two are EARL's own, for aptest
 
 BASELINE = Path(__file__).with_name('baseline.json')
 EARL_OUTCOMES: dict[str, Outcome] = {
-    'passed': 'passed', 'failed': 'failed', 'inapplicable': 'skipped', 'cantTell': 'skipped',
+    'passed': 'passed', 'failed': 'failed', 'inapplicable': 'inapplicable', 'cantTell': 'cantTell',
 }
 TESTS_DIR = '/opt/feditest-tests-fediverse/tests/'   # the pinned feditest-tests-fediverse checkout in the runner image
 TAP_LINE = re.compile(r'^(not ok|ok)\b\s*(?:\d+)?\s*(?:-\s*)?(.*)$')
