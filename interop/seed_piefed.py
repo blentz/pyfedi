@@ -1,11 +1,13 @@
-# Seed the harness PieFed: site setup, user alice, the local microblogs community, alice's video_channel
+# Seed the harness PieFed: site setup, user alice, the local microblogs community, alice's feed conf-feed, alice's video_channel
 # community vc1, and the media upload communities vc_media (video_channel) and pod_media (podcast), which alice
 # moderates, with video and audio uploads open to users. Idempotent.
 from app import db
 from app.activitypub.signature import RsaKeys
 from app.activitypub.util import find_microblogging_community
 from app.constants import COMMUNITY_KIND_PODCAST, COMMUNITY_KIND_VIDEO_CHANNEL
-from app.models import Community, CommunityMember, User
+from app.models import Community, CommunityMember, Feed, User
+from app.shared.feed import feed_identity
+from app.storefront import default_domain
 from app.utils import gibberish, set_setting, utcnow
 from flask import current_app
 
@@ -51,6 +53,14 @@ for name, kind in (('vc_media', COMMUNITY_KIND_VIDEO_CHANNEL), ('pod_media', COM
         db.session.flush()
         db.session.add(CommunityMember(user_id=owner.id, community_id=community.id, is_moderator=True, is_owner=True))
         db.session.commit()
+if Feed.query.filter_by(machine_name='conf-feed', ap_id=None).first() is None:
+    # a feed belongs to a site domain, and one without a domain is not served: made as feed_new makes it
+    owner = User.query.filter_by(user_name='alice', ap_id=None).one()
+    private_key, public_key = RsaKeys.generate_keypair()
+    db.session.add(Feed(user_id=owner.id, title='conf-feed', name='conf-feed', machine_name='conf-feed',
+                        private_key=private_key, public_key=public_key, public=True, nsfw=False, nsfl=False,
+                        subscriptions_count=1, **feed_identity(default_domain(), 'conf-feed')))
+    db.session.commit()
 set_setting('allow_video_file_uploads', 'users')
 set_setting('allow_audio_file_uploads', 'users')
 print('seed_piefed: ok')
