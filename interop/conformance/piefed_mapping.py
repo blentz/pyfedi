@@ -67,6 +67,13 @@ def note_text(html: str, title: str) -> str:
     return '\n\n'.join(paragraphs)
 
 
+def without_mention(text: str, actor_url: str) -> str:
+    """`text` without the address a sender driver appended to deliver it to `actor_url` (a Mention is the only way to
+    address someone, and PieFed shows it as the actor's URL). Only a trailing one, and never the whole text."""
+    suffix = ' ' + actor_url
+    return text.removesuffix(suffix) if text.endswith(suffix) else text
+
+
 def received_ap_id(rows: list[tuple]) -> str | None:
     """The ap_id of the first row of an ap_id-first query, None when PieFed has no such object (an unknown object is an answer, not an error)."""
     return rows[0][0] if rows else None
