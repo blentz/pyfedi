@@ -22,7 +22,7 @@ from werkzeug.exceptions import BadRequest
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import cached_property
 from celery import Celery
-from celery.signals import task_failure, task_prerun, worker_init
+from celery.signals import task_failure, task_prerun, worker_init, worker_process_init
 from sqlalchemy_searchable import make_searchable
 import httpx
 from authlib.integrations.flask_client import OAuth
@@ -164,6 +164,13 @@ def _close_the_connections_before_the_pool_forks(**kwargs):
     # synchronization with server". With none open, each child connects for itself.
     db.session.remove()
     db.engine.dispose()
+
+
+@worker_process_init.connect
+def _forget_the_connections_the_child_inherited(**kwargs):
+    # A child re-forked later (--max-tasks-per-child) comes from a main process that may have reconnected since the
+    # handler above. close=False leaves the parent's sockets alone: they are the parent's to close.
+    db.engine.dispose(close=False)
 
 
 @task_prerun.connect
