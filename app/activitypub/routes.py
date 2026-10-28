@@ -1,6 +1,7 @@
 import base64
 import copy
 import io
+import re
 
 import werkzeug.exceptions
 from flask import request, current_app, abort, jsonify, json, g, url_for, redirect, make_response, flash
@@ -177,6 +178,9 @@ def _federating_feed_named(actor: str, domain: str):
         public=True, banned=False, ap_deleted_at=None).filter(federating_feed_clause()).first()
 
 
+URI_SCHEME = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*:')
+
+
 @cache.memoize(timeout=60)
 def process_webfinger_request(resource, host):
     """WebFinger's answer to `resource` asked of `host`, one of our domains. Each federating domain answers only for
@@ -196,6 +200,8 @@ def process_webfinger_request(resource, host):
         # url_host, not furl(...).host: furl raises ValueError on a resource it cannot read ('https://[x'), which
         # was a 500. Such a URL names no host, so it is not on this instance.
         domain = url_host(query) or ''
+    elif URI_SCHEME.match(query):
+        abort(404)   # RFC 7033 4.5: any URI scheme may be asked about; one we hold nothing under names nothing here
     else:
         abort(400, description='Webfinger regex failed to match')
 

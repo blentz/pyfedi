@@ -273,6 +273,17 @@ def test_a_malformed_resource_is_400(app, db_session):
     assert response.status_code == 400
 
 
+@pytest.mark.parametrize('resource', ['mailto:abc@def.com', 'foo://piefed.test', 'xmpp:alice@test.piefed.local'])
+def test_a_well_formed_resource_of_another_scheme_is_404(app, db_session, resource):
+    """RFC 7033 4.5: a resource may use any URI scheme. One this server does not know is well formed but names
+    nothing it holds: 404, not the 400 that a resource with no scheme at all gets."""
+    seed_local_actors()
+
+    response = webfinger_get(app, resource=resource)
+
+    assert response.status_code == 404
+
+
 @pytest.mark.parametrize('resource', ['https://[x', 'https://test.piefed.local:abc/u/alice', 'https://%zz/u/alice'])
 def test_a_url_resource_whose_host_cannot_be_read_is_404(app, db_session, resource):
     """furl raises ValueError on an unterminated IPv6 bracket, a port that is not a number or a host it will not
