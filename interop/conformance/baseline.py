@@ -35,6 +35,38 @@ def parse_tap(text: str, prefix: str) -> dict[str, Outcome]:
     return results
 
 
+def feditest_outcome(result: dict | None) -> Outcome:
+    """Classify a transcript result the way feditest's TestRunTranscriptSummary.add_test_result does."""
+    if result is None:
+        return 'passed'
+    kind = result['type']
+    if kind.endswith('AssertionFailure'):
+        return 'failed'
+    if kind.endswith(('SkipTestException', 'NotImplementedByNodeError', 'NotImplementedByNodeDriverError')):
+        return 'skipped'
+    return 'error'
+
+
+def parse_feditest_json(text: str, prefix: str) -> dict[str, Outcome]:
+    """Read feditest's --json transcript. Its TAP writer reports skips as ok, so the gate reads this instead."""
+    transcript = json.loads(text)
+    tests = transcript['plan']['session_template']['tests']
+    results: dict[str, Outcome] = {}
+    if transcript.get('result'):
+        results[f'{prefix}/__run__'] = 'error'
+    for number, session in enumerate(transcript['sessions']):
+        if session.get('result'):
+            results[f'{prefix}/__session_{number}__'] = 'error'
+        for run_test in session['run_tests']:
+            name = transcript['test_meta'][tests[run_test['plan_test_index']]['name']]['name']
+            result = run_test['result']
+            for step in run_test.get('run_steps') or []:   # as feditest's worst_result: a step result counts unless it is only a soft or degrade failure
+                if result is None or (step['result'] and step['result']['type'] not in ('SoftAssertionFailure', 'DegradeAssertionFailure')):
+                    result = step['result'] or result
+            results[f'{prefix}/{name}'] = feditest_outcome(result)
+    return results
+
+
 def parse_aptest_ndjson(text: str, actor: str) -> dict[str, Outcome]:
     results: dict[str, Outcome] = {}
     for line in text.splitlines():
@@ -69,8 +101,9 @@ def compare(results: dict[str, Outcome], baseline: dict[str, dict]) -> list[str]
 
 def collect(results_dir: Path) -> dict[str, Outcome]:
     results: dict[str, Outcome] = {}
-    for path in sorted(results_dir.glob('*.tap')):
-        results |= parse_tap(path.read_text(), path.stem)
+    for path in sorted(results_dir.glob('*.json')):
+        if not path.name.startswith('aptest-'):
+            results |= parse_feditest_json(path.read_text(), path.stem)
     for path in sorted(results_dir.glob('aptest-*.ndjson')):
         results |= parse_aptest_ndjson(path.read_text(), path.stem.removeprefix('aptest-'))
     return results

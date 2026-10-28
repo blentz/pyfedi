@@ -1,0 +1,143 @@
+{
+  "type": "feditest-testrun-transcript",
+  "feditest_version": "0.6.dev",
+  "id": "r1",
+  "started": "2026-10-27T20:00:00Z",
+  "ended": "2026-10-27T20:01:00Z",
+  "platform": null,
+  "username": null,
+  "hostname": null,
+  "result": null,
+  "plan": {
+    "type": "feditest-testplan",
+    "name": "piefed",
+    "session_template": {
+      "name": "s",
+      "tests": [
+        {
+          "name": "webfinger::resolves_local_account"
+        },
+        {
+          "name": "activitypub::inbox_rejects_unsigned"
+        },
+        {
+          "name": "nodeinfo::has_software_version"
+        },
+        {
+          "name": "activitypub::delivers_follow"
+        }
+      ]
+    },
+    "constellations": [],
+    "sessions": []
+  },
+  "test_meta": {
+    "webfinger::resolves_local_account": {
+      "name": "webfinger::resolves_local_account",
+      "roles": [
+        "server"
+      ],
+      "steps": null,
+      "description": null
+    },
+    "activitypub::inbox_rejects_unsigned": {
+      "name": "activitypub::inbox_rejects_unsigned",
+      "roles": [
+        "server"
+      ],
+      "steps": null,
+      "description": null
+    },
+    "nodeinfo::has_software_version": {
+      "name": "nodeinfo::has_software_version",
+      "roles": [
+        "server"
+      ],
+      "steps": null,
+      "description": null
+    },
+    "activitypub::delivers_follow": {
+      "name": "activitypub::delivers_follow",
+      "roles": [
+        "server"
+      ],
+      "steps": null,
+      "description": null
+    }
+  },
+  "sessions": [
+    {
+      "run_session_index": 0,
+      "total_sessions": 1,
+      "started": "2026-10-27T20:00:00Z",
+      "ended": "2026-10-27T20:01:00Z",
+      "constellation": {
+        "nodes": {}
+      },
+      "result": null,
+      "run_tests": [
+        {
+          "plan_test_index": 0,
+          "started": "2026-10-27T20:00:00Z",
+          "ended": "2026-10-27T20:00:01Z",
+          "result": null,
+          "run_steps": null
+        },
+        {
+          "plan_test_index": 1,
+          "started": "2026-10-27T20:00:00Z",
+          "ended": "2026-10-27T20:00:01Z",
+          "result": {
+            "type": "AssertionFailure",
+            "spec_level": "MUST",
+            "interop_level": "PROBLEM",
+            "stacktrace": [
+              [
+                "tests/x.py",
+                7
+              ]
+            ],
+            "msg": "inbox answered 202"
+          },
+          "run_steps": null
+        },
+        {
+          "plan_test_index": 2,
+          "started": "2026-10-27T20:00:00Z",
+          "ended": "2026-10-27T20:00:01Z",
+          "result": {
+            "type": "NotImplementedByNodeError",
+            "spec_level": "UNSPECIFIED",
+            "interop_level": "UNKNOWN",
+            "stacktrace": [
+              [
+                "tests/x.py",
+                7
+              ]
+            ],
+            "msg": "NotImplementedByNodeError"
+          },
+          "run_steps": null
+        },
+        {
+          "plan_test_index": 3,
+          "started": "2026-10-27T20:00:00Z",
+          "ended": "2026-10-27T20:00:01Z",
+          "result": {
+            "type": "ConnectionError",
+            "spec_level": "UNSPECIFIED",
+            "interop_level": "UNKNOWN",
+            "stacktrace": [
+              [
+                "tests/x.py",
+                7
+              ]
+            ],
+            "msg": "connection refused"
+          },
+          "run_steps": null
+        }
+      ]
+    }
+  ]
+}
