@@ -11,6 +11,7 @@ BASELINE = Path(__file__).with_name('baseline.json')
 EARL_OUTCOMES: dict[str, Outcome] = {
     'passed': 'passed', 'failed': 'failed', 'inapplicable': 'skipped', 'cantTell': 'skipped',
 }
+TESTS_DIR = '/opt/feditest-tests-fediverse/tests/'   # the pinned feditest-tests-fediverse checkout in the runner image
 TAP_LINE = re.compile(r'^(not ok|ok)\b\s*(?:\d+)?\s*(?:-\s*)?(.*)$')
 TAP_SKIP = re.compile(r'\s+#\s*SKIP\b.*$', re.IGNORECASE)
 
@@ -59,21 +60,38 @@ def worst_result(run_test: dict) -> dict | None:
     return result
 
 
+def feditest_test_results(transcript: dict, prefix: str):
+    """Yield (id, result) for each test of each session, the result being what worst_result picks."""
+    tests = transcript['plan']['session_template']['tests']
+    for session in transcript['sessions']:
+        for run_test in session['run_tests']:
+            name = transcript['test_meta'][tests[run_test['plan_test_index']]['name']]['name']
+            yield f'{prefix}/{name}', worst_result(run_test)
+
+
 def parse_feditest_json(text: str, prefix: str) -> dict[str, Outcome]:
     """Read feditest's --json transcript. Its TAP writer reports skips as ok, so the gate reads this instead."""
     transcript = json.loads(text)
-    tests = transcript['plan']['session_template']['tests']
     results: dict[str, Outcome] = {}
     if transcript.get('result'):
         results[f'{prefix}/__run__'] = 'error'
     for number, session in enumerate(transcript['sessions']):
         if session.get('result'):
             results[f'{prefix}/__session_{number}__'] = 'error'
-        for run_test in session['run_tests']:
-            name = transcript['test_meta'][tests[run_test['plan_test_index']]['name']]['name']
-            result = worst_result(run_test)
-            results[f'{prefix}/{name}'] = feditest_outcome(result)
+    for test_id, result in feditest_test_results(transcript, prefix):
+        results[test_id] = feditest_outcome(result)
     return results
+
+
+def parse_feditest_locations(text: str, prefix: str) -> dict[str, str]:
+    """Where each failed or errored test failed: its innermost stacktrace frame in the tests dir as `<file>.py:<line>`,
+    or `unknown` when none is there. A baselined test that fails at another line is another failure."""
+    locations: dict[str, str] = {}
+    for test_id, result in feditest_test_results(json.loads(text), prefix):
+        if feditest_outcome(result) in ('failed', 'error'):
+            frames = [(file, line) for file, line in result.get('stacktrace') or [] if file.startswith(TESTS_DIR)]
+            locations[test_id] = f'{Path(frames[-1][0]).name}:{frames[-1][1]}' if frames else 'unknown'
+    return locations
 
 
 def parse_aptest_ndjson(text: str, actor: str) -> dict[str, Outcome]:
@@ -89,7 +107,7 @@ def parse_aptest_ndjson(text: str, actor: str) -> dict[str, Outcome]:
     return results
 
 
-def compare(results: dict[str, Outcome], baseline: dict[str, dict]) -> list[str]:
+def compare(results: dict[str, Outcome], baseline: dict[str, dict], locations: dict[str, str] | None = None) -> list[str]:
     if not results:
         return ['no results']
     problems = []
@@ -102,24 +120,31 @@ def compare(results: dict[str, Outcome], baseline: dict[str, dict]) -> list[str]
             problems.append(f'{test_id}: now passes, remove it from the baseline')
         elif results[test_id] != entry.get('outcome'):
             problems.append(f'{test_id}: baselined as {entry.get("outcome")} but is now {results[test_id]}')
+        elif test_id in (locations or {}) and not entry.get('at'):
+            problems.append(f'{test_id}: baseline entry has no at')
+        elif test_id in (locations or {}) and locations[test_id] != entry['at']:
+            problems.append(f'{test_id}: baselined as {entry["outcome"]} at {entry["at"]} but fails elsewhere, at {locations[test_id]}')
     for test_id, outcome in sorted(results.items()):
         if outcome != 'passed' and test_id not in baseline:
             problems.append(f'{test_id}: {outcome} and not in the baseline')
     return problems
 
 
-def collect(results_dir: Path) -> dict[str, Outcome]:
+def collect(results_dir: Path) -> tuple[dict[str, Outcome], dict[str, str]]:
     results: dict[str, Outcome] = {}
+    locations: dict[str, str] = {}
     for path in sorted(results_dir.glob('*.json')):
         if not path.name.startswith('aptest-'):
             results |= parse_feditest_json(path.read_text(), path.stem)
+            locations |= parse_feditest_locations(path.read_text(), path.stem)
     for path in sorted(results_dir.glob('aptest-*.ndjson')):
         results |= parse_aptest_ndjson(path.read_text(), path.stem.removeprefix('aptest-'))
-    return results
+    return results, locations
 
 
 def main(argv: list[str]) -> int:
-    problems = compare(collect(Path(argv[0])), json.loads(BASELINE.read_text()))
+    results, locations = collect(Path(argv[0]))
+    problems = compare(results, json.loads(BASELINE.read_text()), locations)
     for problem in problems:
         print(problem)
     return 1 if problems else 0

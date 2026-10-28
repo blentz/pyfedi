@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from interop.conformance.baseline import compare, main, parse_aptest_ndjson, parse_feditest_json, parse_tap
+from interop.conformance.baseline import compare, main, parse_aptest_ndjson, parse_feditest_json, parse_feditest_locations, parse_tap
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'conformance'
 FAILED = {'outcome': 'failed', 'reason': 'r'}
@@ -185,3 +185,75 @@ def test_a_run_level_result_is_an_error_entry():
 def test_a_session_level_result_is_an_error_entry():
     text = feditest_transcript(run_test(), session_result=FAILURE)
     assert parse_feditest_json(text, 'p')['p/__session_0__'] == 'error'
+
+
+TESTS_DIR = '/opt/feditest-tests-fediverse/tests/system2'
+
+
+def failure_at(*frames):
+    return {'type': 'AssertionFailure', 'stacktrace': [[f'{TESTS_DIR}/{name}', line] for name, line in frames]}
+
+
+def test_a_failure_is_located_at_its_innermost_frame_in_the_tests_dir():
+    result = failure_at(('reply_single_hop.py', 10), ('reply_single_hop.py', 76))
+    result['stacktrace'].append(['/usr/lib/python3/hamcrest/core/assert_that.py', 57])
+    text = feditest_transcript(run_test(None, [{'result': None}, {'result': result}]))
+    assert parse_feditest_locations(text, 'p') == {'p/t::one': 'reply_single_hop.py:76'}
+
+
+def test_a_test_result_is_located_like_a_step_result():
+    text = feditest_transcript(run_test(failure_at(('follow_receive.py', 81)), None))
+    assert parse_feditest_locations(text, 'p') == {'p/t::one': 'follow_receive.py:81'}
+
+
+def test_a_passing_test_and_a_skip_have_no_location():
+    assert parse_feditest_locations(feditest_transcript(run_test()), 'p') == {}
+    skip = {'type': 'SkipTestException', 'stacktrace': [[f'{TESTS_DIR}/x.py', 3]]}
+    assert parse_feditest_locations(feditest_transcript(run_test(skip)), 'p') == {}
+
+
+def test_a_failure_outside_the_tests_dir_has_an_unknown_location():
+    result = {'type': 'ValueError', 'stacktrace': [['/app/driver.py', 5]]}
+    assert parse_feditest_locations(feditest_transcript(run_test(result)), 'p') == {'p/t::one': 'unknown'}
+
+
+def test_the_sample_transcript_has_no_frame_in_the_tests_dir():
+    locations = parse_feditest_locations((FIXTURES / 'sample.feditest.json').read_text(), 'piefed')
+    assert set(locations.values()) == {'unknown'}
+    assert len(locations) == 2
+
+
+AT = {'outcome': 'failed', 'reason': 'r', 'at': 'reply_single_hop.py:76'}
+
+
+def test_a_baselined_failure_at_its_baselined_line_passes():
+    assert compare({'x': 'failed'}, {'x': AT}, {'x': 'reply_single_hop.py:76'}) == []
+
+
+def test_a_baselined_failure_elsewhere_fails():
+    problems = compare({'x': 'failed'}, {'x': AT}, {'x': 'reply_single_hop.py:79'})
+    assert problems == ['x: baselined as failed at reply_single_hop.py:76 but fails elsewhere, at reply_single_hop.py:79']
+
+
+def test_a_baselined_failure_with_an_unknown_location_fails():
+    assert compare({'x': 'failed'}, {'x': AT}, {'x': 'unknown'}) != []
+
+
+def test_a_located_failure_needs_an_at_in_its_entry():
+    assert compare({'x': 'failed'}, {'x': FAILED}, {'x': 'follow_receive.py:81'}) == ['x: baseline entry has no at']
+
+
+def test_an_outcome_mismatch_is_not_also_reported_as_elsewhere():
+    assert len(compare({'x': 'error'}, {'x': AT}, {'x': 'follow_receive.py:81'})) == 1
+
+
+def test_cli_names_a_baselined_test_that_fails_elsewhere(tmp_path, capsys, monkeypatch):
+    (tmp_path / 'results').mkdir()
+    baseline = {'p/t::one': {'outcome': 'failed', 'reason': 'r', 'at': 'reply_single_hop.py:76'}}
+    (tmp_path / 'baseline.json').write_text(json.dumps(baseline))
+    monkeypatch.setattr('interop.conformance.baseline.BASELINE', tmp_path / 'baseline.json')
+    (tmp_path / 'results' / 'p.json').write_text(feditest_transcript(run_test(failure_at(('reply_single_hop.py', 79)))))
+    assert main([str(tmp_path / 'results')]) == 1
+    assert 'fails elsewhere, at reply_single_hop.py:79' in capsys.readouterr().out
+    (tmp_path / 'results' / 'p.json').write_text(feditest_transcript(run_test(failure_at(('reply_single_hop.py', 76)))))
+    assert main([str(tmp_path / 'results')]) == 0

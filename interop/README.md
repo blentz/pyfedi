@@ -64,12 +64,15 @@ FediTest prints its own `FAILED.` lines while baselined failures exist, and its 
 code is the verdict. It exits 1, naming the test, when:
 
 - a test fails or errors and is not in the baseline (a skip must be baselined too, so new skips are noticed),
-- a baselined test now passes (remove the entry), did not run, or ended in another outcome than the entry records, or
+- a baselined test now passes (remove the entry), did not run, or ended in another outcome than the entry records,
+- a baselined FediTest failure or error is now somewhere else than the entry's `at` ("fails elsewhere"), or
 - there are no results at all, or an entry has no `reason`.
 
 To change the baseline, edit `baseline.json`: the key is the test id as the checker prints it, `outcome` is `failed`,
-`error` or `skipped`, and `reason` is required. A reason for a deliberate gap cites its section of
-`docs/PYFEDI_GAPS.md`; one for a bug in FediTest says `upstream:` and gives the file and line at the pinned SHA. A real
+`error` or `skipped`, and `reason` is required. A FediTest entry that is `failed` or `error` also carries `at`, the
+`<file>.py:<line>` where the test fails (the innermost stacktrace frame under the tests dir, as the transcript's
+`stacktrace` gives it, e.g. `reply_single_hop.py:76`), so a different failure of the same test is not hidden by it.
+A reason for a deliberate gap cites its section of `docs/PYFEDI_GAPS.md`; one for a bug in FediTest says `upstream:` and gives the file and line at the pinned SHA. A real
 PieFed failure is a defect to fix, not to baseline. Add the same row to the "External conformance suites" table in
 `docs/PYFEDI_GAPS.md` §2. `tests/test_conformance_baseline.py` pins the checker itself.
 
