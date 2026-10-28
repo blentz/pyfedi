@@ -6,7 +6,7 @@ from flask import g
 from sqlalchemy import desc, not_
 
 from app.activitypub.util import find_actor_or_create, remote_object_to_json, actor_json_to_model, is_user_actor, \
-    find_community, create_resolved_object, normalise_actor_string, host_of, find_microblogging_community
+    find_community, create_resolved_object, normalise_actor_string, host_of, find_microblogging_community, NEW_CONTENT_TYPES
 from app.api.alpha.utils.community import get_community_list
 from app.api.alpha.utils.post import get_post_list
 from app.api.alpha.utils.user import get_user_list
@@ -546,7 +546,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                 if isinstance(object, (Post, PostReply)):   # not an account, community or feed, nor a view
                     community = object.community
 
-        if not community and not ap_json.get('inReplyTo'):
+        if not community and not ap_json.get('inReplyTo') and ap_json['type'] in NEW_CONTENT_TYPES:
             community = find_microblogging_community()   # a note from a microblogging platform, as the inbox files it
 
         if not community:
