@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from interop.conformance.baseline import compare, main, parse_aptest_ndjson, parse_tap
+from interop.conformance.baseline import compare, main, parse_aptest_ndjson, parse_feditest_json, parse_tap
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'conformance'
 FAILED = {'outcome': 'failed', 'reason': 'r'}
@@ -79,8 +79,38 @@ def test_empty_results_fail_the_gate():
     assert compare({}, {}) == ['no results']
 
 
-def test_cli_reads_results_dir(tmp_path, capsys):
+def test_feditest_json_outcomes():
+    results = parse_feditest_json((FIXTURES / 'sample.feditest.json').read_text(), 'piefed')
+    assert results == {
+        'piefed/webfinger::resolves_local_account': 'passed',
+        'piefed/activitypub::inbox_rejects_unsigned': 'failed',
+        'piefed/nodeinfo::has_software_version': 'skipped',
+        'piefed/activitypub::delivers_follow': 'error',
+    }
+
+
+def test_feditest_skip_is_not_a_pass():
+    tap = parse_tap((FIXTURES / 'sample.tap').read_text(), 'piefed')
+    results = parse_feditest_json((FIXTURES / 'sample.feditest.json').read_text(), 'piefed')
+    assert results['piefed/nodeinfo::has_software_version'] != 'passed'
+    assert compare({'piefed/nodeinfo::has_software_version': results['piefed/nodeinfo::has_software_version']}, {}) != []
+    assert tap.keys() == {k for k in results if k in tap}
+
+
+def test_tap_only_results_dir_is_no_results(tmp_path, capsys):
     (tmp_path / 'piefed.tap').write_text((FIXTURES / 'sample.tap').read_text())
+    assert main([str(tmp_path)]) == 1
+    assert capsys.readouterr().out.strip() == 'no results'
+
+
+def test_cli_ignores_aptest_json(tmp_path, capsys):
+    (tmp_path / 'aptest-alice.json').write_text((FIXTURES / 'sample.feditest.json').read_text())
+    assert main([str(tmp_path)]) == 1
+    assert capsys.readouterr().out.strip() == 'no results'
+
+
+def test_cli_reads_results_dir(tmp_path, capsys):
+    (tmp_path / 'piefed.json').write_text((FIXTURES / 'sample.feditest.json').read_text())
     (tmp_path / 'aptest-alice.ndjson').write_text((FIXTURES / 'sample.ndjson').read_text())
     assert main([str(tmp_path)]) == 1
     out = capsys.readouterr().out
