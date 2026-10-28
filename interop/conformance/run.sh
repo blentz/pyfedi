@@ -12,7 +12,7 @@ actors() {  # one "name url" per line
 case "${1:-}" in
     --version-check) feditest version; activitypub-testing help | head -1 ;;
     "")
-        cd interop/conformance
+        cd "$(dirname "$0")"   # every path below is relative to interop/conformance, wherever the caller stands
         rm -rf results && mkdir -p results/plans
         while read -r name url; do
             activitypub-testing test actor "$url" > "results/aptest-$name.ndjson"
