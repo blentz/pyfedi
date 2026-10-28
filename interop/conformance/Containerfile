@@ -1,0 +1,15 @@
+FROM docker.io/library/python:3.12-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nodejs npm jq git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Every external tool is pinned to an exact SHA or version; never a branch or `latest`.
+RUN pip install --no-cache-dir \
+        "git+https://github.com/fediverse-devnet/feditest@41cfd61d6a5640e3b2a05c8af5a79768cc15b13d" \
+        httpx psycopg2-binary
+RUN git clone https://github.com/fediverse-devnet/feditest-tests-fediverse /opt/feditest-tests-fediverse \
+    && git -C /opt/feditest-tests-fediverse checkout cdbb4672437b2e09e7c1305a91a12d1081ca811b
+RUN npm install -g activitypub-testing@0.16.1
+
+WORKDIR /app

@@ -200,3 +200,4 @@ scratch_*
 interop/.env.interop
 interop/.tokens.json
 !tests/fixtures/media/
+interop/conformance/results/
