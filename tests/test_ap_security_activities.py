@@ -213,3 +213,28 @@ def test_a_vote_with_only_an_audience_is_served_to_the_audience_host_only(app, d
                 audience='https://lemmy.example/c/news')
     assert _get(app, path, signed_get_headers(path, community_host_actor)).status_code == 200
     _assert_refused(_get(app, path, signed_get_headers(path, third_host_actor)))
+
+
+def test_a_served_activity_carries_no_blind_addressing(app, db_session):
+    """AS2 §7: bto and bcc are removed before an activity is shown to anyone. A logged Announce wraps what a peer sent,
+    so the peer's blind addressing could be inside it, at any depth of `object`."""
+    make_site()
+    author = _local('author')
+    path = _log('announce', 'blind', actor=author.ap_profile_id, to=[PUBLIC], bto=['https://a.example/u/x'],
+                object={'type': 'Create', 'bcc': ['https://b.example/u/y'],
+                        'object': {'type': 'Note', 'bto': ['https://c.example/u/z'], 'content': 'hi'}})
+    response = _get(app, path)
+    assert response.status_code == 200
+    assert 'bto' not in response.json
+    assert 'bcc' not in response.json['object']
+    assert response.json['object']['object'] == {'type': 'Note', 'content': 'hi'}
+
+
+def test_a_blind_copied_addressee_is_still_served_without_the_blind_list(app, db_session):
+    make_site()
+    author = _local('author')
+    recipient = _remote('peer.example', 'bob')
+    path = _log('create', 'bcc', actor=author.ap_profile_id, bcc=[recipient.ap_profile_id])
+    response = _get(app, path, signed_get_headers(path, recipient))
+    assert response.status_code == 200
+    assert 'bcc' not in response.json

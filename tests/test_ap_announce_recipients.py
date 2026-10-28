@@ -46,6 +46,7 @@ from unittest.mock import patch
 from flask import g
 
 from app import db
+from app.activitypub.routes import announce_activity_to_followers
 from app.models import ActivityBatch, Instance, Site
 from tests.factories import (make_community, make_community_member,
                              make_instance, make_user)
@@ -507,3 +508,22 @@ class TestTheAnnounceItself:
         assert announce['cc'] == [f'{env.community.public_url()}/followers']
         assert announce['id'].startswith(
             'https://test.piefed.local/activities/announce/')
+
+
+def test_the_announce_carries_no_blind_addressing_and_leaves_the_callers_activity_alone(env):
+    """AS2 §7: bto and bcc are removed before delivery. The relayed activity is a peer's, so it may carry them, on the
+    activity or its object; every follower instance would otherwise read who was blind-copied."""
+    activity = {'id': 'https://creator-host.test/activities/2', 'type': 'Create',
+                'actor': 'https://creator-host.test/u/acreator', 'bcc': ['https://x.test/u/hidden'],
+                'object': {'id': 'https://creator-host.test/p/2', 'type': 'Page', 'bto': ['https://x.test/u/hidden']}}
+    payloads = []
+    with patch('app.activitypub.routes.send_to_remote_instance_fast',
+               side_effect=lambda inbox, private_key, key_id, payload: payloads.append(payload)), \
+            patch('app.activitypub.routes.instance_banned', return_value=False):
+        announce_activity_to_followers(env.community, env.creator, activity)
+
+    assert payloads
+    for payload in payloads:
+        assert 'bcc' not in payload['object'] and 'bto' not in payload['object']['object']
+        assert payload['object']['object']['id'] == 'https://creator-host.test/p/2'
+    assert activity['bcc'] and activity['object']['bto']   # the caller's dict is untouched
