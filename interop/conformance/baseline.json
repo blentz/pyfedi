@@ -5,7 +5,7 @@
   },
   "aptest/alice/inbox-must-be-an-orderedcollection": {
     "outcome": "skipped",
-    "reason": "Inapplicable: the inbox is POST-only and answers GET with 405 (404 on a feed); PYFEDI_GAPS §1 Actors and collections (§4-5) lists no inbox GET"
+    "reason": "Inapplicable: every inbox route is POST-only and answers GET with 405 (404 on a feed); PYFEDI_GAPS §1 Client-to-server API (§6)"
   },
   "aptest/alice/likes-collection-must-be-a-collection": {
     "outcome": "skipped",
@@ -45,7 +45,7 @@
   },
   "aptest/conf-feed/inbox-must-be-an-orderedcollection": {
     "outcome": "skipped",
-    "reason": "Inapplicable: the inbox is POST-only and answers GET with 405 (404 on a feed); PYFEDI_GAPS §1 Actors and collections (§4-5) lists no inbox GET"
+    "reason": "Inapplicable: every inbox route is POST-only and answers GET with 405 (404 on a feed); PYFEDI_GAPS §1 Client-to-server API (§6)"
   },
   "aptest/conf-feed/liked-collection-must-be-a-collection": {
     "outcome": "skipped",
@@ -93,7 +93,7 @@
   },
   "aptest/instance/inbox-must-be-an-orderedcollection": {
     "outcome": "skipped",
-    "reason": "Inapplicable: the inbox is POST-only and answers GET with 405 (404 on a feed); PYFEDI_GAPS §1 Actors and collections (§4-5) lists no inbox GET"
+    "reason": "Inapplicable: every inbox route is POST-only and answers GET with 405 (404 on a feed); PYFEDI_GAPS §1 Client-to-server API (§6)"
   },
   "aptest/instance/liked-collection-must-be-a-collection": {
     "outcome": "skipped",
@@ -133,7 +133,7 @@
   },
   "aptest/microblogs/inbox-must-be-an-orderedcollection": {
     "outcome": "skipped",
-    "reason": "Inapplicable: the inbox is POST-only and answers GET with 405 (404 on a feed); PYFEDI_GAPS §1 Actors and collections (§4-5) lists no inbox GET"
+    "reason": "Inapplicable: every inbox route is POST-only and answers GET with 405 (404 on a feed); PYFEDI_GAPS §1 Client-to-server API (§6)"
   },
   "aptest/microblogs/liked-collection-must-be-a-collection": {
     "outcome": "skipped",
