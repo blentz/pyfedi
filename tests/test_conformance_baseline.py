@@ -1,9 +1,12 @@
 import json
+import re
 from pathlib import Path
 
-from interop.conformance.baseline import compare, main, parse_aptest_ndjson, parse_feditest_json, parse_feditest_locations, parse_tap
+from interop.conformance.baseline import BASELINE, compare, main, parse_aptest_ndjson, parse_feditest_json, parse_feditest_locations, parse_tap
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'conformance'
+GAPS = Path(__file__).parent.parent / 'docs' / 'PYFEDI_GAPS.md'
+TABLE_ROW = re.compile(r'^\| `([^`]+)` \| (\w+) \| (.*) \|$')
 FAILED = {'outcome': 'failed', 'reason': 'r'}
 
 
@@ -264,3 +267,11 @@ def test_cli_names_a_baselined_test_that_fails_elsewhere(tmp_path, capsys, monke
     assert 'fails elsewhere, at reply_single_hop.py:79' in capsys.readouterr().out
     (tmp_path / 'results' / 'p.json').write_text(feditest_transcript(run_test(failure_at(('reply_single_hop.py', 76)))))
     assert main([str(tmp_path / 'results')]) == 0
+
+
+def test_the_gaps_table_has_the_baseline_rows_word_for_word():
+    """The README says to add the same row to the "External conformance suites" table of docs/PYFEDI_GAPS.md."""
+    section = GAPS.read_text().split('### External conformance suites', 1)[1].split('\n## ', 1)[0]
+    table = {m.group(1): (m.group(2), m.group(3)) for m in map(TABLE_ROW.match, section.splitlines()) if m}
+    baseline = {test_id: (entry['outcome'], entry['reason']) for test_id, entry in json.loads(BASELINE.read_text()).items()}
+    assert table == baseline
