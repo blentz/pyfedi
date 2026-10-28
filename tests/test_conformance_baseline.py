@@ -275,3 +275,31 @@ def test_the_gaps_table_has_the_baseline_rows_word_for_word():
     table = {m.group(1): (m.group(2), m.group(3)) for m in map(TABLE_ROW.match, section.splitlines()) if m}
     baseline = {test_id: (entry['outcome'], entry['reason']) for test_id, entry in json.loads(BASELINE.read_text()).items()}
     assert table == baseline
+
+
+def two_test_transcript(*run_tests, skip=None):
+    """A transcript whose plan names two tests, the second skipped by the plan when `skip` is set."""
+    return json.dumps({
+        'plan': {'session_template': {'tests': [{'name': 't::one', 'rolemapping': None, 'skip': None},
+                                                {'name': 't::two', 'rolemapping': None, 'skip': skip}]}},
+        'test_meta': {'t::one': {'name': 't::one'}, 't::two': {'name': 't::two'}},
+        'result': None,
+        'sessions': [{'result': None, 'run_tests': list(run_tests)}],
+    })
+
+
+def test_a_planned_test_that_did_not_run_is_missing():
+    """feditest stops a session on an AbortTestException, and a test that never ran leaves no run_test behind."""
+    results = parse_feditest_json(two_test_transcript(run_test()), 'p')
+    assert results == {'p/t::one': 'passed', 'p/t::two': 'missing'}
+    assert compare(results, {}) == ['p/t::two: planned but did not run']
+
+
+def test_a_test_the_plan_skips_is_a_skip():
+    """feditest leaves no run_test for a plan entry with `skip` set; the gate treats it as any other skip."""
+    results = parse_feditest_json(two_test_transcript(run_test(), skip='not yet'), 'p')
+    assert results == {'p/t::one': 'passed', 'p/t::two': 'skipped'}
+
+
+def test_a_baselined_test_that_goes_missing_fails():
+    assert compare({'p/t::two': 'missing'}, {'p/t::two': FAILED}) == ['p/t::two: baselined as failed but is now missing']

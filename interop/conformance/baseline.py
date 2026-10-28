@@ -5,7 +5,8 @@ import sys
 from pathlib import Path
 from typing import Literal
 
-Outcome = Literal['passed', 'failed', 'skipped', 'error', 'inapplicable', 'cantTell']   # the last two are EARL's own, for aptest
+Outcome = Literal['passed', 'failed', 'skipped', 'error', 'inapplicable', 'cantTell', 'missing']   # inapplicable and cantTell are
+# EARL's own, for aptest; missing is a test a feditest plan names that its session never ran
 
 BASELINE = Path(__file__).with_name('baseline.json')
 EARL_OUTCOMES: dict[str, Outcome] = {
@@ -78,6 +79,12 @@ def parse_feditest_json(text: str, prefix: str) -> dict[str, Outcome]:
     for number, session in enumerate(transcript['sessions']):
         if session.get('result'):
             results[f'{prefix}/__session_{number}__'] = 'error'
+    tests = transcript['plan']['session_template']['tests']
+    for session in transcript['sessions']:   # feditest leaves no run_test for a test the plan skips or an abort cut short
+        ran = {run_test['plan_test_index'] for run_test in session['run_tests']}
+        for index, test in enumerate(tests):
+            if index not in ran:
+                results[f"{prefix}/{transcript['test_meta'][test['name']]['name']}"] = 'skipped' if test.get('skip') else 'missing'
     for test_id, result in feditest_test_results(transcript, prefix):
         results[test_id] = feditest_outcome(result)
     return results
@@ -125,7 +132,9 @@ def compare(results: dict[str, Outcome], baseline: dict[str, dict], locations: d
         elif test_id in (locations or {}) and locations[test_id] != entry['at']:
             problems.append(f'{test_id}: baselined as {entry["outcome"]} at {entry["at"]} but fails elsewhere, at {locations[test_id]}')
     for test_id, outcome in sorted(results.items()):
-        if outcome != 'passed' and test_id not in baseline:
+        if outcome == 'missing' and test_id not in baseline:
+            problems.append(f'{test_id}: planned but did not run')
+        elif outcome != 'passed' and test_id not in baseline:
             problems.append(f'{test_id}: {outcome} and not in the baseline')
     return problems
 
