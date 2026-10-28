@@ -164,6 +164,19 @@ def test_the_api_does_not_put_a_reply_whose_parent_cannot_be_fetched_into_microb
     assert Post.query.count() == 0 and PostReply.query.count() == 0
 
 
+@pytest.mark.parametrize('object_type', ['Collection', 'OrderedCollection', 'Tombstone', 'Offer', 'Document'])
+def test_the_api_does_not_file_an_object_the_inbox_would_not_into_microblogs(world, http_mock, object_type):
+    note_id = f'https://{PEER}/@alice/collections/1'
+    obj = {'id': note_id, 'type': object_type, 'name': 'x', 'content': '<p>x</p>', 'published': '2026-10-28T00:00:00Z',
+           'attributedTo': world.alice.ap_profile_id, 'to': [PUBLIC], 'cc': []}
+    http_mock.get(note_id).respond(json=obj)
+
+    with pytest.raises(Exception, match='No object found'):
+        get_resolve_object(None, {'q': note_id}, user_id=1, recursive=True)
+
+    assert Post.query.count() == 0
+
+
 # ---- D3: a podcast owns its community; a restricted or private twin still takes its episodes -------------------
 
 @pytest.mark.parametrize('restriction', ['restricted_to_mods', 'private'])

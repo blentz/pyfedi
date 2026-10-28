@@ -344,6 +344,7 @@ def object_language(obj: dict, map_code: str | None):
 
 
 MEDIA_OBJECT_TYPES = ('Audio', 'Document', 'Image', 'Video')  # C4: media objects a peer may Create as posts
+NEW_CONTENT_TYPES = ('Page', 'Article', 'Link', 'Note', 'Question', 'Event', *MEDIA_OBJECT_TYPES)  # what the inbox and resolve_object file as a post
 MEDIA_URL_KIND = {'Image': 'image', 'Audio': 'audio', 'Document': None}  # Video keeps its object id as the url
 MAX_MEDIA_URL_ENTRIES = 20  # url or attachment entries read per object: each costs a url_is_storable check
 MAX_POST_URL_LENGTH = 2048  # Post.url

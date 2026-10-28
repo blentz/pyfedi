@@ -26,7 +26,7 @@ from app.activitypub.actor import find_actor_by_url
 from app.activitypub.entitlement import PRIVATE_HEADERS, actor_document, addressees_of, audience_entitles, signed_requester_actor
 from app.activitypub.signature import POST_REQUIRED, HttpSignature, publish_async_posts, signed_at, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request, verify_with_key_refresh, request_key_id
-from app.activitypub.util import MEDIA_OBJECT_TYPES, follow_answer_inbox, MEDIA_URL_KIND, media_url_from, activity_dedupe_key, community_actor_data, refresh_community_profile_task, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
+from app.activitypub.util import MEDIA_OBJECT_TYPES, NEW_CONTENT_TYPES, follow_answer_inbox, MEDIA_URL_KIND, media_url_from, activity_dedupe_key, community_actor_data, refresh_community_profile_task, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
     post_to_activity, post_count_collections, comment_count_collections, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
@@ -1793,8 +1793,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                 return
 
                         object_type = core_activity['object']['type']
-                        new_content_types = ['Page', 'Article', 'Link', 'Note', 'Question', 'Event', *MEDIA_OBJECT_TYPES]  # C4
-                        if object_type in new_content_types:  # create or update a post
+                        if object_type in NEW_CONTENT_TYPES:  # C4  # create or update a post
                             process_new_content(user, community, store_ap_json, request_json, announced)
                             return
                         elif object_type == 'Group' and core_activity['type'] == 'Update':  # update community/category info
