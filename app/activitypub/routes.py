@@ -167,7 +167,7 @@ def webfinger():
         # the host is part of the memo key: the same resource has another answer on each of our domains
         return process_webfinger_request(request.args.get('resource'), current_storefront().domain)
     else:
-        abort(404)
+        abort(400)   # RFC 7033 4.2: an absent resource is a bad request
 
 
 def _federating_feed_named(actor: str, domain: str):
