@@ -591,6 +591,22 @@ def test_a_missing_site_row_is_created_with_defaults_and_a_warning(app, db_sessi
     assert warned.call_count == 1
 
 
+def test_a_missing_site_row_is_created_with_a_keypair(app, db_session):
+    """The Site row is the instance actor, and its keypair signs the instance's fetches. A row made here, ahead of
+    `flask init-db`, had neither key: the instance actor then published `publicKeyPem: null`."""
+    from app.utils import get_site_as_dict
+
+    db.session.execute(text('DELETE FROM "site"'))
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        site = get_site_as_dict()
+
+    row = db.session.get(Site, 1)
+    assert row.private_key.startswith('-----BEGIN') and row.public_key.startswith('-----BEGIN')
+    assert site['public_key'] == row.public_key
+
+
 # ---------------------------------------------------------------------------
 # jinja globals and filters
 # ---------------------------------------------------------------------------
