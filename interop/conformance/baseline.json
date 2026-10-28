@@ -173,7 +173,7 @@
   },
   "system2-mastodon-to-piefed/system2.reply_single_hop::ReplyTest": {
     "outcome": "failed",
-    "reason": "upstream: stock MastodonSaasNodeDriver returns note HTML where the test compares plain text (reply_single_hop.py:76 equal_to between the two nodes and :80 equal_to the plain reply cannot both hold with one Mastodon side); the reply is imported and delivered, PieFed behaviour correct (feditest-tests-fediverse cdbb467, feditest 41cfd61)"
+    "reason": "upstream: stock MastodonSaasNodeDriver returns note HTML where the test compares plain text (reply_single_hop.py:76 equal_to between the two nodes and :79 equal_to the plain reply cannot both hold with one Mastodon side); the reply is imported and delivered, PieFed behaviour correct (feditest-tests-fediverse cdbb467, feditest 41cfd61)"
   },
   "system2-piefed-to-mastodon/system2.direct_addressing::SendNoteToTest": {
     "outcome": "failed",
@@ -181,6 +181,6 @@
   },
   "system2-piefed-to-mastodon/system2.reply_single_hop::ReplyTest": {
     "outcome": "failed",
-    "reason": "upstream: stock MastodonSaasNodeDriver returns note HTML where the test compares plain text (reply_single_hop.py:76 equal_to between the two nodes and :80 equal_to the plain reply cannot both hold with one Mastodon side); PieFed behaviour correct (feditest-tests-fediverse cdbb467, feditest 41cfd61)"
+    "reason": "upstream: stock MastodonSaasNodeDriver returns note HTML where the test compares plain text (reply_single_hop.py:76 equal_to between the two nodes and :79 equal_to the plain reply cannot both hold with one Mastodon side); PieFed behaviour correct (feditest-tests-fediverse cdbb467, feditest 41cfd61)"
   }
 }

@@ -18,18 +18,25 @@ def query(sql):
             return cur.fetchall() if cur.description else []
 
 
+def follows():
+    """The follows between alice and bob, as (bob's user id, is_inward) rows."""
+    return query("SELECT f.remote_user_id, f.is_inward FROM user_follower f "
+                 "JOIN \"user\" u ON u.id = f.local_user_id WHERE u.user_name = 'alice' AND u.ap_id IS NULL "
+                 "AND f.remote_user_id IN (SELECT id FROM \"user\" WHERE user_name = 'bob' AND ap_domain = 'mastodon.test')")
+
+
 def main():
     mastodon = Mastodon(tokens()['mastodon_bob'])
     alice = mastodon.resolve_account('alice@piefed.test')
     mastodon.unfollow(alice['id'])
     mastodon.remove_follower(alice['id'])
     piefed = PieFed('alice', 'interop-alice-pw')
-    for remote_user_id, is_inward in query('SELECT remote_user_id, is_inward FROM user_follower'):
+    for remote_user_id, is_inward in follows():
         if not is_inward:
             piefed.unfollow_user(remote_user_id)
     piefed.resolve('@bob@mastodon.test')   # PieFed knows him from here on
-    query("UPDATE \"user\" SET created = now() - interval '30 days' WHERE ap_domain = 'mastodon.test'")
-    wait_for(lambda: not query('SELECT 1 FROM user_follower'))
+    query("UPDATE \"user\" SET created = now() - interval '30 days' WHERE user_name = 'bob' AND ap_domain = 'mastodon.test'")
+    wait_for(lambda: not follows())
 
 
 if __name__ == '__main__':
