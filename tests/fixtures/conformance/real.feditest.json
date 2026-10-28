@@ -1,0 +1,453 @@
+{
+ "plan": {
+  "session_template": {
+   "tests": [
+    {
+     "name": "webfinger.server.4_1__2_parameter_ordering_not_significant::parameter_ordering",
+     "rolemapping": null,
+     "skip": null
+    },
+    {
+     "name": "webfinger.server.4_2__14_must_only_redirect_to_https::must_only_redirect_to_https",
+     "rolemapping": null,
+     "skip": null
+    },
+    {
+     "name": "webfinger.server.4_2__2_perform_query::normal_query",
+     "rolemapping": null,
+     "skip": null
+    },
+    {
+     "name": "webfinger.server.4_2__3_requires_resource_uri::requires_resource_uri_http_status",
+     "rolemapping": null,
+     "skip": null
+    },
+    {
+     "name": "webfinger.server.4_2__3_requires_resource_uri::requires_resource_uri_jrd",
+     "rolemapping": null,
+     "skip": null
+    },
+    {
+     "name": "webfinger.server.4_2__4_do_not_accept_malformed_resource_parameters::double_equals_http_status",
+     "rolemapping": null,
+     "skip": null
+    },
+    {
+     "name": "webfinger.server.4_2__4_do_not_accept_malformed_resource_parameters::double_equals_jrd",
+     "rolemapping": null,
+     "skip": null
+    },
+    {
+     "name": "webfinger.server.4_2__4_do_not_accept_malformed_resource_parameters::requires_valid_resource_uri_http_status",
+     "rolemapping": null,
+     "skip": null
+    },
+    {
+     "name": "webfinger.server.4_2__4_do_not_accept_malformed_resource_parameters::requires_valid_resource_uri_jrd",
+     "rolemapping": null,
+     "skip": null
+    },
+    {
+     "name": "webfinger.server.4_2__5_status_404_for_nonexisting_resources::status_404_for_nonexisting_resources",
+     "rolemapping": null,
+     "skip": null
+    },
+    {
+     "name": "webfinger.server.4_2__9_content_type::returns_jrd_in_response_to_https",
+     "rolemapping": null,
+     "skip": null
+    },
+    {
+     "name": "webfinger.server.4_5__1_any_uri_scheme_for_resource_identifiers::any_uri_scheme_for_resource_identifiers",
+     "rolemapping": null,
+     "skip": null
+    },
+    {
+     "name": "webfinger.server.4__1_accepts_all_link_rels_in_query::accepts_combined_link_rels_in_query",
+     "rolemapping": null,
+     "skip": null
+    },
+    {
+     "name": "webfinger.server.4__1_accepts_all_link_rels_in_query::accepts_known_link_rels_in_query",
+     "rolemapping": null,
+     "skip": null
+    },
+    {
+     "name": "webfinger.server.4__1_accepts_all_link_rels_in_query::accepts_unknown_link_rels_in_query",
+     "rolemapping": null,
+     "skip": null
+    },
+    {
+     "name": "webfinger.server.4__3_only_returns_jrd_in_response_to_https_requests::does_not_return_jrd_in_response_to_http",
+     "rolemapping": null,
+     "skip": null
+    },
+    {
+     "name": "webfinger.server.4__3_only_returns_jrd_in_response_to_https_requests::uses_valid_https_certificate",
+     "rolemapping": null,
+     "skip": null
+    },
+    {
+     "name": "webfinger.server.5_1_cors_header_required::cors_header_required",
+     "rolemapping": null,
+     "skip": null
+    }
+   ],
+   "name": "webfinger-server"
+  },
+  "constellations": [],
+  "name": "piefed-webfinger",
+  "type": "feditest-testplan",
+  "feditest_version": "0.6.dev20261028013925"
+ },
+ "id": "feditest-run-20261028-023622",
+ "started": "2026-10-28T02:36:22.678825Z",
+ "ended": "2026-10-28T02:36:23.072064Z",
+ "sessions": [
+  {
+   "run_session_index": 0,
+   "total_sessions": 1,
+   "started": "2026-10-28T02:36:22.678851Z",
+   "ended": "2026-10-28T02:36:23.072059Z",
+   "constellation": {
+    "nodes": {
+     "server": {
+      "appdata": {
+       "app": "PieFed",
+       "app_version": null
+      },
+      "node_driver": "FediverseSaasNodeDriver"
+     },
+     "client": {
+      "appdata": {
+       "app": "Imp",
+       "app_version": "0.6.dev20261028013925"
+      },
+      "node_driver": "ImpInProcessNodeDriver"
+     }
+    }
+   },
+   "run_tests": [
+    {
+     "plan_test_index": 0,
+     "started": "2026-10-28T02:36:22.679230Z",
+     "ended": "2026-10-28T02:36:22.760517Z",
+     "result": null,
+     "run_steps": null
+    },
+    {
+     "plan_test_index": 1,
+     "started": "2026-10-28T02:36:22.760601Z",
+     "ended": "2026-10-28T02:36:22.772406Z",
+     "result": null,
+     "run_steps": null
+    },
+    {
+     "plan_test_index": 2,
+     "started": "2026-10-28T02:36:22.772432Z",
+     "ended": "2026-10-28T02:36:22.781714Z",
+     "result": null,
+     "run_steps": null
+    },
+    {
+     "plan_test_index": 3,
+     "started": "2026-10-28T02:36:22.781739Z",
+     "ended": "2026-10-28T02:36:22.800418Z",
+     "result": {
+      "type": "AssertionFailure",
+      "spec_level": "MUST",
+      "interop_level": "UNAFFECTED",
+      "stacktrace": [
+       [
+        "/opt/feditest-tests-fediverse/tests/webfinger/server/4_2__3_requires_resource_uri.py",
+        37
+       ]
+      ],
+      "msg": "AssertionFailure (Must, Unaffected): Not HTTP status 400.\nAccessed URI: \"https://piefed.test/.well-known/webfinger\".\nExpected: <400>\n     but: was <404>"
+     },
+     "run_steps": null
+    },
+    {
+     "plan_test_index": 4,
+     "started": "2026-10-28T02:36:22.841199Z",
+     "ended": "2026-10-28T02:36:22.849416Z",
+     "result": null,
+     "run_steps": null
+    },
+    {
+     "plan_test_index": 5,
+     "started": "2026-10-28T02:36:22.849440Z",
+     "ended": "2026-10-28T02:36:22.857113Z",
+     "result": null,
+     "run_steps": null
+    },
+    {
+     "plan_test_index": 6,
+     "started": "2026-10-28T02:36:22.857136Z",
+     "ended": "2026-10-28T02:36:22.865562Z",
+     "result": null,
+     "run_steps": null
+    },
+    {
+     "plan_test_index": 7,
+     "started": "2026-10-28T02:36:22.865654Z",
+     "ended": "2026-10-28T02:36:22.874623Z",
+     "result": null,
+     "run_steps": null
+    },
+    {
+     "plan_test_index": 8,
+     "started": "2026-10-28T02:36:22.874645Z",
+     "ended": "2026-10-28T02:36:22.883464Z",
+     "result": null,
+     "run_steps": null
+    },
+    {
+     "plan_test_index": 9,
+     "started": "2026-10-28T02:36:22.883488Z",
+     "ended": "2026-10-28T02:36:22.918912Z",
+     "result": null,
+     "run_steps": null
+    },
+    {
+     "plan_test_index": 10,
+     "started": "2026-10-28T02:36:22.918937Z",
+     "ended": "2026-10-28T02:36:22.928292Z",
+     "result": null,
+     "run_steps": null
+    },
+    {
+     "plan_test_index": 11,
+     "started": "2026-10-28T02:36:22.928359Z",
+     "ended": "2026-10-28T02:36:22.936807Z",
+     "result": {
+      "type": "AssertionFailure",
+      "spec_level": "MUST",
+      "interop_level": "UNAFFECTED",
+      "stacktrace": [
+       [
+        "/opt/feditest-tests-fediverse/tests/webfinger/server/4_5__1_any_uri_scheme_for_resource_identifiers.py",
+        37
+       ]
+      ],
+      "msg": "AssertionFailure (Must, Unaffected): Not HTTP status 404.\nAccessed URI: \"https://piefed.test/.well-known/webfinger?resource=mailto%3Aabc%40def.com\".\nExpected: <404>\n     but: was <400>"
+     },
+     "run_steps": null
+    },
+    {
+     "plan_test_index": 12,
+     "started": "2026-10-28T02:36:22.937663Z",
+     "ended": "2026-10-28T02:36:22.964370Z",
+     "result": null,
+     "run_steps": null
+    },
+    {
+     "plan_test_index": 13,
+     "started": "2026-10-28T02:36:22.964399Z",
+     "ended": "2026-10-28T02:36:22.987944Z",
+     "result": null,
+     "run_steps": null
+    },
+    {
+     "plan_test_index": 14,
+     "started": "2026-10-28T02:36:22.987974Z",
+     "ended": "2026-10-28T02:36:23.004033Z",
+     "result": null,
+     "run_steps": null
+    },
+    {
+     "plan_test_index": 15,
+     "started": "2026-10-28T02:36:23.004059Z",
+     "ended": "2026-10-28T02:36:23.005960Z",
+     "result": null,
+     "run_steps": null
+    },
+    {
+     "plan_test_index": 16,
+     "started": "2026-10-28T02:36:23.005973Z",
+     "ended": "2026-10-28T02:36:23.063603Z",
+     "result": null,
+     "run_steps": null
+    },
+    {
+     "plan_test_index": 17,
+     "started": "2026-10-28T02:36:23.063627Z",
+     "ended": "2026-10-28T02:36:23.072018Z",
+     "result": null,
+     "run_steps": null
+    }
+   ],
+   "result": null
+  }
+ ],
+ "test_meta": {
+  "webfinger.server.4_1__2_parameter_ordering_not_significant::parameter_ordering": {
+   "name": "webfinger.server.4_1__2_parameter_ordering_not_significant::parameter_ordering",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "Parameter ordering is not significant."
+  },
+  "webfinger.server.4_2__14_must_only_redirect_to_https::must_only_redirect_to_https": {
+   "name": "webfinger.server.4_2__14_must_only_redirect_to_https::must_only_redirect_to_https",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "Test that if the server redirected, the final URL is an HTTPS URL."
+  },
+  "webfinger.server.4_2__2_perform_query::normal_query": {
+   "name": "webfinger.server.4_2__2_perform_query::normal_query",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "Perform a normal, simple query on an existing account."
+  },
+  "webfinger.server.4_2__3_requires_resource_uri::requires_resource_uri_http_status": {
+   "name": "webfinger.server.4_2__3_requires_resource_uri::requires_resource_uri_http_status",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "Do not accept requests with missing resource parameter: HTTP status."
+  },
+  "webfinger.server.4_2__3_requires_resource_uri::requires_resource_uri_jrd": {
+   "name": "webfinger.server.4_2__3_requires_resource_uri::requires_resource_uri_jrd",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "Do not accept requests with missing resource parameter: JRD content."
+  },
+  "webfinger.server.4_2__4_do_not_accept_malformed_resource_parameters::double_equals_http_status": {
+   "name": "webfinger.server.4_2__4_do_not_accept_malformed_resource_parameters::double_equals_http_status",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "Do not accept malformed resource parameters. Test HTTP status for inserting an extra = character."
+  },
+  "webfinger.server.4_2__4_do_not_accept_malformed_resource_parameters::double_equals_jrd": {
+   "name": "webfinger.server.4_2__4_do_not_accept_malformed_resource_parameters::double_equals_jrd",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "Do not accept malformed resource parameters. Test JRD content for inserting an extra = character."
+  },
+  "webfinger.server.4_2__4_do_not_accept_malformed_resource_parameters::requires_valid_resource_uri_http_status": {
+   "name": "webfinger.server.4_2__4_do_not_accept_malformed_resource_parameters::requires_valid_resource_uri_http_status",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "Do not accept malformed resource parameters. Test HTTP status for missing acct: scheme."
+  },
+  "webfinger.server.4_2__4_do_not_accept_malformed_resource_parameters::requires_valid_resource_uri_jrd": {
+   "name": "webfinger.server.4_2__4_do_not_accept_malformed_resource_parameters::requires_valid_resource_uri_jrd",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "Do not accept malformed resource parameters. Test JRD content for missing acct: scheme."
+  },
+  "webfinger.server.4_2__5_status_404_for_nonexisting_resources::status_404_for_nonexisting_resources": {
+   "name": "webfinger.server.4_2__5_status_404_for_nonexisting_resources::status_404_for_nonexisting_resources",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "The server responds with 404 when the resource parameter identifies a non-existent resource."
+  },
+  "webfinger.server.4_2__9_content_type::returns_jrd_in_response_to_https": {
+   "name": "webfinger.server.4_2__9_content_type::returns_jrd_in_response_to_https",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "Test that a query over HTTPS produces a JRD."
+  },
+  "webfinger.server.4_5__1_any_uri_scheme_for_resource_identifiers::any_uri_scheme_for_resource_identifiers": {
+   "name": "webfinger.server.4_5__1_any_uri_scheme_for_resource_identifiers::any_uri_scheme_for_resource_identifiers",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "The server must accept resource identifiers provided in the query that use any scheme."
+  },
+  "webfinger.server.4__1_accepts_all_link_rels_in_query::accepts_combined_link_rels_in_query": {
+   "name": "webfinger.server.4__1_accepts_all_link_rels_in_query::accepts_combined_link_rels_in_query",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "A server must accept all link rels in the query, even if it does not understand them.\n    Tests several known an unknown link rels at a time."
+  },
+  "webfinger.server.4__1_accepts_all_link_rels_in_query::accepts_known_link_rels_in_query": {
+   "name": "webfinger.server.4__1_accepts_all_link_rels_in_query::accepts_known_link_rels_in_query",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "A server must accept all link rels in the query, even if it does not understand them.\n    Tests one known link rel at a time."
+  },
+  "webfinger.server.4__1_accepts_all_link_rels_in_query::accepts_unknown_link_rels_in_query": {
+   "name": "webfinger.server.4__1_accepts_all_link_rels_in_query::accepts_unknown_link_rels_in_query",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "A server must accept all link rels in the query, even if it does not understand them.\n    Tests one unknown link rels at a time."
+  },
+  "webfinger.server.4__3_only_returns_jrd_in_response_to_https_requests::does_not_return_jrd_in_response_to_http": {
+   "name": "webfinger.server.4__3_only_returns_jrd_in_response_to_https_requests::does_not_return_jrd_in_response_to_http",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "Test that a query over HTTP does not produce a JRD."
+  },
+  "webfinger.server.4__3_only_returns_jrd_in_response_to_https_requests::uses_valid_https_certificate": {
+   "name": "webfinger.server.4__3_only_returns_jrd_in_response_to_https_requests::uses_valid_https_certificate",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "Test that the server uses a valid HTTPS certificate."
+  },
+  "webfinger.server.5_1_cors_header_required::cors_header_required": {
+   "name": "webfinger.server.5_1_cors_header_required::cors_header_required",
+   "roles": [
+    "client",
+    "server"
+   ],
+   "steps": null,
+   "description": "The server must provide a valid value for HTTP Header \"Access-Control-Allow-Origin\"."
+  }
+ },
+ "result": null,
+ "platform": "Linux-7.3.0-cachyos1.fc44.x86_64-x86_64-with-glibc2.41",
+ "username": null,
+ "hostname": null,
+ "type": "feditest-testrun-transcript",
+ "feditest_version": "0.6.dev20261028013925"
+}

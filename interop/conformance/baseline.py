@@ -47,6 +47,18 @@ def feditest_outcome(result: dict | None) -> Outcome:
     return 'error'
 
 
+def worst_result(run_test: dict) -> dict | None:
+    """A test's result as feditest's TestRunTestTranscript.worst_result: one that is set wins, else the steps': the
+    first, which a later one replaces unless it is only a soft or degrade failure."""
+    if run_test['result']:
+        return run_test['result']
+    result = None
+    for step in run_test.get('run_steps') or []:
+        if result is None or (step['result'] and step['result']['type'] not in ('SoftAssertionFailure', 'DegradeAssertionFailure')):
+            result = step['result']
+    return result
+
+
 def parse_feditest_json(text: str, prefix: str) -> dict[str, Outcome]:
     """Read feditest's --json transcript. Its TAP writer reports skips as ok, so the gate reads this instead."""
     transcript = json.loads(text)
@@ -59,10 +71,7 @@ def parse_feditest_json(text: str, prefix: str) -> dict[str, Outcome]:
             results[f'{prefix}/__session_{number}__'] = 'error'
         for run_test in session['run_tests']:
             name = transcript['test_meta'][tests[run_test['plan_test_index']]['name']]['name']
-            result = run_test['result']
-            for step in run_test.get('run_steps') or []:   # as feditest's worst_result: a step result counts unless it is only a soft or degrade failure
-                if result is None or (step['result'] and step['result']['type'] not in ('SoftAssertionFailure', 'DegradeAssertionFailure')):
-                    result = step['result'] or result
+            result = worst_result(run_test)
             results[f'{prefix}/{name}'] = feditest_outcome(result)
     return results
 
