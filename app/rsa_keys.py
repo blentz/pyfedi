@@ -28,3 +28,9 @@ class RsaKeys:
             .decode("ascii")
         )
         return private_key_serialized, public_key_serialized
+
+    @classmethod
+    def public_key_for(cls, private_key: str) -> str:
+        """The PEM public half of a PEM private key."""
+        return serialization.load_pem_private_key(private_key.encode('ascii'), password=None).public_key().public_bytes(
+            encoding=serialization.Encoding.PEM, format=serialization.PublicFormat.SubjectPublicKeyInfo).decode('ascii')

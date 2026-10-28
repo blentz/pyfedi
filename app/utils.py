@@ -7628,6 +7628,16 @@ def get_site_as_dict() -> dict:
         site = Site(id=1, private_key=private_key, public_key=public_key)
         db.session.add(site)
         db.session.commit()
+    elif not site.public_key:
+        # a row made by the branch above before it made keys has none, and nothing else fills them: the instance actor
+        # would publish no key. A private key it has signed with is kept, and only its public half derived; a public
+        # key already published is never replaced.
+        current_app.logger.warning('Site(id=1) has no public key; filling it in')
+        if site.private_key:
+            site.public_key = RsaKeys.public_key_for(site.private_key)
+        else:
+            site.private_key, site.public_key = RsaKeys.generate_keypair()
+        db.session.commit()
     exclude = ['private_key']
     return { c.name: getattr(site, c.name) for c in site.__table__.columns if c.name not in exclude}
 

@@ -10,7 +10,7 @@ from app import db
 from app.constants import COMMUNITY_KIND_PODCAST, POST_TYPE_LINK
 from app.models import CommunityMember, Site
 from app.shared.media import with_media
-from tests.factories import a_keypair, make_community, make_instance, make_post, make_user
+from tests.factories import a_keypair, make_community, make_instance, make_post, make_site, make_user
 from tests.peertube_video_fixtures import _remote, sent  # noqa: F401  (sent is a fixture the tests use)
 
 
@@ -39,7 +39,7 @@ def env(request, app, db_session, monkeypatch):
     """A local instance with a founder, a community 'general' and a remote author on the test module's PEER host,
     for tests that feed a peer's activity to `Post.new`. No network: the HEAD request is answered with no type."""
     monkeypatch.setattr('app.utils.mime_type_using_head', lambda url: '')
-    site = db.session.get(Site, 1) or Site(name='Test Site', blocked_phrases='')
+    site = db.session.get(Site, 1) or make_site()
     db.session.add(site)
     db.session.commit()
     site.private_instance = False
