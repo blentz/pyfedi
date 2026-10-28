@@ -1276,3 +1276,27 @@ def test_an_author_instance_the_voter_blocked_gets_no_direct_vote(db_session, ht
     vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
 
     assert _delivered_inboxes(follower_route) == {PEER_INBOX} and len(http_mock.calls) == 1
+
+
+def test_a_notif_server_publishes_the_direct_vote_too(db_session, http_mock, monkeypatch):
+    """With a notification server the Announce is published to redis, not sent; the vote to a remote author goes the
+    same way, as its own publish (one batch carries one activity), and no HTTP request is made."""
+    published = []
+
+    class _Redis:
+        def publish(self, channel, payload):
+            published.append((channel, payload))
+
+    monkeypatch.setattr('app.redis_client', _Redis())
+    monkeypatch.setitem(current_app.config, 'NOTIF_SERVER', 'notifs.example')
+    s = _seed(with_keys=True)
+    _remote_authored(s, http_mock, delivered=False, followed=False)
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert len(http_mock.calls) == 0
+    assert [channel for channel, _payload in published] == ['http_posts:activity']
+    body = json.loads(published[0][1])
+    assert body['urls'] == [AUTHOR_INBOX]
+    sent = json.loads(body['data'])
+    assert sent['type'] == 'Like' and sent['object'] == s.post.public_url()
