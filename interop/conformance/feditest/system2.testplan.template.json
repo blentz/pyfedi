@@ -1,0 +1,81 @@
+{
+    "session_template": {
+        "tests": [
+            {
+                "name": "system2.delete_single_hop::DeleteSingleHopTest",
+                "rolemapping": null,
+                "skip": null
+            },
+            {
+                "name": "system2.direct_addressing::SendNoteToTest",
+                "rolemapping": null,
+                "skip": null
+            },
+            {
+                "name": "system2.follow_receive::FollowReceiveTest",
+                "rolemapping": null,
+                "skip": null
+            },
+            {
+                "name": "system2.like_single_hop::LikeTest",
+                "rolemapping": null,
+                "skip": null
+            },
+            {
+                "name": "system2.preserve_links::PreserveBlockquoteTest",
+                "rolemapping": null,
+                "skip": null
+            },
+            {
+                "name": "system2.reply_single_hop::ReplyTest",
+                "rolemapping": null,
+                "skip": null
+            },
+            {
+                "name": "system2.update_single_hop::UpdateTest",
+                "rolemapping": null,
+                "skip": null
+            }
+        ],
+        "name": "piefed-mastodon"
+    },
+    "constellations": [
+        {
+            "roles": {
+                "sender_node": {
+                    "nodedriver": "piefed.PieFedNodeDriver",
+                    "parameters": {
+                        "app": "PieFed",
+                        "hostname": "piefed.test"
+                    },
+                    "accounts": [
+                        {
+                            "account_userid": "alice",
+                            "password": "interop-alice-pw"
+                        }
+                    ],
+                    "non_existing_accounts": null
+                },
+                "receiver_node": {
+                    "nodedriver": "MastodonSaasNodeDriver",
+                    "parameters": {
+                        "app": "Mastodon",
+                        "hostname": "mastodon.test",
+                        "verify_api_tls_certificate": "true"
+                    },
+                    "accounts": [
+                        {
+                            "account_userid": "bob",
+                            "oauth_token": "set by run.sh from interop/.tokens.json"
+                        }
+                    ],
+                    "non_existing_accounts": null
+                }
+            },
+            "name": "piefed-mastodon"
+        }
+    ],
+    "name": "piefed-mastodon",
+    "type": "feditest-testplan",
+    "feditest_version": "0.6.dev20261028013925"
+}
