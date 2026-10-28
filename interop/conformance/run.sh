@@ -18,7 +18,8 @@ case "${1:-}" in
             activitypub-testing test actor "$url" > "results/aptest-$name.ndjson"
         done < <(actors)
         feditest run --testsdir /opt/feditest-tests-fediverse/tests --testplan feditest/webfinger.testplan.json \
-            --tap results/webfinger.tap --json results/webfinger.json --html results/webfinger.html || true   # the gate judges the outcomes
+            --tap results/webfinger.tap --json results/webfinger.json --html results/webfinger.html </dev/null || true   # the gate judges the outcomes, not feditest's exit code
+        [ -s results/webfinger.json ] || { echo "conformance: feditest wrote no results/webfinger.json" >&2; exit 1; }   # no test is baselined, so the aptest results alone would pass
         cd ../..
         python -m interop.conformance.baseline interop/conformance/results ;;
     *) echo "usage: interop/conformance/run.sh [--version-check]" >&2; exit 2 ;;
