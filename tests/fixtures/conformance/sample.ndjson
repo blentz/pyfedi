@@ -1,0 +1,6 @@
+{"type":["Assertion"],"result":{"outcome":"passed","info":"x"},"test":{"slug":"actor-objects-must-have-inbox-outbox-properties","name":"actor-objects-must-have-inbox-outbox-properties","id":"urn:uuid:00000000-0000-0000-0000-000000000000"}}
+{"type":["Assertion"],"result":{"outcome":"failed","info":"x"},"test":{"slug":"inbox-must-be-an-orderedcollection","name":"inbox-must-be-an-orderedcollection","id":"urn:uuid:00000000-0000-0000-0000-000000000000"}}
+{"type":["Assertion"],"result":{"outcome":"inapplicable","info":"x"},"test":{"slug":"following-collection-must-be-a-collection","name":"following-collection-must-be-a-collection","id":"urn:uuid:00000000-0000-0000-0000-000000000000"}}
+{"type":["Assertion"],"result":{"outcome":"cantTell","info":"x"},"test":{"slug":"outbox-post-servers-must-return-a-201-created-http-code","name":"outbox-post-servers-must-return-a-201-created-http-code","id":"urn:uuid:00000000-0000-0000-0000-000000000000"}}
+{"type":["Assertion"],"result":{"outcome":"untested","info":"x"},"test":{"slug":"liked-collection-must-be-a-collection","name":"liked-collection-must-be-a-collection","id":"urn:uuid:00000000-0000-0000-0000-000000000000"}}
+{"type":["Assertion"],"result":{"outcome":"http://www.w3.org/ns/earl#passed"},"test":{"url":"https://tests.test/activitypub-tests/by-url-only"}}

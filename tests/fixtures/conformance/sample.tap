@@ -1,0 +1,27 @@
+TAP version 14
+# test plan: piefed
+# started: 2026-10-27T20:00:00Z
+# session: session-1
+# constellation: constellation-1
+#   roles:
+#     - name: server
+#       driver: piefed
+#       app: PieFed
+#       app_version: ?
+ok 1 - webfinger::resolves_local_account
+not ok 2 - activitypub::inbox_rejects_unsigned
+  ---
+  problem: AssertionError (must, interop)
+  message:
+    inbox answered 202 to an unsigned activity
+  where:
+    tests/inbox.py 42
+  ...
+ok 3 - nodeinfo::has_software_version # SKIP not implemented
+1..3
+# test run summary:
+#   total: 3
+#   passed: 1
+#   failed: 1
+#   skipped: 1
+#   errors: 0
