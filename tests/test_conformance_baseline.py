@@ -25,8 +25,8 @@ def test_aptest_outcomes():
     assert results == {
         'aptest/alice/actor-objects-must-have-inbox-outbox-properties': 'passed',
         'aptest/alice/inbox-must-be-an-orderedcollection': 'failed',
-        'aptest/alice/following-collection-must-be-a-collection': 'skipped',
-        'aptest/alice/outbox-post-servers-must-return-a-201-created-http-code': 'skipped',
+        'aptest/alice/following-collection-must-be-a-collection': 'inapplicable',
+        'aptest/alice/outbox-post-servers-must-return-a-201-created-http-code': 'cantTell',
         'aptest/alice/liked-collection-must-be-a-collection': 'error',
         'aptest/alice/by-url-only': 'passed',
     }
@@ -61,6 +61,13 @@ def test_missing_baselined_test_fails():
 def test_new_skip_fails_until_baselined():
     assert compare({'x': 'skipped'}, {}) != []
     assert compare({'x': 'skipped'}, {'x': {'outcome': 'skipped', 'reason': 'r'}}) == []
+
+
+def test_an_inapplicable_test_that_becomes_cant_tell_fails():
+    inapplicable = {'outcome': 'inapplicable', 'reason': 'r'}
+    assert compare({'x': 'inapplicable'}, {'x': inapplicable}) == []
+    assert compare({'x': 'cantTell'}, {'x': inapplicable}) == ['x: baselined as inapplicable but is now cantTell']
+    assert compare({'x': 'cantTell'}, {}) == ['x: cantTell and not in the baseline']
 
 
 def test_passing_test_needs_no_baseline():

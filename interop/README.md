@@ -69,7 +69,8 @@ code is the verdict. It exits 1, naming the test, when:
 - there are no results at all, or an entry has no `reason`.
 
 To change the baseline, edit `baseline.json`: the key is the test id as the checker prints it, `outcome` is `failed`,
-`error` or `skipped`, and `reason` is required. A FediTest entry that is `failed` or `error` also carries `at`, the
+`error` or `skipped` for FediTest and `inapplicable` or `cantTell` (the EARL outcome, kept distinct) for
+`activitypub-testing`, and `reason` is required. A FediTest entry that is `failed` or `error` also carries `at`, the
 `<file>.py:<line>` where the test fails (the innermost stacktrace frame under the tests dir, as the transcript's
 `stacktrace` gives it, e.g. `reply_single_hop.py:76`), so a different failure of the same test is not hidden by it.
 A reason for a deliberate gap cites its section of `docs/PYFEDI_GAPS.md`; one for a bug in FediTest says `upstream:` and gives the file and line at the pinned SHA. A real
