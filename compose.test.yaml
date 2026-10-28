@@ -46,7 +46,7 @@ services:
   # Tests run in here, not on the host: this repo has no host Python environment
   # (no venv, no .env, and system python3 has no Flask). The Dockerfile's `test`
   # target is `builder` plus requirements-test.txt, so /venv carries pytest,
-  # pytest-cov, pytest-timeout, respx, moto, fakeredis and atheris on top of
+  # pytest-cov, pytest-timeout, respx, moto, fakeredis, atheris and feditest on top of
   # every production requirement. It is preferred over `runtime` because it runs
   # as root — avoiding __pycache__ permission failures on the bind mount — and
   # skips the tesseract layer tests do not need.
