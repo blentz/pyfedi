@@ -164,7 +164,7 @@ def test_the_api_does_not_put_a_reply_whose_parent_cannot_be_fetched_into_microb
     assert Post.query.count() == 0 and PostReply.query.count() == 0
 
 
-@pytest.mark.parametrize('object_type', ['Collection', 'OrderedCollection', 'Tombstone', 'Offer', 'Document'])
+@pytest.mark.parametrize('object_type', ['Collection', 'OrderedCollection', 'Tombstone', 'Offer', 'Relationship'])
 def test_the_api_does_not_file_an_object_the_inbox_would_not_into_microblogs(world, http_mock, object_type):
     note_id = f'https://{PEER}/@alice/collections/1'
     obj = {'id': note_id, 'type': object_type, 'name': 'x', 'content': '<p>x</p>', 'published': '2026-10-28T00:00:00Z',
