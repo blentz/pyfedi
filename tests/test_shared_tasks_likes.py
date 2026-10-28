@@ -1159,3 +1159,92 @@ def test_a_sent_dislike_marks_the_vote_not_a_federated_like(db_session, http_moc
 
     db.session.refresh(row)
     assert row.federated_like is False
+
+
+# ---- a remote author hears of a vote on their own content in a local community ---------------------------------
+
+AUTHOR_INBOX = 'https://origin.example/users/origin/inbox'
+
+
+def _remote_authored(s, http_mock, delivered=True, **origin_flags):
+    """A local community with a follower, and a post and reply by a user on origin.example. The author's inbox gets a
+    route only when `delivered`: a route that is never called fails the test. Returns (author_route, follower_route, origin)."""
+    _make_deliverable(s)
+    follower_route, _inst = _follower(s, http_mock)
+    origin = _peer('origin.example')
+    for flag, value in origin_flags.items():
+        setattr(origin, flag, value)
+    author = make_user(origin, 'origin')
+    s.post = make_post(s.community, author, ap_id='https://origin.example/post/1')
+    s.reply = make_post_reply(s.post, author, body='a remote reply')
+    db.session.commit()
+    author_route = http_mock.post(AUTHOR_INBOX).respond(200, json={}) if delivered else None
+    return author_route, follower_route, origin
+
+
+@pytest.mark.parametrize('wrapper, target, vote_to_undo, direction, type', [
+    (vote_for_post, 'post', None, 'upvote', 'Like'),
+    (vote_for_post, 'post', None, 'downvote', 'Dislike'),
+    (vote_for_reply, 'reply', None, 'upvote', 'Like'),
+    (vote_for_post, 'post', 'Like', 'upvote', 'Undo'),
+    (vote_for_reply, 'reply', 'Dislike', 'downvote', 'Undo'),
+])
+def test_a_remote_author_gets_the_vote_and_the_community_followers_still_get_the_announce(
+        db_session, http_mock, wrapper, target, vote_to_undo, direction, type):
+    s = _seed(with_keys=True)
+    author_route, follower_route, _origin = _remote_authored(s, http_mock)
+    obj = getattr(s, target)
+
+    wrapper(None, s.user.id, obj.id, vote_to_undo, direction)
+
+    direct = _sent_activity(author_route)
+    announce = _sent_activity(follower_route)
+    assert announce['type'] == 'Announce'
+    assert direct['type'] == type
+    assert '@context' in direct
+    assert direct['id'] == announce['object']['id']   # the one activity, not two
+    if vote_to_undo:
+        assert '@context' not in direct['object']
+        assert direct['object']['object'] == obj.public_url()
+    else:
+        assert direct['object'] == obj.public_url()
+
+
+def test_a_local_author_gets_no_direct_vote(db_session, http_mock):
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    follower_route, _inst = _follower(s, http_mock)
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert _delivered_inboxes(follower_route) == {PEER_INBOX}
+    assert len(http_mock.calls) == 1
+
+
+def test_an_offline_author_instance_gets_no_direct_vote(db_session, http_mock):
+    s = _seed(with_keys=True)
+    _author_route, follower_route, _origin = _remote_authored(s, http_mock, delivered=False, dormant=True, gone_forever=True)
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert _delivered_inboxes(follower_route) == {PEER_INBOX} and len(http_mock.calls) == 1
+
+
+def test_a_banned_author_domain_gets_no_direct_vote(db_session, http_mock):
+    s = _seed(with_keys=True)
+    _author_route, follower_route, _origin = _remote_authored(s, http_mock, delivered=False)
+    make_banned_instance('origin.example')
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert _delivered_inboxes(follower_route) == {PEER_INBOX} and len(http_mock.calls) == 1
+
+
+def test_an_author_instance_the_voter_blocked_gets_no_direct_vote(db_session, http_mock):
+    s = _seed(with_keys=True)
+    _author_route, follower_route, origin = _remote_authored(s, http_mock, delivered=False)
+    make_instance_block(s.user, origin)
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert _delivered_inboxes(follower_route) == {PEER_INBOX} and len(http_mock.calls) == 1
