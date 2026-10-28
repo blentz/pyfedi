@@ -180,7 +180,7 @@ def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
             # The Announce above reaches the community's followers, not the author of a remote object: a Mastodon
             # note filed in microblogs would never hear of its Like. Tell the author, with the same activity.
             author = object.author
-            if not author.is_local() and author.follow_answer_inbox() and author.instance.online() and \
+            if not author.is_local() and author.follow_answer_inbox() and author.instance_id and author.instance.online() and \
                     not instance_banned(author.instance.domain) and not user.has_blocked_instance(author.instance_id):
                 send_post_request(author.follow_answer_inbox(), undo_public if vote_to_undo else vote_public,
                                   user.private_key, public_actor + '#main-key')
