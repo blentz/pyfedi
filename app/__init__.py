@@ -22,7 +22,7 @@ from werkzeug.exceptions import BadRequest
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import cached_property
 from celery import Celery
-from celery.signals import task_failure, task_prerun
+from celery.signals import task_failure, task_prerun, worker_init
 from sqlalchemy_searchable import make_searchable
 import httpx
 from authlib.integrations.flask_client import OAuth
@@ -155,6 +155,15 @@ limiter = Limiter(rate_limit_key)
 # Every task acts as the domain that queued it (app.celery_acting, plan C3); named, not imported, as that module imports
 # app.storefront, which imports this package
 celery = Celery(__name__, broker=Config.CELERY_BROKER_URL, task_cls='app.celery_acting:ActingTask')
+
+
+@worker_init.connect
+def _close_the_connections_before_the_pool_forks(**kwargs):
+    # Building the app in the worker's main process (celery_worker_docker.py) leaves a connection in the pool. The
+    # prefork children inherit it and share its socket, and the first task to use it fails with "lost
+    # synchronization with server". With none open, each child connects for itself.
+    db.session.remove()
+    db.engine.dispose()
 
 
 @task_prerun.connect
