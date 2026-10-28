@@ -5,6 +5,7 @@ from flask_wtf import FlaskForm
 from wtforms import BooleanField, IntegerField, SelectMultipleField, SubmitField
 from wtforms.validators import InputRequired, NumberRange
 from wtforms.widgets import CheckboxInput, ListWidget
+from app.form_choices import select_choices
 
 
 class MultiCheckboxField(SelectMultipleField):
@@ -16,8 +17,8 @@ class DiscoverySyncForm(FlaskForm):
     sync_per_host = IntegerField(_l('Channels and podcasts to keep synced per server'), default=0,
                                  validators=[InputRequired(), NumberRange(min=0, max=50)])
     sync_platforms = MultiCheckboxField(_l('Platforms'), default=['peertube', 'castopod'],
-                                        choices=[('peertube', _l('PeerTube channels')),
-                                                 ('castopod', _l('Castopod podcasts'))])
+                                        choices=select_choices([('peertube', _l('PeerTube channels')),
+                                                 ('castopod', _l('Castopod podcasts'))]))
     sync_external_search = BooleanField(_l('Let people include PeerTube videos from the wider network in search '
                                            '(their search text is sent to sepiasearch.org)'), default=True)
     sync_save = SubmitField(_l('Save'))

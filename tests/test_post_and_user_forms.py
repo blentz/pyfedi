@@ -281,14 +281,14 @@ def test_the_timezone_choices_are_filled_in(app, db_session):
         login_user(alice)
         form = ProfileForm(meta={'csrf': False})
 
-        # choices is an OrderedDict of GROUPS -- {'Africa': [(value, label), ...]}
-        # -- not a flat list, so the membership test has to walk the groups.
+        # get_timezones() is an OrderedDict of GROUPS -- {'Africa': [(value, label), ...]}
+        # -- which the field holds as one SelectChoice per zone, its group as the optgroup.
         # There is no bare 'UTC' entry among the 505: the list is Olson region
         # names, which is why this asserts on one of those rather than on the
         # abbreviation a first version of this row guessed at.
         assert form.timezone.choices
-        every_value = [value for group in form.timezone.choices.values()
-                       for value, label in group]
+        every_value = [choice.value for choice in form.timezone.choices]
+        assert {choice.optgroup for choice in form.timezone.choices} >= {'Africa', 'Europe'}
         assert 'Europe/London' in every_value
         assert len(every_value) > 100
 
