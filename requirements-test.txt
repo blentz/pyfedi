@@ -40,3 +40,7 @@ fakeredis
 atheris
 # starlette's TestClient prefers httpx2 and warns when it falls back to httpx
 httpx2
+# The interop conformance runner's FediTest, at the same commit as interop/conformance/Containerfile, so the PieFed node
+# driver (interop/conformance/feditest/nodedrivers/piefed.py) can be unit-tested here. It is not on PyPI; the test
+# stage already has git. FediTest pins none of its dependencies, so it moves none of PieFed's.
+feditest @ git+https://github.com/fediverse-devnet/feditest@41cfd61d6a5640e3b2a05c8af5a79768cc15b13d
