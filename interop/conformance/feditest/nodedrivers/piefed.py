@@ -4,7 +4,6 @@ PieFed cannot do through those, and FediverseNode records it as skipped: announc
 update and delete of notes, accept and reject of follow requests."""
 import os
 import time
-from contextlib import closing
 from typing import Any
 
 import httpx
@@ -47,6 +46,7 @@ class PieFedNode(FediverseNode):
     def __init__(self, rolename: str, config: NodeConfiguration, account_manager: AccountManager | None = None):
         super().__init__(rolename, config, account_manager)
         self._clients: dict[str, PieFed] = {}
+        self._conn = None
 
     def _client(self, actor_acct_uri: str) -> PieFed:
         userid = acct_to_userid(actor_acct_uri, self.hostname)
@@ -58,7 +58,12 @@ class PieFedNode(FediverseNode):
         return self._clients[userid]
 
     def _rows(self, sql: str, *params: Any) -> list[tuple]:
-        with closing(psycopg2.connect(libpq_dsn(os.environ['DATABASE_URL']))) as conn, conn.cursor() as cur:
+        """One connection per node, autocommit so each poll sees what federation committed since the last; a dropped
+        one is opened again."""
+        if self._conn is None or self._conn.closed:
+            self._conn = psycopg2.connect(libpq_dsn(os.environ['DATABASE_URL']))
+            self._conn.autocommit = True
+        with self._conn.cursor() as cur:
             cur.execute(sql, params)
             return cur.fetchall()
 
