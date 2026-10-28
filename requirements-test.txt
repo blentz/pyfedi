@@ -26,22 +26,20 @@
 # outside the scope of a packaging fix -- but the accurate claim is "PieFed
 # declares no test-only package for production", not "production has no test
 # packages".
-# Exact pins: an unpinned entry moves on every rebuild of the test stage. pytest 9.2.0 changed monkeypatch.setattr
-# (pytest #10644) so that patching current_app.debug records no old value and its undo deletes the property.
-pytest==9.1.1
-pytest-cov==7.1.0
-pytest-timeout==2.4.0
+pytest
+pytest-cov
+pytest-timeout
 # Parallel runs. run_tests.sh passes `-n` only for a WHOLE-suite run (see the
 # script); a run that names a path stays serial, because the per-worker database
 # each worker builds costs more than a short run saves. tests/conftest.py gives
 # every worker its own database and its own pair of Redis dbs.
-pytest-xdist==3.8.0
-respx==0.23.1
-moto==5.2.5
-fakeredis==2.40.0
-atheris==3.1.0
+pytest-xdist
+respx
+moto
+fakeredis
+atheris
 # starlette's TestClient prefers httpx2 and warns when it falls back to httpx
-httpx2==2.16.0
+httpx2
 # The interop conformance runner's FediTest, at the same commit as interop/conformance/Containerfile, so the PieFed node
 # driver (interop/conformance/feditest/nodedrivers/piefed.py) can be unit-tested here. It is not on PyPI; the test
 # stage already has git. FediTest pins none of its dependencies, so it moves none of PieFed's.

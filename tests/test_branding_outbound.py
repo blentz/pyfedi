@@ -221,7 +221,7 @@ def test_the_missed_notifications_mail_is_from_each_accounts_home_domain(app, sh
 def test_the_test_email_is_from_the_callers_home_domain(app, shop_rows, monkeypatch, logged_in):
     shop, shop_user, _ = shop_rows
     brand(shop, **SHOP_OWN)
-    monkeypatch.setattr(current_app, 'debug', True)
+    monkeypatch.setitem(current_app.config, 'DEBUG', True)
     client = app.test_client()
     if logged_in:
         with client.session_transaction(base_url=SHOP_BASE) as session:

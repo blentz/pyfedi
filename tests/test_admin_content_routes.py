@@ -473,7 +473,7 @@ class TestTheMediaList:
     def test_everything_one_account_uploaded_can_be_queued_for_deletion(
             self, env, uploaded, monkeypatch):
         login(env.client, an_admin(env, 'administer all users'))
-        monkeypatch.setattr(current_app, 'debug', False)
+        monkeypatch.setitem(current_app.config, 'DEBUG', False)
         token = csrf(env.app, env.client)
         with patch('app.admin.routes.delete_user_files_in_background') as task:
             response = env.client.post(
@@ -485,7 +485,7 @@ class TestTheMediaList:
     def test_in_debug_that_runs_here_and_now(self, env, uploaded,
                                              monkeypatch):
         login(env.client, an_admin(env, 'administer all users'))
-        monkeypatch.setattr(current_app, 'debug', True)
+        monkeypatch.setitem(current_app.config, 'DEBUG', True)
         token = csrf(env.app, env.client)
         with patch('app.admin.routes.delete_user_files_in_background') as task:
             env.client.post(f'/admin/media/{env.member.id}/delete_all',

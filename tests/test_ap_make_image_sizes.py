@@ -488,13 +488,13 @@ class TestTheFormatTheInstanceHasChosen:
 
 class TestHowTheResizeIsDispatched:
     def test_in_debug_it_runs_here_and_now(self, env, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', True)
+        monkeypatch.setitem(current_app.config, 'DEBUG', True)
         with patch('app.activitypub.util.make_image_sizes_async') as task:
             make_image_sizes(7, 50, 120, 'posts')
         task.assert_called_once_with(7, 50, 120, 'posts', False)
 
     def test_otherwise_it_is_queued_with_a_delay(self, env, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', False)
+        monkeypatch.setitem(current_app.config, 'DEBUG', False)
         with patch('app.activitypub.util.make_image_sizes_async') as task:
             make_image_sizes(7, 50, 120, 'posts')
         assert task.apply_async.call_args.kwargs['args'] == \

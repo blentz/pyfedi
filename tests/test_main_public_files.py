@@ -402,12 +402,12 @@ DIAGNOSTICS = ['/test', '/test_email', '/test_redis', '/test_ip', '/test_s3',
 class TestTheDiagnosticsAreNotThereInProduction:
     @pytest.mark.parametrize('path', DIAGNOSTICS)
     def test_each_one_is_refused(self, env, path, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', False)
+        monkeypatch.setitem(current_app.config, 'DEBUG', False)
         assert env.client.get(path).status_code == 403
 
     @pytest.mark.parametrize('path', DIAGNOSTICS)
     def test_and_to_somebody_signed_in_too(self, env, path, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', False)
+        monkeypatch.setitem(current_app.config, 'DEBUG', False)
         login(env.client, env.member)
         assert env.client.get(path).status_code == 403
 
@@ -415,7 +415,7 @@ class TestTheDiagnosticsAreNotThereInProduction:
 class TestTheDiagnosticsInDebug:
     @pytest.fixture(autouse=True)
     def in_debug(self, env, monkeypatch):
-        monkeypatch.setattr(current_app, 'debug', True)
+        monkeypatch.setitem(current_app.config, 'DEBUG', True)
 
     def test_the_markdown_one(self, env):
         assert env.client.get('/test').status_code == 200
