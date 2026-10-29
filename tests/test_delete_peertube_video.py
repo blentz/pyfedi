@@ -26,7 +26,9 @@ def moderator(video_post):
 def test_peertube_gets_the_owners_delete(sent, video_post, owner):
     delete_object(video_post.author.id, video_post, is_post=True, session=db.session)
     body, key = sent['https://peertube.example/inbox']
-    assert (body['type'], body['actor'], body['object']) == ('Delete', owner.public_url(), video_post.public_url())
+    # an embedded Tombstone (P2): PeerTube reads `activity.object.id` (process-delete.ts:29 at v8.3.1)
+    assert (body['type'], body['actor'], body['object']) == \
+        ('Delete', owner.public_url(), {'id': video_post.public_url(), 'type': 'Tombstone'})
     assert key == owner.public_url() + '#main-key'
     plain = sent['https://follower.example/inbox'][0]       # the owner's copy must not have changed the author's
     assert (plain['type'], plain['actor']) == ('Delete', video_post.author.public_url())
