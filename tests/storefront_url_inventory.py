@@ -83,7 +83,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/models.py': {
         'Community.local_url': 1,
         'Feed.local_url': 1,
-        'File.delete_from_disk': 2,
+        'File.delete_from_disk': 3,   # the CDN purge URLs of file_path, thumbnail_path and the converted JPEG
         'File.local_path_for_url': 2,
         'Post.generate_slug': 1,
         'Post.new': 1,
