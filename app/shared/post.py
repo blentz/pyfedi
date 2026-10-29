@@ -490,6 +490,15 @@ def store_post_image(post: Post, uploaded_file) -> tuple[str, str, str | None]:
     return url, uploaded_name, hash
 
 
+def _stored(post: Post, image: dict) -> dict:
+    """An album entry as set_local_album takes it: an upload ({'upload', 'alt_text'}) stored by store_post_image, which
+    gives its url, file name and hash; an entry already naming its url as it is."""
+    if 'upload' not in image:
+        return image
+    url, file_name, hash = store_post_image(post, image['upload'])
+    return {'url': url, 'alt_text': image['alt_text'], 'file_name': file_name, 'hash': hash}
+
+
 def set_local_album(post: Post, images: list) -> None:
     """Make `post.gallery` the pictures after the post's image (Pixelfed interop R5), replacing what it held: each
     `{url, alt_text}` and, for one of our uploads, the `file_name` and `hash` it was stored with, at weight 1.. in
@@ -523,7 +532,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         raise Exception('This community was deleted on its home server')
     if album is not None and len(album) + 1 > max_album_images():   # the image and its album (R7)
         raise Exception(f'At most {max_album_images()} images in one post')
-    if album and any(_as_url(image['url']) is None for image in album):   # D1407, as for `url`: rendered as hrefs
+    if album and any('url' in image and _as_url(image['url']) is None for image in album):   # D1407, as `url`: hrefs
         raise Exception('Each album url must be an http:// or https:// url')
     if src == SRC_API:
         title = input['title'].strip()
@@ -897,8 +906,8 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         if album:
             raise Exception('An album needs an image post: give its first picture as the url')
         set_local_album(post, [])
-    elif album is not None:
-        set_local_album(post, album)
+    elif album is not None:   # a web upload is stored as the image is, and names the file it wrote
+        set_local_album(post, [_stored(post, image) for image in album])
 
     federate = True
     if type == POST_TYPE_POLL and poll_data:
