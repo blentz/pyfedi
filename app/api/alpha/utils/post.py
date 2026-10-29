@@ -1754,6 +1754,13 @@ def put_post_subscribe(auth, data):
     return post_json
 
 
+def _album(data) -> list | None:
+    """The API's `gallery` as edit_post's album: None when the key is absent (keep the album), else its pictures."""
+    if 'gallery' not in data:
+        return None
+    return [{'url': image['url'], 'alt_text': image.get('alt_text')} for image in data['gallery']]
+
+
 def post_post(auth, data):
     title = data['title']
     community_id = data['community_id']
@@ -1830,7 +1837,7 @@ def post_post(auth, data):
     input['title'] = post_data.get('title', input['title'])
     input['body'] = post_data.get('content', input['body'])
 
-    user_id, post = shared_post.make_post(input, community, type, SRC_API, auth)
+    user_id, post = shared_post.make_post(input, community, type, SRC_API, auth, album=_album(data))
 
     if not scheduled_for:
         post_json = post_view(post=post, variant=4, user_id=user_id)
@@ -1909,7 +1916,7 @@ def put_post(auth, data):
     if 'poll' in data and data['poll']:
         input['poll'] = data['poll']
 
-    user_id, post = shared_post.edit_post(input, post, type, SRC_API, auth=auth)
+    user_id, post = shared_post.edit_post(input, post, type, SRC_API, auth=auth, album=_album(data))
 
     if not scheduled_for:
         post_json = post_view(post=post, variant=4, user_id=user_id)
