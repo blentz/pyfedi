@@ -581,6 +581,13 @@ def served_path(value):
 
 
 MEDIA_ROOT = 'app/static/media'   # every file of ours a URL names is under it: uploads, icons, avatars, thumbnails
+JPEG_RENDITION_ROOT = MEDIA_ROOT + '/jpeg'   # the JPEGs app/jpeg converts our WebP, AVIF and HEIC uploads to on request
+
+
+def jpeg_rendition_path(file_id: int) -> str:
+    """Where the JPEG of File `file_id`'s upload is cached (app/jpeg). Only that converter writes it, for that row only,
+    so the row's delete removes it without asking who else names it."""
+    return f'{JPEG_RENDITION_ROOT}/{file_id % 100:02d}/{file_id}.jpg'
 MEDIA_DIRECTORY = 'app/static/media/posts'
 # The only names store_uploaded_media writes: two shard directories that are the name's first four characters
 _STORED_NAME = re.compile(r'([A-Za-z0-9]{2})/([A-Za-z0-9]{2})/([A-Za-z0-9]{15})\.(?:mp4|mov|webm|mp3|m4a|ogg)')
@@ -1485,6 +1492,14 @@ class File(db.Model):
                                 ...
                     elif os.path.isfile(local_path):
                         self._left_on_disk(local_path)
+
+        # the JPEG app/jpeg converted this record's upload to, if anyone asked for one
+        if self.id is not None and os.path.isfile(jpeg_rendition_path(self.id)):
+            purge_from_cache.append(f"{current_app.config['SERVER_URL']}/media/jpeg/{self.id}.jpg")
+            try:
+                os.unlink(jpeg_rendition_path(self.id))
+            except FileNotFoundError:   # another worker removed it first (D1349's race)
+                ...
 
         if len(s3_files_to_delete) > 0:
             from app.shared.tasks.maintenance import delete_from_s3  # cycle: app.shared.tasks.maintenance imports from this module
