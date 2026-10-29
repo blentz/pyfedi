@@ -243,9 +243,12 @@ def test_the_task_reconciles_then_polls(db_session, monkeypatch):
     order = []
     monkeypatch.setattr(sync, 'reconcile_sync', lambda: order.append('reconcile') or {'added': 0})
     monkeypatch.setattr(sync, 'enqueue_polls', lambda: order.append('poll') or 0)
+    # Pixelfed seeding (spec 2026-10-29) rides on the same task, after the channels
+    monkeypatch.setattr(sync, 'reconcile_people', lambda: order.append('people') or {'added': 1})
+    monkeypatch.setattr(sync, 'enqueue_person_polls', lambda: order.append('people polls') or 0)
 
-    assert reconcile_sync_task() == {'added': 0}
-    assert order == ['reconcile', 'poll']
+    assert reconcile_sync_task() == {'added': 0, 'people': {'added': 1}}
+    assert order == ['reconcile', 'poll', 'people', 'people polls']
 
 
 def test_host_of_a_malformed_target_is_empty():

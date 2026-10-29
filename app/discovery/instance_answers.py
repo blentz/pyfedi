@@ -6,7 +6,7 @@ from flask import current_app
 
 from app import db
 from app.discovery import SYNC_ACCEPTED, SYNC_FAILED
-from app.models import DiscoverySync
+from app.models import DiscoveryPersonSync, DiscoverySync
 
 # Delivery answers that mean the peer will not take this Follow as sent; a 5xx and 429 are retried by the send
 # queue, and a transport failure is transient, so neither is final
@@ -24,15 +24,34 @@ def _host(url: str) -> str:
         return ''
 
 
+# A channel's row and a Pixelfed person's (spec 2026-10-29) answer the same way: one Follow uuid names one row of one
+SYNC_TABLES = (DiscoverySync, DiscoveryPersonSync)
+
+
+def _by_uuid(session, follow_uuid: str):
+    for table in SYNC_TABLES:
+        row = session.query(table).filter_by(follow_uuid=follow_uuid).first()
+        if row is not None:
+            return row
+    return None
+
+
+def _by_target(target: str):
+    for table in SYNC_TABLES:
+        row = db.session.query(table).filter(db.func.lower(table.follow_target) == target.lower()).first()
+        if row is not None:
+            return row
+    return None
+
+
 def _row_for(follow, signer: str):
     """The row a Follow (a dict, or its id as a string) names, when `signer` is on the followed actor's host."""
     row = None
     follow_id = follow.get('id') if isinstance(follow, dict) else follow
     if isinstance(follow_id, str) and '/activities/follow/' in follow_id:
-        row = db.session.query(DiscoverySync).filter_by(follow_uuid=follow_id.rsplit('/', 1)[-1]).first()
+        row = _by_uuid(db.session, follow_id.rsplit('/', 1)[-1])
     elif isinstance(follow, dict) and isinstance(follow.get('object'), str):
-        row = db.session.query(DiscoverySync).filter(
-            db.func.lower(DiscoverySync.follow_target) == follow['object'].lower()).first()
+        row = _by_target(follow['object'])
     if row is None or _host(row.follow_target) != _host(signer):
         return None
     return row
@@ -48,7 +67,7 @@ def instance_actor_answer(activity: dict, signer: str):
             return False, None
         return True, _row_for(obj, signer)
     if isinstance(obj, str):
-        held = db.session.query(DiscoverySync.community_id).filter_by(follow_uuid=obj.rsplit('/', 1)[-1]).first()
+        held = _by_uuid(db.session, obj.rsplit('/', 1)[-1])
         if held is None:
             return False, None
         return True, _row_for(obj, signer)
@@ -70,7 +89,7 @@ def record_delivery_refusal(session, body, status_code) -> None:
     follow_id = body.get('id')
     if not isinstance(follow_id, str) or '/activities/follow/' not in follow_id:
         return
-    row = session.query(DiscoverySync).filter_by(follow_uuid=follow_id.rsplit('/', 1)[-1]).first()
+    row = _by_uuid(session, follow_id.rsplit('/', 1)[-1])
     if row is None or row.follow_state == SYNC_ACCEPTED:
         return
     row.follow_state = SYNC_FAILED

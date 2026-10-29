@@ -1,12 +1,13 @@
 """The instance actor (/actor) as the follower of proactively synced channels and podcasts (interop D24). A Follow
 from /actor puts no user in the community: Accept and Reject only change the discovery_sync row."""
 import uuid
+from datetime import timedelta
 
 from flask import current_app
 
 from app import db
 from app.activitypub.signature import send_post_request
-from app.discovery import SYNC_NONE, SYNC_PENDING
+from app.discovery import FOLLOW_RETRY_DAYS, SYNC_FAILED, SYNC_NONE, SYNC_PENDING
 from app.discovery.instance_answers import instance_actor_url
 from app.federation_urls import activity_id, instance_actor_signing
 from app.models import utcnow
@@ -53,3 +54,12 @@ def send_instance_undo(row, community) -> None:
         send_post_request(community.ap_inbox_url, undo, private_key, key_id, timeout=10)
     except Exception as error:
         current_app.logger.info(f'discovery sync: undo to {community.ap_inbox_url} failed: {type(error).__name__}')
+
+
+def needs_refollow(row, now) -> bool:
+    """Whether a sync row's Follow goes out again: never sent, or unanswered or refused delivery for a week. A row
+    of either table, a channel's or a person's."""
+    if row.follow_state == SYNC_NONE:
+        return True
+    return row.follow_state in (SYNC_PENDING, SYNC_FAILED) and (row.followed_at is None
+                                                 or row.followed_at < now - timedelta(days=FOLLOW_RETRY_DAYS))
