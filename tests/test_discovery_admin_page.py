@@ -34,7 +34,7 @@ def test_the_page_names_every_data_source(admin):
     page = client.get(PAGE).get_data(as_text=True)
 
     for source in ('https://sepiasearch.org/', 'https://index.castopod.org/', 'https://joinmastodon.org/',
-                   'https://fedidb.org/'):
+                   'https://fedidb.org/', 'https://pixelfed.org/servers'):
         assert source in page
     assert 'index.castopod.org</a> (Castopod)' in page
     assert 'podcastindex.org' not in page and 'Podcast Index' not in page
