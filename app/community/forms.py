@@ -10,17 +10,17 @@ from slugify import slugify
 from flask_login import current_user
 from flask_wtf import FlaskForm
 from wtforms import StringField, SubmitField, TextAreaField, BooleanField, HiddenField, SelectField, FileField, \
-    DateField, IntegerField, DateTimeLocalField, RadioField
+    DateField, IntegerField, DateTimeLocalField, RadioField, FieldList
 
 from wtforms.validators import ValidationError, DataRequired, Length, Regexp, Optional, URL, NumberRange
 
 from app import db
 from app.constants import APPLE_PODCAST_CATEGORIES, COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_PODCAST, \
     COMMUNITY_KIND_VIDEO_CHANNEL, DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
-    DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE
+    DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE, MAX_ALBUM_IMAGES_CEILING
 from app.local_names import local_named
-from app.models import Community, Site, utcnow, User, Feed
-from app.utils import domain_from_url, MultiCheckboxField, get_timezones, url_is_parseable, is_hex_color
+from app.models import Community, Site, utcnow, User, Feed, storable_alt_text
+from app.utils import domain_from_url, MultiCheckboxField, get_timezones, url_is_parseable, is_hex_color, max_album_images
 from app.form_choices import select_choices
 
 MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
@@ -447,9 +447,80 @@ class CreateAudioForm(EpisodeFieldsMixin, MediaUrlOrFileMixin, CreatePostForm):
             self.audio_url, lambda name: _l("Audio from %(domain)s is not allowed.", domain=name))
 
 
+def is_chan_screenshot(uploaded_file) -> bool:
+    """Whether the chan image filter (an admin setting) reads `uploaded_file` as a 4chan screenshot: OCR finds
+    'Anonymous' and a post number. An SVG or GIF is not read."""
+    if not uploaded_file or uploaded_file.filename == '' or uploaded_file.filename.endswith('.svg') or \
+            uploaded_file.filename.endswith('.gif'):
+        return False
+    site = db.session.get(Site, 1)
+    if site is None:
+        site = Site()
+    if not site.enable_chan_image_filter:
+        return False
+    # Do not allow fascist meme content
+    try:
+        if '.avif' in uploaded_file.filename:
+            import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
+        uploaded_file.seek(0)
+        image_text = pytesseract.image_to_string(Image.open(BytesIO(uploaded_file.read())).convert('L'))
+    except FileNotFoundError:
+        image_text = ''
+    except UnidentifiedImageError:
+        image_text = ''
+    except pytesseract.TesseractNotFoundError:
+        # D1415. `TesseractNotFoundError` is an `OSError` but NOT a
+        # `FileNotFoundError` (its MRO is TesseractNotFoundError -> OSError),
+        # so neither arm above caught it: pytesseract raises it when the
+        # tesseract BINARY is absent, which is the ordinary state of a machine
+        # that installed this application's Python dependencies and nothing
+        # else. An admin turning `enable_chan_image_filter` on there made every
+        # image upload raise out of form validation -- a 500 on the post form,
+        # for every image, until the setting was turned off again.
+        #
+        # '' is what the other two arms already answer for "the OCR could not
+        # run", and the check below treats an empty string as "no chan markers
+        # found", so the filter degrades to off rather than to broken.
+        image_text = ''
+    finally:
+        uploaded_file.seek(0)
+    return 'Anonymous' in image_text and ('No.' in image_text or ' N0' in image_text)  # chan posts usually contain the text 'Anonymous' and ' No.12345'
+
+
+def album_uploads(form) -> list:
+    """The album pictures the image form was sent, in slot order, as edit_post's album entries: each
+    {'upload', 'alt_text'} (Pixelfed interop R5)."""
+    pictures = []
+    for file_field, alt_field in zip(form.album_files, form.album_alts):
+        picture = request.files.get(file_field.name)
+        if picture and picture.filename:
+            pictures.append({'upload': picture, 'alt_text': storable_alt_text((alt_field.data or '').strip())})
+    return pictures
+
+
+def album_kept(post) -> list:
+    """The pictures of `post`'s album that the edit page sent back without their remove box ticked, each with the alt
+    text the page sent for it."""
+    return [{'url': file.source_url, 'alt_text': storable_alt_text((request.form.get(f'album_alt_{file.id}') or '').strip())}
+            for file in post.album_images()[1:] if not request.form.get(f'album_remove_{file.id}')]
+
+
+def album_slots(post=None) -> int:
+    """How many more pictures the image form offers: the site's max_album_images, less the image and the album
+    `post` already has."""
+    used = len(post.album_images()) if post is not None and post.image_id else 1
+    return max(0, max_album_images() - used)
+
+
 class CreateImageForm(CreatePostForm):
     image_alt_text = StringField(_l('Alt text'), validators=[Optional(), Length(min=3, max=1500)])
     image_file = FileField(_l('Image'), validators=[DataRequired()], render_kw={'accept': 'image/*'})
+    # The album after the image (Pixelfed interop R5): as many slots as the site could allow; the page renders
+    # album_slots() of them
+    album_files = FieldList(FileField(_l('Another image'), validators=[Optional()], render_kw={'accept': 'image/*'}),
+                            min_entries=MAX_ALBUM_IMAGES_CEILING - 1)
+    album_alts = FieldList(StringField(_l('Its alt text'), validators=[Optional(), Length(min=3, max=1500)]),
+                           min_entries=MAX_ALBUM_IMAGES_CEILING - 1)
 
     def validate(self, extra_validators=None) -> bool:
         if not super().validate(extra_validators):
@@ -462,42 +533,25 @@ class CreateImageForm(CreatePostForm):
         # `request.files['image_file']` and was
         # `werkzeug.exceptions.BadRequestKeyError: 400`.
         uploaded_file = request.files.get('image_file')
-        if uploaded_file and uploaded_file.filename != '' and not uploaded_file.filename.endswith('.svg') and not uploaded_file.filename.endswith('.gif'):
-            site = db.session.get(Site, 1)
-            if site is None:
-                site = Site()
-
-            if site.enable_chan_image_filter:
-                # Do not allow fascist meme content
-                try:
-                    if '.avif' in uploaded_file.filename:
-                        import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
-                    image_text = pytesseract.image_to_string(Image.open(BytesIO(uploaded_file.read())).convert('L'))
-                except FileNotFoundError:
-                    image_text = ''
-                except UnidentifiedImageError:
-                    image_text = ''
-                except pytesseract.TesseractNotFoundError:
-                    # D1415. `TesseractNotFoundError` is an `OSError` but NOT a
-                    # `FileNotFoundError` (its MRO is TesseractNotFoundError -> OSError),
-                    # so neither arm above caught it: pytesseract raises it when the
-                    # tesseract BINARY is absent, which is the ordinary state of a machine
-                    # that installed this application's Python dependencies and nothing
-                    # else. An admin turning `enable_chan_image_filter` on there made every
-                    # image upload raise out of form validation -- a 500 on the post form,
-                    # for every image, until the setting was turned off again.
-                    #
-                    # '' is what the other two arms already answer for "the OCR could not
-                    # run", and the check below treats an empty string as "no chan markers
-                    # found", so the filter degrades to off rather than to broken.
-                    image_text = ''
-
-                if 'Anonymous' in image_text and ('No.' in image_text or ' N0' in image_text):  # chan posts usually contain the text 'Anonymous' and ' No.12345'
-                    self.image_file.errors.append("This image is from 4chan.")
-                    db.session.commit()
-                    return False
+        if is_chan_screenshot(uploaded_file):
+            self.image_file.errors.append("This image is from 4chan.")
+            db.session.commit()
+            return False
         if uploaded_file and image_upload_too_large(self.image_file, uploaded_file):
             return False
+        # Each album picture is checked as the image is; the whole album, the image's and those kept on an edit
+        # too, is held to max_album_images by edit_post
+        if len(album_uploads(self)) + 1 > max_album_images():
+            self.image_file.errors.append(_('At most %(count)d images in one post', count=max_album_images()))
+            return False
+        for field in self.album_files:
+            picture = request.files.get(field.name)
+            if picture and picture.filename:
+                if is_chan_screenshot(picture):   # a list by now: super().validate() validated every slot
+                    field.errors.append("This image is from 4chan.")
+                    return False
+                if image_upload_too_large(field, picture):
+                    return False
         if self.communities:
             community = db.session.get(Community, self.communities.data)
             if community.is_local() and g.site.allow_local_image_posts is False:
