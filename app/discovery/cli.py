@@ -4,6 +4,7 @@ from flask import current_app
 
 from app.discovery.refresh import refresh_discovery
 from app.discovery.seed import seed_from_fixtures
+from app.discovery.people import enqueue_person_polls, reconcile_people
 from app.discovery.sync import enqueue_polls, reconcile_sync
 
 
@@ -16,7 +17,7 @@ def register_discovery_commands(app) -> None:
 
     @app.cli.command('sync_discovery')
     def sync_discovery_command():
-        """Keep each host's top PeerTube channels and Castopod podcasts followed by the instance actor, then queue
+        """Keep each host's top PeerTube channels, Castopod podcasts and Pixelfed people followed by the instance actor, then queue
         their daily polls. Run after refresh_discovery."""
         summary = reconcile_sync()
         click.echo(f"added: {summary['added']}")
@@ -24,6 +25,10 @@ def register_discovery_commands(app) -> None:
         click.echo(f"refollowed: {summary['refollowed']}")
         click.echo(f"failed hosts: {', '.join(summary['failed_hosts']) or 'none'}")
         click.echo(f'polls queued: {enqueue_polls()}')
+        people = reconcile_people()   # Pixelfed seeding (spec 2026-10-29)
+        click.echo(f"people added: {people['added']}, dropped: {people['dropped']}, "
+                   f"refollowed: {people['refollowed']}, failed hosts: {', '.join(people['failed_hosts']) or 'none'}")
+        click.echo(f'people polls queued: {enqueue_person_polls()}')
 
     @app.cli.command('discovery-seed-fixtures')
     @click.option('--force', is_flag=True, help='Seed even though the app is not in debug mode.')

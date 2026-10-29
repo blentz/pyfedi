@@ -1,23 +1,22 @@
 """Proactive sync of PeerTube channels and Castopod podcasts (interop D24,
 docs/superpowers/specs/2026-10-05-proactive-discovery-sync-design.md). Each remote host's top N directory entries
 are followed by the instance actor and polled daily; the rest are left alone."""
-from datetime import timedelta
 
 from flask import current_app
 from sqlalchemy import func
 
 from app import celery, db
 from app.activitypub.util import find_actor_or_create, remote_object_to_json
-from app.discovery import KIND_COMMUNITY, SYNC_FAILED, SYNC_NONE, SYNC_PENDING
+from app.discovery import ADDS_PER_HOST_PER_RUN, ADDS_PER_RUN, KIND_COMMUNITY, MAX_PER_HOST, POLL_SPACING_SECONDS
 from app.discovery.backfill import backfill_in_progress, queue_backfill, run_backfill
 from app.discovery.filters import host_is_excluded
-from app.discovery.instance_actor import send_instance_follow, send_instance_undo
+from app.discovery.instance_actor import needs_refollow, send_instance_follow, send_instance_undo
+from app.discovery.people import enqueue_person_polls, reconcile_people
 from app.models import Community, DiscoveryEntry, DiscoveryExclusion, DiscoverySync, utcnow
 from app.storefront import acting_as_default, is_hosted_uri
 from app.utils import get_setting
 
 SYNC_PLATFORMS = ('peertube', 'castopod')
-MAX_PER_HOST = 50
 
 
 def sync_per_host() -> int:
@@ -120,12 +119,6 @@ def poll_synced_community(community_id: int) -> None:
     db.session.commit()
 
 
-ADDS_PER_HOST_PER_RUN = 10   # a larger N ramps up over several days rather than bursting at one host
-# ...and the whole run is bounded too: each add queues a backfill whose posts fan out into per-post tasks, and an
-# uncapped first run (hundreds of hosts) buried an instance's inbox under ~17,000 queued tasks
-ADDS_PER_RUN = 50
-FOLLOW_RETRY_DAYS = 7
-POLL_SPACING_SECONDS = 2
 
 
 def _host(url: str) -> str:
@@ -139,13 +132,6 @@ def drop_row(row) -> None:
         send_instance_undo(row, community)
     db.session.delete(row)
     db.session.commit()
-
-
-def _needs_refollow(row, now) -> bool:
-    if row.follow_state == SYNC_NONE:
-        return True
-    return row.follow_state in (SYNC_PENDING, SYNC_FAILED) and (row.followed_at is None
-                                                 or row.followed_at < now - timedelta(days=FOLLOW_RETRY_DAYS))
 
 
 def _exclude_alias(entry) -> None:
@@ -214,7 +200,7 @@ def reconcile_sync() -> dict:
             for entry in desired[host]:
                 row = held.get(entry.actor_url.lower())
                 if row is not None:
-                    if _needs_refollow(row, now):
+                    if needs_refollow(row, now):
                         if send_instance_follow(row, db.session.get(Community, row.community_id)):
                             summary['refollowed'] += 1
                 elif added < ADDS_PER_HOST_PER_RUN and run_added < ADDS_PER_RUN and _add(entry, held):
@@ -250,4 +236,6 @@ def enqueue_polls() -> int:
 def reconcile_sync_task() -> dict:
     summary = reconcile_sync()
     enqueue_polls()
+    summary['people'] = reconcile_people()   # Pixelfed seeding (spec 2026-10-29), on the same schedule
+    enqueue_person_polls()
     return summary

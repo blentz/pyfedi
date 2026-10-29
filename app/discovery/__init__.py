@@ -16,3 +16,12 @@ SYNC_FAILED = 'failed'   # the peer refused the Follow's delivery outright (4xx)
 
 # Instance.software values whose communities are video channels or podcasts (lower-case)
 MEDIA_SOFTWARE = ('peertube', 'castopod')
+
+# The proactive sync's limits, shared by channels (sync.py) and Pixelfed people (people.py)
+MAX_PER_HOST = 50
+ADDS_PER_HOST_PER_RUN = 10   # a larger N ramps up over several days rather than bursting at one host
+# ...and the whole run is bounded too: each add queues a backfill whose posts fan out into per-post tasks, and an
+# uncapped first run (hundreds of hosts) buried an instance's inbox under ~17,000 queued tasks
+ADDS_PER_RUN = 50
+FOLLOW_RETRY_DAYS = 7
+POLL_SPACING_SECONDS = 2
