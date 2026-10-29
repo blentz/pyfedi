@@ -2263,6 +2263,9 @@ def microblog_content_to_title(html: str) -> Tuple[str, str]:
                 break
     else:
         title = html_to_text(html)
+    # one space per run: get_text's separator doubles the space before a link (`album <a>#tag</a>`), and a newline
+    # has no place in a title (P4)
+    title = ' '.join(title.split())
 
     period_index = title.find('.')
     question_index = title.find('?')
@@ -6262,6 +6265,21 @@ def upload_file_to_s3(local_path: str, key: str, content_type: str) -> str:
     finally:
         s3.close()
     return f"https://{current_app.config['S3_PUBLIC_URL']}/{key}"
+
+
+def read_from_s3(key: str) -> bytes:
+    """The bytes of the object at `key` in our bucket, through the same client upload_file_to_s3 uses."""
+    s3 = boto3.session.Session().client(
+        service_name='s3',
+        region_name=current_app.config['S3_REGION'],
+        endpoint_url=current_app.config['S3_ENDPOINT'],
+        aws_access_key_id=current_app.config['S3_ACCESS_KEY'],
+        aws_secret_access_key=current_app.config['S3_ACCESS_SECRET'],
+    )
+    try:
+        return s3.get_object(Bucket=current_app.config['S3_BUCKET'], Key=key)['Body'].read()
+    finally:
+        s3.close()
 
 
 def move_file_to_s3(file_id, s3):

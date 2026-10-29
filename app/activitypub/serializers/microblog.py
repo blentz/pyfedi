@@ -8,6 +8,7 @@ from markupsafe import escape
 import app.activitypub.util as activitypub_util   # the module: app.activitypub.util imports this one
 from app.constants import POST_TYPE_EVENT, POST_TYPE_IMAGE, POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO
 from app.federation_urls import object_base
+from app.jpeg import jpeg_url, needs_jpeg
 from app.local_only import federated_mentions
 from app.utils import ap_datetime, guess_mime_type, html_to_text, is_local_microblogs
 from app.visibility import followers_only_addressing, is_open
@@ -109,6 +110,8 @@ def note_attachments(post) -> list:
     if post.type == POST_TYPE_IMAGE and post.image is not None and post.image.source_url:
         attachment = {'type': 'Document', 'mediaType': guess_mime_type(post.image.source_url),
                       'url': post.image.source_url, 'name': post.image.alt_text or ''}
+        if needs_jpeg(post.image):   # Pixelfed drops a post with a WebP, AVIF or HEIC attachment (R3)
+            attachment.update(mediaType='image/jpeg', url=jpeg_url(post.image, object_base(post)))
         if post.image.width and post.image.height:
             attachment['width'] = post.image.width
             attachment['height'] = post.image.height

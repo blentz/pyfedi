@@ -3666,8 +3666,13 @@ def process_chat(user, store_ap_json, core_activity, session):
             # activity['object']['to'] is an array with at least 1 element
             recipient_ap_id = core_activity['object']['to'][0]
         
+    # A Note or Page reaches here only as the Create/Update arm's fallback, and a False return sends it on to be
+    # processed as content, which logs its own outcome: a decline is a failure only for a ChatMessage (P3)
+    declined_chat = log_type == APLOG_CHATMESSAGE
+
     if recipient_ap_id == None:
-        log_incoming_ap(id, log_type, APLOG_FAILURE, saved_json, 'Chat recipient is invalid')
+        if declined_chat:
+            log_incoming_ap(id, log_type, APLOG_FAILURE, saved_json, 'Chat recipient is invalid')
         return False
         
     recipient = find_actor_or_create_cached(recipient_ap_id)
@@ -3752,7 +3757,8 @@ def process_chat(user, store_ap_json, core_activity, session):
 
         return True
 
-    log_incoming_ap(id, log_type, APLOG_FAILURE, saved_json, 'ChatMessage target is not local')
+    if declined_chat:
+        log_incoming_ap(id, log_type, APLOG_FAILURE, saved_json, 'ChatMessage target is not local')
     return False
 
 
