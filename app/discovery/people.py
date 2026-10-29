@@ -10,14 +10,15 @@ from flask import current_app
 from sqlalchemy import func
 
 from app import celery, db
-from app.activitypub.util import find_actor_or_create, host_of, resolve_remote_post_from_search
+from app.activitypub.util import NEW_CONTENT_TYPES, create_resolved_object, find_actor_or_create, \
+    find_microblogging_community, host_of, remote_object_to_json
 from app.discovery import ADDS_PER_HOST_PER_RUN, ADDS_PER_RUN, KIND_PERSON, MAX_PER_HOST, POLL_SPACING_SECONDS
 from app.discovery.credits import _declares_a_dtd
 from app.discovery.filters import host_is_excluded
 from app.discovery.instance_actor import needs_refollow, send_instance_follow, send_instance_undo
 from app.models import DiscoveryEntry, DiscoveryExclusion, DiscoveryPersonSync, Post, User, utcnow
 from app.storefront import acting_as_default, is_hosted_uri
-from app.utils import get_request_capped, get_setting
+from app.utils import get_request_capped, get_setting, gibberish
 
 ATOM = '{http://www.w3.org/2005/Atom}'
 ATOM_MAX_ENTRIES = 10          # what Pixelfed's feed holds (ProfileController::showAtomFeed, take(10))
@@ -137,6 +138,17 @@ def _known_post(url: str) -> bool:
     return Post.get_by_ap_id(url) is not None
 
 
+def fetch_post(url: str, host: str) -> None:
+    """Fetch a post the feed lists and file it in microblogs, as the inbox files a Note that names no community
+    (routes.py) and the API's resolve does (get_resolve_object): create_resolved_object checks the author's host and
+    the posting gates. A reply or a non-content object is not a seeded post."""
+    post_data = remote_object_to_json(url, retry_delay=0)
+    if not isinstance(post_data, dict) or post_data.get('inReplyTo') or post_data.get('type') not in NEW_CONTENT_TYPES:
+        return
+    create_resolved_object(url, post_data, host, find_microblogging_community(),
+                           f'https://{host}/activities/announce/{gibberish(15)}', False)
+
+
 def _feed_post_urls(feed: bytes, host: str) -> list[str] | None:
     """The https post URLs on `host` that an Atom feed's entries name, in feed order, at most ATOM_MAX_ENTRIES; None
     when the feed cannot be read (a DTD or entity declaration is refused before parsing)."""
@@ -189,7 +201,7 @@ def poll_synced_person(user_id: int) -> None:
         if _known_post(url):
             continue
         try:
-            resolve_remote_post_from_search(url)
+            fetch_post(url, host)
         except Exception:   # one post's failure must not stop the rest
             current_app.logger.exception(f'discovery people: {url} could not be fetched')
             db.session.rollback()
