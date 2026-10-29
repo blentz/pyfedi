@@ -25,6 +25,7 @@ FETCHERS = {
     peertube.SOURCE: peertube.fetch_peertube_channels,
     castopod.SOURCE: castopod.fetch_castopod_podcasts,
     mastodon.SOURCE: mastodon.fetch_mastodon_people,
+    pixelfed.CURATED_SOURCE: pixelfed.fetch_pixelfed_org_people,   # before fedidb, which leaves its hosts out
     pixelfed.SOURCE: pixelfed.fetch_pixelfed_people,
 }
 

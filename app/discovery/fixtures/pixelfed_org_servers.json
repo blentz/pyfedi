@@ -1,0 +1,28 @@
+{
+ "data": [
+  {
+   "domain": "pixelfed.social",
+   "category": "General",
+   "active": true,
+   "stats": {
+    "user_count": 598413
+   }
+  },
+  {
+   "domain": "spicy.social",
+   "category": "Adult",
+   "active": true,
+   "stats": {
+    "user_count": 2064
+   }
+  },
+  {
+   "domain": "pixelfed.uno",
+   "category": "Regional",
+   "active": true,
+   "stats": {
+    "user_count": 100353
+   }
+  }
+ ]
+}
