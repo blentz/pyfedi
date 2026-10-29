@@ -217,6 +217,8 @@ def test_every_extension_sniffing_predicate_checks_the_scheme_first():
         # extensions a post may carry (`allowed_extensions`, app/shared/post.py:245, 523).
         ('app/shared/post.py', 'make_post'),
         ('app/shared/post.py', 'edit_post'),
+        # ...and the upload itself, moved out of edit_post so each album picture is stored the same way
+        ('app/shared/post.py', 'store_post_image'),
         # A `source_url` that is ALREADY STORED, asked only whether to skip resizing a
         # gif or to accept an avif's octet-stream Content-Type. Every producer of that
         # column now checks the scheme (D1405, D1407, D1408), and by this point the fetch

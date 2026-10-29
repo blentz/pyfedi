@@ -384,6 +384,17 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None, upload
         return post
 
 
+def store_post_image(post: Post, uploaded_file) -> tuple[str, str, str | None]:
+    """Store `uploaded_file`, an image uploaded with `post`: refuse a type not allowed, re-encode it as configured
+    (MEDIA_IMAGE_FORMAT, MAX_DIMENSION, QUALITY) without metadata, refuse a blocked image, move it to S3 when that is
+    on. Marks the post AI-generated when the image says it is (C2PA). Returns its url, on the post's domain or in the
+    bucket, the name of the file written (File.wrote_its_source) and its hash, if hashing is on. The post image and
+    each album picture (Pixelfed interop R5) are stored by it."""
+    hash = None
+    url, uploaded_name, hash = store_post_image(post, uploaded_file)
+    return url, uploaded_name, hash
+
+
 def set_local_album(post: Post, images: list) -> None:
     """Make `post.gallery` the pictures after the post's image (Pixelfed interop R5), replacing what it held: each
     `{url, alt_text}` and, for one of our uploads, the `file_name` and `hash` it was stored with, at weight 1.. in
