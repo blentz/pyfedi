@@ -313,7 +313,8 @@ def test_delete_post_announces_to_the_communitys_followers(db_session, http_mock
     announce = _sent_activity(route)
     assert announce['type'] == 'Announce'
     assert announce['object']['type'] == 'Delete'
-    assert announce['object']['object'] == s.post.public_url()
+    # P2 (Pixelfed spike 2026-10-28): Pixelfed acts only on an embedded Tombstone, Mastodon and Lemmy take both
+    assert announce['object']['object'] == {'id': s.post.public_url(), 'type': 'Tombstone'}
     assert '@context' not in announce['object']
 
 
@@ -963,7 +964,20 @@ def test_restore_reply_sends_an_undo_of_a_reply_delete(db_session, http_mock):
 
     announce = _sent_activity(route)
     assert announce['object']['type'] == 'Undo'
-    assert announce['object']['object']['object'] == reply.public_url()
+    assert announce['object']['object']['object'] == {'id': reply.public_url(), 'type': 'Tombstone'}
+
+
+def test_delete_reply_names_the_reply_as_a_tombstone(db_session, http_mock):
+    """P2: a reply's Delete embeds `{id, type: Tombstone}`, as a post's does; Pixelfed drops a string object."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+    reply = make_post_reply(s.post, s.user)
+    db.session.commit()
+
+    delete_reply(None, s.user.id, reply.id)
+
+    assert _sent_activity(route)['object']['object'] == {'id': reply.public_url(), 'type': 'Tombstone'}
 
 
 def _personal_follower(s, http_mock, inbox=OTHER_INBOX, domain='fan.example'):
@@ -1242,7 +1256,7 @@ def test_delete_pm_sends_a_delete_to_the_remote_recipient(db_session, http_mock)
 
     delete = _sent_activity(route)
     assert delete['type'] == 'Delete'
-    assert delete['object'] == message.ap_id
+    assert delete['object'] == {'id': message.ap_id, 'type': 'Tombstone'}   # P2: Pixelfed matches a DM by Tombstone
     assert _key_id_of(route) == s.user.public_url() + '#main-key'
 
 
