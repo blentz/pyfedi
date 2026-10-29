@@ -14078,3 +14078,12 @@ reached, and a row that tries puts a warning into the suite. Recorded as D1437.
 Not from the source url's extension. A `.tiff` url served as `image/png` takes the PNG arm, so the
 unknown-format fallback needs `content_type='image/tiff'` -- and the response also needs that header at
 all, per `tests/test_ap_make_image_sizes.py`'s own helper.
+
+**1069. A SCHEDULER THAT GROUPS BY A PRIVATE ATTRIBUTE BREAKS ON A MINOR UPGRADE.**
+xdist's `loadgroup` tags each node id with its group by assigning `item._nodeid`. pytest 9.2 builds `nodeid` from
+`item._id`, so the tag stopped appearing, every test was scheduled on its own, and the shared-static modules ran on
+several workers at once: 47 failures and 8 errors of files vanishing under `app/static/media`, all passing serially.
+Lesson 671's `tryfirst` mark-adding hook could not help, since the marks were read and ignored. conftest's
+`WorkerGroupScheduling` now does the grouping itself, from the node id, through xdist's public
+`pytest_xdist_make_scheduler` hook. When a parallel-only failure looks like interference, check `[gwN]` per module in
+a `-v` run first, as 671 says.

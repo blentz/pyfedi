@@ -16,9 +16,9 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import (MAX_XDIST_WORKERS, REDIS_DBS_PER_WORKER,
-                            SHARED_STATIC_GROUP, SHARED_STATIC_MODULES,
-                            is_disposable_database_url, touches_shared_static,
-                            worker_database_url, worker_index, worker_redis_url)
+                            SHARED_STATIC_GROUP, SHARED_STATIC_MODULES, WorkerGroupScheduling,
+                            is_disposable_database_url, pytest_xdist_make_scheduler, touches_shared_static,
+                            worker_database_url, worker_group, worker_index, worker_redis_url)
 
 DATABASE = 'postgresql+psycopg2://pyfedi:pyfedi@test-db:5432/pyfedi_test'
 REDIS = 'redis://test-redis:6379/1'
@@ -193,45 +193,32 @@ class TestWhatHasToStayOnOneWorker:
         assert len(grouped) > 10
 
 
-class TestTheCollectionHook:
-    def test_every_test_carries_a_group(self, pytestconfig):
-        """Asserted against this module's own items rather than the suite's,
-        because collecting the suite inside a test would run it."""
-        import pytest as pytest_module
+class TestTheScheduler:
+    def test_a_test_runs_with_its_module_or_with_the_shared_static_modules(self):
+        assert worker_group('tests/test_safe_order_by.py::TestX::test_y') == 'tests/test_safe_order_by.py'
+        assert worker_group('tests/test_admin_federation.py::test_z') == SHARED_STATIC_GROUP
 
-        from tests.conftest import pytest_collection_modifyitems
+    def test_two_tests_in_one_module_get_the_same_group(self):
+        assert worker_group('tests/test_safe_order_by.py::TestA::test_one') == \
+            worker_group('tests/test_safe_order_by.py::TestB::test_two')
 
-        class Item:
-            def __init__(self, nodeid):
-                self.nodeid = nodeid
-                self.markers = []
+    def test_a_group_suffix_on_the_node_id_changes_nothing(self):
+        """An xdist that tags node ids with their group again, as it did before pytest 9.2, groups the same."""
+        assert worker_group('tests/test_safe_order_by.py::test_y@tests/test_safe_order_by.py') == \
+            'tests/test_safe_order_by.py'
 
-            def add_marker(self, marker):
-                self.markers.append(marker)
+    def test_loadgroup_is_scheduled_by_the_worker_group(self, pytestconfig, monkeypatch):
+        monkeypatch.setattr(pytestconfig.option, 'dist', 'loadgroup')
+        monkeypatch.setattr(pytestconfig.option, 'numprocesses', 2, raising=False)
+        monkeypatch.setattr(pytestconfig.option, 'tx', ['popen', 'popen'], raising=False)
+        monkeypatch.setattr(pytestconfig.option, 'maxschedchunk', None, raising=False)
+        scheduler = pytest_xdist_make_scheduler(pytestconfig, log=None)
+        assert isinstance(scheduler, WorkerGroupScheduling)
+        assert scheduler._split_scope('tests/test_admin_federation.py::test_z') == SHARED_STATIC_GROUP
 
-        items = [Item('tests/test_safe_order_by.py::TestX::test_y'),
-                 Item('tests/test_admin_federation.py::test_z')]
-        pytest_collection_modifyitems(pytestconfig, items)
-        groups = [marker.kwargs.get('name') or marker.args[0]
-                  for item in items for marker in item.markers]
-        assert groups == ['tests/test_safe_order_by.py', SHARED_STATIC_GROUP]
-
-    def test_two_tests_in_one_module_get_the_same_group(self, pytestconfig):
-        from tests.conftest import pytest_collection_modifyitems
-
-        class Item:
-            def __init__(self, nodeid):
-                self.nodeid = nodeid
-                self.markers = []
-
-            def add_marker(self, marker):
-                self.markers.append(marker)
-
-        items = [Item('tests/test_safe_order_by.py::TestA::test_one'),
-                 Item('tests/test_safe_order_by.py::TestB::test_two')]
-        pytest_collection_modifyitems(pytestconfig, items)
-        first, second = (item.markers[0].args[0] for item in items)
-        assert first == second
+    def test_another_dist_mode_keeps_xdists_own_scheduler(self, pytestconfig, monkeypatch):
+        monkeypatch.setattr(pytestconfig.option, 'dist', 'loadfile')
+        assert pytest_xdist_make_scheduler(pytestconfig, log=None) is None
 
 
 class TestNothingLeaksConfigIntoLaterTests:

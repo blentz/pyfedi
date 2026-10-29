@@ -89,6 +89,7 @@ import respx
 from moto import mock_aws
 from pyld import jsonld
 from werkzeug.http import http_date
+from xdist.scheduler import LoadScopeScheduling
 
 # Import app before config. config.py does `import app.constants`, which starts
 # loading the app package; app/__init__.py in turn does `from config import
@@ -1382,41 +1383,39 @@ def pytest_configure(config):
     `xdist_group` mark, so the shared-static modules (test_utils_security.py,
     test_admin_federation.py, the upload modules) ran on several workers at once
     and saw -- and deleted -- each other's files under app/static. A `--dist`
-    the caller named is left alone. A worker re-reads the command line rather
-    than this process's options, and decides on its own whether to tag node ids
-    with their group (`config.option.loadgroup`), so it is told the same here.
+    the caller named is left alone. `loadgroup` is scheduled by
+    WorkerGroupScheduling below, in this process; a worker only runs what it is sent.
     """
     named = any(argument == '-d' or argument.startswith('--dist')
                 for argument in config.invocation_params.args)
     if named:
         return
-    if hasattr(config, 'workerinput'):
-        config.option.loadgroup = True
-    elif getattr(config.option, 'dist', 'no') == 'load':
+    if getattr(config.option, 'dist', 'no') == 'load':
         config.option.dist = 'loadgroup'
 
 
-@pytest.hookimpl(tryfirst=True)
-def pytest_collection_modifyitems(config, items):
-    """Group every test by its module, and the static-touching modules together.
+def worker_group(nodeid):
+    """Which worker group a test runs in: its module's, or the shared-static modules' one.
 
-    `--dist loadgroup` sends tests carrying the same `xdist_group` to the same
-    worker and distributes the rest one at a time. Grouping by module gives
-    `--dist loadfile`'s guarantee -- a module's class- and module-scoped
-    fixtures are built once, on one worker -- while still letting the
-    static-touching modules share a group of their own, which loadfile cannot
-    express.
+    A group runs on one worker, so a module's class- and module-scoped fixtures are built once, as `--dist loadfile`
+    gives, and the static-touching modules, which loadfile cannot put together, share a group of their own."""
+    module = nodeid.split('@', 1)[0].split('::', 1)[0]
+    return SHARED_STATIC_GROUP if touches_shared_static(module) else module
 
-    `tryfirst` IS LOAD-BEARING. xdist reads the `xdist_group` mark in its own
-    `pytest_collection_modifyitems` and rewrites each node id to carry the group
-    -- a mark added after that runs is never seen, and the scheduler falls back
-    to distributing test by test. Measured: without it,
-    `test_admin_site_profile.py` ran on gw0 AND gw1 at once, which is exactly the
-    interference the grouping exists to prevent.
 
-    Harmless in a serial run, where the marker is never read.
-    """
-    for item in items:
-        module = item.nodeid.split('::', 1)[0]
-        group = SHARED_STATIC_GROUP if touches_shared_static(module) else module
-        item.add_marker(pytest.mark.xdist_group(group))
+class WorkerGroupScheduling(LoadScopeScheduling):
+    """`--dist loadgroup`, grouped by worker_group, read off the node id itself.
+
+    xdist's own loadgroup reads `xdist_group` marks and tags each node id with its group by assigning `item._nodeid`;
+    pytest 9.2 builds `nodeid` from `item._id` instead, so the tag never appears and every test was scheduled on its
+    own: `test_admin_site_profile.py` and `test_file_delete_from_disk.py` ran on several workers at once and deleted
+    each other's files under app/static. Grouping here needs nothing carried on the node id."""
+
+    def _split_scope(self, nodeid):
+        return worker_group(nodeid)
+
+
+def pytest_xdist_make_scheduler(config, log):
+    if config.getvalue('dist') == 'loadgroup':
+        return WorkerGroupScheduling(config, log)
+    return None
