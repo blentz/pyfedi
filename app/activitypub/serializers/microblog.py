@@ -106,16 +106,21 @@ def note_addressing(post, mentions: list) -> dict:
             'interactionPolicy': {'canQuote': {'automaticApproval': [PUBLIC]}}}
 
 
+def _image_document(file, post) -> dict:
+    """One picture of an image post as a Document: our WebP, AVIF or HEIC as its JPEG, which Pixelfed takes (R3)."""
+    attachment = {'type': 'Document', 'mediaType': guess_mime_type(file.source_url), 'url': file.source_url,
+                  'name': file.alt_text or ''}
+    if needs_jpeg(file):   # Pixelfed drops a post with a WebP, AVIF or HEIC attachment
+        attachment.update(mediaType='image/jpeg', url=jpeg_url(file, object_base(post)))
+    if file.width and file.height:
+        attachment['width'] = file.width
+        attachment['height'] = file.height
+    return attachment
+
+
 def note_attachments(post) -> list:
     if post.type == POST_TYPE_IMAGE and post.image is not None and post.image.source_url:
-        attachment = {'type': 'Document', 'mediaType': guess_mime_type(post.image.source_url),
-                      'url': post.image.source_url, 'name': post.image.alt_text or ''}
-        if needs_jpeg(post.image):   # Pixelfed drops a post with a WebP, AVIF or HEIC attachment (R3)
-            attachment.update(mediaType='image/jpeg', url=jpeg_url(post.image, object_base(post)))
-        if post.image.width and post.image.height:
-            attachment['width'] = post.image.width
-            attachment['height'] = post.image.height
-        return [attachment]
+        return [_image_document(file, post) for file in post.album_images() if file.source_url]   # one per picture (R5)
     if post.type in (POST_TYPE_LINK, POST_TYPE_VIDEO) and _web_url(post):
         return [{'type': 'Link', 'href': post.url}]
     return []

@@ -3339,3 +3339,25 @@ def test_edit_post_rolls_back_and_closes_when_send_post_raises(
 # conditional expression, so a region can sit at 100% statements and 100%
 # branches with one arm of every ternary in it never executed.
 # ===========================================================================
+
+
+def test_an_album_post_pushes_every_image_in_order(db_session, http_mock):
+    """Pixelfed interop R5: the Page carries the post image and then its album, in weight order, without the blocked
+    rows' marker (GALLERY_BLOCKED_WEIGHT); `image` stays the first. PieFed peers rebuild the album from this list
+    (gallery_attachments skips the primary url), threadiverse apps show the first."""
+    from app.models import File, GALLERY_BLOCKED_WEIGHT, post_file
+    s = _seed(post_type=POST_TYPE_IMAGE, local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    _attach_image(s.post, source_url='https://example.com/0.png', alt_text='zero')
+    files = [File(source_url=f'https://example.com/{n}.png', alt_text=alt) for n, alt in ((2, 'two'), (1, 'one'), (9, None))]
+    db.session.add_all(files)
+    db.session.flush()
+    for file, weight in zip(files, (2, 1, GALLERY_BLOCKED_WEIGHT)):
+        db.session.execute(post_file.insert().values(post_id=s.post.id, file_id=file.id, weight=weight))
+    s.post.gallery_count = 2
+    db.session.commit()
+
+    _send(s.post)
+
+    assert _attachment_of(route) == [{'type': 'Image', 'url': f'https://example.com/{n}.png', 'name': alt}
+                                     for n, alt in ((0, 'zero'), (1, 'one'), (2, 'two'))]
