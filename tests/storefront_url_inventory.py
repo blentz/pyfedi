@@ -48,7 +48,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     },
     'app/cli.py': {
         'register.config_check': 2,
-        'register.init_db': 1,
+        'register.init_db': 2,   # the local Instance row, and the default SiteDomain row init-db seeds
         'register.lemmy_import': 1,
         'register.move_more_post_images_to_s3': 1,
         'register.process_email_bounces': 4,
