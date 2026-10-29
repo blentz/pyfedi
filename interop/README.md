@@ -28,6 +28,9 @@ access tokens last a day; `up` renews them), and the URLs `castopod_podcast` and
 - `test_peertube_subscribe.py`: a PeerTube user subscribes to a `video_channel` and PeerTube sees it accepted.
 - `test_media_pipeline.py`: video and audio uploads are probed, published and served in ranges.
 - `test_podcast.py`: an audio episode uploaded to `pod_media` plays on Mastodon as an audio attachment, a Mastodon reply lands in the PieFed thread, and the community feed carries the episode's enclosure, duration and guid.
+- `test_pixelfed.py`: a PieFed album (one picture a WebP, sent as its JPEG) shows whole in Pixelfed erin's home feed,
+  with each alt text; an edit and a delete reach Pixelfed; Pixelfed's reply, like and boost come back; a Pixelfed album
+  arrives whole, a sensitive one behind its warning, and Pixelfed's edit and delete reach PieFed.
 - `test_video_channel.py`: a video uploaded to `vc_media` plays on PeerTube under the subscribed channel (duration,
   file URL, thumbnail), a PeerTube like comes back as an upvote, an edit renames it, a delete removes it, and a
   restore creates it again.
