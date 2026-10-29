@@ -2263,6 +2263,9 @@ def microblog_content_to_title(html: str) -> Tuple[str, str]:
                 break
     else:
         title = html_to_text(html)
+    # one space per run: get_text's separator doubles the space before a link (`album <a>#tag</a>`), and a newline
+    # has no place in a title (P4)
+    title = ' '.join(title.split())
 
     period_index = title.find('.')
     question_index = title.find('?')
