@@ -3,6 +3,7 @@
 <form method="post" class="mb-3">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {{ render_field(sync_form.sync_per_host) }}
+    {{ render_field(sync_form.sync_people_per_host) }}
     {{ render_field(sync_form.sync_platforms) }}
     {{ render_field(sync_form.sync_external_search) }}
     {{ render_field(sync_form.sync_save) }}
@@ -12,10 +13,10 @@
     {{ render_field(now_form.sync_now, button_style='secondary') }}
 </form>
 <h3 class="h5">{{ _('Synced now') }}</h3>
-{% if synced %}
 {% set follow_labels = {sync_none: _('Not followed yet'), sync_pending: _('Waiting for an answer'),
                         sync_accepted: _('Following'), sync_rejected: _('Refused'),
                         sync_failed: _('Could not deliver')} %}
+{% if synced %}
 <table class="table table-sm">
     <thead><tr><th>{{ _('Community') }}</th><th>{{ _('Server') }}</th><th>{{ _('Follow') }}</th><th>{{ _('Followed') }}</th><th>{{ _('Last poll') }}</th><th>{{ _('Last error') }}</th></tr></thead>
     <tbody>
@@ -27,4 +28,19 @@
 </table>
 {% else %}
 <p>{{ _('Nothing is synced yet.') }}</p>
+{% endif %}
+
+<h3 class="h5 mt-3">{{ _('Pixelfed people followed') }}</h3>
+{% if people %}
+<table class="table table-sm">
+    <thead><tr><th>{{ _('Account') }}</th><th>{{ _('Follow') }}</th><th>{{ _('Followed') }}</th><th>{{ _('Last poll') }}</th><th>{{ _('Last error') }}</th></tr></thead>
+    <tbody>
+    {% for row in people %}
+        <tr><td><a href="{{ row.follow_target }}" rel="noopener nofollow">{{ row.follow_target }}</a></td><td>{{ follow_labels[row.follow_state] }}</td>
+            <td>{{ row.followed_at or '' }}</td><td>{{ row.last_polled_at or '' }}</td><td>{{ row.last_error or '' }}</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>{{ _('No Pixelfed people are followed yet.') }}</p>
 {% endif %}

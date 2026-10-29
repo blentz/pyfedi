@@ -16,6 +16,10 @@ class MultiCheckboxField(SelectMultipleField):
 class DiscoverySyncForm(FlaskForm):
     sync_per_host = IntegerField(_l('Channels and podcasts to keep synced per server'), default=0,
                                  validators=[InputRequired(), NumberRange(min=0, max=50)])
+    sync_people_per_host = IntegerField(_l('Pixelfed people to follow per server'), default=0,
+                                        validators=[InputRequired(), NumberRange(min=0, max=50)],
+                                        description=_l('Only people who opted into their server\'s directory. '
+                                                       'Their posts appear in microblogs.'))
     sync_platforms = MultiCheckboxField(_l('Platforms'), default=['peertube', 'castopod'],
                                         choices=select_choices([('peertube', _l('PeerTube channels')),
                                                  ('castopod', _l('Castopod podcasts'))]))
