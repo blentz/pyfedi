@@ -2955,6 +2955,13 @@ def mark_audio_attachment(post, attachment):
         post.extensions = {**(post.extensions or {}), 'media_type': 'audio'}
 
 
+def vote_lock(voted_on):
+    """The lock held while a user's vote on the Post or PostReply `voted_on` is read and changed: by its own vote(), and
+    by an Undo taking the vote back, so a Like and its Undo handled at once cannot delete a row the other has read."""
+    kind = 'post' if isinstance(voted_on, Post) else 'post_reply'
+    return app_pkg.redis_client.lock(f"lock:{kind}:{voted_on.id}", timeout=10, blocking_timeout=6)
+
+
 class Post(db.Model):
     query_class = FullTextSearchQuery
     id = db.Column(db.Integer, primary_key=True)
@@ -4361,7 +4368,7 @@ class Post(db.Model):
         if vote_direction == 'downvote' and self.author.is_local():
             if user.id in blocked_users(self.user_id) or user.instance_id in blocked_instances(self.user_id):
                 return None
-        with app_pkg.redis_client.lock(f"lock:post:{self.id}", timeout=10, blocking_timeout=6):
+        with vote_lock(self):
             existing_vote = PostVote.query.filter_by(user_id=user.id, post_id=self.id).first()
             if vote_direction == 'reversal':
                 if existing_vote:  # api receives '1' for upvote, '-1' for downvote, and '0' for reversal
@@ -5022,7 +5029,7 @@ class PostReply(db.Model):
         if vote_direction == 'downvote':
             if self.author.has_blocked_user(user.id) or self.author.has_blocked_instance(user.instance_id):
                 return None
-        with app_pkg.redis_client.lock(f"lock:post_reply:{self.id}", timeout=10, blocking_timeout=6):
+        with vote_lock(self):
             existing_vote = db.session.query(PostReplyVote).filter_by(user_id=user.id, post_reply_id=self.id).first()
             # D1196. This used to read `if existing_vote and vote_direction ==
             # 'reversal':`, so a reversal with NOTHING TO REVERSE fell through
