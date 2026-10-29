@@ -1580,6 +1580,8 @@ def refresh_user_profile_task(user_id, activity_json=None):
                     refreshed_inbox = delivery_inbox_of(activity_json, user.ap_profile_id)   # interop C1 item 2: absent or off-host keeps the old one
                     if refreshed_inbox:
                         user.ap_inbox_url = refreshed_inbox
+                        if refreshed_inbox != own_inbox_of(activity_json):   # its shared inbox, so its instance's (P1)
+                            learn_shared_inbox(user.instance_id, refreshed_inbox)
                         # an actor stored before ap_own_inbox_url existed gets it here, on its next refresh (A12)
                         user.ap_own_inbox_url = own_inbox_of(activity_json) or user.ap_own_inbox_url
                     user.accept_private_messages = activity_json['acceptPrivateMessages'] if 'acceptPrivateMessages' in activity_json else 3
@@ -1755,6 +1757,8 @@ def refresh_community_profile_task(community_id, activity_json=None):
                         refreshed_inbox = delivery_inbox_of(activity_json, community.ap_profile_id)   # interop C1 item 2: absent or off-host keeps the old one
                         if refreshed_inbox:
                             community.ap_inbox_url = refreshed_inbox
+                            if refreshed_inbox != own_inbox_of(activity_json):   # its shared inbox, so its instance's (P1)
+                                learn_shared_inbox(community.instance_id, refreshed_inbox)
 
                         if 'postUrlType' in activity_json and activity_json['postUrlType']:
                             community.post_url_type = activity_json['postUrlType']
@@ -2012,6 +2016,8 @@ def refresh_feed_profile_task(feed_id, activity_json=None):
                     refreshed_inbox = delivery_inbox_of(activity_json, feed.ap_profile_id)   # interop C1 item 2: absent or off-host keeps the old one
                     if refreshed_inbox:
                         feed.ap_inbox_url = refreshed_inbox
+                        if refreshed_inbox != own_inbox_of(activity_json):   # its shared inbox, so its instance's (P1)
+                            learn_shared_inbox(feed.instance_id, refreshed_inbox)
 
                     description_html = ''
                     # D1355. Either key is whatever the peer sent, and a value that
@@ -2402,7 +2408,7 @@ def actor_json_to_model(activity_json, address, server):
                     ap_domain=server.lower(),
                     public_key=actor_pem,
                     bot=is_bot_actor(activity_json),
-                    instance_id=find_instance_id(server),
+                    instance_id=find_instance_id(server, shared_inbox=shared_inbox_of(activity_json)),
                     accept_private_messages=activity_json['acceptPrivateMessages'] if 'acceptPrivateMessages' in activity_json else 3
                     # language=community_json['language'][0]['identifier'] # todo: language
                     )
@@ -2559,7 +2565,7 @@ def actor_json_to_model(activity_json, address, server):
         # call in the same position and are unaffected today only because every
         # argument after theirs is a guarded read or a literal. Registered as
         # D33.
-        community.instance_id = find_instance_id(server)
+        community.instance_id = find_instance_id(server, shared_inbox=shared_inbox_of(activity_json))
         if get_setting('meme_comms_low_quality', False):
             community.low_quality = 'memes' in actor_name or 'shitpost' in actor_name
         description_html = ''
@@ -2820,7 +2826,7 @@ def actor_json_to_model(activity_json, address, server):
                         ap_fetched_at=utcnow(),
                         ap_domain=server.lower(),
                         public_key=actor_pem,
-                        instance_id=find_instance_id(server),
+                        instance_id=find_instance_id(server, shared_inbox=shared_inbox_of(activity_json)),
                         public=True
                         )
         except KeyError:
@@ -3485,17 +3491,46 @@ def find_reported_object(ap_id) -> Union[User, Post, PostReply, None]:
     return None
 
 
-def find_instance_id(server):
+# The width of Instance.inbox and Instance.shared_inbox
+INSTANCE_INBOX_MAX = 256
+
+
+def usable_instance_inbox(shared_inbox, domain: str) -> str | None:
+    """`shared_inbox`, the sharedInbox an actor on `domain` names, when deliveries to that instance may go there: a
+    non-empty string that fits the column and is trusted for `domain` as the actor's own was (inbox_trusted)."""
+    if isinstance(shared_inbox, str) and shared_inbox and len(shared_inbox) <= INSTANCE_INBOX_MAX \
+            and inbox_trusted(shared_inbox, domain):
+        return shared_inbox
+    return None
+
+
+def learn_shared_inbox(instance_id, shared_inbox) -> None:
+    """Deliver to `instance_id` at `shared_inbox`, the sharedInbox one of its actors names, from now on (P1, Pixelfed
+    spike 2026-10-28). The instance's /inbox is only find_instance_id's guess, and new_instance_profile_task keeps a
+    learned one over its own. The caller commits."""
+    instance = db.session.get(Instance, instance_id) if instance_id else None
+    if instance is not None and usable_instance_inbox(shared_inbox, instance.domain):
+        instance.inbox = instance.shared_inbox = shared_inbox
+
+
+def find_instance_id(server, shared_inbox=None):
+    """The id of `server`'s instance row, made sparse (and its details fetched in the background) when there is none
+    yet. `shared_inbox` is the sharedInbox of the actor that brought `server` up, if it named one: deliveries to the
+    instance go there rather than to the /inbox guess (P1). Every follower fan-out posts to `instance.inbox`, and a
+    peer's shared inbox need not be /inbox: Pixelfed's is /f/inbox, behind an HTML homepage."""
     if not server:
         return None
     server = server.strip().lower()
     instance = db.session.query(Instance).filter_by(domain=server).first()
     if instance:
+        learn_shared_inbox(instance.id, shared_inbox)
         return instance.id
     else:
         # Our instance does not know about {server} yet. Initially, create a sparse row in the 'instance' table and spawn a background
         # task to update the row with more details later
-        new_instance = Instance(domain=server, software='unknown', inbox=f'https://{server}/inbox', created_at=utcnow())
+        learned = usable_instance_inbox(shared_inbox, server)
+        new_instance = Instance(domain=server, software='unknown', inbox=learned or f'https://{server}/inbox',
+                                shared_inbox=learned, created_at=utcnow())
 
         try:
             db.session.add(new_instance)
@@ -3581,6 +3616,7 @@ def new_instance_profile_task(instance_id: int):
                         instance.outbox = instance_json['outbox']
                 else:  # it's pretty much always /inbox so just assume that it is for whatever this instance is running
                     instance.inbox = f"{protocol}://{instance.domain}/inbox"
+                instance.inbox = instance.shared_inbox or instance.inbox   # what its actors name beats any guess (P1)
                 instance.updated_at = utcnow()
                 session.commit()
 
@@ -3623,7 +3659,7 @@ def new_instance_profile_task(instance_id: int):
                                         InstanceRole.role == 'admin').delete()
                                     session.commit()
             elif instance_data.status_code == 406 or instance_data.status_code == 404:  # Mastodon and PeerTube do 406, a.gup.pe does 404
-                instance.inbox = f"{protocol}://{instance.domain}/inbox"
+                instance.inbox = instance.shared_inbox or f"{protocol}://{instance.domain}/inbox"   # as above (P1)
                 instance.updated_at = utcnow()
                 session.commit()
 
