@@ -143,15 +143,19 @@ Pixelfed refuses peers on private addresses with no setting to allow them; `inte
 
 ## 6. Progress (2026-10-29)
 
-In local `blentz` (not pushed): P1 (c9cf751fa) and its backfill (f706cd4f9), P2 (7d9c07afc), P3 (6942dcb9b), P4
-(04eb25068), the JPEG route (5a494e78d), and a fix found on the way: `flask init-db` made no default `SiteDomain` row, so
-a new install could not create a community (df75c6a5b). Full suite 29,106 passed; interop 22/22 on a fresh harness;
-the spike probes pass in both directions, including a WebP post reaching Pixelfed through the JPEG route.
+Every build step is done.
 
-Harness fixes on `spike/pixelfed`: init-db probe moved to `language` (D911 made `site` unusable), PieFed containers
-recreated after each build (podman-compose kept running stale code), access log on.
+In local `blentz` (5f07a24e2, not pushed): P1 (c9cf751fa) and its backfill (f706cd4f9), P2 (7d9c07afc), P3 (6942dcb9b),
+P4 (04eb25068), the JPEG route (5a494e78d), albums (c9025849e setting, 0de23c410 serializers, 8317889ae storage,
+aaba3b89d API, 23b032a45 refactor, 5f07a24e2 web forms), and a fix found on the way: `flask init-db` made no default
+`SiteDomain` row, so a new install could not create a community (df75c6a5b). Full suite 29,150 passed.
+
+On `spike/pixelfed` only: the harness (Pixelfed in `compose.interop.yaml`, `seed_pixelfed.php`, `pixelfed_harness.sh`),
+`interop/test_pixelfed.py` (6 tests), the harness fixes (init-db probe on `language`, PieFed containers recreated after
+each build, `down` refuses to leave containers behind, access log on), and this spec. Interop 28/28 on a fresh stack.
+
+Album web edit: pictures can be re-captioned, removed and added; reordering is the API's only (a list replaces the
+album). A gallery picture's width and height are not recorded (the post image's are), so its attachment has none.
 
 Known and not in scope: the `lock:post_reply:*` Redis locks (timeout 10 s, six sites) raise `LockNotOwnedError` on
 release when their work outlives them, after the commit has succeeded.
-
-Next: albums (§3.5), then `interop/test_pixelfed.py` (§3.6).
