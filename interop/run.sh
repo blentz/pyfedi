@@ -27,6 +27,9 @@ up() {
     fi
     $COMPOSE build piefed-web
     $COMPOSE up -d
+    # podman-compose's `up -d` keeps a running container whose image was just rebuilt: recreate PieFed's, or a re-run
+    # of `up` (and `test`) runs the old code
+    $COMPOSE up -d --force-recreate --no-deps piefed-web piefed-celery piefed-celery-background
     wait_http piefed-web https://piefed.test/health
     wait_http piefed-web https://mastodon.test/health   # piefed-web has curl; the Mastodon image may not
     wait_http piefed-web https://peertube.test/api/v1/ping
