@@ -28,6 +28,7 @@ from unittest.mock import patch
 import pytest
 from flask import current_app, g
 
+import app.activitypub.util as util
 from app.activitypub.util import process_report, undo_vote
 from app import db
 from app.constants import (NOTIF_REPORT, REPORT_TYPE_POST, REPORT_TYPE_REPLY,
@@ -395,3 +396,58 @@ class TestReportingAComment:
         db.session.commit()
         process_report(env.voter, env.reply, a_flag(), db.session)
         assert Report.query.count() == 0
+
+
+class TestAnUndoHoldsTheVoteLock:
+    """Post.vote and PostReply.vote read and change a user's vote under `lock:post:<id>` or `lock:post_reply:<id>`.
+    An Undo took the vote back without it, so a Like and its Undo handled at once could interleave: the Undo deleted
+    the row the Like had read, and the Like failed with ObjectDeletedError (seen in production on a PostReplyVote)."""
+
+    @pytest.fixture
+    def locks(self, monkeypatch):
+        held, seen = [], []
+
+        class Lock:
+            def __init__(self, name):
+                self.name = name
+
+            def __enter__(self):
+                held.append(self.name)
+                return self
+
+            def __exit__(self, *exc):
+                held.remove(self.name)
+                return False
+
+        class Redis:
+            def lock(self, name, **kwargs):
+                return Lock(name)
+
+        real = util._users_vote
+
+        def users_vote(voted_on, user):
+            seen.append(list(held))
+            return real(voted_on, user)
+
+        monkeypatch.setattr('app.redis_client', Redis())
+        monkeypatch.setattr(util, '_users_vote', users_vote)
+        return seen
+
+    @pytest.mark.parametrize('target', ['post', 'reply'])
+    def test_undo_vote_reads_the_vote_under_the_lock_vote_takes(self, env, locks, target):
+        voted_on = getattr(env, target)
+        (make_post_vote if target == 'post' else make_post_reply_vote)(env.voter, voted_on, 1)
+        db.session.commit()
+
+        undo_vote(None, None, voted_on.ap_id, env.voter)
+
+        kind = 'post' if target == 'post' else 'post_reply'
+        assert locks == [[f'lock:{kind}:{voted_on.id}']]
+
+    def test_undo_reaction_reads_the_vote_under_the_lock_vote_takes(self, env, locks):
+        vote = make_post_reply_vote(env.voter, env.reply, 1)
+        vote.emoji = '🎉'
+        db.session.commit()
+
+        assert util.undo_reaction(env.reply.ap_id, env.voter, '🎉') == (env.reply, True)
+        assert locks == [[f'lock:post_reply:{env.reply.id}']]

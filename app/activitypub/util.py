@@ -40,7 +40,7 @@ from app.federation_urls import MissingInstanceKey, activity_id, domain_site_nam
     instance_actor_signing, is_federating_url, local_object_for_url, object_base, owner_base, owner_domain
 from app.storefront import DomainInfo, acting_domain, default_domain, domain_authority, domain_base_url, \
     hosted_instance_ids, instance_id_of, is_hosted_uri, link_on, registration_mode_on
-from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
+from app.models import User, Post, Community, File, PostReply, Instance, utcnow, vote_lock, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
@@ -5528,9 +5528,10 @@ def undo_vote(comment, post, target_ap_id, user):
     voted_on = find_liked_object(target_ap_id)
     if not isinstance(voted_on, (Post, PostReply)):
         return None
-    existing_vote = _users_vote(voted_on, user)
-    if existing_vote:
-        _take_back_vote(voted_on, existing_vote)
+    with vote_lock(voted_on):   # as Post.vote and PostReply.vote: the vote is read and taken back by one of them at a time
+        existing_vote = _users_vote(voted_on, user)
+        if existing_vote:
+            _take_back_vote(voted_on, existing_vote)
     return voted_on
 
 
@@ -5545,10 +5546,11 @@ def undo_reaction(target_ap_id, user, emoji) -> tuple[Post | PostReply | None, b
     voted_on = find_liked_object(target_ap_id)
     if not isinstance(voted_on, (Post, PostReply)):
         return None, False
-    existing_vote = _users_vote(voted_on, user)
-    if existing_vote is None or existing_vote.emoji is None or (emoji is not None and existing_vote.emoji != emoji):
-        return voted_on, False
-    _take_back_vote(voted_on, existing_vote)
+    with vote_lock(voted_on):
+        existing_vote = _users_vote(voted_on, user)
+        if existing_vote is None or existing_vote.emoji is None or (emoji is not None and existing_vote.emoji != emoji):
+            return voted_on, False
+        _take_back_vote(voted_on, existing_vote)
     return voted_on, True
 
 
