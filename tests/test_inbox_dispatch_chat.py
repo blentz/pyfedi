@@ -411,7 +411,25 @@ def test_an_unhandled_chat_lets_the_arm_continue_to_the_domain_check(app, db_ses
     dispatch(activity)
 
     messages = [l.exception_message for l in ActivityPubLog.query.all()]
-    assert 'Domains do not match' in messages
+    # P3 (Pixelfed spike 2026-10-28): the decline is not a failure of its own; only the real outcome is logged
+    assert messages == ['Domains do not match']
+
+
+def test_a_public_note_tried_as_a_chat_logs_no_false_failure(app, db_session, monkeypatch):
+    """P3. A Mastodon or Pixelfed post names no community, so the arm first offers it to process_chat, whose
+    `to[0]` is the Public collection: not a local user. That decline wrote a FAILURE row ("ChatMessage target is
+    not local") beside the success the same activity then logged, one false failure per post."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: None)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: False)
+
+    dispatch(inbox_activity(sender, activity_type='Create',
+                            object={'type': 'Note', 'content': 'a photo',
+                                    'to': ['https://www.w3.org/ns/activitystreams#Public'],
+                                    'id': 'https://peer.example/p/1'}))
+
+    assert [l.exception_message for l in ActivityPubLog.query.all()] == ['Domains do not match']
 
 
 def test_a_message_containing_a_blocked_phrase_is_refused(app, db_session, monkeypatch):
