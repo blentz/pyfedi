@@ -479,13 +479,14 @@ def test_the_instance_profile_task_leaves_a_hosted_row_alone(app, db_session):
 
 def test_the_interop_harness_probes_a_table_only_init_db_fills():
     """interop/run.sh runs `flask init-db` when its probe table is empty. `flask db upgrade` runs first and some
-    migrations seed rows (from c8f4d2a6b9e1 an instance row), so the probe must be a table no migration writes:
-    `site`, which only init-db's `Site(...)` fills."""
+    migrations seed rows (from c8f4d2a6b9e1 an instance row), so the probe must be a table no migration writes, and
+    no request either: not `site`, which the first request fills since D911 (run.sh's own wait_http is a request), but
+    `language`, which only init-db's `Language(...)` rows fill."""
     script = (Path(__file__).resolve().parent.parent / 'interop' / 'run.sh').read_text()
     probe = re.search(r"select count\(\*\) from (\w+)'", script)
-    assert probe is not None and probe.group(1) == 'site'
+    assert probe is not None and probe.group(1) == 'language'
     versions = (Path(__file__).resolve().parent.parent / 'migrations' / 'versions').glob('*.py')
-    writes = re.compile(r'insert\s+into\s+"?site"?[\s(]|(?<!\w)table\(\s*[\'"]site[\'"]', re.IGNORECASE)
+    writes = re.compile(r'insert\s+into\s+"?language"?[\s(]|(?<!\w)table\(\s*[\'"]language[\'"]', re.IGNORECASE)
     assert [path.name for path in versions if writes.search(path.read_text())] == []
 
 
