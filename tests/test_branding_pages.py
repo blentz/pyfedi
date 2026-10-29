@@ -312,7 +312,7 @@ def test_site_misc_save_shows_on_next_page_load(app, branded, real_cache, settin
         response = client.post('/admin/misc', data={
             'csrf_token': token, 'redirect_policy': 'same_origin', 'allow_video_file_uploads': 'no',
             'allow_audio_file_uploads': 'no', 'default_filter': 'popular', 'default_theme': 'forest',
-            'registration_mode': 'Open', 'language_id': '2', 'read_posts_cutoff': '180', 'nsfw_country_restriction': '',
+            'registration_mode': 'Open', 'language_id': '2', 'read_posts_cutoff': '180', 'max_album_images': '4', 'nsfw_country_restriction': '',
             'auto_decline_countries': '', 'application_question': '', 'auto_decline_referrers': '',
             'ban_check_servers': '', 'registration_approved_email': '', 'additional_css': '.renamed { color: red; }',
             'additional_js': ''})

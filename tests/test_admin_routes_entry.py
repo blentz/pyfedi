@@ -87,6 +87,7 @@ def _valid_misc_payload(language):
     Passing formdata=None keeps the whole helper inside the one app context.
     """
     from wtforms import IntegerField, SelectField, StringField, TextAreaField
+    from wtforms.validators import NumberRange
 
     from app.admin.forms import SiteMiscForm
     from app.utils import theme_list
@@ -106,9 +107,10 @@ def _valid_misc_payload(language):
             assert field.choices, f'{field.name} has no choices; seed its table'
             data[field.name] = str(field.choices[0].value)
         elif isinstance(field, IntegerField):
-            # The upload limits and the onion media sizes have a minimum above 0; the rest take 0.
-            data[field.name] = ('1' if field.name.endswith('_upload_mb') or field.name.endswith('_max_mb') else
-                                '1024' if field.name == 'onion_media_cache_mb' else '0')
+            # Each field's own NumberRange minimum (the upload limits, the onion media sizes and the album size are
+            # above 0), else 0: read off the validators, so a new field with a minimum needs no entry here.
+            minimum = next((v.min for v in field.validators if isinstance(v, NumberRange) and v.min is not None), 0)
+            data[field.name] = str(minimum)
         elif isinstance(field, (StringField, TextAreaField)) and field.name != 'csrf_token':
             data[field.name] = ''
     return data

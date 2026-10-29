@@ -552,6 +552,16 @@ def set_setting(name: str, value):
     cache.delete_memoized(get_setting)
 
 
+def max_album_images() -> int:
+    """How many images a local album post may hold: the admin's `max_album_images`, held to 1..MAX_ALBUM_IMAGES_CEILING
+    whatever the row says, else MAX_ALBUM_IMAGES_DEFAULT. Every reader goes through here, so there is one default."""
+    try:
+        value = int(get_setting('max_album_images', MAX_ALBUM_IMAGES_DEFAULT))
+    except (TypeError, ValueError):
+        return MAX_ALBUM_IMAGES_DEFAULT
+    return min(max(value, 1), MAX_ALBUM_IMAGES_CEILING)
+
+
 # Return the contents of a file as a string. Inspired by PHP's function of the same name.
 def file_get_contents(filename):
     with open(filename, 'r') as file:
