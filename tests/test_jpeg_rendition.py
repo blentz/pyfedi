@@ -49,10 +49,19 @@ def test_only_types_pixelfed_refuses_need_a_jpeg(app, db_session, ext, expected)
     assert needs_jpeg(_upload(ext, write=False)) is expected
 
 
-def test_a_peers_image_never_does(app, db_session):
-    """Only our upload code's records (file_name) are converted: anything else would make the route an image proxy."""
-    assert needs_jpeg(_upload('webp', write=False, ours=False)) is False
-    assert needs_jpeg(None) is False
+def test_an_api_posts_image_does(app, db_session):
+    """An app uploads through /upload/image, then posts the URL: that post's File has no file_name (shared/post.py
+    sets it only for the web form's upload), but its URL names our own media. Found by the Pixelfed harness."""
+    assert needs_jpeg(_upload('webp', write=False, ours=False)) is True
+
+
+def test_an_image_elsewhere_never_does(app, db_session):
+    """Only a file in our own media folders or bucket is converted: anything else would make the route a proxy."""
+    peer = File(source_url='https://peer.example/static/media/posts/ab/cd/x.webp')
+    outside = File(source_url=f'https://{HOST}/static/images/logo.webp', file_name='logo.webp')
+    db.session.add_all([peer, outside])
+    db.session.commit()
+    assert (needs_jpeg(peer), needs_jpeg(outside), needs_jpeg(None)) == (False, False, False)
 
 
 # --- the outbound attachment ---
@@ -117,7 +126,10 @@ def test_an_image_over_pixelfeds_limit_is_scaled_down(app, db_session):
 @pytest.mark.parametrize('kind', ['peer', 'jpeg-already', 'no-record', 'original-gone', 'not-an-image'])
 def test_the_route_refuses_what_it_must_not_convert(app, db_session, kind):
     if kind == 'peer':
-        file_id = _upload('webp', ours=False).id
+        file = File(source_url='https://peer.example/static/media/posts/ab/cd/x.webp')
+        db.session.add(file)
+        db.session.commit()
+        file_id = file.id
     elif kind == 'jpeg-already':
         file_id = _upload('jpg').id
     elif kind == 'no-record':
