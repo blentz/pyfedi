@@ -530,8 +530,8 @@ class TestConcurrentInsert:
         document = peer_actor_json(name='alice')
         real_find_instance_id = activitypub_util.find_instance_id
 
-        def commit_the_rival_row_first(server):
-            instance_id = real_find_instance_id(server)
+        def commit_the_rival_row_first(server, **kwargs):
+            instance_id = real_find_instance_id(server, **kwargs)
             rival = make_user(instance, 'alice')
             rival.ap_profile_id = document['id'].lower()
             rival.title = 'the row that won'

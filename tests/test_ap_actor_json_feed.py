@@ -1794,8 +1794,8 @@ class TestConcurrentInsert:
         document = _owned_feed()
         real_find_instance_id = activitypub_util.find_instance_id
 
-        def commit_the_rival_row_first(server):
-            instance_id = real_find_instance_id(server)
+        def commit_the_rival_row_first(server, **kwargs):
+            instance_id = real_find_instance_id(server, **kwargs)
             rival = Feed(name='rivalnews', title='the row that won',
                          instance_id=instance.id, ap_domain=PEER,
                          ap_profile_id=document['id'].lower(),
