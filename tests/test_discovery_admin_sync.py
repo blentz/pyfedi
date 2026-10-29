@@ -23,7 +23,7 @@ def test_the_form_shows_the_defaults(admin):
 def test_saving_stores_the_settings(admin):
     client, token = admin
     response = client.post(PAGE, data={'csrf_token': token, 'sync_per_host': '5', 'sync_platforms': ['castopod'],
-                                       'sync_save': 'Save'})
+                                       'sync_people_per_host': '0', 'sync_save': 'Save'})
     assert response.status_code == 302
     assert get_setting('discovery_sync_per_host') == 5
     assert get_setting('discovery_sync_platforms') == ['castopod']

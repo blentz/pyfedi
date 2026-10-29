@@ -7,8 +7,9 @@ from app import db
 from app.admin import bp
 from app.discovery import SYNC_ACCEPTED, SYNC_FAILED, SYNC_NONE, SYNC_PENDING, SYNC_REJECTED
 from app.discovery.forms import DiscoverySyncForm, DiscoverySyncNowForm
+from app.discovery.people import people_per_host
 from app.discovery.sync import reconcile_sync_task, sync_per_host, sync_platforms
-from app.models import Community, DiscoverySync
+from app.models import Community, DiscoveryPersonSync, DiscoverySync
 from app.utils import get_setting, login_required, permission_required, render_template, roles_with, set_setting
 
 
@@ -26,18 +27,21 @@ def admin_federation_discovery():
         return redirect(url_for('admin.admin_federation_discovery'))
     if request.method == 'POST' and sync_form.sync_save.data and sync_form.validate_on_submit():
         set_setting('discovery_sync_per_host', sync_form.sync_per_host.data)
+        set_setting('discovery_people_per_host', sync_form.sync_people_per_host.data)
         set_setting('discovery_sync_platforms', sync_form.sync_platforms.data or [])
         set_setting('discovery_external_search', bool(sync_form.sync_external_search.data))
         flash(_('Discovery settings saved. They take effect at the next sync.'))
         return redirect(url_for('admin.admin_federation_discovery'))
     if request.method == 'GET':
         sync_form.sync_per_host.data = sync_per_host()
+        sync_form.sync_people_per_host.data = people_per_host()
         sync_form.sync_platforms.data = sync_platforms()
         sync_form.sync_external_search.data = get_setting('discovery_external_search', True)
     synced = db.session.query(DiscoverySync, Community).join(Community, Community.id == DiscoverySync.community_id) \
         .order_by(Community.ap_domain, Community.name).all()
+    people = db.session.query(DiscoveryPersonSync).order_by(DiscoveryPersonSync.follow_target).all()
     return render_template('admin/federation_discovery.html', title=_('Federation settings - discovery'),
-                           sync_form=sync_form, now_form=now_form, synced=synced,
+                           sync_form=sync_form, now_form=now_form, synced=synced, people=people,
                            sync_none=SYNC_NONE, sync_pending=SYNC_PENDING, sync_accepted=SYNC_ACCEPTED,
                            sync_rejected=SYNC_REJECTED, sync_failed=SYNC_FAILED,
                            roles_with=roles_with('change instance settings'))
