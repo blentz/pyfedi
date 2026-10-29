@@ -6503,6 +6503,22 @@ class DiscoverySync(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
 
 
+class DiscoveryPersonSync(db.Model):
+    """A Pixelfed account this instance keeps seeded into microblogs (spec 2026-10-29): followed by the instance actor
+    (/actor) and its Atom feed polled daily. discovery_sync's twin for a person, whose key is a community. Built by
+    app/discovery/people.py's reconcile; the account and its posts outlive the row."""
+    __tablename__ = 'discovery_person_sync'
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), primary_key=True)
+    entry_id = db.Column(db.Integer, db.ForeignKey('discovery_entry.id', ondelete='SET NULL'), nullable=True)
+    follow_target = db.Column(db.String(1024), nullable=False)   # the actor the Follow goes to, case kept
+    follow_uuid = db.Column(db.String(36), nullable=True, index=True)
+    follow_state = db.Column(db.String(10), nullable=False, default='none', server_default='none')
+    followed_at = db.Column(db.DateTime, nullable=True)
+    last_polled_at = db.Column(db.DateTime, nullable=True)
+    last_error = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+
 class DiscoveryExclusion(db.Model):
     """An actor URL (lower-cased) the proactive sync must never follow again, because an admin deleted the community
     it resolved to (interop D24). Written by app/discovery/sync.py's forget_synced_community."""

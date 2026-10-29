@@ -93,6 +93,7 @@ def test_downgrade_then_upgrade_restores_both(app, db_session):
         try:
             connection.execute(text("SET LOCAL lock_timeout = '5s'"))
             connection.execute(text('DROP TABLE IF EXISTS discovery_sync'))  # its FK holds discovery_entry
+            connection.execute(text('DROP TABLE IF EXISTS discovery_person_sync'))  # so does this one's
             with Operations.context(MigrationContext.configure(connection)):
                 migration.downgrade()
                 inspector = inspect(connection)
