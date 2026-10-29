@@ -77,6 +77,10 @@ case "${1:-}" in
               python -m pytest -c interop/pytest.ini interop "$@" ;;
     conformance) shift; up; $COMPOSE --profile conformance run --rm conformance-runner \
               interop/conformance/run.sh "$@" ;;
-    down) $COMPOSE down -v ;;
+    down) $COMPOSE down -v
+          # a container that survives keeps its app's state (Pixelfed remembering a follow of a PieFed database since
+          # dropped), and the next `up` reuses it beside fresh ones: refuse to leave a mixed stack behind
+          left=$(podman ps -a --filter name=pyfedi-interop_ --format '{{.Names}}')
+          [ -z "$left" ] || { echo "run.sh: down left containers behind:" $left >&2; exit 1; } ;;
     *)    echo "usage: interop/run.sh up|test|conformance|down" >&2; exit 2 ;;
 esac

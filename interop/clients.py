@@ -227,6 +227,36 @@ class PieFedWeb:
             return self.http.post(form, data=data, files={'image_file': (os.path.basename(path), f, mime)})
 
 
+class Pixelfed(Mastodon):
+    """Pixelfed v0.15's Mastodon-compatible API (ApiV1Controller), on pixelfed.test. JSON must be asked for: without it
+    some routes answer HTML. A status's media are uploaded first (/api/v1/media), each with its alt text."""
+
+    def __init__(self, token):
+        super().__init__(token)
+        self.http.base_url = 'https://pixelfed.test'
+        self.http.headers['Accept'] = 'application/json'
+
+    def upload(self, payload, filename, description=''):
+        r = self.http.post('/api/v1/media', files={'file': (filename, payload, 'image/jpeg')},
+                           data={'description': description})
+        return r.raise_for_status().json()['id']
+
+    def post(self, text, media_ids, sensitive=False, spoiler_text=''):
+        data = {'status': text, 'media_ids[]': media_ids, 'visibility': 'public'}
+        if sensitive:
+            data.update(sensitive='true', spoiler_text=spoiler_text)
+        return self.http.post('/api/v1/statuses', data=data).raise_for_status().json()
+
+    def edit(self, status_id, text):
+        self.http.put(f'/api/v1/statuses/{status_id}', data={'status': text}).raise_for_status()
+
+    def delete(self, status_id):
+        self.http.delete(f'/api/v1/statuses/{status_id}').raise_for_status()
+
+    def context(self, status_id):
+        return self.http.get(f'/api/v1/statuses/{status_id}/context').raise_for_status().json()
+
+
 class PeerTube:
     """REST API v1 routes as PeerTube v8.3 documents them (https://docs.joinpeertube.org/api-rest-reference.html)."""
 
