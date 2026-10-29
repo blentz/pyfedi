@@ -380,6 +380,116 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None, album=
         return post
 
 
+def store_post_image(post: Post, uploaded_file) -> tuple[str, str, str | None]:
+    """Store `uploaded_file`, an image uploaded with `post`: refuse a type not allowed, re-encode it as configured
+    (MEDIA_IMAGE_FORMAT, MAX_DIMENSION, QUALITY) without metadata, refuse a blocked image, move it to S3 when that is
+    on. Marks the post AI-generated when the image says it is (C2PA). Returns its url, on the post's domain or in the
+    bucket, the name of the file written (File.wrote_its_source) and its hash, if hashing is on. The post image and
+    each album picture (Pixelfed interop R5) are stored by it."""
+    hash = None
+    # check if this is an allowed type of file
+    allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.mpo', '.avif', '.svg']
+    file_ext = os.path.splitext(uploaded_file.filename)[1]
+    if file_ext.lower() not in allowed_extensions:
+        raise Exception('filetype not allowed')
+
+    new_filename = gibberish(15)
+    # set up the storage directory
+    if store_files_in_s3():
+        directory = 'app/static/tmp'
+    else:
+        directory = 'app/static/media/posts/' + new_filename[0:2] + '/' + new_filename[2:4]
+    ensure_directory_exists(directory)
+
+    # check for AI-generated images
+    uploaded_file.seek(0)
+    ai_gen = inspect_image_c2pa(uploaded_file.read(), uploaded_file.mimetype or "application/octet-stream")
+    if ai_gen['c2pa']['ai_generated']:
+        post.ai_generated = True
+
+    # save the file
+    final_place = os.path.join(directory, new_filename + file_ext.lower())
+    uploaded_file.seek(0)
+    uploaded_file.save(final_place)
+
+    final_ext = file_ext.lower()  # track file extension for conversion
+
+    if final_ext in ('.heic', '.heif'):
+        register_heif_opener()
+    if final_ext == '.avif':
+        import pillow_avif  # NOQA  # do not remove  # lazy: registers Pillow's AVIF plugin only on the AVIF path
+    if final_ext == '.svg':
+        # An SVG that cannot be sanitized is rejected: the '.svg' branch
+        # below skips the Pillow re-encode, so nothing downstream would
+        # repair or re-check the file. sanitize_svg has already destroyed it
+        # by the time it returns False.
+        if not sanitize_svg(final_place):
+            raise Exception('SVG file could not be sanitized')
+
+    # Use environment variables to determine image max dimension, format, and quality
+    image_max_dimension = current_app.config['MEDIA_IMAGE_MAX_DIMENSION']
+    image_format = current_app.config['MEDIA_IMAGE_FORMAT']
+    image_quality = current_app.config['MEDIA_IMAGE_QUALITY']
+
+    if image_format == 'AVIF':
+        import pillow_avif  # NOQA  # do not remove  # lazy: registers Pillow's AVIF plugin only on the AVIF path
+
+    if not final_place.endswith('.svg') and not final_place.endswith('.gif') and not is_video_url(final_place):
+        img = open_uploaded_image(final_place, allowed_extensions)
+        img = ImageOps.exif_transpose(img)
+        if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg', '.mpo']):
+            img = to_srgb(img)
+        else:
+            img = img.convert('RGBA')
+        img.thumbnail((image_max_dimension, image_max_dimension), resample=Image.LANCZOS)
+
+        kwargs = {}
+        original_place = final_place
+        if image_format:
+            kwargs['format'] = image_format.upper()
+            final_ext = '.' + image_format.lower()
+            final_place = os.path.splitext(final_place)[0] + final_ext
+        if image_quality:
+            kwargs['quality'] = int(image_quality)
+
+        save_image_without_metadata(img, final_place, optimize=True, **kwargs)
+        if final_place != original_place:
+            os.unlink(original_place)   # the upload was re-encoded under a new extension (D465)
+
+    # D1363; on the post's domain, which federates it: a moderator's upload into someone else's post too (C3)
+    url = f"{object_base(post)}{served_path(final_place)}"
+    uploaded_name = os.path.basename(final_place)
+
+    if current_app.config['IMAGE_HASHING_ENDPOINT'] and not is_video_url(final_place):
+        hash = retrieve_image_hash(url)
+        if hash and hash_matches_blocked_image(hash):
+            raise Exception('This image is blocked')
+
+    # Move uploaded file to S3
+    if store_files_in_s3():
+        session = boto3.session.Session()
+        extra_args = {'ContentType': guess_mime_type(final_place)}
+        if current_app.config.get('S3_STORAGE_CLASS'):
+            extra_args['StorageClass'] = current_app.config['S3_STORAGE_CLASS']
+        if current_app.config.get('S3_PUBLIC_ACL'):
+            extra_args['ACL'] = 'public-read'
+        s3 = session.client(
+            service_name='s3',
+            region_name=current_app.config['S3_REGION'],
+            endpoint_url=current_app.config['S3_ENDPOINT'],
+            aws_access_key_id=current_app.config['S3_ACCESS_KEY'],
+            aws_secret_access_key=current_app.config['S3_ACCESS_SECRET'],
+        )
+        s3.upload_file(final_place, current_app.config['S3_BUCKET'], 'posts/' +
+                       new_filename[0:2] + '/' + new_filename[2:4] + '/' + new_filename + final_ext,
+                       ExtraArgs=extra_args)
+        url = f"https://{current_app.config['S3_PUBLIC_URL']}/posts/" + \
+              new_filename[0:2] + '/' + new_filename[2:4] + '/' + new_filename + final_ext
+        s3.close()
+        os.unlink(final_place)
+    return url, uploaded_name, hash
+
+
 def set_local_album(post: Post, images: list) -> None:
     """Make `post.gallery` the pictures after the post's image (Pixelfed interop R5), replacing what it held: each
     `{url, alt_text}` and, for one of our uploads, the `file_name` and `hash` it was stored with, at weight 1.. in
@@ -662,106 +772,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
             raise MediaRefused(refusal)
         url = None   # the stored file is post.url; a link sent alongside it is not read
     elif uploaded_file and uploaded_file.filename != '':
-        # check if this is an allowed type of file
-        allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.mpo', '.avif', '.svg']
-        file_ext = os.path.splitext(uploaded_file.filename)[1]
-        if file_ext.lower() not in allowed_extensions:
-            raise Exception('filetype not allowed')
-
-        new_filename = gibberish(15)
-        # set up the storage directory
-        if store_files_in_s3():
-            directory = 'app/static/tmp'
-        else:
-            directory = 'app/static/media/posts/' + new_filename[0:2] + '/' + new_filename[2:4]
-        ensure_directory_exists(directory)
-
-        # check for AI-generated images
-        uploaded_file.seek(0)
-        ai_gen = inspect_image_c2pa(uploaded_file.read(), uploaded_file.mimetype or "application/octet-stream")
-        if ai_gen['c2pa']['ai_generated']:
-            post.ai_generated = True
-
-        # save the file
-        final_place = os.path.join(directory, new_filename + file_ext.lower())
-        uploaded_file.seek(0)
-        uploaded_file.save(final_place)
-
-        final_ext = file_ext.lower()  # track file extension for conversion
-
-        if final_ext in ('.heic', '.heif'):
-            register_heif_opener()
-        if final_ext == '.avif':
-            import pillow_avif  # NOQA  # do not remove  # lazy: registers Pillow's AVIF plugin only on the AVIF path
-        if final_ext == '.svg':
-            # An SVG that cannot be sanitized is rejected: the '.svg' branch
-            # below skips the Pillow re-encode, so nothing downstream would
-            # repair or re-check the file. sanitize_svg has already destroyed it
-            # by the time it returns False.
-            if not sanitize_svg(final_place):
-                raise Exception('SVG file could not be sanitized')
-
-        # Use environment variables to determine image max dimension, format, and quality
-        image_max_dimension = current_app.config['MEDIA_IMAGE_MAX_DIMENSION']
-        image_format = current_app.config['MEDIA_IMAGE_FORMAT']
-        image_quality = current_app.config['MEDIA_IMAGE_QUALITY']
-
-        if image_format == 'AVIF':
-            import pillow_avif  # NOQA  # do not remove  # lazy: registers Pillow's AVIF plugin only on the AVIF path
-
-        if not final_place.endswith('.svg') and not final_place.endswith('.gif') and not is_video_url(final_place):
-            img = open_uploaded_image(final_place, allowed_extensions)
-            img = ImageOps.exif_transpose(img)
-            if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg', '.mpo']):
-                img = to_srgb(img)
-            else:
-                img = img.convert('RGBA')
-            img.thumbnail((image_max_dimension, image_max_dimension), resample=Image.LANCZOS)
-
-            kwargs = {}
-            original_place = final_place
-            if image_format:
-                kwargs['format'] = image_format.upper()
-                final_ext = '.' + image_format.lower()
-                final_place = os.path.splitext(final_place)[0] + final_ext
-            if image_quality:
-                kwargs['quality'] = int(image_quality)
-
-            save_image_without_metadata(img, final_place, optimize=True, **kwargs)
-            if final_place != original_place:
-                os.unlink(original_place)   # the upload was re-encoded under a new extension (D465)
-
-        # D1363; on the post's domain, which federates it: a moderator's upload into someone else's post too (C3)
-        url = f"{object_base(post)}{served_path(final_place)}"
-        uploaded_name = os.path.basename(final_place)
-
-        if current_app.config['IMAGE_HASHING_ENDPOINT'] and not is_video_url(final_place):
-            hash = retrieve_image_hash(url)
-            if hash and hash_matches_blocked_image(hash):
-                raise Exception('This image is blocked')
-
-        # Move uploaded file to S3
-        if store_files_in_s3():
-            session = boto3.session.Session()
-            extra_args = {'ContentType': guess_mime_type(final_place)}
-            if current_app.config.get('S3_STORAGE_CLASS'):
-                extra_args['StorageClass'] = current_app.config['S3_STORAGE_CLASS']
-            if current_app.config.get('S3_PUBLIC_ACL'):
-                extra_args['ACL'] = 'public-read'
-            s3 = session.client(
-                service_name='s3',
-                region_name=current_app.config['S3_REGION'],
-                endpoint_url=current_app.config['S3_ENDPOINT'],
-                aws_access_key_id=current_app.config['S3_ACCESS_KEY'],
-                aws_secret_access_key=current_app.config['S3_ACCESS_SECRET'],
-            )
-            s3.upload_file(final_place, current_app.config['S3_BUCKET'], 'posts/' +
-                           new_filename[0:2] + '/' + new_filename[2:4] + '/' + new_filename + final_ext,
-                           ExtraArgs=extra_args)
-            url = f"https://{current_app.config['S3_PUBLIC_URL']}/posts/" + \
-                  new_filename[0:2] + '/' + new_filename[2:4] + '/' + new_filename + final_ext
-            s3.close()
-            os.unlink(final_place)
+        url, uploaded_name, hash = store_post_image(post, uploaded_file)
 
     if url and (from_scratch or url_changed):
         domain = domain_from_url(url)
