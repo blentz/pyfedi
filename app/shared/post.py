@@ -21,7 +21,7 @@ from app.activitypub.util import find_hashtag_or_create, make_image_sizes, notif
 from app.community.util import tags_from_string_old, end_poll_date, flair_from_form, flairs_from_string
 from app.constants import *
 from app.federation_urls import object_base
-from app.models import File, Notification, NotificationSubscription, Poll, PollChoice, PollChoiceVote, Post, \
+from app.models import File, Notification, NotificationSubscription, Poll, PollChoice, PollChoiceVote, Post, post_file, \
     PostBookmark, PostVote, Report, Site, User, utcnow, Instance, Event, Community, CommunityFlair, \
     votes_cast_today, adjust_domain_post_count, served_path, _as_url
 from app.shared.media import MediaRefused, can_upload_media, episode_form_wanted, media_kind_for, media_of, \
@@ -34,6 +34,7 @@ from app.shared.tasks import task_selector
 from app.shared.upload import open_uploaded_image
 from app.visibility import is_open, post_title_for
 from app.utils import render_template, authorise_api_user, shorten_string, gibberish, ensure_directory_exists, \
+    max_album_images, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, fixup_url, domain_from_url, \
     opengraph_parse, url_to_thumbnail_file, can_create_post, is_video_hosting_site, recently_upvoted_posts, \
     is_image_url, add_to_modlog, store_files_in_s3, guess_mime_type, retrieve_image_hash, \
@@ -267,7 +268,7 @@ def web_form_url(input, type):
     return (field.data or '').strip()
 
 
-def make_post(input, community, type, src, auth=None, uploaded_file=None):
+def make_post(input, community, type, src, auth=None, uploaded_file=None, album=None):
     if src == SRC_API:
         user = authorise_api_user(auth, return_type='model')
         if extra_rate_limit_check(user):
@@ -349,7 +350,7 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None):
     db.session.commit()
 
     try:    # federation is done in edit_post
-        post = edit_post(input, post, type, src, user, auth, uploaded_file, from_scratch=True)
+        post = edit_post(input, post, type, src, user, auth, uploaded_file, from_scratch=True, album=album)
         published = post.status == POST_STATUS_PUBLISHED
         if post.status == POST_STATUS_PROCESSING:
             # Stored and committed: probe_media publishes it when the media is ready. Queued only once this create
@@ -379,12 +380,41 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None):
         return post
 
 
+def set_local_album(post: Post, images: list) -> None:
+    """Make `post.gallery` the pictures after the post's image (Pixelfed interop R5), replacing what it held: each
+    `{url, alt_text}` and, for one of our uploads, the `file_name` and `hash` it was stored with, at weight 1.. in
+    order. The layout of an inbound album (set_post_gallery), so rendering, the API and the serializers read it as
+    they read one. A picture already in the album keeps its File, sized and with our upload's file left on disk; one
+    that leaves the album is deleted with its file; a new one is sized. The caller commits."""
+    rows = db.session.execute(post_file.select().where(post_file.c.post_id == post.id)).all()
+    old = {file.source_url: file for file in File.query.filter(File.id.in_([row.file_id for row in rows])).all()}
+    db.session.execute(post_file.delete().where(post_file.c.post_id == post.id))
+    for weight, image in enumerate(images, start=1):
+        file = old.pop(image['url'], None)
+        if file is None:
+            file = File(source_url=image['url'], file_name=image.get('file_name'), hash=image.get('hash'))
+            db.session.add(file)
+            db.session.flush()
+            make_image_sizes(file.id, 512, 1200, 'posts', post.community.low_quality)
+        file.alt_text = image['alt_text']
+        db.session.execute(post_file.insert().values(post_id=post.id, file_id=file.id, weight=weight))
+    for file in old.values():
+        file.delete_from_disk()
+        db.session.delete(file)
+    post.gallery_count = len(images)
+
+
 # 'from_scratch == True' means that it's not really a user edit, we're just re-using code for make_post()
-def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=None, from_scratch=False, hash=None):
+def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=None, from_scratch=False, hash=None,
+              album=None):
     if src == SRC_API and not user:   # authenticated first: the gone check must not answer an unauthorised caller
         user = authorise_api_user(auth, return_type='model', id_match=post.user_id)
     if not from_scratch and post.community.is_gone():   # interop C1 item 10: a Group deleted on its home server is read-only
         raise Exception('This community was deleted on its home server')
+    if album is not None and len(album) + 1 > max_album_images():   # the image and its album (R7)
+        raise Exception(f'At most {max_album_images()} images in one post')
+    if album and any(_as_url(image['url']) is None for image in album):   # D1407, as for `url`: rendered as hrefs
+        raise Exception('Each album url must be an http:// or https:// url')
     if src == SRC_API:
         title = input['title'].strip()
         body = input['body']
@@ -849,6 +879,15 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         # D856: through the relationship. post.image_id is only synced at FLUSH, so a lookup by it found nothing
         # unless something upstream happened to emit SQL, and the caller's alt text was dropped for some urls.
         post.image.alt_text = image_alt_text
+
+    # The album after the image (Pixelfed interop R5): None leaves it as it is, a list replaces it, and a post that is
+    # no longer an image post has none
+    if post.type != POST_TYPE_IMAGE or post.image is None:
+        if album:
+            raise Exception('An album needs an image post: give its first picture as the url')
+        set_local_album(post, [])
+    elif album is not None:
+        set_local_album(post, album)
 
     federate = True
     if type == POST_TYPE_POLL and poll_data:

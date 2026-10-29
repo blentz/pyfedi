@@ -484,6 +484,7 @@ class TestAdminFormRoundTrip:
             'registration_mode': 'Open',
             'language_id': '2',
             'read_posts_cutoff': '180',
+            'max_album_images': '4',
             'nsfw_country_restriction': '',
             'auto_decline_countries': '',
             'application_question': '',

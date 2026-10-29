@@ -4175,6 +4175,19 @@ class Post(db.Model):
                 (user.ignore_bots == 2 and self.from_bot) or \
                 self.spoiler_flair()
 
+    def album_images(self) -> list:
+        """The post's pictures in album order: its image, then its gallery by weight, leaving out the rows that only
+        remember a blocked image (GALLERY_BLOCKED_WEIGHT). What an album post federates (Pixelfed interop R5); the
+        same rows the API's galleries_for_posts reads."""
+        if self.image is None:
+            return []
+        if not self.gallery_count:
+            return [self.image]
+        gallery = db.session.query(File).join(post_file, post_file.c.file_id == File.id) \
+            .filter(post_file.c.post_id == self.id, func.coalesce(post_file.c.weight, 0) >= 0) \
+            .order_by(post_file.c.weight).all()
+        return [self.image] + gallery
+
     def blur_images(self, user):
         """Whether the post page blurs this post's images for `user`.
 

@@ -465,10 +465,9 @@ def post_to_page(post: Post):
         activity_data["attachment"] = [{"href": post.url, "type": "Link"}]
     if post.image_id is not None:
         activity_data["image"] = {"url": post.image.view_url(base=object_base(post)), "type": "Image"}   # plan C3
-        if post.type == POST_TYPE_IMAGE:
-            activity_data['attachment'] = [{'type': 'Image',
-                                            'url': post.image.source_url,
-                                            'name': post.image.alt_text}]
+        if post.type == POST_TYPE_IMAGE:   # every picture of an album, the image first (Pixelfed interop R5)
+            activity_data['attachment'] = [{'type': 'Image', 'url': file.source_url, 'name': file.alt_text}
+                                           for file in post.album_images()]
     # D1337. This read `poll.mode` off `.first()` and `ap_datetime(poll.end_poll)`
     # without asking whether either was there, and BOTH are reachable:
     #

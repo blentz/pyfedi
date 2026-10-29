@@ -1484,6 +1484,16 @@ class SubscribePostRequest(DefaultSchema):
     subscribe = fields.Boolean(required=True)
 
 
+class AlbumImage(DefaultSchema):
+    url = fields.String(required=True, metadata={"format": "url", "description": "A picture uploaded through /upload/image"})
+    alt_text = fields.String(allow_none=True)
+
+
+GALLERY_DESCRIPTION = ("The pictures after the post's image `url`, in order: an album of at most the site's "
+                       "max_album_images pictures in all. On edit, leave it out to keep the album, [] to clear it, "
+                       "a list to replace it.")
+
+
 class CreatePostRequest(DefaultSchema):
     title = fields.String(required=True, validate=validate_non_empty_string)
     community_id = fields.Integer(required=True)
@@ -1495,6 +1505,7 @@ class CreatePostRequest(DefaultSchema):
     language_id = fields.Integer()
     event = fields.Nested(PostEvent, allow_none=True)
     poll = fields.Nested(PostPoll, allow_none=True)
+    gallery = fields.List(fields.Nested(AlbumImage), metadata={"description": GALLERY_DESCRIPTION})
     visibility = fields.String(metadata={"description": "'public' (default) or 'followers'. 'followers' is accepted "
                                                         "only in the local microblogs community"})
 
@@ -1511,6 +1522,7 @@ class EditPostRequest(DefaultSchema):
     poll = fields.Nested(PostPoll, allow_none=True)
     tags = fields.String(allow_none=True, metadata={"description": "Hashtags, separated by commas with no hash character"})
     flair = fields.String(allow_none=True, metadata={"description": "Flair, separated by commas with no hash character"})
+    gallery = fields.List(fields.Nested(AlbumImage), metadata={"description": GALLERY_DESCRIPTION})
     visibility = fields.String(metadata={"description": "Fixed when the post is created: a different value is refused"})
 
 

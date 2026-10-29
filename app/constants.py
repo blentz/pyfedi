@@ -240,3 +240,9 @@ REMOTE_THUMBNAIL_PIXEL_CAP = 16_000_000
 # The reporter name the automated reports (AI detection) store beside `reporter_id: 1`: it names no account, so a
 # report page shows it as text.
 AUTOMATED_REPORTER = 'automated'
+
+# How many images a local album post may hold (Pixelfed interop R7): admin setting `max_album_images`. Mastodon shows 4
+# and Pixelfed's MAX_ALBUM_LENGTH defaults to 4. Each image may be 10 MB (R207) and a request MAX_CONTENT_LENGTH, 100 MB
+# by default, so ten would not fit in one form post.
+MAX_ALBUM_IMAGES_DEFAULT = 4
+MAX_ALBUM_IMAGES_CEILING = 9

@@ -58,6 +58,7 @@ from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
 from app.translation import LibreTranslateAPI
 from app.utils import canonical_host, render_template, permission_required, set_setting, get_setting, gibberish, markdown_to_html, \
+    max_album_images, \
     moderating_communities, joined_communities, finalize_user_setup, theme_list, blocked_phrases, blocked_referrers, \
     topic_tree, languages_for_form, menu_topics, ensure_directory_exists, add_to_modlog, get_request, \
     LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS, PAGE_MAX_BYTES, \
@@ -632,6 +633,7 @@ def admin_misc():
         set_setting('enable_report_em_dash_replies', form.enable_report_em_dash_replies.data)
         set_setting('limit_one_em_report_per_user', form.limit_one_em_report_per_user.data)
         set_setting('read_posts_cutoff', int(form.read_posts_cutoff.data))
+        set_setting('max_album_images', int(form.max_album_images.data))
         if form.onion_pow_difficulty.data is not None:
             set_setting(POW_DIFFICULTY_SETTING, form.onion_pow_difficulty.data)
         if form.onion_media_cache_mb.data is not None:
@@ -705,6 +707,7 @@ def admin_misc():
         form.enable_report_em_dash_replies.data = get_setting('enable_report_em_dash_replies', True)
         form.limit_one_em_report_per_user.data = get_setting('limit_one_em_report_per_user', False)
         form.read_posts_cutoff.data = get_setting('read_posts_cutoff', 180)
+        form.max_album_images.data = max_album_images()
     return render_template('admin/misc.html', title=_('Misc settings'), form=form, close_form=close_form,
                            roles_with=roles_with('change instance settings'))
 

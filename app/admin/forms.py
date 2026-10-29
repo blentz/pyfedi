@@ -13,7 +13,7 @@ from flask_babel import _, lazy_gettext as _l
 
 from app import db
 from app.constants import DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
-    DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE
+    DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE, MAX_ALBUM_IMAGES_CEILING
 from app.models import Community, User, CmsPage, Instance, InstanceInUse, SiteDomain, instance_row_to_take
 from app.local_names import local_named
 from app.storefront import default_domain, domain_by_id, domain_rows
@@ -113,6 +113,9 @@ class SiteMiscForm(FlaskForm):
     # DataRequired(), which would reject a legitimate 0.
     read_posts_cutoff = IntegerField(_l('Trim read posts table after this many days'),
                                      validators=[InputRequired(), NumberRange(min=0)])
+    max_album_images = IntegerField(_l('Most images in one post'),
+                                    validators=[InputRequired(), NumberRange(min=1, max=MAX_ALBUM_IMAGES_CEILING)],
+                                    description=_l('Mastodon shows only the first 4.'))
     filters = [('local', _l('Local')),
                ('popular', _l('Popular')),
                ('all', _l('All')),
