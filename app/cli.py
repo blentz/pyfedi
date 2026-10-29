@@ -39,7 +39,7 @@ from app.onion_media import DEFAULT_CACHE_BYTES, evict
 from app.models import CronJobLog, Settings, BannedInstances, Role, User, RolePermission, Domain, ActivityPubLog, utcnow, \
     utcnow, Site, Instance, File, Notification, Post, CommunityMember, NotificationSubscription, PostReply, Language, \
     Community, SendQueue, _store_files_in_s3, PostVote, Poll, \
-    ActivityBatch, Reminder, RssFeed, RssFeedItem, Feed, media_of, ErrorCount
+    ActivityBatch, Reminder, RssFeed, RssFeedItem, Feed, media_of, ErrorCount, SiteDomain
 from app.shared.tasks import task_selector
 from app.visibility import listable_clause, post_title_for
 from app.shared.tasks.maintenance import add_remote_communities, remove_old_bot_content, pwn_bots
@@ -68,7 +68,8 @@ from app.utils import move_file_to_s3
 from app.hidden_routes import hidden_notifications
 from app.local_names import local_named
 from app.local_only import restamp_notifications, without_local_only
-from app.storefront import default_domain, domain_base_url, home_storefront, hosted_instance_ids, instance_id_of
+from app.storefront import clear_domain_cache, default_domain, domain_base_url, home_storefront, hosted_instance_ids, \
+    instance_id_of, normalise_host
 from app.discovery.cli import register_discovery_commands
 from app.relays.cli import register_relay_commands
 import app as app_pkg
@@ -175,6 +176,16 @@ def register(app):
                      private_key=private_key, language_id=2))
             db.session.add(Instance(domain=app.config['SERVER_NAME'],
                                     software='PieFed'))  # Instance 1 is always the local instance
+            # The default domain row the site_domain migration (f1c3a9d7b2e4) seeds: rebuild_schema dropped it, and
+            # every local row is stamped with its id. Its before_insert hook gives it Instance 1, added above. Built
+            # from the config as the synthesised default is, never from domain_rows' cache of the schema just
+            # dropped; the cache is cleared after the flush so the admin below gets the row's id.
+            protocol = app.config['HTTP_PROTOCOL']
+            db.session.add(SiteDomain(domain=normalise_host(app.config['SERVER_NAME']),
+                                      scheme='https' if protocol in ('https', 'mixed') else protocol,
+                                      federates=True, registration='anyone', is_default=True))
+            db.session.flush()
+            clear_domain_cache()
             db.session.add(Settings(name='allow_nsfw', value=json.dumps(False)))
             db.session.add(Settings(name='allow_nsfl', value=json.dumps(False)))
             db.session.add(Settings(name='allow_dislike', value=json.dumps(True)))
