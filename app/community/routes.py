@@ -24,6 +24,7 @@ from app.activitypub.actor import schedule_actor_refresh
 # app.activitypub before they are defined (import cycle: app.api.alpha)
 import app.api.alpha.views as alpha_views
 from app.community.forms import SearchRemoteCommunity, CreateDiscussionForm, CreateImageForm, CreateLinkForm, \
+    album_slots, album_uploads, \
     ReportCommunityForm, \
     DeleteCommunityForm, AddCommunityForm, EditCommunityForm, AddModeratorForm, BanUserCommunityForm, \
     EscalateReportForm, ResolveReportForm, CreateVideoForm, CreateAudioForm, CreatePollForm, EditCommunityWikiPageForm, \
@@ -1442,7 +1443,9 @@ def add_post(actor, type=None):
                     return redirect(url_for('community.add_post', actor=community.ap_id if community.ap_id else community.name, type='gallery'))
                 post = shared_post.make_post(form, community, post_type, SRC_WEB, uploaded_files=uploaded_files, image_alt_texts=image_alt_texts)
             else:
-                post = shared_post.make_post(form, community, post_type, SRC_WEB, uploaded_file=uploaded_file)
+                album = album_uploads(form) if type == 'image' else None   # the pictures after the image (R5)
+            post = shared_post.make_post(form, community, post_type, SRC_WEB, uploaded_file=uploaded_file,
+                                         album=album or None)
         except MediaRefused as refusal:   # the bytes are not the kind the form takes: a field error, not a 500
             form.image_file.errors.append(str(refusal))
         except Exception as ex:
@@ -1580,6 +1583,7 @@ def add_post(actor, type=None):
                            post_type=post_type, post_form_type=type, destination_sections=post_destination_sections(), community=community, show_visibility=is_local_microblogs(community), post=post, hide_community_actions=True,
                            markdown_editor=current_user.markdown_editor, low_bandwidth=False, actor=actor, event_online=True,
                            inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None,
+                           album_slots=album_slots() if type == 'image' else 0,
                            )
 
 

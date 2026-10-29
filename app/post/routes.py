@@ -26,7 +26,7 @@ from app.branding import current_branding
 from app.activitypub.signature import default_context, send_post_request
 from app.activitypub.util import update_post_from_activity, notify_about_post
 from app.community.forms import CreateLinkForm, CreateDiscussionForm, CreateVideoForm, CreatePollForm, EditImageForm, \
-    CreateEventForm, CreateGalleryForm
+    CreateEventForm, CreateGalleryForm, album_kept, album_slots, album_uploads
 from app.community.util import send_to_remote_instance, flair_from_form, hashtags_used_in_community, \
     search_for_community
 from app.constants import NOTIF_REPORT, NOTIF_REPORT_ESCALATION, POST_STATUS_SCHEDULED, POST_STATUS_PUBLISHED, \
@@ -1394,8 +1394,10 @@ def post_edit(post_id: int):
                     for entry in form.images:
                         uploaded_files.append(entry.image_file.data)
                         image_alt_texts.append(entry.alt_text.data or '')
+                # the album the page sent back, then its new pictures (R5)
+                album = album_kept(post) + album_uploads(form) if post_type == POST_TYPE_IMAGE else None
                 shared_post.edit_post(form, post, post_type, SRC_WEB, uploaded_file=uploaded_file, uploaded_files=uploaded_files,
-                                      image_alt_texts=image_alt_texts)
+                                      image_alt_texts=image_alt_texts, album=album)
                 flash(Markup(_('Your changes have been saved. <a href="/post/%(post_id)d/edit">Edit it</a> if you notice any typos!')))
             except Exception as ex:
                 flash(_('Your edit was not accepted because %(reason)s', reason=str(ex)), 'error')
@@ -1492,6 +1494,8 @@ def post_edit(post_id: int):
                 form.sticky.render_kw = {'disabled': True}
             return render_template('post/post_edit.html', title=_('Edit post'), form=form,
                                    post_type=post_type, community=post.community, post=post,
+                                   album_existing=post.album_images()[1:] if post_type == POST_TYPE_IMAGE else [],
+                                   album_slots=album_slots(post) if post_type == POST_TYPE_IMAGE else 0,
                                    visibility_text=visibility_name(post) if is_local_microblogs(post.community) else None,
                                    markdown_editor=current_user.markdown_editor, mods=mod_list,
                                    event_online=event_online,
