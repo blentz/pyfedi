@@ -56,6 +56,7 @@ NON_OBJECT_FIELDS = {
     'rules': 'text', 'bio': 'text', 'flair_text': 'text', 'flair_title': 'text', 'flair': 'text', 'alt_text': 'text',
     'posting_warning': 'text', 'tags': 'text', 'question_answer': 'text', 'captcha_answer': 'text',
     'captcha_uuid': 'a token', 'honeypot': 'a trap', 'url': 'a link the post carries', 'banner_url': 'an image',
+    'gallery': 'the pictures the post carries (urls and alt text)',
     'icon_url': 'an image', 'avatar': 'an image', 'cover': 'an image', 'file': 'an upload', 'poll': 'a poll',
     'event': 'an event', 'emoji': 'an emoji', 'text_color': 'a colour', 'background_color': 'a colour',
     'blur_images': 'a flag', 'theme': 'a setting',
