@@ -31,6 +31,11 @@ For Announce, remove @context from inner object, and use same fields except audi
 """
 
 
+def tombstone(ap_id: str) -> dict:
+    """The object of a Delete of content: `ap_id` as an embedded Tombstone."""
+    return {'id': ap_id, 'type': 'Tombstone'}
+
+
 @celery.task
 def delete_reply(send_async, user_id, reply_id, reason=None):
     with current_app.app_context():
@@ -185,7 +190,9 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
       'id': delete_id,
       'type': 'Delete',
       'actor': user.public_url(),
-      'object': object.public_url(),
+      # a post or reply as an embedded Tombstone: Pixelfed acts on no other Delete of content (P2, Pixelfed spike
+      # 2026-10-28), and Mastodon, Lemmy and PieFed take both forms. A community's own Delete keeps its bare id.
+      'object': object.public_url() if isinstance(object, Community) else tombstone(object.public_url()),
       '@context': default_context(),
       'audience': community.public_url(),
       'to': to,
@@ -385,7 +392,7 @@ def delete_message(message, recipient, is_restore=False):
       'id': delete_id,
       'type': 'Delete',
       'actor': message.sender.public_url(),
-      'object': message.ap_id,
+      'object': tombstone(message.ap_id),   # as delete_object's: Pixelfed matches a DM's Delete by Tombstone (P2)
       '@context': default_context(),
       'to': recipient.public_url()
     }
