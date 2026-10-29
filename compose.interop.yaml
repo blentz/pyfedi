@@ -106,6 +106,7 @@ services:
       DATABASE_URL: postgresql+psycopg2://piefed:piefed@piefed-db/piefed   # not in .env.interop: Mastodon reads DATABASE_URL too
       LOG_ACTIVITYPUB_TO_DB: "1"   # inbound activities and why they were ignored land in activity_pub_log
       RATELIMIT_ENABLED: "False"   # the alpha API allows 3 posts a minute; the suite posts one per test
+      ACCESS_LOG: "1"   # gunicorn access log: shows a delivery that arrives but leaves no activity_pub_log row
     build: {context: ., target: runtime}
     image: localhost/piefed-interop:latest
     entrypoint: ["/trust_ca.sh", "/usr/bin/tini", "--", "/app/entrypoint.sh"]
