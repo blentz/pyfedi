@@ -1,5 +1,7 @@
 import unittest
 
+import pytest
+
 from app.utils import microblog_content_to_link, microblog_content_to_title
 
 
@@ -129,3 +131,14 @@ class TestMicroblogContentToLink(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@pytest.mark.parametrize('html,expected', [
+    ('<p>Render album <a href="https://pixelfed.example/discover/tags/interop" class="u-url hashtag">#interop</a></p>',
+     'Render album #interop'),
+    ('<p>Two  spaces\nand a newline here</p>', 'Two spaces and a newline here'),
+], ids=['text-before-a-link', 'runs-in-the-text'])
+def test_a_derived_title_has_single_spaces(html, expected):
+    """P4 (Pixelfed spike 2026-10-28): get_text's separator joins a text node that ends in a space to the link after
+    it with a second space, and the title kept it (`Render album  #interop`)."""
+    assert microblog_content_to_title(html) == (expected, '')
