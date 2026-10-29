@@ -305,8 +305,8 @@ def send_post(post_id, edit=False, session=None):
         attachment.append(episode_attachment(post))
     elif (post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO or post.type == POST_TYPE_EVENT) and post.url is not None:
         attachment.append({'href': post.url, 'type': 'Link'})
-    elif post.type == POST_TYPE_IMAGE and post.image_id:
-        attachment.append({'type': 'Image', 'url': post.image.source_url, 'name': post.image.alt_text})
+    elif post.type == POST_TYPE_IMAGE and post.image_id:   # every picture of an album, as post_to_page (R5)
+        attachment.extend({'type': 'Image', 'url': file.source_url, 'name': file.alt_text} for file in post.album_images())
 
     page = {
       'id': post.public_url(),
