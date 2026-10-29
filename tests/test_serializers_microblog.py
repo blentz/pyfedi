@@ -112,11 +112,22 @@ def test_followers_only_addressing_is_amendment_b(db_session):
 
 def test_image_attachment_is_a_document(db_session):
     post = _local(post_type=POST_TYPE_IMAGE)
+    post.image = File(source_url='https://test.piefed.local/static/media/a.jpg', alt_text='a cat',
+                      width=640, height=480)
+    db.session.commit()
+    assert note_attachments(post) == [{'type': 'Document', 'mediaType': 'image/jpeg',
+                                       'url': 'https://test.piefed.local/static/media/a.jpg',
+                                       'name': 'a cat', 'width': 640, 'height': 480}]
+
+
+def test_our_webp_image_goes_out_as_its_jpeg(db_session):
+    """Pixelfed interop R3: a WebP of ours is sent as the JPEG app/jpeg converts it to (tests/test_jpeg_rendition.py)."""
+    post = _local(post_type=POST_TYPE_IMAGE)
     post.image = File(source_url='https://test.piefed.local/static/media/a.webp', alt_text='a cat',
                       width=640, height=480)
     db.session.commit()
-    assert note_attachments(post) == [{'type': 'Document', 'mediaType': 'image/webp',
-                                       'url': 'https://test.piefed.local/static/media/a.webp',
+    assert note_attachments(post) == [{'type': 'Document', 'mediaType': 'image/jpeg',
+                                       'url': f'https://test.piefed.local/media/jpeg/{post.image.id}.jpg',
                                        'name': 'a cat', 'width': 640, 'height': 480}]
 
 
