@@ -268,7 +268,7 @@ def web_form_url(input, type):
     return (field.data or '').strip()
 
 
-def make_post(input, community, type, src, auth=None, uploaded_file=None):
+def make_post(input, community, type, src, auth=None, uploaded_file=None, album=None):
     if src == SRC_API:
         user = authorise_api_user(auth, return_type='model')
         if extra_rate_limit_check(user):
@@ -350,7 +350,7 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None):
     db.session.commit()
 
     try:    # federation is done in edit_post
-        post = edit_post(input, post, type, src, user, auth, uploaded_file, from_scratch=True)
+        post = edit_post(input, post, type, src, user, auth, uploaded_file, from_scratch=True, album=album)
         published = post.status == POST_STATUS_PUBLISHED
         if post.status == POST_STATUS_PROCESSING:
             # Stored and committed: probe_media publishes it when the media is ready. Queued only once this create
@@ -380,7 +380,6 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None):
         return post
 
 
-# 'from_scratch == True' means that it's not really a user edit, we're just re-using code for make_post()
 def set_local_album(post: Post, images: list) -> None:
     """Make `post.gallery` the pictures after the post's image (Pixelfed interop R5), replacing what it held: each
     `{url, alt_text}` and, for one of our uploads, the `file_name` and `hash` it was stored with, at weight 1.. in
@@ -405,6 +404,7 @@ def set_local_album(post: Post, images: list) -> None:
     post.gallery_count = len(images)
 
 
+# 'from_scratch == True' means that it's not really a user edit, we're just re-using code for make_post()
 def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=None, from_scratch=False, hash=None,
               album=None):
     if src == SRC_API and not user:   # authenticated first: the gone check must not answer an unauthorised caller
@@ -413,6 +413,8 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         raise Exception('This community was deleted on its home server')
     if album is not None and len(album) + 1 > max_album_images():   # the image and its album (R7)
         raise Exception(f'At most {max_album_images()} images in one post')
+    if album and any(_as_url(image['url']) is None for image in album):   # D1407, as for `url`: rendered as hrefs
+        raise Exception('Each album url must be an http:// or https:// url')
     if src == SRC_API:
         title = input['title'].strip()
         body = input['body']
@@ -881,6 +883,8 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
     # The album after the image (Pixelfed interop R5): None leaves it as it is, a list replaces it, and a post that is
     # no longer an image post has none
     if post.type != POST_TYPE_IMAGE or post.image is None:
+        if album:
+            raise Exception('An album needs an image post: give its first picture as the url')
         set_local_album(post, [])
     elif album is not None:
         set_local_album(post, album)
