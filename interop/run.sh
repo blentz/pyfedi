@@ -59,8 +59,12 @@ up() {
         | $COMPOSE exec -T castopod-web php spark install:create-superadmin -n admin -e admin@castopod.test) \
         || grep -q 'already created' <<< "$out" || { echo "$out" >&2; return 1; }
     castopod=$($COMPOSE exec -T piefed-web python - < interop/seed_castopod.py | tail -n 1)
-    printf '%s\n%s' "$peertube" "$castopod" | python3 -c 'import json, sys; t = {}; [t.update(json.loads(l)) for l in sys.stdin]; t["mastodon_bob"] = sys.argv[1]; print(json.dumps(t))' \
-        "$token" > interop/.tokens.json
+    wait_http piefed-web https://pixelfed.test/api/nodeinfo/2.0.json
+    pixelfed=$($COMPOSE exec -T pixelfed-web php artisan tinker --execute="$(sed 1d interop/seed_pixelfed.php)" \
+        | sed -n 's/^TOKEN=//p')
+    [ -n "$pixelfed" ] || { echo "run.sh: seed_pixelfed.php printed no token" >&2; return 1; }
+    printf '%s\n%s' "$peertube" "$castopod" | python3 -c 'import json, sys; t = {}; [t.update(json.loads(l)) for l in sys.stdin]; t["mastodon_bob"] = sys.argv[1]; t["pixelfed_erin"] = sys.argv[2]; print(json.dumps(t))' \
+        "$token" "$pixelfed" > interop/.tokens.json
 }
 
 case "${1:-}" in

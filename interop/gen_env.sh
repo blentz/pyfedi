@@ -38,3 +38,7 @@ fi
 if ! grep -q '^CP_ANALYTICS_SALT=' .env.interop; then
     printf '# Castopod\nCP_ANALYTICS_SALT=%s\n' "$(hex 32)" >> .env.interop
 fi
+# Pixelfed joined the harness later: its own env file (Laravel APP_KEY), apart from .env.interop's Mastodon DB_HOST
+if [ ! -f .env.pixelfed ]; then
+    printf 'APP_KEY=base64:%s\n' "$(openssl rand -base64 32)" > .env.pixelfed
+fi

@@ -18,3 +18,7 @@ peertube.test {
 castopod.test {
 	reverse_proxy castopod-web:8080
 }
+
+pixelfed.test {
+	reverse_proxy pixelfed-web:8080
+}
