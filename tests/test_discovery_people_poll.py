@@ -39,7 +39,7 @@ def net(monkeypatch):
         return log['feeds'].get(url, (404, b''))
 
     monkeypatch.setattr(people, 'get_request_capped', fetch)
-    monkeypatch.setattr(people, 'resolve_remote_post_from_search', log['resolved'].append)
+    monkeypatch.setattr(people, 'fetch_post', lambda url, host: log['resolved'].append(url))
     monkeypatch.setattr(people, '_known_post', lambda url: url in log['known'])
     return log
 
@@ -107,11 +107,11 @@ def test_one_posts_failure_does_not_stop_the_rest(row, net, monkeypatch):
     posts = [f'https://{HOST}/p/erin/{n}' for n in (1, 2)]
     net['feeds'][f'{TARGET}.atom'] = (200, atom(*posts))
 
-    def resolve(url):
+    def resolve(url, host):
         net['resolved'].append(url)
         if url.endswith('/1'):
             raise RuntimeError('boom')
-    monkeypatch.setattr(people, 'resolve_remote_post_from_search', resolve)
+    monkeypatch.setattr(people, 'fetch_post', resolve)
 
     poll_synced_person(row.user_id)
 
@@ -163,3 +163,36 @@ def test_queueing_one_poll_outside_debug_sends_it_to_celery(row, monkeypatch, ap
     monkeypatch.setattr(people.poll_synced_person, 'apply_async', lambda args, countdown: queued.append(args))
     people.queue_person_poll(row.user_id)
     assert queued == [[row.user_id]]
+
+
+# --- fetch_post: a listed post is filed in microblogs as the inbox files a Note (§3.6) ---
+
+NOTE = {'id': f'https://{HOST}/p/erin/1', 'type': 'Note', 'attributedTo': TARGET, 'content': '<p>hi</p>',
+        'to': ['https://www.w3.org/ns/activitystreams#Public'], 'published': '2026-10-29T00:00:00Z'}
+
+
+@pytest.fixture
+def filed(monkeypatch):
+    calls = []
+    monkeypatch.setattr(people, 'create_resolved_object', lambda *args: calls.append(args))
+    return calls
+
+
+def test_a_top_level_note_is_created_in_microblogs(db_session, monkeypatch, filed):
+    microblogs = object()
+    monkeypatch.setattr(people, 'remote_object_to_json', lambda url, retry_delay: dict(NOTE))
+    monkeypatch.setattr(people, 'find_microblogging_community', lambda: microblogs)
+
+    people.fetch_post(NOTE['id'], HOST)
+
+    [(url, data, host, community, announce_id, store)] = filed
+    assert (url, data['id'], host, community, store) == (NOTE['id'], NOTE['id'], HOST, microblogs, False)
+    assert announce_id.startswith(f'https://{HOST}/activities/announce/')
+
+
+@pytest.mark.parametrize('document', [None, [], {**NOTE, 'inReplyTo': f'https://{HOST}/p/x/9'}, {**NOTE, 'type': 'Person'}],
+                         ids=['unreadable', 'not-an-object', 'a-reply', 'not-content'])
+def test_anything_else_is_not_filed(db_session, monkeypatch, filed, document):
+    monkeypatch.setattr(people, 'remote_object_to_json', lambda url, retry_delay: document)
+    people.fetch_post(NOTE['id'], HOST)
+    assert filed == []
