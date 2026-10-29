@@ -1,7 +1,7 @@
 # Interop harness
 
-Runs PieFed (built from this tree), Mastodon, PeerTube and Castopod side by side, behind Caddy with an internal CA,
-on the names `piefed.test`, `mastodon.test`, `peertube.test` and `castopod.test`. Later interop tests drive real servers against each other here.
+Runs PieFed (built from this tree), Mastodon, PeerTube, Castopod and Pixelfed side by side, behind Caddy with an internal CA,
+on the names `piefed.test`, `mastodon.test`, `peertube.test`, `castopod.test` and `pixelfed.test`. Later interop tests drive real servers against each other here.
 See `compose.interop.yaml`; spec 2026-10-14 section 8.1.
 
 ## Use
@@ -15,10 +15,11 @@ Seeded: PieFed `alice` / `interop-alice-pw`, the local `microblogs` community, t
 the media upload communities `vc_media` (`video_channel`) and `pod_media` (`podcast`), which alice moderates, with video
 and audio uploads open to users; Mastodon `bob`; PeerTube admin
 `root` / `interop-root-pw` and user `carol` / `interop-carol-pw`; Castopod superadmin `admin@castopod.test` /
-`interop-admin-pw-1` and podcast `@dave` with one published episode (REST API basic auth `interop` / `interop-api-pw`).
-`interop/.tokens.json` holds the API tokens `mastodon_bob`, `peertube_root` and `peertube_carol` (PeerTube OAuth
+`interop-admin-pw-1` and podcast `@dave` with one published episode (REST API basic auth `interop` / `interop-api-pw`);
+Pixelfed user `erin` / `interop-erin-pw` (`interop/seed_pixelfed.php`).
+`interop/.tokens.json` holds the API tokens `mastodon_bob`, `pixelfed_erin` (Mastodon-compatible API), `peertube_root` and `peertube_carol` (PeerTube OAuth
 access tokens last a day; `up` renews them), and the URLs `castopod_podcast` and `castopod_episode`.
-`interop/.env.interop` (secrets) and `interop/.tokens.json` are generated and gitignored. `up` is safe to repeat.
+`interop/.env.interop` (secrets), `interop/.env.pixelfed` (Pixelfed's `APP_KEY`) and `interop/.tokens.json` are generated and gitignored. `up` is safe to repeat.
 
 ## Tests
 
@@ -97,11 +98,16 @@ PieFed failure is a defect to fix, not to baseline. Add the same row to the "Ext
 - Caddy's CA root is published to every app container as `/caddy-data/harness-root.crt`; `trust_ca.sh` adds it to
   `/tmp/harness-ca.crt` and sets `SSL_CERT_FILE`. Node ignores that variable, so PeerTube gets
   `NODE_EXTRA_CA_CERTS=/caddy-data/harness-root.crt` instead. PHP's curl and openssl ignore it too, so Castopod gets
-  `curl.cainfo` and `openssl.cafile` from `interop/castopod-ca.ini`.
+  `curl.cainfo` and `openssl.cafile` from `interop/castopod-ca.ini`; Pixelfed (also PHP) mounts the same file.
+- Pixelfed refuses every peer whose name resolves to a non-global address and has no setting to allow one
+  (`Helpers::isPublicIp`). `interop/pixelfed_harness.sh` patches the running container's copy to accept
+  10.90.0.0/16 before the server starts (harness only). Pixelfed delivers nothing outside `APP_ENV=production`, and
+  runs every federation job on Horizon (`pixelfed-horizon`): with Horizon down, follows stay `requested`. Inbound
+  posts reach a Pixelfed home feed only after the inbox and feed queues run, which can take over 45 s.
 - `piefed-celery-background` serves the celery `background` queue (`probe_media`), as production's
   `pyfedi-celery-background` does. piefed-web and both workers share the `piefed-media` and `piefed-tmp` volumes.
   The runner mounts `tests/fixtures/media` for the media uploads.
-- Logs: `podman-compose -f compose.interop.yaml logs piefed-celery` (also `piefed-celery-background`, `piefed-web`, `mastodon-web`, `mastodon-sidekiq`, `peertube-web`, `castopod-web`, `caddy`). Castopod's application log is
+- Logs: `podman-compose -f compose.interop.yaml logs piefed-celery` (also `piefed-celery-background`, `piefed-web`, `mastodon-web`, `mastodon-sidekiq`, `peertube-web`, `castopod-web`, `pixelfed-web`, `pixelfed-horizon`, `caddy`). Castopod's application log is
   `/var/www/html/writable/logs/log-<date>.log` inside `castopod-web`.
 - The conformance gate runs FediTest's `system2` tests (PieFed and Mastodon, once in each direction) but not
   `system3`. Its tests need three nodes, and a PieFed in two roles on one host would share one database: the

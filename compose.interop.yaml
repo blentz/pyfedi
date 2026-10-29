@@ -20,6 +20,63 @@ x-piefed-volumes: &piefed-volumes
   - piefed-media:/app/app/static/media:U
   - piefed-tmp:/app/app/static/tmp:U
 
+# Pixelfed's web and Horizon containers. Not the shared env_file: Pixelfed reads DB_HOST and REDIS_HOST, which
+# .env.interop sets for Mastodon. .env.pixelfed holds only its APP_KEY.
+x-pixelfed-env: &pixelfed-env
+  APP_ENV: production
+  APP_DEBUG: "false"
+  APP_URL: https://pixelfed.test
+  APP_DOMAIN: pixelfed.test
+  ADMIN_DOMAIN: pixelfed.test
+  SESSION_DOMAIN: pixelfed.test
+  TRUST_PROXIES: "*"   # Caddy terminates TLS
+  SSL_MODE: "off"
+  DB_CONNECTION: mysql
+  DB_HOST: pixelfed-db
+  DB_PORT: "3306"
+  DB_DATABASE: pixelfed
+  DB_USERNAME: pixelfed
+  DB_PASSWORD: pixelfed
+  REDIS_CLIENT: phpredis
+  REDIS_HOST: pixelfed-redis
+  REDIS_PORT: "6379"
+  CACHE_STORE: redis
+  CACHE_DRIVER: redis
+  QUEUE_DRIVER: redis
+  QUEUE_CONNECTION: redis
+  SESSION_DRIVER: redis
+  BROADCAST_DRIVER: log
+  LOG_CHANNEL: stderr
+  MAIL_DRIVER: log
+  MAIL_MAILER: log
+  IMAGE_DRIVER: gd   # the image has gd and imagick, not vips
+  OPEN_REGISTRATION: "false"
+  ENFORCE_EMAIL_VERIFICATION: "false"
+  OAUTH_ENABLED: "true"
+  ACTIVITY_PUB: "true"
+  AP_REMOTE_FOLLOW: "true"
+  AP_INBOX: "true"
+  AP_OUTBOX: "true"
+  AP_SHAREDINBOX: "true"
+  AP_LOGGER_ENABLED: "true"   # logs inbound activities: the spike's capture
+  PF_NETWORK_TIMELINE: "true"
+  PHP_OPCACHE_ENABLE: "1"
+
+x-pixelfed: &pixelfed
+  # v0.15.2, the newest stable release on 2026-10-28 (upstream commit b19607f1)
+  image: ghcr.io/pixelfed/pixelfed:v0.15.2@sha256:f1237913ef0d392a5afef1dab8e3dd01234435ea90314a3a7221a2ea00932132
+  env_file: ./interop/.env.pixelfed
+  environment: *pixelfed-env
+  volumes:
+    - caddy-data:/caddy-data:ro
+    - ./interop/trust_ca.sh:/trust_ca.sh:ro
+    - ./interop/pixelfed_harness.sh:/pixelfed_harness.sh:ro
+    - ./interop/castopod-ca.ini:/usr/local/etc/php/conf.d/zz-harness-ca.ini:ro   # PHP's curl ignores SSL_CERT_FILE
+    - pixelfed-storage:/var/www/html/storage:U
+  networks: [interop]
+  # trust_ca.sh, the isPublicIp patch, then the image's own serversideup entrypoint and command
+  entrypoint: ["/trust_ca.sh", "/pixelfed_harness.sh", "docker-php-serversideup-entrypoint"]
+
 services:
   caddy:
     image: docker.io/library/caddy:2.10@sha256:d8c17a862962def15cde69863a3a463f25a2664942eafd7bdbf050e9c3116b83
@@ -31,7 +88,7 @@ services:
       - caddy-data:/data
     networks:
       interop:
-        aliases: [piefed.test, mastodon.test, peertube.test, castopod.test]
+        aliases: [piefed.test, mastodon.test, peertube.test, castopod.test, pixelfed.test]
 
   piefed-db:
     image: docker.io/library/postgres:17.11@sha256:3cec7eb015ba8adb28139fa5c83b8489cdf0e666e53dfdf20f598ae0cc8739e3
@@ -179,6 +236,42 @@ services:
     command: ["/init"]
     depends_on: [caddy, castopod-db]
 
+  pixelfed-db:
+    image: docker.io/library/mariadb:11.8@sha256:6422478cb8e159f080fb1d8ccf65101e26fe51385787fde7d16c3b165a331f15
+    environment: {MARIADB_ROOT_PASSWORD: pixelfed, MARIADB_DATABASE: pixelfed, MARIADB_USER: pixelfed, MARIADB_PASSWORD: pixelfed}
+    tmpfs: [/var/lib/mysql]
+    networks: [interop]
+
+  pixelfed-redis:
+    image: docker.io/library/redis:8.10@sha256:6e9101032a2126aeeb4b1e862ac77d2fcf26b831ae37e5ff2e69169f82ddd411
+    networks: [interop]
+
+  pixelfed-web:
+    <<: *pixelfed
+    environment:
+      <<: *pixelfed-env
+      AUTORUN_ENABLED: "true"   # the image migrates, links storage and caches config at boot
+      AUTORUN_LARAVEL_MIGRATION: "true"
+      AUTORUN_LARAVEL_MIGRATION_ISOLATION: "false"   # isolation takes a cache lock; one web container needs none
+      AUTORUN_LARAVEL_STORAGE_LINK: "true"
+      AUTORUN_LARAVEL_CONFIG_CACHE: "true"
+    # the image's command: overriding the entrypoint drops it
+    command: ["frankenphp", "run", "--config", "/etc/frankenphp/Caddyfile", "--adapter", "caddyfile"]
+    depends_on: [caddy, pixelfed-db, pixelfed-redis]
+
+  pixelfed-horizon:
+    <<: *pixelfed
+    # Horizon runs every queue: deliveries (`deliver`), inbox processing, media and fan-out. Wait (at most 300s)
+    # until pixelfed-web has migrated and serves nodeinfo (v0.15.2 has no /up route), or Horizon boots against a half-migrated database
+    command:
+      - sh
+      - -c
+      - >-
+        for i in $$(seq 1 300); do
+        php -r 'exit(@file_get_contents("http://pixelfed-web:8080/api/nodeinfo/2.0.json") === false ? 1 : 0);'
+        && exec php artisan horizon; sleep 1; done; echo "pixelfed-web never came up" >&2; exit 1
+    depends_on: [pixelfed-web]
+
   interop-runner:
     <<: *trust
     environment:
@@ -213,6 +306,7 @@ volumes:
   caddy-data:
   piefed-media:
   piefed-tmp:
+  pixelfed-storage:
 
 networks:
   interop:
