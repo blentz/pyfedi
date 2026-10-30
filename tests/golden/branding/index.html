@@ -211,25 +211,12 @@
 </div>
             </div>
             <div class="col-6 col-xl-auto ms-xl-auto ps-1">
-                <div class="d-xl-none">
-  <select class="form-control form-select navigate_on_change" name="filter_by">
-    <option value="/home/hot/local" aria-label="Posts on this instance" >Local</option>
-    <option value="/home/hot/popular" aria-label="Posts from popular communities" >Popular</option>
-    <option value="/home/hot/media" aria-label="Posts from video and podcast channels" >Media</option>
-    <option value="/home/hot/all" aria-label="No filter" >All</option>
-  </select>
-</div>
-<div class="d-none d-xl-block view_filter btn-group mt-1 mb-2">
-  <a href="/home/hot/local" class="btn btn-outline-secondary" rel="nofollow noindex" title="Posts on this instance">
-      Local
-    </a><a href="/home/hot/popular" class="btn btn-outline-secondary" rel="nofollow noindex" title="Posts from popular communities">
-      Popular
-    </a><a href="/home/hot/media" class="btn btn-outline-secondary" rel="nofollow noindex" title="Posts from video and podcast channels">
-      Media
-    </a><a href="/home/hot/all" class="btn btn-outline-secondary" rel="nofollow noindex" title="No filter">
-      All
-    </a>
-</div>
+                <nav class="btn-group filter_nav view_filter mt-1 mb-2" aria-label="Show posts from">
+    <a href="/home/hot/local" class="btn btn-outline-secondary" rel="nofollow noindex" title="Posts on this instance"><span class="fe fe-home" aria-hidden="true"></span><span class="visually-hidden">Local</span></a>
+    <a href="/home/hot/popular" class="btn btn-outline-secondary" rel="nofollow noindex" title="Posts from popular communities"><span class="fe fe-popular" aria-hidden="true"></span><span class="visually-hidden">Popular</span></a>
+    <a href="/home/hot/media" class="btn btn-outline-secondary" rel="nofollow noindex" title="Videos, podcasts and galleries"><span class="fe fe-video" aria-hidden="true"></span><span class="visually-hidden">Media</span></a>
+    <a href="/home/hot/all" class="btn btn-outline-secondary" rel="nofollow noindex" title="No filter"><span class="fe fe-all" aria-hidden="true"></span><span class="visually-hidden">All</span></a>
+</nav>
             </div>
         </div>
         <div class="post_list h-feed hide_flair" >

@@ -4305,3 +4305,21 @@ body.compact-max .post_teaser .post_utilities_bar .voting_buttons_new .upvote_bu
 }
 
 /*# sourceMappingURL=styles.css.map */
+
+/* The icon filter navs (spec 2026-10-30 G4): Top's periods open from a details element, without JavaScript */
+.filter_menu {
+  position: relative;
+}
+.filter_menu > summary {
+  list-style: none;
+}
+.filter_menu > summary::-webkit-details-marker {
+  display: none;
+}
+.filter_menu[open] > .dropdown-menu {
+  display: block;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 1000;
+}

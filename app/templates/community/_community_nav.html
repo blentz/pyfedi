@@ -445,81 +445,27 @@
 {% endif %}
 
 <div class="d-xl-flex justify-content-between d-none my-1">
-    <div class="btn-group me-lg-1">
-        <a href="?sort=hot&layout={{ post_layout }}&content_type={{ content_type }}&flair={{ flair }}" aria-label="{{ _('Sort by hot') }}" class="btn {{ 'btn-primary' if sort == '' or sort == 'hot' else 'btn-outline-secondary' }}" type="button" rel="nofollow noindex">
-            {{ _('Hot') }}
-        </a>
-        <div class="btn-group" role="group">
-            <button id="top_sort_button" type="button" class="btn {{ 'btn-primary' if sort.startswith('top') else 'btn-outline-secondary' }} dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
-                {{ _('Top') }}
-            </button>
-            <ul class="dropdown-menu" aria-labelledby="top_sort_button">
-                <li>
-                    <a class="dropdown-item {{ 'active' if sort == 'top_12h' else '' }}" href="?sort=top_12h&layout={{ post_layout }}&content_type={{ content_type }}&flair={{ flair }}">
-                        {{ _('12 hours') }}
-                    </a>
-                </li>
-                <li>
-                    <a class="dropdown-item {{ 'active' if sort == 'top' else '' }}" href="?sort=top&layout={{ post_layout }}&content_type={{ content_type }}&flair={{ flair }}">
-                        {{ _('Day') }}
-                    </a>
-                </li>
-                <li>
-                    <a class="dropdown-item {{ 'active' if sort == 'top_1w' else '' }}" href="?sort=top_1w&layout={{ post_layout }}&content_type={{ content_type }}&flair={{ flair }}">
-                        {{ _('Week') }}
-                    </a>
-                </li>
-                <li>
-                    <a class="dropdown-item {{ 'active' if sort == 'top_1m' else '' }}" href="?sort=top_1m&layout={{ post_layout }}&content_type={{ content_type }}&flair={{ flair }}">
-                        {{ _('Month') }}
-                    </a>
-                </li>
-                <li>
-                    <a class="dropdown-item {{ 'active' if sort == 'top_1y' else '' }}" href="?sort=top_1y&layout={{ post_layout }}&content_type={{ content_type }}&flair={{ flair }}">
-                        {{ _('Year') }}
-                    </a>
-                </li>
-                <li>
-                    <a class="dropdown-item {{ 'active' if sort == 'top_all' else '' }}" href="?sort=top_all&layout={{ post_layout }}&content_type={{ content_type }}&flair={{ flair }}">
-                        {{ _('All Time') }}
-                    </a>
-                </li>
-            </ul>
-        </div>
-        <a href="?sort=new&layout={{ post_layout }}&content_type={{ content_type }}&flair={{ flair }}" aria-label="{{ _('Sort by new') }}" class="btn {{ 'btn-primary' if sort == 'new' else 'btn-outline-secondary' }}" rel="nofollow noindex">
-            {{ _('New') }}
-        </a>
-        <a href="?sort=old&layout={{ post_layout }}&content_type={{ content_type }}&flair={{ flair }}" aria-label="{{ _('Sort by old') }}" class="btn {{ 'btn-primary' if sort == 'old' else 'btn-outline-secondary' }}" rel="nofollow noindex">
-            {{ _('Old') }}
-        </a>
-        <a href="?sort=active&layout={{ post_layout }}&content_type={{ content_type }}&flair={{ flair }}" aria-label="{{ _('Sort by active') }}" class="btn {{ 'btn-primary' if sort == 'active' else 'btn-outline-secondary' }}" rel="nofollow noindex">
-            {{ _('Active') }}
-        </a>
-        {% if live_button -%}
-        <a href="?sort=live" aria-label="{{ _('Live feed of new posts') }}" class="btn {{ 'btn-primary' if sort == 'live' else 'btn-outline-secondary' }}" rel="nofollow noindex">
-            {{ _('Live') }}
-        </a>
-        {% endif -%}
-    </div>
-    <div class="btn-group me-lg-1">
-        <a href="?content_type=posts&sort={{ sort }}&layout={{ post_layout }}" aria-label="{{ _('Show posts') }}" class="btn {{ 'btn-primary' if content_type == '' or content_type == 'posts' else 'btn-outline-secondary' }}" rel="nofollow noindex">
-            {{ _('Posts') }}
-        </a>
-        {% if sort == '' %}
-            <a href="?content_type=comments&sort=new&layout={{ post_layout }}" aria-label="{{ _('Show comments') }}" class="btn {{ 'btn-primary' if content_type == 'comments' else 'btn-outline-secondary' }}" rel="nofollow noindex">
-                {{ _('Comments') }}
-            </a>
-        {% else %}
-            <a href="?content_type=comments&sort={{ sort }}&layout={{ post_layout }}" aria-label="{{ _('Show comments') }}" class="btn {{ 'btn-primary' if content_type == 'comments' else 'btn-outline-secondary' }}" rel="nofollow noindex">
-                {{ _('Comments') }}
-            </a>
-        {% endif %}
-        {% if has_events %}
-        <a href="?content_type=events&sort={{ sort }}&layout={{ post_layout }}" aria-label="{{ _('Show events') }}" class="btn {{ 'btn-primary' if content_type == 'events' else 'btn-outline-secondary' }}" rel="nofollow noindex">
-            {{ _('Events') }}
-        </a>
-        {% endif %}
-    </div>
+    {#- Icons with hover text and screen-reader names, every choice a link (spec 2026-10-30 G4) #}
+    {%- from '_filter_nav.html' import filter_link, filter_menu, filter_nav %}
+    {%- set keep = '&layout=' ~ post_layout ~ '&content_type=' ~ content_type ~ '&flair=' ~ flair %}
+    <nav class="btn-group filter_nav me-lg-1" aria-label="{{ _('Sort posts') }}">
+        {{ filter_link('?sort=hot' ~ keep, 'popular', _('Hot'), _('Sort by hot'), sort == '' or sort == 'hot') }}
+        {{ filter_menu('star', _('Top'), _('Sort by top'), sort.startswith('top'), [
+            ('?sort=top_12h' ~ keep, _('12 hours'), sort == 'top_12h'), ('?sort=top' ~ keep, _('Day'), sort == 'top'),
+            ('?sort=top_1w' ~ keep, _('Week'), sort == 'top_1w'), ('?sort=top_1m' ~ keep, _('Month'), sort == 'top_1m'),
+            ('?sort=top_1y' ~ keep, _('Year'), sort == 'top_1y'), ('?sort=top_all' ~ keep, _('All Time'), sort == 'top_all')]) }}
+        {{ filter_link('?sort=new' ~ keep, 'plus', _('New'), _('Sort by new'), sort == 'new') }}
+        {{ filter_link('?sort=old' ~ keep, 'calendar', _('Old'), _('Sort by old'), sort == 'old') }}
+        {{ filter_link('?sort=active' ~ keep, 'activity', _('Active'), _('Sort by active'), sort == 'active') }}
+        {%- if live_button %}
+        {{ filter_link('?sort=live', 'refresh-cw', _('Live'), _('Live feed of new posts'), sort == 'live') }}
+        {%- endif %}
+    </nav>
+    {%- set content_choices = [
+        ('?content_type=posts&sort=' ~ sort ~ '&layout=' ~ post_layout, 'discussion', _('Posts'), _('Show posts'), content_type == '' or content_type == 'posts'),
+        ('?content_type=comments&sort=' ~ (sort or 'new') ~ '&layout=' ~ post_layout, 'message-circle', _('Comments'), _('Show comments'), content_type == 'comments')] %}
+    {%- if has_events %}{% set appended = content_choices.append(('?content_type=events&sort=' ~ sort ~ '&layout=' ~ post_layout, 'event', _('Events'), _('Show events'), content_type == 'events')) %}{% endif %}
+    {{ filter_nav(content_choices, _('Show'), 'me-lg-1') }}
     {% if post_layout != '' and post_layout is not none %}
         <div class="btn-group me-lg-1 layout_switcher">
             <a href="?layout=list&sort={{ sort }}&content_type={{ content_type }}&flair={{ flair }}" class="btn {{ 'btn-primary' if post_layout == '' or post_layout == 'list' else 'btn-outline-secondary' }}" rel="nofollow noindex">

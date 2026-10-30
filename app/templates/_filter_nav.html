@@ -1,0 +1,28 @@
+{# One icon button nav (spec 2026-10-30 G4). Whole words no longer fit, so each choice is an icon: a plain link (no
+   JavaScript needed), its description as hover text, its name as text for screen readers in place of the icon (which
+   is hidden from them), and the current choice marked for both. `icon` names a Feather glyph (fe-<icon>). #}
+{% macro filter_link(href, icon, name, description, current) -%}
+<a href="{{ href }}" class="btn {{ 'btn-primary' if current else 'btn-outline-secondary' }}" rel="nofollow noindex" title="{{ description or name }}"{% if current %} aria-current="page"{% endif %}><span class="fe fe-{{ icon }}" aria-hidden="true"></span><span class="visually-hidden">{{ name }}</span></a>
+{%- endmacro %}
+
+{# `choices`: (href, icon, name, description, current) per choice #}
+{% macro filter_nav(choices, label, classes='') -%}
+<nav class="btn-group filter_nav {{ classes }}" aria-label="{{ label }}">
+{%- for href, icon, name, description, current in choices %}
+    {{ filter_link(href, icon, name, description, current) }}
+{%- endfor %}
+</nav>
+{%- endmacro %}
+
+{# A choice that opens a list of links (e.g. Top's periods): a details element, so it opens without JavaScript.
+   `items`: (href, name, current) per link. #}
+{% macro filter_menu(icon, name, description, current, items) -%}
+<details class="btn-group filter_menu">
+    <summary class="btn {{ 'btn-primary' if current else 'btn-outline-secondary' }}" title="{{ description or name }}"><span class="fe fe-{{ icon }}" aria-hidden="true"></span><span class="visually-hidden">{{ name }}</span></summary>
+    <ul class="dropdown-menu">
+    {%- for href, item_name, item_current in items %}
+        <li><a class="dropdown-item{{ ' active' if item_current }}" href="{{ href }}" rel="nofollow noindex"{% if item_current %} aria-current="page"{% endif %}>{{ item_name }}</a></li>
+    {%- endfor %}
+    </ul>
+</details>
+{%- endmacro %}

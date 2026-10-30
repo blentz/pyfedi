@@ -219,7 +219,7 @@ class TestHomeLivePage:
         html = home.client.get('/home/new/all').get_data(as_text=True)
 
         sort_column = re.search(r'<div class="([^"]*)">\s*<div class="d-xl-none">\s*<select[^>]*name="sort_by"', html)
-        filter_column = re.search(r'<div class="([^"]*)">\s*<div class="d-xl-none">\s*<select[^>]*name="filter_by"', html)
+        filter_column = re.search(r'<div class="([^"]*)">\s*<nav class="btn-group filter_nav view_filter', html)
         assert 'col-xl-auto' in sort_column.group(1).split()
         assert 'col-xl-auto' in filter_column.group(1).split()
 
