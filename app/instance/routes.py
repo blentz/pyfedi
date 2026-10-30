@@ -5,7 +5,7 @@ from datetime import timedelta
 from flask import request, url_for, g, abort, flash, redirect, make_response, current_app
 from flask_babel import _
 from flask_login import current_user
-from sqlalchemy import or_, desc, text
+from sqlalchemy import or_, desc, func, select, text
 
 from app import db
 from app.community.forms import InstanceAddPeopleForm
@@ -137,6 +137,8 @@ def instance_people(instance_domain):
     page = request.args.get('page', 1, type=int)
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
     search = request.args.get('q')
+    # Galleries: the Pixelfed accounts known here (spec 2026-10-30 G3); any other value lists everyone
+    filter_by = 'galleries' if request.args.get('filter') == 'galleries' else ''
     instance = None
 
     if instance_domain == 'all':
@@ -161,6 +163,8 @@ def instance_people(instance_domain):
         if instance:
             people = people.filter(User.instance_id == instance.id)
     people = without_local_only_actors(people, User)   # a logged-out visitor sees no local-only account
+    if filter_by:
+        people = people.filter(User.instance_id.in_(select(Instance.id).where(func.lower(Instance.software) == 'pixelfed')))
     if search:
         people = people.search(search, sort=True)
     people = people.order_by(desc(User.post_count + User.post_reply_count + User.reputation))
@@ -173,14 +177,14 @@ def instance_people(instance_domain):
                                     viewer_id=current_user.id if current_user.is_authenticated else None,
                                     host=instance.domain if instance else None) \
         if search and page == 1 else []
-    next_url = url_for('instance.instance_people', page=people.next_num, q=search,
+    next_url = url_for('instance.instance_people', page=people.next_num, q=search, filter=filter_by or None,
                        instance_domain=instance_domain) if people.has_next else None
-    prev_url = url_for('instance.instance_people', page=people.prev_num, q=search,
+    prev_url = url_for('instance.instance_people', page=people.prev_num, q=search, filter=filter_by or None,
                        instance_domain=instance_domain) if people.has_prev and page != 1 else None
 
     return render_template('instance/people.html', people=people, instance=instance, next_url=next_url,
                            prev_url=prev_url, currently_following=following_user_ids(current_user.get_id()),
-                           q=search, discovered=discovered,
+                           q=search, filter=filter_by, discovered=discovered,
                            title=_('People from %(instance)s', instance=instance.domain) if instance else _('People'),
                            )
 
