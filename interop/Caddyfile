@@ -22,3 +22,13 @@ castopod.test {
 pixelfed.test {
 	reverse_proxy pixelfed-web:8080
 }
+
+loops.test {
+	reverse_proxy loops-web:8080
+}
+
+# Loops' public media URLs (AWS_URL): the versitygw posix tree, read-only
+s3.test {
+	root * /srv/s3/root
+	file_server
+}

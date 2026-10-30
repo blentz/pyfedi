@@ -199,6 +199,7 @@ scratch_*
 # Interop harness secrets and tokens
 interop/.env.interop
 interop/.env.pixelfed
+interop/.env.loops
 interop/.tokens.json
 interop/conformance/results/
 !tests/fixtures/media/

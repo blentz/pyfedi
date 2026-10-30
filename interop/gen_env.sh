@@ -42,3 +42,7 @@ fi
 if [ ! -f .env.pixelfed ]; then
     printf 'APP_KEY=base64:%s\n' "$(openssl rand -base64 32)" > .env.pixelfed
 fi
+# Loops joined the harness later: its own env file (Laravel APP_KEY), for Pixelfed's reason
+if [ ! -f .env.loops ]; then
+    printf 'APP_KEY=base64:%s\n' "$(openssl rand -base64 32)" > .env.loops
+fi
