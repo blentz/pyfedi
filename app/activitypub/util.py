@@ -44,7 +44,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
-    UserFollower, PostBoost, QuoteAuthorization, Relay, storable_alt_text, parse_ap_timestamp, parse_ap_published, image_url_from, markdown_source, \
+    UserFollower, PostBoost, QuoteAuthorization, Relay, storable_alt_text, parse_ap_timestamp, parse_ap_published, image_url_from, video_preview, markdown_source, \
     _as_text, _as_int, _as_float, _as_dict, _as_url, property_value_fields, public_key_pem, \
     more_info_link, is_more_info_link, more_info_url_from, \
     language_from_ap, mark_audio_attachment, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError, post_file, GALLERY_BLOCKED_WEIGHT
@@ -5403,8 +5403,16 @@ def update_post_from_activity(post: Post, request_json: dict):
                         image.alt_text = storable_alt_text(request_json['object']['name'])
                 else:
                     image_url = image_url_from(request_json['object'].get('image'))  # D1352
+                    preview = video_preview(request_json['object']) if is_video_url(new_url) else None
                     if image_url:
                         image = File(source_url=image_url)
+                    elif preview:   # Loops' thumbnail of the new video, as Post.new takes it (I1, I2)
+                        preview_url, preview_name, width, height = preview
+                        attachment_list = request_json['object'].get('attachment')
+                        name = _as_dict(attachment_list[0]).get('name') if isinstance(attachment_list, list) and \
+                            attachment_list else None
+                        image = File(source_url=preview_url, alt_text=storable_alt_text(name or preview_name),
+                                     width=width, height=height)
                     elif object_type not in ('Audio', 'Document'):  # C4 R2: that would fetch the media file itself
                         # Let's see if we can do better than the source instance did!
                         opengraph = opengraph_parse(thumbnail_url)
