@@ -322,6 +322,10 @@ def _make_community_results_datalist_html(community_name):
     return f'<option value="{escape(community_name)}"></option>'
 
 
+# The content types that list posts (any other lists comments); galleries are image posts (spec 2026-10-30 G1).
+POST_CONTENT_TYPES = ('posts', 'events', 'galleries')
+
+
 def community_post_query(community: Community, content_type: str, flair: str = '', tag: str = '',
                          from_instance=None):
     """The posts `community` shows the current viewer: listable, and filtered by that viewer's
@@ -341,6 +345,8 @@ def community_post_query(community: Community, content_type: str, flair: str = '
 
     if content_type == 'events':
         posts = posts.filter(Post.type == POST_TYPE_EVENT)
+    elif content_type == 'galleries':
+        posts = posts.filter(Post.type == POST_TYPE_IMAGE)
 
     # filter out nsfw and nsfl if desired
     if current_user.is_anonymous:
@@ -536,7 +542,7 @@ def show_community(community: Community, from_instance=None):
     sticky_posts = None
     posts = None
     comments = None
-    if content_type == 'posts' or content_type == 'events':
+    if content_type in POST_CONTENT_TYPES:
         posts, content_filters = community_post_query(community, content_type, flair, tag, from_instance=from_instance)
         user = None if current_user.is_anonymous else current_user
 
@@ -758,7 +764,7 @@ def show_community(community: Community, from_instance=None):
     og_image = community.image.source_url if community.image_id else None
 
     page_actor = view_actor or community.link()
-    if content_type == 'posts' or content_type == 'events':
+    if content_type in POST_CONTENT_TYPES:
         next_url = url_for('activitypub.community_profile',
                            actor=page_actor,
                            page=posts.next_num, sort='new' if live else sort, layout=post_layout,
@@ -830,6 +836,7 @@ def show_community(community: Community, from_instance=None):
                                          view_actor=view_actor,
                                          view_joined=from_instance is not None and current_user.is_authenticated
                                          and from_instance.id in joined_server_views(current_user.id),
+                                         show_galleries=is_local_microblogs(community),
                                          microblog_servers=busiest_microblog_servers(community.id)
                                          if is_local_microblogs(community) and not view_actor else None,
                                          live_sse_feed=f'instance:{from_instance.id}' if from_instance is not None else f'community:{community.id}',

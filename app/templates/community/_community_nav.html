@@ -190,6 +190,11 @@
                                             {{ _('Events') }}
                                         </option>
                                     {% endif -%}
+                                    {% if show_galleries -%}
+                                        <option value="galleries" {{ 'selected' if content_type == 'galleries' }}>
+                                            {{ _('Galleries') }}
+                                        </option>
+                                    {% endif -%}
                                 </select>
                             </div>
                             <button type="submit" class="btn btn-primary">
@@ -465,6 +470,7 @@
         ('?content_type=posts&sort=' ~ sort ~ '&layout=' ~ post_layout, 'discussion', _('Posts'), _('Show posts'), content_type == '' or content_type == 'posts'),
         ('?content_type=comments&sort=' ~ (sort or 'new') ~ '&layout=' ~ post_layout, 'message-circle', _('Comments'), _('Show comments'), content_type == 'comments')] %}
     {%- if has_events %}{% set appended = content_choices.append(('?content_type=events&sort=' ~ sort ~ '&layout=' ~ post_layout, 'event', _('Events'), _('Show events'), content_type == 'events')) %}{% endif %}
+    {%- if show_galleries %}{% set appended = content_choices.append(('?content_type=galleries&sort=' ~ sort ~ '&layout=' ~ post_layout, 'image', _('Galleries'), _('Show image posts'), content_type == 'galleries')) %}{% endif %}
     {{ filter_nav(content_choices, _('Show'), 'me-lg-1') }}
     {% if post_layout != '' and post_layout is not none %}
         <div class="btn-group me-lg-1 layout_switcher">
