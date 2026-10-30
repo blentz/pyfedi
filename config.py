@@ -142,6 +142,8 @@ class Config(object):
     IPINFO_TOKEN = os.environ.get('IPINFO_TOKEN') or ''
 
     NUM_CPU = int(os.environ.get('NUM_CPU') or 0)
+    # Loops drops a first Follow (spec 2026-10-30 §3.4): seconds until it is sent again; the interop harness waits less
+    LOOPS_FOLLOW_RESEND_SECONDS = int(os.environ.get('LOOPS_FOLLOW_RESEND_SECONDS') or 300)
 
     DB_POOL_SIZE = os.environ.get('DB_POOL_SIZE') or 10
     DB_MAX_OVERFLOW = os.environ.get('DB_MAX_OVERFLOW') or 30

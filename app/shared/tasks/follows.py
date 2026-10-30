@@ -7,7 +7,7 @@ from app.utils import user_banned_from_community, community_membership, gibberis
     feed_membership, menu_subscribed_feeds, patch_db_session, \
     community_link_markup
 
-from flask import flash
+from flask import current_app, flash
 from markupsafe import Markup
 from flask_babel import _
 
@@ -241,15 +241,13 @@ def follow_user(to_follow_id, user_id, send_async=True):
             if to_follow.instance.software == 'loops':
                 # Loops drops the first activity of an actor it has not stored yet (spec 2026-10-30 §3.4, U1)
                 resend_pending_follow.apply_async(args=(to_follow_id, user_id, str(join_request.uuid)),
-                                                  countdown=LOOPS_FOLLOW_RESEND_S)
+                                                  countdown=current_app.config['LOOPS_FOLLOW_RESEND_SECONDS'])
     except Exception:
         session.rollback()
         raise
     finally:
         session.close()
 
-
-LOOPS_FOLLOW_RESEND_S = 300
 
 
 def _send_user_follow(user, to_follow, request_uuid):
