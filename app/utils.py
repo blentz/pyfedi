@@ -5917,10 +5917,18 @@ JOINED_SERVER_SQL = """(EXISTS (SELECT 1 FROM server_view_member svm
                                 AND c.instance_id = 1 AND c.user_id = 1 AND c.name = 'microblogs' AND """ + listable_sql('p') + ')'
 
 
+# The home Media tab's galleries (spec 2026-10-30 G2): image posts in a community shown in All or in the local
+# microblogs community (is_local_microblogs()'s test), where relayed Pixelfed posts land. Exempt from MICROBLOG_GATE,
+# since a Pixelfed post is a titleless Note; the gate keeps holding for every other post and tab.
+GALLERY_SQL = (f"p.type = {POST_TYPE_IMAGE} AND (c.show_all is true OR (c.kind = '{COMMUNITY_KIND_MICROBLOGS}' "
+               f"AND c.ap_id IS NULL)) AND {listable_sql('p')}")
+
+
 def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, hashtag: str = '', include_following=False, community_sql: str = None, newer_than=None,
-                         show_local_only: bool | None = None, public_only: bool = False) -> List[int]:
+                         show_local_only: bool | None = None, public_only: bool = False, include_galleries=False) -> List[int]:
     """`public_only` (the RSS views): only publicly listable content, whoever reads it. The follow sources keep only
-    public posts and no private community is listed, members included, since a feed's ?token= is a bearer secret."""
+    public posts and no private community is listed, members included, since a feed's ?token= is a bearer secret.
+    `include_galleries` (the Media tab) adds GALLERY_SQL's image posts."""
     joined_servers = include_following and current_user.is_authenticated and joined_server_views(current_user.id)
     if not community_sql and (community_ids is None or len(community_ids) == 0):
         if not joined_servers:
@@ -5972,6 +5980,10 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
     if joined_servers:
         sources.append(JOINED_SERVER_SQL)
         params['local_user_id'] = current_user.id
+    if include_galleries:
+        # low quality is left out as the Media tab's community_sql leaves it out (app/main/routes.py home_feed_source)
+        hide_low_quality = current_user.is_anonymous or current_user.hide_low_quality
+        sources.append(f'({GALLERY_SQL}{" AND c.low_quality is false" if hide_low_quality else ""})')
 
     post_id_where =["(" + " OR ".join(sources) + ")", 'c.banned is false']
     if current_user.is_authenticated and current_user.hide_low_quality and community_ids[0] == -1:

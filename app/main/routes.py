@@ -128,7 +128,7 @@ def home_live_posts(view_filter):
 
     community_ids, community_sql = home_feed_source(view_filter)
     post_ids = get_deduped_post_ids('', community_ids, 'new', include_following=view_filter == 'subscribed',
-                                    community_sql=community_sql,
+                                    community_sql=community_sql, include_galleries=view_filter == 'media',
                                     newer_than=(after, utcnow() - LIVE_WINDOW))[:LIVE_LIMIT]
     if not post_ids:
         return '', 204
@@ -221,7 +221,7 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag, live=False
     query_sort = 'new' if live else sort  # Live is the New order, kept current by live_feed.js
     post_ids = get_deduped_post_ids('' if live else result_id, community_ids, query_sort, tag,
                                     include_following=view_filter == 'subscribed' and current_user.is_authenticated,
-                                    community_sql=community_sql)
+                                    community_sql=community_sql, include_galleries=view_filter == 'media')
     has_next_page = len(post_ids) > (page + 1) * page_length  # page is 0-based; `page + 1 * page_length` was page + page_length (D781)
     post_ids = paginate_post_ids(post_ids, page, page_length=page_length)
     posts = post_ids_to_models(post_ids, query_sort)

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import db
-from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_STATUS_REVIEWING
+from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_STATUS_REVIEWING, POST_TYPE_IMAGE
 from app.models import Instance, Language, Post, Site
 from app.utils import utcnow
 from tests.factories import (make_community, make_community_member, make_instance, make_instance_block,
@@ -790,3 +790,30 @@ class TestHomeLiveRules:
 
         user = live.viewer if logged_in else AnonymousUserMixin()
         assert home_live_available(user, view_filter, page, tag) is expected
+
+
+class TestGalleryLiveKeys:
+    """An image post wakes the Media tab where that tab lists it (spec 2026-10-30 G2)."""
+
+    def keys(self, app, post, community):
+        from app.community.live import live_feed_keys
+
+        with app.test_request_context():
+            return live_feed_keys(post, community, False)
+
+    def test_an_image_post_in_microblogs(self, app, live):
+        assert 'media' in self.keys(app, live.toot(type=POST_TYPE_IMAGE), live.microblogs)
+
+    def test_an_image_post_in_a_community_shown_in_all(self, app, live):
+        general = make_community('general')
+        db.session.commit()
+        post = make_post(general, live.author, 'https://mastodon.example/statuses/g')
+        post.type = POST_TYPE_IMAGE
+        db.session.commit()
+
+        assert 'media' in self.keys(app, post, general)
+        general.show_all = False
+        assert 'media' not in self.keys(app, post, general)
+
+    def test_a_text_toot_does_not(self, app, live):
+        assert 'media' not in self.keys(app, live.toot(), live.microblogs)
