@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import bisect
+import copy
 import gzip
 import hashlib
 from html import escape as html_escape
@@ -2252,13 +2253,22 @@ def boost_cache_entries(rows) -> list:
     ]
 
 
+def _text_with_whole_links(tag) -> str:
+    """`tag`'s text, words apart, each link's text in one piece: Mastodon and Loops mark a hashtag up as
+    `#<span>tag</span>` and a mention as `@<span>bob</span>`, which a separator would split into `# tag` (I3)."""
+    tag = copy.copy(tag)   # the caller still reads the original's links
+    for a in tag.find_all('a'):
+        a.replace_with(a.get_text())
+    return tag.get_text(separator=" ")
+
+
 def microblog_content_to_title(html: str) -> Tuple[str, str]:
     title = ''
     link = ''
     if '<h1>' in html.lower():
         soup = BeautifulSoup(html, 'html.parser')
         for tag in soup.find_all('h1'):
-            text = tag.get_text(separator=" ")
+            text = _text_with_whole_links(tag)
             if len(text) >= 5:
                 title = text
                 a = tag.find('a', href=True)
@@ -2268,7 +2278,7 @@ def microblog_content_to_title(html: str) -> Tuple[str, str]:
     elif '<p>' in html:
         soup = BeautifulSoup(html, 'html.parser')
         for tag in soup.find_all('p'):
-            title = tag.get_text(separator=" ")
+            title = _text_with_whole_links(tag)
             if title and title.strip() != '' and len(title.strip()) >= 5:
                 break
     else:
@@ -2289,7 +2299,6 @@ def microblog_content_to_title(html: str) -> Tuple[str, str]:
     # there's no recognised punctuation
     if end_index == float('inf'):
         if len(title) >= 10:
-            title = title.replace(' @ ', '').replace(' # ', '')
             title = shorten_string(title, 197)
         else:
             title = '(content in post body)'

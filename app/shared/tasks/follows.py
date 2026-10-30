@@ -2,12 +2,12 @@ from app import cache, celery, db
 from app.constants import *
 from app.activitypub.signature import default_context, post_request, send_post_request
 from app.federation_urls import activity_id
-from app.models import Community, CommunityJoinRequest, User, Feed, FeedJoinRequest, UserFollowRequest
+from app.models import Community, CommunityJoinRequest, User, Feed, FeedJoinRequest, UserFollower, UserFollowRequest
 from app.utils import user_banned_from_community, community_membership, gibberish, joined_communities, instance_banned, get_task_session, \
     feed_membership, menu_subscribed_feeds, patch_db_session, \
     community_link_markup
 
-from flask import flash
+from flask import current_app, flash
 from markupsafe import Markup
 from flask_babel import _
 
@@ -237,19 +237,46 @@ def follow_user(to_follow_id, user_id, send_async=True):
             session.add(join_request)
             session.commit()
 
-            to_follow_ap_id = activity_id('follow_user', user, join_request.uuid)
-            follow = {
-                'id': to_follow_ap_id,
-                'type': 'Follow',
-                'actor': user.public_url(),
-                'object': to_follow.public_url(),
-                '@context': default_context(),
-                'to': [to_follow.public_url()],
-            }
-            send_post_request(to_follow.ap_inbox_url, follow, user.private_key, user.public_url() + '#main-key')
+            _send_user_follow(user, to_follow, join_request.uuid)
+            if to_follow.instance.software == 'loops':
+                # Loops drops the first activity of an actor it has not stored yet (spec 2026-10-30 §3.4, U1)
+                resend_pending_follow.apply_async(args=(to_follow_id, user_id, str(join_request.uuid)),
+                                                  countdown=current_app.config['LOOPS_FOLLOW_RESEND_SECONDS'])
     except Exception:
         session.rollback()
         raise
+    finally:
+        session.close()
+
+
+
+def _send_user_follow(user, to_follow, request_uuid):
+    follow = {
+        'id': activity_id('follow_user', user, request_uuid),
+        'type': 'Follow',
+        'actor': user.public_url(),
+        'object': to_follow.public_url(),
+        '@context': default_context(),
+        'to': [to_follow.public_url()],
+    }
+    send_post_request(to_follow.ap_inbox_url, follow, user.private_key, user.public_url() + '#main-key')
+
+
+@celery.task
+def resend_pending_follow(to_follow_id, user_id, request_uuid):
+    """The same Follow once more, when it is still unanswered and still the user's request: Loops dropped it if it
+    was the first activity Loops saw from this user (U1)."""
+    session = get_task_session()
+    try:
+        to_follow: User = session.get(User, to_follow_id)
+        user: User = session.get(User, user_id)
+        request = session.query(UserFollowRequest).filter_by(user_id=user_id, follow_id=to_follow_id).first()
+        pending = session.query(UserFollower).filter_by(local_user_id=user_id, remote_user_id=to_follow_id,
+                                                        is_inward=False).first()
+        if request is None or str(request.uuid) != request_uuid or pending is None or \
+                pending.is_accepted is not None or not to_follow.instance.online():
+            return
+        _send_user_follow(user, to_follow, request.uuid)
     finally:
         session.close()
 

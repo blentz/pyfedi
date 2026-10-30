@@ -226,6 +226,30 @@ def image_url_from(value, prefer_last: bool = False):
     return None
 
 
+def video_preview(obj: dict):
+    """The thumbnail a video Note names in `preview`, as (url, alt text, width, height), or None (I1, I2).
+
+    Loops sends `{type: Image, name, width, height, url: {href, mediaType}}`; `url` may also be a string or a list
+    of such links, and `preview` a list of objects. A link whose mediaType is not an image is passed over: that
+    would be the video file itself, which is never fetched on the inbox path (C4 ruling R2)."""
+    preview = obj.get('preview')
+    if isinstance(preview, list):
+        preview = next((p for p in preview if isinstance(p, dict) and p.get('type') == 'Image'), None)
+    if not isinstance(preview, dict) or preview.get('type') != 'Image':
+        return None
+    link = preview.get('url')
+    if isinstance(link, list):
+        link = link[0] if link else None
+    if isinstance(link, dict):
+        if not str(link.get('mediaType') or 'image/').startswith('image/'):
+            return None
+        link = link.get('href')
+    url = _as_url(link, 1024)
+    if url is None:
+        return None
+    return url, _as_text(preview.get('name')), _as_int(preview.get('width'), None), _as_int(preview.get('height'), None)
+
+
 def _as_int(value, default):
     """An integer out of a peer's document, or `default`.
 
@@ -3495,6 +3519,14 @@ class Post(db.Model):
             image_url = image_url_from(request_json['object'].get('image'))
             if image_url and post.image is None:
                 image = File(source_url=image_url)
+                db.session.add(image)
+                post.image = image
+            elif post.image is None and post.type == constants.POST_TYPE_VIDEO and \
+                    (preview := video_preview(request_json['object'])):
+                # Loops' thumbnail, with the alt text of the video attachment (I1, I2)
+                preview_url, preview_name, width, height = preview
+                image = File(source_url=preview_url, alt_text=storable_alt_text(alt_text or preview_name),
+                             width=width, height=height)
                 db.session.add(image)
                 post.image = image
             if post.image is None and object_type not in ('Audio', 'Document'):  # This is a link post but the source instance has not provided a thumbnail image (C4 ruling R2: never fetch a media file on the inbox path)
