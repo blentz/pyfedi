@@ -183,6 +183,11 @@
                                         <option value="following" {{ 'selected' if microblog_mode == '' or microblog_mode == 'following' }}>
                                             {{ _('Following') }}
                                         </option>
+                                    {% endif -%}
+                                    {% if show_galleries -%}
+                                        <option value="galleries" {{ 'selected' if content_type == 'galleries' }}>
+                                            {{ _('Galleries') }}
+                                        </option>
                                         <option value="firehose" {{ 'selected' if microblog_mode == 'firehose' }}>
                                             {{ _('Everyone') }}
                                         </option>
@@ -479,13 +484,13 @@
         ('?content_type=posts&sort=' ~ sort ~ '&layout=' ~ post_layout, 'discussion', _('Posts'), _('Show posts'), content_type == '' or content_type == 'posts'),
         ('?content_type=comments&sort=' ~ (sort or 'new') ~ '&layout=' ~ post_layout, 'message-circle', _('Comments'), _('Show comments'), content_type == 'comments')] %}
     {%- if has_events %}{% set appended = content_choices.append(('?content_type=events&sort=' ~ sort ~ '&layout=' ~ post_layout, 'event', _('Events'), _('Show events'), content_type == 'events')) %}{% endif %}
+    {%- if show_galleries %}{% set appended = content_choices.append(('?content_type=galleries&sort=' ~ sort ~ '&layout=' ~ post_layout, 'image', _('Galleries'), _('Show image posts'), content_type == 'galleries')) %}{% endif %}
     {%- if community and community.name == 'microblogs' %}
     {{ filter_nav([
         ('?microblog_mode=following&sort=' ~ sort ~ '&layout=' ~ post_layout, 'subscription', _('Following'), _('Show posts from people you are following'), microblog_mode == '' or microblog_mode == 'following'),
-        ('?microblog_mode=firehose&sort=' ~ sort ~ '&layout=' ~ post_layout, 'all', _('Everyone'), _('Show posts from everyone'), microblog_mode == 'firehose')], _('Show'), 'me-lg-1') }}
-    {%- else %}
-    {{ filter_nav(content_choices, _('Show'), 'me-lg-1') }}
+        ('?microblog_mode=firehose&sort=' ~ sort ~ '&layout=' ~ post_layout, 'all', _('Everyone'), _('Show posts from everyone'), microblog_mode == 'firehose')], _('Whose posts'), 'me-lg-1') }}
     {%- endif %}
+    {{ filter_nav(content_choices, _('Show'), 'me-lg-1') }}
     {% if post_layout != '' and post_layout is not none %}
         <div class="btn-group me-lg-1 layout_switcher">
             <a href="?layout=list&sort={{ sort }}&content_type={{ content_type }}&flair={{ flair }}&microblog_mode={{ microblog_mode }}" class="btn {{ 'btn-primary' if post_layout == '' or post_layout == 'list' else 'btn-outline-secondary' }}" rel="nofollow noindex">
