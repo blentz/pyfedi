@@ -10,6 +10,9 @@ ADDRESS_SPACE_BYTES = 512 * 1024 * 1024
 # ...) could follow `file:` references to other local files. Only the demuxers of accepted media may run.
 _INPUT_LIMITS = ['-protocol_whitelist', 'file',
                  '-format_whitelist', 'mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,mp3,ogg']
+# One decoder thread: ffmpeg's default is one per core, and on a many-core host their buffers outgrow
+# ADDRESS_SPACE_BYTES (a portrait 1080p frame failed with get_buffer() on 32 cores). One frame needs no more.
+_DECODE_LIMITS = ['-threads', '1']
 
 
 class MediaToolError(Exception):
@@ -53,12 +56,12 @@ def _require_image(out_path: str) -> None:
 
 
 def extract_frame(path: str, at_s: float, out_path: str) -> None:
-    _run(['ffmpeg', '-nostdin', '-v', 'error', *_INPUT_LIMITS, '-ss', f'{at_s:.3f}', '-i', 'file:' + path,
+    _run(['ffmpeg', '-nostdin', '-v', 'error', *_INPUT_LIMITS, *_DECODE_LIMITS, '-ss', f'{at_s:.3f}', '-i', 'file:' + path,
           '-frames:v', '1', '-y', 'file:' + out_path], (path, out_path))
     _require_image(out_path)
 
 
 def extract_cover(path: str, out_path: str) -> None:
-    _run(['ffmpeg', '-nostdin', '-v', 'error', *_INPUT_LIMITS, '-i', 'file:' + path, '-an', '-map', '0:v:0',
+    _run(['ffmpeg', '-nostdin', '-v', 'error', *_INPUT_LIMITS, *_DECODE_LIMITS, '-i', 'file:' + path, '-an', '-map', '0:v:0',
           '-frames:v', '1', '-y', 'file:' + out_path], (path, out_path))
     _require_image(out_path)
