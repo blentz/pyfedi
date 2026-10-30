@@ -23,9 +23,9 @@ Loops (joinloops, the federated short-video app by the Pixelfed author) carried 
 - L2. Outbound = users' own uploaded mp4 video posts, sent in the shape Loops accepts, the title folded into the
   content. Communities are out of scope on Loops (it follows `Person` actors only). Every Loops server's admin must
   allow our videos (`allow_video_posts`, off by default even between Loops servers); recorded, not ours to change.
-- L4. The relay is verified with a harness stand-in that speaks the published relay JSON (§2).
 - L3. Loops bug U1 (§2): PieFed re-sends a user's Follow of a Loops account once if it is still pending after
   5 minutes; the upstream issue is drafted for the owner to file.
+- L4. The relay is verified with a harness stand-in that speaks the published relay JSON (§2).
 
 Inherited: verification against local containers only, never public servers; 100% line and branch coverage on every
 line this work adds or changes.
