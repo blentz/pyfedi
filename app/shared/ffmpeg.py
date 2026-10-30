@@ -1,19 +1,19 @@
-"""ffprobe and ffmpeg in a sandbox (spec §5.2, A13.3): local files only, 60 s, 512 MiB of address space."""
+"""ffprobe and ffmpeg in a sandbox (spec §5.2, A13.3): local files only, 60 s, 1 GiB of address space."""
 import json
 import os
 import resource
 import subprocess
 
 PROBE_TIMEOUT_S = 60
-ADDRESS_SPACE_BYTES = 512 * 1024 * 1024
+ADDRESS_SPACE_BYTES = 1024 * 1024 * 1024   # 512 MiB until 2026-10-30: too tight for ffmpeg 7 on a phone-size video
 # Protocols are not enough: ffmpeg probes content to pick a demuxer, so a playlist demuxer (hls, concat,
 # ...) could follow `file:` references to other local files. Only the demuxers of accepted media may run.
 _INPUT_LIMITS = ['-protocol_whitelist', 'file',
                  '-format_whitelist', 'mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,mp3,ogg']
 # One thread for the decoder (before -i) and one for the JPEG encoder (after it): ffmpeg's default is one per core
-# for each, and on a many-core host their buffers outgrow ADDRESS_SPACE_BYTES (on 32 cores a portrait 1080p frame
-# failed with get_buffer() in the decoder, then 'Error while opening encoder' about 4 times in 10). One frame needs
-# no more.
+# for each, and on a many-core host their buffers can outgrow ADDRESS_SPACE_BYTES (under 512 MiB, on 32 cores, a
+# portrait 1080p frame failed with get_buffer() in the decoder, then 'Error while opening encoder' about 4 times in
+# 10). One frame needs no more.
 _DECODE_LIMITS = ['-threads', '1']
 _ENCODE_LIMITS = ['-threads', '1']
 

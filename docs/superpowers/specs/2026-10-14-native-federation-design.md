@@ -276,7 +276,7 @@ Tombstone path unchanged.
 ### 5.2 `probe_media(post_id)` (celery)
 
 1. Run `ffprobe -v error -print_format json -show_format -show_streams -protocol_whitelist file <path>`
-   with a 60 s timeout, under `prlimit` with a 512 MiB address-space cap, and no network protocols.
+   with a 60 s timeout, under `prlimit` with a 512 MiB address-space cap (1 GiB since 2026-10-30, owner ruling: 512 MiB failed phone-size videos under ffmpeg 7), and no network protocols.
 2. Validate the result. Video needs a `codec_name` in {h264, vp9, av1}, a positive duration and positive
    dimensions. Audio needs a `codec_name` in {aac, mp3, opus, vorbis} and a positive duration. Any failure,
    timeout, non-zero exit or unparseable JSON sets `status='failed'` with a reason.
@@ -554,7 +554,7 @@ Each step gets its own implementation plan and its own commits, and each ends wi
      - Werkzeug refuses a larger `Content-Length` with 413 before reading anything, and stops a lying or chunked body at the cap.
      - After parsing, the file's exact size is checked against the limit.
      - The global `MAX_CONTENT_LENGTH` (env, default 100 MB) is unchanged; §2's "no `MAX_CONTENT_LENGTH`" was wrong.
-  3. **Sandbox mechanism.** A `preexec_fn` calls `resource.setrlimit(RLIMIT_AS, 512 MiB)`. No `prlimit` binary is used, which avoids an extra dependency with the same effect.
+  3. **Sandbox mechanism.** A `preexec_fn` calls `resource.setrlimit(RLIMIT_AS, 512 MiB)` (1 GiB since 2026-10-30). No `prlimit` binary is used, which avoids an extra dependency with the same effect.
   4. **File storage.**
      - The media file is stored at `Post.url`, under `app/static/media/posts/xx/yy/<gibberish15>.<ext>`, with no `File` row.
      - The thumbnail is an ordinary `File` that is also `post.image`, so listings show it and the existing image delete paths remove it. `extensions.media.thumbnail_file_id` equals `post.image_id`.
