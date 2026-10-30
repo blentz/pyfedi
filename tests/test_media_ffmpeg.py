@@ -65,10 +65,10 @@ def test_ffmpeg_commands_are_sandboxed(monkeypatch, tmp_path):
     frame, cover = seen
     assert frame[0] == ['ffmpeg', '-nostdin', '-v', 'error', '-protocol_whitelist', 'file',
                         '-format_whitelist', FORMATS, '-threads', '1', '-ss', '0.500', '-i', 'file:/x/y.mp4',
-                        '-frames:v', '1', '-y', 'file:' + str(tmp_path / 'f.jpg')]
+                        '-threads', '1', '-frames:v', '1', '-y', 'file:' + str(tmp_path / 'f.jpg')]
     assert cover[0] == ['ffmpeg', '-nostdin', '-v', 'error', '-protocol_whitelist', 'file',
-                        '-format_whitelist', FORMATS, '-threads', '1', '-i', 'file:/x/y.mp3', '-an', '-map', '0:v:0',
-                        '-frames:v', '1', '-y', 'file:' + str(tmp_path / 'c.jpg')]
+                        '-format_whitelist', FORMATS, '-threads', '1', '-i', 'file:/x/y.mp3', '-threads', '1',
+                        '-an', '-map', '0:v:0', '-frames:v', '1', '-y', 'file:' + str(tmp_path / 'c.jpg')]
     assert all(kw['stdin'] is subprocess.DEVNULL and kw['timeout'] == 60 for _, kw in seen)
     assert all(kw['env'] == {'PATH': os.environ.get('PATH', '/usr/bin:/bin')} for _, kw in seen)
 
@@ -162,14 +162,17 @@ def test_frame_and_cover_are_written(tmp_path):
 
 
 def test_frame_of_a_full_size_video_fits_the_address_space_limit(tmp_path):
-    """A phone-size video decodes inside the 512 MiB limit: ffmpeg's default of one decoder thread per core ran out
-    of address space on a 32-core host (get_buffer() failed), so every portrait upload failed its probe."""
+    """A phone-size video decodes and encodes inside the 512 MiB limit. ffmpeg starts one thread per core for the
+    decoder and again for the JPEG encoder; on a 32-core host the decoder's ran out of address space
+    (get_buffer() failed) and, with only those limited, the encoder's failed to open about 4 extractions in 10. Ten
+    extractions here, so an unlimited side cannot pass by luck."""
     clip = tmp_path / 'portrait.mp4'
     subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=1080x1920:rate=30:duration=1',
                     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', str(clip)], check=True, stdin=subprocess.DEVNULL)
-    frame = tmp_path / 'f.jpg'
-    extract_frame(str(clip), 0.5, str(frame))
-    assert frame.read_bytes()[:2] == b'\xff\xd8'
+    for attempt in range(10):
+        frame = tmp_path / f'f{attempt}.jpg'
+        extract_frame(str(clip), 0.5, str(frame))
+        assert frame.read_bytes()[:2] == b'\xff\xd8'
 
 
 def test_cover_of_audio_without_picture_raises(tmp_path):
