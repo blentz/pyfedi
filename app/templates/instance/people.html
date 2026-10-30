@@ -27,7 +27,16 @@
         {% endif -%}
 
         {% if people %}
-            <form><input type="search" placeholder="{{ _('Search') }}" name="q" class="form-control" autofocus value="{{ q if q else '' }}"></form>
+            {%- from '_filter_nav.html' import filter_nav %}
+            {%- set domain = request.view_args.instance_domain %}
+            <div class="d-flex gap-2">
+                <form class="flex-grow-1"><input type="search" placeholder="{{ _('Search') }}" name="q" class="form-control" autofocus value="{{ q if q else '' }}">
+                    {%- if filter %}<input type="hidden" name="filter" value="{{ filter }}">{% endif %}</form>
+                {{ filter_nav([
+                    (url_for('instance.instance_people', instance_domain=domain, q=q or None), 'user', _('Everyone'), _('Everyone'), not filter),
+                    (url_for('instance.instance_people', instance_domain=domain, filter='galleries', q=q or None), 'image', _('Galleries'), _('Pixelfed people'), filter == 'galleries')],
+                    _('Show people')) }}
+            </div>
             <div class="row row-cols-1 row-cols-sm-2 row-cols-md-3 row-cols-lg-4 g-3 mt-2">
                 {% for person in people.items %}
                     <div class="col">
