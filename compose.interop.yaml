@@ -77,6 +77,66 @@ x-pixelfed: &pixelfed
   # trust_ca.sh, the isPublicIp patch, then the image's own serversideup entrypoint and command
   entrypoint: ["/trust_ca.sh", "/pixelfed_harness.sh", "docker-php-serversideup-entrypoint"]
 
+# Loops' web and Horizon containers. Not the shared env_file, for Pixelfed's reason; .env.loops holds only its APP_KEY.
+# Videos go to S3 (loops-s3), and Caddy serves that bucket read-only as https://s3.test, the public media URL.
+x-loops-env: &loops-env
+  APP_ENV: production
+  APP_DEBUG: "false"
+  APP_URL: https://loops.test
+  FORCE_HTTPS: "true"   # Caddy terminates TLS
+  SSL_MODE: "off"
+  DB_CONNECTION: mysql
+  DB_HOST: loops-db
+  DB_PORT: "3306"
+  DB_DATABASE: loops
+  DB_USERNAME: loops
+  DB_PASSWORD: loops
+  REDIS_CLIENT: phpredis
+  REDIS_HOST: loops-redis
+  REDIS_PASSWORD: "null"
+  REDIS_PORT: "6379"
+  CACHE_STORE: redis
+  QUEUE_CONNECTION: redis
+  SESSION_DRIVER: database
+  BROADCAST_CONNECTION: log
+  LOG_CHANNEL: stderr
+  LOG_LEVEL: debug
+  MAIL_MAILER: log
+  FILESYSTEM_DISK: local
+  AWS_ACCESS_KEY_ID: loops
+  AWS_SECRET_ACCESS_KEY: loops-secret
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_BUCKET: loops
+  AWS_ENDPOINT: http://loops-s3:7070
+  AWS_USE_PATH_STYLE_ENDPOINT: "true"
+  AWS_URL: https://s3.test/loops
+  FFMPEG_BINARIES: /usr/bin/ffmpeg
+  FFPROBE_BINARIES: /usr/bin/ffprobe
+  LOOPS_TRANSCODE_PRESET: ultrafast   # the default `slow` makes every harness upload a minutes-long wait
+  LOOPS_API_RATE_LIMITS_ENABLED: "false"
+  LOOPS_ADMIN_DASHBOARD_AUTOUPDATE: "false"
+  PHP_OPCACHE_ENABLE: "1"
+  PHP_POST_MAX_SIZE: 100M
+  PHP_UPLOAD_MAX_FILE_SIZE: 100M
+  PHP_MEMORY_LIMIT: 512M
+
+x-loops: &loops
+  # v1.0.0-beta.15 (upstream commit 0d2a881e4, 2026-10-23), built from source: Loops publishes no public image. Build
+  # it with: podman build -t localhost/loops-server:v1.0.0-beta.15 <loops-server checkout at that tag>
+  image: localhost/loops-server:v1.0.0-beta.15
+  env_file: ./interop/.env.loops
+  environment: *loops-env
+  volumes:
+    - caddy-data:/caddy-data:ro
+    - ./interop/trust_ca.sh:/trust_ca.sh:ro
+    - ./interop/loops_harness.sh:/loops_harness.sh:ro
+    - ./interop/castopod-ca.ini:/usr/local/etc/php/conf.d/zz-harness-ca.ini:ro   # PHP's curl ignores SSL_CERT_FILE
+    - loops-storage:/var/www/html/storage:U
+  networks: [interop]
+  # trust_ca.sh, the private-address patches, then the image's own serversideup entrypoint and command. No scheduler
+  # container: its tasks (version checks, server-list and observatory submissions) reach public servers.
+  entrypoint: ["/trust_ca.sh", "/loops_harness.sh", "docker-php-serversideup-entrypoint"]
+
 services:
   caddy:
     image: docker.io/library/caddy:2.10@sha256:d8c17a862962def15cde69863a3a463f25a2664942eafd7bdbf050e9c3116b83
@@ -86,9 +146,10 @@ services:
     volumes:
       - ./interop/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
+      - loops-s3-data:/srv/s3:ro   # s3.test serves the Loops bucket
     networks:
       interop:
-        aliases: [piefed.test, mastodon.test, peertube.test, castopod.test, pixelfed.test]
+        aliases: [piefed.test, mastodon.test, peertube.test, castopod.test, pixelfed.test, loops.test, s3.test]
 
   piefed-db:
     image: docker.io/library/postgres:17.11@sha256:3cec7eb015ba8adb28139fa5c83b8489cdf0e666e53dfdf20f598ae0cc8739e3
@@ -273,6 +334,52 @@ services:
         && exec php artisan horizon; sleep 1; done; echo "pixelfed-web never came up" >&2; exit 1
     depends_on: [pixelfed-web]
 
+  loops-db:
+    image: docker.io/library/mysql:9@sha256:86b390ef642f89a0157d6215dee33ddc928b8b0ecab173117f56f6c40cb24eab
+    environment: {MYSQL_ROOT_PASSWORD: loops, MYSQL_DATABASE: loops, MYSQL_USER: loops, MYSQL_PASSWORD: loops}
+    tmpfs: [/var/lib/mysql]
+    networks: [interop]
+
+  loops-redis:
+    image: docker.io/library/redis:8.10@sha256:6e9101032a2126aeeb4b1e862ac77d2fcf26b831ae37e5ff2e69169f82ddd411
+    networks: [interop]
+
+  # S3 for Loops' videos (MinIO publishes no image any more). The posix backend keeps each object as a plain file at
+  # /data/root/<bucket>/<key>, which Caddy serves as https://s3.test/<bucket>/<key>; metadata goes to a sidecar dir.
+  loops-s3:
+    image: docker.io/versity/versitygw:v1.10.0@sha256:89cad13cc981986ee284cbafea4613f9533ce6fd5f37a2c96c4c4fb8adb3a316
+    environment: {ROOT_ACCESS_KEY: loops, ROOT_SECRET_KEY: loops-secret}
+    entrypoint: ["sh", "-c", "mkdir -p /data/root/loops /data/meta && exec versitygw --port :7070 posix --sidecar /data/meta /data/root"]
+    volumes:
+      - loops-s3-data:/data
+    networks: [interop]
+
+  loops-web:
+    <<: *loops
+    environment:
+      <<: *loops-env
+      AUTORUN_ENABLED: "true"   # the image migrates, links storage and caches config at boot
+      AUTORUN_LARAVEL_MIGRATION: "true"
+      AUTORUN_LARAVEL_MIGRATION_ISOLATION: "false"   # isolation takes a cache lock; one web container needs none
+      AUTORUN_LARAVEL_STORAGE_LINK: "true"
+      AUTORUN_LARAVEL_CONFIG_CACHE: "true"
+    # the image's command: overriding the entrypoint drops it
+    command: ["frankenphp", "run", "--config", "/etc/frankenphp/Caddyfile", "--adapter", "caddyfile"]
+    depends_on: [caddy, loops-db, loops-redis, loops-s3]
+
+  loops-horizon:
+    <<: *loops
+    # Horizon runs every queue: federation in and out, remote video downloads, transcoding. Wait (at most 300s) until
+    # loops-web has migrated and answers /up, or Horizon boots against a half-migrated database
+    command:
+      - sh
+      - -c
+      - >-
+        for i in $$(seq 1 300); do
+        php -r 'exit(@file_get_contents("http://loops-web:8080/up") === false ? 1 : 0);'
+        && exec php artisan horizon; sleep 1; done; echo "loops-web never came up" >&2; exit 1
+    depends_on: [loops-web]
+
   interop-runner:
     <<: *trust
     environment:
@@ -308,6 +415,8 @@ volumes:
   piefed-media:
   piefed-tmp:
   pixelfed-storage:
+  loops-storage:
+  loops-s3-data:
 
 networks:
   interop:

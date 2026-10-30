@@ -67,8 +67,12 @@ up() {
     pixelfed=$($COMPOSE exec -T pixelfed-web php artisan tinker --execute="$(sed 1d interop/seed_pixelfed.php)" \
         | sed -n 's/^TOKEN=//p')
     [ -n "$pixelfed" ] || { echo "run.sh: seed_pixelfed.php printed no token" >&2; return 1; }
-    printf '%s\n%s' "$peertube" "$castopod" | python3 -c 'import json, sys; t = {}; [t.update(json.loads(l)) for l in sys.stdin]; t["mastodon_bob"] = sys.argv[1]; t["pixelfed_erin"] = sys.argv[2]; print(json.dumps(t))' \
-        "$token" "$pixelfed" > interop/.tokens.json
+    wait_http piefed-web https://loops.test/up
+    loops=$($COMPOSE exec -T loops-web php artisan tinker --execute="$(sed 1d interop/seed_loops.php)" \
+        | sed -n 's/^TOKEN=//p')
+    [ -n "$loops" ] || { echo "run.sh: seed_loops.php printed no token" >&2; return 1; }
+    printf '%s\n%s' "$peertube" "$castopod" | python3 -c 'import json, sys; t = {}; [t.update(json.loads(l)) for l in sys.stdin]; t["mastodon_bob"] = sys.argv[1]; t["pixelfed_erin"] = sys.argv[2]; t["loops_lucy"] = sys.argv[3]; print(json.dumps(t))' \
+        "$token" "$pixelfed" "$loops" > interop/.tokens.json
 }
 
 case "${1:-}" in
