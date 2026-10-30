@@ -68,6 +68,7 @@ up() {
         | sed -n 's/^TOKEN=//p')
     [ -n "$pixelfed" ] || { echo "run.sh: seed_pixelfed.php printed no token" >&2; return 1; }
     wait_http piefed-web https://loops.test/up
+    wait_http piefed-web https://relay.test/actor   # seed_loops.php subscribes Loops to it
     loops=$($COMPOSE exec -T loops-web php artisan tinker --execute="$(sed 1d interop/seed_loops.php)" \
         | sed -n 's/^TOKEN=//p')
     [ -n "$loops" ] || { echo "run.sh: seed_loops.php printed no token" >&2; return 1; }

@@ -20,6 +20,12 @@ if (! DB::table('oauth_clients')->where('id', 100)->exists()) {
 }
 // Every Loops server refuses remote video until its admin allows the sending instance (CreateValidator.php:164)
 App\Models\Instance::updateOrCreate(['domain' => 'piefed.test'], ['allow_video_posts' => true, 'allow_videos_in_fyf' => true]);
+// Subscribe to the stand-in relay (interop/relay_standin.py), as an admin's Relays -> Add relay does, sending
+// public posts to it and taking its Announces
+if (! App\Models\RelaySubscription::where('relay_url', 'https://relay.test')->exists()) {
+    app(App\Services\RelayService::class)->subscribe('https://relay.test')
+        ->update(['send_public_posts' => true, 'receive_content' => true]);
+}
 $lucy = App\Models\User::whereUsername('lucy')->first();
 if (! $lucy) {
     $lucy = new App\Models\User;

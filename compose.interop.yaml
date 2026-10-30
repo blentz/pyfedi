@@ -149,7 +149,7 @@ services:
       - loops-s3-data:/srv/s3:ro   # s3.test serves the Loops bucket
     networks:
       interop:
-        aliases: [piefed.test, mastodon.test, peertube.test, castopod.test, pixelfed.test, loops.test, s3.test]
+        aliases: [piefed.test, mastodon.test, peertube.test, castopod.test, pixelfed.test, loops.test, s3.test, relay.test]
 
   piefed-db:
     image: docker.io/library/postgres:17.11@sha256:3cec7eb015ba8adb28139fa5c83b8489cdf0e666e53dfdf20f598ae0cc8739e3
@@ -379,6 +379,18 @@ services:
         php -r 'exit(@file_get_contents("http://loops-web:8080/up") === false ? 1 : 0);'
         && exec php artisan horizon; sleep 1; done; echo "loops-web never came up" >&2; exit 1
     depends_on: [loops-web]
+
+  # A stand-in for Relay by Loops (interop/relay_standin.py: the published relay cannot run), in PieFed's image for its
+  # cryptography and httpx
+  loops-relay:
+    <<: *trust
+    image: localhost/piefed-interop:latest
+    entrypoint: ["/trust_ca.sh", "python", "/relay_standin.py"]
+    volumes:
+      - caddy-data:/caddy-data:ro
+      - ./interop/trust_ca.sh:/trust_ca.sh:ro
+      - ./interop/relay_standin.py:/relay_standin.py:ro
+    depends_on: [caddy, piefed-web]
 
   interop-runner:
     <<: *trust
