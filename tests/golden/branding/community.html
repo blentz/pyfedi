@@ -323,68 +323,27 @@
 
 
 <div class="d-xl-flex justify-content-between d-none my-1">
-    <div class="btn-group me-lg-1">
-        <a href="?sort=hot&layout=list&content_type=posts&flair=" aria-label="Sort by hot" class="btn btn-primary" type="button" rel="nofollow noindex">
-            Hot
-        </a>
-        <div class="btn-group" role="group">
-            <button id="top_sort_button" type="button" class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
-                Top
-            </button>
-            <ul class="dropdown-menu" aria-labelledby="top_sort_button">
-                <li>
-                    <a class="dropdown-item " href="?sort=top_12h&layout=list&content_type=posts&flair=">
-                        12 hours
-                    </a>
-                </li>
-                <li>
-                    <a class="dropdown-item " href="?sort=top&layout=list&content_type=posts&flair=">
-                        Day
-                    </a>
-                </li>
-                <li>
-                    <a class="dropdown-item " href="?sort=top_1w&layout=list&content_type=posts&flair=">
-                        Week
-                    </a>
-                </li>
-                <li>
-                    <a class="dropdown-item " href="?sort=top_1m&layout=list&content_type=posts&flair=">
-                        Month
-                    </a>
-                </li>
-                <li>
-                    <a class="dropdown-item " href="?sort=top_1y&layout=list&content_type=posts&flair=">
-                        Year
-                    </a>
-                </li>
-                <li>
-                    <a class="dropdown-item " href="?sort=top_all&layout=list&content_type=posts&flair=">
-                        All Time
-                    </a>
-                </li>
-            </ul>
-        </div>
-        <a href="?sort=new&layout=list&content_type=posts&flair=" aria-label="Sort by new" class="btn btn-outline-secondary" rel="nofollow noindex">
-            New
-        </a>
-        <a href="?sort=old&layout=list&content_type=posts&flair=" aria-label="Sort by old" class="btn btn-outline-secondary" rel="nofollow noindex">
-            Old
-        </a>
-        <a href="?sort=active&layout=list&content_type=posts&flair=" aria-label="Sort by active" class="btn btn-outline-secondary" rel="nofollow noindex">
-            Active
-        </a>
-        </div>
-    <div class="btn-group me-lg-1">
-        <a href="?content_type=posts&sort=&layout=list" aria-label="Show posts" class="btn btn-primary" rel="nofollow noindex">
-            Posts
-        </a>
-        
-            <a href="?content_type=comments&sort=new&layout=list" aria-label="Show comments" class="btn btn-outline-secondary" rel="nofollow noindex">
-                Comments
-            </a>
-        
-        
-    </div>
+    <nav class="btn-group filter_nav me-lg-1" aria-label="Sort posts">
+        <a href="?sort=hot&amp;layout=list&amp;content_type=posts&amp;flair=" class="btn btn-primary" rel="nofollow noindex" title="Sort by hot" aria-current="page"><span class="fe fe-popular" aria-hidden="true"></span><span class="visually-hidden">Hot</span></a>
+        <details class="btn-group filter_menu">
+    <summary class="btn btn-outline-secondary" title="Sort by top"><span class="fe fe-star" aria-hidden="true"></span><span class="visually-hidden">Top</span></summary>
+    <ul class="dropdown-menu">
+        <li><a class="dropdown-item" href="?sort=top_12h&amp;layout=list&amp;content_type=posts&amp;flair=" rel="nofollow noindex">12 hours</a></li>
+        <li><a class="dropdown-item" href="?sort=top&amp;layout=list&amp;content_type=posts&amp;flair=" rel="nofollow noindex">Day</a></li>
+        <li><a class="dropdown-item" href="?sort=top_1w&amp;layout=list&amp;content_type=posts&amp;flair=" rel="nofollow noindex">Week</a></li>
+        <li><a class="dropdown-item" href="?sort=top_1m&amp;layout=list&amp;content_type=posts&amp;flair=" rel="nofollow noindex">Month</a></li>
+        <li><a class="dropdown-item" href="?sort=top_1y&amp;layout=list&amp;content_type=posts&amp;flair=" rel="nofollow noindex">Year</a></li>
+        <li><a class="dropdown-item" href="?sort=top_all&amp;layout=list&amp;content_type=posts&amp;flair=" rel="nofollow noindex">All Time</a></li>
+    </ul>
+</details>
+        <a href="?sort=new&amp;layout=list&amp;content_type=posts&amp;flair=" class="btn btn-outline-secondary" rel="nofollow noindex" title="Sort by new"><span class="fe fe-plus" aria-hidden="true"></span><span class="visually-hidden">New</span></a>
+        <a href="?sort=old&amp;layout=list&amp;content_type=posts&amp;flair=" class="btn btn-outline-secondary" rel="nofollow noindex" title="Sort by old"><span class="fe fe-calendar" aria-hidden="true"></span><span class="visually-hidden">Old</span></a>
+        <a href="?sort=active&amp;layout=list&amp;content_type=posts&amp;flair=" class="btn btn-outline-secondary" rel="nofollow noindex" title="Sort by active"><span class="fe fe-activity" aria-hidden="true"></span><span class="visually-hidden">Active</span></a>
+    </nav>
+    <nav class="btn-group filter_nav me-lg-1" aria-label="Show">
+    <a href="?content_type=posts&amp;sort=&amp;layout=list" class="btn btn-primary" rel="nofollow noindex" title="Show posts" aria-current="page"><span class="fe fe-discussion" aria-hidden="true"></span><span class="visually-hidden">Posts</span></a>
+    <a href="?content_type=comments&amp;sort=new&amp;layout=list" class="btn btn-outline-secondary" rel="nofollow noindex" title="Show comments"><span class="fe fe-message-circle" aria-hidden="true"></span><span class="visually-hidden">Comments</span></a>
+</nav>
     
         <div class="btn-group me-lg-1 layout_switcher">
             <a href="?layout=list&sort=&content_type=posts&flair=" class="btn btn-primary" rel="nofollow noindex">

@@ -50,7 +50,7 @@ def test_the_nav_offers_the_tab(media):
 @pytest.fixture
 def galleries(media):
     microblogs = make_community('microblogs', kind=COMMUNITY_KIND_MICROBLOGS)
-    microblogs.show_all = microblogs.show_popular = False   # as on hell.cloud: the relays' 38,000 posts a day
+    microblogs.show_all = microblogs.show_popular = False   # as in production: the relays' 38,000 posts a day
     media.communities['local_private'].show_all = True       # in All, so only membership keeps it from anyone
     db.session.commit()
     for name, community, image, microblog in (

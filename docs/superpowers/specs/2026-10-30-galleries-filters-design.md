@@ -5,7 +5,7 @@ Status: owner design and rulings G1-G4 given in conversation; building
 
 ## 1. Problem
 
-Pixelfed seeding works (spec 2026-10-29): on hell.cloud the instance actor follows 50 accounts and their posts land in
+Pixelfed seeding works (spec 2026-10-29): on the first domain the instance actor follows 50 accounts and their posts land in
 `microblogs`. But `microblogs` takes about 38,000 relayed posts a day and is left out of All and Popular, so a seeded
 Pixelfed post ranked around 33,800th by New. The owner's design surfaces image posts as a *filter*, not a community:
 
