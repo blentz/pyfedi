@@ -46,3 +46,7 @@ fi
 if [ ! -f .env.loops ]; then
     printf 'APP_KEY=base64:%s\n' "$(openssl rand -base64 32)" > .env.loops
 fi
+# Loops' dropped first Follow is re-sent after this many seconds (default 300): test_loops waits on it
+if ! grep -q '^LOOPS_FOLLOW_RESEND_SECONDS=' .env.interop; then
+    printf '# Loops\nLOOPS_FOLLOW_RESEND_SECONDS=10\n' >> .env.interop
+fi

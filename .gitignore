@@ -200,6 +200,7 @@ scratch_*
 interop/.env.interop
 interop/.env.pixelfed
 interop/.env.loops
+interop/.loops_clip.mp4
 interop/.tokens.json
 interop/conformance/results/
 !tests/fixtures/media/

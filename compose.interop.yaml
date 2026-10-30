@@ -390,6 +390,7 @@ services:
       - caddy-data:/caddy-data:ro
       - ./interop/trust_ca.sh:/trust_ca.sh:ro
       - ./interop/relay_standin.py:/relay_standin.py:ro
+      - loops-relay-state:/state:U   # its key and subscribers outlive a recreated container
     depends_on: [caddy, piefed-web]
 
   interop-runner:
@@ -429,6 +430,7 @@ volumes:
   pixelfed-storage:
   loops-storage:
   loops-s3-data:
+  loops-relay-state:
 
 networks:
   interop:

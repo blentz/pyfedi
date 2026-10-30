@@ -257,6 +257,56 @@ class Pixelfed(Mastodon):
         return self.http.get(f'/api/v1/statuses/{status_id}/context').raise_for_status().json()
 
 
+class Loops:
+    """Loops v1.0.0-beta.15's own JSON API (routes/api.php), on loops.test. JSON must be asked for. An upload answers
+    nothing about the video it made: it is found in the uploader's own feed once Loops has transcoded it."""
+
+    def __init__(self, token):
+        self.http = httpx.Client(base_url='https://loops.test', verify=ssl.create_default_context(cafile=CA), timeout=30,
+                                 headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json'})
+
+    def me(self):
+        return self.http.get('/api/v1/account/info/self').raise_for_status().json()['data']
+
+    def my_videos(self):
+        return self.http.get('/api/v1/feed/account/self').raise_for_status().json()['data']
+
+    def following_feed(self):
+        return self.http.get('/api/v1/feed/following').raise_for_status().json()['data']
+
+    def upload(self, path, description, alt_text=''):
+        """The id of the video `path` became, once Loops lists it (transcoding takes a few seconds)."""
+        with open(path, 'rb') as f:
+            self.http.post('/api/v1/studio/upload', files={'video': ('clip.mp4', f, 'video/mp4')},
+                           data={'description': description, 'alt_text': alt_text}).raise_for_status()
+        return wait_for(lambda: next((v['id'] for v in self.my_videos() if v.get('caption') == description), None),
+                        timeout=120, interval=2)
+
+    def resolve(self, handle):
+        """The Loops profile of a remote account, fetched by Loops if it does not know it yet."""
+        users = self.http.post('/api/v1/search/remote', json={'q': handle}).raise_for_status().json()['data']['users']
+        return users[0] if users else None
+
+    def follow(self, profile_id):
+        return self.http.post(f'/api/v1/account/follow/{profile_id}').raise_for_status().json()
+
+    def comment(self, video_id, text, parent_id=None):
+        data = {'comment': text, **({'parent_id': parent_id} if parent_id else {})}
+        return self.http.post(f'/api/v1/video/comments/{video_id}', data=data).raise_for_status().json()['data'][0]['id']
+
+    def comments(self, video_id):
+        return self.http.get(f'/api/v1/video/comments/{video_id}').raise_for_status().json()['data']
+
+    def like(self, video_id):
+        self.http.post(f'/api/v1/video/like/{video_id}').raise_for_status()
+
+    def video(self, video_id):
+        return self.http.get(f'/api/v1/video/{video_id}').raise_for_status().json()['data']
+
+    def delete(self, video_id):
+        self.http.post(f'/api/v1/video/delete/{video_id}').raise_for_status()
+
+
 class PeerTube:
     """REST API v1 routes as PeerTube v8.3 documents them (https://docs.joinpeertube.org/api-rest-reference.html)."""
 
