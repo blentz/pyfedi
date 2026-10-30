@@ -20,6 +20,12 @@ class TestMicroblogContentToTitle(unittest.TestCase):
         self.assertEqual(title, 'My Great Heading')
         self.assertEqual(link, 'https://example.com/page')
 
+    def test_h1_link_with_markup_is_one_piece(self):
+        """Markup inside a heading's link keeps the words apart once, and the link is still returned"""
+        title, link = microblog_content_to_title('<h1><a href="https://example.com/x">A <b>bold</b> heading</a></h1>')
+        self.assertEqual(title, 'A bold heading')
+        self.assertEqual(link, 'https://example.com/x')
+
     def test_h1_too_short_is_ignored(self):
         """A <h1> shorter than 5 characters does not become a title"""
         title, link = microblog_content_to_title('<h1>Hi</h1>')
@@ -68,11 +74,11 @@ class TestMicroblogContentToTitle(unittest.TestCase):
         self.assertEqual(title, '(content in post body)')
         self.assertEqual(link, '')
 
-    def test_at_and_hash_markers_removed(self):
-        """' @ ' and ' # ' markers are stripped when there is no sentence punctuation"""
+    def test_a_lone_at_or_hash_in_the_text_is_kept(self):
+        """A lone '@' or '#' the author typed stays, with its spaces: only a link's own text is joined (I3)"""
         title, link = microblog_content_to_title(
             '<p>Email me @ home and tag # this please today friend</p>')
-        self.assertEqual(title, 'Email mehome and tagthis please today friend')
+        self.assertEqual(title, 'Email me @ home and tag # this please today friend')
         self.assertEqual(link, '')
 
     def test_long_title_is_truncated(self):
@@ -137,8 +143,18 @@ if __name__ == '__main__':
     ('<p>Render album <a href="https://pixelfed.example/discover/tags/interop" class="u-url hashtag">#interop</a></p>',
      'Render album #interop'),
     ('<p>Two  spaces\nand a newline here</p>', 'Two spaces and a newline here'),
-], ids=['text-before-a-link', 'runs-in-the-text'])
+    ('<p>Loops probe one <a href="https://loops.example/tag/interop" class="mention hashtag" '
+     'rel="tag nofollow noopener noreferrer ugc">#<span>interop</span></a></p>', 'Loops probe one #interop'),
+    ('<p>Hi <span class="h-card"><a href="https://mastodon.example/@bob" class="u-url mention">@<span>bob</span></a>'
+     '</span> see <a href="https://mastodon.example/tags/cats" class="mention hashtag" rel="tag">#<span>cats</span>'
+     '</a> today</p>', 'Hi @bob see #cats today'),
+    ('<p>Short. <a href="https://mastodon.example/tags/cats" class="mention hashtag">#<span>cats</span></a></p>',
+     'Short'),
+], ids=['text-before-a-link', 'runs-in-the-text', 'loops-hashtag', 'mastodon-mention-and-hashtag',
+        'punctuation-before-a-hashtag'])
 def test_a_derived_title_has_single_spaces(html, expected):
     """P4 (Pixelfed spike 2026-10-28): get_text's separator joins a text node that ends in a space to the link after
-    it with a second space, and the title kept it (`Render album  #interop`)."""
+    it with a second space, and the title kept it (`Render album  #interop`). I3 (Loops spike 2026-10-30): the separator
+    split a Mastodon-style `#<span>tag</span>` into `# tag`, and the ' # ' replace then ate the space before it too
+    (`Loops probe oneinterop`)."""
     assert microblog_content_to_title(html) == (expected, '')
