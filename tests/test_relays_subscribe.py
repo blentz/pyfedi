@@ -295,3 +295,48 @@ class TestFollowersListing:
             relay = Relay(url='https://relay.example/inbox', actor_id=None)
             assert subscribe._lists_us_as_follower(relay) is False
         assert net['get'] == [] and net['post'] == []
+
+
+# Relay by Loops' actor as relay.loopsplatform.com/actor served it on 2026-10-30 (key cut): an Application whose inbox
+# is /actor/inbox, with /inbox as its sharedInbox. Its root URL is an HTML landing page, so an admin enters /actor.
+LOOPS_RELAY = {'@context': ['https://www.w3.org/ns/activitystreams', 'https://w3id.org/security/v1'],
+               'id': 'https://relay.loopsplatform.com/actor', 'type': 'Application', 'preferredUsername': 'relay',
+               'name': 'Loops Relay', 'summary': 'A content discovery service, created by https://joinloops.org.',
+               'inbox': 'https://relay.loopsplatform.com/actor/inbox',
+               'outbox': 'https://relay.loopsplatform.com/actor/outbox',
+               'followers': 'https://relay.loopsplatform.com/actor/followers',
+               'following': 'https://relay.loopsplatform.com/actor/following',
+               'url': 'https://relay.loopsplatform.com/actor',
+               'endpoints': {'sharedInbox': 'https://relay.loopsplatform.com/inbox'},
+               'publicKey': {'id': 'https://relay.loopsplatform.com/actor#main-key',
+                             'owner': 'https://relay.loopsplatform.com/actor', 'publicKeyPem': 'LOOPSPEM'}}
+
+
+class TestRelayByLoops:
+    """Spec 2026-10-30 §3.5: the relay Loops runs (ruling L1), as detect_relay sees it."""
+
+    def test_its_actor_url_is_litepub_style_with_the_actor_inbox(self, app, net):
+        net['documents']['https://relay.loopsplatform.com/actor'] = LOOPS_RELAY
+        with app.test_request_context():
+            found = subscribe.detect_relay('https://relay.loopsplatform.com/actor')
+        assert found == {'style': STYLE_LITEPUB, 'inbox_url': 'https://relay.loopsplatform.com/actor/inbox',
+                         'actor_id': 'https://relay.loopsplatform.com/actor', 'public_key': 'LOOPSPEM'}
+
+    def test_its_inbox_url_is_mastodon_style_with_its_actor_found(self, app, net):
+        net['documents']['https://relay.loopsplatform.com/actor'] = LOOPS_RELAY
+        with app.test_request_context():
+            found = subscribe.detect_relay('https://relay.loopsplatform.com/inbox')
+        assert found == {'style': STYLE_MASTODON, 'inbox_url': 'https://relay.loopsplatform.com/inbox',
+                         'actor_id': 'https://relay.loopsplatform.com/actor', 'public_key': 'LOOPSPEM'}
+
+    def test_its_landing_page_is_not_a_relay(self, app, net):
+        with app.test_request_context(), pytest.raises(subscribe.RelayError):
+            subscribe.detect_relay('https://relay.loopsplatform.com')
+
+    def test_its_litepub_follow_names_its_actor(self, app, net):
+        net['documents']['https://relay.loopsplatform.com/actor'] = LOOPS_RELAY
+        with app.test_request_context():
+            relay = subscribe.add_relay('https://relay.loopsplatform.com/actor')
+        uri, body, _ = net['post'][-1]
+        assert uri == 'https://relay.loopsplatform.com/actor/inbox'
+        assert body['type'] == 'Follow' and body['object'] == relay.actor_id == LOOPS_RELAY['id']
