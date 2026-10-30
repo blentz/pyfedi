@@ -4303,9 +4303,6 @@ body.compact-max .post_teaser .post_utilities_bar .voting_buttons_new .upvote_bu
   filter: blur(var(--spacing-4));
   user-select: none;
 }
-
-/*# sourceMappingURL=styles.css.map */
-
 /* The icon filter navs (spec 2026-10-30 G4): Top's periods open from a details element, without JavaScript */
 .filter_menu {
   position: relative;
@@ -4323,3 +4320,5 @@ body.compact-max .post_teaser .post_utilities_bar .voting_buttons_new .upvote_bu
   left: 0;
   z-index: 1000;
 }
+
+/*# sourceMappingURL=styles.css.map */
