@@ -105,3 +105,12 @@ def test_the_community_content_nav_is_icons_and_events_only_where_there_are_even
     show = page.find('nav', attrs={'aria-label': 'Show'})
     assert [a.find(class_='visually-hidden').text for a in show.find_all('a')] == ['Posts', 'Comments']
     assert show.find('a', attrs={'aria-current': 'page'})['href'].startswith('?content_type=comments&sort=new')
+
+
+def test_the_top_menu_sits_level_with_the_other_buttons():
+    """Every `details` gets a bottom margin (styles.scss), which lifted Top above its row; the menu takes none."""
+    from pathlib import Path
+    static = Path(__file__).resolve().parent.parent / 'app' / 'static'
+    for name in ('styles.scss', 'styles.css'):
+        rule = re.search(r'\n\.filter_menu\s*\{([^}]*)\}', (static / name).read_text())
+        assert rule and 'margin-bottom: 0;' in rule.group(1), name

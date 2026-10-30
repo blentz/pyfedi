@@ -4306,6 +4306,7 @@ body.compact-max .post_teaser .post_utilities_bar .voting_buttons_new .upvote_bu
 /* The icon filter navs (spec 2026-10-30 G4): Top's periods open from a details element, without JavaScript */
 .filter_menu {
   position: relative;
+  margin-bottom: 0; /* every details has one (below) */
 }
 .filter_menu > summary {
   list-style: none;
