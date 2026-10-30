@@ -34,12 +34,14 @@ def test_probe_command_is_sandboxed(monkeypatch):
                            '-format_whitelist', FORMATS, 'file:/x/y.mp4']
     assert seen['timeout'] == 60 and seen['preexec_fn'] is ffmpeg._limit_address_space
     assert seen['stdin'] is subprocess.DEVNULL
-    assert seen['env'] == {'PATH': os.environ.get('PATH', '/usr/bin:/bin')}   # none of the app's secrets
+    assert seen['env'] == {'PATH': os.environ.get('PATH', '/usr/bin:/bin'),   # none of the app's secrets
+                           'MALLOC_ARENA_MAX': '1'}
 
 
 def test_the_tools_run_without_the_apps_environment(monkeypatch):
     """ffmpeg parses untrusted bytes: it gets PATH and nothing else of the app's environment (database URL, S3 keys,
-    the secret key)."""
+    the secret key), plus one malloc arena: each thread's own arena reserves 64 MiB of the 512 MiB address space, and
+    with them a 1080x1920 frame failed under 384 MiB about 4 times in 20 (with one arena, never)."""
     seen = {}
 
     def fake_run(cmd, **kwargs):
@@ -49,7 +51,7 @@ def test_the_tools_run_without_the_apps_environment(monkeypatch):
     monkeypatch.setenv('SECRET_KEY', 'not for ffmpeg')
     monkeypatch.delenv('PATH')
     run_ffprobe('/x/y.mp4')
-    assert seen['env'] == {'PATH': '/usr/bin:/bin'}
+    assert seen['env'] == {'PATH': '/usr/bin:/bin', 'MALLOC_ARENA_MAX': '1'}
 
 
 def test_ffmpeg_commands_are_sandboxed(monkeypatch, tmp_path):
@@ -70,7 +72,8 @@ def test_ffmpeg_commands_are_sandboxed(monkeypatch, tmp_path):
                         '-format_whitelist', FORMATS, '-threads', '1', '-i', 'file:/x/y.mp3', '-threads', '1',
                         '-an', '-map', '0:v:0', '-frames:v', '1', '-y', 'file:' + str(tmp_path / 'c.jpg')]
     assert all(kw['stdin'] is subprocess.DEVNULL and kw['timeout'] == 60 for _, kw in seen)
-    assert all(kw['env'] == {'PATH': os.environ.get('PATH', '/usr/bin:/bin')} for _, kw in seen)
+    assert all(kw['env'] == {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'MALLOC_ARENA_MAX': '1'}
+               for _, kw in seen)
 
 
 def _playlist(tmp_path, name):

@@ -28,9 +28,11 @@ def _limit_address_space():
 
 def _run(cmd: list, private_paths: tuple = ()) -> bytes:
     try:
-        # PATH only: the tools parse untrusted bytes, and the app's environment holds its secrets
+        # PATH and no secret: the tools parse untrusted bytes, and the app's environment holds its secrets. One malloc
+        # arena: glibc's default of one per thread reserves 64 MiB of ADDRESS_SPACE_BYTES for each of ffmpeg's threads
         done = subprocess.run(cmd, capture_output=True, timeout=PROBE_TIMEOUT_S, preexec_fn=_limit_address_space,
-                              stdin=subprocess.DEVNULL, check=False, env={'PATH': os.environ.get('PATH', '/usr/bin:/bin')})
+                              stdin=subprocess.DEVNULL, check=False,
+                              env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'MALLOC_ARENA_MAX': '1'})
     except subprocess.TimeoutExpired:
         raise MediaToolError(f'{cmd[0]} timed out after {PROBE_TIMEOUT_S} s')
     except FileNotFoundError:
