@@ -64,10 +64,10 @@ def test_ffmpeg_commands_are_sandboxed(monkeypatch, tmp_path):
     extract_cover('/x/y.mp3', str(tmp_path / 'c.jpg'))
     frame, cover = seen
     assert frame[0] == ['ffmpeg', '-nostdin', '-v', 'error', '-protocol_whitelist', 'file',
-                        '-format_whitelist', FORMATS, '-ss', '0.500', '-i', 'file:/x/y.mp4',
+                        '-format_whitelist', FORMATS, '-threads', '1', '-ss', '0.500', '-i', 'file:/x/y.mp4',
                         '-frames:v', '1', '-y', 'file:' + str(tmp_path / 'f.jpg')]
     assert cover[0] == ['ffmpeg', '-nostdin', '-v', 'error', '-protocol_whitelist', 'file',
-                        '-format_whitelist', FORMATS, '-i', 'file:/x/y.mp3', '-an', '-map', '0:v:0',
+                        '-format_whitelist', FORMATS, '-threads', '1', '-i', 'file:/x/y.mp3', '-an', '-map', '0:v:0',
                         '-frames:v', '1', '-y', 'file:' + str(tmp_path / 'c.jpg')]
     assert all(kw['stdin'] is subprocess.DEVNULL and kw['timeout'] == 60 for _, kw in seen)
     assert all(kw['env'] == {'PATH': os.environ.get('PATH', '/usr/bin:/bin')} for _, kw in seen)
@@ -159,6 +159,17 @@ def test_frame_and_cover_are_written(tmp_path):
     extract_frame(os.path.join(FIX, 'video_h264.mp4'), 0.1, str(frame))
     extract_cover(os.path.join(FIX, 'audio_cover.mp3'), str(cover))
     assert frame.read_bytes()[:2] == b'\xff\xd8' and cover.read_bytes()[:2] == b'\xff\xd8'
+
+
+def test_frame_of_a_full_size_video_fits_the_address_space_limit(tmp_path):
+    """A phone-size video decodes inside the 512 MiB limit: ffmpeg's default of one decoder thread per core ran out
+    of address space on a 32-core host (get_buffer() failed), so every portrait upload failed its probe."""
+    clip = tmp_path / 'portrait.mp4'
+    subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=1080x1920:rate=30:duration=1',
+                    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', str(clip)], check=True, stdin=subprocess.DEVNULL)
+    frame = tmp_path / 'f.jpg'
+    extract_frame(str(clip), 0.5, str(frame))
+    assert frame.read_bytes()[:2] == b'\xff\xd8'
 
 
 def test_cover_of_audio_without_picture_raises(tmp_path):
