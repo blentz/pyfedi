@@ -1,8 +1,9 @@
 import json
 from zoneinfo import ZoneInfo
 from app import celery, db
-from app.activitypub.serializers import (episode_attachment, microblog_note, peertube_video, uses_microblog_note,
-                                         uses_peertube_video, uses_podcast_episode)
+from app.activitypub.serializers import (episode_attachment, loops_video, microblog_note, peertube_video,
+                                         uses_loops_video, uses_microblog_note, uses_peertube_video,
+                                         uses_podcast_episode)
 from app.activitypub.signature import default_context, send_post_request
 from app.constants import POST_TYPE_LINK, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_VIDEO, \
     POST_TYPE_POLL, MICROBLOG_APPS, NOTIF_MENTION, POST_TYPE_EVENT
@@ -208,7 +209,13 @@ def send_peertube_video(post, user, community, recipients: list, edit: bool) -> 
     for instance in targets + user.following_instances():
         if instance.domain in sent_to or not can_deliver_to(user, instance):
             continue
-        send_post_request(instance.inbox, activity, user.private_key, author_key)
+        if instance.software == 'loops':   # Loops stores only a Note with a video/mp4 Document (spec 2026-10-30 §3.3)
+            if uses_loops_video(post):
+                note = loops_video(post)
+                send_post_request(instance.inbox, dict(activity, object=note, to=note['to'], cc=note['cc']),
+                                  user.private_key, author_key)
+        else:
+            send_post_request(instance.inbox, activity, user.private_key, author_key)
         sent_to.add(instance.domain)
 
 
