@@ -40,7 +40,7 @@ def test_probe_command_is_sandboxed(monkeypatch):
 
 def test_the_tools_run_without_the_apps_environment(monkeypatch):
     """ffmpeg parses untrusted bytes: it gets PATH and nothing else of the app's environment (database URL, S3 keys,
-    the secret key), plus one malloc arena: each thread's own arena reserves 64 MiB of the 512 MiB address space, and
+    the secret key), plus one malloc arena: each thread's own arena reserves 64 MiB of the 1 GiB address space, and
     with them a 1080x1920 frame failed under 384 MiB about 4 times in 20 (with one arena, never)."""
     seen = {}
 
@@ -154,7 +154,7 @@ def test_rlimit_is_set(monkeypatch):
     calls = []
     monkeypatch.setattr(ffmpeg.resource, 'setrlimit', lambda which, lim: calls.append((which, lim)))
     ffmpeg._limit_address_space()
-    assert calls == [(ffmpeg.resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))]
+    assert calls == [(ffmpeg.resource.RLIMIT_AS, (1024 * 1024 * 1024, 1024 * 1024 * 1024))]
 
 
 def test_frame_and_cover_are_written(tmp_path):
@@ -165,7 +165,7 @@ def test_frame_and_cover_are_written(tmp_path):
 
 
 def test_frame_of_a_full_size_video_fits_the_address_space_limit(tmp_path):
-    """A phone-size video decodes and encodes inside the 512 MiB limit. ffmpeg starts one thread per core for the
+    """A phone-size video decodes and encodes inside the 1 GiB limit (512 MiB until 2026-10-30). ffmpeg starts one thread per core for the
     decoder and again for the JPEG encoder; on a 32-core host the decoder's ran out of address space
     (get_buffer() failed) and, with only those limited, the encoder's failed to open about 4 extractions in 10. Ten
     extractions here, so an unlimited side cannot pass by luck."""
