@@ -9,7 +9,7 @@ from flask import current_app
 from sqlalchemy import desc, func
 
 from app import cache, db
-from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_STATUS_REVIEWING, VISIBILITY_PUBLIC
+from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_STATUS_REVIEWING, POST_TYPE_IMAGE, VISIBILITY_PUBLIC
 from app.models import Community, Instance, Post, ServerViewMember, post_stored_hooks
 from app import utils
 from app.storefront import hosted_instance_ids, is_local_host
@@ -146,8 +146,9 @@ def live_feed_keys(post, community, backfill: bool) -> set:
         keys.add('local')
     if community.show_popular:
         keys.add('popular')
-    if _software(community) in MEDIA_SOFTWARE:
-        keys.add('media')
+    if _software(community) in MEDIA_SOFTWARE or \
+            post.type == POST_TYPE_IMAGE and (community.show_all or is_local_microblogs(community)):
+        keys.add('media')   # the Media tab's galleries (GALLERY_SQL, spec 2026-10-30 G2)
     if is_local_microblogs(community) and post.instance_id and post.instance_id not in hosted_instance_ids():
         keys.add(f'instance:{post.instance_id}')   # its author's server view (spec 2026-10-08)
     return keys
