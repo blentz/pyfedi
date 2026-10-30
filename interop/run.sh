@@ -69,11 +69,20 @@ up() {
     [ -n "$pixelfed" ] || { echo "run.sh: seed_pixelfed.php printed no token" >&2; return 1; }
     wait_http piefed-web https://loops.test/up
     wait_http piefed-web https://relay.test/actor   # seed_loops.php subscribes Loops to it
-    loops=$($COMPOSE exec -T loops-web php artisan tinker --execute="$(sed 1d interop/seed_loops.php)" \
-        | sed -n 's/^TOKEN=//p')
-    [ -n "$loops" ] || { echo "run.sh: seed_loops.php printed no token" >&2; return 1; }
-    printf '%s\n%s' "$peertube" "$castopod" | python3 -c 'import json, sys; t = {}; [t.update(json.loads(l)) for l in sys.stdin]; t["mastodon_bob"] = sys.argv[1]; t["pixelfed_erin"] = sys.argv[2]; t["loops_lucy"] = sys.argv[3]; print(json.dumps(t))' \
-        "$token" "$pixelfed" "$loops" > interop/.tokens.json
+    seeded=$($COMPOSE exec -T loops-web php artisan tinker --execute="$(sed 1d interop/seed_loops.php)")
+    loops=$(sed -n 's/^TOKEN=//p' <<< "$seeded")
+    mia=$(sed -n 's/^MIA=//p' <<< "$seeded")
+    [ -n "$loops" ] && [ -n "$mia" ] || { echo "run.sh: seed_loops.php printed no tokens" >&2; return 1; }
+    { printf 'from pyfedi import app\napp.app_context().push()\n'; cat interop/seed_piefed_relay.py; } \
+        | $COMPOSE exec -T -e SSL_CERT_FILE=/tmp/harness-ca.crt piefed-web python -
+    # test_loops' clip, made by Loops' ffmpeg: Loops refuses an upload under 250 KB, and the fixtures are smaller
+    if [ ! -s interop/.loops_clip.mp4 ]; then
+        $COMPOSE exec -T loops-web sh -c 'ffmpeg -loglevel error -y -f lavfi -i testsrc2=size=720x1280:rate=30:duration=6 \
+            -f lavfi -i sine=frequency=440:duration=6 -c:v libx264 -b:v 1500k -pix_fmt yuv420p -c:a aac -shortest \
+            /tmp/interop_clip.mp4 && cat /tmp/interop_clip.mp4' > interop/.loops_clip.mp4
+    fi
+    printf '%s\n%s' "$peertube" "$castopod" | python3 -c 'import json, sys; t = {}; [t.update(json.loads(l)) for l in sys.stdin]; t["mastodon_bob"] = sys.argv[1]; t["pixelfed_erin"] = sys.argv[2]; t["loops_lucy"] = sys.argv[3]; t["loops_mia"] = sys.argv[4]; print(json.dumps(t))' \
+        "$token" "$pixelfed" "$loops" "$mia" > interop/.tokens.json
 }
 
 case "${1:-}" in

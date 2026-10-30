@@ -82,15 +82,18 @@ our Follow pending until its admin allows hell.cloud.
 When a stored post is `POST_TYPE_VIDEO` from a `Note` whose `url` came from a video attachment, and the object has a
 `preview` naming an image (`url` a string, or an object or list with `href`, http(s), `mediaType` image/*), that
 image becomes `post.image` (a `File` with `source_url`, `width`/`height` from `preview`). The alt text is the video
-attachment's `name`, else `preview.name`, through `storable_alt_text`. Remote images follow
-`cache_remote_images_locally` as every remote thumbnail does. The same rule runs on `Update`. Not Loops-specific:
+attachment's `name`, else `preview.name`, through `storable_alt_text`. A video post's thumbnail is not cached locally, as for every remote video post today
+(`Post.new` skips `make_image_sizes` for `POST_TYPE_VIDEO`). An `image` key still wins over `preview`. The same rule
+runs on an `Update` that changes the video. Built: `video_preview` (`app/models.py`), eb335b0ca. Not Loops-specific:
 any Note with a video attachment and a preview gets it.
 
 ### 3.2 I3: title from a caption with hashtag links
 
 `microblog_content_to_title` keeps a hashtag link's text with one space before it: the caption above gives
-`Loops probe one #interop`. The build step first pins where the `#` and the space are lost (the spike only saw the
-result) with a failing test on the real Loops content.
+`Loops probe one #interop`. Cause: `get_text(separator=" ")` split `#<span>interop</span>` into `# interop`, and
+the no-punctuation branch's `.replace(' # ', '')` (meant to rejoin it) also ate the space before. Mastodon marks its
+hashtags and mentions up the same way, so its titles were hit too. Built (b8809e6b7): each link's text is read in one
+piece and the replace is gone; a lone `@` or `#` the author typed stays as written.
 
 ### 3.3 O1: a Loops-shaped video for Loops followers
 
@@ -98,7 +101,7 @@ A new serializer, `loops_video(post)` in `app/activitypub/serializers/loops.py`,
 `peertube_video`:
 
 ```json
-{"id": "<post ap_id>", "type": "Note", "attributedTo": "<author>", "url": "<post page url, a string>",
+{"id": "<post ap_id>", "type": "Note", "attributedTo": "<author>", "url": "<the post's id, a string>",
  "content": "<p><b>title</b></p>\n<body html>", "sensitive": <nsfw>, "summary": null, "published": "…",
  "to": ["https://www.w3.org/ns/activitystreams#Public"], "cc": ["<author followers url>"],
  "attachment": [{"type": "Document", "mediaType": "video/mp4", "url": "<the mp4 url>", "name": "<alt or null>",
@@ -108,7 +111,7 @@ A new serializer, `loops_video(post)` in `app/activitypub/serializers/loops.py`,
 ```
 
 Rules from the source analysis: `object.url` must be a string (Loops names the post by it in its Likes and comment
-`inReplyTo`, so PieFed must also resolve that URL to the post); the mp4 must be served on 443 and answer HEAD 2xx
+`inReplyTo`, so it is the post's id, which PieFed already resolves); the mp4 must be served on 443 and answer HEAD 2xx
 with a Content-Length ≤ 100 MB; only `video/mp4`; the activity's `to`/`cc` must name the full Public URI and the
 author's followers URL exactly; the Create is signed by the author.
 
@@ -125,12 +128,15 @@ hell.cloud user follows the commenter. Recorded as a Loops limitation. Likes go 
 
 When a local user follows a remote user on an instance with `software == 'loops'`, a Celery task is queued with a
 5-minute countdown. If the `UserFollower` row is still pending (`is_accepted` None), it re-sends the same Follow
-once. Nothing is queued for other software; an accepted, refused or removed follow cancels the re-send.
+once. Nothing is queued for other software; an accepted, refused or removed follow cancels the re-send. The wait
+is `LOOPS_FOLLOW_RESEND_SECONDS` (default 300; the harness sets 10). Built: `resend_pending_follow`
+(`app/shared/tasks/follows.py`), 6fb8b94bd, 75b15efbf.
 
 ### 3.5 Relay (L1)
 
-Nothing to build: the relay path works (§2). The owner adds `https://relay.loopsplatform.com` on the relay admin
-page, then asks the relay admin to allow hell.cloud. A unit test pins `detect_relay` on the relay's real actor
+Nothing to build: the relay path works (§2). The owner adds `https://relay.loopsplatform.com/actor` on the relay
+admin page (not the root URL the relay's own page shows: it is an HTML landing page, which `detect_relay` refuses),
+then asks the relay admin to allow hell.cloud. A unit test pins `detect_relay` on the relay's real actor
 document (LitePub style, its `/actor/inbox`), so a change on either side shows up in the suite.
 
 ### 3.6 Interop tests (`interop/test_loops.py`)
@@ -145,7 +151,7 @@ without a manual re-follow (U1). Loops refuses uploads under 250 KB, so the harn
 
 1. F1 into blentz (done on its branch).
 2. I3, then I1 + I2, TDD, one commit each.
-3. O1: serializer, delivery branch, resolving Loops' `url` references back to the post.
+3. O1: serializer and delivery branch (1bf6e19c3).
 4. U1 re-send.
 5. Relay `detect_relay` pin.
 6. `interop/test_loops.py`, then merge `spike/loops`.

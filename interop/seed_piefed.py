@@ -1,4 +1,4 @@
-# Seed the harness PieFed: site setup, user alice, the local microblogs community, alice's feed conf-feed, alice's video_channel
+# Seed the harness PieFed: site setup, users alice and dora (dora only for test_loops' first Follow), the local microblogs community, alice's feed conf-feed, alice's video_channel
 # community vc1, and the media upload communities vc_media (video_channel) and pod_media (podcast), which alice
 # moderates, with video and audio uploads open to users. Idempotent.
 from app import db
@@ -11,18 +11,19 @@ from app.storefront import default_domain
 from app.utils import gibberish, set_setting, utcnow
 from flask import current_app
 
-if User.query.filter_by(user_name='alice', ap_id=None).first() is None:
-    private_key, public_key = RsaKeys.generate_keypair()
-    alice = User(user_name='alice', title='alice', email='alice@piefed.test', instance_id=1,
-                 private_key=private_key, public_key=public_key, alt_user_name=gibberish(12),
-                 email_unread_sent=False, verified=True, last_seen=utcnow())
-    alice.set_password('interop-alice-pw')
-    url = current_app.config['SERVER_URL']
-    alice.ap_profile_id = f'{url}/u/alice'
-    alice.ap_public_url = f'{url}/u/alice'
-    alice.ap_inbox_url = f'{url}/u/alice/inbox'
-    db.session.add(alice)
-    db.session.commit()
+for name in ('alice', 'dora'):
+    if User.query.filter_by(user_name=name, ap_id=None).first() is None:
+        private_key, public_key = RsaKeys.generate_keypair()
+        user = User(user_name=name, title=name, email=f'{name}@piefed.test', instance_id=1,
+                    private_key=private_key, public_key=public_key, alt_user_name=gibberish(12),
+                    email_unread_sent=False, verified=True, last_seen=utcnow())
+        user.set_password(f'interop-{name}-pw')
+        url = current_app.config['SERVER_URL']
+        user.ap_profile_id = f'{url}/u/{name}'
+        user.ap_public_url = f'{url}/u/{name}'
+        user.ap_inbox_url = f'{url}/u/{name}/inbox'
+        db.session.add(user)
+        db.session.commit()
 find_microblogging_community()
 if Community.query.filter_by(name='vc1', ap_id=None).first() is None:
     # kind is set here: no form sets it yet (spec 2026-10-14 §3.2, step 4)

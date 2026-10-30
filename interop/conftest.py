@@ -1,6 +1,6 @@
 import pytest
 
-from interop.clients import Mastodon, PeerTube, PieFed, Pixelfed, tokens, wait_for
+from interop.clients import Loops, Mastodon, PeerTube, PieFed, Pixelfed, tokens, wait_for
 
 
 @pytest.fixture(scope='session')
@@ -16,6 +16,11 @@ def peertube():
 @pytest.fixture(scope='session')
 def pixelfed():
     return Pixelfed(tokens()['pixelfed_erin'])
+
+
+@pytest.fixture(scope='session')
+def loops():
+    return Loops(tokens()['loops_lucy'])
 
 
 @pytest.fixture(scope='session')

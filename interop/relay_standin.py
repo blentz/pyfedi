@@ -8,12 +8,17 @@ AuthController and its migrations are not in the repository. This speaks the JSO
 - an Undo of a Follow drops the subscriber;
 - a public Create from a subscriber's host is announced, as its object's id, to every other subscriber.
 
-Incoming signatures are not verified: every sender is a harness peer. State is in memory; a restart forgets the
-subscribers. Run in the PieFed image (it has cryptography and httpx), behind Caddy."""
+Incoming signatures are not verified: every sender is a harness peer. The key and the subscribers live in STATE (a
+volume): a container `run.sh up` recreates must keep both, or Loops and PieFed stay subscribed to a relay that no
+longer knows them and checks signatures with a key it no longer has. Run in the PieFed image (it has cryptography
+and httpx), behind Caddy."""
 import base64
 import email.utils
 import hashlib
 import json
+import os
+import signal
+import sys
 import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,10 +31,38 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 DOMAIN = 'relay.test'
 ACTOR = f'https://{DOMAIN}/actor'
 PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
-KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+STATE = '/state'
+KEY_FILE, SUBSCRIBERS_FILE = os.path.join(STATE, 'key.pem'), os.path.join(STATE, 'subscribers.json')
+
+
+def _key():
+    if os.path.exists(KEY_FILE):
+        with open(KEY_FILE, 'rb') as f:
+            return serialization.load_pem_private_key(f.read(), password=None)
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    with open(KEY_FILE, 'wb') as f:
+        f.write(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                  serialization.NoEncryption()))
+    return key
+
+
+def _subscribers():
+    if os.path.exists(SUBSCRIBERS_FILE):
+        with open(SUBSCRIBERS_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def _save_subscribers():
+    with open(SUBSCRIBERS_FILE + '.tmp', 'w') as f:
+        json.dump(subscribers, f)
+    os.replace(SUBSCRIBERS_FILE + '.tmp', SUBSCRIBERS_FILE)
+
+
+KEY = _key()
 PEM = KEY.public_key().public_bytes(serialization.Encoding.PEM,
                                     serialization.PublicFormat.SubjectPublicKeyInfo).decode()
-subscribers = {}   # follower actor id -> its delivery inbox
+subscribers = _subscribers()   # follower actor id -> its delivery inbox
 announced = {}     # announce uuid -> object uri
 http = httpx.Client(timeout=15, follow_redirects=False)
 
@@ -83,11 +116,13 @@ def handle(activity):
     kind, actor = activity.get('type'), activity.get('actor')
     if kind == 'Follow' and isinstance(actor, str):
         subscribers[actor] = delivery_inbox(actor)
+        _save_subscribers()
         signed_post(subscribers[actor], {'@context': 'https://www.w3.org/ns/activitystreams',
                                          'id': f'{ACTOR}/activities/{uuid.uuid4()}', 'type': 'Accept',
                                          'actor': ACTOR, 'object': activity})
     elif kind == 'Undo' and isinstance(activity.get('object'), dict) and activity['object'].get('type') == 'Follow':
         subscribers.pop(actor, None)
+        _save_subscribers()
     elif kind == 'Create' and addressed_publicly(activity):
         if not any(urlsplit(s).netloc == urlsplit(actor or '').netloc for s in subscribers):
             return   # only subscribed servers may post through the relay
@@ -148,4 +183,5 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))   # PID 1 has no default SIGTERM action: stop at once
     ThreadingHTTPServer(('0.0.0.0', 8080), Handler).serve_forever()

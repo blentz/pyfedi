@@ -1,7 +1,7 @@
 <?php
 // Seed the harness Loops (run.sh pipes this into `php artisan tinker`): admin settings with federation on, OAuth keys,
-// a personal access client, user lucy, remote video allowed from piefed.test, and lucy's API token on the last line as
-// TOKEN=<token>. Safe to repeat.
+// a personal access client, users lucy and mia, remote video allowed from piefed.test, the relay subscription, mia's
+// API token as MIA=<token> and lucy's on the last line as TOKEN=<token>. Safe to repeat.
 if (! App\Models\AdminSetting::where('key', 'federation.enableFederation')->exists()) {
     Artisan::call('db:seed', ['--class' => 'AdminSettingsSeeder', '--force' => true]);
 }
@@ -26,15 +26,21 @@ if (! App\Models\RelaySubscription::where('relay_url', 'https://relay.test')->ex
     app(App\Services\RelayService::class)->subscribe('https://relay.test')
         ->update(['send_public_posts' => true, 'receive_content' => true]);
 }
-$lucy = App\Models\User::whereUsername('lucy')->first();
-if (! $lucy) {
-    $lucy = new App\Models\User;
-    $lucy->name = 'lucy';
-    $lucy->username = 'lucy';
-    $lucy->email = 'lucy@loops.test';
-    $lucy->password = Hash::make('interop-lucy-pw');
-    $lucy->email_verified_at = now();
-    $lucy->is_admin = false;
-    $lucy->save();   // UserObserver::created makes the profile
+// lucy is followed from PieFed; mia never is, so a video of hers reaches PieFed only through the relay
+$tokens = [];
+foreach (['lucy', 'mia'] as $name) {
+    $user = App\Models\User::whereUsername($name)->first();
+    if (! $user) {
+        $user = new App\Models\User;
+        $user->name = $name;
+        $user->username = $name;
+        $user->email = "$name@loops.test";
+        $user->password = Hash::make("interop-$name-pw");
+        $user->email_verified_at = now();
+        $user->is_admin = false;
+        $user->save();   // UserObserver::created makes the profile
+    }
+    $tokens[$name] = $user->createToken('interop')->accessToken;
 }
-echo 'TOKEN='.$lucy->createToken('interop')->accessToken."\n";
+echo 'MIA='.$tokens['mia']."\n";
+echo 'TOKEN='.$tokens['lucy']."\n";
