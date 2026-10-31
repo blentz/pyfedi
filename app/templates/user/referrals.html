@@ -41,7 +41,7 @@
             <form method="post" action="{{ url_for('user.user_referrals_generate') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-warning confirm_first">{{ _('Regenerate referral code') }}</button>
-                <p class="small field_hint">{{ _('Your current link and QR code will stop working.') }}</p>
+                <p class="small text-muted mt-2">{{ _('Your current link and QR code will stop working.') }}</p>
             </form>
         {% else -%}
             <form method="post" action="{{ url_for('user.user_referrals_generate') }}">
