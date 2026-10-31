@@ -1,3 +1,4 @@
+import calendar
 import json as python_json
 import os
 from collections import defaultdict
@@ -2829,24 +2830,22 @@ def user_follow_request_reject(user_id):
     return _('Done')
 
 
+def _add_months(when, months):
+    """`when` moved on by `months` calendar months, the day clamped to the target month's length: 31 October plus
+    one month is 30 November. Only the month number used to change, which asked for 31 November and raised."""
+    month_index = when.month - 1 + months
+    year, month = when.year + month_index // 12, month_index % 12 + 1
+    return when.replace(year=year, month=month, day=min(when.day, calendar.monthrange(year, month)[1]))
+
+
 def _calculate_future_date(restriction_setting):
     """Calculate future date based on restriction setting"""
     current_date = datetime.now()
     if restriction_setting == '1day':
         return current_date + timedelta(days=1)
     elif restriction_setting == '1month':
-        # Add 1 month by getting same day next month
-        if current_date.month == 12:
-            return current_date.replace(year=current_date.year + 1, month=1)
-        else:
-            return current_date.replace(month=current_date.month + 1)
+        return _add_months(current_date, 1)
     elif restriction_setting == '2months':
-        # Add 2 months
-        new_month = current_date.month + 2
-        new_year = current_date.year
-        if new_month > 12:
-            new_month -= 12
-            new_year += 1
-        return current_date.replace(year=new_year, month=new_month)
+        return _add_months(current_date, 2)
     else:
         return current_date

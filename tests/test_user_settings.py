@@ -374,6 +374,26 @@ def test_a_december_restriction_rolls_into_next_year(app, env):
     assert (future.year, future.month) == (2027, 1)
 
 
+@pytest.mark.parametrize('now, setting, expected', [
+    (datetime(2026, 10, 31, 9, 30), '1month', datetime(2026, 11, 30, 9, 30)),
+    (datetime(2027, 1, 31, 9, 30), '1month', datetime(2027, 2, 28, 9, 30)),
+    (datetime(2028, 1, 31, 9, 30), '1month', datetime(2028, 2, 29, 9, 30)),
+    (datetime(2026, 12, 31, 9, 30), '1month', datetime(2027, 1, 31, 9, 30)),
+    (datetime(2026, 12, 31, 9, 30), '2months', datetime(2027, 2, 28, 9, 30)),
+    (datetime(2026, 7, 31, 9, 30), '2months', datetime(2026, 9, 30, 9, 30)),
+    (datetime(2026, 3, 15, 9, 30), '2months', datetime(2026, 5, 15, 9, 30)),
+])
+def test_a_month_restriction_from_a_long_month_ends_on_the_target_months_last_day(app, env, now, setting, expected):
+    """Adding to the month number alone asked for 31 November on 31 October -- `ValueError: day 31 must be in range
+    1..30` -- so saving a restriction failed on the last days of long months. The day is clamped to the target month's
+    length instead."""
+    from app.user import routes
+
+    with patch.object(routes, 'datetime') as fake:
+        fake.now.return_value = now
+        assert routes._calculate_future_date(setting) == expected
+
+
 def test_a_november_two_month_restriction_rolls_over(app, env):
     """The two-month arm wraps by subtracting twelve, which is a different
     calculation from the one-month arm's."""
