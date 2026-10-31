@@ -465,7 +465,7 @@ def test_the_admin_referral_list(app, admin_client, people):
     _referred(admin, 'listed1')
     text = admin_client.get('/admin/referrals').get_data(as_text=True)
     assert 'listed1' in text and 'adminuser' in text
-    filtered = admin_client.get('/admin/referrals?referrer=nobody').get_data(as_text=True)
+    filtered = admin_client.get('/admin/referrals?by=nobody').get_data(as_text=True)
     assert 'listed1' not in filtered
 
 
@@ -646,8 +646,9 @@ def test_the_admin_list_pages_and_names_a_deleted_referrer(app, admin_client, pe
     assert '(deleted)' in first
     second = admin_client.get('/admin/referrals?page=2').get_data(as_text=True)
     assert 'Previous page' in second and 'Next page' not in second
-    filtered = admin_client.get('/admin/referrals?referrer=adminuser').get_data(as_text=True)
+    filtered = admin_client.get('/admin/referrals?by=adminuser').get_data(as_text=True)
     assert '>All<' in filtered and '(deleted)' not in filtered
+    assert 'by=adminuser' in first   # each referrer links to their own rows
 
 
 def test_the_admin_list_says_when_there_are_none(app, admin_client):
@@ -661,3 +662,35 @@ def test_the_admin_navs_link_the_list_only_in_referral_mode(app, admin_client):
     from app.utils import get_site_as_dict
     cache.delete_memoized(get_site_as_dict)
     assert '/admin/referrals' not in admin_client.get('/admin/users').get_data(as_text=True)
+
+
+def test_a_google_callback_without_a_code_makes_no_account(app, people):
+    """RC5 through the provider callback, not only the helper."""
+    client = app.test_client()
+    with patch('app.auth.oauth_util.get_token_and_user_info',
+               return_value=('a-token', {'id': 'g-1', 'email': 'fromgoogle@example.com', 'username': 'Goo'})):
+        response = client.get('/auth/google_authorize')
+    assert response.headers['Location'] == '/auth/login'
+    assert User.query.filter_by(email='fromgoogle@example.com').count() == 0
+
+
+def test_a_google_callback_with_a_code_makes_a_referred_account(app, people):
+    code = _code(people['admin'])
+    client = app.test_client()
+    with client.session_transaction() as sess:
+        sess['referral_code'] = code
+    with patch('app.auth.oauth_util.get_token_and_user_info',
+               return_value=('a-token', {'id': 'g-2', 'email': 'withcode@example.com', 'username': 'Coded'})), \
+            patch('app.auth.oauth_util.finalize_user_setup'):
+        client.get('/auth/google_authorize')
+    user = User.query.filter_by(email='withcode@example.com').one()
+    assert Referral.query.filter_by(referred_id=user.id).one().referrer_id == people['admin'].id
+
+
+def test_the_mastodon_email_step_without_a_code_makes_no_account(app, people):
+    client = app.test_client()
+    with client.session_transaction() as sess:
+        sess['user_info'] = {'id': 'm-1', 'username': 'tooter'}
+    response = client.post('/auth/mastodon_authorize', data={'email': 'tooter@example.com', 'submit': 'Set email'})
+    assert response.headers['Location'] == '/auth/login'
+    assert User.query.filter_by(email='tooter@example.com').count() == 0

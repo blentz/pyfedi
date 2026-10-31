@@ -280,15 +280,15 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     if followers_only:
         # only a local author's instance speaks for the audience; a remote author's post or reply is theirs to delete.
         # A reply went to the replier's followers, the parent's author and its mentions (S7.3); the parent's host
-        # comes from followers_only_reply_instances.
-        if user.is_local():
-            payload = undo if is_restore else delete
-            audience = follower_instances(user) if is_post else followers_only_reply_instances(object)
-            hosted = hosted_instance_ids()
-            for instance in audience + [recipient.instance for recipient in recipients]:
-                if instance.id not in hosted and instance.domain not in domains_sent_to and can_deliver_to(user, instance):
-                    send_post_request(instance.inbox, payload, user.private_key, user.public_url() + '#main-key')
-                    domains_sent_to.append(instance.domain)
+        # comes from followers_only_reply_instances. `user` is the author here, and local: a remote author returned
+        # above (97a0f17c8), so the `if user.is_local():` that stood here had no other arm left to take.
+        payload = undo if is_restore else delete
+        audience = follower_instances(user) if is_post else followers_only_reply_instances(object)
+        hosted = hosted_instance_ids()
+        for instance in audience + [recipient.instance for recipient in recipients]:
+            if instance.id not in hosted and instance.domain not in domains_sent_to and can_deliver_to(user, instance):
+                send_post_request(instance.inbox, payload, user.private_key, user.public_url() + '#main-key')
+                domains_sent_to.append(instance.domain)
     elif is_post and followers and not reason:
         payload = undo if is_restore else delete
         for follower in followers:
