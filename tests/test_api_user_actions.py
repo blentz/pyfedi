@@ -624,22 +624,6 @@ def test_the_doubled_path_is_gone(app, env, path, method):
     assert response.status_code == 404
 
 
-def test_registering_through_the_api_says_it_is_not_written(app, env):
-    """D1181. Both utils were `...`, and the route loads a response schema
-    from what they return -- `Schema().load(None)`."""
-    from app.api.alpha.utils.user import get_user_captcha, post_user_register
-
-    actor, target = env
-
-    with pytest.raises(Exception) as refused:
-        post_user_register({})
-    assert str(refused.value) == 'not implemented'
-
-    with pytest.raises(Exception) as refused:
-        get_user_captcha()
-    assert str(refused.value) == 'not implemented'
-
-
 def test_a_note_is_mine_alone(app, env):
     """Two people may hold notes about the same person, and editing one must
     not reach the other's."""

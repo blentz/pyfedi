@@ -1627,6 +1627,7 @@ def post_alpha_user_unban(data):
 
 
 @user_bp.route('/user/register', methods=['POST'])  # D1180
+@limiter.limit("300 per day;10 per 5 minutes")   # the web form's limits
 @user_bp.doc(summary="Register a new user")
 @user_bp.arguments(UserRegistrationRequest)
 @user_bp.response(200, UserRegistrationResponse)
@@ -1639,13 +1640,13 @@ def post_alpha_user_register(data):
     # required fields are `username`, `password` and `password_verify`. A response shaped
     # like `UserRegistrationResponse` (jwt / registration_created / verify_email_sent)
     # could never satisfy it, so the endpoint would have answered 400 to every successful
-    # registration. Latent rather than live: `post_user_register` still raises
-    # `not implemented` (D1181), so this line has never run. Corrected now, while the two
-    # schemas are in front of us, rather than left for whoever finishes the endpoint.
+    # registration. It was latent while `post_user_register` was a stub (D1181); the
+    # endpoint is implemented now (app.auth.util.register_from_api).
     return UserRegistrationResponse().load(resp)
 
 
 @user_bp.route('/user/get_captcha', methods=['GET'])  # D1180
+@limiter.limit("60 per hour")   # each one is a stored code
 @user_bp.doc(summary="Fetch a Captcha")
 @user_bp.response(200, FetchCaptchaResponse)
 @user_bp.alt_response(400, schema=DefaultError)

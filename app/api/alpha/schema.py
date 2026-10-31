@@ -2236,7 +2236,7 @@ class UserRegistrationRequest(DefaultSchema):
 
 
 class UserRegistrationResponse(DefaultSchema):
-    jwt = fields.String()
+    jwt = fields.String(allow_none=True)   # null until the account can log in: email unverified or application pending
     registration_created = fields.Boolean()
     verify_email_sent = fields.Boolean()
 
@@ -2248,7 +2248,7 @@ class CaptchaFields(DefaultSchema):
 
 
 class FetchCaptchaResponse(DefaultSchema):
-    ok = fields.List(fields.Nested(CaptchaFields))
+    ok = fields.Nested(CaptchaFields, allow_none=True)   # Lemmy's shape: one captcha, or null when none is asked
 
 
 class UserFollowRequest(DefaultSchema):

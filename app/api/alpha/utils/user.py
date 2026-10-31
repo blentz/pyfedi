@@ -31,7 +31,7 @@ from app.models import Conversation, ChatMessage, Notification, PostReply, User,
 # package before they are defined (import cycle: app.shared.user)
 import app.shared.user as shared_user
 from app.utils import authorise_api_user, in_sorted_list, user_in_restricted_country, user_access, user_notes
-from app.utils import markdown_to_html, log_login_failure
+from app.utils import create_captcha, get_setting, markdown_to_html, log_login_failure
 from app.visibility import visible_to_clause
 from app.storefront import canonicalise_text, current_instance_id, current_storefront, domain_for_host, link_on, on_domain, storefront_link
 
@@ -1164,11 +1164,14 @@ def post_user_logout(auth):
 
 
 def post_user_register(data):
-    # D1181. This was `...`, and its route loads a response schema from what
-    # it returns -- `Schema().load(None)`. An endpoint that is not written yet
-    # says so, rather than answering 500.
-    raise Exception('not implemented')
+    return auth_util.register_from_api(data)
 
 
 def get_user_captcha():
-    raise Exception('not implemented')  # D1181, as above
+    """Lemmy's get_captcha: `ok` is null when the instance asks for no captcha, else the base64 image and audio (no
+    data: prefix) and the uuid that register's captcha_uuid names. The image is a JPEG, in Lemmy's `png` key."""
+    if not get_setting('captcha_enabled', True):
+        return {'ok': None}
+    captcha = create_captcha()
+    strip = lambda data_uri: data_uri.split(',', 1)[1].replace('\n', '')
+    return {'ok': {'png': strip(captcha['image']), 'wav': strip(captcha['audio']), 'uuid': captcha['uuid']}}

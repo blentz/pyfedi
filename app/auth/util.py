@@ -13,11 +13,12 @@ from flask_babel import _
 from flask_login import current_user, login_user
 from markupsafe import Markup
 from sqlalchemy import and_, false, func
+from werkzeug.datastructures import MultiDict
 from wtforms import Label
 
 from app import cache, db, plugins
 from app.activitypub.util import users_total
-from app.auth.forms import LoginForm
+from app.auth.forms import LoginForm, RegistrationForm
 from app.constants import NOTIF_REGISTRATION
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
@@ -34,7 +35,8 @@ from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, \
     finalize_user_setup, get_request, get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
-    user_ip_banned, log_login_failure, role_access, actor_contains_blocked_words, get_site_as_dict, user_name_is_taken
+    user_ip_banned, log_login_failure, role_access, actor_contains_blocked_words, get_site_as_dict, user_name_is_taken, \
+    decode_captcha
 from app.shared.tasks import task_selector
 
 
@@ -258,37 +260,28 @@ def process_registration_form(form):
 
 
 def is_invalid_email_or_username(form, disallowed_usernames):
-    # D1133. This function used to open with
-    #
-    #     if form.email.data.strip():
-    #         return False
-    #
-    # `email` was the HONEYPOT (now `hp_field`) beside the real `real_email`,
-    # which a human never fills. Returning False means "not invalid", so
-    # filling the honeypot SKIPPED both checks below it: the field meant to
-    # catch bots was a bypass around the two gates that stop a registration
-    # taking a reserved name or a role address. Measured:
-    #
-    #     PROBE at3 honeypot + reserved name "admin": users created=1 | admin exists=True
-    #     PROBE at4 honeypot + role address: users created=1
-    #     PROBE at5 reserved name, NO honeypot: users created=0
-    #     PROBE at6 role address, NO honeypot: users created=0
-    #
-    # The checks now run for every registration, and a filled honeypot is
-    # itself refused (D1134).
-    if form.hp_field.data:
-        flash(_("Sorry, we could not register you."), "error")
+    """The web form's check: flashes the refusal and answers True, else False."""
+    refusal = email_or_username_refusal(form, disallowed_usernames)
+    if refusal is not None:
+        flash(refusal, "error")
         return True
-
-    if form.real_email.data.lower().startswith(("postmaster@", "abuse@", "noc@")):
-        flash(_("Sorry, you cannot use that email address"), "error")
-        return True
-
-    if form.user_name.data in disallowed_usernames:
-        flash(_("Sorry, you cannot use that user name"), "error")
-        return True
-
     return False
+
+
+def email_or_username_refusal(form, disallowed_usernames):
+    """Why `form`'s name or address may not register, or None. Shared by the web form and the API (one rule each).
+
+    D1133. The web check used to open with `if form.email.data.strip(): return False` -- `email` was the HONEYPOT
+    (now `hp_field`) beside `real_email`, which a human never fills -- so filling the honeypot SKIPPED the reserved
+    name and role address checks below it (`PROBE at3 honeypot + reserved name "admin": users created=1`). The checks
+    run for every registration now, and a filled honeypot is itself refused (D1134)."""
+    if form.hp_field.data:
+        return _("Sorry, we could not register you.")
+    if form.real_email.data.lower().startswith(("postmaster@", "abuse@", "noc@")):
+        return _("Sorry, you cannot use that email address")
+    if form.user_name.data in disallowed_usernames:
+        return _("Sorry, you cannot use that user name")
+    return None
 
 
 def redirect_with_session_cookie(route):
@@ -464,6 +457,76 @@ def finalize_user_registration(user, form):
     if user.verified and not user.waiting_for_approval():
         finalize_user_setup(user)
         login_user(user, remember=True)
+
+
+def register_from_api(data: dict) -> dict:
+    """POST /api/alpha/user/register (spec 2026-10-31 referral codes, API registration section).
+
+    The web form's rules, applied to a JSON body: the same `RegistrationForm` validates the name, address and
+    password, then the same gates run in the same order as `process_registration_form`. Differences, by ruling:
+    registering is agreeing to the terms (apps show them, as Lemmy's do); the captcha comes as captcha_uuid and
+    captcha_answer from GET /user/get_captcha; the onion refuses, because its proof-of-work and wait step are the
+    web form's; and the account is never logged in -- a jwt is returned instead, when the account is usable now.
+    Answers Lemmy's {jwt, registration_created, verify_email_sent}. A refusal is a bare `Exception`, which the API's
+    error handler hands back as a 400 with that message (app/api/alpha/__init__.py, D895); a subclass would be a 500."""
+    storefront = current_storefront()
+    if storefront.is_onion or is_onion_request():
+        raise Exception('registration_closed')
+    referral = referral_mode_on(g.site)
+    mode = g.site.registration_mode
+    if mode == 'Closed' or (not referral and not public_registration_open(storefront)) or \
+            (mode == 'RequireApplication' and not g.site.application_question):
+        raise Exception('registration_closed')
+    handle_abandoned_open_instance()
+
+    form = RegistrationForm(formdata=MultiDict({
+        'user_name': data.get('username') or '', 'real_email': data.get('email') or '',
+        'password': data.get('password') or '', 'password2': data.get('password_verify') or '',
+        'question': data.get('answer') or '', 'hp_field': data.get('honeypot') or '', 'timezone': 'UTC',
+    }), meta={'csrf': False})
+    del form.terms
+    if hasattr(form, 'captcha'):
+        del form.captcha   # checked below from the JSON body: CaptchaField reads request.form
+    if mode == 'Open':
+        del form.question
+    if not form.validate():
+        field, errors = next(iter(form.errors.items()))
+        raise Exception(f'{field}: {errors[0]}')
+    if get_setting('captcha_enabled', True) and not decode_captcha(data.get('captcha_uuid'), data.get('captcha_answer')):
+        raise Exception('captcha_incorrect')
+
+    form.user_name.data = normalize_utf(form.user_name.data.strip())
+    refusal = email_or_username_refusal(form, RESERVED_USER_NAMES)
+    if refusal is None and actor_contains_blocked_words(form.user_name.data):
+        refusal = _("Sorry, this username pattern is not allowed.")
+    if refusal is not None:
+        raise Exception(str(refusal))
+    ip = ip_address()
+    country = get_country(ip)
+    if is_country_blocked(country):
+        raise Exception('registration_declined')
+    referrer = None
+    if referral:
+        referrer = referrer_for(form.question.data, storefront)
+        if referrer is None:
+            raise Exception('invalid_referral_code')
+
+    user = create_new_user(form, ip, country, random_token(16), referrer)
+    verify_email_sent = bool(requires_email_verification(user))
+    if verify_email_sent:
+        send_email_verification(user)
+    sync_user_with_ldap(user, form.password.data)
+    application = None
+    if requires_approval(user):
+        application = create_registration_application(user, form.question.data)
+        db.session.commit()
+        if get_setting("ban_check_servers", ""):
+            task_selector("check_application", application_id=application.id)
+    elif user.verified:
+        finalize_user_setup(user)
+    usable = user.verified and application is None and not user.banned
+    return {'jwt': user.encode_jwt_token() if usable else None, 'registration_created': application is not None,
+            'verify_email_sent': verify_email_sent}
 
 
 def oauth_client_id(provider):

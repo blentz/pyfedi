@@ -16,10 +16,9 @@ lines are a branch no request in the suite had ever asked for.
     176, 1602, 1618, 1634, 1648   success-path returns: nothing had ever got all the way
                              through resolve_object, the three uploads or image/delete
 
-Two of the eighteen are left red on purpose. `:1574` and `:1585` are the success returns of
-`/user/register` and `/user/get_captcha`, and both helpers still `raise Exception('not
-implemented')` (D1181), so no request can reach either line. `:1574` is where D1417 was
-found while reading them.
+Two of the eighteen were left red on purpose: the success returns of `/user/register` and
+`/user/get_captcha`, whose helpers raised `Exception('not implemented')` (D1181). Both are
+implemented now and covered by tests/test_api_register.py. D1417 was found while reading them.
 
 THE DEBUG BRANCH IS WORTH MORE THAN ITS SIX LINES. `list_posts_response.load(resp)` runs
 the endpoint's own declared schema over the response it is about to send, so a row that
