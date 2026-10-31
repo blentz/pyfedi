@@ -100,6 +100,9 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'post_move': 1,
         'post_share_mastodon': 1,
     },
+    'app/referral.py': {
+        'referral_namespace': 1,   # a referral code's UUIDv5 namespace: one value per site, never per storefront
+    },
     'app/relays/expiry.py': {
         '_local_user_ids': 1,
     },

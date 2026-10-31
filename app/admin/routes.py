@@ -2206,17 +2206,17 @@ def admin_topic_delete(topic_id):
 @login_required
 @permission_required('administer all users')
 def admin_referrals():
-    """Who referred whom (spec 2026-10-31 RC13), newest first; `?referrer=<user name>` narrows it to one referrer."""
+    """Who referred whom (spec 2026-10-31 RC13), newest first; `?by=<user name>` narrows it to one referrer."""
     page = request.args.get('page', 1, type=int)
-    referrer_name = request.args.get('referrer', '').strip()
+    referrer_name = request.args.get('by', '').strip()
     referrer = aliased(User)
     rows = Referral.query.outerjoin(referrer, Referral.referrer_id == referrer.id)
     if referrer_name:
         rows = rows.filter(func.lower(referrer.user_name) == referrer_name.lower())
     rows = rows.order_by(desc(Referral.created_at)).paginate(page=page, per_page=100, error_out=False)
-    next_url = url_for('admin.admin_referrals', page=rows.next_num, referrer=referrer_name) if rows.has_next else None
-    prev_url = url_for('admin.admin_referrals', page=rows.prev_num, referrer=referrer_name) if rows.has_prev else None
-    return render_template('admin/referrals.html', title=_('Referrals'), referrals=rows, referrer=referrer_name,
+    next_url = url_for('admin.admin_referrals', page=rows.next_num, by=referrer_name) if rows.has_next else None
+    prev_url = url_for('admin.admin_referrals', page=rows.prev_num, by=referrer_name) if rows.has_prev else None
+    return render_template('admin/referrals.html', title=_('Referrals'), referrals=rows, by=referrer_name,
                            next_url=next_url, prev_url=prev_url)
 
 

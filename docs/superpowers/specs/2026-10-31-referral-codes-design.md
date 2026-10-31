@@ -24,7 +24,7 @@ Codes are generated in the user's settings, shown as a link and a QR code, and e
 | RC10 | A code is valid only on its referrer's home storefront, so the new account gets the referrer's `site_domain_id`. Used on any other domain it reads as invalid. |
 | RC11 | A valid code opens signup on a domain whose public registration is off ('staff'/'admin' storefronts). |
 | RC12 | The QR code is an inline SVG rendered server-side with `segno` (pure Python, unpinned per the latest-versions policy), plus a PNG download. No JavaScript is needed (onion). |
-| RC13 | Who-referred-whom is visible only to admins, on an admin referral list (referrer → referred, date, code; filterable by referrer). There is no user-facing list and no public "invited by". |
+| RC13 | Who-referred-whom is visible only to admins, on an admin referral list (referrer → referred, date, code; filterable by referrer with `?by=`). There is no user-facing list and no public "invited by". |
 
 ## Admin UI (/admin/misc)
 

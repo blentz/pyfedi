@@ -12,10 +12,10 @@
     <div class="col">
         <h1>{{ _('Referrals') }}</h1>
         <form method="get" class="mb-3">
-            <label for="referrer" class="form-label">{{ _('Referrer') }}</label>
-            <input type="search" name="referrer" id="referrer" class="form-control d-inline-block w-auto" value="{{ referrer }}">
+            <label for="by" class="form-label">{{ _('Referrer') }}</label>
+            <input type="search" name="by" id="by" class="form-control d-inline-block w-auto" value="{{ by }}">
             <input type="submit" class="btn btn-primary" value="{{ _('Filter') }}">
-            {% if referrer -%}<a href="{{ url_for('admin.admin_referrals') }}" class="btn btn-outline-secondary">{{ _('All') }}</a>{% endif -%}
+            {% if by -%}<a href="{{ url_for('admin.admin_referrals') }}" class="btn btn-outline-secondary">{{ _('All') }}</a>{% endif -%}
         </form>
         <table class="table table-striped">
             <tr>
@@ -26,7 +26,7 @@
             </tr>
             {% for row in referrals.items -%}
             <tr>
-                <td>{% if row.referrer -%}<a href="{{ url_for('admin.admin_referrals', referrer=row.referrer.user_name) }}">{{ row.referrer.user_name }}</a>{% else -%}{{ _('(deleted)') }}{% endif -%}</td>
+                <td>{% if row.referrer -%}<a href="{{ url_for('admin.admin_referrals', by=row.referrer.user_name) }}">{{ row.referrer.user_name }}</a>{% else -%}{{ _('(deleted)') }}{% endif -%}</td>
                 <td><a href="/u/{{ row.referred.link() }}">{{ row.referred.user_name }}</a></td>
                 <td>{{ row.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
                 <td><code>{{ row.code }}</code></td>
