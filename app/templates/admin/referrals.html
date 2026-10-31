@@ -1,0 +1,44 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% set active_child = 'admin_referrals' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col">
+        <h1>{{ _('Referrals') }}</h1>
+        <form method="get" class="mb-3">
+            <label for="referrer" class="form-label">{{ _('Referrer') }}</label>
+            <input type="search" name="referrer" id="referrer" class="form-control d-inline-block w-auto" value="{{ referrer }}">
+            <input type="submit" class="btn btn-primary" value="{{ _('Filter') }}">
+            {% if referrer -%}<a href="{{ url_for('admin.admin_referrals') }}" class="btn btn-outline-secondary">{{ _('All') }}</a>{% endif -%}
+        </form>
+        <table class="table table-striped">
+            <tr>
+                <th>{{ _('Referrer') }}</th>
+                <th>{{ _('Referred') }}</th>
+                <th>{{ _('When') }}</th>
+                <th>{{ _('Code') }}</th>
+            </tr>
+            {% for row in referrals.items -%}
+            <tr>
+                <td>{% if row.referrer -%}<a href="{{ url_for('admin.admin_referrals', referrer=row.referrer.user_name) }}">{{ row.referrer.user_name }}</a>{% else -%}{{ _('(deleted)') }}{% endif -%}</td>
+                <td><a href="/u/{{ row.referred.link() }}">{{ row.referred.user_name }}</a></td>
+                <td>{{ row.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td><code>{{ row.code }}</code></td>
+            </tr>
+            {% else -%}
+            <tr><td colspan="4">{{ _('No referrals yet.') }}</td></tr>
+            {% endfor -%}
+        </table>
+        <nav aria-label="{{ _('Pagination') }}" class="mt-4">
+            {% if prev_url -%}<a href="{{ prev_url }}" class="btn btn-primary">&larr; {{ _('Previous page') }}</a>{% endif -%}
+            {% if next_url -%}<a href="{{ next_url }}" class="btn btn-primary">{{ _('Next page') }} &rarr;</a>{% endif -%}
+        </nav>
+    </div>
+</div>
+{% endblock %}

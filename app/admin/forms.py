@@ -16,7 +16,7 @@ from app.constants import DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE
     DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE, MAX_ALBUM_IMAGES_CEILING
 from app.models import Community, User, CmsPage, Instance, SiteDomain, InstanceInUse, instance_row_to_take
 from app.utils import get_setting, REDIRECT_POLICY_ALL_REFERRERS, REDIRECT_POLICY_FEDERATED_SERVERS, REDIRECT_POLICY_SAME_ORIGIN, REDIRECT_POLICY_TRUSTED_SERVERS, validate_user_name_charset
-from app.storefront import default_domain, domain_rows, domain_by_id
+from app.storefront import REFERRAL_MODE, default_domain, domain_rows, domain_by_id
 from app.local_names import local_named
 from app.onion_guard import MAX_POW_DIFFICULTY
 from app.form_choices import select_choices
@@ -92,9 +92,19 @@ class SiteMiscForm(FlaskForm):
     reports_email_admins = BooleanField(_l('Notify admins about reports, not just moderators'))
     email_verification = BooleanField(_l('Require new accounts to verify their email address'))
     captcha_enabled = BooleanField(_l('Require CAPTCHA for new account registration'))
-    types = [('Open', _l('Open')), ('RequireApplication', _l('Require application')), ('Closed', _l('Closed'))]
+    types = [('Open', _l('Open')), ('RequireApplication', _l('Require application')), ('Closed', _l('Closed')),
+             (REFERRAL_MODE, _l('Referral code'))]
     registration_mode = SelectField(_l('Registration mode'), choices=select_choices(types), default=1, coerce=str, render_kw={'class': 'form-select'})
     application_question = TextAreaField(_l('Question to ask people applying for an account'))
+    referral_generator_options = [('admins', _l('Admins only')), ('staff', _l('Admins + Staff')),
+                                  ('all', _l('All local users'))]
+    referral_generators = SelectField(_l('Who can generate referral codes?'),
+                                      choices=select_choices(referral_generator_options), coerce=str,
+                                      validate_choice=False, render_kw={'class': 'form-select'})   # checked on save
+    referral_max_per_code = IntegerField(_l('Max signups per referral code (0 = unlimited)'),
+                                         validators=[Optional(), NumberRange(min=0, max=1000000)])
+    referral_max_per_user = IntegerField(_l('Max referrals per user, lifetime (0 = unlimited)'),
+                                         validators=[Optional(), NumberRange(min=0, max=1000000)])
     registration_approved_email = TextAreaField(_l('Registration approved email'), render_kw={'rows': '5'})
     ban_posts = BooleanField(_l('Manually approve posts by new accounts'))
 

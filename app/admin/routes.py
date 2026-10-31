@@ -13,7 +13,8 @@ from flask_login import current_user, login_user
 from flask_babel import _, ngettext
 from flask_smorest import abort as abort_with_message
 from slugify import slugify
-from sqlalchemy import text, desc, or_, and_, delete, update, select
+from sqlalchemy import text, desc, or_, and_, delete, update, select, func
+from sqlalchemy.orm import aliased
 from sqlalchemy.exc import SQLAlchemyError
 from PIL import Image
 from urllib.parse import urlparse
@@ -51,7 +52,8 @@ from app.federation_urls import object_base
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, RolePermission, Domain, \
-    Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain, instance_row_referenced, DomainBranding
+    Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain, instance_row_referenced, DomainBranding, Referral
+from app.referral import DEFAULT_GENERATORS, GENERATOR_CHOICES, GENERATORS_SETTING, MAX_PER_CODE_SETTING, MAX_PER_USER_SETTING
 from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, live_registration, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default, federating_base, is_hosted_uri
 from app.onion_media import DEFAULT_CACHE_BYTES
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
@@ -615,6 +617,12 @@ def admin_misc():
         set_setting('public_modlog', form.public_modlog.data)
         set_setting('email_verification', form.email_verification.data)
         set_setting('captcha_enabled', form.captcha_enabled.data)
+        if form.referral_generators.data in GENERATOR_CHOICES:
+            set_setting(GENERATORS_SETTING, form.referral_generators.data)
+        if form.referral_max_per_code.data is not None:   # blank keeps the current limit, as the upload limits do
+            set_setting(MAX_PER_CODE_SETTING, form.referral_max_per_code.data)
+        if form.referral_max_per_user.data is not None:
+            set_setting(MAX_PER_USER_SETTING, form.referral_max_per_user.data)
         set_setting('choose_topics', form.choose_topics.data)
         set_setting('filter_selection', form.filter_selection.data)
         set_setting('registration_approved_email', form.registration_approved_email.data)
@@ -659,6 +667,9 @@ def admin_misc():
         form.reports_email_admins.data = site.reports_email_admins
         form.registration_mode.data = site.registration_mode
         form.application_question.data = site.application_question
+        form.referral_generators.data = get_setting(GENERATORS_SETTING, DEFAULT_GENERATORS)
+        form.referral_max_per_code.data = get_setting(MAX_PER_CODE_SETTING, 0)
+        form.referral_max_per_user.data = get_setting(MAX_PER_USER_SETTING, 0)
         form.auto_decline_referrers.data = site.auto_decline_referrers
         form.auto_decline_countries.data = get_setting('auto_decline_countries', '').upper()
         form.log_activitypub_json.data = site.log_activitypub_json
@@ -2189,6 +2200,24 @@ def admin_topic_delete(topic_id):
     cache.delete_memoized(menu_topics)
 
     return redirect(url_for('admin.admin_topics'))
+
+
+@bp.route('/referrals', methods=['GET'])
+@login_required
+@permission_required('administer all users')
+def admin_referrals():
+    """Who referred whom (spec 2026-10-31 RC13), newest first; `?referrer=<user name>` narrows it to one referrer."""
+    page = request.args.get('page', 1, type=int)
+    referrer_name = request.args.get('referrer', '').strip()
+    referrer = aliased(User)
+    rows = Referral.query.outerjoin(referrer, Referral.referrer_id == referrer.id)
+    if referrer_name:
+        rows = rows.filter(func.lower(referrer.user_name) == referrer_name.lower())
+    rows = rows.order_by(desc(Referral.created_at)).paginate(page=page, per_page=100, error_out=False)
+    next_url = url_for('admin.admin_referrals', page=rows.next_num, referrer=referrer_name) if rows.has_next else None
+    prev_url = url_for('admin.admin_referrals', page=rows.prev_num, referrer=referrer_name) if rows.has_prev else None
+    return render_template('admin/referrals.html', title=_('Referrals'), referrals=rows, referrer=referrer_name,
+                           next_url=next_url, prev_url=prev_url)
 
 
 @bp.route('/users', methods=['GET'])

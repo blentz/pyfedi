@@ -2247,6 +2247,9 @@ class User(UserMixin, db.Model):
     allow_community_themes = db.Column(db.Boolean, default=True, server_default="1")
     community_keyword_filter = db.Column(db.String(150))
     referrer = db.Column(db.String(256))
+    # Referral codes (spec 2026-10-31): NULL until the user generates one; regenerating replaces both (app/referral.py)
+    referral_nonce = db.Column(db.String(64))
+    referral_code = db.Column(db.String(36), unique=True, index=True)
     markdown_editor = db.Column(db.Boolean, default=True)
     interface_language = db.Column(db.String(10))  # a locale that the translation system understands e.g. 'en' or 'en-us'. If empty, use browser default
     language_id = db.Column(db.Integer, db.ForeignKey('language.id'))  # the default choice in the language dropdown when composing posts & comments. NOT UI language
@@ -5467,6 +5470,17 @@ class UserFollowRequest(db.Model):
     uuid = db.Column(UUID(as_uuid=True), index=True, default=uuid.uuid4)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     follow_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+
+
+class Referral(db.Model):
+    """Who referred whom (spec 2026-10-31 referral codes): one row per account created with a referral code."""
+    id = db.Column(db.Integer, primary_key=True)
+    referrer_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='SET NULL'), index=True)
+    referred_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), unique=True, nullable=False)
+    code = db.Column(db.String(36), nullable=False, index=True)   # the code used, so a regenerated code's uses are told apart
+    created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+    referrer = db.relationship('User', foreign_keys=[referrer_id])
+    referred = db.relationship('User', foreign_keys=[referred_id])
 
 
 class UserRegistration(db.Model):

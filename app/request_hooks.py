@@ -7,6 +7,7 @@ from flask_login import current_user
 from flask_wtf.csrf import generate_csrf
 
 from app import db
+from app.referral import referrals_available
 from app.branding import Branding, current_branding
 from app.activitypub.entitlement import secure_mode_cache_headers, signed_fetch_refusal
 from app.community.live import post_community_link
@@ -138,6 +139,7 @@ def register_request_hooks(app):
     app.jinja_env.globals['user_access'] = user_access
     app.jinja_env.globals['can_moderate'] = can_moderate
     app.jinja_env.globals['role_access'] = role_access
+    app.jinja_env.globals['referrals_available'] = referrals_available
     app.jinja_env.globals['ap_datetime'] = ap_datetime
     app.jinja_env.globals['can_upvote'] = can_upvote
     app.jinja_env.globals['can_downvote'] = can_downvote

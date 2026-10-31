@@ -18,6 +18,9 @@
             {% if g.site.registration_mode == 'RequireApplication' and user_access('approve registrations', current_user.id) %}
                 <a class="nav-link{% if active_child == 'admin_approve_registrations' %} active{% endif %}" id="users-tab" type="button" role="tab" href="/admin/approve_registrations" style="view-transition-name: approve">{{ _('Registration') }}</a>
             {% endif -%}
+            {% if g.site.registration_mode == 'ReferralCode' and user_access('administer all users', current_user.id) %}
+                <a class="nav-link{% if active_child == 'admin_referrals' %} active{% endif %}" id="referrals-tab" type="button" role="tab" href="/admin/referrals" style="view-transition-name: referrals">{{ _('Referrals') }}</a>
+            {% endif -%}
             {% if user_access('administer all communities', current_user.id) %}
                 <a class="nav-link{% if active_child == 'admin_content' %} active{% endif %}" id="content-tab" type="button" role="tab" href="/admin/content" style="view-transition-name: content">{{ _('Content') }}</a>
                 <a class="nav-link{% if active_child == 'admin_reports' %} active{% endif %}" id="moderation-tab" type="button" role="tab" href="/admin/reports" style="view-transition-name: reports">{{ _('Moderation') }}</a>

@@ -52,9 +52,14 @@
             </div>
             <hr>
             <h3>{{ _('Registration') }}</h3>
-            {{ render_field(form.registration_mode) }}
+            {{ render_field(form.registration_mode, data_referral_prompt=_('Enter your referral code')) }}
             {{ render_field(form.application_question) }}
             <p class="small field_hint">{{ _('You can use markdown here.') }}</p>
+            {{ render_field(form.referral_generators) }}
+            {{ render_field(form.referral_max_per_code) }}
+            {{ render_field(form.referral_max_per_user) }}
+            <p class="small field_hint">{{ _('Used when the registration mode is "Referral code". Admins are exempt from both limits.') }}</p>
+            <script type="module" src="{{ url_for('static', filename='js/admin_misc_referral.js', changed=getmtime('js/admin_misc_referral.js')) }}" nonce="{{ nonce }}"></script>
             {{ render_field(form.email_verification) }}
             {{ render_field(form.captcha_enabled) }}
             {{ render_field(form.choose_topics) }}

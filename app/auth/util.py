@@ -28,6 +28,7 @@ from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow
     verify_password_hash
 from app.onion import apply_audit, is_onion_request, stamp_activity
 from app.log_scrub import log_ldap_sync_failure
+from app.referral import REFERRAL_MODE, record_referral, referral_mode_on, referrer_for
 from app.onion_account import audit_country, audit_ip, is_onion_account
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message, prepare_onion_proof
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, \
@@ -244,7 +245,16 @@ def process_registration_form(form):
         return render_template("generic_message.html", title=_("Application declined"),
                                message=_("Sorry, we are not accepting registrations from your country."))
 
-    return register_new_user(form, ip, country)
+    referrer = None
+    if referral_mode_on(g.site):
+        # Spec 2026-10-31 RC3: without a code that works here and now, no account at all. One message for every
+        # failure (unknown, revoked, capped, another domain's), so it tells nobody which codes exist.
+        referrer = referrer_for(form.question.data, current_storefront())
+        if referrer is None:
+            form.question.errors = list(form.question.errors) + [_("Invalid referral code")]
+            return render_registration_form(form)
+
+    return register_new_user(form, ip, country, referrer)
 
 
 def is_invalid_email_or_username(form, disallowed_usernames):
@@ -306,12 +316,12 @@ def is_country_blocked(country):
     )
 
 
-def register_new_user(form, ip, country):
+def register_new_user(form, ip, country, referrer=None):
     verification_token = random_token(16)
     form.user_name.data = form.user_name.data.strip()
     normalize_username(form)
 
-    user = create_new_user(form, ip, country, verification_token)
+    user = create_new_user(form, ip, country, verification_token, referrer)
 
     if requires_email_verification(user):
         send_email_verification(user)
@@ -341,7 +351,7 @@ def normalize_username(form):
         )
 
 
-def create_new_user(form, ip, country, verification_token):
+def create_new_user(form, ip, country, verification_token, referrer=None):
     storefront = current_storefront()
     user = User(
         user_name=form.user_name.data,
@@ -367,6 +377,9 @@ def create_new_user(form, ip, country, verification_token):
     user.set_password(form.password.data)
 
     db.session.add(user)
+    if referrer is not None:
+        record_referral(referrer, user)   # one commit with the account, while referrer_for's row lock is held
+        session.pop('referral_code', None)
     db.session.commit()
     return user
 
@@ -460,8 +473,8 @@ def oauth_client_id(provider):
 
 
 def render_registration_form(form):
-    registration_open = public_registration_open(current_storefront())
-    if g.site.registration_mode == "RequireApplication" and g.site.application_question:
+    registration_open = public_registration_open(current_storefront()) or referral_mode_on(g.site)
+    if g.site.registration_mode in ("RequireApplication", REFERRAL_MODE) and g.site.application_question:
         form.question.label = Label("question", markdown_to_html(g.site.application_question))
     if g.site.tos_url is None or not g.site.tos_url.strip():
         del form.terms

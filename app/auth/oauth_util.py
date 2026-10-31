@@ -10,6 +10,7 @@ from app import db, oauth
 from app.auth.util import create_registration_application, get_country, handle_banned_user
 from app.models import User, utcnow
 from app.storefront import current_storefront, default_domain, instance_id_of, public_registration_open
+from app.referral import record_referral, referral_mode_on, referrer_for
 from app.onion import apply_audit, stamp_activity
 from app.onion_account import audit_country, audit_ip
 from app.shared.tasks import task_selector
@@ -32,10 +33,22 @@ def refuse_new_oauth_account():
     """A response when OAuth may not create an account here, otherwise None. OAuth makes default-domain accounts
     only, so a new one is refused on any other storefront, and on the default one when registration is closed to
     the public. An existing account's login is not asked this."""
+    if referral_mode_on(g.site):
+        # Spec 2026-10-31 RC5: only with the code a referral link left in the session, valid for a default-domain
+        # account (RC10) -- OAuth makes no other kind
+        if not current_storefront().is_default or oauth_referrer() is None:
+            flash(_('Account registrations need a referral code. Open your referral link, then sign up.'), 'error')
+            return redirect(url_for('auth.login'))
+        return None
     if not current_storefront().is_default or not public_registration_open(default_domain()):
         flash(_('Account registrations are currently closed.'), 'error')
         return redirect(url_for('auth.login'))
     return None
+
+
+def oauth_referrer():
+    """The referrer whose code the session holds, if it may be used for a default-domain account now; else None."""
+    return referrer_for(session.get('referral_code'), default_domain())
 
 
 def handle_user_verification(user, oauth_id_key, token, ip, country, user_info):
@@ -148,6 +161,13 @@ def initialize_new_user(email, username, oauth_id_key, user_info, ip, country):
         user.hide_nsfw = 0
     setattr(user, oauth_id_key, user_info['id'])  # Assign OAuth provider ID
     db.session.add(user)
+    if referral_mode_on(g.site):
+        referrer = oauth_referrer()   # asked by refuse_new_oauth_account already; asked again for the row lock
+        if referrer is None:
+            db.session.rollback()
+            raise ValueError('referral-mode OAuth signup without a usable referral code')
+        record_referral(referrer, user)
+        session.pop('referral_code', None)
     db.session.commit()
 
     # Handle registration mode requiring applications

@@ -55,7 +55,10 @@ class DomainInfo(NamedTuple):
 DEFAULT_INSTANCE_ID = 1
 
 
-_REGISTRATION_FROM_MODE = {'Open': 'anyone', 'RequireApplication': 'anyone', 'Closed': 'admin'}
+# Referral-code registration (app/referral.py): signup needs a referral code, so it is closed to the public
+REFERRAL_MODE = 'ReferralCode'
+
+_REGISTRATION_FROM_MODE = {'Open': 'anyone', 'RequireApplication': 'anyone', 'Closed': 'admin', REFERRAL_MODE: 'admin'}
 
 
 def registration_from_mode(mode: str) -> str:
@@ -79,8 +82,17 @@ def public_registration_open(storefront: DomainInfo) -> bool:
 
 def registration_mode_on(storefront: DomainInfo, site) -> str:
     """`site.registration_mode` as `storefront` offers it: 'Closed' where public sign-up is not open
-    (`public_registration_open`). The default domain's is the Site row's own."""
-    return site.registration_mode if public_registration_open(storefront) else 'Closed'
+    (`public_registration_open`). The default domain's is the Site row's own. Referral-code mode is offered as
+    'RequireApplication' (spec 2026-10-31 RC6): clients that know only Lemmy's three modes then show the question
+    field the code is typed into."""
+    if not public_registration_open(storefront):
+        return 'Closed'
+    return 'RequireApplication' if site.registration_mode == REFERRAL_MODE else site.registration_mode
+
+
+def open_registrations(storefront: DomainInfo, site) -> bool:
+    """nodeinfo's `openRegistrations`: false when closed and in referral-code mode, which is closed to the public."""
+    return site.registration_mode != REFERRAL_MODE and registration_mode_on(storefront, site) != 'Closed'
 
 
 _NOT_IN_AUTHORITY = frozenset('@/\\?#')

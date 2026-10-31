@@ -59,7 +59,7 @@ from app.local_names import actor_handle, local_clause, split_local_name
 from app.federation_urls import activity_id, domain_site_name, federating_storefront, instance_actor_url, \
     is_federating_url, object_base, owned_elsewhere, owner_base, owner_domain
 from app.storefront import acting_for, current_storefront, domain_authority, domain_base_url, domain_for_host, federating_base, \
-    hosted_instance_ids, is_served_name, registration_mode_on, storefront_cache_key
+    hosted_instance_ids, is_served_name, open_registrations, registration_mode_on, storefront_cache_key
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
@@ -366,7 +366,7 @@ def nodeinfo2():
             "activitypub"
         ],
         "usage": nodeinfo_usage(domain),
-        "openRegistrations": registration_mode_on(domain, g.site) != 'Closed'
+        "openRegistrations": open_registrations(domain, g.site)
     }
     return jsonify(nodeinfo_data)
 
@@ -388,7 +388,7 @@ def nodeinfo21():
             "activitypub"
         ],
         "usage": nodeinfo_usage(domain),
-        "openRegistrations": registration_mode_on(domain, g.site) != 'Closed',
+        "openRegistrations": open_registrations(domain, g.site),
         "services": {
             "inbound": [],
             "outbound": []
@@ -419,7 +419,7 @@ def api_v1_instance():
             "status_count": usage['localPosts'] + usage['localComments'],
             "domain_count": 1
         },
-        'registrations': registration != 'Closed',
+        'registrations': open_registrations(domain, g.site),
         'approval_required': registration == 'RequireApplication'
     }
     return jsonify(retval)

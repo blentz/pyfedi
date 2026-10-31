@@ -1,0 +1,54 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% set active_child = 'referrals' %}
+
+{% block app_content %}
+<div class="row">
+    <main class="col-12 col-lg-8 position-relative main_pane">
+        <nav class="mb-2" id="breadcrumb_nav" title="{{ _('Navigation') }}">
+          <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/">{{ _('Home') }}</a></li>
+            <li class="breadcrumb-item"><a href="/u/{{ user.link() }}">{{ user.display_name() }}</a></li>
+            <li class="breadcrumb-item active" aria-current="page">{{ _('Referral code') }}</li>
+          </ol>
+        </nav>
+        <h1>{{ _('Referral code') }}</h1>
+        {% include "user/_user_nav.html" %}
+
+        <p>{{ _('New accounts can only be created with a referral code. Share your link or QR code with people you want to invite; their account is approved straight away.') }}</p>
+        {% if link -%}
+            <div class="mb-3">
+                <label class="form-label" for="referral_code">{{ _('Your code') }}</label>
+                <input type="text" class="form-control" id="referral_code" value="{{ user.referral_code }}" readonly>
+            </div>
+            <div class="mb-3">
+                <label class="form-label" for="referral_link">{{ _('Your link') }}</label>
+                <input type="text" class="form-control" id="referral_link" value="{{ link }}" readonly>
+            </div>
+            <div class="mb-3 referral_qr">{{ qr_svg | safe }}</div>
+            <p><a href="{{ url_for('user.user_referrals_qr_png') }}" class="btn btn-outline-secondary">{{ _('Download QR code (PNG)') }}</a></p>
+            <p>
+                {% if exempt -%}
+                    {{ _('Signups with this code: %(uses)d. Admins have no limit.', uses=uses) }}
+                {% else -%}
+                    {{ _('Signups with this code: %(uses)d', uses=uses) }}{% if per_code %} / {{ per_code }}{% endif %}.
+                    {{ _('All your referrals: %(lifetime)d', lifetime=lifetime) }}{% if per_user %} / {{ per_user }}{% endif %}.
+                {% endif -%}
+            </p>
+            <form method="post" action="{{ url_for('user.user_referrals_generate') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-warning confirm_first">{{ _('Regenerate referral code') }}</button>
+                <p class="small field_hint">{{ _('Your current link and QR code will stop working.') }}</p>
+            </form>
+        {% else -%}
+            <form method="post" action="{{ url_for('user.user_referrals_generate') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-primary">{{ _('Generate referral code') }}</button>
+            </form>
+        {% endif -%}
+    </main>
+</div>
+{% endblock %}
