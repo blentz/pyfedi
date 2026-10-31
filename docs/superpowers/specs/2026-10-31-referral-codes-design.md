@@ -16,7 +16,7 @@ Codes are generated in the user's settings, shown as a link and a QR code, and e
 | RC2 | Code = `uuid5(NS, f"{user_name}:{nonce}")`, where `NS = uuid5(NAMESPACE_DNS, SERVER_NAME)` and `nonce` is a random value stored per user. "Regenerate" rotates the nonce: the old code and every printed QR code stop working. A plain `uuid5(NS, user_name)` was rejected because anyone could compute it. |
 | RC3 | A missing or wrong code is refused outright: the form shows an "invalid referral code" error and no account is created. Nothing is queued for approval. |
 | RC4 | Caps are admin settings: **max signups per code** (it counts the current code and resets on regenerate) and **max referrals per user (lifetime)** (regenerating doesn't reset it). In both, 0 means unlimited, and admins are exempt from both. A capped code is refused like an invalid one. |
-| RC5 | Every signup path is covered. The web form uses the question/answer field, prefilled from `?ref=`. API `POST /user/register` is still an unimplemented stub (D1181) that refuses every signup; when it is finished it must call `referrer_for` on its answer field. OAuth signup is refused unless the session holds a `?ref=` code captured before the OAuth redirect, and that code is validated again at account creation. |
+| RC5 | Every signup path is covered. The web form uses the question/answer field, prefilled from `?ref=`. API `POST /user/register` takes the code in its `answer` field (see API registration below). OAuth signup is refused unless the session holds a `?ref=` code captured before the OAuth redirect, and that code is validated again at account creation. |
 | RC6 | Advertised as `RequireApplication` (API `registration_mode`) and `openRegistrations: false` (nodeinfo), so Lemmy-compatible clients show the question field. |
 | RC7 | A valid code skips only the approval queue. Email verification, honeypot/captcha, the onion proof, blocked words, the country block and the referrer block all still apply. |
 | RC8 | Codes are checked at use time. The code's owner must be local, not banned, not deleted, verified, and currently allowed by "Who can generate referral codes?" Narrowing that setting disables existing codes at once, and widening it brings them back. |
@@ -60,3 +60,20 @@ A referral panel is shown only when the mode is ReferralCode and the user is all
 - The admin referral list is `/admin/referrals`, gated by the 'administer all users' permission like `/admin/users`.
 - Rate limiting: the existing `/auth/register` limits apply. A wrong code gives the same generic error as an unknown code,
   so no oracle reveals whether a code exists.
+
+## API registration (added 2026-10-31)
+
+`POST /api/alpha/user/register` and `GET /api/alpha/user/get_captcha` are implemented (`app.auth.util.register_from_api`)
+so apps can sign people up. The web form's `RegistrationForm` validates the JSON body, then the web form's gates run in
+the same order, so all three registration modes and referral codes behave as they do in the browser. Owner rulings:
+
+| # | Ruling |
+|---|---|
+| AR1 | Captcha: Lemmy's `get_captcha`. `ok` is `{png, wav, uuid}` (base64, no `data:` prefix; the image is a JPEG), or null when captcha is off. Register sends `captcha_uuid`/`captcha_answer`, checked once with `decode_captcha`. |
+| AR2 | Registering is agreeing to the terms: the request has no terms field, as in Lemmy. |
+| AR3 | The onion refuses (`registration_closed`): its proof-of-work and wait step belong to the web form. |
+| AR4 | `jwt` is returned only when the account can log in now. It is null while email verification or an application is pending, and for an account created banned. `registration_created` means an application was created. |
+
+Refusals are 400 with a message: `registration_closed`, `captcha_incorrect`, `registration_declined` (country),
+`invalid_referral_code`, the web form's own refusal texts, or `<field>: <validator message>` for form validation.
+Rate limits match the web form's (300/day, 10 per 5 minutes); get_captcha is 60/hour.

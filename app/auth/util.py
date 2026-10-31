@@ -485,7 +485,7 @@ def register_from_api(data: dict) -> dict:
         'question': data.get('answer') or '', 'hp_field': data.get('honeypot') or '', 'timezone': 'UTC',
     }), meta={'csrf': False})
     del form.terms
-    if hasattr(form, 'captcha'):
+    if 'captcha' in form:   # RegistrationForm drops it when captcha is off; hasattr would still see the class attribute
         del form.captcha   # checked below from the JSON body: CaptchaField reads request.form
     if mode == 'Open':
         del form.question
