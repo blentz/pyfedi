@@ -517,3 +517,147 @@ def test_generate_needs_csrf(app, people):
     login(client, people['admin'])
     client.post('/user/settings/referrals/generate', data={})
     assert db.session.get(User, people['admin'].id).referral_code is None
+
+
+# --------------------------------------------------------------------------
+# Outside referral mode nothing changes
+# --------------------------------------------------------------------------
+
+def test_an_open_registration_records_no_referral(app, people, no_captcha):
+    _mode('Open')
+    _register(app.test_client(), '')
+    user = User.query.filter_by(user_name='newperson').one()
+    assert Referral.query.filter_by(referred_id=user.id).count() == 0
+
+
+def test_the_open_form_keeps_its_own_question_label(app, people):
+    _mode('Open')
+    with patch('app.auth.util.render_template', return_value='rendered') as rt:
+        app.test_client().get('/auth/register')
+    assert rt.call_args.kwargs['registration_open'] is True
+    assert rt.call_args.kwargs['form'].question is None   # an open site asks nothing
+
+
+def test_a_staff_only_domain_is_closed_outside_referral_mode(app, people):
+    _mode('Open')
+    _shop('staff')
+    with patch('app.auth.util.render_template', return_value='rendered') as rt:
+        app.test_client().get('/auth/register', base_url='https://shop.example')
+    assert rt.call_args.kwargs['registration_open'] is False
+
+
+def test_a_staff_only_domain_advertises_closed(people):
+    shop = _shop('staff')
+    site = db.session.get(Site, 1)
+    assert registration_mode_on(domain_by_id(shop.id), site) == 'Closed'
+    assert open_registrations(domain_by_id(shop.id), site) is False
+
+
+def test_oauth_signup_outside_referral_mode_is_unchanged(app, people):
+    from app.auth.oauth_util import initialize_new_user, refuse_new_oauth_account
+    _mode('Open')
+    with app.test_request_context('/'):
+        g.site = db.session.get(Site, 1)
+        assert refuse_new_oauth_account() is None
+        with patch('app.auth.oauth_util.finalize_user_setup'), patch('app.auth.oauth_util.login_user'):
+            user = initialize_new_user('plainoauth@example.com', 'plainoauth', 'discord_oauth_id', {'id': 'd-2'},
+                                       '127.0.0.1', '')
+    assert Referral.query.filter_by(referred_id=user.id).count() == 0
+
+
+def test_oauth_account_creation_without_a_usable_code_is_refused(app, people):
+    """initialize_new_user asks again under the row lock; a code that stopped working in between makes no account."""
+    from app.auth.oauth_util import initialize_new_user
+    with app.test_request_context('/'):
+        g.site = db.session.get(Site, 1)
+        with pytest.raises(ValueError):
+            initialize_new_user('late@example.com', 'late', 'discord_oauth_id', {'id': 'd-3'}, '127.0.0.1', '')
+    assert User.query.filter_by(email='late@example.com').count() == 0
+
+
+def test_the_qr_png_needs_a_code(app, people):
+    client = app.test_client()
+    login(client, people['admin'])
+    assert client.get('/user/settings/referrals/qr.png').status_code == 404
+
+
+# --------------------------------------------------------------------------
+# Every branch of the two new templates
+# --------------------------------------------------------------------------
+
+def test_the_settings_page_shows_counts_against_the_caps_for_a_capped_user(app, people):
+    set_setting('referral_generators', 'all')
+    set_setting('referral_max_per_code', 5)
+    set_setting('referral_max_per_user', 7)
+    plain = people['plain']
+    _code(plain)
+    _referred(plain, 'counted1')
+    client = app.test_client()
+    login(client, plain)
+    text = ' '.join(client.get('/user/settings/referrals').get_data(as_text=True).split())
+    assert 'Signups with this code: 1 / 5' in text
+    assert 'All your referrals: 1 / 7' in text
+    assert 'Regenerate referral code' in text and 'Referral code' in text
+
+
+def test_the_settings_page_shows_uncapped_counts(app, people):
+    set_setting('referral_generators', 'all')
+    plain = people['plain']
+    _code(plain)
+    client = app.test_client()
+    login(client, plain)
+    text = ' '.join(client.get('/user/settings/referrals').get_data(as_text=True).split())
+    assert 'Signups with this code: 0.' in text and 'All your referrals: 0.' in text
+
+
+def test_the_settings_page_shows_the_admin_exemption(app, people):
+    """One logged-in user per test: requests share the session's app context, so flask_login's g._login_user
+    from one client is still current for the next."""
+    _code(people['admin'])
+    client = app.test_client()
+    login(client, people['admin'])
+    assert 'Admins have no limit' in client.get('/user/settings/referrals').get_data(as_text=True)
+
+
+def test_the_settings_nav_links_the_page_for_someone_allowed(app, people):
+    client = app.test_client()
+    login(client, people['admin'])
+    assert '/user/settings/referrals' in client.get('/user/passkeys').get_data(as_text=True)
+
+
+def test_the_settings_nav_hides_the_page_from_someone_not_allowed(app, people):
+    client = app.test_client()
+    login(client, people['plain'])
+    assert '/user/settings/referrals' not in client.get('/user/passkeys').get_data(as_text=True)
+
+
+def test_the_admin_list_pages_and_names_a_deleted_referrer(app, admin_client, people):
+    admin = people['admin']
+    _code(admin)
+    local = Instance.query.filter_by(domain=SERVER).one()
+    for n in range(101):
+        user = make_user(local, f'bulk{n}', local=True)
+        record_referral(admin, user)
+    orphan = make_user(local, 'orphan', local=True)
+    db.session.add(Referral(referrer_id=None, referred=orphan, code=admin.referral_code))
+    db.session.commit()
+    first = admin_client.get('/admin/referrals').get_data(as_text=True)
+    assert 'Next page' in first and 'Previous page' not in first
+    assert '(deleted)' in first
+    second = admin_client.get('/admin/referrals?page=2').get_data(as_text=True)
+    assert 'Previous page' in second and 'Next page' not in second
+    filtered = admin_client.get('/admin/referrals?referrer=adminuser').get_data(as_text=True)
+    assert '>All<' in filtered and '(deleted)' not in filtered
+
+
+def test_the_admin_list_says_when_there_are_none(app, admin_client):
+    assert 'No referrals yet.' in admin_client.get('/admin/referrals').get_data(as_text=True)
+
+
+def test_the_admin_navs_link_the_list_only_in_referral_mode(app, admin_client):
+    assert '/admin/referrals' in admin_client.get('/admin/referrals').get_data(as_text=True)
+    _mode('Open')
+    from app import cache
+    from app.utils import get_site_as_dict
+    cache.delete_memoized(get_site_as_dict)
+    assert '/admin/referrals' not in admin_client.get('/admin/users').get_data(as_text=True)
