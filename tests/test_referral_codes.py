@@ -694,3 +694,29 @@ def test_the_mastodon_email_step_without_a_code_makes_no_account(app, people):
     response = client.post('/auth/mastodon_authorize', data={'email': 'tooter@example.com', 'submit': 'Set email'})
     assert response.headers['Location'] == '/auth/login'
     assert User.query.filter_by(email='tooter@example.com').count() == 0
+
+
+# --------------------------------------------------------------------------
+# RC5: the API's register endpoint (a stub today, D1181) must never become a way round referral mode
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize('with_code', [False, True])
+def test_api_register_never_creates_an_account_in_referral_mode(app, people, monkeypatch, with_code):
+    """POST /api/alpha/user/register refuses everything while it is unimplemented. Whoever implements it must check
+    `answer` with app.referral.referrer_for and call record_referral on success, as the web form does: without a code
+    no account may be made, and an account made with one must carry its Referral row."""
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    code = _code(people['admin']) if with_code else ''
+    before = User.query.count()
+    response = app.test_client().post('/api/alpha/user/register', json={
+        'username': 'apiperson', 'password': 'a-good-password', 'password_verify': 'a-good-password',
+        'email': 'apiperson@example.com', 'answer': code})
+    created = User.query.filter_by(user_name='apiperson').first()
+    assert response.status_code != 404   # the route is really there: a 404 would pass every row below vacuously
+    if not with_code:
+        assert created is None and User.query.count() == before
+        assert response.status_code >= 400
+    elif created is not None:   # an implemented endpoint: a valid code may create the account, but only as a referral
+        assert Referral.query.filter_by(referred_id=created.id).one().referrer_id == people['admin'].id
+    else:
+        assert response.status_code >= 400
