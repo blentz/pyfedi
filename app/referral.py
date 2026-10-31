@@ -119,7 +119,7 @@ def referral_link(user: User) -> str:
 
 
 def referral_qr_svg(link: str) -> str:
-    return segno.make(link, error='m').svg_inline(scale=5, title='QR code', border=2)
+    return segno.make(link, error='m').svg_inline(scale=5, title='QR code', border=2, dark='#000', light='#fff')
 
 
 def referral_qr_png(link: str) -> bytes:

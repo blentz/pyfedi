@@ -243,6 +243,12 @@ def test_the_qr_is_an_svg_of_the_link():
     assert svg.lstrip().startswith('<svg') and '</svg>' in svg
 
 
+def test_the_qr_svg_has_its_own_white_background():
+    """A transparent QR is unreadable on the dark theme: the light modules and the quiet zone are painted white."""
+    svg = referral_qr_svg('https://test.piefed.local/auth/register?ref=x')
+    assert '<path fill="#fff"' in svg
+
+
 # --------------------------------------------------------------------------
 # RC6: what is advertised
 # --------------------------------------------------------------------------
