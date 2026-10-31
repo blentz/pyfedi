@@ -696,7 +696,7 @@ def register(client, **overrides):
 
 def no_captcha():
     """Fact 529."""
-    return patch('app.auth.forms.get_setting', return_value=False)
+    return patch('app.auth.forms.captcha_enabled', return_value=False)
 
 
 def verification(on):

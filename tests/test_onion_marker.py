@@ -312,7 +312,7 @@ def test_onion_signup_stores_the_sentinel_ip(app, site):
     registration_env()
     add_onion_domain()
     with proxy_ip(app), patch.dict(app.config, {'COUNTRY_SOURCE_HEADER': 'CF-IPCountry'}), \
-            patch('app.auth.forms.get_setting', return_value=False), \
+            patch('app.auth.forms.captcha_enabled', return_value=False), \
             patch('app.auth.util.ip2location') as located, \
             patch('app.auth.util.send_email_verification'), patch('app.auth.util.sync_user_with_ldap'), \
             patch('app.auth.routes.onion_proof_refused', return_value=False):   # task 10's proof: test_onion_pow.py
@@ -330,7 +330,7 @@ def test_onion_signup_stores_the_sentinel_ip(app, site):
 
 def test_clearnet_signup_ip_stored(app, site):
     registration_env()
-    with proxy_ip(app), patch('app.auth.forms.get_setting', return_value=False), \
+    with proxy_ip(app), patch('app.auth.forms.captcha_enabled', return_value=False), \
             patch('app.auth.util.send_email_verification'), patch('app.auth.util.sync_user_with_ldap'):
         response = app.test_client().post('/auth/register', data=REGISTRATION,
                                           environ_base={'REMOTE_ADDR': '203.0.113.9'})

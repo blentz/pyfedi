@@ -69,7 +69,7 @@ import app.activitypub.serializers.microblog as microblog_serializer   # the mod
 import app.activitypub.serializers.peertube as peertube_serializer   # likewise
 import app.activitypub.serializers.podcast as podcast_serializer   # likewise
 import urllib.parse
-from app.utils import feed_open_to, random_chars, site_language_id, is_hex_color, save_image_without_metadata, \
+from app.utils import captcha_enabled, feed_open_to, random_chars, site_language_id, is_hex_color, save_image_without_metadata, \
     refuse_over_remote_thumbnail_cap
 from app.visibility import OPEN_VISIBILITIES, can_view, is_open, post_served_to_any_peer, post_title_for, \
     post_withheld_from_peers
@@ -6319,7 +6319,7 @@ def lemmy_site_data(domain: DomainInfo):
                 "application_email_admins": True,
                 "actor_name_max_length": 20,
                 "federation_enabled": True,
-                "captcha_enabled": get_setting('captcha_enabled', True),
+                "captcha_enabled": captcha_enabled(),
                 "captcha_difficulty": "medium",
                 "published": site.created_at.isoformat(),
                 "updated": site.updated.isoformat(),

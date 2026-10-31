@@ -388,7 +388,7 @@ def test_the_captcha_field_is_removed_when_the_site_turns_it_off(app, db_session
 
     _seed()
     with app.test_request_context('/'):
-        with patch('app.auth.forms.get_setting', return_value=captcha_enabled):
+        with patch('app.auth.forms.captcha_enabled', return_value=captcha_enabled):
             form = RegistrationForm(meta={'csrf': False})
 
         assert ('captcha' in form._fields) is present

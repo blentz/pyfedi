@@ -542,6 +542,12 @@ def get_setting(name: str, default=None):
             return default
 
 
+
+def captcha_enabled() -> bool:
+    """Whether registration asks for a captcha. One default for every reader (D1398): required until an admin turns
+    it off, because no migration or seed writes a `captcha_enabled` row."""
+    return bool(get_setting('captcha_enabled', True))
+
 # retrieves arbitrary object from persistent key-value store
 def set_setting(name: str, value):
     setting = Settings.query.filter_by(name=name).first()

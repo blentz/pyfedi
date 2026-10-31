@@ -70,7 +70,7 @@ def no_captcha():
     the form refuses the submission before any route code runs -- which is
     what made the first attempt at D1133's probe measure nothing (fact 529).
     """
-    with patch('app.auth.forms.get_setting', return_value=False):
+    with patch('app.auth.forms.captcha_enabled', return_value=False):
         yield
 
 

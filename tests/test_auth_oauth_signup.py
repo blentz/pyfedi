@@ -616,7 +616,7 @@ def test_an_email_somebody_else_holds_is_refused_on_the_form(app, env):
         session['user_info'] = {'id': 'remote-9', 'username': 'Someone'}
 
     with no_setup():
-        with patch('app.auth.forms.get_setting', return_value=False):
+        with patch('app.auth.forms.captcha_enabled', return_value=False):
             response = client.post('/auth/mastodon_authorize',
                                    data={'email': 'person@example.com',
                                          'submit': 'Register'})

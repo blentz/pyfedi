@@ -60,7 +60,7 @@ from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
 from app.translation import LibreTranslateAPI
-from app.utils import canonical_host, render_template, permission_required, set_setting, get_setting, gibberish, markdown_to_html, \
+from app.utils import canonical_host, captcha_enabled, render_template, permission_required, set_setting, get_setting, gibberish, markdown_to_html, \
     max_album_images, \
     moderating_communities, joined_communities, finalize_user_setup, theme_list, blocked_phrases, blocked_referrers, \
     topic_tree, languages_for_form, menu_topics, ensure_directory_exists, add_to_modlog, get_request, \
@@ -698,7 +698,7 @@ def admin_misc():
         # Round 203's failure mode -- a pre-fill disagreeing with reality resets the
         # setting on the next save -- arriving through a mismatched DEFAULT rather
         # than a missing line.
-        form.captcha_enabled.data = get_setting('captcha_enabled', True)
+        form.captcha_enabled.data = captcha_enabled()
         form.onion_pow_difficulty.data = pow_difficulty()
         form.onion_media_cache_mb.data = get_setting('onion_media_cache_bytes', DEFAULT_CACHE_BYTES) // 1048576
         form.onion_media_image_max_mb.data = get_setting('onion_media_image_max_bytes', 20971520) // 1048576

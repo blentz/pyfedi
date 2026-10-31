@@ -31,7 +31,8 @@ from app.models import Conversation, ChatMessage, Notification, PostReply, User,
 # package before they are defined (import cycle: app.shared.user)
 import app.shared.user as shared_user
 from app.utils import authorise_api_user, in_sorted_list, user_in_restricted_country, user_access, user_notes
-from app.utils import create_captcha, get_setting, markdown_to_html, log_login_failure
+from app.utils import captcha_enabled, create_captcha, markdown_to_html, log_login_failure
+from app.onion import is_onion_request
 from app.visibility import visible_to_clause
 from app.storefront import canonicalise_text, current_instance_id, current_storefront, domain_for_host, link_on, on_domain, storefront_link
 
@@ -1170,7 +1171,9 @@ def post_user_register(data):
 def get_user_captcha():
     """Lemmy's get_captcha: `ok` is null when the instance asks for no captcha, else the base64 image and audio (no
     data: prefix) and the uuid that register's captcha_uuid names. The image is a JPEG, in Lemmy's `png` key."""
-    if not get_setting('captcha_enabled', True):
+    if is_onion_request():
+        raise Exception('registration_closed')   # the onion takes no app signups (AR3), so it hands out no captchas
+    if not captcha_enabled():
         return {'ok': None}
     captcha = create_captcha()
     strip = lambda data_uri: data_uri.split(',', 1)[1].replace('\n', '')

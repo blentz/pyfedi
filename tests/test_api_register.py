@@ -228,6 +228,13 @@ def test_get_captcha_is_null_when_none_is_asked(app, api):
     assert response.status_code == 200 and response.get_json() == {'ok': None}
 
 
+def test_get_captcha_refuses_on_the_onion(app, api):
+    set_setting('captcha_enabled', True)
+    with patch('app.api.alpha.utils.user.is_onion_request', return_value=True):
+        response = api['client'].get('/api/alpha/user/get_captcha')
+    assert response.status_code == 400 and response.get_json()['message'] == 'registration_closed'
+
+
 def test_get_captcha_returns_lemmys_shape(app, api):
     set_setting('captcha_enabled', True)
     body = api['client'].get('/api/alpha/user/get_captcha').get_json()['ok']

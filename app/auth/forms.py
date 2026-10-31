@@ -8,7 +8,7 @@ from wtforms.validators import ValidationError, DataRequired, Email, EqualTo, Le
 from app.local_names import local_named
 from app.models import User, Community, Feed
 from app.storefront import current_storefront
-from app.utils import MultiCheckboxField, CaptchaField, get_setting, validate_user_name_charset
+from app.utils import MultiCheckboxField, CaptchaField, captcha_enabled, validate_user_name_charset
 from app.form_choices import select_choices
 
 
@@ -51,7 +51,7 @@ class RegistrationForm(FlaskForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if not get_setting('captcha_enabled', True):
+        if not captcha_enabled():
             delattr(self, 'captcha')
 
     def validate_real_email(self, email):

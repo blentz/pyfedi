@@ -10604,11 +10604,11 @@ truncation from the other direction. Never pipe a long-running pass into
 
 **529. `RegistrationForm` CARRIES A CAPTCHA UNLESS `captcha_enabled` IS
 OFF.** `CaptchaField` with `DataRequired` is added in `__init__` and removed
-only when `get_setting('captcha_enabled', True)` is false, so a registration
+only when `captcha_enabled()` (app/utils.py) is false, so a registration
 row that does not patch that setting has its POST refused by the form before
 any route code runs -- and the route answers 200 (the form, re-rendered),
 which reads like the route rejecting the registration rather than the form
-never letting it through. Patch `app.auth.forms.get_setting`.
+never letting it through. Patch `app.auth.forms.captcha_enabled`.
 
 **530. `g.site` IS A TRANSIENT COPY, NOT THE ROW.** `before_request` builds
 it as `Site(**get_site_as_dict())` -- a new object from a plain dict, never

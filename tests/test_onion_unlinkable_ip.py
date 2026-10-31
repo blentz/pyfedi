@@ -134,7 +134,7 @@ def test_clearnet_api_post_and_reply_still_update_the_ip(app, world):
 
 def test_onion_registered_account_always_has_the_sentinel(app, world):
     registration_env()
-    with proxy_ip(app), patch('app.auth.forms.get_setting', return_value=False), \
+    with proxy_ip(app), patch('app.auth.forms.captcha_enabled', return_value=False), \
             patch('app.auth.util.send_email_verification'), patch('app.auth.util.sync_user_with_ldap'), \
             patch('app.auth.routes.onion_proof_refused', return_value=False), \
             patch('app.auth.util.get_country') as geolocated:

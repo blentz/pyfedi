@@ -67,6 +67,9 @@ ONION_SESSION_EXEMPT: frozenset[str] = frozenset({
     # Keyed by the logged-in user's id (their own key_func), not by session; anonymous callers are sent to log in.
     'main.home_live_posts',
     'community.live_posts_fragment',
+    # App registration: apps keep no cookies, and both refuse on the onion anyway (API registration ruling AR3).
+    'User.post_alpha_user_register',
+    'User.get_alpha_user_get_captcha',
 })
 
 COOKIE_CHECK = 'cookie_check=1'

@@ -144,14 +144,15 @@ def test_every_allowlisted_name_differs_only_by_an_omitted_default():
 
 
 def test_the_captcha_setting_reads_the_same_default_everywhere():
-    """D1398 by name, so the repair cannot be undone quietly. Three callers, one
-    answer, and the answer is `True`: the captcha is required until an admin turns it
-    off, not off until one turns it on."""
+    """D1398 by name, so the repair cannot be undone quietly. One reader,
+    `app.utils.captcha_enabled`, which every caller goes through, and its answer is
+    `True`: the captcha is required until an admin turns it off, not off until one
+    turns it on."""
     calls = _get_setting_calls()
     defaults = {default for _, _, default in calls['captcha_enabled']}
 
     assert defaults == {'True'}
-    assert len(calls['captcha_enabled']) == 3
+    assert calls['captcha_enabled'] == [('app/utils.py', calls['captcha_enabled'][0][1], 'True')]
 
 
 # --------------------------------------------------------------------------

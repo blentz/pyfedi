@@ -32,7 +32,7 @@ from app.log_scrub import log_ldap_sync_failure
 from app.referral import REFERRAL_MODE, record_referral, referral_mode_on, referrer_for
 from app.onion_account import audit_country, audit_ip, is_onion_account
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message, prepare_onion_proof
-from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, \
+from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, captcha_enabled, \
     finalize_user_setup, get_request, get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
     user_ip_banned, log_login_failure, role_access, actor_contains_blocked_words, get_site_as_dict, user_name_is_taken, \
@@ -492,7 +492,7 @@ def register_from_api(data: dict) -> dict:
     if not form.validate():
         field, errors = next(iter(form.errors.items()))
         raise Exception(f'{field}: {errors[0]}')
-    if get_setting('captcha_enabled', True) and not decode_captcha(data.get('captcha_uuid'), data.get('captcha_answer')):
+    if captcha_enabled() and not decode_captcha(data.get('captcha_uuid'), data.get('captcha_answer')):
         raise Exception('captcha_incorrect')
 
     form.user_name.data = normalize_utf(form.user_name.data.strip())

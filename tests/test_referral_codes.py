@@ -270,7 +270,7 @@ def test_nodeinfo_says_registrations_are_not_open(app, people):
 
 @pytest.fixture
 def no_captcha():
-    with patch('app.auth.forms.get_setting', return_value=False):
+    with patch('app.auth.forms.captcha_enabled', return_value=False):
         yield
 
 
