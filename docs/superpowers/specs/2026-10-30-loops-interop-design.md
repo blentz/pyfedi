@@ -10,10 +10,10 @@ Loops (joinloops, the federated short-video app by the Pixelfed author) carried 
 
 ## 1. Goal
 
-- **In:** Loops videos reach hell.cloud as playable video posts, with their thumbnail, alt text and a clean title.
-  They come from the Loops relay and from Loops accounts that hell.cloud users follow. Loops comments, edits and
+- **In:** Loops videos reach <first-domain> as playable video posts, with their thumbnail, alt text and a clean title.
+  They come from the Loops relay and from Loops accounts that <first-domain> users follow. Loops comments, edits and
   deletes follow.
-- **Out:** a Loops user who follows a hell.cloud user sees that user's uploaded videos in their Loops Following feed
+- **Out:** a Loops user who follows a <first-domain> user sees that user's uploaded videos in their Loops Following feed
   as native Loops videos. Likes and comments from Loops come back into the PieFed thread.
 
 ### Owner rulings (2026-10-30)
@@ -61,7 +61,7 @@ Found:
   answers 202 and drops it: its inbox stores only a `Note` (`CreateValidator`).
 - **U1 (Loops bug).** Loops drops the first activity from any actor it has not stored yet: the new `Profile` is
   created without `status`, so `status !== 1` returns early
-  (`ProcessInboxActivityWithVerification.php:484, :95`). A hell.cloud user's first Follow of a Loops account stays
+  (`ProcessInboxActivityWithVerification.php:484, :95`). A <first-domain> user's first Follow of a Loops account stays
   pending; the same Follow sent again is accepted at once.
 
 The relay, verified with a stand-in (ruling L4, 2026-10-30): the published `joinloops/relay` (one commit,
@@ -73,7 +73,7 @@ sends its public video Creates there; PieFed's `add_relay` detects it as LitePub
 Loops user nobody here follows arrives through the relay's Announce, is fetched from Loops by
 `process_relayed_announce`, and is stored in `microblogs` as a video post with `relay_id` set. Not covered by the
 stand-in: the real relay's moderation and filtering, and its invite-only setting (`restrict => true`), which keeps
-our Follow pending until its admin allows hell.cloud.
+our Follow pending until its admin allows <first-domain>.
 
 ## 3. Design
 
@@ -121,8 +121,8 @@ refuse is not sent to Loops at all: mime not `video/mp4`, or larger than 100 MB.
 (Pixelfed P2), which Loops accepts.
 
 Inbound from Loops on our videos: Loops sends a comment only to the commenter's followers and mentioned accounts,
-never to the video's author (source analysis §4), so a Loops comment on a hell.cloud video arrives only if a
-hell.cloud user follows the commenter. Recorded as a Loops limitation. Likes go to the author's inbox and arrive.
+never to the video's author (source analysis §4), so a Loops comment on a <first-domain> video arrives only if a
+<first-domain> user follows the commenter. Recorded as a Loops limitation. Likes go to the author's inbox and arrive.
 
 ### 3.4 U1: re-send a Follow that Loops dropped
 
@@ -136,7 +136,7 @@ is `LOOPS_FOLLOW_RESEND_SECONDS` (default 300; the harness sets 10). Built: `res
 
 Nothing to build: the relay path works (§2). The owner adds `https://relay.loopsplatform.com/actor` on the relay
 admin page (not the root URL the relay's own page shows: it is an HTML landing page, which `detect_relay` refuses),
-then asks the relay admin to allow hell.cloud. A unit test pins `detect_relay` on the relay's real actor
+then asks the relay admin to allow <first-domain>. A unit test pins `detect_relay` on the relay's real actor
 document (LitePub style, its `/actor/inbox`), so a change on either side shows up in the suite.
 
 ### 3.6 Interop tests (`interop/test_loops.py`)
