@@ -8,7 +8,7 @@ from flask import g
 from app import db
 from app.models import Instance, Referral, Role, Site, SiteDomain, User, UserRegistration, user_role
 from app.referral import (REFERRAL_MODE, derive_code, generate_code, may_generate, open_registrations, record_referral,
-                          referral_link, referral_namespace, referral_qr_svg, referrer_for)
+                          referral_link, referral_namespace, referral_qr_svg, referrer_for, remaining_signups)
 from app.storefront import clear_domain_cache, default_domain, domain_by_id, registration_mode_on
 from app.utils import get_setting, set_setting
 from tests.factories import make_instance, make_user
@@ -153,6 +153,44 @@ def _referred(referrer, name):
     record_referral(referrer, user)
     db.session.commit()
     return user
+
+
+@pytest.mark.parametrize('per_code, per_user, expected', [
+    (0, 0, (None, None)),   # both unlimited
+    (5, 0, (4, None)),      # only the code is capped
+    (0, 7, (6, 6)),         # only the lifetime is capped: the code can take no more than the lifetime has left
+    (5, 7, (4, 6)),
+    (5, 2, (1, 1)),         # the lifetime is the tighter limit
+    (1, 7, (0, 6)),         # the code is used up; a regenerated one would have 6
+])
+def test_remaining_signups_per_code_and_lifetime(people, per_code, per_user, expected):
+    set_setting('referral_generators', 'all')
+    set_setting('referral_max_per_code', per_code)
+    set_setting('referral_max_per_user', per_user)
+    plain = people['plain']
+    _code(plain)
+    _referred(plain, 'left1')
+    assert remaining_signups(plain) == expected
+
+
+def test_remaining_signups_never_goes_negative_when_a_cap_is_lowered(people):
+    set_setting('referral_generators', 'all')
+    plain = people['plain']
+    _code(plain)
+    _referred(plain, 'over1')
+    _referred(plain, 'over2')
+    set_setting('referral_max_per_code', 1)
+    set_setting('referral_max_per_user', 1)
+    assert remaining_signups(plain) == (0, 0)
+
+
+def test_remaining_signups_is_unlimited_for_admins(people):
+    set_setting('referral_max_per_code', 1)
+    set_setting('referral_max_per_user', 1)
+    admin = people['admin']
+    _code(admin)
+    _referred(admin, 'byadmin')
+    assert remaining_signups(admin) == (None, None)
 
 
 def test_the_per_code_cap_and_regenerate_resets_it(people):
@@ -603,6 +641,7 @@ def test_the_settings_page_shows_counts_against_the_caps_for_a_capped_user(app, 
     text = ' '.join(client.get('/user/settings/referrals').get_data(as_text=True).split())
     assert 'Signups with this code: 1 / 5' in text
     assert 'All your referrals: 1 / 7' in text
+    assert 'Signups left with this code: 4' in text and 'Signups left in total: 6' in text
     assert 'Regenerate referral code' in text and 'Referral code' in text
 
 
@@ -614,6 +653,7 @@ def test_the_settings_page_shows_uncapped_counts(app, people):
     login(client, plain)
     text = ' '.join(client.get('/user/settings/referrals').get_data(as_text=True).split())
     assert 'Signups with this code: 0.' in text and 'All your referrals: 0.' in text
+    assert 'Signups left with this code: unlimited' in text and 'Signups left in total: unlimited' in text
 
 
 def test_the_settings_page_shows_the_admin_exemption(app, people):

@@ -73,15 +73,22 @@ def caps() -> tuple[int, int]:
     return int(get_setting(MAX_PER_CODE_SETTING, 0) or 0), int(get_setting(MAX_PER_USER_SETTING, 0) or 0)
 
 
-def under_caps(user: User) -> bool:
+def remaining_signups(user: User) -> tuple[int | None, int | None]:
+    """(signups left on the current code, signups left in total); None is unlimited. The code can never take more than
+    the lifetime cap has left, so its figure is the lower of the two. Admins are exempt (RC4)."""
     if user.is_admin():
-        return True
+        return None, None
     per_code, per_user = caps()
-    if per_code and uses_of_current_code(user) >= per_code:
-        return False
-    if per_user and lifetime_referrals(user) >= per_user:
-        return False
-    return True
+    lifetime_left = max(per_user - lifetime_referrals(user), 0) if per_user else None
+    code_left = max(per_code - uses_of_current_code(user), 0) if per_code else None
+    if lifetime_left is not None:
+        code_left = lifetime_left if code_left is None else min(code_left, lifetime_left)
+    return code_left, lifetime_left
+
+
+def under_caps(user: User) -> bool:
+    """Whether the current code can take another signup: the same figure the settings page shows."""
+    return remaining_signups(user)[0] != 0
 
 
 def normalise_code(text: str | None) -> str | None:

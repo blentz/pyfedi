@@ -36,6 +36,8 @@
                 {% else -%}
                     {{ _('Signups with this code: %(uses)d', uses=uses) }}{% if per_code %} / {{ per_code }}{% endif %}.
                     {{ _('All your referrals: %(lifetime)d', lifetime=lifetime) }}{% if per_user %} / {{ per_user }}{% endif %}.
+                    <br>{{ _('Signups left with this code: %(left)s', left=code_left if code_left is not none else _('unlimited')) }}.
+                    <br>{{ _('Signups left in total: %(left)s', left=lifetime_left if lifetime_left is not none else _('unlimited')) }}.
                 {% endif -%}
             </p>
             <form method="post" action="{{ url_for('user.user_referrals_generate') }}">
