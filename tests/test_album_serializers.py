@@ -43,6 +43,17 @@ def test_an_image_post_has_its_one_picture(db_session):
     assert post.album_images() == ([post.image] if post.image is not None else [])
 
 
+def test_an_image_post_with_its_image_has_that_one_picture(db_session):
+    post = _local(post_type=POST_TYPE_IMAGE)
+    image = File(source_url=f'{OURS}/only.png')
+    db.session.add(image)
+    db.session.flush()
+    post.image_id = image.id
+    db.session.commit()
+
+    assert post.album_images() == [image]
+
+
 def test_the_note_carries_a_document_per_picture(db_session):
     post = _gallery(_local(post_type=POST_TYPE_GALLERY), (f'{OURS}/a.png', 'a'), (f'{OURS}/b.webp', 'b'),
                     (f'{OURS}/c.gif', None))

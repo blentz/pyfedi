@@ -584,6 +584,20 @@ def test_a_comment_search_finds_a_reply_by_its_body(app, db_session):
     assert render.call_args.kwargs['posts'] is None
 
 
+def test_a_comment_search_with_no_words_lists_by_its_other_filters(app, db_session):
+    """No query text: the community filter alone runs the search, and every comment in it is listed."""
+    instance, alice, bob = _seed()
+    community, elsewhere = make_community('microblogs'), make_community('elsewhere')
+    _reply(community, bob, _post(community, alice, 'a thread'), 'here')
+    _reply(elsewhere, bob, _post(elsewhere, alice, 'b thread'), 'there')
+    client = app.test_client()
+
+    with patch('app.search.routes.render_template', return_value='rendered') as render:
+        client.get(f'/search?q=&search_for=comments&community_id={community.id}')
+
+    assert _bodies(render) == ['here']
+
+
 def test_a_comment_search_skips_deleted_followers_only_and_unindexed_replies(app, db_session):
     instance, alice, bob = _seed()
     community = make_community('microblogs')

@@ -2380,6 +2380,18 @@ class TestUrlChangeImageUrl:
         assert [(file.source_url, file.alt_text) for file in post.gallery_pictures()] == [
             (CHANGED_IMAGE_URL, ATTACHMENT_ALT), (UNTAKEN_URL, UNTAKEN_ALT)]
 
+    def test_an_image_with_no_url_does_not_stop_the_walk(self, app, db_session, http_mock, redis_lock_only_double):
+        """The first image WITH a url is taken: an empty one before it is passed over, not the end of the walk."""
+        post = _seed_link_post()
+        _taken(http_mock, CHANGED_IMAGE_URL)
+
+        update_post_from_activity(post, _attachment_update(
+            {'type': 'Image', 'url': '', 'name': UNTAKEN_ALT},
+            {'type': 'Image', 'url': CHANGED_IMAGE_URL, 'name': ATTACHMENT_ALT}))
+
+        db.session.expire_all()
+        assert post.url == CHANGED_IMAGE_URL and post.type == POST_TYPE_IMAGE
+
     def test_alt_text_longer_than_the_column_is_cut_to_it(self, app, db_session, http_mock, redis_lock_only_double):
         """File.alt_text is varchar(1500); a longer caption was a StringDataRightTruncation at commit."""
         post = _seed_link_post()

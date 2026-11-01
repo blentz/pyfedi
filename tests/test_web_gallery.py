@@ -126,6 +126,15 @@ def test_a_picture_from_4chan_is_refused(images_allowed, monkeypatch):
     assert the_post() is None
 
 
+def test_a_gallery_without_a_title_is_not_posted(images_allowed):
+    env = images_allowed
+
+    response = submit(env, env.stranger, env.talk, 'gallery', title='', **slots((png(), 'one'), (png((9, 9, 9)), 'two')))
+
+    assert response.status_code == 200 and the_post() is None
+    assert Post.query.count() == 0
+
+
 def _gallery(env):
     post_gallery(env, (png(), 'first'), (png((9, 9, 9)), 'keep me'), (png((8, 8, 8)), 'drop me'))
     return the_post()
