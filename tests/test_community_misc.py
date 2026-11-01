@@ -183,7 +183,7 @@ def metadata(app, body=b'', status=200, url='https://example.com/x', headers=Non
 def test_a_page_over_the_default_cap_is_read_under_its_own(app, env):
     """A page with inline scripts passes the default 1 MiB easily: the metadata fetch is capped at
     PAGE_MAX_BYTES instead."""
-    title, description = metadata(app, b'<html><head><title>Big</title></head><body>'
+    title, description, image = metadata(app, b'<html><head><title>Big</title></head><body>'
                                        + b'x' * FETCH_MAX_BYTES + b'</body></html>')
 
     assert title == 'Big'
@@ -192,16 +192,16 @@ def test_a_page_over_the_default_cap_is_read_under_its_own(app, env):
 def test_a_page_over_its_cap_yields_nothing(app, env):
     """ResponseTooLarge, into the `except Exception:` arm: refused before the body is read."""
     assert metadata(app, b'<html><title>Ignored</title></html>',
-                    headers={'Content-Length': str(PAGE_MAX_BYTES + 1)}) == ('', '')
+                    headers={'Content-Length': str(PAGE_MAX_BYTES + 1)}) == ('', '', '')
 
 
 def test_a_redirect_is_not_followed(app, env):
     """No route serves the Location, so following it would error the test."""
-    assert metadata(app, status=302, headers={'Location': 'https://elsewhere.example/x'}) == ('', '')
+    assert metadata(app, status=302, headers={'Location': 'https://elsewhere.example/x'}) == ('', '', '')
 
 
 def test_the_open_graph_title_is_preferred(app, env):
-    title, description = metadata(app, (
+    title, description, image = metadata(app, (
         b'<html><head><meta property="og:title" content=" Social title ">'
         b'<title>HTML title</title></head></html>'))
 
@@ -211,14 +211,14 @@ def test_the_open_graph_title_is_preferred(app, env):
 def test_the_html_title_is_the_fallback(app, env):
     """`if title == '':` -- a page with no og:title, and one whose og:title is
     empty, both fall through to `<title>`."""
-    title, description = metadata(app, (
+    title, description, image = metadata(app, (
         b'<html><head><title> HTML title </title></head></html>'))
 
     assert title == 'HTML title'
 
 
 def test_an_empty_open_graph_title_falls_back_too(app, env):
-    title, description = metadata(app, (
+    title, description, image = metadata(app, (
         b'<html><head><meta property="og:title" content="">'
         b'<title>HTML title</title></head></html>'))
 
@@ -226,23 +226,31 @@ def test_an_empty_open_graph_title_falls_back_too(app, env):
 
 
 def test_a_page_with_no_title_gives_an_empty_one(app, env):
-    title, description = metadata(app, b'<html><head></head></html>')
+    title, description, image = metadata(app, b'<html><head></head></html>')
 
-    assert (title, description) == ('', '')
+    assert (title, description, image) == ('', '', '')
+
+
+def test_the_open_graph_image_is_read(app, env):
+    """The third value: the page's og:image, which the already-posted check offers as the thumbnail."""
+    title, description, image = metadata(app, (
+        b'<html><head><meta property="og:image" content=" https://example.com/i.png "></head></html>'))
+
+    assert image == 'https://example.com/i.png'
 
 
 def test_the_description_is_read_from_the_meta_tag(app, env):
-    title, description = metadata(app, (
+    title, description, image = metadata(app, (
         b'<html><head><meta name="description" content=" What this is "></head></html>'))
 
     assert description == 'What this is'
 
 
 def test_a_non_200_response_yields_nothing(app, env):
-    title, description = metadata(app, b'<html><title>Ignored</title></html>',
+    title, description, image = metadata(app, b'<html><title>Ignored</title></html>',
                                   status=404)
 
-    assert (title, description) == ('', '')
+    assert (title, description, image) == ('', '', '')
 
 
 def test_a_refused_uri_is_not_fetched(app, env):
@@ -256,7 +264,7 @@ def test_a_refused_uri_is_not_fetched(app, env):
                        return_value=True):
                 result = retrieve_metadata_of_url('https://internal.example/x')
 
-    assert result == ('', '')
+    assert result == ('', '', '')
     assert fetch.call_args is None
 
 
@@ -270,7 +278,7 @@ def test_a_transport_failure_yields_nothing(app, env):
                    side_effect=RuntimeError('connection reset')):
             result = retrieve_metadata_of_url('https://example.com/x')
 
-    assert result == ('', '')
+    assert result == ('', '', '')
 
 
 # --------------------------------------------------------------------------

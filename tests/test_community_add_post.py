@@ -23,6 +23,7 @@ from unittest.mock import patch
 import pytest
 
 from app import db
+from app.constants import POST_STATUS_PUBLISHED
 from app.models import Community, Language, Post, Site
 from tests.factories import (make_community, make_community_member,
                              make_instance, make_user)
@@ -591,9 +592,9 @@ def test_a_banned_user_cannot_post(app, poster):
     assert render.call_args_list == []
 
 
-def test_a_user_banned_from_posting_cannot_post(app, poster):
-    """`current_user.ban_posts` is a separate sanction from `banned` -- an
-    account that may still read and comment but not post."""
+def test_a_user_banned_from_posting_still_gets_the_form(app, poster):
+    """Since v1.8.10 (778fb654, the post approval queue) `ban_posts` no longer refuses the form: the account may
+    post, and make_post holds what it posts for review (POST_STATUS_REVIEWING)."""
     client, token, community, author, english = poster
     author.ban_posts = True
     db.session.commit()
@@ -602,7 +603,7 @@ def test_a_user_banned_from_posting_cannot_post(app, poster):
         client.get(url(app, 'community.add_post', actor=community.name,
                        type='discussion'))
 
-    assert render.call_args_list == []
+    assert render.call_args.args[0] == 'community/add_post.html'
 
 
 def test_a_successful_post_clears_the_draft_cookies(app, poster):
@@ -660,6 +661,7 @@ class FakePost:
 
     sticky = False
     slug = '/post/1'
+    status = POST_STATUS_PUBLISHED   # not REVIEWING: the route takes the published path
     id = 1
 
 

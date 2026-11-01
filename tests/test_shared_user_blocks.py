@@ -342,7 +342,7 @@ def test_bot_challenge_user_web_sends_a_message_and_records_the_challenge(app, d
     assert len(challenge.uuid) == 49
 
     message = db.session.query(ChatMessage).one()
-    assert f'/bot_challenge/{challenge.uuid}' in message.body
+    assert f'/botchallenge/{challenge.uuid}' in message.body
 
 
 def test_bot_challenge_user_puts_the_recipient_in_the_conversation(app, db_session):
@@ -380,7 +380,7 @@ def test_bot_challenge_user_reuses_the_uuid_of_an_unanswered_challenge(app, db_s
     assert db.session.query(BotChallenge).filter_by(user_id=s.target.id).count() == 1
     message = db.session.query(ChatMessage).one()
     stored = db.session.query(BotChallenge).filter_by(user_id=s.target.id).one().uuid
-    assert f'/bot_challenge/{stored}' in message.body
+    assert f'/botchallenge/{stored}' in message.body
 
 
 def test_bot_challenge_user_refuses_someone_who_already_answered(app, db_session):

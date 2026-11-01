@@ -183,7 +183,7 @@ class TestABodyThatIsJson:
 
         response = admin_client.get(f'/admin/activity_json/{row.id}')
 
-        assert b'&quot;type&quot;' in response.data or b'"type"' in response.data
+        assert b'&quot;type&quot;' in response.data or b'&#34;type&#34;' in response.data or b'"type"' in response.data
 
     def test_a_backtick_run_inside_a_string_cannot_open_a_fence(self, app,
                                                                admin_client):

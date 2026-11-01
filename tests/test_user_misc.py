@@ -624,7 +624,7 @@ def test_sending_a_bot_challenge(app, env):
     assert response.status_code in (200, 302)
     assert challenge.call_args.args[0] == other.id
     messages = ' '.join(str(call.args[0]) for call in flashed.call_args_list)
-    assert 'Bot challenge was sent' in messages
+    assert 'If they do not respond within 48 hours their account will be flagged' in messages
 
 
 def test_a_bot_challenge_answers_htmx(app, env):

@@ -123,7 +123,7 @@ def test_the_next_link_is_a_page_that_can_be_fetched(app, db_session):
     instance, alice, bob = _seed()
     tag = _tag()
     community = make_community('microblogs')
-    for index in range(101):
+    for index in range(51):   # v1.8.10 lists 50 a page
         _tagged(tag, community, alice, f'post {index}')
     client = app.test_client()
 
@@ -822,7 +822,8 @@ def test_an_entry_encloses_a_file_but_not_a_web_page(app, db_session, url, enclo
 
     response = client.get('/tag/solarstorm/feed')
 
-    assert (b'<enclosure' in response.data) is enclosed
+    # v1.8.10's RSSFeed carries the url as media:content, typed when the path names a type: a file's is not text/
+    assert (b'type="image/' in response.data) is enclosed
 
 
 def test_the_feed_carries_at_most_twenty_entries(app, db_session):
@@ -882,7 +883,7 @@ def test_the_feed_is_built_from_the_newest_posts_and_prints_them_oldest_first(ap
 
     assert b'<title>post 00</title>' not in response.data
     assert b'<title>post 24</title>' in response.data
-    assert response.data.index(b'post 05') < response.data.index(b'post 24')
+    assert response.data.index(b'post 24') < response.data.index(b'post 05')   # newest first since v1.8.10
 
 
 def test_the_page_is_titled_by_the_tag_and_asks_for_no_category(app, db_session):

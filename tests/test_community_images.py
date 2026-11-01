@@ -581,7 +581,6 @@ class TestTheFormatsPillowNeedsAPluginFor:
         return FileStorage(stream=buffer, filename=name)
 
     def an_avif(self, name='photo.avif'):
-        import pillow_avif  # NOQA
         buffer = io.BytesIO()
         Image.new('RGB', (300, 300), (10, 20, 30)).save(buffer, format='AVIF')
         buffer.seek(0)

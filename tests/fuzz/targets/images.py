@@ -76,7 +76,6 @@ import io
 import os
 
 import PIL
-import pillow_avif  # NOQA  # registers the plugin, as production's first AVIF upload does
 from PIL import Image, ImageOps
 import pillow_heif
 from pillow_heif import register_heif_opener
@@ -95,7 +94,7 @@ register_heif_opener()
 Image.init()
 
 # Where a refusal is raised from: Pillow and the two plugins production registers.
-PILLOW_PACKAGES = tuple(os.path.dirname(module.__file__) + os.sep for module in (PIL, pillow_avif, pillow_heif))
+PILLOW_PACKAGES = tuple(os.path.dirname(module.__file__) + os.sep for module in (PIL, pillow_heif))
 
 # The upload cap (R207) is 10 MB, but a fuzz input past 64 KiB says nothing about the codecs a shorter one does not,
 # and the seeds stay under it.

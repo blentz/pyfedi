@@ -124,7 +124,7 @@
                 </h1>
             <p class="text-muted">!goldart@test.piefed.local</p>
         
-<div class="d-block d-xl-none">
+<div class="d-block d-xl-none"><!-- mobile -->
     <div class="row">
         <div class="col-6 pe-1">
             <div class="d-block d-sm-none">
@@ -322,23 +322,23 @@
 
 
 
-<div class="d-xl-flex justify-content-between d-none my-1">
+<div class="d-xl-flex justify-content-between d-none my-1"><!-- desktop -->
     <nav class="btn-group filter_nav me-lg-1" aria-label="Sort posts">
-        <a href="?sort=hot&amp;layout=list&amp;content_type=posts&amp;flair=" class="btn btn-primary" rel="nofollow noindex" title="Sort by hot" aria-current="page"><span class="fe fe-popular" aria-hidden="true"></span><span class="visually-hidden">Hot</span></a>
+        <a href="?sort=hot&amp;layout=list&amp;content_type=posts&amp;flair=&amp;microblog_mode=following" class="btn btn-primary" rel="nofollow noindex" title="Sort by hot" aria-current="page"><span class="fe fe-popular" aria-hidden="true"></span><span class="visually-hidden">Hot</span></a>
         <details class="btn-group filter_menu">
     <summary class="btn btn-outline-secondary" title="Sort by top"><span class="fe fe-star" aria-hidden="true"></span><span class="visually-hidden">Top</span></summary>
     <ul class="dropdown-menu">
-        <li><a class="dropdown-item" href="?sort=top_12h&amp;layout=list&amp;content_type=posts&amp;flair=" rel="nofollow noindex">12 hours</a></li>
-        <li><a class="dropdown-item" href="?sort=top&amp;layout=list&amp;content_type=posts&amp;flair=" rel="nofollow noindex">Day</a></li>
-        <li><a class="dropdown-item" href="?sort=top_1w&amp;layout=list&amp;content_type=posts&amp;flair=" rel="nofollow noindex">Week</a></li>
-        <li><a class="dropdown-item" href="?sort=top_1m&amp;layout=list&amp;content_type=posts&amp;flair=" rel="nofollow noindex">Month</a></li>
-        <li><a class="dropdown-item" href="?sort=top_1y&amp;layout=list&amp;content_type=posts&amp;flair=" rel="nofollow noindex">Year</a></li>
-        <li><a class="dropdown-item" href="?sort=top_all&amp;layout=list&amp;content_type=posts&amp;flair=" rel="nofollow noindex">All Time</a></li>
+        <li><a class="dropdown-item" href="?sort=top_12h&amp;layout=list&amp;content_type=posts&amp;flair=&amp;microblog_mode=following" rel="nofollow noindex">12 hours</a></li>
+        <li><a class="dropdown-item" href="?sort=top&amp;layout=list&amp;content_type=posts&amp;flair=&amp;microblog_mode=following" rel="nofollow noindex">Day</a></li>
+        <li><a class="dropdown-item" href="?sort=top_1w&amp;layout=list&amp;content_type=posts&amp;flair=&amp;microblog_mode=following" rel="nofollow noindex">Week</a></li>
+        <li><a class="dropdown-item" href="?sort=top_1m&amp;layout=list&amp;content_type=posts&amp;flair=&amp;microblog_mode=following" rel="nofollow noindex">Month</a></li>
+        <li><a class="dropdown-item" href="?sort=top_1y&amp;layout=list&amp;content_type=posts&amp;flair=&amp;microblog_mode=following" rel="nofollow noindex">Year</a></li>
+        <li><a class="dropdown-item" href="?sort=top_all&amp;layout=list&amp;content_type=posts&amp;flair=&amp;microblog_mode=following" rel="nofollow noindex">All Time</a></li>
     </ul>
 </details>
-        <a href="?sort=new&amp;layout=list&amp;content_type=posts&amp;flair=" class="btn btn-outline-secondary" rel="nofollow noindex" title="Sort by new"><span class="fe fe-plus" aria-hidden="true"></span><span class="visually-hidden">New</span></a>
-        <a href="?sort=old&amp;layout=list&amp;content_type=posts&amp;flair=" class="btn btn-outline-secondary" rel="nofollow noindex" title="Sort by old"><span class="fe fe-calendar" aria-hidden="true"></span><span class="visually-hidden">Old</span></a>
-        <a href="?sort=active&amp;layout=list&amp;content_type=posts&amp;flair=" class="btn btn-outline-secondary" rel="nofollow noindex" title="Sort by active"><span class="fe fe-activity" aria-hidden="true"></span><span class="visually-hidden">Active</span></a>
+        <a href="?sort=new&amp;layout=list&amp;content_type=posts&amp;flair=&amp;microblog_mode=following" class="btn btn-outline-secondary" rel="nofollow noindex" title="Sort by new"><span class="fe fe-plus" aria-hidden="true"></span><span class="visually-hidden">New</span></a>
+        <a href="?sort=old&amp;layout=list&amp;content_type=posts&amp;flair=&amp;microblog_mode=following" class="btn btn-outline-secondary" rel="nofollow noindex" title="Sort by old"><span class="fe fe-calendar" aria-hidden="true"></span><span class="visually-hidden">Old</span></a>
+        <a href="?sort=active&amp;layout=list&amp;content_type=posts&amp;flair=&amp;microblog_mode=following" class="btn btn-outline-secondary" rel="nofollow noindex" title="Sort by active"><span class="fe fe-activity" aria-hidden="true"></span><span class="visually-hidden">Active</span></a>
     </nav>
     <nav class="btn-group filter_nav me-lg-1" aria-label="Show">
     <a href="?content_type=posts&amp;sort=&amp;layout=list" class="btn btn-primary" rel="nofollow noindex" title="Show posts" aria-current="page"><span class="fe fe-discussion" aria-hidden="true"></span><span class="visually-hidden">Posts</span></a>
@@ -346,13 +346,13 @@
 </nav>
     
         <div class="btn-group me-lg-1 layout_switcher">
-            <a href="?layout=list&sort=&content_type=posts&flair=" class="btn btn-primary" rel="nofollow noindex">
+            <a href="?layout=list&sort=&content_type=posts&flair=&microblog_mode=following" class="btn btn-primary" rel="nofollow noindex">
                 List
             </a>
-            <a href="?layout=masonry&sort=&content_type=posts&flair=" class="btn btn-outline-secondary" rel="nofollow noindex">
+            <a href="?layout=masonry&sort=&content_type=posts&flair=&microblog_mode=following" class="btn btn-outline-secondary" rel="nofollow noindex">
                 Tile
             </a>
-            <a href="?layout=masonry_wide&sort=&content_type=posts&flair=" class="btn btn-outline-secondary" rel="nofollow noindex">
+            <a href="?layout=masonry_wide&sort=&content_type=posts&flair=&microblog_mode=following" class="btn btn-outline-secondary" rel="nofollow noindex">
                 Wide tile
             </a>
         </div>
@@ -430,6 +430,24 @@
 
 
 </div>
+<dialog id="insertImageDialog">
+    <div class="p-3 pb-0">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="mb-0">Insert image</h5>
+            <button type="button" class="btn-close" aria-label="Close" id="insert_image_dialog_close"></button>
+        </div>
+        <div class="mb-3">
+            <div class="input-group">
+                <input type="file" class="form-control" id="imageUploadInput" accept="image/*">
+                <button class="btn btn-primary" type="button" id="imageUploadButton">Upload</button>
+            </div>
+            <div id="uploadStatus" class="mt-2"></div>
+        </div>
+        <hr>
+        <div id="loadImagesHere"></div>
+        <p class="small mt-3">These files are not very private - test.piefed.local admins may review them occasionally.</p>
+    </div>
+</dialog>
 
         </div>
         <footer class="footer mt-auto" role="contentinfo">
@@ -488,6 +506,8 @@
     <script type="text/javascript" src="/static/js/user-mentions.js?changed={MTIME}" nonce="{NONCE}"></script>
     <script type="text/javascript" src="/static/js/scripts.js?changed={MTIME}" nonce="{NONCE}"></script>
     <script src="/static/js/lightbox/baguetteBox.js" nonce="{NONCE}"></script>
-        
+        <script src="/static/js/media_library.js?changed={MTIME}" nonce="{NONCE}"></script>
+    <script src="/static/js/coolfieldset.js?v=3" nonce="{NONCE}"></script>
+
   </body>
 </html>

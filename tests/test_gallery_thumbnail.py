@@ -1,5 +1,7 @@
-import unittest
 import os
+import shutil
+import tempfile
+import unittest
 from PIL import Image
 from app.utils import make_gallery_thumbnail
 
@@ -8,33 +10,20 @@ class TestGalleryThumbnail(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        """load sample images once for all tests."""
-        os.chdir("..")                          # Change to project root directory to ensure image and font paths work
-        cls.sample_dir = "testing_data/sample_pics"
-        cls.image_paths = [
-            os.path.join(cls.sample_dir, "DSC07922.JPG"),
-            os.path.join(cls.sample_dir, "DSC07923.JPG"),
-            os.path.join(cls.sample_dir, "DSC07924.JPG"),
-            os.path.join(cls.sample_dir, "DSC07925.JPG"),
-            os.path.join(cls.sample_dir, "IMG999.jpg"),
-        ]
-        cls.images = [Image.open(path) for path in cls.image_paths]
+        """Five generated images of different sizes, aspect ratios and colours. v1.8.10 loaded photographs from
+        testing_data/sample_pics, which is not in the repository, after a chdir("..") out of it -- which moved the
+        whole test worker's working directory."""
+        sizes = [(1600, 1200), (1200, 1600), (800, 800), (2000, 600), (640, 480)]
+        colours = [(200, 30, 30), (30, 200, 30), (30, 30, 200), (200, 200, 30), (30, 200, 200)]
+        cls.images = [Image.new('RGB', size, colour) for size, colour in zip(sizes, colours)]
 
     def setUp(self):
-        self.output_dir = "."
-        os.makedirs(self.output_dir, exist_ok=True)
+        self.output_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.output_dir, True)
 
     def _save_and_cleanup(self, result, filename):
         if result is not None:
-            output_path = os.path.join(self.output_dir, filename)
-            result.save(output_path)
-            self.addCleanup(lambda fp=output_path: self._cleanup_file(fp))
-
-    def _cleanup_file(self, path):
-        # comment these lines out to visually inspect the results
-        #if os.path.exists(path):
-        #    os.remove(path)
-        pass
+            result.save(os.path.join(self.output_dir, filename))
 
     def test_empty_list_returns_none(self):
         result = make_gallery_thumbnail([])

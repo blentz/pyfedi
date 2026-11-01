@@ -226,15 +226,11 @@ class TestWhoIsTrusted:
 # --------------------------------------------------------------------------
 
 
-def test_the_two_limits_it_exempts_are_the_credential_ones():
-    """Asserted on the source, because it is what makes the substring test worth
-    a defect number rather than a tidy-up. Both `exempt_when=is_trusted_request`
-    sites guard a password check, so a caller who is wrongly trusted gets
-    unmetered guesses.
-
-    A third site added without a limit, or one of these two losing its limit,
-    changes what the function above is responsible for -- so the count and the
-    limits are both pinned.
+def test_every_api_limit_exempts_a_trusted_caller():
+    """Since v1.8.10 (9a802fe1, "Properly bypass api rate limits if set") every `with limiter.limit` in the API routes
+    takes `exempt_when=is_trusted_request`, the two that guard a password check (20/hour and 6/hour) among them --
+    which is why the substring test above was worth a defect number: a caller wrongly trusted gets unmetered
+    guesses. Asserted on the source, so a limit added without the exemption, or one losing it, fails here.
     """
     import ast
     import inspect
@@ -242,18 +238,19 @@ def test_the_two_limits_it_exempts_are_the_credential_ones():
     import app.api.alpha.routes as routes
 
     tree = ast.parse(inspect.getsource(routes))
-    guarded = []
+    exempt, plain = [], []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
+        # the per-call limits inside the handlers (`with limiter.limit(...)`); the route decorators' limits are
+        # the web form's and not part of this exemption
+        if not isinstance(node, ast.With):
             continue
-        if not any(isinstance(kw.value, ast.Name)
-                   and kw.value.id == 'is_trusted_request'
-                   and kw.arg == 'exempt_when' for kw in node.keywords):
+        node = node.items[0].context_expr
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'limit'
+                and isinstance(node.func.value, ast.Name) and node.func.value.id == 'limiter'):
             continue
-        guarded.append(node.args[0].value)
+        is_exempt = any(isinstance(kw.value, ast.Name) and kw.value.id == 'is_trusted_request'
+                        and kw.arg == 'exempt_when' for kw in node.keywords)
+        (exempt if is_exempt else plain).append(ast.unparse(node.args[0]))
 
-    assert sorted(guarded) == ['20/hour', '6/hour']
-
-    source = inspect.getsource(routes)
-    for path in ('/user/login', '/user/verify_credentials'):
-        assert path in source
+    assert plain == []
+    assert {"'20/hour'", "'6/hour'"} <= set(exempt)

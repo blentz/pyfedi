@@ -204,7 +204,6 @@ class TestWhatTheContentTypeSays:
         assert stored.thumbnail_path is None
 
     def test_an_avif_arriving_as_a_byte_stream(self, env):
-        import pillow_avif  # NOQA
         file = a_file(env, 'https://remote.test/media/photo.avif')
         stored = run(file, answered_with(
             image_bytes(400, 300, fmt='AVIF'),
@@ -293,8 +292,7 @@ class TestAnImageOverTheRemoteThumbnailCap:
 
     @pytest.mark.parametrize('directory', ['communities', 'users'])
     def test_an_avif_icon_that_keeps_its_format_is_refused_too(self, env, monkeypatch, directory):
-        import pillow_avif  # NOQA
-        from pillow_avif.AvifImagePlugin import AvifImageFile
+        from PIL.AvifImagePlugin import AvifImageFile
         monkeypatch.setattr('app.utils.REMOTE_THUMBNAIL_PIXEL_CAP', 400 * 300 - 1)
         self._refused(env, monkeypatch, image_bytes(400, 300, fmt='AVIF'), 'image/avif',
                       'https://remote.test/media/icon.avif', directory, AvifImageFile)
@@ -478,7 +476,6 @@ class TestTheFormatTheInstanceHasChosen:
         assert stored.file_path.endswith(stored_as)
 
     def test_an_avatar_in_a_format_with_no_rule_becomes_a_png(self, env):
-        import pillow_avif  # NOQA
         file = a_file(env, 'https://remote.test/media/icon.avif')
         stored = run(file, answered_with(
             image_bytes(400, 300, fmt='AVIF'), content_type='image/avif'),

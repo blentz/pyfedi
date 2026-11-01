@@ -1099,7 +1099,7 @@ def test_reporting_a_conversation_writes_the_report_and_notifies_every_admin(app
     assert report.reasons == 'Spam'
     assert report.description == 'they will not stop'
     assert report.targets == {'gen': '0', 'suspect_conversation_id': conversation.id,
-                              'reporter_id': alice.id}
+                              'reporter_id': alice.id, 'report_id': report.id}
     db.session.expire_all()
     notified = Notification.query.filter_by(subtype='chat_conversation_reported').all()
     # user 1 is an admin by id alone (app/request_hooks.py:100), so the seed's

@@ -513,7 +513,7 @@ class TestTheContentWarningAndTheChallenge:
 
         with env.app.test_request_context('/somewhere',
                                           headers={'User-Agent': 'Mozilla/5.0',
-                                                   'Cookie': 'anoobis=solved'}):
+                                                   'Cookie': 'anoobis2=solved'}):
             answer = view()
 
         assert answer == 'through'

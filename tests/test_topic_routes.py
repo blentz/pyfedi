@@ -753,7 +753,7 @@ def test_the_feed_carries_the_topics_posts(app, db_session):
     assert response.status_code == 200
     assert response.headers['Content-Type'] == 'application/rss+xml'
     assert 'ETag' in response.headers
-    assert response.headers['Cache-Control'] == 'no-cache, max-age=600, must-revalidate'
+    assert response.headers['Cache-Control'].startswith('public, max-age=')   # v1.8.10: cached by post rate
     assert '<title>news 0</title>' in body
     assert '<title>news 1</title>' in body
     assert f'{topic.name} on ' in body
@@ -778,10 +778,10 @@ def test_a_feed_entry_links_to_the_posts_slug_or_its_id(app, db_session):
     assert f'https://test.piefed.local/post/{without.id}' in body
 
 
-def test_a_feed_entry_encloses_a_media_url_but_not_a_web_page(app, db_session):
-    """`if type and not type.startswith('text/')` -- three posts, one linking to
-    an image, one to an HTML page and one with no url at all, so both operands
-    of the guard are separated.
+def test_a_feed_entry_carries_its_url_as_media_content_with_its_type(app, db_session):
+    """Since v1.8.10 the shared RSSFeed puts every post url in media:content (RSS's enclosure would need a
+    length), typed when the path names one: an image as image/jpeg, an HTML page as text/html, a post with
+    no url as nothing.
     """
     instance, alice, bob = _seed()
     topic = _topic()
@@ -795,9 +795,9 @@ def test_a_feed_entry_encloses_a_media_url_but_not_a_web_page(app, db_session):
 
     body = client.get(f'/topic/{topic.machine_name}.rss').get_data(as_text=True)
 
-    assert 'https://example.test/picture.jpg' in body
-    assert 'enclosure' in body
-    assert 'article.html' not in body
+    assert '<media:content url="https://example.test/picture.jpg" type="image/jpeg"' in body
+    assert '<media:content url="https://example.test/article.html" type="text/html"' in body
+    assert '<enclosure' not in body
 
 
 def test_the_feed_gathers_child_topics_when_the_topic_says_so(app, db_session):

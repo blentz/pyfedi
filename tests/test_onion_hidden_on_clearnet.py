@@ -476,6 +476,10 @@ def active(onion):
     """The first domain's bob, signed in on the onion, upvoted, bookmarked and read the onion's posts and its reply, and
     FIRSTPOST, the control."""
     bob = onion.first_bob
+    # FIRSTOTHER is the upvotes page's control: since v1.8.10 that page leaves out votes on the user's own posts,
+    # and FIRSTPOST is bob's
+    onion.first_other = make_post(onion.first_art, onion.admin, f'https://{FIRST}/post/other', title='FIRSTOTHER')
+    db.session.add(PostVote(user_id=bob.id, author_id=onion.admin.id, post_id=onion.first_other.id, effect=1.0))
     for post in (onion.post, onion.in_first, onion.first_post):
         db.session.add(PostVote(user_id=bob.id, author_id=post.user_id, post_id=post.id, effect=1.0))
         db.session.add(PostBookmark(user_id=bob.id, post_id=post.id))
@@ -488,11 +492,12 @@ def active(onion):
 
 
 def test_upvotes_bookmarks_and_read_posts_leave_out_onion_content_on_the_first_domain(app, active):
-    pages = {'/u/bob/upvotes': active.admin, '/bookmarks': active.first_bob, '/read-posts': active.first_bob}
-    for path, viewer in pages.items():
+    pages = {'/u/bob/upvotes': (active.admin, 'FIRSTOTHER'), '/bookmarks': (active.first_bob, 'FIRSTPOST'),
+             '/read-posts': (active.first_bob, 'FIRSTPOST')}
+    for path, (viewer, control) in pages.items():
         body = get(app, path, user=viewer).get_data(as_text=True)
         assert 'ONIONPOST' not in body and 'ONIONINFIRST' not in body, (path, near(body, 'ONIONPOST', 'ONIONINFIRST'))
-        assert 'FIRSTPOST' in body, path   # the control
+        assert control in body, path   # the control
     body = get(app, '/bookmarks/comments', user=active.first_bob).get_data(as_text=True)
     assert 'ONIONREPLY' not in body and 'FIRSTREPLY' in body
 

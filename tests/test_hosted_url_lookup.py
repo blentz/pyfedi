@@ -481,7 +481,7 @@ def test_a_credit_naming_a_hosted_url_we_do_not_store_is_not_fetched(env, wire, 
 
 def test_the_instance_chooser_never_asks_our_own_domains(env, http_mock, monkeypatch):
     nodes = [{'domain': d, 'uptime_alltime': 99, 'monthsmonitored': 12} for d in (SHOP, SERVER, 'peer.example')]
-    http_mock.post('https://api.fediverse.observer/').respond(200, json={'data': {'nodes': nodes}})
+    http_mock.get(url__regex=r'https://piefed\.social/static/media/known_instances\.json.*').respond(200, json=nodes)
     http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(200, json={'nsfw': False})
     asked = []
     real_get_request = maintenance.get_request
@@ -492,8 +492,8 @@ def test_the_instance_chooser_never_asks_our_own_domains(env, http_mock, monkeyp
 
     monkeypatch.setattr(maintenance, 'get_request', recording_get_request)
     maintenance.refresh_instance_chooser()
-    assert asked == ['https://peer.example/api/alpha/site/instance_chooser']
+    assert [url for url in asked if 'known_instances.json' not in url] == ['https://peer.example/api/alpha/site/instance_chooser']
     db.session.expire_all()
     assert {row.domain for row in db.session.query(InstanceChooser)} == {'peer.example'}
-    assert all(httpx.URL(str(call.request.url)).host == 'peer.example' or 'observer' in str(call.request.url)
+    assert all(httpx.URL(str(call.request.url)).host == 'peer.example' or 'known_instances.json' in str(call.request.url)
                for call in http_mock.calls)

@@ -860,6 +860,9 @@ def test_each_wrapper_rolls_back_and_reraises(db_session, monkeypatch, task, kwa
     four tests and had to fix in a later round.
     """
     record = _recording_task_session(monkeypatch)
+    # v1.8.10's delete_object returns quietly for a missing object, so the post wrappers no longer raise on an
+    # unknown id: the failure is made inside delete_object instead, which every wrapper reaches the same way
+    monkeypatch.setattr('app.shared.tasks.deletes.delete_object', lambda *a, **k: (_ for _ in ()).throw(RuntimeError('boom')))
 
     with pytest.raises(Exception):
         task(None, 1, **{kwarg: 999999})

@@ -49,7 +49,7 @@ def test_undo_follow_of_a_community_removes_membership_and_join_request(app, db_
     assert db.session.query(CommunityJoinRequest).filter_by(
         user_id=follower_id, community_id=community_id).first() is None
     fresh = db.session.get(type(community), community_id)
-    assert fresh.subscriptions_count == 4
+    assert fresh.subscriptions_count == 5   # v1.8.10: it counts local subscribers only, and this follower is remote
     assert fresh.last_active > stale
     assert db.session.get(type(follower), follower_id).last_seen > stale
 
@@ -105,7 +105,7 @@ def test_undo_follow_of_a_community_with_no_join_request_still_removes_membershi
     db.session.expire_all()
     assert db.session.query(CommunityMember).filter_by(
         user_id=follower_id, community_id=community_id).first() is None
-    assert db.session.get(type(community), community_id).subscriptions_count == 4
+    assert db.session.get(type(community), community_id).subscriptions_count == 5   # v1.8.10: local subscribers only; the follower is remote
 
     log = ActivityPubLog.query.one()
     assert log.result == 'success'

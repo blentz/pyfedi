@@ -281,7 +281,7 @@ class TestWhatAnEntryCarries:
         response = seeded.client.get('/index/feed')
 
         assert 'episode.mp3' in response.text
-        assert 'enclosure' in response.text
+        assert 'media:content' in response.text   # v1.8.10's RSSFeed carries the url as media:content
 
     def test_a_post_linking_to_a_web_page_carries_no_enclosure(self, seeded):
         """The `and not type.startswith('text/')` half. A link post pointing at an article

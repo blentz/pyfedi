@@ -28,6 +28,8 @@ from tests.app_source import APP, app_trees
 
 ALLOWED = {
     # (path under the repo, enclosing function): (findings in it, reason)
+    ('app/main/routes.py', 'statistics'): (1, "row 1 is the default domain's: v1.8.10's statistics page caches "
+                                             "this server's monthly active count on its own Instance row"),
     ('app/post/routes.py', 'comment_emoji_list'): (1, "row 1 is the default domain's: emoji are site-wide, and the "
                                                       "site's own are stored on row 1, so they sort first"),
     ('app/admin/routes.py', 'admin_emoji_add'): (1, "row 1 is the default domain's: emoji are site-wide, and an "

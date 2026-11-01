@@ -74,6 +74,9 @@ NON_OBJECT_FIELDS = {
     'reply_collapse_threshold': 'a setting', 'reply_hide_threshold': 'a setting', 'restricted_to_mods': 'a setting',
     'searchable': 'a setting', 'show_nsfl': 'a setting', 'show_nsfw': 'a setting', 'show_read_posts': 'a setting',
     'visibility': 'a setting',
+    # v1.8.10's fields
+    'og_image_url': 'an image the post carries', 'include_deleted': 'a switch', 'repeat': 'a schedule',
+    'scheduled_for': 'a time', 'matrix_user_id': "the caller's own", 'reposter_visibility': 'a setting',
 }
 # Endpoint fields that name an object but are not looked up by a caller's id or name
 EXEMPT = {
@@ -88,6 +91,18 @@ EXEMPT = {
     ('GET', '/api/alpha/post/list', 'q'): 'search text, as /search',
     ('GET', '/api/alpha/post/list2', 'q'): 'search text, as /search',
     ('GET', '/api/alpha/site/instance_chooser_search', 'q'): 'an instance (accepted by ruling)',
+    # v1.8.10's scheduled posts: each endpoint answers only for the caller's own scheduled post
+    # (scheduled_post_view refuses another author's; the list filters by Post.user_id)
+    ('GET', '/api/alpha/post/scheduled', 'id'): "the caller's own scheduled post",
+    ('POST', '/api/alpha/post/scheduled/delete', 'post_id'): "the caller's own scheduled post",
+    ('PUT', '/api/alpha/post/scheduled', 'post_id'): "the caller's own scheduled post",
+    ('GET', '/api/alpha/post/scheduled/list', 'q'): "search text over the caller's own scheduled posts",
+    ('GET', '/api/alpha/post/scheduled/list', 'community_id'):
+        "a filter over the caller's own scheduled posts; a community hidden here answers as a missing one",
+    ('GET', '/api/alpha/post/scheduled/list', 'community_name'):
+        "a filter over the caller's own scheduled posts; a community hidden here answers as a missing one",
+    ('POST', '/api/alpha/post/scheduled', 'community_id'):
+        "the community a new post goes to, through make_post's own checks, as POST /post's",
 }
 
 # The cases whose visible twin answers as an id nobody holds does, so the positive control cannot tell, and why

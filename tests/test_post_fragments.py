@@ -1090,15 +1090,13 @@ def test_an_admin_still_reads_a_deleted_posts_source(app, env):
 
 
 @pytest.mark.parametrize('body, escaped', [
-    ('plain text', False),
-    ('```\nfenced\n```', False),
+    ('plain text', True),
+    ('```\nfenced\n```', True),
     ('````\ndouble fenced\n````', True),
 ])
 def test_source_rendering_survives_its_own_fences(app, env, body, escaped):
-    """The source is shown inside a fence one backtick longer than anything in
-    the body. A body containing FOUR backticks cannot be fenced at all, so it
-    is escaped into a literal `<pre><code>` instead -- and that is the only
-    thing that distinguishes the two arms, since both render the text."""
+    """Since v1.8.10 the source is always escaped into a literal `<pre><code>`, whatever fences the body
+    holds, so no body can break out of it."""
     anon, community, post, mod, author, outsider = env
     post.body = body
     db.session.commit()
@@ -1186,8 +1184,8 @@ def test_an_admin_still_reads_a_deleted_comments_source(app, env):
 
 
 @pytest.mark.parametrize('body, escaped', [
-    ('plain text', False),
-    ('```\nfenced\n```', False),
+    ('plain text', True),
+    ('```\nfenced\n```', True),
     ('````\ndouble fenced\n````', True),
 ])
 def test_comment_source_rendering_survives_its_own_fences(app, env, body,

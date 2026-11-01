@@ -29,7 +29,7 @@ from flask import g
 
 from app import db
 from app.constants import (POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_LINK,
-                           POST_TYPE_POLL, POST_TYPE_VIDEO)
+                           POST_TYPE_POLL, POST_TYPE_VIDEO, POST_TYPE_GALLERY)
 from app.models import Language, PostReply, Site
 from app.post.util import (body_has_no_archive_link,
                            convert_archived_replies_to_tree,
@@ -564,8 +564,10 @@ class TestArchiveLinks:
 class TestWhichFormAPostTypeNeeds:
     @pytest.mark.parametrize('post_type,url,expected', [
         (POST_TYPE_LINK, 'https://example.test/x', 'link'),
-        (POST_TYPE_IMAGE, 'https://example.test/x.png', 'image'),
-        (POST_TYPE_VIDEO, 'https://example.test/x.mp4', 'video'),
+        # v1.8.10: an image, gallery or video post is cross-posted through the link form
+        (POST_TYPE_IMAGE, 'https://example.test/x.png', 'link'),
+        (POST_TYPE_GALLERY, None, 'link'),
+        (POST_TYPE_VIDEO, 'https://example.test/x.mp4', 'link'),
         (POST_TYPE_POLL, None, 'poll'),
         (POST_TYPE_ARTICLE, None, ''),
     ])

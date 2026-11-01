@@ -119,7 +119,8 @@ class TestPwnBots:
     which is why `pwn_bots` now has that wrapper.
     """
 
-    def test_a_challenge_ignored_past_the_cutoff_marks_the_user_a_bot(self, db_session):
+    def test_a_challenge_ignored_past_the_cutoff_marks_the_user_a_reposter(self, db_session):
+        """v1.8.10 flags an unanswered challenge as a reposter, not a bot."""
         instance, user, _, _ = _seed()
         challenge = BotChallenge(uuid='c1', user_id=user.id,
                                  sent_at=utcnow() - timedelta(days=2))
@@ -130,7 +131,7 @@ class TestPwnBots:
 
         db.session.expire_all()
         refreshed = db.session.get(User, user.id)
-        assert (refreshed.bot, refreshed.bot_override) == (True, True)
+        assert (refreshed.reposter, refreshed.reposter_override) == (True, True)
         assert db.session.get(BotChallenge, challenge.id).is_a_bot is True
 
     def test_a_challenge_inside_the_cutoff_is_left_alone(self, db_session):
@@ -482,14 +483,10 @@ class TestRemoveOldCommunityContent:
 
         assert recorder.calls == []
 
-    def test_the_deletion_is_not_federated(self, db_session, monkeypatch):
-        """`:150` passes False for `delete_post`'s SECOND parameter, which is
-        `federate_deletion` (app/shared/post.py:755) and not a locality flag.
-
-        A retention-policy deletion is deliberately not federated, so remote
-        instances keep the post. `remove_old_bot_content:185` passes a different
-        value for the same parameter; the two are separate policies, not an
-        inconsistency.
+    def test_the_deletion_is_federated_for_a_local_community_only(self, db_session, monkeypatch):
+        """`delete_post`'s SECOND parameter is `federate_deletion`. Since v1.8.10 (26bb2b85, "community retention:
+        federate deletion in local communities") a retention deletion is federated when the community is this
+        instance's own, so its followers drop the post too; a remote community's copy is only removed here.
         """
         recorder = _Recorder()
         monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
@@ -500,7 +497,7 @@ class TestRemoveOldCommunityContent:
 
         remove_old_community_content()
 
-        assert recorder.calls[0][1] is False
+        assert recorder.calls[0][1] is community.is_local()
 
     def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
         """`:142`'s cutoff, not `:138`'s query, is what must raise.

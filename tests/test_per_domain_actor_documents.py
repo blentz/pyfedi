@@ -318,6 +318,7 @@ def test_the_cli_admin_is_made_on_the_default_domain(app):
     fake_db.session.execute.return_value.fetchone.return_value = ('UTF8',)
     answers = iter(['rootish', 'a@example.com', 'password123'])
     with patch('app.cli.db', fake_db), patch('builtins.input', lambda prompt='': next(answers)), \
+            patch('app.cli.pwinput', lambda prompt='': next(answers)), \
             patch('app.cli.retrieve_block_list', return_value=''), \
             patch('app.cli.retrieve_peertube_block_list', return_value=''):
         result = app.test_cli_runner().invoke(args=['init-db', '--interactive', 'yes'], input='n\nn\nn\nn\nn\n')

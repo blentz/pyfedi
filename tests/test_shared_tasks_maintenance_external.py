@@ -57,6 +57,7 @@ target is shared more widely than this module's tests are.
 
 import json
 import os
+import re
 import tempfile
 import time
 from types import SimpleNamespace
@@ -674,12 +675,11 @@ class TestRefreshInstanceChooser:
     for both arms of `:1050`'s existing-row guard.
     """
 
-    OBSERVER = 'https://api.fediverse.observer/'
+    # v1.8.10 reads the main instance list's known_instances.json (a list of nodes) instead of fediverse.observer
+    OBSERVER = re.compile(r'https://piefed\.social/static/media/known_instances\.json\?cache_bust=.*')
 
     def _nodes(self, *domains):
-        return {'data': {'nodes': [
-            {'domain': d, 'uptime_alltime': 99, 'monthsmonitored': 12}
-            for d in domains]}}
+        return [{'domain': d, 'uptime_alltime': 99, 'monthsmonitored': 12} for d in domains]
 
     def _chooser(self):
         """`newbie_friendly` is `False` deliberately, NOT the more obvious
@@ -694,7 +694,7 @@ class TestRefreshInstanceChooser:
         return {'nsfw': False, 'newbie_friendly': False, 'name': 'Peer'}
 
     def test_a_listed_domain_gets_a_row(self, db_session, http_mock):
-        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get(url__regex=self.OBSERVER).respond(200, json=self._nodes('peer.example'))
         http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
             200, json=self._chooser())
 
@@ -704,11 +704,10 @@ class TestRefreshInstanceChooser:
         rows = db.session.query(InstanceChooser).all()
         assert {r.domain for r in rows} == {'peer.example'}
 
-    def test_the_uptime_and_months_are_folded_into_the_stored_data(self, db_session, http_mock):
-        """`:1021-1022` copy two fields off the observer node into the chooser
-        document before `:1038` stores the whole thing.
-        """
-        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+    def test_the_uptime_is_folded_into_the_stored_data(self, db_session, http_mock):
+        """The node's uptime is copied into the chooser document, as a string, before the whole thing is stored.
+        v1.8.10 no longer copies monthsmonitored: the chooser document carries its own."""
+        http_mock.get(url__regex=self.OBSERVER).respond(200, json=self._nodes('peer.example'))
         http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
             200, json=self._chooser())
 
@@ -716,8 +715,8 @@ class TestRefreshInstanceChooser:
 
         db.session.expire_all()
         row = db.session.query(InstanceChooser).filter_by(domain='peer.example').first()
-        assert row.data['uptime'] == 99
-        assert row.data['monthsmonitored'] == 12
+        assert row.data['uptime'] == '99'
+        assert 'monthsmonitored' not in row.data
 
     def test_an_existing_row_is_updated_rather_than_duplicated(self, db_session, http_mock):
         """`:1026`'s false arm -- the row already exists.
@@ -730,7 +729,7 @@ class TestRefreshInstanceChooser:
         """
         db.session.add(InstanceChooser(domain='peer.example', nsfw=True, newbie_friendly=True))
         db.session.commit()
-        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get(url__regex=self.OBSERVER).respond(200, json=self._nodes('peer.example'))
         http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
             200, json=self._chooser())
 
@@ -746,7 +745,7 @@ class TestRefreshInstanceChooser:
         """`:1040`'s else arm and `:1043`'s guard."""
         db.session.add(InstanceChooser(domain='peer.example'))
         db.session.commit()
-        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get(url__regex=self.OBSERVER).respond(200, json=self._nodes('peer.example'))
         http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(404)
 
         refresh_instance_chooser()
@@ -801,7 +800,7 @@ class TestRefreshInstanceChooser:
         recorder = []
         monkeypatch.setattr(
             app.logger, 'warning', lambda *a, **kw: recorder.append((a, kw)))
-        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get(url__regex=self.OBSERVER).respond(200, json=self._nodes('peer.example'))
         http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(404)
 
         refresh_instance_chooser()
@@ -815,7 +814,7 @@ class TestRefreshInstanceChooser:
         """`:1056-1058` -- rows for domains absent from the observer response."""
         db.session.add(InstanceChooser(domain='gone.example'))
         db.session.commit()
-        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get(url__regex=self.OBSERVER).respond(200, json=self._nodes('peer.example'))
         http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
             200, json=self._chooser())
 
@@ -865,7 +864,7 @@ class TestRefreshInstanceChooser:
         monkeypatch.setattr('app.shared.tasks.maintenance.get_request', _get_request)
         db.session.add(InstanceChooser(domain='down.example'))
         db.session.commit()
-        http_mock.post(self.OBSERVER).respond(
+        http_mock.get(url__regex=self.OBSERVER).respond(
             200, json=self._nodes('down.example', 'newly-down.example', 'peer.example'))
         http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
             200, json=self._chooser())
@@ -888,7 +887,7 @@ class TestRefreshInstanceChooser:
             'app.shared.tasks.maintenance.find_language_or_create', recorder)
         doc = self._chooser()
         doc['language'] = {'id': 1, 'code': 'en', 'name': 'English'}
-        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get(url__regex=self.OBSERVER).respond(200, json=self._nodes('peer.example'))
         http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
             200, json=doc)
 
@@ -921,7 +920,7 @@ class TestRefreshInstanceChooser:
             'app.shared.tasks.maintenance.find_language_or_create', recorder)
         doc = self._chooser()
         doc['language'] = {'code': 'en', 'name': 'English'}
-        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get(url__regex=self.OBSERVER).respond(200, json=self._nodes('peer.example'))
         http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
             200, json=doc)
 
@@ -942,7 +941,7 @@ class TestRefreshInstanceChooser:
         """
         db.session.add(InstanceChooser(domain='kept.example'))
         db.session.commit()
-        http_mock.post(self.OBSERVER).respond(503)
+        http_mock.get(url__regex=self.OBSERVER).respond(503)
 
         refresh_instance_chooser()
 
@@ -962,7 +961,7 @@ class TestRefreshInstanceChooser:
         """
         db.session.add(InstanceChooser(domain='kept.example'))
         db.session.commit()
-        http_mock.post(self.OBSERVER).mock(side_effect=httpx.ConnectError(
+        http_mock.get(url__regex=self.OBSERVER).mock(side_effect=httpx.ConnectError(
             '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol'))
 
         refresh_instance_chooser()
@@ -972,10 +971,10 @@ class TestRefreshInstanceChooser:
             domain='kept.example').first() is not None
 
     def test_a_malformed_observer_response_returns_early(self, db_session, http_mock):
-        """`:991`'s shape check -- 200 with no `data.nodes`."""
+        """The shape check -- 200 with something that is not a list of nodes."""
         db.session.add(InstanceChooser(domain='kept.example'))
         db.session.commit()
-        http_mock.post(self.OBSERVER).respond(200, json={'unexpected': True})
+        http_mock.get(url__regex=self.OBSERVER).respond(200, json={'unexpected': True})
 
         refresh_instance_chooser()
 
@@ -983,33 +982,16 @@ class TestRefreshInstanceChooser:
         assert db.session.query(InstanceChooser).filter_by(
             domain='kept.example').first() is not None
 
-    def test_a_response_with_data_but_no_nodes_returns_early(self, db_session, http_mock):
-        """`:991`'s THIRD disjunct, `'nodes' not in response_data['data']`.
-
-        The test above sends a body with no `data` key at all, which already
-        trips the guard's SECOND disjunct (`'data' not in response_data`) --
-        it cannot discriminate a mutation that deletes the third disjunct,
-        because with `data` absent entirely the second disjunct catches it
-        regardless of whether the third exists. This test supplies a `data`
-        key with a different shape, so only the third disjunct can catch it.
-
-        If the third disjunct were deleted, control would fall through past
-        `:991`'s early return to `:998`'s
-        `response_data['data']['nodes']`, which raises `KeyError` -- there is
-        no `nodes` key here. Nothing inside `refresh_instance_chooser` catches
-        a `KeyError` raised before the per-domain loop starts; it propagates
-        out of the function, which this call (made with no `pytest.raises`)
-        would then fail on.
-        """
-        db.session.add(InstanceChooser(domain='kept.example'))
-        db.session.commit()
-        http_mock.post(self.OBSERVER).respond(200, json={'data': {'unexpected': True}})
+    def test_a_node_without_a_domain_is_skipped(self, db_session, http_mock):
+        """A node that names no domain is passed over, not a KeyError that ends the run: the next node is still
+        processed."""
+        http_mock.get(url__regex=self.OBSERVER).respond(200, json=[{'unexpected': True}] + self._nodes('peer.example'))
+        http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(200, json=self._chooser())
 
         refresh_instance_chooser()
 
         db.session.expire_all()
-        assert db.session.query(InstanceChooser).filter_by(
-            domain='kept.example').first() is not None
+        assert {r.domain for r in db.session.query(InstanceChooser).all()} == {'peer.example'}
 
     def test_a_failure_after_a_200_response_deletes_an_existing_row(
             self, db_session, http_mock, monkeypatch):
@@ -1043,7 +1025,7 @@ class TestRefreshInstanceChooser:
             'app.shared.tasks.maintenance.find_language_or_create', _boom)
         doc = self._chooser()
         doc['language'] = {'id': 1, 'code': 'en', 'name': 'English'}
-        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get(url__regex=self.OBSERVER).respond(200, json=self._nodes('peer.example'))
         http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
             200, json=doc)
 
@@ -1077,7 +1059,7 @@ class TestRefreshInstanceChooser:
         which re-raises -- the same propagation path the `:986` test above
         documents -- and fails this call, made with no `pytest.raises`.
         """
-        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get(url__regex=self.OBSERVER).respond(200, json=self._nodes('peer.example'))
         http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
             200, content=b'not valid json')
 
@@ -1095,7 +1077,7 @@ class TestRefreshInstanceChooser:
         final prune were lost with it. Now only that domain is dropped."""
         db.session.add(InstanceChooser(domain='gone.example'))
         db.session.commit()
-        http_mock.post(self.OBSERVER).respond(
+        http_mock.get(url__regex=self.OBSERVER).respond(
             200, json=self._nodes('peer.example', 'bad.example'))
         http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
             200, json=self._chooser())
@@ -1108,17 +1090,16 @@ class TestRefreshInstanceChooser:
         assert {r.domain for r in db.session.query(InstanceChooser).all()} == {'peer.example'}
 
     def test_an_endless_observer_answer_ends_the_task_instead_of_pinning_it(self, db_session, http_mock):
-        """The POST goes through _capped_request: an endless answer keeps its 200 and loses its body, so `json()`
-        fails out of the task (as a malformed answer always did) instead of holding the worker. timeout=30 stays
-        the per-read timeout."""
-        route = http_mock.post(self.OBSERVER).respond(200, content=(b'{"data": ' * 10000 for _ in iter(int, 1)))
+        """The list is fetched through get_request's cap: an endless answer loses its body, so it is not JSON, and
+        the task returns early, keeping the rows, instead of holding the worker."""
+        db.session.add(InstanceChooser(domain='kept.example'))
+        db.session.commit()
+        http_mock.get(url__regex=self.OBSERVER).respond(200, content=(b'[{"domain": ' * 10000 for _ in iter(int, 1)))
 
-        with pytest.raises(ValueError):
-            refresh_instance_chooser()
-        sent = route.calls[0].request
-        assert sent.extensions['timeout']['read'] == 30
-        assert json.loads(sent.content)['query'].startswith('{ nodes(')
-        assert sent.headers['content-type'] == 'application/json'
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceChooser).filter_by(domain='kept.example').first() is not None
 
     def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch, http_mock):
         """`:1062-1064`'s handler.
@@ -1132,7 +1113,7 @@ class TestRefreshInstanceChooser:
             raise RuntimeError('the task itself failed')
 
         monkeypatch.setattr('app.shared.tasks.maintenance.random.shuffle', _boom)
-        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get(url__regex=self.OBSERVER).respond(200, json=self._nodes('peer.example'))
 
         with pytest.raises(RuntimeError, match='the task itself failed'):
             refresh_instance_chooser()

@@ -1450,7 +1450,7 @@ def test_the_export_lists_user_notes(app, env):
     _response, exported_json = exported(app, client)
 
     assert exported_json['user_notes'] == [
-        {'target': other.profile_id(), 'note': 'a note about them'}]
+        {'target': other.profile_id(), 'body': 'a note about them'}]   # 'body' since v1.8.10
 
 
 def test_a_community_with_no_subscriber_counts_is_still_joinable(app, env):

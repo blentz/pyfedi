@@ -626,11 +626,9 @@ class TestUpdateCommunityStats:
         db.session.expire_all()
         assert db.session.get(Community, community.id).total_subscriptions_count == 1
 
-    def test_a_local_community_whose_total_already_leads_is_left_alone(self, db_session):
-        """The false arm of `:306-307`'s third condition.
-
-        A local community's total counts remote subscribers too, so a total
-        ABOVE the local count is the normal state and must not be pulled down.
+    def test_a_local_communitys_total_is_recounted_from_its_members(self, db_session):
+        """Since v1.8.10 a local community's total is counted from its members, local and remote, rather than only
+        raised to the local count: a stale total is corrected, whichever way it is wrong.
         """
         instance, user, community, _ = _seed()
         make_community_member(user, community)
@@ -640,7 +638,7 @@ class TestUpdateCommunityStats:
         update_community_stats()
 
         db.session.expire_all()
-        assert db.session.get(Community, community.id).total_subscriptions_count == 50
+        assert db.session.get(Community, community.id).total_subscriptions_count == 1
 
     def test_a_remote_community_keeps_its_total_untouched(self, db_session):
         """`:306`'s first condition, `is_local()`, taking its false arm.

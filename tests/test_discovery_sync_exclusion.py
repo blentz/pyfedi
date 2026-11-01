@@ -251,4 +251,5 @@ def test_the_community_delete_route_forgets_the_community_before_the_row_is_gone
                                data={'submit': 'Delete', 'csrf_token': csrf(app, client)})
 
     assert response.status_code == 302 and seen == [(True, True)]
+    db.session.expire_all()   # the delete runs in delete_community_task's own session (v1.8.10)
     assert db.session.get(Community, community_id) is None

@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import boto3
+from unittest.mock import patch
+
 import pytest
 from PIL import Image
 from sqlalchemy import text
@@ -20,7 +22,7 @@ from werkzeug.datastructures import FileStorage
 
 from app import cli, db
 from app.constants import (COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_PODCAST, COMMUNITY_KIND_VIDEO_CHANNEL, NOTIF_DEFAULT,
-                           POST_STATUS_PROCESSING, POST_STATUS_PUBLISHED, POST_STATUS_SCHEDULED, POST_TYPE_LINK,
+                           POST_STATUS_PROCESSING, POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING, POST_STATUS_SCHEDULED, POST_TYPE_LINK,
                            POST_TYPE_VIDEO)
 from app.models import CommunityBan, CommunityMember, File, ModLog, Notification, Post, Settings, User, utcnow
 from app.shared.ffmpeg import MediaToolError, run_ffprobe
@@ -567,8 +569,6 @@ REVOCATIONS = {
         lambda env, post: lambda o: setattr(o.get(User, env.mod.id), 'deleted', True), NO_RIGHT),
     'the author was banned from the site': (
         lambda env, post: lambda o: setattr(o.get(User, env.mod.id), 'banned', True), NO_RIGHT),
-    'the author may no longer post': (
-        lambda env, post: lambda o: setattr(o.get(User, env.mod.id), 'ban_posts', True), NO_RIGHT),
     'the author was banned from the community': (
         lambda env, post: lambda o: o.add(CommunityBan(user_id=env.mod.id, community_id=post.community_id,
                                                        banned_by=1)), NO_RIGHT),
@@ -606,6 +606,18 @@ def test_a_right_lost_before_a_scheduled_upload_is_ready_fails_it_too(env, monke
     while_probing(monkeypatch, REVOCATIONS['the author is no longer a moderator'][0](env, post))
     post = run(post)
     assert media_of(post)['status'] == 'failed' and post.status == POST_STATUS_PROCESSING
+
+
+def test_an_author_whose_posts_need_approval_is_held_for_review_when_ready(env, monkeypatch):
+    """`ban_posts` (v1.8.10's approval queue) is not a lost right: make_post holds such an author's posts for
+    review, and a ready upload is held the same way -- not published, not announced, and the admins are told."""
+    post = stored_post(env)
+    while_probing(monkeypatch, lambda o: setattr(o.get(User, env.mod.id), 'ban_posts', True))
+    with patch('app.shared.tasks.media.notify_admins_of_post_needing_approval') as notify_admins:
+        post = run(post)
+    assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_REVIEWING
+    assert env.tasks == [] and env.notified == []
+    assert [p.id for p in notify_admins.call_args.args] == [post.id]
 
 
 def test_rights_unchanged_while_probing_publish_as_before(env, monkeypatch):

@@ -519,7 +519,7 @@ DOCUMENTED_EXEMPTIONS = {
                     "parameter, and that route checks it before redirecting."),
         ),
         Exempt(
-            line="referrer=request.args.get('referrer'),",
+            line="referrer=request.args.get('referrer'))",
             occurrences=1,
             reason=("render_template keyword. It becomes a hidden field in "
                     "post_block_image_purge_posts.html, Jinja-escaped, and is "

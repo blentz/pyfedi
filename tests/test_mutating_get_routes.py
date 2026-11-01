@@ -52,6 +52,12 @@ KNOWN_GET_MUTATORS = {
     'main.index_rss', 'main.modlog', 'main.random', 'main.random_nsfw',
     'main.test', 'tag.show_tag', 'tag.tag_cloud', 'tag.tag_posts',
     'topic.show_topic', 'topic.show_topic_rss', 'user.user_hidden_posts',
+    'main.statistics',   # v1.8.10: caches the instance's monthly active count, at most daily
+
+    # Read-only reports (v1.8.10) that run a SELECT through db.session.execute(text(...)), which this
+    # detector cannot tell from a raw-SQL write.
+    'admin.admin_high_posts_per_day', 'admin.admin_no_link_diversity', 'admin.admin_votes_for_noone',
+    'admin.admin_votes_serial_downvoters', 'user.user_voting_patterns', 'user.user_voting_patterns_down',
 
     # GET by protocol: an external service redirects the browser here, so the
     # method is not ours to choose. Each carries its own single-use token.

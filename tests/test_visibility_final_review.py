@@ -311,7 +311,7 @@ def test_check_url_already_posted_obeys_the_predicate(app, world):
     db.session.commit()
 
     def shown(user):
-        with patch('app.community.routes.retrieve_metadata_of_url', return_value=('', '')), \
+        with patch('app.community.routes.retrieve_metadata_of_url', return_value=('', '', '')), \
                 patch('app.community.routes.flask.render_template', return_value='rendered') as render:
             assert client_as(app, user).get('/community/check_url_already_posted', query_string={'link_url': url}).status_code == 200
         return [p.id for p in render.call_args.kwargs['posts']]

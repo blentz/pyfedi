@@ -17,6 +17,8 @@ from tests.app_source import APP, app_trees
 
 ALLOWED = {
     # (path under the repo, enclosing function): reason
+    ('app/user/utils.py', '_get_user_same_name'): "not a lookup of one account: v1.8.10's admin report lists every "
+                                                 "account, local or remote, that shares the name",
     ('app/api/alpha/utils/post.py', 'get_post_list'): 'scoped by ap_domain: a community named with its instance',
     ('app/api/alpha/utils/post.py', 'get_post_list2'): 'scoped by ap_domain: a community named with its instance',
     ('app/api/alpha/views.py', 'community_view'): 'scoped by ap_domain: a community named with its instance',

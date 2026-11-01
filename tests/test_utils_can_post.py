@@ -85,13 +85,14 @@ class TestCanCreatePostContentAndUserGuards:
 
 
 class TestCanCreatePostBanPosts:
-    def test_ban_posts_is_refused(self, app, db_session):
-        """Fails if `if user.ban_posts: return False` is deleted."""
+    def test_ban_posts_is_not_refused(self, app, db_session):
+        """Since v1.8.10 (778fb654, the post approval queue) `ban_posts` holds an account's posts for review rather
+        than refusing them, so it is no longer a reason can_create_post says no."""
         make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
         user = make_user(None, 'banpost', local=True, with_keys=True)
         user.ban_posts = True
         community = make_community('postland3')
-        assert can_create_post(user, community) is False
+        assert can_create_post(user, community) is True
 
 
 class TestCanCreatePostLocalBranch:

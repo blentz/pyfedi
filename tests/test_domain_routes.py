@@ -597,7 +597,7 @@ def test_the_feed_carries_the_domains_posts(app, db_session):
     assert response.status_code == 200
     assert response.headers['Content-Type'] == 'application/rss+xml'
     assert response.headers['ETag'] == f'{domain.id}_{hash(domain.post_count)}'
-    assert response.headers['Cache-Control'] == 'no-cache, max-age=600, must-revalidate'
+    assert response.headers['Cache-Control'].startswith('public, max-age=')   # v1.8.10: cached by post rate
     assert '<title>an article</title>' in body
     assert f'example.test on ' in body
 
@@ -679,7 +679,9 @@ def test_a_feed_entry_encloses_media_but_not_a_web_page_or_an_unknown_type(app, 
 
     body = app.test_client().get(f'/d/{domain.id}/feed').get_data(as_text=True)
 
-    assert body.count('<enclosure') == 1
+    # v1.8.10's RSSFeed: every url as media:content, typed when the path names a type
+    assert body.count('<enclosure') == 0
+    assert '<media:content url="https://example.test/p.jpg" type="image/jpeg"' in body
     assert 'p.jpg' in body
 
 

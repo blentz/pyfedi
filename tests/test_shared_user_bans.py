@@ -620,6 +620,9 @@ def test_ban_user_purging_a_remote_target_flashes_the_shorter_message(
     two messages are compared in full so that a swapped pair fails."""
     s = _seed_ban_scenario(target_local=False)
 
+    # v1.8.10 purges a remote user in the background, so the name is still theirs when the message is made
+    name = s.target.display_name()
+
     with web_ctx(app, s.admin):
         with _recording_task_selector():
             ban_user(_BanForm(s.target.id, purge=True, reason='spam'),
@@ -628,7 +631,7 @@ def test_ban_user_purging_a_remote_target_flashes_the_shorter_message(
                    flask_session.get('_flashes', [])]
 
     assert flashed == [
-        f'{s.target.display_name()} has been banned, deleted and all their '
+        f'{name} has been banned, deleted and all their '
         f'content deleted.']
 
 
@@ -660,6 +663,9 @@ def test_ban_user_purging_an_instance_admin_warns_first(
                                 user_id=s.target.id, role='admin'))
     db.session.commit()
 
+    # v1.8.10 purges a remote user in the background, so the name is still theirs when the message is made
+    name = s.target.display_name()
+
     with web_ctx(app, s.admin):
         with _recording_task_selector():
             ban_user(_BanForm(s.target.id, purge=True, reason='spam'),
@@ -669,7 +675,7 @@ def test_ban_user_purging_an_instance_admin_warns_first(
 
     assert flashed == [
         'Purged user was a remote instance admin.',
-        f'{s.target.display_name()} has been banned, deleted and all their '
+        f'{name} has been banned, deleted and all their '
         f'content deleted.']
 
 

@@ -679,7 +679,7 @@ def test_the_rss_feed_lists_the_feeds_posts(app, db_session, show_posts_in_child
     db.session.commit()
 
     with app.test_client() as client:
-        with patch('app.feed.routes.mimetype_from_url', return_value='image/png') as mime:
+        with patch('app.rss_extras.mimetype_from_url', return_value='image/png') as mime:
             response = client.get('/f/rssfeed.rss')
 
     body = response.get_data(as_text=True)
@@ -709,7 +709,7 @@ def test_the_rss_feed_encloses_only_non_text_urls(app, db_session, mimetype):
     db.session.commit()
 
     with app.test_client() as client:
-        with patch('app.feed.routes.mimetype_from_url', return_value=mimetype):
+        with patch('app.rss_extras.mimetype_from_url', return_value=mimetype):
             response = client.get('/f/rssfeed.rss')
 
     body = response.get_data(as_text=True)

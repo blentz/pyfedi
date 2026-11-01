@@ -108,6 +108,7 @@ how.
 """
 from datetime import datetime
 
+import re
 import pytest
 
 from app import db
@@ -391,7 +392,7 @@ class TestPersonAndService:
         assert isinstance(user, User)
         assert user.user_name == 'alice'
         assert user.bot is False
-        assert user.email == f'alice@{PEER}'
+        assert re.fullmatch(rf'alice_\w{{5}}@{re.escape(PEER)}', user.email)   # v1.8.10 makes it unique
         assert user.ap_preferred_username == 'alice'
 
     def test_service_document_creates_a_bot_user(self, app, db_session):

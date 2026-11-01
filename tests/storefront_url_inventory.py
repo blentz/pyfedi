@@ -129,6 +129,8 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     },
     'app/shared/tasks/maintenance.py': {
         'add_remote_community_from_post': 1,
+        'build_instance_list': 2,        # v1.8.10's crawl: this server lists itself under its default name
+        'refresh_instance_chooser': 1,   # v1.8.10: the main list is this server only when it is the default domain
     },
     'app/shared/tasks/notes.py': {
         'send_reply': 2,

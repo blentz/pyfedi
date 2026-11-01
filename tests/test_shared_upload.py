@@ -363,7 +363,6 @@ class TestAnAvifCarriesNoUploaderMetadata:
 
     def test_an_avif_upload_kept_as_avif_drops_its_own_exif(self, app):
         """No MEDIA_IMAGE_FORMAT: the format comes from the '.avif' name, and the source's EXIF is in img.info."""
-        import pillow_avif  # noqa: F401  -- registers the AVIF plugin for this test's encode
         source = Image.open(io.BytesIO(jpeg_with_gps_exif()))
         buffer = io.BytesIO()
         source.save(buffer, format='AVIF', exif=source.info['exif'], xmp=source.info['xmp'])
@@ -551,11 +550,10 @@ class TestHeicAndAvifLazyImports:
             finally:
                 _cleanup(before)
 
-    def test_an_avif_upload_imports_pillow_avif_and_succeeds(self, app):
-        """:54-55 -- `if file_ext.lower() == '.avif': import pillow_avif`."""
+    def test_an_avif_upload_succeeds(self, app):
+        """An .avif upload is read and stored (Pillow reads AVIF itself since v1.8.10 dropped pillow-avif-plugin)."""
         before = files_under(MEDIA_ROOT)
         buffer = io.BytesIO()
-        import pillow_avif  # noqa: F401  -- registers the AVIF plugin for this test's encode
         Image.new('RGB', (8, 8), color=(7, 8, 9)).save(buffer, format='AVIF')
         buffer.seek(0)
         avif = FileStorage(stream=buffer, filename='probe.avif')
@@ -566,10 +564,9 @@ class TestHeicAndAvifLazyImports:
             finally:
                 _cleanup(before)
 
-    def test_configuring_avif_output_format_imports_pillow_avif(self, app):
-        """:64-65 -- `if image_format == 'AVIF': import pillow_avif`, independent of
-        the upload's own extension: a plain PNG upload with output format
-        configured to AVIF."""
+    def test_configuring_avif_output_format_writes_avif(self, app):
+        """Output format AVIF, independent of the upload's own extension: a plain PNG upload is stored as
+        .avif."""
         before = files_under(MEDIA_ROOT)
         with app.app_context():
             original_format = app.config['MEDIA_IMAGE_FORMAT']

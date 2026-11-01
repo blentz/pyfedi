@@ -225,7 +225,7 @@ def test_other_kinds_unchanged(app, pod, episode_post):
 
     assert not [element for element in channel.iter() if element.tag.startswith(('{%s}' % NS['itunes'], '{%s}' % NS['podcast']))]
     assert channel.find('item/enclosure') is None
-    assert channel.findtext('language') == 'en'
+    assert channel.findtext('language') is None   # v1.8.10 (5fcf3344): a feed's items carry their own languages
 
 
 @pytest.mark.parametrize('kind', ['discussion', COMMUNITY_KIND_PODCAST])
@@ -309,7 +309,7 @@ def test_a_flair_or_tag_that_is_not_xml_text_is_left_out_of_the_items(app, pod, 
 
     item = items_of(channel_of(app.test_client()))['Episode one']
 
-    assert sorted(c.text for c in item.findall('category')) == ['good flair', 'pod']
+    assert sorted(c.text for c in item.findall('category')) == ['!pod@test.piefed.local', 'good flair', 'pod']   # v1.8.10 names the community twice: name and lemmy-link
 
 
 def test_a_community_title_or_description_that_is_not_xml_text_does_not_fail_the_feed(app, pod, episode_post):

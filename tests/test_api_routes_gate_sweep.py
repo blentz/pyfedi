@@ -128,11 +128,13 @@ class TestEveryRouteRefusesWhenTheApiIsOff:
                 unreached.append(f'{method} {path} -> {response.status_code}')
         assert answered == []
         assert len(refused) > 110, f'only {len(refused)} reached the gate'
-        # 113 of the 118 reach the gate. The five that do not are the three
-        # upload endpoints, which want a multipart file rather than JSON, and
-        # two GETs whose synthesised id has to name a row that exists; all
-        # five are covered by name in tests/test_api_routes_*.py.
-        assert len(unreached) == 5, unreached
+        # All but six reach the gate. The six that do not are the three
+        # upload endpoints, which want a multipart file rather than JSON, two
+        # GETs whose synthesised id has to name a row that exists, and
+        # v1.8.10's POST /post/scheduled, whose synthesised scheduled_for is
+        # not in the future; the first five are covered by name in
+        # tests/test_api_routes_*.py.
+        assert len(unreached) == 6, unreached
 
     # With the API ON, these two run a keyset query over `post`, and
     # sqlakeyset warns once per nullable column it is ordering by. Those

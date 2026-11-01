@@ -127,17 +127,19 @@ class TestWhatADownvoteCostsANewPost:
         db.session.commit()
         db.session.refresh(env.post)
 
-    def test_a_downvote_on_a_new_post_is_amplified(self, env):
+    def test_a_downvote_on_a_new_post_is_amplified_in_its_spicy_score(self, env):
+        """Since v1.8.10 the stored score counts a vote once and the amplification is Post.spicy_score's, which
+        the ranking reads."""
         before = env.post.score or 0
 
         self._vote(env)
 
         assert env.post.down_votes == 1
-        assert env.post.score == before - env.app.config['SPICY_UNDER_30']
+        assert env.post.score == before - 1
+        assert env.post.spicy_score() == pytest.approx(before - env.app.config['SPICY_UNDER_30'])
 
-    def test_a_post_past_thirty_votes_uses_the_second_multiplier(self, env):
-        """The `elif`. The two bands are different numbers, so a row that only drove the
-        first would pass against an implementation that used it everywhere."""
+    def test_a_post_past_thirty_votes_moves_its_score_by_one(self, env):
+        """The banded multipliers are spicy_score's (tests/test_models_voting.py); the stored score moves by one."""
         env.post.up_votes = 40
         env.post.down_votes = 0
         env.post.score = 40
@@ -145,7 +147,7 @@ class TestWhatADownvoteCostsANewPost:
 
         self._vote(env)
 
-        assert env.post.score == 40 - env.app.config['SPICY_UNDER_60']
+        assert env.post.score == 39
 
     def test_a_post_past_sixty_votes_is_not_amplified_at_all(self, env):
         """Neither band applies, so a downvote costs exactly one point -- an established

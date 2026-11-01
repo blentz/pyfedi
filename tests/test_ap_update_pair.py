@@ -480,8 +480,8 @@ def test_a_reply_update_takes_the_same_lock_timeouts_as_a_post(app, db_session, 
     update_post_reply_from_activity(reply, _update(content='x'))
     update_post_from_activity(reply.post, _update(name='t', content='x', type='Note'))
 
-    assert taken == [(f'lock:post_reply:{reply.id}', {'timeout': 60, 'blocking_timeout': 60}),
-                     (f'lock:post:{reply.post.id}', {'timeout': 60, 'blocking_timeout': 60})]
+    assert taken == [(f'lock:post_reply:{reply.id}', {'timeout': 120, 'blocking_timeout': 60}),
+                     (f'lock:post:{reply.post.id}', {'timeout': 120, 'blocking_timeout': 60})]
 
 
 def test_a_reply_distinguished_flag_is_applied(app, db_session, redis_lock_only_double):

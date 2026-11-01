@@ -220,41 +220,37 @@ class TestWhoMayDownvote:
 
 
 class TestTheSpicyAmplification:
-    """Early votes count for more, so that 'hot' moves at all on a new post."""
+    """Early votes count for more in 'hot', so that it moves at all on a new post. Since v1.8.10 the amplification
+    lives in Post.spicy_score(), which the ranking reads; the stored score counts each vote once."""
 
-    def amplified(self, env, up_votes, down_votes, monkeypatch, **spices):
-        for key, value in spices.items():
-            monkeypatch.setitem(current_app.config, key, value)
-        env.post.up_votes = up_votes
-        env.post.down_votes = down_votes
-        env.post.score = 0
+    def spiced(self, env, up_votes, down_votes, score, monkeypatch, **spices):
+        for key in ('SPICY_UNDER_10', 'SPICY_UNDER_30', 'SPICY_UNDER_60'):
+            monkeypatch.setitem(current_app.config, key, spices.get(key, 1))
+        env.post.up_votes, env.post.down_votes, env.post.score = up_votes, down_votes, score
+        return env.post.spicy_score()
+
+    def test_a_vote_moves_the_stored_score_by_one(self, env, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'SPICY_UNDER_10', 3)
+        env.post.up_votes = env.post.down_votes = env.post.score = 0
         db.session.commit()
         env.post.vote(env.voter, 'upvote', None)
-        return counts(env.post)[2]
+        assert counts(env.post)[2] == 1
 
     def test_the_first_ten_votes_count_most(self, env, monkeypatch):
-        assert self.amplified(env, 0, 0, monkeypatch, SPICY_UNDER_10=3) == 3
+        assert self.spiced(env, 1, 0, 1, monkeypatch, SPICY_UNDER_10=3) == 3
 
     def test_the_next_twenty_count_less(self, env, monkeypatch):
-        assert self.amplified(env, 15, 0, monkeypatch, SPICY_UNDER_30=2) == 2
-
-    def test_the_next_thirty_less_again(self, env, monkeypatch):
-        """2, not 1.5: `Post.score` is an Integer column, so a fractional
-        SPICY_UNDER_* is rounded on the way to the database. Not a defect --
-        but it does mean an instance that sets 1.5 buys the same amplification
-        as one that sets 2 for the first vote on a post."""
-        assert self.amplified(env, 45, 0, monkeypatch, SPICY_UNDER_60=1.5) == 2
+        """Votes 11 to 30 at x2: twenty votes past the first eleven add twenty more."""
+        assert self.spiced(env, 31, 0, 31, monkeypatch, SPICY_UNDER_30=2) == pytest.approx(51)
 
     def test_after_sixty_a_vote_is_just_a_vote(self, env, monkeypatch):
-        assert self.amplified(env, 70, 0, monkeypatch, SPICY_UNDER_60=1.5) == 1
+        assert self.spiced(env, 70, 0, 70, monkeypatch) == 70
 
     def test_a_downvote_is_amplified_too(self, env, monkeypatch):
-        monkeypatch.setitem(current_app.config, 'SPICY_UNDER_30', 2)
-        env.post.up_votes = 10
-        env.post.score = 0
-        db.session.commit()
-        env.post.vote(env.voter, 'downvote', None)
-        assert counts(env.post)[2] == -2
+        assert self.spiced(env, 0, 1, -1, monkeypatch, SPICY_UNDER_30=2) == -2
+
+    def test_a_post_with_no_votes_is_its_score(self, env, monkeypatch):
+        assert self.spiced(env, 0, 0, 5, monkeypatch, SPICY_UNDER_10=3) == 5
 
 
 class TestAnEmojiReaction:

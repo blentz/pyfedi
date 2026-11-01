@@ -166,6 +166,8 @@ def expected_targets(s):
         'reporter_id': s.reporter.id,
         'reporter_user_name': s.reporter.user_name,
         'orig_comment_body': s.reply.body,
+        # v1.8.10 adds the report's own id once it is committed; this module makes one report per test
+        'report_id': Report.query.one().id,
     }
 
 
@@ -280,6 +282,7 @@ class TestReportReply:
             'reporter_id': s.reporter.id,
             'reporter_user_name': s.reporter.user_name,
             'orig_comment_body': s.reply.body,
+            'report_id': row.id,
         }
 
     def test_the_web_arm_reads_the_form_and_returns_none(self, db_session, app):

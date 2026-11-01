@@ -972,7 +972,7 @@ def test_deleting_a_local_community_bans_it_and_records_the_reason(
     community, owner, ordinary, english = owned_community
     client, token = owner_client
 
-    with patch('app.community.routes.add_to_modlog') as modlog:
+    with patch('app.community.util.add_to_modlog') as modlog:
         response = client.post(
             url(app, 'community.community_delete', community_id=community.id),
             data={'submit': 'Delete', 'csrf_token': token})
@@ -980,7 +980,9 @@ def test_deleting_a_local_community_bans_it_and_records_the_reason(
     assert response.status_code == 302
     assert modlog.call_args.args == ('delete_community',)
     assert owner.user_name in modlog.call_args.kwargs['reason']
-    assert db.session.get(Community, community.id) is None
+    community_id = community.id
+    db.session.expire_all()   # the delete ran in the task's own session
+    assert db.session.get(Community, community_id) is None
 
 
 def test_the_delete_form_renders_on_a_get(app, owned_community, owner_client):

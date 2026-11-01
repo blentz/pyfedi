@@ -151,7 +151,7 @@ def _web_form(**over):
         'title': 'a title', 'body': 'a body',
         'link_url': 'https://example.com/page', 'video_url': 'https://example.com/v.mp4',
         'nsfw': False, 'ai_generated': False, 'notify_author': True,
-        'language_id': None, 'tags': '', 'flair': [],
+        'language_id': None, 'og_image_url': None, 'tags': '', 'flair': [],
         'scheduled_for': None, 'repeat': None, 'timezone': 'UTC',
         'image_alt_text': '', 'sticky': False, 'nsfl': False,
         'mode': 'single', 'local_only': False, 'finish_in': '3d',

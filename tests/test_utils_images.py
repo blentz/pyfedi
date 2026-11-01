@@ -1,6 +1,5 @@
 import io
 
-import pillow_avif  # noqa: F401  -- registers the AVIF writer, as production's first AVIF save does
 import pytest
 from PIL import Image, ImageCms
 

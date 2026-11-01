@@ -395,14 +395,14 @@ ALICE_ACTOR = (b'{"@context":["https://www.w3.org/ns/activitystreams","https://w
     b'x","indexable":true,"liked":"https://test.piefed.local/u/alice/liked","manuallyApprovesFollowers":false,"name"'
     b':"Alice","outbox":"https://test.piefed.local/u/alice/outbox","preferredUsername":"alice","publicKey":{"id":"ht'
     b'tps://test.piefed.local/u/alice#main-key","owner":"https://test.piefed.local/u/alice","publicKeyPem":"ALICE-PU'
-    b'BLIC-KEY"},"published":"2026-01-02T03:04:05+00:00","type":"Person"}\n')
+    b'BLIC-KEY"},"published":"2026-01-02T03:04:05+00:00","reposter":false,"type":"Person"}\n')   # reposter: v1.8.10
 ALICE_WEBFINGER = (b'{"aliases":["https://test.piefed.local/u/alice"],"links":[{"href":"https://test.piefed.local/u/alice","rel":"h'
     b'ttp://webfinger.net/rel/profile-page","type":"text/html"},{"href":"https://test.piefed.local/u/alice","propert'
     b'ies":{"https://www.w3.org/ns/activitystreams#type":"Person"},"rel":"self","type":"application/activity+json"},'
     b'{"rel":"https://w3id.org/fep/3b86/Create","template":"https://test.piefed.local/share?url={object}"}],"subject'
     b'":"acct:alice@test.piefed.local"}\n')
 CLEARNET_ACTOR = (b'{"@context":["https://www.w3.org/ns/activitystreams","https://w3id.org/security/v1"],"attributedTo":"https://t'
-    b'est.piefed.local/c/clearnet/moderators","defaultPostType":null,"endpoints":{"sharedInbox":"https://test.piefed'
+    b'est.piefed.local/c/clearnet/moderators","defaultHashtag":"","defaultPostType":null,"endpoints":{"sharedInbox":"https://test.piefed'
     b'.local/inbox"},"featured":"https://test.piefed.local/c/clearnet/featured","followers":"https://test.piefed.loc'
     b'al/c/clearnet/followers","following":"https://test.piefed.local/c/clearnet/following","genAI":false,"id":"http'
     b's://test.piefed.local/c/clearnet","inbox":"https://test.piefed.local/c/clearnet/inbox","language":[],"lemmy:ta'
