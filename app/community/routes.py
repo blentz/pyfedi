@@ -74,7 +74,7 @@ from app.utils import user_banned_from_community, back, get_setting, render_temp
     approval_required, permission_required, aged_account_required, communities_banned_from_all_users, \
     moderating_communities_ids_all_users, block_honey_pot, user_pronouns, community_membership_private, \
     show_reason_why_no_federation, banned_instances, is_invalid_get_request_uri, user_ip_banned, \
-    check_anoobis, calculate_rss_cache_timeout, opengraph_parse, community_link_markup, sanitise_posting_warning, refuse_if_private_instance, as_rss_reader
+    check_anoobis, calculate_rss_cache_timeout, community_link_markup, sanitise_posting_warning, refuse_if_private_instance, as_rss_reader
 # The module, not the names: app.shared.post reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.post)
 import app.shared.post as shared_post
@@ -1085,11 +1085,10 @@ def subscribe(actor):
         return server_view_button_response(actor, joined=True, htmx=htmx)
     do_subscribe(actor, current_user.id, admin_preload=htmx)
     if htmx:
-        community = actor_to_community(actor)
-        if request.headers.get('HX-Request'):
+        if request.form.get('reply') == 'text':   # a post teaser's Join link is swapped for a word, not a button
             return _('Joined')
-        else:
-            return render_template('community/_leave_button.html', community=community)
+        community = actor_to_community(actor)
+        return render_template('community/_leave_button.html', community=community)
     else:
         # send them back where they came from
         return back('/c/' + actor)
@@ -1447,7 +1446,7 @@ def add_post(actor, type=None):
                 # Check that at least one image is provided (for creation)
                 if not uploaded_files:
                     flash(_('At least one image is required for a gallery post.'), 'error')
-                    return redirect(url_for('community.add_post', actor=community.ap_id if community.ap_id else community.name, type='gallery'))
+                    return redirect(url_for('community.add_post', actor=community.link(), type='gallery'))
                 post = shared_post.make_post(form, community, post_type, SRC_WEB, uploaded_files=uploaded_files, image_alt_texts=image_alt_texts)
             else:
                 album = album_uploads(form) if type == 'image' else None   # the pictures after the image (R5)
@@ -1820,10 +1819,12 @@ def community_delete(community_id: int):
     if community.is_owner() or current_user.is_admin():
         form = DeleteCommunityForm()
         if form.validate_on_submit():
+            # The community and who is deleting it, by id: the task runs in a worker, where there is no
+            # current_user (v1.8.10 called it with neither)
             if current_app.debug:
-                delete_community_task()
+                delete_community_task(community.id, current_user.id)
             else:
-                delete_community_task.delay()
+                delete_community_task.delay(community.id, current_user.id)
 
             flash(_('Community deleted'))
             return redirect('/communities')
@@ -3451,17 +3452,36 @@ def get_sidebar(community_id):
 
 
 def retrieve_metadata_of_url(url):
+    """(title, description, og:image) of the page at `url`, each '' when absent or when the page cannot be read.
+    One capped fetch that does not follow redirects; the HTML <title> stands in for a missing og:title."""
     title = ''
     description = ''
     image = ''
     if is_invalid_get_request_uri(url):
-        return '', ''
+        return title, description, image
     try:
-        metadata = opengraph_parse(url)
-        if metadata:
-            title = metadata.get('og:title', '')
-            description = metadata.get('description', '')
-            image = metadata.get('og:image', '')
+        response = _capped_get(url, timeout=10, max_bytes=PAGE_MAX_BYTES)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.content, 'html.parser')
+
+            # Try og:title first
+            og_title = soup.find('meta', property='og:title')
+            if og_title and og_title.get('content'):
+                title = og_title.get('content').strip()
+
+            if title == '':
+                # Fall back to HTML title
+                title_tag = soup.find('title')
+                if title_tag:
+                    title = title_tag.get_text().strip()
+
+            meta_description = soup.find('meta', {'name': 'description'})
+            if meta_description and meta_description.get('content'):
+                description = meta_description.get('content').strip()
+
+            og_image = soup.find('meta', property='og:image')
+            if og_image and og_image.get('content'):
+                image = og_image.get('content').strip()
         return title, description, image
     except Exception:
         return title, description, image

@@ -13,7 +13,7 @@
 {% endif %}
 
 {% block end_scripts -%}
-    <script src="{{ url_for('static', filename='js/chart.js', changed=getmtime('js/chart.js')) }}" nonce={{ nonce }}></script>
+    <script src="{{ url_for('static', filename='js/chart.js', changed=getmtime('js/chart.js')) }}" nonce="{{ nonce }}"></script>
 {% endblock -%}
 
 {% block app_content %}

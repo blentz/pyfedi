@@ -7,11 +7,11 @@
 {% from "_macros.html" import render_username, render_communityname, render_feedname -%}
 
 {% block end_scripts -%}
-    <script src="{{ url_for('static', filename='js/media_library.js', changed=getmtime('js/media_library.js')) }}" nonce={{ nonce }}></script>
+    <script src="{{ url_for('static', filename='js/media_library.js', changed=getmtime('js/media_library.js')) }}" nonce="{{ nonce }}"></script>
 {% endblock -%}
 
 {% block app_content %}
-<script src="/static/js/coolfieldset.js?v=3" nonce={{ nonce }}></script>
+<script src="/static/js/coolfieldset.js?v=3" nonce="{{ nonce }}"></script>
 <div class="row">
     <main class="col-12 col-lg-8 position-relative add_reply main_pane">
         <fieldset id="post_reply_op" class="coolfieldset  {{ 'collapsed' if request.cookies.get('fieldset_post_reply_op_state', 'collapsed') == 'collapsed' }} mt-3"><legend class="w-auto">{{ _('Original post') }}</legend>

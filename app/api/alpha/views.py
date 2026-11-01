@@ -14,7 +14,7 @@ from app.branding import own_value
 from app.activitypub.util import active_month, normalise_actor_string
 from app.constants import *
 import app.discovery.credits as discovery_credits   # the module, not names: app.discovery.credits imports this package indirectly
-from app.models import ChatMessage, Community, Language, Instance, Post, PostReply, User, utcnow, \
+from app.models import ChatMessage, Community, Language, Instance, Post, PostReply, User, utcnow, federation_base, \
     AllowedInstances, BannedInstances, utcnow, Site, Feed, FeedItem, Topic, CommunityFlair, \
     UserNote, Poll, Event, PollChoice, Conversation, Report, File, post_file
 from app.post.util import tags_to_string, flair_to_string
@@ -129,7 +129,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
                     v1['thumbnail_url'] = valid_url
                 if valid_url := post.image.thumbnail_url():
                     v1['small_thumbnail_url'] = valid_url
-            v1['url'] = post.url if post.url else current_app.config['SERVER_URL'] + post.slug
+            v1['url'] = post.url if post.url else federation_base(post) + post.slug   # a gallery: the post itself
         if post.cross_posts:
             v1['cross_posts'] = []
             # for a token user only (spec §3.4), and on its own domain only (follow-up F6)
@@ -407,7 +407,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
 
 def scheduled_post_view(post: Post | int, variant: int, user_id: int | None = None) -> dict:
     if isinstance(post, int):
-        post = Post.query.get(post)
+        post = db.session.get(Post, post)
         if post is None:
             raise NoResultFound
 

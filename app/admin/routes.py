@@ -1717,7 +1717,8 @@ def activity_json(activity_id):
         is_valid_json = False
 
     if is_valid_json:
-        json_html = '<pre><code>\n' + pretty_json + '\n</code></pre>'
+        # Escaped: a valid document still carries a peer's strings, and v1.8.10 wrote them in as markup
+        json_html = Markup('<pre><code>\n{}\n</code></pre>').format(pretty_json)
     else:
         # D1383. This arm is reached precisely when the body did NOT parse, so
         # `pretty_json` is the peer's bytes verbatim, and it was wrapped in a
@@ -2914,17 +2915,17 @@ def admin_instance_edit(instance_id):
 
 
 @bp.route('/instance/<int:instance_id>/contact', methods=['GET', 'POST'])
-@permission_required('administer all communities')
 @login_required
+@permission_required('administer all communities')
 def admin_instance_contact(instance_id):
     form = ContactInstanceForm()
-    instance = Instance.query.get_or_404(instance_id)
+    instance = db.session.get(Instance, instance_id) or abort(404)
     admins = User.query.join(InstanceRole, InstanceRole.user_id == User.id).\
         filter(InstanceRole.instance_id == instance_id, InstanceRole.role == 'admin').\
         order_by(desc(User.last_seen))
-    form.admin.choices = [(admin.id, admin.display_name()) for admin in admins.all()]
+    form.admin.choices = select_choices([(admin.id, admin.display_name()) for admin in admins.all()])
     if form.validate_on_submit():
-        recipient = User.query.get(form.admin.data)
+        recipient = db.session.get(User, form.admin.data)
         conversation = None
         existing_conversation = Conversation.find_existing_conversation(recipient=recipient, sender=current_user)
         if existing_conversation:
@@ -3220,7 +3221,7 @@ def admin_cms_page_delete(page_id):
 @permission_required('change instance settings')
 def admin_emoji():
     query = Emoji.query.order_by(Emoji.token)
-    if filter := get_setting('emoji_filter'):
+    if filter := get_setting('emoji_filter', ''):
         patterns = filter.split('\n')
         conditions = [~Emoji.url.like(f'%{pattern.strip()}%') for pattern in patterns if pattern.strip()]
         if conditions:
@@ -3282,8 +3283,8 @@ def admin_emoji_delete(emoji_id):
 
 
 @bp.route('/emoji/filter', methods=['GET', 'POST'])
-@permission_required('change instance settings')
 @login_required
+@permission_required('change instance settings')
 def admin_emoji_filter():
     form = EmojiFilterForm()
     if form.validate_on_submit():
@@ -3482,8 +3483,8 @@ def vote_manipulation_findings():
 
 
 @bp.route('/votes', methods=['GET'])
-@permission_required('administer all communities')
 @login_required
+@permission_required('administer all communities')
 def admin_votes():
     if request.args.get('refresh'):
         cache.delete_memoized(vote_manipulation_findings)
@@ -3494,8 +3495,8 @@ def admin_votes():
 
 
 @bp.route('/votes_for_noone', methods=['GET'])
-@permission_required('administer all communities')
 @login_required
+@permission_required('administer all communities')
 def admin_votes_for_noone():
     rows = db.session.execute(text(sql_file('accounts_no_votes'))).all()
     return render_template('admin/votes_for_noone.html',
@@ -3504,8 +3505,8 @@ def admin_votes_for_noone():
 
 
 @bp.route('/serial_downvoters', methods=['GET'])
-@permission_required('administer all communities')
 @login_required
+@permission_required('administer all communities')
 def admin_votes_serial_downvoters():
     rows = db.session.execute(text(sql_file('serial_downvoters'))).all()
     return render_template('admin/votes_serial_downvoters.html',
@@ -3514,8 +3515,8 @@ def admin_votes_serial_downvoters():
 
 
 @bp.route('/high_posts_per_day', methods=['GET'])
-@permission_required('administer all communities')
 @login_required
+@permission_required('administer all communities')
 def admin_high_posts_per_day():
     rows = db.session.execute(text(sql_file('high_posts_per_day'))).all()
     return render_template('admin/high_posts_per_day.html',
@@ -3524,8 +3525,8 @@ def admin_high_posts_per_day():
 
 
 @bp.route('/no_link_diversity', methods=['GET'])
-@permission_required('administer all communities')
 @login_required
+@permission_required('administer all communities')
 def admin_no_link_diversity():
     rows = db.session.execute(text(sql_file('no_link_diversity'))).all()
     return render_template('admin/no_link_diversity.html',

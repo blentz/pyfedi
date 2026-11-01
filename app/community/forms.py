@@ -605,7 +605,7 @@ class CreateGalleryForm(CreatePostForm):
                 uploaded_file.seek(0)
 
         if self.communities:
-            community = Community.query.get(self.communities.data)
+            community = db.session.get(Community, self.communities.data)
             if community.is_local() and g.site.allow_local_image_posts is False:
                 self.communities.errors.append(_l('Galleries cannot be posted to local communities.'))
                 return False

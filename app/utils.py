@@ -79,7 +79,7 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     File, ModLog, CommunityBlock, Feed, FeedMember, CommunityFlair, CommunityJoinRequest, Notification, UserNote, \
     PostReply, PostReplyBookmark, AllowedInstances, InstanceBan, Tag, Emoji, UserExtraField, ArchivedPostReply, \
     RevokedToken, CommunityFavorite, UserFollower, CommunityFlairBlock, s3_key_from_url, Role, RolePermission, \
-    ServerViewMember
+    ServerViewMember, federation_base, served_path
 from app.local_names import local_named
 from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, DomainInfo, current_storefront, canonicalise_links, canonicalise_text, domain_base_url, \
     act_in_this_request, acting_as_default, acting_domain, domain_authority, \
@@ -2319,7 +2319,7 @@ def get_emoji_replacements():
     # Keyed lowercase: allowlist_html matches tokens case-insensitively and looks the match up lowercased, and
     # remote emoji keep their instance's spelling (':Blobhaj_Knife:').
     emojis = db.session.query(Emoji)
-    if filter := get_setting('emoji_filter'):
+    if filter := get_setting('emoji_filter', ''):
         patterns = filter.split('\n')
         conditions = [~Emoji.url.like(f'%{pattern.strip()}%') for pattern in patterns if pattern.strip()]
         if conditions:
@@ -2675,6 +2675,10 @@ def stash_code_md(text: str, placeholder: str, ignore_indented: bool = False) ->
     def store_code(match):
         code_snippets.append(match.group(0))
         return f"{placeholder}{len(code_snippets) - 1}$"
+
+    # Closed <code> elements: markdown passes inline HTML through, so the preprocessors that use this must leave a
+    # <code> block's lines alone as they leave a fence's (the property tests/fuzz/targets/markdown.py checks)
+    text = _CODE_HTML_RE.sub(lambda match: match.group(0) if match.group(1) is None else store_code(match), text)
 
     # Fenced code blocks (```...```)
     fenced_regex = re.compile(r'^```[^\n]*\n([\s\S]*?)^```[ \t]*$', re.M)
@@ -8569,3 +8573,76 @@ class TaskError(Exception):
     this one, and the design itself wrote "and more"). It is intended as the
     migration target for the rest; see the findings register for D315.
     """
+
+
+def build_gallery_thumbnail(files: list[str], post, return_file_id=True):
+    """A composite thumbnail of `files`, stored on `post`'s domain (federation_base) as its other images are."""
+    pil_images = []
+    for file in files:
+        if file.startswith('http'):
+            source_image_response = get_request(file)
+            if source_image_response and source_image_response.status_code == 200:
+                content_type = source_image_response.headers.get('content-type')
+                if content_type:
+                    if content_type.startswith('image') or (content_type == 'application/octet-stream' and file.endswith('.avif')):
+                        source_image = source_image_response.content
+                        source_image_response.close()
+
+                        image = Image.open(io.BytesIO(source_image))
+                        image = ImageOps.exif_transpose(image)
+                        pil_images.append(image)
+        else:
+            pil_images.append(Image.open(file))
+
+    thumbnail = make_gallery_thumbnail(pil_images, size=1200)
+
+    if thumbnail:
+        # Generate new filename
+        new_filename = gibberish(15)
+        if store_files_in_s3():
+            directory = 'app/static/tmp'
+        else:
+            directory = 'app/static/media/posts/' + new_filename[0:2] + '/' + new_filename[2:4]
+        ensure_directory_exists(directory)
+
+        final_ext = '.webp'
+        final_place = os.path.join(directory, new_filename + final_ext)
+
+        thumbnail.save(final_place)
+
+        url = f"{federation_base(post)}{served_path(final_place)}"
+
+        # Move to S3 if configured
+        if store_files_in_s3():
+            session = boto3.session.Session()
+            extra_args = {}
+            if current_app.config.get('S3_STORAGE_CLASS'):
+                extra_args['StorageClass'] = current_app.config['S3_STORAGE_CLASS']
+            if current_app.config.get('S3_PUBLIC_ACL'):
+                extra_args['ACL'] = 'public-read'
+            s3 = session.client(
+                service_name='s3',
+                region_name=current_app.config['S3_REGION'],
+                endpoint_url=current_app.config['S3_ENDPOINT'],
+                aws_access_key_id=current_app.config['S3_ACCESS_KEY'],
+                aws_secret_access_key=current_app.config['S3_ACCESS_SECRET'],
+            )
+            extra_args['ContentType'] = guess_mime_type(final_place)
+            s3.upload_file(final_place, current_app.config['S3_BUCKET'], 'posts/' +
+                           new_filename[0:2] + '/' + new_filename[2:4] + '/' + new_filename + final_ext,
+                           ExtraArgs=extra_args)
+            url = f"https://{current_app.config['S3_PUBLIC_URL']}/posts/" + \
+                  new_filename[0:2] + '/' + new_filename[2:4] + '/' + new_filename + final_ext
+            os.unlink(final_place)
+
+        # Create File record
+        if return_file_id:
+            file = File(source_url=url)
+            db.session.add(file)
+            db.session.commit()
+
+            return file.id
+        else:
+            return url
+    else:
+        return None

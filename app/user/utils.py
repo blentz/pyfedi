@@ -102,12 +102,11 @@ def purge_remote_user_then_delete_task(user_id, flush):
         session = get_task_session()
         try:
             with patch_db_session(session):
-                user = session.query(User).get(user_id)
+                user = session.get(User, user_id)
                 if user:
                     user.purge_content(flush=flush)
 
-                    from app import redis_client
-                    with redis_client.lock(f"lock:user:{user.id}", timeout=10, blocking_timeout=6):
+                    with app_pkg.redis_client.lock(f"lock:user:{user.id}", timeout=10, blocking_timeout=6):
                         session.refresh(user) # often the removal of content will take a long time so get a fresh copy of the user to be sure the setting of the delete flag succeeds.
                         user.deleted = True
                         session.commit()

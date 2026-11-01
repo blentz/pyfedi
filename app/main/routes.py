@@ -1522,7 +1522,7 @@ def explore():
 # RSS feed of the home page
 @bp.route('/index/feed', methods=['GET'])
 @bp.route('/index/feed/<feed_type>', methods=['GET'])
-@cache.cached(timeout=600, query_string=True)
+#@cache.cached(timeout=600, query_string=True)   # off: a private instance is checked inline on every request (tests/test_private_instance_rss.py)
 @as_rss_reader
 def index_rss(feed_type=None):
     if feed_type not in (None, 'local', 'popular', 'all', 'subscribed'):
@@ -1628,7 +1628,7 @@ def statistics(software=''):
     else:
         title = _('Statistics for %(software)s', software=software)
 
-    local_instance = Instance.query.get(1)
+    local_instance = db.session.get(Instance, 1)
     if local_instance.active_1mo is None or local_instance.updated_at < utcnow() - timedelta(days=1):
         local_instance.active_1mo = active_month()
         local_instance.updated_at = utcnow()

@@ -6,7 +6,7 @@
 {% from 'bootstrap5/form.html' import render_form, render_field %}
 
 {% block end_scripts -%}
-    <script src="{{ url_for('static', filename='js/media_library.js', changed=getmtime('js/media_library.js')) }}" nonce={{ nonce }}></script>
+    <script src="{{ url_for('static', filename='js/media_library.js', changed=getmtime('js/media_library.js')) }}" nonce="{{ nonce }}"></script>
 {% endblock -%}
 
 {% block app_content %}

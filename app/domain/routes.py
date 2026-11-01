@@ -148,6 +148,10 @@ def show_domain_rss(domain_id):
                        Post.private == False, listable_clause(Post))
             posts = without_local_only(posts, Post, visible=local_only_visible_rss()).order_by(
                 desc(Post.posted_at)).limit(20).all()
+            # One entry per url: a domain's feed is its links, and cross-posts of one link would repeat it (D756's
+            # twin). The newest post of each url is kept.
+            seen_urls = set()
+            posts = [post for post in posts if not post.url or not (post.url in seen_urls or seen_urls.add(post.url))]
 
             server_url = storefront_url()   # the visitor's storefront
             feed = RSSFeed(title = f'{domain.name} on {domain_site_name(current_storefront(), g.site)}',

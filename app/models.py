@@ -2717,6 +2717,12 @@ class User(UserMixin, db.Model):
         instance_block = db.session.query(InstanceBlock).filter_by(user_id=self.id, instance_id=instance_id).first()
         return instance_block is not None
 
+    def has_blocked_instances(self):
+        # v1.8.10 removed this with the refusal it served; the branch keeps that refusal (post_ap_refusal and
+        # the Vary headers that go with it), so it keeps this too
+        instance_block = db.session.query(InstanceBlock).filter_by(user_id=self.id).first()
+        return instance_block is not None
+
     def has_blocked_user(self, user_id: int):
         existing_block = db.session.query(UserBlock).filter_by(blocker_id=self.id, blocked_id=user_id).first()
         return existing_block is not None
@@ -3257,7 +3263,7 @@ class Post(db.Model):
                     indexable=user.indexable,
                     microblog=microblog,
                     local_only=local_only.content_local_only(user, community),
-                    posted_at=ap_parse_datetime(request_json['object']['published']) if 'published' in request_json['object'] else utcnow()
+                    posted_at=parse_ap_published(request_json['object'].get('published')) or utcnow()   # unreadable or future: now
                     )
         if 'type' in request_json and request_json['type'] == 'Update':
             post.edited_at = utcnow()
@@ -3333,7 +3339,6 @@ class Post(db.Model):
                 isinstance(request_json['object']['attachment'], list) and
                 len(request_json['object']['attachment']) > 0 and
                 any('type' in _as_dict(attachment) for attachment in request_json['object']['attachment'])):
-            attached_images = []
             for attachment in request_json['object']['attachment']:
                 alt_text = None
                 # Every entry is read here, whatever its shape, so one that is not
@@ -3353,14 +3358,12 @@ class Post(db.Model):
                 elif attachment['type'] == 'Document':
                     if 'url' not in attachment:     # as the Link branch above
                         continue                    # already tests for
-                    if str(attachment.get('mediaType', '')).startswith('audio/'):
-                        # A17.3: a PieFed episode is a link post to its audio, not an image or a gallery entry
-                        post.url = attachment['url']
-                        mark_audio_attachment(post, attachment)
-                        break
+                    post.url = attachment['url']  # Mastodon
+                    mark_audio_attachment(post, attachment)
                     if 'name' in attachment:
                         alt_text = attachment['name']
-                    attached_images.append(attachment)
+                    if post.url:
+                        break
                 elif attachment['type'] == 'Audio':  # WordPress podcast
                     if 'url' not in attachment:
                         continue
@@ -3380,26 +3383,10 @@ class Post(db.Model):
                         alt_text = attachment.get("name")
                         # never its `file_path`: a peer naming a path on our disk had it unlinked with the File
                         break  # the first image is the post's own; set_post_gallery keeps the rest in order
-            if len(attached_images) > 1:
-                post.url = None
-                post.type = POST_TYPE_GALLERY
-                for f in attached_images:
-                    file = File(alt_text=f.get('name'), source_url=f.get('url'))
-                    db.session.add(file)
-                    post.gallery.append(file)
-                if 'image' in request_json['object']:
-                    image = File(source_url=request_json['object']['image']['url'])
-                    db.session.add(image)
-                    post.image = image
-                else:
-                    from app.shared.post import build_gallery_thumbnail
-                    if source_url := build_gallery_thumbnail([f.get('url') for f in attached_images], return_file_id=False):
-                        image = File(source_url=source_url)
-                        db.session.add(image)
-                        post.image = image
-            elif len(attached_images) == 1:
-                post.type = POST_TYPE_IMAGE
-                post.url = attached_images[0]['url']
+            # An album -- several Image or Document attachments -- is an image post whose first picture is its
+            # image and whose others are its gallery (set_post_gallery, Pixelfed interop R5), as before v1.8.10.
+            # v1.8.10's POST_TYPE_GALLERY is kept for galleries made here; which of the two an inbound album
+            # becomes is the owner's decision (docs/CHANGES-since-v1.8.10.md, 1.1).
 
         if 'attachment' in request_json['object'] and isinstance(request_json['object']['attachment'], dict):  # a.gup.pe (Mastodon)
             alt_text = None
@@ -4427,9 +4414,10 @@ class Post(db.Model):
         return self.score + self.up_votes * extra_per_vote(up_bands) - self.down_votes * extra_per_vote(down_bands)
 
     def vote(self, user: User, vote_direction: str, emoji: str | None):
-        from app.utils import blocked_users, blocked_instances
-        if vote_direction == 'downvote' and self.author.is_local():
-            if user.id in blocked_users(self.user_id) or user.instance_id in blocked_instances(self.user_id):
+        # Any author's block, not only a local author's as v1.8.10 has it: a remote author's block of a local voter
+        # is recorded here too (InstanceBlock/UserBlock), and PostReply.vote reads it the same way
+        if vote_direction == 'downvote':
+            if self.author.has_blocked_user(user.id) or self.author.has_blocked_instance(user.instance_id):
                 return None
         with vote_lock(self):
             existing_vote = PostVote.query.filter_by(user_id=user.id, post_id=self.id).first()
@@ -4728,7 +4716,7 @@ class PostReply(db.Model):
                           if request_json else None,
                           ap_create_id=request_json['id'] if request_json else None,
                           ap_announce_id=announce_id,
-                          posted_at=ap_parse_datetime(request_json['object']['published']) if request_json and 'published' in request_json['object'] else utcnow(),
+                          posted_at=(parse_ap_published(request_json['object'].get('published')) if request_json else None) or utcnow(),
                           local_only=local_only.content_local_only(user, post.community, in_reply_to, post))
         # 'type' in request_json, not just request_json -- Post.new's equivalent
         # read one class up has always been guarded this way, and this one was

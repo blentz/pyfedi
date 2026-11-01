@@ -22,6 +22,7 @@ import pendulum
 import boto3
 import httpx
 import pillow_jxl
+import pytesseract
 from PIL import Image, ImageOps
 from flask import current_app, request, g, url_for, json
 from flask_babel import _, force_locale, gettext
@@ -3334,7 +3335,6 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                     if site.enable_chan_image_filter and toxic_community and img_width < 2000:  # images > 2000px tend to be real photos instead of 4chan screenshots.
                                         if os.environ.get('ALLOW_4CHAN', None) is None:
                                             if current_app.config['CHAN_DETECTION_ENDPOINT'] == '':
-                                                import pytesseract
                                                 try:
                                                     image_text = pytesseract.image_to_string(
                                                         Image.open(BytesIO(source_image)).convert('L'), timeout=30)
@@ -4744,7 +4744,7 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
 
 def update_post_reply_from_activity(reply: PostReply, request_json: dict):
     # the same lock, content and language rules as update_post_from_activity (D249, D250, D252, D253)
-    with app_pkg.redis_client.lock(f"lock:post_reply:{reply.id}", timeout=60, blocking_timeout=60):
+    with app_pkg.redis_client.lock(f"lock:post_reply:{reply.id}", timeout=120, blocking_timeout=60):
         reply.quote_ap_id = quote_id_from(request_json['object'])  # C2: an Update sets, changes or clears the quote
         if 'content' in request_json['object'] and request_json['object']['content'] is not None:   # Kbin, Mastodon, etc provide their posts as html
             # prefer Markdown in 'source' in provided

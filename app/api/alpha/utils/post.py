@@ -14,6 +14,7 @@ from app.constants import *
 import app.feed.routes as feed_routes
 from app.storefront import ON_DOMAIN_PARAM, BOOST_WINDOW, current_storefront, boosted_posts, boosted_top_sql, \
     domain_authority, on_domain, on_domain_sql, unboosted_order_by
+from app.local_names import named_by_actor
 from app.models import Post, Community, CommunityMember, utcnow, User, Feed, FeedItem, Topic, PostReply, PostVote, \
     CommunityFlair, read_posts, Poll, Report, hidden_posts
 # The module, not the names: app.shared.post reaches this file through a blueprint
@@ -810,15 +811,12 @@ def get_scheduled_post_list(auth, data):
     if community_id or community_name:
         community = None
         if community_id:
-            community = Community.query.get(community_id)
+            community = db.session.get(Community, community_id)
         else:
-            # Parse the community name to get the community
-            if '@' not in community_name:
-                community_name_lookup = f"{community_name}@{current_app.config['SERVER_NAME']}"
-            else:
-                community_name_lookup = community_name
-            name, ap_domain = community_name_lookup.split('@')
-            community = Community.query.filter_by(name=name, ap_domain=ap_domain).first()
+            # A bare name is local on the request's own domain; a handle on a domain of ours is that domain's
+            community = Community.query.filter(named_by_actor(Community, community_name.strip())).first()
+        if community is not None and hidden_here(community, True):
+            community = None   # a community hidden here answers as one that does not exist (follow-up F6)
 
         if community:
             scheduled_posts = scheduled_posts.filter(Post.community_id == community.id)

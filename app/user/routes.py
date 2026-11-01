@@ -307,11 +307,7 @@ def user_upvotes(actor):
 @login_required_if_private_instance
 @permission_required('manage users')
 def user_voting_patterns(actor):
-    actor = actor.strip()
-    if '@' in actor:
-        user = find_actor_or_create(actor, create_if_not_found=False)
-    else:
-        user = find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}', create_if_not_found=False)
+    user = User.query.filter(named_by_actor(User, actor.strip())).first()   # local on its own domain, or a stored remote
 
     if user is not None:
         votes_received_sql = sql_file('user_votes_received')
@@ -334,11 +330,7 @@ def user_voting_patterns(actor):
 @login_required_if_private_instance
 @permission_required('manage users')
 def user_voting_patterns_down(actor):
-    actor = actor.strip()
-    if '@' in actor:
-        user = find_actor_or_create(actor, create_if_not_found=False)
-    else:
-        user = find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}', create_if_not_found=False)
+    user = User.query.filter(named_by_actor(User, actor.strip())).first()   # local on its own domain, or a stored remote
 
     if user is not None:
         downvote_sql = """
@@ -363,11 +355,7 @@ def user_voting_patterns_down(actor):
 @login_required_if_private_instance
 @permission_required('manage users')
 def user_post_timing(actor):
-    actor = actor.strip()
-    if '@' in actor:
-        user = find_actor_or_create(actor, create_if_not_found=False)
-    else:
-        user = find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}', create_if_not_found=False)
+    user = User.query.filter(named_by_actor(User, actor.strip())).first()   # local on its own domain, or a stored remote
 
     if user is not None:
         posts = Post.query.filter(Post.user_id == user.id).order_by(desc(Post.posted_at)).limit(100).all()

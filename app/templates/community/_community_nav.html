@@ -175,41 +175,40 @@
                                 </select>
                             </div>
                             <div class="mb-3">
-                                {% if community.name == 'microblogs' %}
-                                    <label for="type" class="form-label">
+                                {% if community.name == 'microblogs' -%}
+                                    <label for="microblog_mode" class="form-label">
                                         {{ _('Posts from') }}
                                     </label>
-                                    <select class="form-control form-select" id="microblog_mode" name="microblog_mode">
+                                    <select class="form-control form-select mb-3" id="microblog_mode" name="microblog_mode">
                                         <option value="following" {{ 'selected' if microblog_mode == '' or microblog_mode == 'following' }}>
                                             {{ _('Following') }}
+                                        </option>
+                                        <option value="firehose" {{ 'selected' if microblog_mode == 'firehose' }}>
+                                            {{ _('Everyone') }}
+                                        </option>
+                                    </select>
+                                {% endif -%}
+                                <label for="type" class="form-label">
+                                    {{ _('Content type') }}
+                                </label>
+                                <select class="form-control form-select" id="type" name="content_type">
+                                    <option value="posts" {{ 'selected' if content_type == '' or content_type == 'posts' }}>
+                                        {{ _('Posts') }}
+                                    </option>
+                                    <option value="comments" {{ 'selected' if content_type == 'comments' }}>
+                                        {{ _('Comments') }}
+                                    </option>
+                                    {% if has_events -%}
+                                        <option value="events" {{ 'selected' if content_type == 'events' }}>
+                                            {{ _('Events') }}
                                         </option>
                                     {% endif -%}
                                     {% if show_galleries -%}
                                         <option value="galleries" {{ 'selected' if content_type == 'galleries' }}>
                                             {{ _('Galleries') }}
                                         </option>
-                                        <option value="firehose" {{ 'selected' if microblog_mode == 'firehose' }}>
-                                            {{ _('Everyone') }}
-                                        </option>
-                                    </select>
-                                {% else -%}
-                                    <label for="type" class="form-label">
-                                        {{ _('Content type') }}
-                                    </label>
-                                    <select class="form-control form-select" id="type" name="content_type">
-                                        <option value="posts" {{ 'selected' if content_type == '' or content_type == 'posts' }}>
-                                            {{ _('Posts') }}
-                                        </option>
-                                        <option value="comments" {{ 'selected' if content_type == 'comments' }}>
-                                            {{ _('Comments') }}
-                                        </option>
-                                        {% if has_events -%}
-                                            <option value="events" {{ 'selected' if content_type == 'events' }}>
-                                                {{ _('Events') }}
-                                            </option>
-                                        {% endif -%}
-                                    </select>
-                                {% endif %}
+                                    {% endif -%}
+                                </select>
                             </div>
                             <button type="submit" class="btn btn-primary">
                                 {{ _('Apply filters') }}

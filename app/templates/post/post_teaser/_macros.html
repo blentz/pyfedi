@@ -187,7 +187,7 @@
     {% if not embed -%}
         <div class="post_options_link pull-right">
             {% if current_user.is_authenticated and joined_communities and post.community_id not in joined_communities and not post.is_microblog() %}
-                <a class="small" rel="nofollow" title="{{ _('Join this community') }}" aria-label="{{ _('Join this community') }}" href="#" hx-post="{{ '/c/' + post.community.link() + '/subscribe' }}" hx-swap="outerHTML" hx-target="this" >{{ _('Join') }}</a>
+                <a class="small" rel="nofollow" title="{{ _('Join this community') }}" aria-label="{{ _('Join this community') }}" href="#" hx-post="/community/{{ post.community.link() }}/subscribe" hx-vals='{"csrf_token": "{{ csrf_token() }}", "reply": "text"}' hx-swap="outerHTML" hx-target="this" >{{ _('Join') }}</a>
             {% endif -%}
             {% if current_user.is_authenticated and current_user.language_id and post.language_id and (current_user.language_id != (v.language_id or post.language_id) or post.community.always_translate) -%}
                 <div class="post_translate_icon">
@@ -203,7 +203,7 @@
                 <a href="#" data-id="{{ post.id }}" class="hide_read_post"><span class="fe fe-hide"></span></a>
             </div>
             {% endif -%}
-            {% if (moderated_community_ids and post.community_id in moderated_community_ids) or current_user.get_id() in admin_ids -%}
+            {% if (moderated_community_ids and post.community_id in moderated_community_ids) or current_user.get_id() in (admin_ids or []) -%}
               <div class="dropdown" id="flair_dropdown_{{ post.id }}">
                 <a href='{{ '/post/' + post.id|string + '/set_flair' if low_bandwidth else '#' }}'
                   data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" id="flair_link_{{ post.id }}"
@@ -218,7 +218,7 @@
                 </ul>
               </div>
             {% endif -%}
-            {% if post.status == 0 and current_user.get_id() in admin_ids -%}
+            {% if post.status == 0 and current_user.get_id() in (admin_ids or []) -%}
                 <div>
                     <a href="#" class="btn btn-sm btn-primary" hx-post="{{ '/post/' + post.id|string + '/approve' }}" hx-target="this" hx-swap="outerHTML">{{ _('Approve') }}</a>
                 </div>

@@ -643,19 +643,20 @@ def flairs_from_string(flairs: str, community_id: int) -> List[Tag]:
 
 
 @celery.task
-def delete_community_task(community_id):
+def delete_community_task(community_id, user_id):
     with current_app.app_context():
         session = get_task_session()
         try:
             with patch_db_session(session):
-                community = session.query(Community).get(community_id)
+                community = session.get(Community, community_id)
                 if community.is_local():
                     community.banned = True
                     # todo: federate deletion out to all instances. At end of federation process, delete_dependencies() and delete community
 
                 # record for modlog
-                reason = f"Community {community.name} deleted by {current_user.user_name}"
-                add_to_modlog('delete_community', actor=current_user, reason=reason, community=community)
+                deleter = session.get(User, user_id)
+                reason = f"Community {community.name} deleted by {deleter.user_name}"
+                add_to_modlog('delete_community', actor=deleter, reason=reason, community=community)
 
                 # actually delete the community
                 from app.discovery.sync import forget_synced_community  # cycle: app.discovery.sync imports app.discovery.backfill, which reaches this module while it is mid-import

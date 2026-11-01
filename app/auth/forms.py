@@ -152,7 +152,7 @@ class FilterSetupForm(FlaskForm):
                          (3, _l('Make post semi-transparent'))]
     ignore_bots = SelectField(_l('Posts by bots'), choices=select_choices(hide_type_choices),
                               default=0, coerce=int, render_kw={'class': 'form-select'})
-    ignore_reposters = SelectField(_l('Posts by reposters'), choices=hide_type_choices,
+    ignore_reposters = SelectField(_l('Posts by reposters'), choices=select_choices(hide_type_choices),
                                    default=3, coerce=int, render_kw={'class': 'form-select'})
     hide_nsfw = SelectField(_l('NSFW posts'), choices=select_choices(hide_type_choices),
                             default=0, coerce=int, render_kw={'class': 'form-select'})

@@ -2145,7 +2145,7 @@ def post_flair_list(post_id):
 @login_required
 @permission_required('administer all communities')
 def post_approve(post_id):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     if post.user_id == current_user.id or post.community.is_moderator(current_user) or current_user.is_staff() or current_user.is_admin():
         post.status = POST_STATUS_PUBLISHED
         post.posted_at = utcnow()
@@ -2456,8 +2456,8 @@ def post_reply_edit_inline(post_id: int, comment_id: int):
         redirect(url_for('post.post_reply_edit', post_id=post_id, comment_id=comment_id))
 
     # Fetch stuff
-    post = Post.query.get_or_404(post_id)
-    post_reply = PostReply.query.get_or_404(comment_id)
+    post = db.session.get(Post, post_id) or abort(404)
+    post_reply = db.session.get(PostReply, comment_id) or abort(404)
     form = EditReplyForm()
     form.language_id.choices = languages_for_form()
     
@@ -3014,7 +3014,7 @@ def preview():
     if preview_top:
         oob_target = oob_target + "top_"
 
-    if preview_type.startswith("comment"):
+    if preview_type and preview_type.startswith("comment"):   # no type is no preview kind, not a 500
         oob_target = oob_target + "comment_preview_"
         if preview_top:
             target_id = "#textarea_comment_to_preview"

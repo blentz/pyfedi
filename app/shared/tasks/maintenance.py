@@ -651,8 +651,10 @@ def monitor_healthy_instances():
                         if 'software' in node_json:
                             instance.software = node_json['software']['name'].lower()[:50]
                             instance.version = node_json['software']['version'][:50]
-                            instance.active_1mo = node_json['usage']['users']['activeMonth']
-                            instance.active_6mo = node_json['usage']['users']['activeHalfyear']
+                            # usage is optional in nodeinfo: a document without it still records the software above
+                            users = ((node_json.get('usage') or {}).get('users') or {}) if isinstance(node_json, dict) else {}
+                            instance.active_1mo = users.get('activeMonth') if isinstance(users.get('activeMonth'), int) else instance.active_1mo
+                            instance.active_6mo = users.get('activeHalfyear') if isinstance(users.get('activeHalfyear'), int) else instance.active_6mo
                             instance.failures = 0
                             instance.dormant = False
                             instance.gone_forever = False
@@ -741,12 +743,15 @@ def monitor_healthy_instances():
                                                       category=emoji['custom_emoji']['category'],
                                                       aliases=' '.join(aliases))
                                     session.add(new_emoji)
-                                session.commit()
+                            session.commit()
 
                         # determine if they're a liability - open registration with no captcha makes them a source of problems
-                        instance.liability = instance_data['site_view']['local_site']['registration_mode'] == 'Open' \
-                                             and instance_data['site_view']['local_site']['captcha_enabled'] is False \
-                                             and instance_data['site_view']['local_site']['require_email_verification'] is False
+                        # (.get: a peer's document without these keys is not a liability, and must not undo the roles
+                        # and emoji above by raising into the handler below)
+                        local_site = (instance_data.get('site_view') or {}).get('local_site') or {}
+                        instance.liability = local_site.get('registration_mode') == 'Open' \
+                                             and local_site.get('captcha_enabled') is False \
+                                             and local_site.get('require_email_verification') is False
 
                         cache.delete_memoized(get_emoji_replacements)
                 except Exception:
@@ -1112,8 +1117,13 @@ def refresh_instance_chooser():
                 build_instance_list.delay()
             return
             
-        response_data = response.json()
-        if not response_data:
+        # An answer that is not a list of nodes keeps the rows the last good run left, as an unreachable list
+        # does: neither says anything about the instances, and neither may stop the rest of the maintenance
+        try:
+            response_data = response.json()
+        except ValueError:
+            response_data = None
+        if not response_data or not isinstance(response_data, list):
             current_app.logger.error(f"Invalid response from {main_list} API")
             return
             
@@ -1124,9 +1134,11 @@ def refresh_instance_chooser():
         
         # Process each domain from main list
         for node in response_data:
-            domain = node['domain']
+            domain = node.get('domain') if isinstance(node, dict) else None
+            if not isinstance(domain, str) or not domain:
+                continue   # a node with no usable domain is skipped, not a KeyError that ends the run
             # One of our own domains: never asked over HTTP (plan C4), and its row is pruned below
-            if isinstance(domain, str) and is_local_host(domain):
+            if is_local_host(domain):
                 continue
             observer_domains.add(domain)
             

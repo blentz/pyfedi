@@ -34,7 +34,7 @@ from app.storefront import is_upload_link, link_on, stored_link
 from app.shared.tasks import task_selector
 from app.shared.upload import open_uploaded_image
 from app.visibility import is_open, post_title_for
-from app.utils import render_template, authorise_api_user, shorten_string, gibberish, ensure_directory_exists, \
+from app.utils import build_gallery_thumbnail, render_template, authorise_api_user, shorten_string, gibberish, ensure_directory_exists, \
     max_album_images, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, fixup_url, domain_from_url, \
     opengraph_parse, url_to_thumbnail_file, can_create_post, is_video_hosting_site, recently_upvoted_posts, \
@@ -638,7 +638,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         if type == POST_TYPE_IMAGE and not from_scratch:
             url = post.url
         elif type == POST_TYPE_GALLERY:    # gallery posts have a url going to the post, so Lemmy users can view the gallery
-            url = f"{current_app.config['SERVER_URL']}{post.slug}"
+            url = f"{object_base(post)}{post.slug}"
         else:
             url = web_form_url(input, type)
         nsfw = input.nsfw.data
@@ -1020,22 +1020,6 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                 post_file, (post_file.c.file_id == File.id) & (post_file.c.post_id == post.id)
             ).order_by(post_file.c.weight).all()
             
-            # Process each form entry
-            if store_files_in_s3():
-                session = boto3.session.Session()
-                extra_args = {}
-                if current_app.config.get('S3_STORAGE_CLASS'):
-                    extra_args['StorageClass'] = current_app.config['S3_STORAGE_CLASS']
-                if current_app.config.get('S3_PUBLIC_ACL'):
-                    extra_args['ACL'] = 'public-read'
-                s3 = session.client(
-                    service_name='s3',
-                    region_name=current_app.config['S3_REGION'],
-                    endpoint_url=current_app.config['S3_ENDPOINT'],
-                    aws_access_key_id=current_app.config['S3_ACCESS_KEY'],
-                    aws_secret_access_key=current_app.config['S3_ACCESS_SECRET'],
-                )
-
             for i, uploaded_file in enumerate(uploaded_files):
                 # Check if this entry has a new file upload
                 if uploaded_file and uploaded_file.filename != '':
@@ -1051,82 +1035,13 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                         db.session.delete(old_file)
                         db.session.commit()
                     
-                    # Validate file type
-                    allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.mpo', '.avif', '.svg']
-                    file_ext = os.path.splitext(uploaded_file.filename)[1]
-                    if file_ext.lower() not in allowed_extensions:
-                        raise Exception('filetype not allowed')
-
-                    # Generate new filename
-                    new_filename = gibberish(15)
-                    if store_files_in_s3():
-                        directory = 'app/static/tmp'
-                    else:
-                        directory = 'app/static/media/posts/' + new_filename[0:2] + '/' + new_filename[2:4]
-                    ensure_directory_exists(directory)
-
-                    # Check for AI-generated images
-                    uploaded_file.seek(0)
-                    ai_gen = inspect_image_c2pa(uploaded_file.read(), uploaded_file.mimetype or "application/octet-stream")
-                    if ai_gen['c2pa']['ai_generated']:
-                        post.ai_generated = True
-
-                    # Save the file
-                    final_place = os.path.join(directory, new_filename + file_ext.lower())
-                    uploaded_file.seek(0)
-                    uploaded_file.save(final_place)
-
-                    final_ext = file_ext.lower()
-
-                    # Handle special formats
-                    if final_ext == '.heic':
-                        register_heif_opener()
-
-                    Image.MAX_IMAGE_PIXELS = 89478485
-                    image_max_dimension = current_app.config['MEDIA_IMAGE_MAX_DIMENSION']
-                    image_format = current_app.config['MEDIA_IMAGE_FORMAT']
-                    image_quality = current_app.config['MEDIA_IMAGE_QUALITY']
-
-                    if final_ext == '.svg':
-                        sanitize_svg(final_place)
-
-                    if not final_place.endswith('.svg') and not final_place.endswith('.gif'):
-                        img = Image.open(final_place)
-                        if '.' + img.format.lower() in allowed_extensions:
-                            img = ImageOps.exif_transpose(img)
-                            if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']):
-                                img = to_srgb(img)
-                            else:
-                                img = img.convert('RGBA')
-                            img.thumbnail((image_max_dimension, image_max_dimension), resample=Image.LANCZOS)
-
-                            kwargs = {}
-                            if image_format:
-                                kwargs['format'] = image_format.upper()
-                                final_ext = '.' + image_format.lower()
-                                final_place = os.path.splitext(final_place)[0] + final_ext
-                            if image_quality:
-                                kwargs['quality'] = int(image_quality)
-
-                            img.save(final_place, optimize=True, **kwargs)
-                        else:
-                            raise Exception('filetype not allowed')
-
-                    url = f"{current_app.config['SERVER_URL']}/{final_place.replace('app/', '')}"
-
-                    # Move to S3 if configured
-                    if store_files_in_s3():
-                        extra_args['ContentType'] = guess_mime_type(final_place)
-                        s3.upload_file(final_place, current_app.config['S3_BUCKET'], 'posts/' +
-                                       new_filename[0:2] + '/' + new_filename[2:4] + '/' + new_filename + final_ext,
-                                       ExtraArgs=extra_args)
-                        url = f"https://{current_app.config['S3_PUBLIC_URL']}/posts/" + \
-                              new_filename[0:2] + '/' + new_filename[2:4] + '/' + new_filename + final_ext
-                        os.unlink(final_place)
+                    # One upload path for a post's images: the type check, re-encoding without metadata, SVG
+                    # sanitising, the blocked-image check and S3 are store_post_image's, as for the post image
+                    url, uploaded_name, hash = store_post_image(post, uploaded_file)
 
                     # Create File record
                     alt_text = image_alt_texts[i] if image_alt_texts and i < len(image_alt_texts) else ''
-                    file = File(source_url=url, alt_text=alt_text)
+                    file = File(source_url=url, alt_text=alt_text, file_name=uploaded_name, hash=hash)
                     db.session.add(file)
                     db.session.commit()
 
@@ -1139,18 +1054,6 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                     # Generate image sizes
                     make_image_sizes(file.id, 512, 1200, 'posts', post.community.low_quality)
 
-                    # Check against image hash blocking
-                    if current_app.config['IMAGE_HASHING_ENDPOINT']:
-                        hash = retrieve_image_hash(url)
-                        if hash and hash_matches_blocked_image(hash):
-                            raise Exception('This image is blocked')
-                    
-                    # Update file hash
-                    file.hash = hash if 'hash' in locals() else None
-                    db.session.commit()
-
-            if store_files_in_s3():
-                s3.close()
             
             # Handle existing images that weren't replaced (update alt text)
             # and remove any existing images beyond the uploaded files count
@@ -1175,7 +1078,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                     old_file.delete_from_disk()
                     db.session.delete(old_file)
                 db.session.commit()
-            post.image_id = build_gallery_thumbnail([file.source_url for file in post.gallery])
+            post.image_id = build_gallery_thumbnail([file.source_url for file in post.gallery], post)
 
         post.calculate_cross_posts(url_changed=url_changed)
     elif url and is_video_hosting_site(url):
@@ -1831,76 +1734,3 @@ def vote_for_poll(post_id, votes, src, auth=None):
             if not already_voted:
                 task_selector('vote_for_poll', post_id=post_id, user_id=user.id,
                               choice_text=db.session.get(PollChoice, int(choice_id)).choice_text)
-
-
-def build_gallery_thumbnail(files: List[str], return_file_id=True):
-    pil_images = []
-    for file in files:
-        if file.startswith('http'):
-            source_image_response = get_request(file)
-            if source_image_response and source_image_response.status_code == 200:
-                content_type = source_image_response.headers.get('content-type')
-                if content_type:
-                    if content_type.startswith('image') or (content_type == 'application/octet-stream' and file.endswith('.avif')):
-                        source_image = source_image_response.content
-                        source_image_response.close()
-
-                        Image.MAX_IMAGE_PIXELS = 89478485
-                        image = Image.open(BytesIO(source_image))
-                        image = ImageOps.exif_transpose(image)
-                        pil_images.append(image)
-        else:
-            pil_images.append(Image.open(file))
-
-    thumbnail = make_gallery_thumbnail(pil_images, size=1200)
-
-    if thumbnail:
-        # Generate new filename
-        new_filename = gibberish(15)
-        if store_files_in_s3():
-            directory = 'app/static/tmp'
-        else:
-            directory = 'app/static/media/posts/' + new_filename[0:2] + '/' + new_filename[2:4]
-        ensure_directory_exists(directory)
-
-        final_ext = '.webp'
-        final_place = os.path.join(directory, new_filename + final_ext)
-
-        thumbnail.save(final_place)
-
-        url = f"{current_app.config['SERVER_URL']}/{final_place.replace('app/', '')}"
-
-        # Move to S3 if configured
-        if store_files_in_s3():
-            session = boto3.session.Session()
-            extra_args = {}
-            if current_app.config.get('S3_STORAGE_CLASS'):
-                extra_args['StorageClass'] = current_app.config['S3_STORAGE_CLASS']
-            if current_app.config.get('S3_PUBLIC_ACL'):
-                extra_args['ACL'] = 'public-read'
-            s3 = session.client(
-                service_name='s3',
-                region_name=current_app.config['S3_REGION'],
-                endpoint_url=current_app.config['S3_ENDPOINT'],
-                aws_access_key_id=current_app.config['S3_ACCESS_KEY'],
-                aws_secret_access_key=current_app.config['S3_ACCESS_SECRET'],
-            )
-            extra_args['ContentType'] = guess_mime_type(final_place)
-            s3.upload_file(final_place, current_app.config['S3_BUCKET'], 'posts/' +
-                           new_filename[0:2] + '/' + new_filename[2:4] + '/' + new_filename + final_ext,
-                           ExtraArgs=extra_args)
-            url = f"https://{current_app.config['S3_PUBLIC_URL']}/posts/" + \
-                  new_filename[0:2] + '/' + new_filename[2:4] + '/' + new_filename + final_ext
-            os.unlink(final_place)
-
-        # Create File record
-        if return_file_id:
-            file = File(source_url=url)
-            db.session.add(file)
-            db.session.commit()
-
-            return file.id
-        else:
-            return url
-    else:
-        return None

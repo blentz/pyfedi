@@ -14,8 +14,9 @@ from PIL import Image, ImageOps
 
 from app import celery, db
 from app.activitypub.util import make_image_sizes, notify_about_post
+from app.community.util import notify_admins_of_post_needing_approval
 from app.constants import (MEDIA_KIND_AUDIO, MEDIA_KIND_VIDEO, NOTIF_DEFAULT, POST_STATUS_PROCESSING,
-                           POST_STATUS_PUBLISHED, POST_STATUS_SCHEDULED)
+                           POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING, POST_STATUS_SCHEDULED)
 from app.models import CommunityMember, File, Notification, Post, federation_base, s3_key_from_url, served_path, utcnow
 from app.shared.ffmpeg import MediaToolError, extract_cover, extract_frame, run_ffprobe
 from app.shared.post import feature_published_post
@@ -380,7 +381,15 @@ def publish_ready_post(post) -> None:
 
 
 def _commit_ready_post(post) -> bool:
-    """Commit the ready post as published, or as scheduled if it has a schedule; whether it was published now."""
+    """Commit the ready post as published, as held for review if its author's posts need approval, or as scheduled
+    if it has a schedule; whether it was published now."""
+    if post.author.ban_posts:
+        # v1.8.10's approval queue: make_post holds such an author's other posts for review, and an upload is held
+        # the same way when it is ready, whether the flag was set before the upload or while it was processing
+        post.status = POST_STATUS_REVIEWING
+        db.session.commit()
+        notify_admins_of_post_needing_approval(post)
+        return False
     if post.scheduled_for:
         post.status = POST_STATUS_SCHEDULED
         db.session.commit()

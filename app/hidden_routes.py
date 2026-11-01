@@ -105,6 +105,7 @@ NON_OBJECT_ARGUMENTS = {
     'mode': None, 'sort': None, 'type': None, 'state': None, 'view_filter': None, 'filter': None, 'year': None,
     'vote_direction': None, 'federate': None, 'emoji': None, 'collection': None, 'feed_type': None, 'result': None,
     'offer_markdown_source': None, 'whatever': None,
+    'software': ('/statistics/',),   # v1.8.10's statistics page: a fediverse software name, not a row
     # secrets and one-time values: a token, a nonce, a signature
     'token': None, 'nonce': None, 'sig': None, 'key': None, 'uuid': None,
     # rows that are not an account, community, feed, post or reply
