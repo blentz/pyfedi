@@ -25,7 +25,7 @@ from app import db, celery, cache
 from app.branding import ends_inside_markup, offsite_references
 from app.discovery import sync as discovery_sync
 from app.visibility import visible_to_clause
-from app.local_only import domain_has_owners, user_local_only, without_local_only, without_local_only_actors
+from app.local_only import accounts_shown_here_sql, domain_has_owners, user_local_only, without_local_only, without_local_only_actors
 from app.activitypub.routes import process_inbox_request, process_delete_request, replay_inbox_request, \
     SIGNATURE_FAILURE_MESSAGES, UNVERIFIED_LOG_MESSAGES
 from app.activitypub.signature import post_request, default_context, RsaKeys
@@ -3431,14 +3431,21 @@ def _run_vote_query(sql, params):
         return None
 
 
-@cache.memoize(timeout=3600)
 def vote_manipulation_findings():
+    """The vote findings this storefront's admin is shown: an hour's cache for each set of accounts hidden here, so
+    the onion's, which names its own accounts, is never served on the clearnet (follow-up F6)."""
+    return _vote_manipulation_findings(accounts_shown_here_sql(sql_file('vote_targeting')),
+                                       accounts_shown_here_sql(sql_file('vote_namesake')))
 
-    targeting_rows = _run_vote_query(sql_file('vote_targeting'),
+
+@cache.memoize(timeout=3600)
+def _vote_manipulation_findings(targeting_sql, namesake_sql):
+
+    targeting_rows = _run_vote_query(targeting_sql,
                                      {'days': VOTE_TARGETING_DAYS, 'min_votes': 10,
                                       'min_focus': 0.5, 'min_communities': 4,
                                       'min_rate': 6.0})
-    namesake_rows = _run_vote_query(sql_file('vote_namesake'),
+    namesake_rows = _run_vote_query(namesake_sql,
                                     {'days': VOTE_NAMESAKE_DAYS, 'min_votes': 5})
 
     targeting = []
@@ -3487,7 +3494,7 @@ def vote_manipulation_findings():
 @permission_required('administer all communities')
 def admin_votes():
     if request.args.get('refresh'):
-        cache.delete_memoized(vote_manipulation_findings)
+        cache.delete_memoized(_vote_manipulation_findings)   # every storefront's
         return redirect(url_for('admin.admin_votes'))
     return render_template('admin/votes.html',
                            findings=vote_manipulation_findings(),
@@ -3498,7 +3505,7 @@ def admin_votes():
 @login_required
 @permission_required('administer all communities')
 def admin_votes_for_noone():
-    rows = db.session.execute(text(sql_file('accounts_no_votes'))).all()
+    rows = db.session.execute(text(accounts_shown_here_sql(sql_file('accounts_no_votes')))).all()
     return render_template('admin/votes_for_noone.html',
                            rows=rows,
                            roles_with=roles_with('administer all communities'))
@@ -3508,7 +3515,7 @@ def admin_votes_for_noone():
 @login_required
 @permission_required('administer all communities')
 def admin_votes_serial_downvoters():
-    rows = db.session.execute(text(sql_file('serial_downvoters'))).all()
+    rows = db.session.execute(text(accounts_shown_here_sql(sql_file('serial_downvoters')))).all()
     return render_template('admin/votes_serial_downvoters.html',
                            rows=rows,
                            roles_with=roles_with('administer all communities'))
@@ -3518,7 +3525,7 @@ def admin_votes_serial_downvoters():
 @login_required
 @permission_required('administer all communities')
 def admin_high_posts_per_day():
-    rows = db.session.execute(text(sql_file('high_posts_per_day'))).all()
+    rows = db.session.execute(text(accounts_shown_here_sql(sql_file('high_posts_per_day')))).all()
     return render_template('admin/high_posts_per_day.html',
                            rows=rows,
                            roles_with=roles_with('administer all communities'))
@@ -3528,7 +3535,7 @@ def admin_high_posts_per_day():
 @login_required
 @permission_required('administer all communities')
 def admin_no_link_diversity():
-    rows = db.session.execute(text(sql_file('no_link_diversity'))).all()
+    rows = db.session.execute(text(accounts_shown_here_sql(sql_file('no_link_diversity')))).all()
     return render_template('admin/no_link_diversity.html',
                            rows=rows,
                            roles_with=roles_with('administer all communities'))

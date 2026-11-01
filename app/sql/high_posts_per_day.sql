@@ -25,6 +25,6 @@ SELECT
     ) as avg_posts_per_day
 FROM user_post_stats ups
 JOIN "user" u ON ups.user_id = u.id
-where u.deleted = false and u.banned = false and not (u.bot = true or u.bot_override = true) and ups.last_post_date  >= now() - interval '1 month'
+where u.deleted = false and u.banned = false and not (u.bot = true or u.bot_override = true) and ups.last_post_date  >= now() - interval '1 month' /* shown here: u */
 ORDER BY avg_posts_per_day DESC
 LIMIT 100;

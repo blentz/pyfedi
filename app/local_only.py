@@ -557,6 +557,24 @@ def hidden_here_sql(alias: str, model, signed_in: bool | None = None) -> str:
     return f'({alias}.local_only AND ({" OR ".join(owners)}))'
 
 
+
+_ACCOUNT_SHOWN_MARKER = re.compile(r'/\*\s*shown here:\s*(\w+)\s*\*/')
+
+
+def accounts_shown_here_sql(sql: str, signed_in: bool = True) -> str:
+    """`sql` (a file of app/sql) with each `/* shown here: <alias> */` marker, which stands in a WHERE clause after a
+    condition, made `AND NOT <the "user" row aliased <alias> is hidden here>` (`hidden_here_sql`): a list of accounts
+    an admin reads names none this storefront hides (follow-up F6; owner ruling 2026-11-01 for v1.8.10's analytics).
+    Its readers are signed in (admin pages), so that is the default, which needs no request. A marker is an SQL
+    comment, so the file still runs unchanged where nothing is hidden."""
+    return _ACCOUNT_SHOWN_MARKER.sub(lambda m: _account_shown_condition(m.group(1), signed_in), sql)
+
+
+def _account_shown_condition(alias: str, signed_in: bool) -> str:
+    hidden = hidden_here_sql(alias, models.User, signed_in)
+    return '' if hidden == 'false' else f'AND NOT {hidden}'
+
+
 def federated_mentions(users: list) -> list:
     """`users` without the local-only ones. A Mention of a local-only account goes out as the plain text it was typed
     as: no Mention tag, no addressee and no delivery, so the activity naming them is still sent."""

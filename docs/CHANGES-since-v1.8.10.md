@@ -1490,12 +1490,15 @@ PERM-1 to PERM-5.
   below their floor in `coverage_floors.ini`; the tests added since
   (`7a48c72a` and the fixes above) bring all 125 back, and every line and
   branch added since `2aaea7e2` is executed.
-- **v1.8.10's admin analytics name accounts without the onion rule.** The vote
-  manipulation and posting-pattern pages (`/admin/votes` and its siblings) list
-  account names from raw SQL, and their findings are cached for the whole
-  site, so on a site with an onion domain a clearnet admin can see onion
-  accounts there. Whether to filter them as follow-up F6 filters every other
-  list is the owner's to decide.
+- **v1.8.10's admin analytics follow the onion rule (owner ruling
+  2026-11-01).** `/admin/votes`, `/admin/votes_for_noone`,
+  `/admin/serial_downvoters`, `/admin/high_posts_per_day`,
+  `/admin/no_link_diversity` and an account's `/u/<actor>/voting_patterns`
+  leave out every row naming an account hidden here, as voter or target
+  (`accounts_shown_here_sql`, a `/* shown here: <alias> */` marker in each
+  SQL file); the onion still sees its own. `/admin/votes`' hour-long cache is
+  kept per set of hidden accounts, so the onion's is never served on the
+  clearnet; its refresh clears every storefront's.
 - **D354 stays deliberate.** Per-row commits inside loops are kept as ruled;
   this is the only item the register still lists as deliberate.
 - **Closed as not defects:** D203 (restore's cross-post recompute from NULL

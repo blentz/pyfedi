@@ -25,7 +25,7 @@ from app.email import send_verification_email
 from app.federation_urls import activity_id, domain_site_name, owner_base
 from app.ldap_utils import sync_user_to_ldap
 from app.feed_domains import feeds_shown_here_clause
-from app.local_only import hidden_here, local_only_visible_rss, refuses_remote_contact, \
+from app.local_only import accounts_shown_here_sql, hidden_here, local_only_visible_rss, refuses_remote_contact, \
     remote_contact_refusal_message, user_local_only, without_local_only, without_local_only_actors
 from app.visibility import OPEN_VISIBILITIES, visible_to_clause
 from app.log_scrub import log_ldap_sync_failure
@@ -319,9 +319,9 @@ def admin_viewed_user(actor) -> User:
 def user_voting_patterns(actor):
     user = admin_viewed_user(actor)
 
-    votes_received_sql = sql_file('user_votes_received')
+    votes_received_sql = accounts_shown_here_sql(sql_file('user_votes_received'))
 
-    votes_cast_sql = sql_file('user_votes_cast')
+    votes_cast_sql = accounts_shown_here_sql(sql_file('user_votes_cast'))
 
     votes_received = db.session.execute(text(votes_received_sql), {'user_id': user.id, 'top_n': 8, 'days': 60}).all()
 

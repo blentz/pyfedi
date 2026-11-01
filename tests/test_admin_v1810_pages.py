@@ -156,7 +156,7 @@ def test_the_findings_are_folded_for_the_page(app, admin, monkeypatch):
                  row(username='ann', target_label='ann@z', voter_label='ann@1', votes=9, ups=9, downs=0)]
     answers = iter([targeting, namesakes])
     monkeypatch.setattr(admin_routes, '_run_vote_query', lambda sql, params: next(answers))
-    cache.delete_memoized(admin_routes.vote_manipulation_findings)
+    cache.delete_memoized(admin_routes._vote_manipulation_findings)
 
     findings = admin_routes.vote_manipulation_findings()
 
@@ -185,7 +185,7 @@ def test_a_detector_that_fails_degrades_to_no_rows(app, admin, monkeypatch):
 
 def test_the_votes_page_renders_and_its_refresh_starts_over(app, admin, monkeypatch):
     monkeypatch.setattr(admin_routes, '_run_vote_query', lambda sql, params: [])
-    cache.delete_memoized(admin_routes.vote_manipulation_findings)
+    cache.delete_memoized(admin_routes._vote_manipulation_findings)
 
     assert admin.client.get('/admin/votes').status_code == 200
     response = admin.client.get('/admin/votes?refresh=1')
@@ -193,7 +193,7 @@ def test_the_votes_page_renders_and_its_refresh_starts_over(app, admin, monkeypa
 
 
 def test_the_real_detectors_run_on_an_empty_site(app, admin):
-    cache.delete_memoized(admin_routes.vote_manipulation_findings)
+    cache.delete_memoized(admin_routes._vote_manipulation_findings)
     findings = admin_routes.vote_manipulation_findings()
 
     assert findings['targeting'] == [] and findings['namesakes'] == []

@@ -34,6 +34,7 @@ FROM windowed w
 JOIN "user" voter  ON voter.id  = w.user_id
 JOIN "user" author ON author.id = w.author_id
 WHERE w.votes_in_3min >= 10 and not (author.bot_override is true or author.bot is true or author.banned is true or author.deleted is true)
+  /* shown here: voter */ /* shown here: author */
 GROUP BY w.user_id, voter.user_name, voter.ap_domain, voter.ap_id,
          w.author_id, author.user_name, author.ap_domain
 ORDER BY max_downvotes_in_3min DESC, burst_windows DESC;

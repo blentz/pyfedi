@@ -16,7 +16,9 @@ agg AS (
            COUNT(*)                           AS votes,
            COUNT(*) FILTER (WHERE effect > 0) AS ups,
            COUNT(*) FILTER (WHERE effect < 0) AS downs
-    FROM v GROUP BY other_id
+    FROM v JOIN "user" other ON other.id = v.other_id
+    WHERE true /* shown here: other */
+    GROUP BY other_id
 ),
 ranked AS (
     SELECT *,

@@ -22,6 +22,6 @@ LEFT JOIN LATERAL (
 WHERE COALESCE(v.other_votes, 0) = 0
   AND LOWER(i.software) IN ('lemmy', 'piefed')
   AND u.deleted = false
-  AND u.banned = false
+  AND u.banned = false /* shown here: u */
   and u.bot = false and (u.bot_override = false or u.bot_override is null)
 ORDER BY p.post_count DESC, votes_on_others ASC;

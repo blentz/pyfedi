@@ -26,5 +26,6 @@ WHERE LOWER(voter.user_name) = LOWER(target.user_name)
   AND voter.instance_id IS DISTINCT FROM target.instance_id
   AND (p.ups = 0 OR p.downs = 0)
   AND voter.deleted IS NOT TRUE AND target.deleted IS NOT TRUE
+  /* shown here: voter */ /* shown here: target */
 ORDER BY p.votes DESC
 LIMIT 100
