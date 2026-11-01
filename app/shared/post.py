@@ -498,6 +498,13 @@ def _stored(post: Post, image: dict) -> dict:
     return {'url': url, 'alt_text': image['alt_text'], 'file_name': file_name, 'hash': hash}
 
 
+def _thumbnail_source(file: File) -> str:
+    """Where build_gallery_thumbnail reads a picture: our own file from disk, so a local gallery never has this
+    server fetch its own uploads over the network; anything else (a bucket's, a peer's) by its url."""
+    path = File.local_path_for_url(file.source_url) if file.source_url else None
+    return path if path and os.path.isfile(path) else file.source_url
+
+
 def set_local_album(post: Post, images: list) -> None:
     """Make `post.gallery` a gallery post's pictures (spec 2026-11-01 G-2), replacing what it held: each `{url,
     alt_text}` and, for one of our uploads, the `file_name` and `hash` it was stored with, at weight 0.. in order. The
@@ -1033,7 +1040,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                 raise Exception(f'A gallery has 2 to {max_album_images()} pictures')
             set_local_album(post, [_stored(post, image) for image in album])
             thumbnail = db.session.get(File, post.image_id) if post.image_id else None   # by id: see D856
-            post.image_id = build_gallery_thumbnail([file.source_url for file in post.gallery_pictures()], post)
+            post.image_id = build_gallery_thumbnail([_thumbnail_source(file) for file in post.gallery_pictures()], post)
             if thumbnail is not None and thumbnail.id != post.image_id:   # the composite is never a gallery row (G-2)
                 thumbnail.delete_from_disk()
                 db.session.delete(thumbnail)

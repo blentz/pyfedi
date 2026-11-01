@@ -6,6 +6,8 @@ deleted with its file; a new one is sized. `edit_post(..., album=...)` reads it 
 pictures alone, a list of 2 to max_album_images() replaces them and rebuilds the composite thumbnail, and a post that
 is no longer a gallery loses them.
 """
+import os
+
 import pytest
 
 from app import db
@@ -185,3 +187,17 @@ def test_a_new_gallery_needs_its_pictures(db_session, sized):
 
     with pytest.raises(Exception, match='A gallery needs its pictures'):
         edit_post(_api_input(url=None), post, POST_TYPE_GALLERY, SRC_API, user=post.author, from_scratch=True)
+
+
+@pytest.mark.usefixtures('private_static_tree')
+def test_the_composite_reads_our_own_pictures_from_disk(db_session, sized, composite):
+    """A picture of ours on disk is handed over by its path, so building the thumbnail never has this server fetch
+    its own uploads; one it cannot find there goes by its url."""
+    os.makedirs('app/static/media/posts/ab/cd', exist_ok=True)
+    with open('app/static/media/posts/ab/cd/p1.png', 'wb') as handle:
+        handle.write(b'a picture')
+    post = _post(POST_TYPE_ARTICLE)
+
+    edit_post(_api_input(url=None), post, POST_TYPE_GALLERY, SRC_API, user=post.author, album=_two())
+
+    assert composite == [[os.path.realpath('app/static/media/posts/ab/cd/p1.png'), f'{OURS}/p2.png']]
