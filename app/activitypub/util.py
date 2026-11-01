@@ -5137,11 +5137,6 @@ def update_post_from_activity(post: Post, request_json: dict):
                     mode = 'multiple'
                 else:
                     return
-                # D291. A count is a non-negative int, and anything else is treated as no count, like a missing
-                # totalItems: a negative could cancel another to the 0 that routes into the destructive Edit path
-                # below, and a non-number raised TypeError here.
-                if not _is_vote_count(vote['replies']['totalItems']):
-                    continue
 
                 total_vote_count = 0
                 for vote in votes:
@@ -5154,6 +5149,11 @@ def update_post_from_activity(post: Post, request_json: dict):
                     if not 'replies' in vote:
                         continue
                     if not 'totalItems' in _as_dict(vote['replies']):
+                        continue
+                    # D291. A count is a non-negative int, and anything else is treated as no count, like a missing
+                    # totalItems: a negative could cancel another to the 0 that routes into the destructive Edit path
+                    # below, and a non-number raised TypeError here.
+                    if not _is_vote_count(vote['replies']['totalItems']):
                         continue
 
                     total_vote_count += vote['replies']['totalItems']
@@ -5442,6 +5442,17 @@ def update_post_from_activity(post: Post, request_json: dict):
                     if new_domain and old_domain != new_domain:
                         # notify about links to banned websites.
                         already_notified = set()  # often admins and mods are the same people - avoid notifying them twice
+                        # D1391. `post.domain` here is the OLD Domain object -- the
+                        # new one is assigned below -- and `Notification.targets` is a
+                        # db.JSON column, so this could not be stored at all.
+                        # Measured: `StatementError (builtins.TypeError) Object of
+                        # type Domain is not JSON serializable`, which a peer reaches
+                        # by editing a post's link to a domain whose `notify_mods` or
+                        # `notify_admins` an admin has set.
+                        #
+                        # `suspect_user_user_name` is what
+                        # app/templates/user/notifs/20.html:110 reads for this
+                        # subtype; no producer wrote it.
                         targets_data = {'gen': '0',
                                         'post_id': post.id,
                                         'orig_post_title': post.title,
@@ -5505,12 +5516,12 @@ def update_post_from_activity(post: Post, request_json: dict):
             if old_db_entry_to_delete:
                 File.query.filter_by(id=old_db_entry_to_delete).delete()
                 db.session.commit()
+
+            # An Update that carries attachments replaces the album, as it replaces the image
+            if 'attachment' in request_json['object']:
+                set_post_gallery(post, request_json, post.community.low_quality)
     except LockNotOwnedError:
         pass
-
-        # An Update that carries attachments replaces the album, as it replaces the image
-        if 'attachment' in request_json['object']:
-            set_post_gallery(post, request_json, post.community.low_quality)
 
 
 def _users_vote(voted_on, user):
