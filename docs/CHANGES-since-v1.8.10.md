@@ -178,6 +178,29 @@ rather than restoring the old:
 - `tests/test_gallery_thumbnail.py` read sample photographs that are not in the
   repository, after a `chdir` out of it.
 
+Found while covering v1.8.10's code to the floors, each fixed test-first:
+
+- The gallery form's picture slots each demanded a CSRF token the page never
+  rendered, so with CSRF on (as in production) no gallery ever validated;
+  v1.8.10's `validate()` returned True whatever the fields said, which hid it
+  (`2647d5df`). A gallery post's url was never stored either.
+- `build_instance_list` compared versions as text, so every PieFed past 1.9
+  was left out of `known_instances.json`, and one malformed entry from a peer
+  stopped the list being written (`01cc77c7`).
+- `/statistics` listed the onion's instance row on the clearnet, linked its
+  pages to the moderation log (or to `/statistics/?page=2`), and sent a
+  second, public Cache-Control on a signed-in reader's page (`2c4a355c`).
+- The admin voting-pattern, downvote and post-timing views answered an
+  unknown actor with an empty page or a 500, and on the clearnet showed an
+  onion account and the onion authors it downvoted (`49b02c65`).
+- Approving a held post re-published and re-federated a post that was
+  already published or deleted, and was a 500 for a permission holder with no
+  say over the community; the inline comment edit dropped its redirect and
+  skipped the edit page's visibility and post checks (`f5992942`).
+- A local gallery's thumbnail fetched our own uploads over HTTP (`0d7b9750`).
+- A scheduled post whose author had no timezone failed through the API and
+  was never published by `publish-scheduled-posts` (`900cee40`).
+
 **Database.** v1.8.10 adds seven migrations from the same revision the
 branch's start from; `b8d1e6f4` merges the two chains (section 2.1).
 
@@ -1463,14 +1486,16 @@ PERM-1 to PERM-5.
 
 ## 7. Known remaining items
 
-- **v1.8.10's code is not yet covered to the floors.** After the rebase the suite
-  passes (`ae9320ab` updated the tests that pinned behaviour v1.8.10 changed on
-  purpose), but 22 modules are below their floor in `coverage_floors.ini`,
-  because v1.8.10's own additions (galleries, scheduled posts, statistics and
-  the admin reports, the instance-list crawl) came with few tests. The v1.7.17
-  rebase was followed by the same work (`test: cover the code the v1.7.17
-  rebase brought in`).
-- **Three decisions from the rebase are open:** see the end of section 1.1.
+- **v1.8.10's code is covered to the floors.** After the rebase 22 modules were
+  below their floor in `coverage_floors.ini`; the tests added since
+  (`7a48c72a` and the fixes above) bring all 125 back, and every line and
+  branch added since `2aaea7e2` is executed.
+- **v1.8.10's admin analytics name accounts without the onion rule.** The vote
+  manipulation and posting-pattern pages (`/admin/votes` and its siblings) list
+  account names from raw SQL, and their findings are cached for the whole
+  site, so on a site with an onion domain a clearnet admin can see onion
+  accounts there. Whether to filter them as follow-up F6 filters every other
+  list is the owner's to decide.
 - **D354 stays deliberate.** Per-row commits inside loops are kept as ruled;
   this is the only item the register still lists as deliberate.
 - **Closed as not defects:** D203 (restore's cross-post recompute from NULL
