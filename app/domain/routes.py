@@ -279,12 +279,11 @@ def domain_unblock(domain_id):
 @permission_required('manage users')
 def domain_ban(domain_id):
     domain = db.session.get(Domain, domain_id) or abort(404)
-    if domain:
-        domain.banned = True
-        db.session.commit()
-        domain.purge_content()
-        flash(_('%(name)s banned for all users and all content deleted.', name=domain.name))
-        return redirect(url_for('domain.domains'))
+    domain.banned = True
+    db.session.commit()
+    domain.purge_content()
+    flash(_('%(name)s banned for all users and all content deleted.', name=domain.name))
+    return redirect(url_for('domain.domains'))
 
 
 @bp.route('/d/<int:domain_id>/unban', methods=['POST'])
@@ -292,8 +291,7 @@ def domain_ban(domain_id):
 @permission_required('manage users')
 def domain_unban(domain_id):
     domain = db.session.get(Domain, domain_id) or abort(404)
-    if domain:
-        domain.banned = False
-        db.session.commit()
-        flash(_('%(name)s un-banned for all users.', name=domain.name))
-        return redirect(url_for('domain.show_domain', domain_id=domain.id))
+    domain.banned = False
+    db.session.commit()
+    flash(_('%(name)s un-banned for all users.', name=domain.name))
+    return redirect(url_for('domain.show_domain', domain_id=domain.id))

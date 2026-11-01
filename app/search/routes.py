@@ -121,7 +121,7 @@ def run_search():
             posts = posts.filter(Post.indexable == True)
             if user_id != 0:
                 posts = posts.filter(Post.user_id == user_id)
-            if q is not None:
+            if q:   # never None (read as a stripped string above); an empty query searches nothing out
                 posts = posts.search(q, sort=True if sort_by == '' else False)
             if type != 0:
                 posts = posts.filter(Post.type == type)
@@ -181,7 +181,7 @@ def run_search():
             replies = replies.filter(PostReply.indexable == True)
             if user_id != 0:
                 replies = replies.filter(PostReply.user_id == user_id)
-            if q is not None:
+            if q:   # never None (read as a stripped string above); an empty query searches nothing out
                 replies = replies.search(q, sort=True if sort_by == '' else False)
             if type != 0:
                 replies = replies.filter(Post.type == type)
