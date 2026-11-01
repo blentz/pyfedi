@@ -30,7 +30,7 @@ from app.community.forms import CreateLinkForm, CreateDiscussionForm, CreateVide
 from app.community.util import send_to_remote_instance, flair_from_form, hashtags_used_in_community, \
     search_for_community
 from app.constants import NOTIF_REPORT, NOTIF_REPORT_ESCALATION, POST_STATUS_SCHEDULED, POST_STATUS_PUBLISHED, \
-    POST_TYPE_EVENT, NOTIF_MENTION, NOTIF_ANSWER, SRC_API, POST_TYPE_GALLERY, AP_FETCH_ACCEPT
+    POST_STATUS_REVIEWING, POST_TYPE_EVENT, NOTIF_MENTION, NOTIF_ANSWER, SRC_API, POST_TYPE_GALLERY, AP_FETCH_ACCEPT
 from app.constants import SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, POST_TYPE_LINK, \
     POST_TYPE_IMAGE, \
     POST_TYPE_ARTICLE, POST_TYPE_VIDEO, POST_TYPE_POLL, SRC_WEB, VISIBILITY_FOLLOWERS, VISIBILITY_UNLISTED
@@ -2137,18 +2137,24 @@ def post_flair_list(post_id):
 @permission_required('administer all communities')
 def post_approve(post_id):
     post = db.session.get(Post, post_id) or abort(404)
-    if post.user_id == current_user.id or post.community.is_moderator(current_user) or current_user.is_staff() or current_user.is_admin():
-        post.status = POST_STATUS_PUBLISHED
-        post.posted_at = utcnow()
-        post.author.ban_posts = False
-        db.session.commit()
+    refuse_invisible_unless_moderating(post)
+    # only a post held for review is published here: one already published, or deleted, would be federated again
+    if post.deleted or post.status != POST_STATUS_REVIEWING:
+        abort(404)
+    if not (post.user_id == current_user.id or post.community.is_moderator(current_user) or current_user.is_staff()
+            or current_user.is_admin()):
+        abort(403)   # v1.8.10 fell off the end here: None, a 500
+    post.status = POST_STATUS_PUBLISHED
+    post.posted_at = utcnow()
+    post.author.ban_posts = False
+    db.session.commit()
 
-        # Federate post
-        task_selector('make_post', post_id=post.id)
+    # Federate post
+    task_selector('make_post', post_id=post.id)
 
-        notify_about_post(post)
+    notify_about_post(post)
 
-        return _('Done')
+    return _('Done')
 
 
 @bp.route('/post/<int:post_id>/lock/<mode>', methods=['POST'])
@@ -2442,15 +2448,19 @@ def post_reply_source(post_id: int, comment_id: int, state: str):
 @bp.route("/post/<int:post_id>/comment/<int:comment_id>/edit_inline", methods=["GET", "POST"])
 @login_required
 def post_reply_edit_inline(post_id: int, comment_id: int):
-    # This should be an htmx request, if not, redirect to the old form
+    # This should be an htmx request, if not, redirect to the old form (v1.8.10 built the redirect and dropped it)
     if not request.headers.get('HX-Request'):
-        redirect(url_for('post.post_reply_edit', post_id=post_id, comment_id=comment_id))
+        return redirect(url_for('post.post_reply_edit', post_id=post_id, comment_id=comment_id))
 
-    # Fetch stuff
+    # as the full edit page: hidden or unviewable content is 404, and the comment must be the post's (D1077)
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+    refuse_invisible(post_reply)
+    if post_reply.post_id != post.id:
+        abort(404)
     form = EditReplyForm()
-    form.language_id.choices = languages_for_form()
+    form.language_id.choices = select_choices(languages_for_form())
     
     # Ensure it is the author making the edit
     if post_reply.user_id == current_user.id:
