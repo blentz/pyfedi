@@ -757,7 +757,8 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
             post.type = POST_TYPE_IMAGE
 
     if scheduled_for and post.status != POST_STATUS_PROCESSING:   # A13.7: processing media is published by probe_media
-        date_with_tz = post.scheduled_for.replace(tzinfo=ZoneInfo(post.timezone))
+        # an author who never chose a timezone schedules in UTC (v1.8.10's ZoneInfo(None) was a TypeError)
+        date_with_tz = post.scheduled_for.replace(tzinfo=ZoneInfo(post.timezone or 'UTC'))
         if date_with_tz.astimezone(ZoneInfo('UTC')) > utcnow(naive=False):
             post.status = POST_STATUS_SCHEDULED
     

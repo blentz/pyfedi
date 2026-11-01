@@ -136,3 +136,15 @@ def test_a_scheduled_sticky_post_is_featured_when_it_is_published(app, scheduled
     assert db.session.get(Post, scheduled.post.id).status == POST_STATUS_PUBLISHED
     assert sent == [('sticky_post', {'user_id': scheduled.author.id, 'post_id': scheduled.post.id})]
     assert ModLog.query.filter_by(action='featured_post').count() == 1
+
+
+def test_a_post_whose_author_never_chose_a_timezone_is_published_in_utc(app, scheduled):
+    """The post and its author both without a timezone: v1.8.10 skipped such a post for ever."""
+    scheduled.post.timezone = None
+    scheduled.author.timezone = None
+    db.session.commit()
+
+    _publish(app)
+
+    post = db.session.get(Post, scheduled.post.id)
+    assert post.status == POST_STATUS_PUBLISHED and post.timezone == 'UTC'

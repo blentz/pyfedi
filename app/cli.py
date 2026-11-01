@@ -1097,7 +1097,8 @@ def register(app):
             for post in Post.query.filter(Post.status == POST_STATUS_SCHEDULED, Post.deleted == False,
                                           Post.scheduled_for != None):
                 if post.timezone is None:
-                    post.timezone = post.author.timezone
+                    # an author who never chose a timezone schedules in UTC: without one the post was never published
+                    post.timezone = post.author.timezone or 'UTC'
                 if post.scheduled_for and post.timezone:
                     date_with_tz = post.scheduled_for.replace(tzinfo=ZoneInfo(post.timezone))
                     if date_with_tz.astimezone(ZoneInfo('UTC')) > utcnow(naive=False):
