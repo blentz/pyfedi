@@ -41,9 +41,9 @@ from app.visibility import can_view, visible_to_sql
 
 
 def galleries_for_posts(posts) -> dict:
-    """{post id: [File, ...]} -- the gallery of every album post in `posts`, in album order,
-    read with one query. A post without a gallery_count is not looked up at all."""
-    ids = [post.id for post in posts if post.type in (POST_TYPE_IMAGE, POST_TYPE_LINK) and post.gallery_count]
+    """{post id: [File, ...]} -- the gallery of every gallery post (and link post with images beside its link) in
+    `posts`, in order, read with one query. A post without a gallery_count is not looked up at all."""
+    ids = [post.id for post in posts if post.type in (POST_TYPE_GALLERY, POST_TYPE_LINK) and post.gallery_count]
     galleries = {}
     if ids:
         rows = db.session.execute(
@@ -147,8 +147,9 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
                 'height': post.image.height,
             }
 
-        if post.type in (POST_TYPE_IMAGE, POST_TYPE_LINK) and post.gallery_count:
-            # Fork extension (spec D17): the album's images after the first, kept out of the bare Lemmy fields
+        if post.type in (POST_TYPE_GALLERY, POST_TYPE_LINK) and post.gallery_count:
+            # Fork extension (spec D17): a gallery's pictures (every one, spec 2026-11-01 G-5), or the images beside
+            # a link, kept out of the bare Lemmy fields
             # A listing passes `galleries` (galleries_for_posts), so the page costs one query
             images = galleries.get(post.id, []) if galleries is not None else post.gallery
             gallery = [{'url': storefront_link(image.view_url()), 'alt_text': image.alt_text, 'width': image.width, 'height': image.height}
@@ -355,11 +356,9 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
                     v2['post']['poll'] = poll_data
 
             # Gallery data
-            if post.type == POST_TYPE_GALLERY:
-                gallery_data = []
-                for gallery_image in post.gallery:
-                    gallery_data.append(gallery_image.source_url)
-                v2['post']['gallery'] = gallery_data
+            if post.type == POST_TYPE_GALLERY:   # every picture (G-5); a listing's `galleries` saves a query per post
+                pictures = galleries.get(post.id, []) if galleries is not None else post.gallery_pictures()
+                v2['post']['gallery'] = [picture.source_url for picture in pictures]
 
         return v2
 

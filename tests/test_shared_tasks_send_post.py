@@ -61,7 +61,7 @@ import pytest
 from app import db
 from app.constants import (
     NOTIF_MENTION, POST_TYPE_ARTICLE, POST_TYPE_EVENT, POST_TYPE_IMAGE,
-    POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO,
+    POST_TYPE_GALLERY, POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO,
 )
 from app.activitypub.signature import default_context
 from app.models import (
@@ -3341,23 +3341,25 @@ def test_edit_post_rolls_back_and_closes_when_send_post_raises(
 # ===========================================================================
 
 
-def test_an_album_post_pushes_every_image_in_order(db_session, http_mock):
-    """Pixelfed interop R5: the Page carries the post image and then its album, in weight order, without the blocked
-    rows' marker (GALLERY_BLOCKED_WEIGHT); `image` stays the first. PieFed peers rebuild the album from this list
-    (gallery_attachments skips the primary url), threadiverse apps show the first."""
+def test_a_gallery_post_pushes_every_picture_in_order_then_a_link_to_the_post(db_session, http_mock):
+    """Pixelfed interop R5, spec 2026-11-01 G-4: the Page carries the gallery's pictures, in weight order, as
+    Documents, without the blocked rows' marker (GALLERY_BLOCKED_WEIGHT), then v1.8.10's Link to the post's page.
+    PieFed peers rebuild the gallery from the Documents, threadiverse apps show `image`, the thumbnail."""
     from app.models import File, GALLERY_BLOCKED_WEIGHT, post_file
-    s = _seed(post_type=POST_TYPE_IMAGE, local_community=False, with_keys=True)
+    s = _seed(post_type=POST_TYPE_GALLERY, local_community=False, with_keys=True)
     route = _remote_inbox(s, http_mock)
-    _attach_image(s.post, source_url='https://example.com/0.png', alt_text='zero')
-    files = [File(source_url=f'https://example.com/{n}.png', alt_text=alt) for n, alt in ((2, 'two'), (1, 'one'), (9, None))]
+    _attach_image(s.post, source_url='https://example.com/composite.png', alt_text='thumbnail')
+    files = [File(source_url=f'https://example.com/{n}.png', alt_text=alt) for n, alt in ((1, 'one'), (0, 'zero'), (9, None))]
     db.session.add_all(files)
     db.session.flush()
-    for file, weight in zip(files, (2, 1, GALLERY_BLOCKED_WEIGHT)):
+    for file, weight in zip(files, (1, 0, GALLERY_BLOCKED_WEIGHT)):
         db.session.execute(post_file.insert().values(post_id=s.post.id, file_id=file.id, weight=weight))
     s.post.gallery_count = 2
     db.session.commit()
 
     _send(s.post)
 
-    assert _attachment_of(route) == [{'type': 'Image', 'url': f'https://example.com/{n}.png', 'name': alt}
-                                     for n, alt in ((0, 'zero'), (1, 'one'), (2, 'two'))]
+    assert [(item['type'], item.get('url') or item.get('href'), item.get('name'))
+            for item in _attachment_of(route)] == [('Document', 'https://example.com/0.png', 'zero'),
+                                                   ('Document', 'https://example.com/1.png', 'one'),
+                                                   ('Link', s.post.public_url(), None)]

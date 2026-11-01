@@ -1753,7 +1753,8 @@ def put_post_subscribe(auth, data):
 
 
 def _album(data) -> list | None:
-    """The API's `gallery` as edit_post's album: None when the key is absent (keep the album), else its pictures."""
+    """The API's `gallery` as edit_post's: None when the key is absent (keep the pictures), else every picture of a
+    gallery post (spec 2026-11-01 G-5)."""
     if 'gallery' not in data:
         return None
     return [{'url': image['url'], 'alt_text': image.get('alt_text')} for image in data['gallery']]
@@ -1790,6 +1791,8 @@ def post_post(auth, data):
             # Default to ending the poll in three days
             end_poll = utcnow() + timedelta(days=3)
             data['poll']['end_poll'] = end_poll.isoformat(timespec="microseconds")
+    elif data.get('gallery'):   # every picture of a gallery post; its url is its own page (spec 2026-11-01 G-5)
+        type = POST_TYPE_GALLERY
     elif url:
         type = POST_TYPE_LINK
     else:
@@ -1892,6 +1895,8 @@ def put_post(auth, data):
             type = POST_TYPE_LINK
         else:
             type = POST_TYPE_ARTICLE
+    if data.get('gallery') or (post.type == POST_TYPE_GALLERY and 'gallery' not in data and 'url' not in data):
+        type = POST_TYPE_GALLERY   # given pictures make a gallery; leaving both out keeps one (spec 2026-11-01 G-5)
 
     input = {'title': title,
              'body': body,

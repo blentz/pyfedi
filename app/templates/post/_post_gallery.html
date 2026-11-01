@@ -1,6 +1,6 @@
-{# The images of a post's gallery after its own: an album's, or the images beside a link #}
+{# A post's gallery: a gallery post's pictures (spec 2026-11-01 G-7), or the images beside a link #}
 {% set blur_images = post.blur_images(current_user) -%}
-{% for gallery_image in (post.gallery if post.gallery_count else []) -%}
+{% for gallery_image in post.gallery_pictures() -%}
     <a href="{{ gallery_image.view_url(resize=low_bandwidth) }}" rel="nofollow ugc" class="post_gallery_image">
         <img src="{{ gallery_image.medium_url() }}"
                 alt="{{ gallery_image.alt_text if gallery_image.alt_text else post.title }}"

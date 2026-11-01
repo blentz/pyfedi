@@ -6181,10 +6181,11 @@ JOINED_SERVER_SQL = """(EXISTS (SELECT 1 FROM server_view_member svm
                                 AND c.instance_id = 1 AND c.user_id = 1 AND c.name = 'microblogs' AND """ + listable_sql('p') + ')'
 
 
-# The home Media tab's galleries (spec 2026-10-30 G2): image posts in a community shown in All or in the local
-# microblogs community (is_local_microblogs()'s test), where relayed Pixelfed posts land. Exempt from MICROBLOG_GATE,
-# since a Pixelfed post is a titleless Note; the gate keeps holding for every other post and tab.
-GALLERY_SQL = (f"p.type = {POST_TYPE_IMAGE} AND (c.show_all is true OR (c.kind = '{COMMUNITY_KIND_MICROBLOGS}' "
+# The home Media tab's galleries (spec 2026-10-30 G2): image and gallery posts (spec 2026-11-01 G-7) in a community
+# shown in All or in the local microblogs community (is_local_microblogs()'s test), where relayed Pixelfed posts
+# land. Exempt from MICROBLOG_GATE, since a Pixelfed post is a titleless Note; the gate keeps holding for every
+# other post and tab.
+GALLERY_SQL = (f"p.type IN ({POST_TYPE_IMAGE}, {POST_TYPE_GALLERY}) AND (c.show_all is true OR (c.kind = '{COMMUNITY_KIND_MICROBLOGS}' "
                f"AND c.ap_id IS NULL)) AND {listable_sql('p')}")
 
 

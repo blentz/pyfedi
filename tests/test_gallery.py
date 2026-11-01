@@ -1,6 +1,6 @@
-"""Multi-image posts (Pixelfed albums, Mastodon): the attachments after the
-first are kept in `Post.gallery`, shown on the post page, and offered to API
-clients under `extensions`."""
+"""Multi-image posts (Pixelfed albums, Mastodon): a post with two or more pictures is a gallery post whose
+`Post.gallery` holds every picture, the first being also its image (spec 2026-11-01 G-1, G-2); shown on the post
+page, and offered to API clients under `extensions`."""
 import io
 import re
 from pathlib import Path
@@ -11,7 +11,7 @@ from flask import render_template
 from PIL import Image
 
 from app import db
-from app.constants import POST_TYPE_IMAGE
+from app.constants import POST_TYPE_GALLERY, POST_TYPE_IMAGE
 from app.models import File, Language, Post, Site
 from tests.factories import (make_community, make_community_member, make_instance,
                              make_post, make_site, make_user)
@@ -80,31 +80,33 @@ def ingest(db_session, author, pixelfed):
 
 
 def gallery_of(post):
-    return post.gallery.all()
+    """The gallery's pictures, without the rows that only remember a blocked image."""
+    return post.gallery_pictures()
 
 
 def test_second_attachment_is_stored_in_the_gallery(ingest):
     post = ingest(album(image(FIRST, 'first alt'),
                         image(SECOND, 'second alt', width=640, height=480)))
 
-    assert post.type == POST_TYPE_IMAGE
-    assert post.image.source_url == FIRST
-    extra = gallery_of(post)
-    assert len(extra) == 1
-    assert extra[0].source_url == SECOND
-    assert extra[0].alt_text == 'second alt'
-    assert (extra[0].width, extra[0].height) == (640, 480)
+    assert post.type == POST_TYPE_GALLERY
+    assert post.image.source_url == FIRST and post.url == FIRST   # the thumbnail, and the url (G-3)
+    pictures = gallery_of(post)
+    assert [f.source_url for f in pictures] == [FIRST, SECOND]
+    assert pictures[0].id != post.image.id   # the thumbnail is never also a gallery row (G-2)
+    assert pictures[1].alt_text == 'second alt'
+    assert (pictures[1].width, pictures[1].height) == (640, 480)
 
 
 def test_gallery_keeps_attachment_order(ingest):
     post = ingest(album(image(FIRST, 'a'), image(SECOND, 'b'), image(THIRD, 'c')))
 
-    assert [f.source_url for f in gallery_of(post)] == [SECOND, THIRD]
+    assert [f.source_url for f in gallery_of(post)] == [FIRST, SECOND, THIRD]
 
 
 def test_single_image_has_no_gallery(ingest):
     post = ingest(album(image(FIRST, 'a')))
 
+    assert post.type == POST_TYPE_IMAGE
     assert gallery_of(post) == []
 
 
@@ -112,25 +114,25 @@ def test_unsafe_scheme_attachment_is_not_stored(ingest):
     post = ingest(album(image(FIRST, 'a'), image('javascript:alert(1)', 'bad'),
                         image(SECOND, 'b')))
 
-    assert [f.source_url for f in gallery_of(post)] == [SECOND]
+    assert [f.source_url for f in gallery_of(post)] == [FIRST, SECOND]
 
 
 def test_update_replaces_the_gallery(ingest):
     from app.activitypub.util import update_post_from_activity
     post = ingest(album(image(FIRST, 'a'), image(SECOND, 'b')))
-    assert len(gallery_of(post)) == 1
+    assert len(gallery_of(post)) == 2
 
     update = album(image(FIRST, 'a'), image(THIRD, 'c'))
     update['type'] = 'Update'
     update_post_from_activity(post, update)
     db.session.refresh(post)
-    assert [f.source_url for f in gallery_of(post)] == [THIRD]
+    assert [f.source_url for f in gallery_of(post)] == [FIRST, THIRD]
 
     update = album(image(FIRST, 'a'))
     update['type'] = 'Update'
     update_post_from_activity(post, update)
     db.session.refresh(post)
-    assert gallery_of(post) == []
+    assert gallery_of(post) == [] and post.type == POST_TYPE_IMAGE   # one picture: an image post again
 
 
 def test_post_page_shows_every_image_and_alt_text(app, ingest):
@@ -153,7 +155,8 @@ def test_api_post_view_offers_the_gallery_under_extensions(app, ingest):
 
     view = post_view(post=post, variant=1)
 
-    assert view['extensions']['gallery'] == [
+    assert view['extensions']['gallery'] == [   # every picture (G-5)
+        {'url': FIRST, 'alt_text': 'first alt', 'width': None, 'height': None},
         {'url': SECOND, 'alt_text': 'second alt', 'width': 640, 'height': 480}]
 
 
@@ -228,7 +231,7 @@ def test_an_update_drops_a_blocked_gallery_image(ingest, hashing):
     update_post_from_activity(post, update)
     db.session.refresh(post)
 
-    assert [f.source_url for f in gallery_of(post)] == [THIRD]
+    assert [f.source_url for f in gallery_of(post)] == [FIRST, THIRD]
 
 
 def test_deleting_the_post_deletes_its_gallery(ingest, tmp_path, monkeypatch):
@@ -257,14 +260,14 @@ def test_deleting_the_post_deletes_its_gallery(ingest, tmp_path, monkeypatch):
 
 
 def test_image_type_attachments_keep_the_first_as_the_primary(ingest):
-    """PieFed, Lemmy and Pixelfed send `type: Image`: the first is the post's own image, the rest the gallery in order."""
+    """PieFed, Lemmy and Pixelfed send `type: Image`: the first is the post's own image, all of them the gallery."""
     post = ingest(album({'type': 'Image', 'url': FIRST, 'name': 'a'},
                         {'type': 'Image', 'url': SECOND, 'name': 'b'},
                         {'type': 'Image', 'url': THIRD, 'name': 'c'}))
 
     assert post.image.source_url == FIRST
     assert post.image.alt_text == 'a'
-    assert [f.source_url for f in gallery_of(post)] == [SECOND, THIRD]
+    assert [f.source_url for f in gallery_of(post)] == [FIRST, SECOND, THIRD]
 
 
 @pytest.fixture
@@ -285,7 +288,7 @@ def post_file_queries():
 def test_the_gallery_count_follows_the_gallery(ingest):
     from app.activitypub.util import update_post_from_activity
     post = ingest(album(image(FIRST, 'a'), image(SECOND, 'b'), image(THIRD, 'c')))
-    assert post.gallery_count == 2
+    assert post.gallery_count == 3
 
     update = album(image(FIRST, 'a'))
     update['type'] = 'Update'
@@ -333,7 +336,7 @@ def test_an_update_with_the_same_images_changes_alt_text_in_place(ingest):
     db.session.refresh(post)
 
     assert [f.id for f in gallery_of(post)] == ids
-    assert [f.alt_text for f in gallery_of(post)] == ['new b', 'c']
+    assert [f.alt_text for f in gallery_of(post)] == ['a', 'new b', 'c']
 
 
 def test_an_update_that_reorders_the_images_rewrites_the_gallery(ingest):
@@ -343,8 +346,8 @@ def test_an_update_that_reorders_the_images_rewrites_the_gallery(ingest):
     update_post_from_activity(post, an_update(image(FIRST, 'a'), image(THIRD, 'c'), image(SECOND, 'b')))
     db.session.refresh(post)
 
-    assert [f.source_url for f in gallery_of(post)] == [THIRD, SECOND]
-    assert post.gallery_count == 2
+    assert [f.source_url for f in gallery_of(post)] == [FIRST, THIRD, SECOND]
+    assert post.gallery_count == 3
 
 
 def test_an_update_without_attachment_keeps_the_gallery(ingest):
@@ -357,8 +360,8 @@ def test_an_update_without_attachment_keeps_the_gallery(ingest):
     update_post_from_activity(post, update)
     db.session.refresh(post)
 
-    assert [f.source_url for f in gallery_of(post)] == [SECOND]
-    assert post.gallery_count == 1
+    assert [f.source_url for f in gallery_of(post)] == [FIRST, SECOND]
+    assert post.gallery_count == 2
 
 
 def numbered_album(number, *attachments):
@@ -383,7 +386,7 @@ def test_a_listing_reads_post_file_once_for_the_whole_page(app, ingest, post_fil
 
     assert len(listing['posts']) == 3
     for entry in listing['posts']:
-        assert [image['alt_text'] for image in entry['post']['extensions']['gallery']] == ['b', 'c']
+        assert [image['alt_text'] for image in entry['post']['extensions']['gallery']] == ['a', 'b', 'c']
     assert len(post_file_queries) == 1
 
 
@@ -438,10 +441,10 @@ def test_an_unchanged_album_with_a_dropped_blocked_image_is_a_no_op(ingest, hash
     update_post_from_activity(post, an_update(image(FIRST, 'a'), image(SECOND, 'b'), image(THIRD, 'c')))
     db.session.refresh(post)
 
-    assert [f.source_url for f in gallery_of(post)] == [THIRD]
+    assert [f.source_url for f in gallery_of(post)] == [FIRST, THIRD]
     assert [f.id for f in gallery_of(post)] == ids
     assert hashing.asked == []
-    assert post.gallery_count == 1
+    assert post.gallery_count == 2
 
 
 def test_a_known_blocked_image_does_not_count_in_the_gallery_or_the_api(app, ingest, hashing):
@@ -454,7 +457,7 @@ def test_a_known_blocked_image_does_not_count_in_the_gallery_or_the_api(app, ing
 
     gallery = post_view(post=post, variant=1)['extensions']['gallery']
 
-    assert [image['alt_text'] for image in gallery] == ['c']
+    assert [image['alt_text'] for image in gallery] == ['a', 'c']
 
 
 def test_the_blocked_image_is_forgotten_when_an_update_no_longer_carries_it(ingest, hashing):
@@ -467,7 +470,7 @@ def test_the_blocked_image_is_forgotten_when_an_update_no_longer_carries_it(inge
     db.session.refresh(post)
 
     assert File.query.filter_by(source_url=SECOND).count() == 0
-    assert [f.source_url for f in gallery_of(post)] == [THIRD]
+    assert [f.source_url for f in gallery_of(post)] == [FIRST, THIRD]
 
 
 

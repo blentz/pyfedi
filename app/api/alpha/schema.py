@@ -420,7 +420,7 @@ class PodcastExtension(DefaultSchema):
 
 
 class PostExtensions(DefaultSchema):
-    gallery = fields.List(fields.Nested(GalleryImage), metadata={"description": "The images of a multi-image post after the first, in order. Fork extension; Lemmy clients ignore it."})
+    gallery = fields.List(fields.Nested(GalleryImage), metadata={"description": "Every picture of a gallery post, in order, or the images beside a link. Fork extension; Lemmy clients ignore it."})
     content_warning = fields.String(metadata={"description": "The warning the post's body and images should be collapsed under. Present only when there is one. Fork extension; Lemmy clients ignore it."})
     podcast = fields.Nested(PodcastExtension, metadata={"description": "A Castopod episode's credits. Fork extension; Lemmy clients ignore it."})
 
@@ -1526,9 +1526,9 @@ class AlbumImage(DefaultSchema):
     alt_text = fields.String(allow_none=True)
 
 
-GALLERY_DESCRIPTION = ("The pictures after the post's image `url`, in order: an album of at most the site's "
-                       "max_album_images pictures in all. On edit, leave it out to keep the album, [] to clear it, "
-                       "a list to replace it.")
+GALLERY_DESCRIPTION = ("Every picture of a gallery post, in order: 2 to the site's max_album_images. Given, the post "
+                       "is a gallery and `url` is not used (a gallery's url is its own page). On edit, leave it out "
+                       "to keep the pictures, or give the new list.")
 
 
 class CreatePostRequest(DefaultSchema):

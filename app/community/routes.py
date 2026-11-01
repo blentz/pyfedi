@@ -24,7 +24,7 @@ from app.activitypub.actor import schedule_actor_refresh
 # app.activitypub before they are defined (import cycle: app.api.alpha)
 import app.api.alpha.views as alpha_views
 from app.community.forms import SearchRemoteCommunity, CreateDiscussionForm, CreateImageForm, CreateLinkForm, \
-    album_slots, album_uploads, \
+    gallery_form_pictures, \
     ReportCommunityForm, \
     DeleteCommunityForm, AddCommunityForm, EditCommunityForm, AddModeratorForm, BanUserCommunityForm, \
     EscalateReportForm, ResolveReportForm, CreateVideoForm, CreateAudioForm, CreatePollForm, EditCommunityWikiPageForm, \
@@ -60,7 +60,7 @@ from app.feed_domains import feed_view_domain, feeds_shown_here_clause, listed_f
 from app.local_only import community_local_only, found_here, hidden_here, hidden_here_sql, local_only_visible_rss, \
     without_local_only, without_local_only_actors
 from app.visibility import is_open, listable_clause, visible_to_clause
-from app.utils import etag_stamp
+from app.utils import etag_stamp, max_album_images
 from app.utils import user_banned_from_community, back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
     shorten_string, community_membership, _capped_get, PAGE_MAX_BYTES, \
     request_etag_matches, return_304, can_upvote, can_downvote, user_filters_posts, \
@@ -342,7 +342,7 @@ def community_post_query(community: Community, content_type: str, flair: str = '
     if content_type == 'events':
         posts = posts.filter(Post.type == POST_TYPE_EVENT)
     elif content_type == 'galleries':
-        posts = posts.filter(Post.type == POST_TYPE_IMAGE)
+        posts = posts.filter(Post.type.in_((POST_TYPE_IMAGE, POST_TYPE_GALLERY)))   # spec 2026-11-01 G-7
 
     # filter out nsfw and nsfl if desired
     if current_user.is_anonymous:
@@ -1436,22 +1436,13 @@ def add_post(actor, type=None):
                 form.body.data = post_data.get('content', form.body.data)
 
             if type == 'gallery':
-                # Collect all gallery images
-                uploaded_files = []
-                image_alt_texts = []
-                for entry in form.images:
-                    if entry.image_file.data:
-                        uploaded_files.append(entry.image_file.data)
-                        image_alt_texts.append(entry.alt_text.data or '')
-                # Check that at least one image is provided (for creation)
-                if not uploaded_files:
-                    flash(_('At least one image is required for a gallery post.'), 'error')
+                pictures = gallery_form_pictures(form)   # spec 2026-11-01 G-6
+                if len(pictures) < 2:
+                    flash(_('A gallery needs at least two images.'), 'error')
                     return redirect(url_for('community.add_post', actor=community.link(), type='gallery'))
-                post = shared_post.make_post(form, community, post_type, SRC_WEB, uploaded_files=uploaded_files, image_alt_texts=image_alt_texts)
+                post = shared_post.make_post(form, community, post_type, SRC_WEB, album=pictures)
             else:
-                album = album_uploads(form) if type == 'image' else None   # the pictures after the image (R5)
-            post = shared_post.make_post(form, community, post_type, SRC_WEB, uploaded_file=uploaded_file,
-                                         album=album or None)
+                post = shared_post.make_post(form, community, post_type, SRC_WEB, uploaded_file=uploaded_file)
         except MediaRefused as refusal:   # the bytes are not the kind the form takes: a field error, not a 500
             form.image_file.errors.append(str(refusal))
         except Exception as ex:
@@ -1589,7 +1580,7 @@ def add_post(actor, type=None):
                            post_type=post_type, post_form_type=type, destination_sections=post_destination_sections(), community=community, show_visibility=is_local_microblogs(community), post=post, hide_community_actions=True,
                            markdown_editor=current_user.markdown_editor, low_bandwidth=False, actor=actor, event_online=True,
                            inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None,
-                           album_slots=album_slots() if type == 'image' else 0,
+                           gallery_slots=max_album_images() if type == 'gallery' else 0,
                            )
 
 

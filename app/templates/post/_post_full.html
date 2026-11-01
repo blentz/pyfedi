@@ -225,13 +225,9 @@
                 </div>
             {% endif -%}
         {% elif post.type == POST_TYPE_GALLERY and not post.deleted -%}
-            <div class="post_gallery row g-2">
-                {%- for file in post.gallery -%}
-                    <div class="col-12 col-md-4"><a href="{{ file.view_url() }}" target="_blank" rel="nofollow ugc">
-                        <img src="{{ file.thumbnail_url() }}" alt="{{ file.alt_text if file.alt_text else post.title }}"
-                            width="{{ file.width if file.width else '' }}" height="{{ file.height if file.height else '' }}"
-                            class="img-fluid w-100 gallery-thumbnail" loading="lazy"></a></div>
-                {%- endfor -%}
+            {# every picture, as an album's were shown, with its blur and under its warning (spec 2026-11-01 G-7) #}
+            <div class="post_image post_gallery">
+                {% include 'post/_post_gallery.html' %}
             </div>
         {% elif post.type == POST_TYPE_EVENT and not post.deleted -%}
             <div class="post_event">

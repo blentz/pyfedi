@@ -76,7 +76,7 @@ from sqlalchemy.exc import StatementError
 from app import db
 from app.activitypub.util import update_post_from_activity
 from app.constants import (NOTIF_REPORT, POST_TYPE_ARTICLE, POST_TYPE_EVENT,
-                           POST_TYPE_IMAGE, POST_TYPE_LINK, POST_TYPE_POLL,
+                           POST_TYPE_GALLERY, POST_TYPE_IMAGE, POST_TYPE_LINK, POST_TYPE_POLL,
                            POST_TYPE_VIDEO, ROLE_ADMIN, ROLE_ADMIN_NAME)
 from app.models import (Event, File, Notification, PollChoice, PollChoiceVote,
                         Post, Role, User)
@@ -2359,30 +2359,26 @@ class TestUrlChangeImageUrl:
             self, app, db_session, http_mock, redis_lock_only_double):
         """`:3483-3485` with all three conjuncts true.
 
-        Two attachments, and the second is what makes the `[0]` in `:3484-3485`
-        provable rather than merely present. The second pass at `:3443-3446` has
-        no `break`, so the LAST `Image` in the list is the one that supplies
-        `new_url` -- which is why the url taken is entry [1]'s while the alt text
-        asserted is entry [0]'s. A mutant that read the walked attachment
-        instead of `[0]` would write UNTAKEN_ALT and fail here.
-
-        UNTAKEN_URL, on entry [0], is registered nowhere: it is overwritten by
-        entry [1] before `:3477` ever sees it, so a run that took it instead
-        fails on the unmatched HEAD as well as on the two assertions.
+        Two attachments. The first `Image` supplies `new_url` and its name the alt text, as a Create takes them
+        (spec 2026-11-01 G-3: an inbound gallery's url is its first picture); the second is the gallery's second
+        picture, so the post becomes a gallery (G-1). Before, the walk had no `break` and the LAST image was the
+        url, which put a gallery's last picture first.
         """
         post = _seed_link_post()
         _taken(http_mock, CHANGED_IMAGE_URL)
 
         update_post_from_activity(post, _attachment_update(
-            {'type': 'Image', 'url': UNTAKEN_URL, 'name': ATTACHMENT_ALT},
-            {'type': 'Image', 'url': CHANGED_IMAGE_URL, 'name': UNTAKEN_ALT}))
+            {'type': 'Image', 'url': CHANGED_IMAGE_URL, 'name': ATTACHMENT_ALT},
+            {'type': 'Image', 'url': UNTAKEN_URL, 'name': UNTAKEN_ALT}))
 
         db.session.expire_all()
         assert post.url == CHANGED_IMAGE_URL
-        assert post.type == POST_TYPE_IMAGE
+        assert post.type == POST_TYPE_GALLERY
         image = db.session.get(File, post.image_id)
         assert image.source_url == CHANGED_IMAGE_URL
         assert image.alt_text == ATTACHMENT_ALT
+        assert [(file.source_url, file.alt_text) for file in post.gallery_pictures()] == [
+            (CHANGED_IMAGE_URL, ATTACHMENT_ALT), (UNTAKEN_URL, UNTAKEN_ALT)]
 
     def test_alt_text_longer_than_the_column_is_cut_to_it(self, app, db_session, http_mock, redis_lock_only_double):
         """File.alt_text is varchar(1500); a longer caption was a StringDataRightTruncation at commit."""

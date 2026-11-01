@@ -253,7 +253,7 @@ class RSSFeed:
         :post    Post
         :fe      FeedEntry object
         """
-        gallery = post.gallery if post.gallery else []
+        gallery = post.gallery_pictures()   # not the rows remembering a blocked image
         for file in gallery:
             url = file.source_url
             medium = {'url': storefront_link(url)}   # a stored URL, shown on this storefront

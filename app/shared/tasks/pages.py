@@ -1,7 +1,7 @@
 import json
 from zoneinfo import ZoneInfo
 from app import celery, db
-from app.activitypub.serializers import (episode_attachment, loops_video, microblog_note, peertube_video,
+from app.activitypub.serializers import (episode_attachment, gallery_documents, loops_video, microblog_note, peertube_video,
                                          uses_loops_video, uses_microblog_note, uses_peertube_video,
                                          uses_podcast_episode)
 from app.activitypub.signature import default_context, send_post_request
@@ -312,12 +312,10 @@ def send_post(post_id, edit=False, session=None):
         attachment.append(episode_attachment(post))
     elif (post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO or post.type == POST_TYPE_EVENT) and post.url is not None:
         attachment.append({'href': post.url, 'type': 'Link'})
-    elif post.type == POST_TYPE_IMAGE and post.image_id:   # every picture of an album, as post_to_page (R5)
-        attachment.extend({'type': 'Image', 'url': file.source_url, 'name': file.alt_text} for file in post.album_images())
-    elif post.type == POST_TYPE_GALLERY:
-        for file in post.gallery:
-            attachment.append({'type': 'Document', 'url': file.source_url, 'name': file.alt_text,
-                               'width': file.width, 'height': file.height})
+    elif post.type == POST_TYPE_IMAGE and post.image_id:
+        attachment.append({'type': 'Image', 'url': post.image.source_url, 'name': post.image.alt_text})
+    elif post.type == POST_TYPE_GALLERY:   # as post_to_page (spec 2026-11-01 G-4)
+        attachment.extend(gallery_documents(post) + [{'href': post.public_url(), 'type': 'Link'}])
 
     page = {
       'id': post.public_url(),

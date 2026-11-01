@@ -9,7 +9,7 @@ from flask_babel import _, lazy_gettext as _l
 from slugify import slugify
 from flask_login import current_user
 from flask_wtf import FlaskForm
-from wtforms import StringField, SubmitField, TextAreaField, BooleanField, HiddenField, SelectField, FileField, \
+from wtforms import Form, StringField, SubmitField, TextAreaField, BooleanField, HiddenField, SelectField, FileField, \
     DateField, IntegerField, DateTimeLocalField, RadioField, FieldList, FormField
 
 from wtforms.validators import ValidationError, DataRequired, Length, Regexp, Optional, URL, NumberRange
@@ -489,40 +489,25 @@ def is_chan_screenshot(uploaded_file) -> bool:
     return 'Anonymous' in image_text and ('No.' in image_text or ' N0' in image_text)  # chan posts usually contain the text 'Anonymous' and ' No.12345'
 
 
-def album_uploads(form) -> list:
-    """The album pictures the image form was sent, in slot order, as edit_post's album entries: each
-    {'upload', 'alt_text'} (Pixelfed interop R5)."""
+def gallery_form_pictures(form, post=None) -> list:
+    """The gallery form's pictures for edit_post (spec 2026-11-01 G-6), slot by slot up to max_album_images(): a new
+    upload where one was given, else the gallery's picture in that slot unless its remove box is ticked, with the
+    slot's alt text (the picture's own when blank)."""
+    existing = post.gallery_pictures() if post is not None else []
     pictures = []
-    for file_field, alt_field in zip(form.album_files, form.album_alts):
-        picture = request.files.get(file_field.name)
-        if picture and picture.filename:
-            pictures.append({'upload': picture, 'alt_text': storable_alt_text((alt_field.data or '').strip())})
+    for index, entry in enumerate(form.images.entries[:max_album_images()]):
+        upload = entry.image_file.data
+        alt_text = storable_alt_text((entry.alt_text.data or '').strip())
+        if upload and getattr(upload, 'filename', ''):
+            pictures.append({'upload': upload, 'alt_text': alt_text})
+        elif index < len(existing) and not request.form.get(f'gallery_remove_{index}'):
+            pictures.append({'url': existing[index].source_url, 'alt_text': alt_text or existing[index].alt_text})
     return pictures
-
-
-def album_kept(post) -> list:
-    """The pictures of `post`'s album that the edit page sent back without their remove box ticked, each with the alt
-    text the page sent for it."""
-    return [{'url': file.source_url, 'alt_text': storable_alt_text((request.form.get(f'album_alt_{file.id}') or '').strip())}
-            for file in post.album_images()[1:] if not request.form.get(f'album_remove_{file.id}')]
-
-
-def album_slots(post=None) -> int:
-    """How many more pictures the image form offers: the site's max_album_images, less the image and the album
-    `post` already has."""
-    used = len(post.album_images()) if post is not None and post.image_id else 1
-    return max(0, max_album_images() - used)
 
 
 class CreateImageForm(CreatePostForm):
     image_alt_text = StringField(_l('Alt text'), validators=[Optional(), Length(min=3, max=1500)])
     image_file = FileField(_l('Image'), validators=[DataRequired()], render_kw={'accept': 'image/*'})
-    # The album after the image (Pixelfed interop R5): as many slots as the site could allow; the page renders
-    # album_slots() of them
-    album_files = FieldList(FileField(_l('Another image'), validators=[Optional()], render_kw={'accept': 'image/*'}),
-                            min_entries=MAX_ALBUM_IMAGES_CEILING - 1)
-    album_alts = FieldList(StringField(_l('Its alt text'), validators=[Optional(), Length(min=3, max=1500)]),
-                           min_entries=MAX_ALBUM_IMAGES_CEILING - 1)
 
     def validate(self, extra_validators=None) -> bool:
         if not super().validate(extra_validators):
@@ -541,19 +526,6 @@ class CreateImageForm(CreatePostForm):
             return False
         if uploaded_file and image_upload_too_large(self.image_file, uploaded_file):
             return False
-        # Each album picture is checked as the image is; the whole album, the image's and those kept on an edit
-        # too, is held to max_album_images by edit_post
-        if len(album_uploads(self)) + 1 > max_album_images():
-            self.image_file.errors.append(_('At most %(count)d images in one post', count=max_album_images()))
-            return False
-        for field in self.album_files:
-            picture = request.files.get(field.name)
-            if picture and picture.filename:
-                if is_chan_screenshot(picture):   # a list by now: super().validate() validated every slot
-                    field.errors.append("This image is from 4chan.")
-                    return False
-                if image_upload_too_large(field, picture):
-                    return False
         if self.communities:
             community = db.session.get(Community, self.communities.data)
             if community.is_local() and g.site.allow_local_image_posts is False:
@@ -581,28 +553,30 @@ class EditImageForm(CreateImageForm):
     # the inherited method is the one that runs.
 
 
-class GalleryImageForm(FlaskForm):
+class GalleryImageForm(Form):
+    # A plain wtforms Form: as a FlaskForm each slot wanted a CSRF token of its own, which the page never renders,
+    # so with CSRF on (as in production) no gallery passed validation; the outer form's token covers the slots.
     image_file = FileField(_l('Image'), validators=[Optional()], render_kw={'accept': 'image/*'})
     alt_text = StringField(_l('Alt text'), validators=[Optional(), Length(min=3, max=1500)])
 
 
 class CreateGalleryForm(CreatePostForm):
-    images = FieldList(FormField(GalleryImageForm), min_entries=10)
+    # The site's max_album_images() of these are offered (gallery_form_pictures), up to its ceiling
+    images = FieldList(FormField(GalleryImageForm), min_entries=MAX_ALBUM_IMAGES_CEILING)
 
     def validate(self, extra_validators=None) -> bool:
-        super().validate(extra_validators)
+        if not super().validate(extra_validators):   # v1.8.10 went on to answer True whatever the fields said
+            return False
 
-        # Validate file sizes for each uploaded image (only checks entries with data)
-        max_size_in_mb = 10 * 1024 * 1024  # 10 MB
-        for entry in self.images:
-            if entry.image_file.data:
-                uploaded_file = entry.image_file.data
-                file_content = uploaded_file.read()
-                if len(file_content) > max_size_in_mb:
-                    entry.image_file.errors.append(_l('This image file size is too large.'))
-                    uploaded_file.seek(0)
+        # Each picture is checked as an image post's image is (spec 2026-11-01 G-6): a 4chan screenshot, the size
+        for entry in self.images.entries[:max_album_images()]:
+            upload = entry.image_file.data
+            if upload and getattr(upload, 'filename', ''):
+                if is_chan_screenshot(upload):
+                    entry.image_file.errors.append("This image is from 4chan.")
                     return False
-                uploaded_file.seek(0)
+                if image_upload_too_large(entry.image_file, upload):
+                    return False
 
         if self.communities:
             community = db.session.get(Community, self.communities.data)

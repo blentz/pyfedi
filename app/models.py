@@ -3377,10 +3377,9 @@ class Post(db.Model):
                         alt_text = attachment.get("name")
                         # never its `file_path`: a peer naming a path on our disk had it unlinked with the File
                         break  # the first image is the post's own; set_post_gallery keeps the rest in order
-            # An album -- several Image or Document attachments -- is an image post whose first picture is its
-            # image and whose others are its gallery (set_post_gallery, Pixelfed interop R5), as before v1.8.10.
-            # v1.8.10's POST_TYPE_GALLERY is kept for galleries made here; which of the two an inbound album
-            # becomes is the owner's decision (docs/CHANGES-since-v1.8.10.md, 1.1).
+            # An album -- several Image or Document attachments -- is a gallery post (spec 2026-11-01 G-1):
+            # the first picture is its url and stays its image, the thumbnail, and set_post_gallery makes every
+            # picture its gallery, in order (Pixelfed interop R5). One picture is an image post.
 
         if 'attachment' in request_json['object'] and isinstance(request_json['object']['attachment'], dict):  # a.gup.pe (Mastodon)
             alt_text = None
@@ -3998,9 +3997,9 @@ class Post(db.Model):
         db.session.execute(text('UPDATE "rss_feed_item" SET post_id = null WHERE post_id = :post_id'), {'post_id': self.id})
 
         # Handle file deletions from disk before cascade deletes the File records
-        if self.image_id and self.image:
-            self.image.delete_from_disk(cache_urls=cache_urls)
-        # The album's other images: post_file has no cascade, and its File rows belong to this post alone
+        # The gallery first: post_file has no cascade, and its File rows belong to this post alone. A gallery
+        # picture may be a copy naming the image's own files (migration c3e9a7d1f5b2), which the image may remove
+        # only once no other record names them -- so the copies go, and are flushed, before the image is asked.
         gallery_ids = [row.file_id for row in db.session.execute(
             post_file.select().where(post_file.c.post_id == self.id)).all()]
         if gallery_ids:
@@ -4008,6 +4007,9 @@ class Post(db.Model):
             for file in File.query.filter(File.id.in_(gallery_ids)).all():
                 file.delete_from_disk(cache_urls=cache_urls)
                 db.session.delete(file)
+            db.session.flush()
+        if self.image_id and self.image:
+            self.image.delete_from_disk(cache_urls=cache_urls)
         # A13.8: the post that owns the media record always takes its media with it. A post that only links to the
         # URL is not a reference: anyone, a remote peer included, can make one, and it must not stop a takedown
         owns_media = media_of(self) is not None and self.is_local()
@@ -4254,17 +4256,23 @@ class Post(db.Model):
                 self.spoiler_flair()
 
     def album_images(self) -> list:
-        """The post's pictures in album order: its image, then its gallery by weight, leaving out the rows that only
-        remember a blocked image (GALLERY_BLOCKED_WEIGHT). What an album post federates (Pixelfed interop R5); the
-        same rows the API's galleries_for_posts reads."""
+        """The post's pictures in order: a gallery post's gallery by weight (spec 2026-11-01 G-2), an image post's
+        image, leaving out the rows that only remember a blocked image (GALLERY_BLOCKED_WEIGHT). What the post
+        federates (Pixelfed interop R5); the same rows the API's galleries_for_posts reads."""
+        if self.type == constants.POST_TYPE_GALLERY:
+            return self.gallery_pictures()
         if self.image is None:
             return []
+        return [self.image]
+
+    def gallery_pictures(self) -> list:
+        """The post's gallery rows in order, without the ones that only remember a blocked image: a gallery post's
+        pictures, or the images beside a link. None are looked up when gallery_count says there are none."""
         if not self.gallery_count:
-            return [self.image]
-        gallery = db.session.query(File).join(post_file, post_file.c.file_id == File.id) \
+            return []
+        return db.session.query(File).join(post_file, post_file.c.file_id == File.id) \
             .filter(post_file.c.post_id == self.id, func.coalesce(post_file.c.weight, 0) >= 0) \
             .order_by(post_file.c.weight).all()
-        return [self.image] + gallery
 
     def blur_images(self, user):
         """Whether the post page blurs this post's images for `user`.

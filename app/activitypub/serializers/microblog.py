@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup, NavigableString
 from markupsafe import escape
 
 import app.activitypub.util as activitypub_util   # the module: app.activitypub.util imports this one
-from app.constants import POST_TYPE_EVENT, POST_TYPE_IMAGE, POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO
+from app.constants import POST_TYPE_EVENT, POST_TYPE_GALLERY, POST_TYPE_IMAGE, POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO
 from app.federation_urls import object_base
 from app.jpeg import jpeg_url, needs_jpeg
 from app.local_only import federated_mentions
@@ -118,9 +118,16 @@ def _image_document(file, post) -> dict:
     return attachment
 
 
+def gallery_documents(post) -> list:
+    """A gallery post's pictures, in order, one Document each (spec 2026-11-01 G-4, Pixelfed interop R5)."""
+    return [_image_document(file, post) for file in post.album_images() if file.source_url]
+
+
 def note_attachments(post) -> list:
+    if post.type == POST_TYPE_GALLERY:
+        return gallery_documents(post)
     if post.type == POST_TYPE_IMAGE and post.image is not None and post.image.source_url:
-        return [_image_document(file, post) for file in post.album_images() if file.source_url]   # one per picture (R5)
+        return [_image_document(post.image, post)]
     if post.type in (POST_TYPE_LINK, POST_TYPE_VIDEO) and _web_url(post):
         return [{'type': 'Link', 'href': post.url}]
     return []

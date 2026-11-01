@@ -1,6 +1,6 @@
-"""A sensitive image post is blurred on the post page, as it is in teasers, for
-everyone but a viewer who chose to see NSFW content as it is. Gallery images
-blur with the primary one."""
+"""A sensitive image or gallery post is blurred on the post page, as it is in teasers, for
+everyone but a viewer who chose to see NSFW content as it is. Every picture of a gallery
+blurs (spec 2026-11-01 G-7)."""
 import re
 
 import pytest
@@ -64,7 +64,7 @@ def page_images(app, post, user):
         sess['_user_id'] = str(user.id)
         sess['_fresh'] = True
     html = client.get(f'/post/{post.id}', follow_redirects=True).get_data(as_text=True)
-    block = html[html.index('<div class="post_image">'):]
+    block = html[html.index('<div class="post_image'):]   # an image post's, or a gallery's "post_image post_gallery"
     block = block[:block.index('</div>')]
     return re.findall(r'<img [^>]*>', block)
 

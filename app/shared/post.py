@@ -268,7 +268,7 @@ def web_form_url(input, type):
     return (field.data or '').strip()
 
 
-def make_post(input, community, type, src, auth=None, uploaded_file=None, uploaded_files=None, image_alt_texts=None, album=None):
+def make_post(input, community, type, src, auth=None, uploaded_file=None, album=None):
     if src == SRC_API:
         user = authorise_api_user(auth, return_type='model')
         if extra_rate_limit_check(user):
@@ -354,7 +354,7 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None, upload
 
     try:    # federation is done in edit_post
         post = edit_post(input, post, type, src, user, auth, uploaded_file, from_scratch=True,
-                         uploaded_files=uploaded_files, image_alt_texts=image_alt_texts, album=album)
+                         album=album)
         published = post.status == POST_STATUS_PUBLISHED
         if post.status == POST_STATUS_PROCESSING:
             # Stored and committed: probe_media publishes it when the media is ready. Queued only once this create
@@ -499,15 +499,15 @@ def _stored(post: Post, image: dict) -> dict:
 
 
 def set_local_album(post: Post, images: list) -> None:
-    """Make `post.gallery` the pictures after the post's image (Pixelfed interop R5), replacing what it held: each
-    `{url, alt_text}` and, for one of our uploads, the `file_name` and `hash` it was stored with, at weight 1.. in
-    order. The layout of an inbound album (set_post_gallery), so rendering, the API and the serializers read it as
-    they read one. A picture already in the album keeps its File, sized and with our upload's file left on disk; one
+    """Make `post.gallery` a gallery post's pictures (spec 2026-11-01 G-2), replacing what it held: each `{url,
+    alt_text}` and, for one of our uploads, the `file_name` and `hash` it was stored with, at weight 0.. in order. The
+    layout of an inbound gallery (set_post_gallery), so rendering, the API and the serializers read it as they read
+    one. A picture already in the album keeps its File, sized and with our upload's file left on disk; one
     that leaves the album is deleted with its file; a new one is sized. The caller commits."""
     rows = db.session.execute(post_file.select().where(post_file.c.post_id == post.id)).all()
     old = {file.source_url: file for file in File.query.filter(File.id.in_([row.file_id for row in rows])).all()}
     db.session.execute(post_file.delete().where(post_file.c.post_id == post.id))
-    for weight, image in enumerate(images, start=1):
+    for weight, image in enumerate(images):
         file = old.pop(image['url'], None)
         if file is None:
             file = File(source_url=image['url'], file_name=image.get('file_name'), hash=image.get('hash'))
@@ -524,12 +524,12 @@ def set_local_album(post: Post, images: list) -> None:
 
 # 'from_scratch == True' means that it's not really a user edit, we're just re-using code for make_post()
 def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=None, from_scratch=False, hash=None,
-              uploaded_files=None, image_alt_texts=None, album=None):
+              album=None):
     if src == SRC_API and not user:   # authenticated first: the gone check must not answer an unauthorised caller
         user = authorise_api_user(auth, return_type='model', id_match=post.user_id)
     if not from_scratch and post.community.is_gone():   # interop C1 item 10: a Group deleted on its home server is read-only
         raise Exception('This community was deleted on its home server')
-    if album is not None and len(album) + 1 > max_album_images():   # the image and its album (R7)
+    if album is not None and len(album) > max_album_images():   # a gallery's pictures (R7, spec 2026-11-01 G-5)
         raise Exception(f'At most {max_album_images()} images in one post')
     if album and any('url' in image and _as_url(image['url']) is None for image in album):   # D1407, as `url`: hrefs
         raise Exception('Each album url must be an http:// or https:// url')
@@ -551,6 +551,8 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         # caller is waiting for an answer and can fix the value.
         if url and _as_url(url) is None:
             raise Exception('url must be an http:// or https:// url')
+        if type == POST_TYPE_GALLERY:   # its own page, as the web form gives it (spec 2026-11-01 G-3)
+            url = f"{object_base(post)}{post.slug}"
         nsfw = input['nsfw']
         ai_generated = input['ai_generated']
         notify_author = input['notify_author']
@@ -736,7 +738,8 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
     post.repeat = repeat
     post.timezone = timezone
 
-    if post.url:
+    # A gallery's url is its own page (G-3): nothing to sniff a type from, before or after this edit
+    if post.url and type != POST_TYPE_GALLERY and post.url != f"{object_base(post)}{post.slug}":
         if host_of(post.url) in {'pixelfed.social', 'pixelfed.uno'}:  # one pixelfed test, as below (D478)
             post.type = POST_TYPE_IMAGE
         elif post.url.startswith('https://loops.video/'):
@@ -1012,74 +1015,6 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                 else:
                     post.type = POST_TYPE_LINK
 
-        # Handle gallery images
-        if type == POST_TYPE_GALLERY and uploaded_files:
-            post.type = POST_TYPE_GALLERY
-            # Get existing gallery images sorted by weight
-            existing_gallery = db.session.query(File).join(
-                post_file, (post_file.c.file_id == File.id) & (post_file.c.post_id == post.id)
-            ).order_by(post_file.c.weight).all()
-            
-            for i, uploaded_file in enumerate(uploaded_files):
-                # Check if this entry has a new file upload
-                if uploaded_file and uploaded_file.filename != '':
-                    # If there's an existing image at this index, delete it first
-                    if i < len(existing_gallery):
-                        old_file = existing_gallery[i]
-                        # Delete from post_file table first (to avoid FK constraint)
-                        db.session.execute(
-                            text('DELETE FROM post_file WHERE post_id = :post_id AND file_id = :file_id'),
-                            {'post_id': post.id, 'file_id': old_file.id}
-                        )
-                        old_file.delete_from_disk()
-                        db.session.delete(old_file)
-                        db.session.commit()
-                    
-                    # One upload path for a post's images: the type check, re-encoding without metadata, SVG
-                    # sanitising, the blocked-image check and S3 are store_post_image's, as for the post image
-                    url, uploaded_name, hash = store_post_image(post, uploaded_file)
-
-                    # Create File record
-                    alt_text = image_alt_texts[i] if image_alt_texts and i < len(image_alt_texts) else ''
-                    file = File(source_url=url, alt_text=alt_text, file_name=uploaded_name, hash=hash)
-                    db.session.add(file)
-                    db.session.commit()
-
-                    # Associate file with post via post_file table
-                    db.session.execute(
-                        text('INSERT INTO post_file (post_id, file_id, weight) VALUES (:post_id, :file_id, :weight)'),
-                        {'post_id': post.id, 'file_id': file.id, 'weight': i}
-                    )
-
-                    # Generate image sizes
-                    make_image_sizes(file.id, 512, 1200, 'posts', post.community.low_quality)
-
-            
-            # Handle existing images that weren't replaced (update alt text)
-            # and remove any existing images beyond the uploaded files count
-            for i in range(len(existing_gallery)):
-                if i >= len(uploaded_files) or not (uploaded_files[i] and uploaded_files[i].filename != ''):
-                    # This existing image wasn't replaced
-                    old_file = existing_gallery[i]
-                    # Update alt text if provided
-                    if i < len(image_alt_texts) and image_alt_texts[i]:
-                        old_file.alt_text = image_alt_texts[i]
-                        db.session.commit()
-            
-            # Remove any existing images beyond the number of form entries
-            if len(existing_gallery) > len(uploaded_files):
-                for i in range(len(uploaded_files), len(existing_gallery)):
-                    old_file = existing_gallery[i]
-                    # Delete from post_file table first (to avoid FK constraint)
-                    db.session.execute(
-                        text('DELETE FROM post_file WHERE post_id = :post_id AND file_id = :file_id'),
-                        {'post_id': post.id, 'file_id': old_file.id}
-                    )
-                    old_file.delete_from_disk()
-                    db.session.delete(old_file)
-                db.session.commit()
-            post.image_id = build_gallery_thumbnail([file.source_url for file in post.gallery], post)
-
         post.calculate_cross_posts(url_changed=url_changed)
     elif url and is_video_hosting_site(url):
         post.type = POST_TYPE_VIDEO
@@ -1089,14 +1024,30 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         # unless something upstream happened to emit SQL, and the caller's alt text was dropped for some urls.
         post.image.alt_text = image_alt_text
 
-    # The album after the image (Pixelfed interop R5): None leaves it as it is, a list replaces it, and a post that is
-    # no longer an image post has none
-    if post.type != POST_TYPE_IMAGE or post.image is None:
+    # A gallery's pictures (spec 2026-11-01 G-5, G-6): the API's `gallery`, or the web form's (gallery_form_pictures). None
+    # keeps them; a post that is not a gallery has none. Done whether or not the url changed: a gallery's url is its
+    # own page, which an edit does not change.
+    if type == POST_TYPE_GALLERY:
+        if album is not None:
+            if not 2 <= len(album) <= max_album_images():
+                raise Exception(f'A gallery has 2 to {max_album_images()} pictures')
+            set_local_album(post, [_stored(post, image) for image in album])
+            thumbnail = db.session.get(File, post.image_id) if post.image_id else None   # by id: see D856
+            post.image_id = build_gallery_thumbnail([file.source_url for file in post.gallery_pictures()], post)
+            if thumbnail is not None and thumbnail.id != post.image_id:   # the composite is never a gallery row (G-2)
+                thumbnail.delete_from_disk()
+                db.session.delete(thumbnail)
+        elif from_scratch:
+            raise Exception('A gallery needs its pictures')
+        post.type = POST_TYPE_GALLERY
+        post.url = url   # its own page (G-3); the url block above leaves a gallery's alone, and v1.8.10 never set it
+    else:
         if album:
-            raise Exception('An album needs an image post: give its first picture as the url')
-        set_local_album(post, [])
-    elif album is not None:   # a web upload is stored as the image is, and names the file it wrote
-        set_local_album(post, [_stored(post, image) for image in album])
+            raise Exception('Only a gallery post has a gallery')
+        if post.gallery_count:
+            set_local_album(post, [])
+        if post.url and post.url == f"{object_base(post)}{post.slug}":   # it was a gallery: its own page was its url
+            post.url = None
 
     federate = True
     if type == POST_TYPE_POLL and poll_data:

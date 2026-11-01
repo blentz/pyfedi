@@ -467,16 +467,12 @@ def post_to_page(post: Post):
         activity_data["attachment"] = [{"href": post.url, "type": "Link"}]
     if post.image_id is not None:
         activity_data["image"] = {"url": post.image.view_url(base=object_base(post)), "type": "Image"}   # plan C3
-        if post.type == POST_TYPE_IMAGE:   # every picture of an album, the image first (Pixelfed interop R5)
-            activity_data['attachment'] = [{'type': 'Image', 'url': file.source_url, 'name': file.alt_text}
-                                           for file in post.album_images()]
+        if post.type == POST_TYPE_IMAGE:
+            activity_data['attachment'] = [{'type': 'Image', 'url': post.image.source_url, 'name': post.image.alt_text}]
     if post.type == POST_TYPE_GALLERY:
-        if 'attachment' not in activity_data:
-            activity_data['attachment'] = []
-        for file in post.gallery:
-            activity_data['attachment'].append({'type': 'Document', 'url': file.source_url, 'name': file.alt_text,
-                                                'width': file.width, 'height': file.height})
-        activity_data["attachment"].append({"href": post.ap_id, "type": "Link"})
+        # every picture, in order, as Documents -- what v1.8.10 reads as a gallery and Pixelfed as an album (R5) --
+        # then v1.8.10's Link to the post's page, for a Lemmy reader (spec 2026-11-01 G-4)
+        activity_data["attachment"] = microblog_serializer.gallery_documents(post) + [{'href': post.public_url(), 'type': 'Link'}]
     if post.type == POST_TYPE_POLL:
         poll = Poll.query.filter_by(post_id=post.id).first()
         if poll is not None and poll.end_poll is not None:
@@ -2970,17 +2966,29 @@ def gallery_image_is_blocked(image: dict) -> bool:
 
 
 def set_post_gallery(post: Post, request_json: dict, low_quality: bool = False, images: list = None):
-    """Make `post.gallery` the extra images of `request_json`, replacing what it held.
+    """Make `post.gallery` the album `request_json` carries, replacing what it held (spec 2026-11-01).
 
-    Each image is sized by make_image_sizes, as the post's own image is, and the
-    `weight` of the post_file row is its place in the album (the post's own image
-    being 0). `images` is gallery_attachments' answer when the caller already has
-    it (Post.new hashes them before the post exists). An image matching a blocked
-    image is not stored: Post.new refuses the whole post for one, so this only
-    drops one an Update brings, remembering its url (a post_file row of
-    GALLERY_BLOCKED_WEIGHT) so an unchanged album is not rebuilt.
+    An image or gallery post with two or more pictures is a gallery post (G-1) whose gallery holds every picture,
+    the first being the post's image, at post_file weights 0, 1, 2, ... (G-2); with one picture it is an image post
+    with no gallery. A link post keeps the images beside its link (Friendica) at weights 1, 2, ... Each image is
+    sized by make_image_sizes, as the post's own image is. `images` is gallery_attachments' answer when the caller
+    already has it (Post.new hashes them before the post exists). An image matching a blocked image is not stored:
+    Post.new refuses the whole post for one, so this only drops one an Update brings, remembering its url (a
+    post_file row of GALLERY_BLOCKED_WEIGHT) so an unchanged album is not rebuilt.
     """
-    if post.type in (POST_TYPE_IMAGE, POST_TYPE_LINK):
+    first_weight = 1
+    if post.type in (POST_TYPE_IMAGE, POST_TYPE_GALLERY) and post.image is not None and post.image.source_url:
+        if images is None:
+            images = gallery_attachments(request_json, [post.url, post.image.source_url])
+        if images:
+            first = post.image
+            images = [{'url': first.source_url, 'alt_text': first.alt_text, 'width': first.width,
+                       'height': first.height, 'hash': first.hash}] + images
+            post.type = POST_TYPE_GALLERY
+            first_weight = 0
+        else:
+            post.type = POST_TYPE_IMAGE
+    elif post.type == POST_TYPE_LINK:
         if images is None:
             images = gallery_attachments(request_json, [post.url, post.image.source_url if post.image else None])
     else:
@@ -3024,7 +3032,7 @@ def set_post_gallery(post: Post, request_json: dict, low_quality: bool = False, 
         else:
             kept.append(extra)
     images = kept
-    for weight, extra in enumerate(images, start=1):
+    for weight, extra in enumerate(images, start=first_weight):
         file = File(source_url=extra['url'], alt_text=extra['alt_text'],
                     width=extra['width'], height=extra['height'], hash=extra['hash'])
         db.session.add(file)
@@ -5337,6 +5345,8 @@ def update_post_from_activity(post: Post, request_json: dict):
                         if attachment.get('type') == 'Image':
                             new_url = attachment['url']  # PixelFed, PieFed, Lemmy >= 0.19.4
                             chosen_attachment = attachment
+                            if new_url:   # the first image is the post's own, as a Create takes it: a gallery's
+                                break     # url is its first picture and set_post_gallery keeps the rest in order (G-3)
 
             if 'attachment' in request_json['object'] and isinstance(request_json['object']['attachment'],
                                                                      dict):  # Mastodon / a.gup.pe
