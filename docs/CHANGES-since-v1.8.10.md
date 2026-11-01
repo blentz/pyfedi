@@ -125,22 +125,31 @@ rather than restoring the old:
   get the type check, metadata stripping, SVG refusal, blocked-image check and
   the uploader's domain; the composite thumbnail is stored on the post's
   domain.
+- **One multi-image post: v1.8.10's gallery** (owner ruling 2026-11-01, spec
+  `docs/superpowers/specs/2026-11-01-gallery-type-design.md`, G-1 to G-8). A
+  post with two or more pictures is a gallery post (type 7) everywhere: an
+  incoming Pixelfed or Mastodon album, the web form and the API. The branch's
+  album (an image post whose other pictures were its gallery) is gone, and its
+  features moved onto the gallery: every picture federates in order as a
+  Document (a WebP, AVIF or HEIC as its JPEG), the Page form adding v1.8.10's
+  Link to the post; the Galleries filters, blur, content warning, teaser count
+  badge, RSS `media:content` and the API's `extensions.gallery` take gallery
+  posts. The web gallery form offers one slot per picture the site allows
+  (`max_album_images`, default 4), each checked as an image post's is (size
+  cap, chan filter) and stored by `store_post_image`; the image form takes one
+  picture. The API's `gallery` is every picture, two to `max_album_images`,
+  and makes the post a gallery. Migration `c3e9a7d1f5b2` converts existing
+  album posts (section 2.1).
 
 **Upstream changes kept out, or corrected.**
 
 - *`Post.vote` and `PostReply.vote`* refuse a downvote from anyone the author
   has blocked, local author or not; v1.8.10 checks local authors only.
-- *`post_ap` and `comment_ap`* still answer 401 to an instance the author has
-  blocked, and keep `Vary: User-Agent, Signature` on such an author's objects;
-  v1.8.10 removed both (`449ffac0`). Decision pending, below.
 - *`index_rss`* stays uncached, so a private instance's check runs on every
   request; v1.8.10 re-enabled `@cache.cached`.
 - *`retrieve_metadata_of_url`* stays the branch's single capped, non-redirecting
   fetch with the `<title>` fallback, now also returning `og:image`; v1.8.10's
   version returned two values on one path and three on the other.
-- *An incoming album* is still an image post with the remaining pictures in its
-  album (Pixelfed interop R5); v1.8.10 makes it a gallery post. Decision
-  pending, below.
 - *An audio `Document`* (a PieFed podcast episode) is still a link post to its
   audio; v1.8.10 counted it as an image.
 - *Function-level imports, `Query.get` and tuple form choices* that v1.8.10's
@@ -172,15 +181,17 @@ rather than restoring the old:
 **Database.** v1.8.10 adds seven migrations from the same revision the
 branch's start from; `b8d1e6f4` merges the two chains (section 2.1).
 
-**Decisions left to the owner.**
+**Decisions taken after the rebase** (owner, 2026-11-01).
 
-1. Whether an incoming multi-image post becomes v1.8.10's gallery post or stays
-   the branch's image post with an album. Today: the latter.
-2. Whether to keep the author-blocked-instance 401 on `post_ap` and
-   `comment_ap` (and its `Vary`), which v1.8.10 removed. Today: kept.
-3. Whether the branch's local album (`set_local_album`, an image post's extra
-   pictures) and v1.8.10's local gallery upload should be one feature. Today:
-   both exist.
+1. An incoming multi-image post is v1.8.10's gallery post, and so is a local
+   one: the branch's album and v1.8.10's gallery upload are one feature (above).
+2. The author-blocked-instance 401 on `post_ap`, `comment_ap`, their
+   collections and the user outbox is dropped, as v1.8.10 dropped it
+   (`449ffac0`), with its `Vary: User-Agent, Signature`. A public object was
+   never kept from a blocked instance by it: an unsigned fetch, another
+   User-Agent or a third party got round it, and the `Vary` kept every
+   blocking author's objects out of shared caches. An author's instance block
+   still refuses that instance's votes, replies and deliveries.
 
 ---
 
@@ -200,6 +211,14 @@ single head. None of the seven touches a column or index the branch touches.
 - **From a `blentz` deployment made before the rebase** (database at
   `a7c2e5f9d3b1`): `flask db upgrade` applies v1.8.10's seven migrations,
   then the merge migration. Nothing of the branch's runs again.
+- **Then, either way:** `c3e9a7d1f5b2` album_posts_become_galleries turns
+  every image post with an album (`gallery_count > 0`) into a gallery post. A
+  copy of the image's File (url, alt text, size, hash and paths, flagged as
+  not written by us, so it never removes the image's files) becomes the
+  picture at weight 0, ahead of the album's weights 1..; `gallery_count`
+  counts it; the image stays as the thumbnail and `post.url` keeps the first
+  picture. Rewrites data: those posts only. The downgrade reverses exactly the
+  posts it converted.
 
 The table lists the branch's first twenty-six migrations, which cover the
 work this summary describes, in the order they apply. The branch has added
@@ -670,8 +689,15 @@ limits on input that could cost seconds of CPU or crash a request:
   objects, never nulls (`453b1d08`). The user API obeys the same predicate
   (`f7ed8cd4`).
 - **New `extensions` fields** on posts and replies: `content_warning`
-  (`4bfd238c`), the gallery's images (`2e8ba47f`) and, for podcast episodes,
+  (`4bfd238c`), the gallery's images (`2e8ba47f`; every picture of a gallery
+  post, or the images beside a link) and, for podcast episodes,
   `podcast.credits`, listing only verified credits (`dcfa5b5b`).
+- **Gallery posts.** On create and edit, `gallery` ([{url, alt_text}], two
+  to `max_album_images`) is every picture and makes the post a gallery; `url`
+  is not used beside it. On edit, leaving it out keeps the pictures; fewer
+  than two is refused. A gallery post's `url` is its own page, as v1.8.10 gives
+  it, and its `gallery` (v1.8.10's url list) and `extensions.gallery` list
+  every picture.
 - **Quotes.** Posts and comments show the id they quote, except when deleted
   (`3ee7755c`, `18c4b541`).
 - **Language variants.** Posts and comments return their language variants
@@ -682,8 +708,9 @@ limits on input that could cost seconds of CPU or crash a request:
 **Responses this instance serves**
 
 - **410 Tombstones.** A deleted local post is served as 410 with an
-  ActivityPub `Tombstone`; private, local-only and unpublished posts are 403;
-  401 when the author blocks the requesting instance. Visibility is checked
+  ActivityPub `Tombstone`; private, local-only and unpublished posts are 403.
+  (The 401 when the author blocks the requesting instance was dropped after
+  the rebase, as v1.8.10 dropped it.) Visibility is checked
   first, so a Tombstone never confirms the existence of something the caller
   may not see. `post_ap`, `post_replies_ap` and the post context share this
   gate (D189, D199, D190, `dfcfea20`, `500378d2`). A remote reply's URL
@@ -719,9 +746,11 @@ limits on input that could cost seconds of CPU or crash a request:
   request by a signed-in user resolves the remote handle instead
   (`0254fdec`).
 - An ActivityPub GET no longer creates an `Instance` row for its caller
-  (D193, `8c90ca20`). The author instance-block check identifies a signed GET
-  by its signing key's host, falling back to the User-Agent (D194,
-  `72099509`).
+  (D193, `8c90ca20`).
+- **Gallery posts** (type 7) carry every picture, in order, as a `Document`
+  (a WebP, AVIF or HEIC as its JPEG rendition); the `Page` form adds a `Link`
+  to the post's page, the `Note` form does not. `image` is the thumbnail. An
+  incoming post with two or more image attachments is stored as a gallery.
 - `/quote_boost_auth` vouches only for quotes this instance recorded accepting
   and answers 404 for anything else (R205, `35abcf19`).
 - **JSON-LD content type.** A peer asking for `application/ld+json` gets
