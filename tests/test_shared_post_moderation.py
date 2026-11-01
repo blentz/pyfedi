@@ -85,7 +85,8 @@ import pytest
 from contextlib import contextmanager
 
 from app import db
-from app.constants import NOTIF_POST, NOTIF_REPORT, NOTIF_REPORT_ESCALATION, SRC_API, SRC_WEB
+from app.constants import (NOTIF_POST, NOTIF_REPORT, NOTIF_REPORT_ESCALATION, POST_STATUS_PUBLISHED,
+                           POST_STATUS_REVIEWING, SRC_API, SRC_WEB)
 from app.models import ModLog, Notification, hidden_posts, utcnow
 from app.shared.post import (
     hide_post,
@@ -815,6 +816,21 @@ def test_a_moderator_removes_a_post(db_session):
     db.session.refresh(s.post)
     assert s.post.deleted is True
     assert s.post.deleted_by == s.voter.id
+
+
+@pytest.mark.parametrize('status, federated', [(POST_STATUS_PUBLISHED, ['delete_post']), (POST_STATUS_REVIEWING, [])])
+def test_only_a_published_removal_is_federated(db_session, status, federated):
+    """A post still held for review (v1.8.10's approval queue) was never sent anywhere, so removing it sends no
+    Delete either."""
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    s.post.status = status
+    db.session.commit()
+
+    with recording_task_selector() as calls:
+        mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
+
+    assert calls == federated
 
 
 def test_removal_decrements_both_counters(db_session):

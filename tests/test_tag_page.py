@@ -31,7 +31,7 @@ import pytest
 from unittest.mock import patch
 
 from app import db
-from app.models import Post, Site, Tag, post_tag
+from app.models import Language, Post, Site, Tag, post_tag
 from tests.factories import make_community, make_instance, make_post, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -967,3 +967,48 @@ def test_the_previous_link_is_absent_on_the_first_page_however_it_is_asked_for(a
         for query in ['', '?page=1', '?page=0', '?page=-3']:
             client.get(f'/tag/solarstorm{query}')
             assert render.call_args.kwargs['prev_url'] is None, query
+
+
+@pytest.mark.parametrize('ignore_reposters, expected', [
+    (1, ['own post']),
+    (0, ['own post', 'reposted post']),
+])
+def test_a_reader_sees_reposters_only_when_they_have_asked_to(app, db_session, ignore_reposters, expected):
+    """v1.8.10's reposter filter, on the tag page and on the tag cloud's post list (/tags/posts/<id>)."""
+    instance, alice, bob = _seed()
+    alice.ignore_reposters = ignore_reposters
+    db.session.commit()
+    tag = _tag()
+    community = make_community('microblogs')
+    _tagged(tag, community, alice, 'own post')
+    _tagged(tag, community, alice, 'reposted post', from_reposter=True)
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.tag.routes.render_template', return_value='rendered') as render:
+        client.get('/tag/solarstorm')
+    with patch('app.tag.routes.flask') as fl:
+        fl.render_template.return_value = 'rendered'
+        client.get(f'/tags/posts/{tag.id}')
+
+    assert sorted(_titles(render)) == expected
+    assert sorted(post.title for post in fl.render_template.call_args.kwargs['posts']) == expected
+
+
+def test_the_feed_can_be_narrowed_to_one_language(app, db_session):
+    """v1.8.10's ?lang= on a tag's feed: a post's language_code(), 'en' for one with no language."""
+    instance, alice, bob = _seed()
+    french = Language(code='fr', name='French')
+    db.session.add(french)
+    db.session.commit()
+    tag = _tag()
+    community = make_community('microblogs')
+    _tagged(tag, community, alice, 'english post')
+    _tagged(tag, community, alice, 'french post', language_id=french.id)
+    client = app.test_client()
+
+    french_feed = client.get('/tag/solarstorm/feed?lang=fr').data
+    whole_feed = client.get('/tag/solarstorm/feed').data
+
+    assert b'french post' in french_feed and b'english post' not in french_feed
+    assert b'french post' in whole_feed and b'english post' in whole_feed

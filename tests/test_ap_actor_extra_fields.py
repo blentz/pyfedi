@@ -20,6 +20,7 @@ from app import db
 from app.activitypub.util import (actor_json_to_model, refresh_user_profile_task)
 from app.models import (User, UserExtraField, property_value_fields,
                         public_key_pem)
+from tests.factories import peer_actor_json, peer_instance
 from tests.test_ap_refresh_profiles import (PEER, _person_document, _remote_user,
                                             _serve)
 
@@ -289,3 +290,20 @@ class TestCreatingAnActorWithAwkwardFields:
         label = user.extra_fields[0].label
         assert len(label) == 48 and label.endswith('…')
         assert user.extra_fields[0].text == 'https://me.test'
+
+
+class TestAReposterFlag:
+    """v1.8.10's `reposter`: an account that reposts others' content says so, and is stored as saying so, on create
+    and on refresh."""
+
+    def test_on_create(self, app, db_session, http_mock):
+        peer_instance(PEER)
+        person = peer_actor_json('Person', name='bot', server=PEER,
+                                 fields={'inbox': f'https://{PEER}/u/bot/inbox', 'reposter': True})
+
+        assert actor_json_to_model(person, 'bot', PEER).reposter is True
+
+    def test_on_refresh(self, app, db_session, http_mock):
+        user = TestRefreshingAnActorWithAwkwardFields().refresh(http_mock, reposter=True)
+
+        assert user.reposter is True

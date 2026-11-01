@@ -37,6 +37,7 @@ unless the test calls `db.session.expire_all()` first (fact 153).
 from datetime import timedelta
 
 import pytest
+from flask import current_app
 from sqlalchemy import event
 
 from app import db
@@ -648,6 +649,49 @@ class TestRemoveOldBotContent:
 
         with pytest.raises(RuntimeError, match='the task itself failed'):
             remove_old_bot_content()
+
+
+class TestRemoveOldMicroblogContent:
+    """v1.8.10's second arm of remove_old_bot_content: replyless microblog posts older than
+    MICROBLOG_CONTENT_RETENTION units of 28 days (default -1, forever) are deleted as old bot posts are."""
+
+    def _microblog(self, community, user, ap_id, age_days, **columns):
+        post = make_post(community, user, ap_id)
+        post.microblog = True
+        post.reply_count = 0
+        post.posted_at = utcnow() - timedelta(days=age_days)
+        for column, value in columns.items():
+            setattr(post, column, value)
+        return post
+
+    def test_only_old_replyless_unpinned_microblogs_are_handed_over(self, db_session, monkeypatch):
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
+        monkeypatch.setitem(current_app.config, 'BOT_CONTENT_RETENTION', -1)
+        monkeypatch.setitem(current_app.config, 'MICROBLOG_CONTENT_RETENTION', 2)
+        instance, user, community, post = _seed()
+        old = self._microblog(community, user, 'https://peer.example/p/2', 28 * 2 + 1)
+        self._microblog(community, user, 'https://peer.example/p/3', 28 * 2 - 1)
+        self._microblog(community, user, 'https://peer.example/p/4', 28 * 2 + 1, reply_count=1)
+        self._microblog(community, user, 'https://peer.example/p/5', 28 * 2 + 1, sticky=True)
+        self._microblog(community, user, 'https://peer.example/p/6', 28 * 2 + 1, deleted=True)
+        db.session.commit()
+
+        remove_old_bot_content()
+
+        assert [c[0] for c in recorder.calls] == [old.id]
+
+    def test_the_default_keeps_microblogs_for_ever(self, db_session, monkeypatch):
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
+        monkeypatch.setitem(current_app.config, 'BOT_CONTENT_RETENTION', -1)
+        instance, user, community, post = _seed()
+        self._microblog(community, user, 'https://peer.example/p/2', 28 * 100)
+        db.session.commit()
+
+        remove_old_bot_content()
+
+        assert recorder.calls == []
 
 
 class TestDeleteOldSoftDeletedContent:

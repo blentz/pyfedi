@@ -40,7 +40,7 @@ from app.api.alpha.utils.post import (get_post_like_list, get_post_report_list,
 from app import db
 from app.constants import (POST_TYPE_ARTICLE, POST_TYPE_LINK, POST_TYPE_POLL,
                            REPORT_STATE_NEW, REPORT_STATE_RESOLVED)
-from app.models import (Community, Language, Post, PostBookmark, PostVote,
+from app.models import (Community, File, Language, Post, PostBookmark, PostVote,
                         Report, Role, RolePermission, Site, User,
                         NotificationSubscription, read_posts, user_role)
 from tests.factories import (a_keypair, make_community, make_community_ban,
@@ -275,6 +275,20 @@ class TestWriting:
                              'url': 'https://example.test/thing'})
         assert db.session.get(
             Post, res['post_view']['post']['id']).type == POST_TYPE_LINK
+
+    def test_a_given_og_image_is_the_link_posts_thumbnail(self, env):
+        """v1.8.10's og_image_url: a client that already has the page's image names it, and the page is not
+        fetched for one."""
+        with patch('app.shared.post.is_image_url', return_value=False), \
+                patch('app.shared.post.opengraph_parse') as fetched, \
+                patch('app.shared.post.url_to_thumbnail_file',
+                      side_effect=lambda url: File(source_url=url)) as thumbnailed:
+            res = post_post(token(env.author),
+                            {'title': 'hello', 'community_id': env.community.id,
+                             'url': 'https://example.test/thing', 'og_image_url': 'https://example.test/og.png'})
+        post = db.session.get(Post, res['post_view']['post']['id'])
+        assert post.image.source_url == 'https://example.test/og.png'
+        assert thumbnailed.call_args.args == ('https://example.test/og.png',) and not fetched.called
 
     def test_a_poll_ends_in_three_days_unless_told_otherwise(self, env):
         from datetime import timedelta

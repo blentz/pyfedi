@@ -21,7 +21,7 @@ from flask import session
 from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.models import Community, NotificationSubscription, Post, Site, Topic, User, utcnow
+from app.models import Community, Language, NotificationSubscription, Post, Site, Topic, User, utcnow
 from tests.factories import make_community, make_instance, make_post, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -1230,3 +1230,22 @@ def test_the_private_community_placeholder_and_the_banned_filter_are_redundant(a
         client.get(f'/topic/{topic.machine_name}')
 
     assert [p.title for p in render.call_args.kwargs['posts']] == ['visible 0']
+
+
+def test_the_topic_feed_can_be_narrowed_to_one_language(app, db_session):
+    """v1.8.10's ?lang= on a topic's feed: a post's language_code(), 'en' for one with no language."""
+    instance, alice, bob = _seed()
+    french = Language(code='fr', name='French')
+    db.session.add(french)
+    db.session.commit()
+    community = _community_in(_topic())
+    english, france = _posts(community, alice, 2)
+    france.language_id = french.id
+    db.session.commit()
+    client = app.test_client()
+
+    french_feed = client.get('/topic/fediverse.rss?lang=fr').data
+    whole_feed = client.get('/topic/fediverse.rss').data
+
+    assert b'post 1' in french_feed and b'post 0' not in french_feed
+    assert b'post 1' in whole_feed and b'post 0' in whole_feed

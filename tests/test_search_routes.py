@@ -433,21 +433,23 @@ def test_a_reader_who_does_not_hide_nsfw_sees_it_by_default(app, db_session):
 
 
 def test_a_logged_in_readers_own_filters_apply(app, db_session):
-    """Four reader-scoped filters in one row, each with something to exclude
-    and the good post left standing: bots, blocked domains, blocked instances
-    and blocked communities.
+    """Five reader-scoped filters in one row, each with something to exclude
+    and the good post left standing: bots, reposters, blocked domains, blocked
+    instances and blocked communities.
     """
     from app.models import Domain
     from tests.factories import (make_community_block, make_domain, make_domain_block,
                                  make_instance_block)
     instance, alice, bob = _seed()
     alice.ignore_bots = 1
+    alice.ignore_reposters = 1   # v1.8.10's reposter filter, a fifth
     peer = make_instance('remote.example', software='lemmy')
     community = make_community('microblogs')
     blocked_community = make_community('blockedcomm')
     domain = make_domain('blocked.test')
     _post(community, alice, 'plain article')
     _post(community, alice, 'bot article', from_bot=True)
+    _post(community, alice, 'reposted article', from_reposter=True)
     _post(community, alice, 'domain article', domain_id=domain.id)
     _post(community, alice, 'instance article', instance_id=peer.id)
     _post(blocked_community, alice, 'community article')

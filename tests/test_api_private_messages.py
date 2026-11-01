@@ -22,6 +22,8 @@ import pytest
 from flask import g
 
 from app import db
+import app.api.alpha.utils.private_message as private_message_module
+from app.api.alpha.utils.private_message import get_private_message_list
 from app.constants import (NOTIF_MESSAGE, REPORT_STATE_NEW,
                            REPORT_STATE_RESOLVED, REPORT_TYPE_MESSAGE)
 from app.models import (ChatMessage, Conversation, Notification, Report, Role,
@@ -335,6 +337,24 @@ def test_the_message_list_carries_both_ends_of_a_conversation(app, env):
     assert {m['private_message']['content']
             for m in answer['private_messages']} == {'SECRETBODY',
                                                      'and hello back'}
+
+
+def test_a_message_that_cannot_be_shown_is_left_out_of_the_list(app, env, monkeypatch):
+    """v1.8.10 (fa0f49516): a message whose view cannot be built (an AttributeError: something it reads is gone)
+    is skipped rather than failing the whole list."""
+    alice, bob, stranger, conversation, message = env
+    a_message(bob, alice, conversation, body='broken')
+    real_view = private_message_module.private_message_view
+
+    def view(message, variant):
+        if message.body == 'broken':
+            raise AttributeError("'NoneType' object has no attribute 'instance_id'")
+        return real_view(message, variant=variant)
+    monkeypatch.setattr(private_message_module, 'private_message_view', view)
+
+    answer = get_private_message_list(token(alice), {})
+
+    assert [m['private_message']['content'] for m in answer['private_messages']] == ['SECRETBODY']
 
 
 def test_the_unread_list_carries_only_what_was_received(app, env):

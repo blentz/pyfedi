@@ -41,7 +41,7 @@ from app.community.util import (actor_to_community, community_in_list,
                                 flairs_from_string,
                                 get_community_theme_allowed,
                                 hashtags_used_in_communities,
-                                hashtags_used_in_community, is_bad_name,
+                                hashtags_recent, hashtags_used_in_community, is_bad_name,
                                 normalize_font_size, remove_old_file,
                                 send_to_remote_instance,
                                 send_to_remote_instance_fast,
@@ -623,6 +623,17 @@ class TestTheHashtagCloud:
         self.a_tagged_post(env, 'spoilers')
         assert hashtags_used_in_communities([env.community.id],
                                             {'f': ['spoil']}) == []
+
+
+class TestTheRecentHashtags:
+    """v1.8.10's hashtags_recent: the tags of the last day's posts, without those the reader's filters block."""
+
+    def test_a_tag_a_filter_blocks_is_left_out(self, env):
+        TestTheHashtagCloud().a_tagged_post(env, 'spoilers')
+        TestTheHashtagCloud().a_tagged_post(env, 'news')
+
+        assert [t['name'] for t in hashtags_recent({'my filter': ['spoil']})] == ['news']
+        assert sorted(t['name'] for t in hashtags_recent(None)) == ['news', 'spoilers']
 
 
 class TestSizingTheCloud:

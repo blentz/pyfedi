@@ -30,14 +30,14 @@ from flask import g
 from app import db
 from app.constants import (POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_LINK,
                            POST_TYPE_POLL, POST_TYPE_VIDEO, POST_TYPE_GALLERY)
-from app.models import Language, PostReply, Site
+from app.models import Language, PostReply, Site, UserExtraField
 from app.post.util import (body_has_no_archive_link,
                            convert_archived_replies_to_tree,
                            find_comment_branch,
                            flair_to_string, generate_archive_link,
                            get_comment_branch, get_post_reply_count,
                            post_replies, post_type_to_form_url_type,
-                           retrieve_archived_post, tags_to_string)
+                           retrieve_archived_post, tags_to_string, user_pronouns_on_post)
 from app.utils import FETCH_MAX_BYTES
 from tests.factories import (make_community, make_community_member, make_post,
                              make_post_flair, make_post_reply, make_user)
@@ -616,3 +616,25 @@ class TestTheEdgesOfOneBranch:
         db.session.commit()
         tree = get_comment_branch(env.post, wanted.id, 'new', viewer=None)
         assert bodies(tree) == {'the one asked for'}
+
+
+def test_pronouns_are_read_from_the_authors_and_commenters_profiles(env):
+    """v1.8.10's user_pronouns_on_post: a 'pronouns' or 'species' extra field of the post's author or of
+    anyone who replied (on it or a cross-post), up to 22 characters, its HTML reduced to text."""
+    commenter, quiet = env.reader, env.baseline.user1
+    a_reply(env)
+    make_post_reply(env.post, commenter, body='me too')
+    db.session.add_all([UserExtraField(user_id=env.author.id, label='Pronouns', text='<p>they/them</p>'),
+                        UserExtraField(user_id=commenter.id, label='species', text='otter'),
+                        UserExtraField(user_id=quiet.id, label='pronouns', text='she/her'),
+                        UserExtraField(user_id=commenter.id, label='website', text='https://x.example')])
+    db.session.commit()
+
+    assert dict(user_pronouns_on_post(env.post)) == {env.author.id: 'they/them', commenter.id: 'otter'}
+
+
+def test_a_pronoun_field_longer_than_a_badge_is_not_shown(env):
+    db.session.add(UserExtraField(user_id=env.author.id, label='pronouns', text='x' * 23))
+    db.session.commit()
+
+    assert dict(user_pronouns_on_post(env.post)) == {}

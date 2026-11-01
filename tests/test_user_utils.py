@@ -45,6 +45,7 @@ from app.user.utils import (SimplePagination, _get_user_archived_replies,
                             _get_user_posts, _get_user_posts_and_replies,
                             _get_user_same_ip, _get_user_subscribed_communities,
                             _get_user_upvoted_posts, insert_or_update_user_note,
+                            purge_remote_user_then_delete, purge_remote_user_then_delete_task,
                             search_for_user, unsubscribe_from_community)
 from tests.factories import (give_site_a_key, make_community, make_community_member, make_post,
                              make_post_reply, make_post_vote, make_user)
@@ -1055,6 +1056,29 @@ class TestHowThePurgeIsDispatched:
             from app.user.utils import purge_user_then_delete
             purge_user_then_delete(7, flush=True)
         task.delay.assert_called_once_with(7, True)
+
+
+class TestPurgingARemoteAccount:
+    """v1.8.10's purge_remote_user_then_delete: a remote account's content goes, then the account is marked
+    deleted, run here in debug and queued otherwise."""
+
+    def test_in_debug_it_runs_here_and_now(self, env, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'DEBUG', True)
+        with patch('app.user.utils.purge_remote_user_then_delete_task') as task:
+            purge_remote_user_then_delete(7, flush=False)
+        task.assert_called_once_with(7, False)
+
+    def test_an_account_that_is_already_gone(self, env):
+        with patch.object(User, 'purge_content') as purge:
+            purge_remote_user_then_delete_task(999999, True)
+        purge.assert_not_called()
+
+    def test_a_failure_is_rolled_back_and_raised(self, env, scene):
+        with patch.object(User, 'purge_content', side_effect=Exception('the purge failed')):
+            with pytest.raises(Exception, match='the purge failed'):
+                purge_remote_user_then_delete_task(scene.stranger.id, True)
+        db.session.expire_all()
+        assert db.session.get(User, scene.stranger.id).deleted is not True
 
 
 class TestAnAccountInNoPrivateCommunities:

@@ -585,6 +585,18 @@ def test_the_inline_reply_form_renders(app, env):
     assert render.call_args.kwargs['nonce'] == 'abc'
 
 
+def test_the_inline_reply_form_quotes_the_selected_text(app, env):
+    """v1.8.10's selectedText: the reader's selection is pre-filled as a Markdown quote, one '> ' per line."""
+    anon, community, post, mod, author, outsider = env
+    parent = a_reply(post, author, body='the parent')
+
+    with patch('app.post.routes.render_template', return_value='rendered') as render:
+        as_user(app, author).get(f'/post/{post.id}/comment/{parent.id}/reply_inline/abc',
+                                 query_string={'selectedText': 'first line\nsecond line'})
+
+    assert render.call_args.kwargs['quoted_text'] == '> first line\n> second line\n\n'
+
+
 def test_the_inline_form_refuses_a_parent_from_another_post(app, env):
     """D1092. Every permission above is tested against `post.community`, and
     the reply is then attached to `in_reply_to`."""

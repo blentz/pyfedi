@@ -339,6 +339,27 @@ def test_a_reader_who_ignores_bots_takes_the_anonymous_filter(app, db_session):
     assert [p.title for p in render.call_args.kwargs['posts'].items] == ['good']
 
 
+@pytest.mark.parametrize('ignore_reposters, shown', [(1, ['good']), (0, ['good', 'reposted'])])
+def test_a_reader_who_ignores_reposters_does_not_see_their_posts(app, db_session, ignore_reposters, shown):
+    """v1.8.10's reposter filter: a post from a reposting account (`from_reposter`) is left out for a reader
+    whose `ignore_reposters` is 1."""
+    instance, alice, bob = _seed()
+    alice.ignore_bots = 0
+    alice.ignore_reposters = ignore_reposters
+    db.session.commit()
+    domain = _domain()
+    community = make_community('microblogs')
+    _post_on(domain, community, alice, title='good')
+    _post_on(domain, community, alice, title='reposted', from_reposter=True)
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.domain.routes.render_template', return_value='rendered') as render:
+        client.get(f'/d/{domain.id}')
+
+    assert sorted(p.title for p in render.call_args.kwargs['posts'].items) == shown
+
+
 def test_a_blocked_instances_posts_are_filtered_out(app, db_session):
     """The instance filter only runs when the reader has blocked something, and
     it deliberately keeps posts with no instance at all -- so the fixture has

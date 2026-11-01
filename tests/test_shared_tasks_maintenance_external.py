@@ -67,6 +67,7 @@ import pytest
 
 from app import db
 from app.models import InstanceChooser
+from app.utils import set_setting
 from app.shared.tasks.maintenance import (
     add_remote_communities, add_remote_community_from_post, clean_up_tmp,
     delete_from_s3, refresh_instance_chooser,
@@ -981,6 +982,43 @@ class TestRefreshInstanceChooser:
         db.session.expire_all()
         assert db.session.query(InstanceChooser).filter_by(
             domain='kept.example').first() is not None
+
+    def test_an_answer_that_is_not_json_returns_early(self, db_session, http_mock):
+        db.session.add(InstanceChooser(domain='kept.example'))
+        db.session.commit()
+        http_mock.get(url__regex=self.OBSERVER).respond(200, content=b'<html>not json</html>')
+
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceChooser).filter_by(domain='kept.example').first() is not None
+
+    def test_a_crawling_instance_rebuilds_its_list_after_a_run(self, app, db_session, http_mock, monkeypatch):
+        """v1.8.10's crawl_known_instances: an instance serving the list rebuilds it after reading its own."""
+        set_setting('crawl_known_instances', True)
+        rebuilt = []
+        monkeypatch.setattr('app.shared.tasks.maintenance.build_instance_list.delay', lambda: rebuilt.append(True))
+        http_mock.get(url__regex=self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(200, json=self._chooser())
+
+        refresh_instance_chooser()
+
+        assert rebuilt == [True]
+
+    @pytest.mark.parametrize('main_list, rebuilds', [('ours', True), ('piefed.social', False)])
+    def test_a_main_list_that_is_down_is_rebuilt_only_by_the_instance_serving_it(
+            self, app, db_session, http_mock, monkeypatch, main_list, rebuilds):
+        set_setting('crawl_known_instances', True)
+        name = app.config['SERVER_NAME'] if main_list == 'ours' else main_list
+        set_setting('main_instance_list', name)
+        rebuilt = []
+        monkeypatch.setattr('app.shared.tasks.maintenance.build_instance_list.delay', lambda: rebuilt.append(True))
+        # the test instance's .local name is refused as a fetch target, so the list's answer is stubbed
+        monkeypatch.setattr('app.shared.tasks.maintenance.get_request', lambda url, *a, **k: httpx.Response(503))
+
+        refresh_instance_chooser()
+
+        assert rebuilt == ([True] if rebuilds else [])
 
     def test_a_node_without_a_domain_is_skipped(self, db_session, http_mock):
         """A node that names no domain is passed over, not a KeyError that ends the run: the next node is still

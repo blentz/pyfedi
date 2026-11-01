@@ -8,6 +8,7 @@ from app import db
 from app.discovery import SYNC_ACCEPTED, sync
 from app.discovery.sync import desired_entries, forget_synced_community, reconcile_sync
 from app.admin.routes import unsubscribe_everyone_then_delete_task
+from app.community.util import delete_community_task
 from app.models import Community, DiscoveryExclusion, DiscoverySync, User
 from app.utils import set_setting
 from tests.discovery_fixtures import add_entry, fresh_cache  # noqa: F401
@@ -253,3 +254,17 @@ def test_the_community_delete_route_forgets_the_community_before_the_row_is_gone
     assert response.status_code == 302 and seen == [(True, True)]
     db.session.expire_all()   # the delete runs in delete_community_task's own session (v1.8.10)
     assert db.session.get(Community, community_id) is None
+
+
+def test_a_community_delete_that_fails_keeps_the_community(app, db_session):
+    """delete_community_task (v1.8.10) runs in its own session: a failure part-way rolls back and is raised, and the
+    community is still there."""
+    community = remote_community()
+    community_id = community.id
+
+    with patch('app.discovery.sync.forget_synced_community', side_effect=RuntimeError('the sync is broken')):
+        with pytest.raises(RuntimeError, match='the sync is broken'):
+            delete_community_task(community_id, 1)
+
+    db.session.expire_all()
+    assert db.session.get(Community, community_id) is not None

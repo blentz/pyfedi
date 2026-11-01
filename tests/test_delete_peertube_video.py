@@ -94,3 +94,9 @@ def test_a_page_post_keeps_the_announce_for_peertube(sent, video_post, owner):
     video_post.type = POST_TYPE_ARTICLE
     delete_object(video_post.author.id, video_post, is_post=True, session=db.session)
     assert sent['https://peertube.example/inbox'][0]['type'] == 'Announce'
+
+
+def test_nothing_to_delete_sends_nothing(sent):
+    """v1.8.10: delete_object returns at once when the object is already gone (a purge raced the task)."""
+    assert delete_object(1, None) is None
+    assert sent.calls == []

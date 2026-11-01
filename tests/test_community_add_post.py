@@ -23,8 +23,9 @@ from unittest.mock import patch
 import pytest
 
 from app import db
-from app.constants import POST_STATUS_PUBLISHED
-from app.models import Community, Language, Post, Site
+from app.constants import (POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING, ROLE_ADMIN, ROLE_ADMIN_NAME, ROLE_STAFF,
+                           ROLE_STAFF_NAME)
+from app.models import Community, Language, Notification, Post, Role, RolePermission, Site
 from tests.factories import (make_community, make_community_member,
                              make_instance, make_user)
 
@@ -604,6 +605,38 @@ def test_a_user_banned_from_posting_still_gets_the_form(app, poster):
                        type='discussion'))
 
     assert render.call_args.args[0] == 'community/add_post.html'
+
+
+def test_a_post_held_for_review_tells_its_author_and_asks_the_admins_and_staff(app, poster):
+    """v1.8.10's approval queue: a `ban_posts` account's post is held (POST_STATUS_REVIEWING), its author is told,
+    and every admin -- and, where staff may approve registrations, every staff member -- is notified with a link to
+    the queue (notify_admins_of_post_needing_approval)."""
+    client, token, community, author, english = poster
+    author.ban_posts = True
+    admin, staffer = make_user(author.instance, 'boss', local=True), make_user(author.instance, 'helper', local=True)
+    admin.roles.append(db.session.get(Role, ROLE_ADMIN) or Role(id=ROLE_ADMIN, name=ROLE_ADMIN_NAME))
+    staffer.roles.append(db.session.get(Role, ROLE_STAFF) or Role(id=ROLE_STAFF, name=ROLE_STAFF_NAME))
+    db.session.add(RolePermission(role_id=ROLE_STAFF, permission='approve registrations'))
+    db.session.commit()
+    hooked = []
+
+    def hook(name, data=None, **kwargs):   # every hook goes through fire_hook: pass the data on, note the one
+        hooked.append(name)
+        return data
+
+    with patch('app.community.util.plugins.fire_hook', side_effect=hook), \
+            patch('app.community.routes.render_template', return_value='rendered'):
+        response = client.post(url(app, 'community.add_post', actor=community.name, type='discussion'),
+                               data=_post_payload(token, english, community, title='Held back'),
+                               content_type='multipart/form-data')
+
+    assert response.status_code == 302
+    post = Post.query.filter_by(title='Held back').one()
+    assert post.status == POST_STATUS_REVIEWING
+    asked = Notification.query.filter_by(subtype='new_post_for_approval').all()
+    assert {n.user_id for n in asked} >= {admin.id, staffer.id}
+    assert {n.url for n in asked} == {'/admin/content?show=approval'}
+    assert 'new_post_for_approval' in hooked
 
 
 def test_a_successful_post_clears_the_draft_cookies(app, poster):

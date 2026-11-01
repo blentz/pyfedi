@@ -20,6 +20,7 @@ from app.constants import (NOTIF_COMMUNITY, NOTIF_FEED, NOTIF_MENTION,
                            NOTIF_POST, NOTIF_REPLY, NOTIF_REPORT, NOTIF_TOPIC,
                            NOTIF_USER)
 from app import db
+from app.api.alpha.utils.user import get_user_notifications
 from app.models import (File, Notification, Site, User, UserExtraField,
                         utcnow)
 from tests.factories import make_post_reply, make_user
@@ -323,6 +324,33 @@ def test_the_reserved_display_name_is_refused(app, env):
     assert str(refused.value) == 'this display name is reserved'
 
 
+@pytest.mark.parametrize('visibility,stored', [('Show', 0), ('Hide', 1), ('Blur', 2), ('Transparent', 3),
+                                               ('Sideways', 'unchanged')])
+def test_the_reposter_visibility_is_written(app, env, visibility, stored):
+    """v1.8.10's reposter_visibility, as bot_visibility; a value it does not name leaves the setting alone."""
+    user, author, baseline = env
+    user.ignore_reposters = 2
+    db.session.commit()
+
+    settings(user, reposter_visibility=visibility)
+
+    assert user.ignore_reposters == (2 if stored == 'unchanged' else stored)
+
+
+def test_the_matrix_id_is_set_and_removed(app, env):
+    """v1.8.10's matrix_user_id: a value sets it, a null clears it, leaving it out keeps it."""
+    user, author, baseline = env
+
+    settings(user, matrix_user_id='@alice:matrix.example')
+    assert user.matrix_user_id == '@alice:matrix.example'
+
+    settings(user, show_read_posts=True)
+    assert user.matrix_user_id == '@alice:matrix.example'
+
+    settings(user, matrix_user_id=None)
+    assert user.matrix_user_id == ''
+
+
 def test_an_avatar_is_set_and_removed(app, env):
     from unittest.mock import patch
 
@@ -462,6 +490,25 @@ def test_an_extra_field_with_no_label_is_not_created(app, env):
     settings(user, extra_fields=[{'label': '', 'text': 'orphan'}])
 
     assert UserExtraField.query.count() == 0
+
+
+def test_an_extra_field_entry_naming_nothing_is_ignored(app, env):
+    """An entry with neither an id nor a label and text adds, edits and removes nothing."""
+    user, author, baseline = env
+    settings(user, extra_fields=[{'label': 'Website', 'text': 'here'}])
+
+    settings(user, extra_fields=[{'colour': 'blue'}])
+
+    assert [(f.label, f.text) for f in UserExtraField.query.all()] == [('Website', 'here')]
+
+
+@pytest.mark.parametrize('status, read', [('Unread', False), ('Read', True), ('All', False)])
+def test_a_notification_without_a_subtype_is_not_listed(app, env, status, read):
+    """An old notification with no subtype has no shape in the API's answer: it is left out of every list."""
+    user, author, baseline = env
+    a_notification(user, author, NOTIF_FEED, None, {'gen': '0', 'post_id': baseline.post1.id}, read=read)
+
+    assert get_user_notifications(token(user), {'status': status})['items'] == []
 
 
 def test_the_settings_come_back_as_they_were_saved(app, env):
