@@ -303,76 +303,83 @@ def user_upvotes(actor):
                                rss_feed_name=f"{user.display_name()} on {current_branding().name}" if user.post_count > 0 else None)
 
 
+def admin_viewed_user(actor) -> User:
+    """The account an admin's view of one names: found as its profile finds it, a banned one too (an admin looks
+    at those), and 404 for a name nobody holds or an account hidden here -- no clearnet viewer, admins included, sees
+    an onion account (follow-up F6)."""
+    user = user_for_actor(actor, allow_banned=True)
+    if user is None or hidden_here(user):
+        abort(404)
+    return user
+
+
 @bp.route('/u/<actor>/voting_patterns')
 @login_required_if_private_instance
 @permission_required('manage users')
 def user_voting_patterns(actor):
-    user = User.query.filter(named_by_actor(User, actor.strip())).first()   # local on its own domain, or a stored remote
+    user = admin_viewed_user(actor)
 
-    if user is not None:
-        votes_received_sql = sql_file('user_votes_received')
+    votes_received_sql = sql_file('user_votes_received')
 
-        votes_cast_sql = sql_file('user_votes_cast')
+    votes_cast_sql = sql_file('user_votes_cast')
 
-        votes_received = db.session.execute(text(votes_received_sql), {'user_id': user.id, 'top_n': 8, 'days': 60}).all()
+    votes_received = db.session.execute(text(votes_received_sql), {'user_id': user.id, 'top_n': 8, 'days': 60}).all()
 
-        votes_cast = db.session.execute(text(votes_cast_sql), {'user_id': user.id, 'top_n': 8, 'days': 60}).all()
+    votes_cast = db.session.execute(text(votes_cast_sql), {'user_id': user.id, 'top_n': 8, 'days': 60}).all()
 
-        return render_template('user/voting_patterns.html', user=user,
-                               title=_('Voting patterns of %(user_name)s', user_name=user.user_name),
-                               votes_received=votes_received, votes_cast=votes_cast
-                               )
-    else:
-        return ''
+    return render_template('user/voting_patterns.html', user=user,
+                           title=_('Voting patterns of %(user_name)s', user_name=user.user_name),
+                           votes_received=votes_received, votes_cast=votes_cast
+                           )
 
 
 @bp.route('/u/<actor>/voting_patterns_down')
 @login_required_if_private_instance
 @permission_required('manage users')
 def user_voting_patterns_down(actor):
-    user = User.query.filter(named_by_actor(User, actor.strip())).first()   # local on its own domain, or a stored remote
+    user = admin_viewed_user(actor)
 
-    if user is not None:
-        downvote_sql = """
-            select author_id, created_at, effect, 'post' as kind, post_id as item_id
-            from "post_vote" where user_id = :user_id and effect < 0
-            union all
-            select author_id, created_at, effect, 'comment' as kind, post_reply_id as item_id
-            from "post_reply_vote" where user_id = :user_id and effect < 0
-            order by created_at desc """
-        votes_cast = db.session.execute(text(downvote_sql), {'user_id': user.id}).all()
+    downvote_sql = """
+        select author_id, created_at, effect, 'post' as kind, post_id as item_id
+        from "post_vote" where user_id = :user_id and effect < 0
+        union all
+        select author_id, created_at, effect, 'comment' as kind, post_reply_id as item_id
+        from "post_reply_vote" where user_id = :user_id and effect < 0
+        order by created_at desc """
+    votes_cast = db.session.execute(text(downvote_sql), {'user_id': user.id}).all()
 
-        author_ids = {vote.author_id for vote in votes_cast if vote.author_id}
-        authors = {author.id: author for author in User.query.filter(User.id.in_(author_ids)).all()} if author_ids else {}
+    author_ids = {vote.author_id for vote in votes_cast if vote.author_id}
+    authors = {author.id: author for author in User.query.filter(User.id.in_(author_ids)).all()} if author_ids else {}
+    hidden = {author_id for author_id, author in authors.items() if hidden_here(author)}   # follow-up F6
+    if hidden:
+        votes_cast = [vote for vote in votes_cast if vote.author_id not in hidden]
+        authors = {author_id: author for author_id, author in authors.items() if author_id not in hidden}
 
-        return render_template('user/voting_patterns_down.html', user=user,
-                               title=_('Downvoting history of %(user_name)s', user_name=user.user_name),
-                               votes=votes_cast, authors=authors
-                               )
+    return render_template('user/voting_patterns_down.html', user=user,
+                           title=_('Downvoting history of %(user_name)s', user_name=user.user_name),
+                           votes=votes_cast, authors=authors
+                           )
 
 
 @bp.route('/u/<actor>/post_timing')
 @login_required_if_private_instance
 @permission_required('manage users')
 def user_post_timing(actor):
-    user = User.query.filter(named_by_actor(User, actor.strip())).first()   # local on its own domain, or a stored remote
+    user = admin_viewed_user(actor)
 
-    if user is not None:
-        posts = Post.query.filter(Post.user_id == user.id).order_by(desc(Post.posted_at)).limit(100).all()
+    posts = Post.query.filter(Post.user_id == user.id).order_by(desc(Post.posted_at)).limit(100).all()
 
-        # posts made within 60 seconds of the post before or after them
-        close_together = set()
-        for newer, older in zip(posts, posts[1:]):
-            if (newer.posted_at - older.posted_at).total_seconds() < 46:
-                close_together.add(newer.id)
-                close_together.add(older.id)
+    # posts made within 60 seconds of the post before or after them
+    close_together = set()
+    for newer, older in zip(posts, posts[1:]):
+        if (newer.posted_at - older.posted_at).total_seconds() < 46:
+            close_together.add(newer.id)
+            close_together.add(older.id)
 
-        return render_template('user/post_timing.html', user=user,
-                               title=_('Post timings of %(user_name)s', user_name=user.user_name),
-                               posts=posts, close_together=close_together
-                               )
-    else:
-        return ''
+    return render_template('user/post_timing.html', user=user,
+                           title=_('Post timings of %(user_name)s', user_name=user.user_name),
+                           posts=posts, close_together=close_together
+                           )
 
 
 @bp.route('/u/<actor>/profile', methods=['GET', 'POST'])
