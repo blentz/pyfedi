@@ -1616,6 +1616,9 @@ def index_rss(feed_type=None):
     return response
 
 
+STATISTICS_PAGE_LENGTH = 100   # instances on one page of /statistics; half that for low bandwidth
+
+
 @bp.route('/statistics')
 @bp.route('/statistics/<software>')
 @login_required_if_private_instance
@@ -1635,26 +1638,32 @@ def statistics(software=''):
         local_instance.version = VERSION
         db.session.commit()
 
-    instances = Instance.query.filter(Instance.gone_forever == False, Instance.active_1mo != None, Instance.active_1mo > 0)
+    # a local-only domain's row is listed on its own storefront only (plan C2 task 6, hidden_instance_ids)
+    instances = Instance.query.filter(Instance.gone_forever == False, Instance.active_1mo != None, Instance.active_1mo > 0,
+                                      Instance.id.not_in(hidden_instance_ids()))
     if software:
         software = software.strip().lower()
         instances = instances.filter(func.lower(Instance.software) == software)
 
     instances = instances.order_by(desc(Instance.active_1mo))
 
-    # Pagination
-    arg_dict = {"low_bandwidth": low_bandwidth,
-                "software": software,
-                }
+    # Pagination. The software only when there is one: an empty one built /statistics/?page=2, which is no page;
+    # low bandwidth is the reader's cookie, not a parameter
+    arg_dict = {"software": software} if software else {}
 
-    instances = instances.paginate(page=page, per_page=100 if not low_bandwidth else 50, error_out=False)
-    next_url = url_for('main.modlog', page=instances.next_num, **arg_dict) if instances.has_next else None
-    prev_url = url_for('main.modlog', page=instances.prev_num, **arg_dict) if instances.has_prev and page != 1 else None
+    per_page = STATISTICS_PAGE_LENGTH if not low_bandwidth else max(1, STATISTICS_PAGE_LENGTH // 2)
+    instances = instances.paginate(page=page, per_page=per_page, error_out=False)
+    # v1.8.10 linked these to main.modlog
+    next_url = url_for('main.statistics', page=instances.next_num, **arg_dict) if instances.has_next else None
+    prev_url = url_for('main.statistics', page=instances.prev_num, **arg_dict) if instances.has_prev and page != 1 else None
 
     response = make_response(render_template('statistics.html', title=title, instances=instances,
                                              next_url=next_url, prev_url=prev_url, software=software))
     if not current_app.debug:
-        response.headers.add_header('Cache-Control', f'public, max-age=3600')
+        # a signed-in reader's page carries their account's menu, so only an anonymous one may sit in a shared cache;
+        # theirs keeps the private no-store the after-request hook gives (v1.8.10 added a second, public header)
+        if current_user.is_anonymous:
+            response.headers.set('Cache-Control', 'public, max-age=3600')
     return response
 
 
