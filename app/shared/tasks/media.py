@@ -5,7 +5,6 @@ import os
 from contextlib import suppress
 from datetime import datetime, timedelta
 
-import pillow_avif  # NOQA  # registers Pillow's AVIF plugin, for an instance whose MEDIA_IMAGE_FORMAT is AVIF
 from boto3.exceptions import Boto3Error
 from botocore.exceptions import BotoCoreError, ClientError
 from flask import current_app

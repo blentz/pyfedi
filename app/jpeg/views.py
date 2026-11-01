@@ -7,7 +7,6 @@ import io
 import os
 
 from flask import abort, current_app, send_file
-import pillow_avif  # noqa: F401  registers Pillow's AVIF plugin, for an AVIF upload
 from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
 
