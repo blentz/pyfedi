@@ -2717,12 +2717,6 @@ class User(UserMixin, db.Model):
         instance_block = db.session.query(InstanceBlock).filter_by(user_id=self.id, instance_id=instance_id).first()
         return instance_block is not None
 
-    def has_blocked_instances(self):
-        # v1.8.10 removed this with the refusal it served; the branch keeps that refusal (post_ap_refusal and
-        # the Vary headers that go with it), so it keeps this too
-        instance_block = db.session.query(InstanceBlock).filter_by(user_id=self.id).first()
-        return instance_block is not None
-
     def has_blocked_user(self, user_id: int):
         existing_block = db.session.query(UserBlock).filter_by(blocker_id=self.id, blocked_id=user_id).first()
         return existing_block is not None

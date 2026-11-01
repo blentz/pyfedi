@@ -23,13 +23,8 @@ def ap_get(app, path, user_agent=None):
     the Accept header, so a real header is sent rather than the function being
     doubled -- the parse is part of what is under test.
 
-    `user_agent` is separate because `requestor_domain()` (app/utils.py) reads
-    it and returns '' unless it contains a '+'. Since `known_instance_id('')`
-    returns None and `has_blocked_instance(None)` returns False, the 401
-    instance-block branch in `comment_ap` and `post_ap` is UNREACHABLE without
-    a '+'-style agent string. A test that omits it measures the wrong branch.
-    These requests are unsigned; a signed GET is identified by its signer
-    instead (D194), see `signed_ap_get`.
+    `user_agent` is the agent string a peer volunteers; `requestor_domain()` (app/utils.py) reads a domain from it
+    only when it contains a '+'. These requests are unsigned; see `signed_ap_get` for a signed one.
     """
     headers = {'Accept': AP_ACCEPT}
     if user_agent is not None:
@@ -115,13 +110,12 @@ def test_a_comment_is_served_as_activitypub_json(app, db_session, monkeypatch):
 
 
 def test_a_comment_response_sets_its_link_and_vary_headers(app, db_session, monkeypatch):
-    """`Link` points at the HTML alternate; `Vary` is `Accept` because this
-    author has blocked no instances.
+    """`Link` points at the HTML alternate; `Vary` is `Accept`.
 
     `Vary` is asserted as `'Accept, Accept-Encoding'`, NOT `'Accept'`:
     Flask-Compress appends `Accept-Encoding` to every response, so the header
-    is never bare (harness fact 38). The two-instance-block branch is
-    `test_a_comment_from_a_blocking_author_varies_on_user_agent`.
+    is never bare (harness fact 38). An author who blocks instances gets the
+    same header: `test_a_comment_is_served_to_an_instance_the_author_has_blocked`.
     """
     _double_the_delegates(monkeypatch)
     community, author, post = seed_local_post()
@@ -242,72 +236,19 @@ def test_a_deleted_comment_in_a_private_community_is_403_not_410(app, db_session
     assert response.status_code == 403
 
 
-def test_a_comment_is_401_when_the_author_has_blocked_the_requesting_instance(app, db_session, monkeypatch):
-    """The 401 branch, and it is UNREACHABLE without a '+'-style User-Agent.
-
-    `requestor_domain()` (app/utils.py) returns '' unless the agent string
-    contains a '+', `find_instance_id('')` returns None, and
-    `has_blocked_instance(None)` returns False. So this test sends
-    'Test (+https://blocked.example)', from which `requestor_domain()` extracts
-    'blocked.example' -- and the Instance row must already exist with that
-    domain, or `find_instance_id` would CREATE one (and return an id the
-    author has not blocked).
-    """
+def test_a_comment_is_served_to_an_instance_the_author_has_blocked(app, db_session, monkeypatch):
+    """A comment is public: an author's instance block no longer refuses its fetch with a 401, as v1.8.10 dropped
+    it (449ffac0d). Any requester could get round it -- unsigned, another User-Agent, a third party -- and the
+    `Vary: User-Agent, Signature` it needed kept every blocking author's objects out of shared caches."""
     _double_the_delegates(monkeypatch)
     community, author, post = seed_local_post()
-    blocked = make_instance('blocked.example')
-    make_instance_block(author, blocked)
+    make_instance_block(author, make_instance('blocked.example'))
     reply = make_post_reply(post, author)
 
-    response = ap_get(app, f'/comment/{reply.id}',
-                      user_agent='Test (+https://blocked.example)')
-
-    assert response.status_code == 401
-    assert b'blocked.example' in response.data
-
-
-def test_a_comment_is_served_when_the_author_blocked_a_different_instance(app, db_session, monkeypatch):
-    """The block is per-instance, not a global flag. The author blocks
-    'other.example' and the request arrives from 'peer.example', so the 401
-    must NOT fire -- this is what stops the guard being satisfied by any block
-    at all, and it is a different assertion from the `has_blocked_instances()`
-    Vary branch below, which IS a global flag.
-    """
-    _double_the_delegates(monkeypatch)
-    community, author, post = seed_local_post()
-    other = make_instance('other.example')
-    make_instance_block(author, other)
-    make_instance('peer2.example')
-    reply = make_post_reply(post, author)
-
-    response = ap_get(app, f'/comment/{reply.id}',
-                      user_agent='Test (+https://peer2.example)')
+    response = ap_get(app, f'/comment/{reply.id}', user_agent='Test (+https://blocked.example)')
 
     assert response.status_code == 200
-
-
-def test_a_comment_from_a_blocking_author_varies_on_user_agent(app, db_session, monkeypatch):
-    """`if reply.author.has_blocked_instances():` -- a GLOBAL "does this author
-    block anyone at all" flag, distinct from the per-instance
-    `has_blocked_instance(id)` the 401 uses. The response varies on User-Agent
-    because the body now depends on who is asking.
-
-    The author blocks 'other.example' while the request comes from
-    'peer2.example', so the 401 does NOT fire and this test reaches the header
-    -- which is exactly what makes it discriminate the two different methods.
-    """
-    _double_the_delegates(monkeypatch)
-    community, author, post = seed_local_post()
-    other = make_instance('other.example')
-    make_instance_block(author, other)
-    make_instance('peer2.example')
-    reply = make_post_reply(post, author)
-
-    response = ap_get(app, f'/comment/{reply.id}',
-                      user_agent='Test (+https://peer2.example)')
-
-    assert response.status_code == 200
-    assert response.headers['Vary'] == 'Accept, User-Agent, Signature, Accept-Encoding'
+    assert response.headers['Vary'] == 'Accept, Accept-Encoding'
 
 
 def test_a_browser_request_for_a_comment_delegates_to_the_discussion_view(app, db_session, monkeypatch):
@@ -382,10 +323,7 @@ def test_a_post_with_a_slug_links_to_its_slug_url(app, db_session, monkeypatch):
 
 
 def test_a_post_from_a_non_blocking_author_varies_on_accept_only(app, db_session, monkeypatch):
-    """`Vary` is `Accept` plus Flask-Compress's `Accept-Encoding`. The author
-    blocks nobody, which is `make_user`'s state and is made contrary by the
-    twin below rather than being asserted bare.
-    """
+    """`Vary` is `Accept` plus Flask-Compress's `Accept-Encoding`."""
     _double_the_delegates(monkeypatch)
     community, author, post = seed_local_post()
 
@@ -393,24 +331,6 @@ def test_a_post_from_a_non_blocking_author_varies_on_accept_only(app, db_session
 
     assert response.status_code == 200
     assert response.headers['Vary'] == 'Accept, Accept-Encoding'
-
-
-def test_a_post_from_a_blocking_author_varies_on_user_agent(app, db_session, monkeypatch):
-    """`if post.author.has_blocked_instances():` -- the global flag. The author
-    blocks 'other.example' and the request arrives from 'peer2.example', so the
-    401 does not fire and the header branch is reached.
-    """
-    _double_the_delegates(monkeypatch)
-    community, author, post = seed_local_post()
-    other = make_instance('other.example')
-    make_instance_block(author, other)
-    make_instance('peer2.example')
-
-    response = ap_get(app, f'/post/{post.id}',
-                      user_agent='Test (+https://peer2.example)')
-
-    assert response.status_code == 200
-    assert response.headers['Vary'] == 'Accept, User-Agent, Signature, Accept-Encoding'
 
 
 def test_an_unknown_post_is_404_for_an_activitypub_request(app, db_session, monkeypatch):
@@ -522,22 +442,17 @@ def test_a_deleted_post_in_a_private_community_is_403_not_410(app, db_session, m
     assert response.status_code == 403
 
 
-def test_a_post_is_401_when_the_author_has_blocked_the_requesting_instance(app, db_session, monkeypatch):
-    """`post_ap`'s copy of `comment_ap`'s 401 guard. The Instance row is created
-    with the exact domain `requestor_domain()` will extract, because
-    `find_instance_id` CREATES AND COMMITS a sparse Instance row for an unknown
-    domain -- so an absent row would silently yield an id the author has not
-    blocked and this test would measure the wrong branch.
-    """
+@pytest.mark.parametrize('path', ['/post/{post}', '/post/{post}/replies', '/post/{post}/context'])
+def test_a_post_is_served_to_an_instance_the_author_has_blocked(app, db_session, monkeypatch, path):
+    """As a comment is (above): the post, its replies and its context, varying on Accept alone."""
     _double_the_delegates(monkeypatch)
     community, author, post = seed_local_post()
-    blocked = make_instance('blocked.example')
-    make_instance_block(author, blocked)
+    make_instance_block(author, make_instance('blocked.example'))
 
-    response = ap_get(app, f'/post/{post.id}',
-                      user_agent='Test (+https://blocked.example)')
+    response = ap_get(app, path.format(post=post.id), user_agent='Test (+https://blocked.example)')
 
-    assert response.status_code == 401
+    assert response.status_code == 200
+    assert response.headers['Vary'] == 'Accept, Accept-Encoding'
 
 
 def signed_ap_get(app, path, signer, user_agent, key_id=None):
@@ -554,80 +469,6 @@ def signed_ap_get(app, path, signer, user_agent, key_id=None):
     headers['User-Agent'] = user_agent
     with app.test_client() as client:
         return client.get(path, headers=headers)
-
-
-def test_a_signed_get_is_identified_by_its_signer_not_its_user_agent(app, db_session, monkeypatch):
-    """D194, fixed (owner ruling 2026-09-30). The instance-block guard used to
-    identify the requester only by a '+URL' User-Agent, which the caller writes.
-    A GET carrying a valid HTTP signature from an actor already stored here is
-    now identified by the keyId's host, so a blocked instance claiming another
-    instance's agent string is still refused.
-    """
-    _double_the_delegates(monkeypatch)
-    community, author, post = seed_local_post()
-    blocked = make_instance('blocked.example')
-    make_instance_block(author, blocked)
-    make_instance('peer2.example')
-    signer = make_user(blocked, 'signer', with_keys=True)
-
-    response = signed_ap_get(app, f'/post/{post.id}', signer, 'Test (+https://peer2.example)')
-
-    assert response.status_code == 401
-    assert b'blocked.example' in response.data
-
-
-def test_a_comment_is_identified_by_its_signer_too(app, db_session, monkeypatch):
-    """D194, fixed: `comment_ap`'s copy of the guard uses the same identification."""
-    _double_the_delegates(monkeypatch)
-    community, author, post = seed_local_post()
-    blocked = make_instance('blocked.example')
-    make_instance_block(author, blocked)
-    signer = make_user(blocked, 'signer', with_keys=True)
-    reply = make_post_reply(post, author)
-
-    response = signed_ap_get(app, f'/comment/{reply.id}', signer, 'Test')
-
-    assert response.status_code == 401
-
-
-def test_a_signature_that_does_not_verify_falls_back_to_the_user_agent(app, db_session, monkeypatch):
-    """D194, fixed: an unverified keyId is not trusted. The request names an
-    unblocked actor's key but is signed with another key, so the guard falls
-    back to the User-Agent, which here names the blocked instance.
-    """
-    _double_the_delegates(monkeypatch)
-    community, author, post = seed_local_post()
-    blocked = make_instance('blocked.example')
-    make_instance_block(author, blocked)
-    peer = make_instance('peer2.example')
-    innocent = make_user(peer, 'innocent', with_keys=True)
-    forger = make_user(blocked, 'forger', with_keys=True)
-
-    response = signed_ap_get(app, f'/post/{post.id}', forger, 'Test (+https://blocked.example)',
-                             key_id=f'{innocent.ap_profile_id}#main-key')
-
-    assert response.status_code == 401
-
-
-def test_a_signature_from_an_unknown_actor_falls_back_to_the_user_agent(app, db_session, monkeypatch):
-    """D194, fixed: only keys already stored here are used, so a GET never makes
-    this instance fetch a key. A signer this instance has not met is ignored and
-    the User-Agent decides, as before; nothing is fetched or created.
-    """
-    _double_the_delegates(monkeypatch)
-    community, author, post = seed_local_post()
-    blocked = make_instance('blocked.example')
-    make_instance_block(author, blocked)
-    make_instance('peer2.example')
-    stranger = make_user(blocked, 'stranger', with_keys=True)
-    db.session.delete(stranger)
-    db.session.commit()
-    users_before = db.session.query(activitypub_routes.User).count()
-
-    response = signed_ap_get(app, f'/post/{post.id}', stranger, 'Test (+https://peer2.example)')
-
-    assert response.status_code == 200
-    assert db.session.query(activitypub_routes.User).count() == users_before
 
 
 def test_a_remote_post_redirects_to_its_origin(app, db_session, monkeypatch):
@@ -839,20 +680,6 @@ def test_post_replies_are_410_for_a_deleted_post(app, db_session, monkeypatch):
     assert calls['post_replies_for_ap'] == []
 
 
-def test_post_replies_are_401_when_the_author_has_blocked_the_requesting_instance(app, db_session, monkeypatch):
-    """D189, fixed: the author-block arm, mirrored from `post_ap`."""
-    calls = _double_the_delegates(monkeypatch)
-    community, author, post = seed_local_post()
-    blocked = make_instance('blocked.example')
-    make_instance_block(author, blocked)
-
-    response = ap_get(app, f'/post/{post.id}/replies',
-                      user_agent='Test (+https://blocked.example)')
-
-    assert response.status_code == 401
-    assert calls['post_replies_for_ap'] == []
-
-
 def test_an_unknown_post_replies_collection_is_404(app, db_session, monkeypatch):
     """`Post.query.get_or_404` inside the ActivityPub branch. Reached only with
     an ActivityPub Accept header -- a browser request for the same URL is
@@ -982,19 +809,6 @@ def test_a_post_context_is_403_for_an_unpublished_post(app, db_session, monkeypa
     response = ap_get(app, f'/post/{post.id}/context')
 
     assert response.status_code == 403
-
-
-def test_a_post_context_is_401_when_the_author_has_blocked_the_requesting_instance(app, db_session, monkeypatch):
-    """D190, fixed: the author-block arm of the shared gate."""
-    _double_the_delegates(monkeypatch)
-    community, author, post = seed_local_post()
-    blocked = make_instance('blocked.example')
-    make_instance_block(author, blocked)
-
-    response = ap_get(app, f'/post/{post.id}/context',
-                      user_agent='Test (+https://blocked.example)')
-
-    assert response.status_code == 401
 
 
 def test_a_post_context_omits_deleted_replies(app, db_session, monkeypatch):

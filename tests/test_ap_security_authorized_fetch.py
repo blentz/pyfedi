@@ -189,12 +189,13 @@ def test_a_followers_only_posts_collections_are_404_to_anyone_else(app, world, s
     assert response.status_code == 404
 
 
-def test_an_author_who_blocks_a_followers_instance_still_refuses_it(app, world):
-    """D194 holds on the unlock path: entitlement does not outrank the author's instance block."""
+def test_an_author_who_blocks_a_followers_instance_is_still_read_by_it(app, world):
+    """The author-block 401 is gone (v1.8.10, 449ffac0d), on the unlock path as on any other: a block does not
+    take away what the follower is entitled to fetch."""
     make_instance_block(world.author, world.follower.instance)
 
-    assert signed_ap_get(app, f'/post/{world.post.id}', world.follower, UA).status_code == 401
-    assert signed_ap_get(app, f'/comment/{world.reply.id}', world.follower, UA).status_code == 401
+    assert signed_ap_get(app, f'/post/{world.post.id}', world.follower, UA).status_code == 200
+    assert signed_ap_get(app, f'/comment/{world.reply.id}', world.follower, UA).status_code == 200
 
 
 # --------------------------------------------------------------------------

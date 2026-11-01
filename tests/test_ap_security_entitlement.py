@@ -355,24 +355,6 @@ def test_private_headers_are_the_contract_values():
     assert PRIVATE_HEADERS == {'Cache-Control': 'private, no-store', 'Vary': 'Accept, Signature'}
 
 
-# ---- signed_requestor_domain keeps its behaviour on the new helper ----------
-
-def test_signed_requestor_domain_reports_the_signers_host(app, db_session):
-    from app.activitypub.routes import signed_requestor_domain
-    make_site()
-    signer = _remote('peer.example', 'alice')
-    with app.test_request_context('/post/1', method='GET', headers=signed_get_headers('/post/1', signer)):
-        assert signed_requestor_domain() == 'peer.example'
-
-
-def test_signed_requestor_domain_falls_back_to_the_user_agent(app, db_session):
-    from app.activitypub.routes import signed_requestor_domain
-    make_site()
-    with app.test_request_context('/post/1', method='GET',
-                                  headers={'User-Agent': 'Test (+https://agent.example)'}):
-        assert signed_requestor_domain() == 'agent.example'
-
-
 # ---- R-SECUREACTORS (c): keyIds whose actor id is a root URL or carries a query ----
 
 @pytest.mark.parametrize('actor_id, key_id', [

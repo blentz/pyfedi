@@ -1,8 +1,9 @@
-"""Phase S6 groundwork: a post or comment response whose answer depends on who signed the request says so.
+"""Phase S6 groundwork: what a shared cache may do with a public post or comment response.
 
-The author-blocks-instances guard (D194) already answers differently per signer: a blocked instance gets 401,
-everyone else 200. Vary named only User-Agent, so a shared cache could hand one signer's 200 to another. None
-of these views is cached server-side either: Flask-Caching's @cache.cached keys on the URL alone.
+It used to vary on User-Agent and Signature for an author who blocks instances, as the author-block guard (D194)
+refused a blocked instance with a 401. v1.8.10 dropped that guard (449ffac0d) and so does the branch: a public
+object is answered alike to every requester and varies on Accept alone. None of these views is cached server-side
+either: Flask-Caching's @cache.cached keys on the URL alone, and a non-public object is answered per signer.
 """
 import pytest
 
@@ -18,24 +19,12 @@ def _vary(response):
 
 
 @pytest.mark.parametrize('path', PATHS)
-def test_a_response_from_an_author_who_blocks_instances_varies_on_the_signature(app, db_session, monkeypatch, path):
+@pytest.mark.parametrize('blocks', [False, True], ids=['blocks-nobody', 'blocks-an-instance'])
+def test_a_response_varies_on_accept_only(app, db_session, monkeypatch, path, blocks):
     _double_the_delegates(monkeypatch)
     community, author, post = seed_local_post()
-    make_instance_block(author, make_instance('other.example'))
-    make_instance('peer2.example')
-    reply = make_post_reply(post, author)
-
-    response = ap_get(app, path.format(post=post.id, reply=reply.id), user_agent='Test (+https://peer2.example)')
-
-    assert response.status_code == 200
-    assert _vary(response)[:3] == ['Accept', 'User-Agent', 'Signature']
-    assert response.headers['Cache-Control'] == 'public, max-age=120'
-
-
-@pytest.mark.parametrize('path', PATHS)
-def test_a_response_from_an_author_who_blocks_nobody_varies_on_accept_only(app, db_session, monkeypatch, path):
-    _double_the_delegates(monkeypatch)
-    community, author, post = seed_local_post()
+    if blocks:
+        make_instance_block(author, make_instance('other.example'))
     reply = make_post_reply(post, author)
 
     response = ap_get(app, path.format(post=post.id, reply=reply.id))

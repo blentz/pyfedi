@@ -259,13 +259,14 @@ def test_a_post_collection_is_refused_exactly_as_its_post(app, db_session, refus
 
 
 @pytest.mark.parametrize('name', POST_COLLECTIONS)
-def test_a_post_collection_is_401_when_the_author_blocked_the_requester(app, db_session, name):
+def test_a_post_collection_is_served_to_an_instance_the_author_blocked(app, db_session, name):
+    """As the post is (tests/test_ap_content_objects.py): v1.8.10's drop of the author-block 401."""
     community, author, post = seed_local_post()
     make_instance_block(author, make_instance('blocked.example'))
 
     response = ap_get(app, f'/post/{post.id}/{name}', user_agent='Test (+https://blocked.example)')
 
-    assert response.status_code == 401
+    assert response.status_code == 200
 
 
 @pytest.mark.parametrize('name', POST_COLLECTIONS)
@@ -354,14 +355,14 @@ def test_a_comment_collection_is_refused_exactly_as_its_comment(app, db_session,
 
 
 @pytest.mark.parametrize('name', COMMENT_COLLECTIONS)
-def test_a_comment_collection_is_401_when_the_author_blocked_the_requester(app, db_session, name):
+def test_a_comment_collection_is_served_to_an_instance_the_author_blocked(app, db_session, name):
     community, author, post = seed_local_post()
     make_instance_block(author, make_instance('blocked.example'))
     reply = make_post_reply(post, author)
 
     response = ap_get(app, f'/comment/{reply.id}/{name}', user_agent='Test (+https://blocked.example)')
 
-    assert response.status_code == 401
+    assert response.status_code == 200
 
 
 @pytest.mark.parametrize('name', COMMENT_COLLECTIONS)

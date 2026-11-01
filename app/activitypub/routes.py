@@ -38,7 +38,7 @@ from app.activitypub.util import MEDIA_OBJECT_TYPES, NEW_CONTENT_TYPES, follow_a
     comment_model_to_json, restore_post_or_comment, ban_user, unban_user, \
     log_incoming_ap, find_community, site_ban_remove_data, community_ban_remove_data, verify_object_from_source, \
     verify_announced_inner, verify_ld_accepted_activity, ACTOR_UPDATE_TYPES, ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, _id_of, \
-    post_replies_for_ap, is_vote, known_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
+    post_replies_for_ap, is_vote, resolve_remote_post_from_search, proactively_delete_content, \
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
     announce_target_uri, undo_boost, undo_reaction, withdraw_flag, LD_SIGNED_LOG_PREFIX, current_ld_signed, current_as_sent, normalise_activity_types, \
     NO_STRING_TYPE_MESSAGE, names_actor, refresh_user_profile_task, delete_remote_group, GROUP_DELETED_MESSAGE, \
@@ -745,10 +745,6 @@ def user_outbox(actor):
     if not is_activitypub_request():
         return redirect(url_for('activitypub.user_profile', actor=actor))
     user = local_actor_user(actor)
-    # D194, as post_ap_refusal and comment_ap: an instance the user blocked may not read their history in bulk
-    requesting_domain = signed_requestor_domain()
-    if user.has_blocked_instance(known_instance_id(requesting_domain)):
-        return make_response(f'Author has blocked {requesting_domain}'), 401
     rows = user_outbox_rows(user)
     total = db.session.scalar(select(func.count()).select_from(rows))
     outbox = paged_outbox(f"{user.public_url()}/outbox", total,
@@ -756,8 +752,7 @@ def user_outbox(actor):
     resp = jsonify(outbox)
     resp.content_type = ap_media_type()
     resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
-    # refused to some requesters and served to others, so a shared cache keys on who asks (ap_content_headers)
-    resp.headers.set('Vary', 'Accept, User-Agent, Signature' if user.has_blocked_instances() else 'Accept')
+    resp.headers.set('Vary', 'Accept')
     return resp
 
 
@@ -2772,9 +2767,6 @@ def comment_ap_refusal(reply: PostReply):
         abort(404)
     if reply.deleted:
         return tombstone_response(reply.ap_id, 'Note', private=not is_open(reply))
-    requesting_domain = signed_requestor_domain()
-    if reply.author.has_blocked_instance(known_instance_id(requesting_domain)):
-        return make_response(f'Author has blocked {requesting_domain}'), 401
     return None
 
 
@@ -2890,14 +2882,14 @@ def ap_media_type() -> str:
 def ap_content_headers(resp, obj):
     """Cache-Control and Vary for a served post or comment, or a post's replies or context collection.
 
-    A non-public object is served only to an entitled signer (S6), so it is never stored by a shared cache. An
-    author who blocks instances is refused to some signers and served to others (D194), so the response then
-    varies on the signature as well as on the User-Agent that identifies an unsigned requester."""
+    A non-public object is served only to an entitled signer (S6), so it is never stored by a shared cache. A public
+    one is answered alike to every requester: an author's instance blocks no longer refuse its fetch (v1.8.10,
+    449ffac0d), so it varies on Accept alone."""
     if not is_open(obj):
         resp.headers.update(PRIVATE_HEADERS)
         return
     resp.headers.set('Cache-Control', AP_CACHE_CONTENT)
-    resp.headers.set('Vary', 'Accept, User-Agent, Signature' if obj.author.has_blocked_instances() else 'Accept')
+    resp.headers.set('Vary', 'Accept')
 
 
 @bp.route('/private_message/<int:message_id>')
@@ -2929,17 +2921,6 @@ def private_message_ap(message_id):
     return resp
 
 
-def signed_requestor_domain():
-    """The host of the actor that validly signed this GET, else the domain its User-Agent volunteers.
-
-    Only actors already stored here are considered (entitlement.signed_requester_actor), so identifying a requester
-    never fetches anything; a signature from an unknown actor, or one that does not verify, is ignored."""
-    actor = signed_requester_actor()
-    if actor is not None:
-        return host_of(actor.ap_profile_id or actor.public_url())
-    return requestor_domain()
-
-
 def post_ap_refusal(post: Post):
     """The response that refuses an ActivityPub fetch of `post` (or of its replies or context), or None to serve it.
 
@@ -2954,9 +2935,6 @@ def post_ap_refusal(post: Post):
         abort(404)
     if post.deleted:
         return tombstone_response(post.ap_id, former_type_of_post(post), private=not is_open(post))
-    requesting_domain = signed_requestor_domain()
-    if post.author.has_blocked_instance(known_instance_id(requesting_domain)):
-        return make_response(f'Author has blocked {requesting_domain}'), 401
     return None
 
 
