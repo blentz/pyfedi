@@ -1214,6 +1214,23 @@ def refresh_instance_chooser():
         build_instance_list.delay()
 
 
+def version_at_least(version, minimum: str) -> bool:
+    """Whether the dotted `version` a peer reports is `minimum` or later, compared number by number: as strings
+    '1.10.0' sorted below '1.6.0'. Each part counts by its leading digits ('0-dev' is 0); a version with none at all,
+    or none given, is not known to be anything."""
+    def numbers(text):
+        parts = []
+        for part in str(text).split('.'):
+            digits = re.match(r'\d*', part.strip()).group()
+            parts.append(int(digits) if digits else 0)
+        return parts
+    if not version or not re.match(r'\s*\d', str(version)):
+        return False
+    have, want = numbers(version), numbers(minimum)
+    width = max(len(have), len(want))
+    return have + [0] * (width - len(have)) >= want + [0] * (width - len(want))
+
+
 @celery.task
 def build_instance_list():
     """ Generate a json file at /static/media/known_instances.json for other instances to populate their instance chooser with """
@@ -1228,9 +1245,11 @@ def build_instance_list():
         already_seen = {current_app.config['SERVER_NAME']}
 
         # Initially, get the list of instances we already know about, from previous federation traffic. monitor_healthy_instances() keeps this up to date.
-        locally_known_instances = session.query(Instance).filter(Instance.software == 'piefed', Instance.version >= min_version,
+        locally_known_instances = session.query(Instance).filter(Instance.software == 'piefed',
                                                                  Instance.dormant == False, Instance.gone_forever == False)
         for instance in locally_known_instances:
+            if not version_at_least(instance.version, min_version):   # by number, not as text ('1.10' < '1.6')
+                continue
             result.append({
                 'domain': instance.domain,
                 'uptime_alltime': ''
@@ -1251,12 +1270,19 @@ def build_instance_list():
                 except (ValueError, KeyError, TypeError) as e:
                     current_app.logger.warning(f"Bad federated_instances response from {instance.domain}: {str(e)}")
                     continue
+                if not isinstance(linked, list):
+                    current_app.logger.warning(f"Bad federated_instances response from {instance.domain}: linked "
+                                               f"is not a list")
+                    continue
 
                 for federated_instance in linked:
+                    # one peer's malformed entry costs only that entry, not the list for everyone
+                    if not isinstance(federated_instance, dict) or not isinstance(federated_instance.get('domain'), str):
+                        continue
                     domain = federated_instance['domain']
-                    software = federated_instance['software'] if 'software' in federated_instance else ''
-                    version = federated_instance['version'] if 'version' in federated_instance else ''
-                    if domain not in already_seen and software == 'piefed' and version >= min_version:
+                    software = federated_instance.get('software') or ''
+                    version = federated_instance.get('version') or ''
+                    if domain not in already_seen and software == 'piefed' and version_at_least(version, min_version):
                         result.append({
                             'domain': domain,
                             'uptime_alltime': ''
