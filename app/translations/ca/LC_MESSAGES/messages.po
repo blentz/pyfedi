@@ -7058,7 +7058,7 @@ msgstr ""
 #: app/templates/admin/votes.html:36
 #, fuzzy, python-format
 msgid "in %(span)s"
-msgstr "Uneix-te a %(domain)s"
+msgstr ""
 
 #: app/templates/admin/votes.html:38
 #, fuzzy, python-format
@@ -10871,7 +10871,7 @@ msgstr "Sense instàncies bloquejades"
 #: app/templates/user/filters.html:188
 #, fuzzy, python-format
 msgid "Unblock %(flair)s"
-msgstr "Desbloqueja %(user_name)s"
+msgstr ""
 
 #: app/templates/user/filters.html:193
 #, fuzzy
@@ -11178,7 +11178,7 @@ msgstr "Nom d'usuari"
 #: app/templates/user/show_profile.html:411
 #, fuzzy, python-format
 msgid "Search posts by %(name)s"
-msgstr "Publicacions de %(user_name)s"
+msgstr ""
 
 #: app/templates/user/show_profile.html:419
 msgid "Moderate user"
@@ -12215,7 +12215,7 @@ msgstr "%(community_name)s s'ha desbloquejat."
 #: app/user/routes.py:1169
 #, fuzzy, python-format
 msgid "%(flair_name)s has been unblocked."
-msgstr "%(name)s s'ha desbloquejat."
+msgstr ""
 
 #: app/user/routes.py:1203
 msgid "Account deletion in progress. Give it a few minutes."

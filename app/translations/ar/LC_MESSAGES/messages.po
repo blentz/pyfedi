@@ -3217,7 +3217,7 @@ msgstr ""
 #: app/community/routes.py:1878
 #, fuzzy, python-format
 msgid "RSS feeds for %(community)s"
-msgstr "ردود على تعليقي حول %(post_title)s"
+msgstr ""
 
 #: app/community/routes.py:1921
 #, python-format
@@ -8100,7 +8100,7 @@ msgstr ""
 #: app/templates/community/community_membership.html:20
 #, fuzzy, python-format
 msgid "Membership of %(community)s"
-msgstr "ردود على تعليقي حول %(post_title)s"
+msgstr ""
 
 #: app/templates/community/community_mod_list.html:47
 msgid "See and change who moderates this community"

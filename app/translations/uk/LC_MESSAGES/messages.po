@@ -6934,7 +6934,7 @@ msgstr ""
 #: app/templates/admin/votes.html:36
 #, fuzzy, python-format
 msgid "in %(span)s"
-msgstr "Долучитись до %(domain)s"
+msgstr ""
 
 #: app/templates/admin/votes.html:38
 #, fuzzy, python-format

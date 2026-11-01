@@ -7014,7 +7014,7 @@ msgstr ""
 #: app/templates/admin/votes.html:36
 #, fuzzy, python-format
 msgid "in %(span)s"
-msgstr "डोमेन %(domain)s को अवरुद्ध करें"
+msgstr ""
 
 #: app/templates/admin/votes.html:38
 #, fuzzy, python-format
@@ -10725,7 +10725,7 @@ msgstr ""
 #: app/templates/user/filters.html:188
 #, fuzzy, python-format
 msgid "Unblock %(flair)s"
-msgstr "%(user_name)s को अवरुद्ध करें"
+msgstr ""
 
 #: app/templates/user/filters.html:193
 #, fuzzy
@@ -11018,7 +11018,7 @@ msgstr "उपयोगकर्ता नाम"
 #: app/templates/user/show_profile.html:411
 #, fuzzy, python-format
 msgid "Search posts by %(name)s"
-msgstr "%(user_name)s को अवरुद्ध करें"
+msgstr ""
 
 #: app/templates/user/show_profile.html:419
 msgid "Moderate user"
@@ -11061,7 +11061,7 @@ msgstr "इस विधा में अभी तक कोई पोस्ट
 #: app/templates/user/voting_patterns.html:158 app/user/routes.py:233
 #, fuzzy, python-format
 msgid "Voting patterns of %(user_name)s"
-msgstr "%(name)s का प्रोफ़ाइल संपादित करें"
+msgstr ""
 
 #: app/templates/user/show_profile.html:489
 #: app/templates/user/voting_patterns_down.html:29
@@ -12074,7 +12074,7 @@ msgstr "%(community_name)s को अनब्लॉक कर दिया ग�
 #: app/user/routes.py:1169
 #, fuzzy, python-format
 msgid "%(flair_name)s has been unblocked."
-msgstr "%(community_name)s को अनब्लॉक कर दिया गया है।"
+msgstr ""
 
 #: app/user/routes.py:1203
 msgid "Account deletion in progress. Give it a few minutes."

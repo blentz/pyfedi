@@ -6824,7 +6824,7 @@ msgstr ""
 #: app/templates/admin/votes.html:36
 #, fuzzy, python-format
 msgid "in %(span)s"
-msgstr "%(domain)s に参加する"
+msgstr ""
 
 #: app/templates/admin/votes.html:38
 #, fuzzy, python-format
@@ -10444,7 +10444,7 @@ msgstr "ブロックしたインスタンスはありません"
 #: app/templates/user/filters.html:188
 #, fuzzy, python-format
 msgid "Unblock %(flair)s"
-msgstr "%(user_name)sのブロックを解除"
+msgstr ""
 
 #: app/templates/user/filters.html:193
 #, fuzzy
@@ -10733,7 +10733,7 @@ msgstr "ユーザー名 (英数字（a～z、0～9 ) が使用できます)"
 #: app/templates/user/show_profile.html:411
 #, fuzzy, python-format
 msgid "Search posts by %(name)s"
-msgstr "%(user_name)s の投稿"
+msgstr ""
 
 #: app/templates/user/show_profile.html:419
 msgid "Moderate user"
@@ -11737,7 +11737,7 @@ msgstr "%(community_name)sのブロックは解除されました。"
 #: app/user/routes.py:1169
 #, fuzzy, python-format
 msgid "%(flair_name)s has been unblocked."
-msgstr "%(name)sのロックは解除されました。"
+msgstr ""
 
 #: app/user/routes.py:1203
 msgid "Account deletion in progress. Give it a few minutes."

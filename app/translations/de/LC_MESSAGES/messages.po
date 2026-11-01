@@ -7009,7 +7009,7 @@ msgstr ""
 #: app/templates/admin/votes.html:36
 #, fuzzy, python-format
 msgid "in %(span)s"
-msgstr "%(domain)s beitreten"
+msgstr ""
 
 #: app/templates/admin/votes.html:38
 #, fuzzy, python-format
@@ -10829,7 +10829,7 @@ msgstr "Keine blockierten Instanzen"
 #: app/templates/user/filters.html:188
 #, fuzzy, python-format
 msgid "Unblock %(flair)s"
-msgstr "%(user_name)s entblocken"
+msgstr ""
 
 #: app/templates/user/filters.html:193
 #, fuzzy
@@ -11128,7 +11128,7 @@ msgstr "Kontoname"
 #: app/templates/user/show_profile.html:411
 #, fuzzy, python-format
 msgid "Search posts by %(name)s"
-msgstr "Beiträge von %(user_name)s"
+msgstr ""
 
 #: app/templates/user/show_profile.html:419
 msgid "Moderate user"
@@ -12159,7 +12159,7 @@ msgstr "%(community_name)s wurde entblockt."
 #: app/user/routes.py:1169
 #, fuzzy, python-format
 msgid "%(flair_name)s has been unblocked."
-msgstr "%(name)s wurde entsperrt."
+msgstr ""
 
 #: app/user/routes.py:1203
 msgid "Account deletion in progress. Give it a few minutes."

@@ -7046,7 +7046,7 @@ msgstr ""
 #: app/templates/admin/votes.html:36
 #, fuzzy, python-format
 msgid "in %(span)s"
-msgstr "Batu %(domain)s-(e)ra"
+msgstr ""
 
 #: app/templates/admin/votes.html:38
 #, fuzzy, python-format
@@ -10876,7 +10876,7 @@ msgstr "Blokeatutako instantziarik ez"
 #: app/templates/user/filters.html:188
 #, fuzzy, python-format
 msgid "Unblock %(flair)s"
-msgstr "Desblokeatu %(user_name)s"
+msgstr ""
 
 #: app/templates/user/filters.html:193
 #, fuzzy
@@ -11182,7 +11182,7 @@ msgstr "Erabiltzaile-izena"
 #: app/templates/user/show_profile.html:411
 #, fuzzy, python-format
 msgid "Search posts by %(name)s"
-msgstr "%(user_name)s-ren argitalpenak"
+msgstr ""
 
 #: app/templates/user/show_profile.html:419
 msgid "Moderate user"
@@ -12219,7 +12219,7 @@ msgstr "%(community_name)s desblokeatu da."
 #: app/user/routes.py:1169
 #, fuzzy, python-format
 msgid "%(flair_name)s has been unblocked."
-msgstr "%(name)s desblokeatu da."
+msgstr ""
 
 #: app/user/routes.py:1203
 msgid "Account deletion in progress. Give it a few minutes."

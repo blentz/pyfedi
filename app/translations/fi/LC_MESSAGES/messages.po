@@ -3256,7 +3256,7 @@ msgstr "Yhteisön %(community)s valvojat"
 #: app/community/routes.py:1921
 #, fuzzy, python-format
 msgid "Edit rss feed %(name)s"
-msgstr "Muokkaa: %(topic_name)s"
+msgstr ""
 
 #: app/community/routes.py:1921
 #: app/templates/community/community_rss_feeds.html:22
@@ -6930,7 +6930,7 @@ msgstr ""
 #: app/templates/admin/votes.html:36
 #, fuzzy, python-format
 msgid "in %(span)s"
-msgstr "Liity: %(domain)s"
+msgstr ""
 
 #: app/templates/admin/votes.html:38
 #, fuzzy, python-format
@@ -10909,7 +10909,7 @@ msgstr "Käyttäjänimi"
 #: app/templates/user/show_profile.html:411
 #, fuzzy, python-format
 msgid "Search posts by %(name)s"
-msgstr "Käyttäjän %(user_name)s julkaisut"
+msgstr ""
 
 #: app/templates/user/show_profile.html:419
 msgid "Moderate user"
@@ -11918,7 +11918,7 @@ msgstr ""
 #: app/user/routes.py:1169
 #, fuzzy, python-format
 msgid "%(flair_name)s has been unblocked."
-msgstr "%(name)s on lukittu."
+msgstr ""
 
 #: app/user/routes.py:1203
 msgid "Account deletion in progress. Give it a few minutes."
