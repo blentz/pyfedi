@@ -2389,6 +2389,7 @@ def community_rss_feed_delete(community_id, rss_feed_id):
 
         return render_template('generic_form.html', form=form, title=_('Are you sure?'),
                                message=_('Deleting this feed will also delete any posts created from it.'))
+    abort(403)   # a refusal fell off the end here: None, a 500 (tests/test_rbac_parity.py community.rss_feed_delete)
 
 
 @bp.route('/<actor>/moderate/subscribers', methods=['GET', 'POST'])

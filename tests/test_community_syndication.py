@@ -584,6 +584,21 @@ def test_a_moderator_cannot_delete_another_communitys_feed(app, env):
     assert db.session.get(RssFeed, feed.id) is not None
 
 
+def test_a_caller_who_moderates_nothing_there_is_refused_with_a_403(app, env):
+    """Not a moderator of `theirs` and not an admin: the refusal fell off the end of the view, which returned None,
+    and Flask answered a 500. Found by the RBAC parity table (tests/test_rbac_parity.py)."""
+    client, mine, theirs, mod = env
+    feed = a_feed(theirs, title='Theirs')
+    token = csrf(app, client)
+
+    response = client.post(
+        f'/community/community/{theirs.id}/feed/{feed.id}/delete',
+        data={'submit': 'Delete', 'csrf_token': token})
+
+    assert response.status_code == 403
+    assert db.session.get(RssFeed, feed.id) is not None
+
+
 def test_a_moderator_can_delete_their_own_communitys_feed(app, env):
     client, mine, theirs, mod = env
     feed = a_feed(mine, title='Mine')
