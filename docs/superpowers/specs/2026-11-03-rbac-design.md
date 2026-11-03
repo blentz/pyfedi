@@ -324,3 +324,19 @@ Instance-wide holders are still notified as they are today. A replacement helper
 - **O4. Referral caps for scoped holders.** Viewing `/admin/referrals` filtered to X comes with `administer all users`
   on X. `exempt from account limits` is instance-only, so a holder scoped to a domain can't be exempted from
   referral caps.
+
+## Follow-ups after the RBAC work (owner, 2026-11-03)
+
+From O5's wider principle: admin actions are visible to content creators, admins do not edit content, and an
+administrative action is by default limited to removal or turning comments and reactions off. To take up once the
+build steps are done, not before:
+
+1. The web feed editor (`app/feed/routes.py` `feed_edit`) still lets an admin edit anyone's feed, private ones
+   included, so the web and the API now disagree.
+2. Admins edit others' content elsewhere: community wiki pages (`CommunityWikiPage.can_edit`), a community's
+   description and settings (`/admin/community/<id>/edit`), and a post's flair, NSFW and AI labels (staff,
+   moderators).
+3. A moderator's or admin's removal of a post or reply does not tell its author; the modlog is the only record, and
+   its entries are often private.
+4. The catalogue could split the moderation actions ("remove", "turn comments off", "turn reactions off") and offer no
+   permission to edit someone else's content, so the principle holds for custom roles too.
