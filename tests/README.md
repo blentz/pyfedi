@@ -186,9 +186,20 @@ production.
 ## Running pytest directly
 
 There is no host Python environment for this repo, so pytest always runs inside
-the `test-runner` container:
+the `test-runner` container. `./run_tests.sh` removes the stack when it exits, so
+`exec` only works while a stack is up: start one yourself first, and take it
+down when you are done. (Postgres may need a few seconds after `up -d` before
+the upgrade connects; `run_tests.sh` waits with `pg_isready`.)
 
+    podman-compose -f compose.test.yaml up -d
+    podman-compose -f compose.test.yaml exec -T test-runner flask db upgrade   # the tmpfs database starts empty
     podman-compose -f compose.test.yaml exec -T test-runner pytest tests/test_microblog_announce.py -v
+    ./run_tests.sh --down
+
+Python that needs neither database nor Redis -- the coverage checkers below, for
+instance -- runs in a one-off container instead, with no stack at all:
+
+    podman-compose -f compose.test.yaml run --rm -T --no-deps test-runner python tests/check_coverage_floors.py coverage.json coverage_floors.ini
 
 Pure-function tests need no database, but they do need the environment — importing
 `app.utils` pulls in `config.py`, which reads `SERVER_NAME` at import time and
@@ -556,9 +567,18 @@ one is a sub-project's deliverable, and lowering one to make a run pass defeats
 the ratchet. A module with no entry is ignored, so unfinished modules block
 nobody.
 
-    ./run_tests.sh tests/ -q --cov=app --cov-report=json && \
-    podman-compose -f compose.test.yaml exec -T test-runner \
-        python tests/check_coverage_floors.py coverage.json coverage_floors.ini
+    ./run_tests.sh tests/ -q --cov=app --cov-branch --cov-report=json:coverage.json && \
+    podman-compose -f compose.test.yaml run --rm -T --no-deps test-runner \
+        python tests/check_coverage_floors.py coverage.json coverage_floors.ini && \
+    podman-compose -f compose.test.yaml run --rm -T --no-deps test-runner \
+        python tests/check_changed_line_coverage.py coverage.json <base-ref> --branches
+
+`run --rm`, not `exec`: `./run_tests.sh` has already removed the stack by the
+time its `&&` passes, so an `exec` there fails with `no container with name or
+ID "pyfedi_test-runner_1" found` (exit 125). The bind mount gives the one-off
+container the same working tree, `coverage.json` included. The last command is
+the changed-line gate (`tests/check_changed_line_coverage.py`): every line and
+branch added since `<base-ref>` must have been run.
 
 **Run it as one `&&` chain, exactly as written.** `coverage.json` is gitignored,
 so it is not cleaned up and it persists in the working tree between runs. A
