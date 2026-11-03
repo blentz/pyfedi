@@ -2820,10 +2820,9 @@ def parse_communities(interests_source, segment):
 
 def actor_id_to_ap_id(actor_id) -> str:
     # turn a string like https://example.com/u/username into username@example.com
-    host = furl(actor_id).host
-    path = furl(actor_id).path
-    path_parts = path.split('/')
-    return f'{path_parts[1]}@{host}'
+    url = furl(actor_id)
+    segments = [segment for segment in url.path.segments if segment]   # a Path, not a str; a trailing '/' is ''
+    return f'{segments[-1]}@{url.host}'
 
 
 def strip_tracking(url):

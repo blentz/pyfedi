@@ -11,6 +11,7 @@ import pytest
 from flask import current_app
 
 from app import cli, db
+from app.cli import actor_id_to_ap_id
 from app.models import Role, User
 from tests.factories import admin_role, make_instance, make_user
 
@@ -66,3 +67,15 @@ def test_a_lemmy_admin_is_given_the_built_in_admin_role(commands):
     assert db.session.get(User, 50).is_admin()
     assert not db.session.get(User, 51).is_admin()
     assert [role.name for role in db.session.get(User, 50).roles] == [Role.admin().name]
+
+
+@pytest.mark.parametrize('actor_id,handle', [
+    ('https://lemmy.example/u/alice', 'alice@lemmy.example'),
+    ('https://lemmy.example/c/news', 'news@lemmy.example'),
+    ('https://lemmy.example/u/alice/', 'alice@lemmy.example'),
+])
+def test_an_actor_url_becomes_its_handle(actor_id, handle):
+    """`furl(...).path` is a Path, not a str: `.split` raised AttributeError for every url, so the import could not
+    take in a remote person or update anyone already here. And `/u/alice` split on '/' is ['', 'u', 'alice'], whose
+    [1] is 'u', not the name."""
+    assert actor_id_to_ap_id(actor_id) == handle
