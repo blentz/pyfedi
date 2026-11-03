@@ -53,7 +53,7 @@ def _staff(instance, name='staffer'):
     user.verified = True
     role = Role.query.filter_by(name='Staff').first()
     if role is None:
-        role = Role(name='Staff', weight=5)
+        role = Role(name='Staff')
         db.session.add(role)
         db.session.commit()
     user.roles.append(role)
@@ -214,7 +214,7 @@ def test_an_admin_can_read_the_admin_home(app, db_session):
 
     instance, ordinary = _seed()
     admin = make_user(instance, 'theadmin', local=True)
-    role = Role(name='Admin', weight=10)
+    role = Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
     admin.roles.append(role)

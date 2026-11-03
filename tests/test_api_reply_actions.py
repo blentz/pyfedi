@@ -21,7 +21,7 @@ from app.constants import REPORT_STATE_NEW, REPORT_STATE_RESOLVED, ROLE_STAFF_NA
 from app import db
 from app.models import (Community, CommunityMember, Language, Notification,
                         Post, PostReply, PostReplyVote, Report, Role,
-                        RolePermission, Site, User, user_role)
+                        RolePermission, Site, User, role_grant)
 from tests.factories import (make_community_member, make_post_reply,
                              make_post_reply_vote, make_user)
 
@@ -31,11 +31,11 @@ def token(user):
 
 
 def with_permission(user, permission):
-    role = Role(name=f'role-{user.id}-{permission}', weight=10)
+    role = Role(name=f'role-{user.id}-{permission}')
     db.session.add(role)
     db.session.commit()
     db.session.add(RolePermission(role_id=role.id, permission=permission))
-    db.session.execute(user_role.insert().values(user_id=user.id,
+    db.session.execute(role_grant.insert().values(user_id=user.id,
                                                  role_id=role.id))
     db.session.commit()
     return user
@@ -709,10 +709,10 @@ def test_a_staff_member_may_distinguish_their_own(app, env):
     from app.api.alpha.utils.reply import post_reply_distinguish
 
     author, stranger, community, post, reply, baseline = env
-    role = Role(name=ROLE_STAFF_NAME, weight=10)
+    role = Role(name=ROLE_STAFF_NAME)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=author.id,
+    db.session.execute(role_grant.insert().values(user_id=author.id,
                                                  role_id=role.id))
     db.session.commit()
 

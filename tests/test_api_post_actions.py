@@ -42,7 +42,7 @@ from app.constants import (POST_TYPE_ARTICLE, POST_TYPE_LINK, POST_TYPE_POLL,
                            REPORT_STATE_NEW, REPORT_STATE_RESOLVED)
 from app.models import (Community, File, Language, Post, PostBookmark, PostVote,
                         Report, Role, RolePermission, Site, User,
-                        NotificationSubscription, read_posts, user_role)
+                        NotificationSubscription, read_posts, role_grant)
 from tests.factories import (a_keypair, make_community, make_community_ban,
                              make_community_flair, make_community_member,
                              make_poll, make_poll_choice, make_post,
@@ -56,11 +56,11 @@ def token(user):
 
 
 def with_permission(user, permission):
-    role = Role(name=f'role-{user.id}-{permission}', weight=10)
+    role = Role(name=f'role-{user.id}-{permission}')
     db.session.add(role)
     db.session.commit()
     db.session.add(RolePermission(role_id=role.id, permission=permission))
-    db.session.execute(user_role.insert().values(user_id=user.id,
+    db.session.execute(role_grant.insert().values(user_id=user.id,
                                                  role_id=role.id))
     db.session.commit()
     return user

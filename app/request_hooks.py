@@ -17,7 +17,7 @@ from flask import before_render_template, session, g, json, request, current_app
 from sqlalchemy import text
 from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, POST_TYPE_VIDEO, POST_TYPE_POLL, \
     SUBSCRIPTION_MODERATOR, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_PENDING, VERSION, \
-    POST_TYPE_EVENT, POST_TYPE_GALLERY, ROLE_ADMIN_NAME, AP_MEDIA_TYPES, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO
+    POST_TYPE_EVENT, POST_TYPE_GALLERY, AP_MEDIA_TYPES, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO
 from app.models import Site, utcnow
 from app.onion import is_onion_request, stamp_activity
 from app.onion_guard import require_onion_session, resolve_onion_api_rate_key
@@ -242,10 +242,11 @@ def register_request_hooks(app):
                             UNION
                             SELECT u.id
                             FROM "user" u
-                            JOIN user_role ur ON u.id = ur.user_id AND u.deleted = false AND u.banned = false
-                            JOIN role r ON r.id = ur.role_id AND r.name = :role_admin_name
-                            ORDER BY id"""),
-                    {'role_admin_name': ROLE_ADMIN_NAME}).scalars())  # D481: by name, as is_admin()
+                            JOIN role_grant rg ON u.id = rg.user_id AND u.deleted = false AND u.banned = false
+                                 AND rg.site_domain_id IS NULL
+                                 AND (rg.expires_at IS NULL OR rg.expires_at > timezone('utc', now()))
+                            JOIN role r ON r.id = rg.role_id AND r.built_in
+                            ORDER BY id""")).scalars())  # the built-in role, as is_admin()
                 set_setting('admin_ids', g.admin_ids)
             refusal = signed_fetch_refusal()   # S6 secure mode: an unsigned ActivityPub fetch is refused
             if refusal is not None:

@@ -570,7 +570,7 @@ def test_the_first_account_on_an_empty_instance_is_an_admin(app, env):
     """`users_total() == 0`: whoever arrives first on an instance with nobody
     on it gets the admin role, or there is no way to administer it."""
     client, person = env
-    db.session.add(Role(id=4, name='Admin'))
+    db.session.add(Role(name='Admin', built_in=True))
     db.session.commit()
 
     with app.test_request_context('/'):
@@ -582,7 +582,7 @@ def test_the_first_account_on_an_empty_instance_is_an_admin(app, env):
                     user = validate_user_ldap_login('newcomer', 'pw',
                                                     '127.0.0.1')
 
-    assert db.session.get(Role, 4) in user.roles
+    assert Role.admin() in user.roles
 
 
 def test_a_directory_that_refuses_falls_through_to_the_local_password(app, env):

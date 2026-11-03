@@ -274,11 +274,11 @@ def test_ban_user_warns_instead_when_the_target_holds_a_role(app, db_session):
     behaviour of the else at :197.
     """
     s = _seed_ban_scenario()
-    from app.models import Role, user_role
-    role = Role(name='Admin', weight=0)
+    from app.models import Role, role_grant
+    role = Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=s.target.id,
+    db.session.execute(role_grant.insert().values(user_id=s.target.id,
                                                  role_id=role.id))
     db.session.commit()
 
@@ -686,11 +686,11 @@ def test_ban_user_purging_a_role_holder_warns_about_permissions(
     this target has no InstanceRole, so only one of the two warnings fires,
     which is what separates :162 from :164."""
     s = _seed_ban_scenario(target_local=False)
-    from app.models import Role, user_role
-    role = Role(name='Admin', weight=0)
+    from app.models import Role, role_grant
+    role = Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=s.target.id,
+    db.session.execute(role_grant.insert().values(user_id=s.target.id,
                                                  role_id=role.id))
     db.session.commit()
 

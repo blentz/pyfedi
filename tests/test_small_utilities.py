@@ -435,7 +435,7 @@ def test_the_community_list_context_names_the_readers_powers(app, db_session, ro
         name = 'Admin' if role == 'admin' else 'Staff'
         existing = Role.query.filter_by(name=name).first()
         if existing is None:
-            existing = Role(name=name, weight=10)
+            existing = Role(name=name, built_in=name == 'Admin')   # Admin is the built-in role (RB16)
             db.session.add(existing)
             db.session.commit()
         alice.roles.append(existing)

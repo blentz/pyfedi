@@ -32,7 +32,6 @@ from flask.globals import app_ctx as app_ctx_proxy
 from sqlalchemy import text
 
 from app import db, request_hooks
-from app.constants import ROLE_ADMIN, ROLE_ADMIN_NAME
 from app.models import Role, Settings, Site
 from app.rsa_keys import RsaKeys
 from app.utils import etag_stamp, get_site_as_dict, set_setting
@@ -147,7 +146,7 @@ def test_admin_ids_computed_and_persisted_when_setting_absent(app, db_session):
     instance = make_instance('test.piefed.local', software='piefed')
     make_user(instance, 'notadmin', local=True)
     admin = make_user(instance, 'realadmin', local=True)
-    admin.roles.append(Role(id=ROLE_ADMIN + 100, name=ROLE_ADMIN_NAME))
+    admin.roles.append(Role(name='Admin', built_in=True))
     db.session.commit()
     assert admin.id != 1
     assert Settings.query.filter_by(name='admin_ids').first() is None

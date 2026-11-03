@@ -10,7 +10,7 @@ import pytest
 
 from app import db
 from app.utils import captcha_store
-from app.models import Instance, Referral, Role, Site, SiteDomain, User, UserRegistration, user_role
+from app.models import Instance, Referral, Role, Site, SiteDomain, User, UserRegistration, role_grant
 from app.referral import REFERRAL_MODE, generate_code
 from app.storefront import clear_domain_cache
 from app.utils import set_setting
@@ -272,10 +272,10 @@ def test_a_solved_captcha_registers_once(app, api):
 def referrer(api):
     _site(REFERRAL_MODE, 'Enter your referral code')
     admin = make_user(api['local'], 'adminuser', local=True)
-    role = Role.query.filter_by(name='Admin').first() or Role(name='Admin', weight=0)
+    role = Role.query.filter_by(name='Admin').first() or Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=admin.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=admin.id, role_id=role.id))
     generate_code(admin)
     db.session.commit()
     return admin

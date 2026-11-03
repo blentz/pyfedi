@@ -1,31 +1,24 @@
 """The roles a new instance starts with.
 
-`flask init-db` creates them, and the RBAC parity test (tests/test_rbac_parity.py) seeds the same ones, so that test
+`flask init-db` creates them, and the RBAC parity table (tests/rbac_parity.py) seeds the same ones, so that table
 measures what a freshly installed instance's Staff and Admin may do.
+
+Admin is the one built-in role: it holds every permission and is found by `Role.built_in`, never by its name
+(spec 2026-11-03-rbac-design.md RB2, RB16). Staff is seeded, not built in: from then on it is an ordinary role an
+admin may edit, rename or delete.
 """
 from app import db
-from app.constants import ROLE_ADMIN_NAME, ROLE_STAFF_NAME
+from app.constants import ROLE_STAFF_NAME
 from app.models import Role, RolePermission
 
-# These create rows in the 'role' table with ids 1, 2, 3 and 4, in this order. Some constants (ROLE_*) in
-# constants.py rely on those ids.
-DEFAULT_ROLES = (
-    ('Anonymous user', 0, ()),
-    ('Authenticated user', 1, ()),
-    (ROLE_STAFF_NAME, 2, ('approve registrations', 'ban users', 'administer all communities', 'manage users')),
-    (ROLE_ADMIN_NAME, 3, ('approve registrations', 'change user roles', 'ban users', 'manage users',
-                          'change instance settings', 'administer all communities', 'administer all users',
-                          'edit cms pages')),
-)
+STAFF_PERMISSIONS = ('approve registrations', 'ban users', 'administer all communities', 'manage users')
 
 
 def seed_default_roles() -> dict[str, Role]:
-    """Add the default roles to the session, and return them by name. The caller commits."""
-    roles = {}
-    for name, weight, permissions in DEFAULT_ROLES:
-        role = Role(name=name, weight=weight)
-        for permission in permissions:
-            role.permissions.append(RolePermission(permission=permission))
-        db.session.add(role)
-        roles[name] = role
-    return roles
+    """Add Admin and Staff to the session, and return them by name. The caller commits."""
+    admin = Role(name='Admin', built_in=True)
+    staff = Role(name=ROLE_STAFF_NAME, listed_publicly=True)
+    for permission in STAFF_PERMISSIONS:
+        staff.permissions.append(RolePermission(permission=permission))
+    db.session.add_all([admin, staff])
+    return {admin.name: admin, staff.name: staff}

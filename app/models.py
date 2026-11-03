@@ -43,7 +43,7 @@ from app.constants import AUTOMATED_REPORTER, SUBSCRIPTION_NONMEMBER, SUBSCRIPTI
     SUBSCRIPTION_BANNED, SUBSCRIPTION_PENDING, NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC, NOTIF_POST, NOTIF_REPLY, \
     NOTIF_FEED, NOTIF_DEFAULT, NOTIF_REPORT, NOTIF_MENTION, POST_STATUS_REVIEWING, \
     POST_STATUS_PUBLISHED, POST_TYPE_VIDEO, INVITE_MEMBERS_ONLY, INVITE_MODS_ONLY, INVITE_OWNER_ONLY, POST_TYPE_GALLERY, \
-    POST_TYPE_IMAGE, ROLE_ADMIN_NAME, ROLE_STAFF_NAME, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC, VISIBILITY_UNLISTED
+    POST_TYPE_IMAGE, ROLE_STAFF_NAME, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC, VISIBILITY_UNLISTED
 import app as app_pkg
 # The module, not the name: app.storefront reads SiteDomain from this module (import cycle: storefront)
 import app.storefront as storefront
@@ -2096,11 +2096,31 @@ class Community(db.Model):
         db.session.commit()
 
 
-user_role = db.Table('user_role',
-                     db.Column('user_id', db.Integer, db.ForeignKey('user.id')),
-                     db.Column('role_id', db.Integer, db.ForeignKey('role.id')),
-                     db.PrimaryKeyConstraint('user_id', 'role_id')
-                     )
+class RoleGrant(db.Model):
+    """A user holds a role instance-wide (site_domain_id NULL) or on one domain, until `expires_at` if it is set
+    (spec 2026-11-03-rbac-design.md RB1, RB11). Only Admin makes or revokes grants (RB5)."""
+    __tablename__ = 'role_grant'
+    __table_args__ = (
+        Index('uq_role_grant_user_role_scope', 'user_id', 'role_id', text('COALESCE(site_domain_id, 0)'), unique=True),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', name='fk_role_grant_user_id', ondelete='CASCADE'),
+                        nullable=False, index=True)
+    role_id = db.Column(db.Integer, db.ForeignKey('role.id', name='fk_role_grant_role_id', ondelete='RESTRICT'),
+                        nullable=False, index=True)
+    site_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id', name='fk_role_grant_site_domain_id',
+                                                         ondelete='CASCADE'))
+    granted_by = db.Column(db.Integer, db.ForeignKey('user.id', name='fk_role_grant_granted_by', ondelete='SET NULL'))
+    granted_at = db.Column(db.DateTime, nullable=False, default=utcnow, server_default=text("timezone('utc', now())"))
+    expires_at = db.Column(db.DateTime)
+
+
+role_grant = RoleGrant.__table__
+
+
+def unexpired_grant(table=role_grant):
+    """A grant with no expiry, or one still ahead. Dates are stored as naive UTC, as utcnow() writes them."""
+    return or_(table.c.expires_at.is_(None), table.c.expires_at > func.timezone('utc', func.now()))
 
 # table to hold users' read post ids
 read_posts = db.Table('read_posts',
@@ -2297,7 +2317,12 @@ class User(UserMixin, db.Model):
     posts = db.relationship('Post', lazy='dynamic', cascade="all, delete-orphan")
     post_replies = db.relationship('PostReply', lazy='dynamic', cascade="all, delete-orphan")
     extra_fields = db.relationship('UserExtraField', lazy='dynamic', cascade="all, delete-orphan")
-    roles = db.relationship('Role', secondary=user_role, lazy='dynamic')
+    # The roles held instance-wide and not expired. A domain-scoped grant is not here: it is checked against the
+    # object acted on (spec 2026-11-03-rbac-design.md, Check API). Appending adds an instance-wide grant.
+    roles = db.relationship('Role', secondary=role_grant, lazy='dynamic',
+                            primaryjoin=lambda: and_(User.id == role_grant.c.user_id,
+                                                     role_grant.c.site_domain_id.is_(None), unexpired_grant()),
+                            secondaryjoin=lambda: Role.id == role_grant.c.role_id)
     passkeys = db.relationship('Passkey', lazy='dynamic', cascade="all, delete-orphan")
     modlog_target = db.relationship('ModLog', lazy='dynamic', foreign_keys="ModLog.target_user_id", back_populates='target_user', cascade="all, delete-orphan")
     modlog_actor = db.relationship('ModLog', lazy='dynamic', foreign_keys="ModLog.user_id", back_populates='author', cascade="all, delete-orphan")
@@ -2472,10 +2497,7 @@ class User(UserMixin, db.Model):
     def is_admin(self):
         if self.id == 1:
             return True
-        for role in self.roles:
-            if role.name == ROLE_ADMIN_NAME:
-                return True
-        return False
+        return self.roles.filter(Role.built_in.is_(True)).first() is not None
 
     @cache.memoize(timeout=30)
     def is_staff(self):
@@ -2807,7 +2829,7 @@ class User(UserMixin, db.Model):
             db.session.delete(file)
         db.session.execute(text('DELETE FROM "post_vote" WHERE user_id = :user_id'), {'user_id': self.id})
         db.session.execute(text('DELETE FROM "post_reply_vote" WHERE user_id = :user_id'), {'user_id': self.id})
-        db.session.execute(text('DELETE FROM "user_role" WHERE user_id = :user_id'), {'user_id': self.id})
+        db.session.execute(text('DELETE FROM "role_grant" WHERE user_id = :user_id'), {'user_id': self.id})
         db.session.execute(text('DELETE FROM "hidden_posts" WHERE user_id = :user_id'), {'user_id': self.id})
         db.session.execute(text('DELETE FROM "read_posts" WHERE user_id = :user_id'), {'user_id': self.id})
         db.session.query(NotificationSubscription).filter(NotificationSubscription.user_id == self.id).delete()
@@ -5562,10 +5584,25 @@ class Filter(db.Model):
 
 
 class Role(db.Model):
+    """A named bundle of permissions. Exactly one role is `built_in`: Admin, which implicitly holds every permission
+    and is found by that flag, never by its name or id (RB2, RB16). Every other role is an admin's to edit."""
+    __table_args__ = (
+        Index('uq_role_name_lower', func.lower(text('name')), unique=True),
+        Index('uq_role_one_built_in', 'built_in', unique=True, postgresql_where=text('built_in')),
+    )
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(50))
-    weight = db.Column(db.Integer, default=0)
+    built_in = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    listed_publicly = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    description = db.Column(db.String(512))
+    created_at = db.Column(db.DateTime, default=utcnow, server_default=text("timezone('utc', now())"))
+    updated_at = db.Column(db.DateTime, default=utcnow, onupdate=utcnow, server_default=text("timezone('utc', now())"))
     permissions = db.relationship('RolePermission')
+
+    @staticmethod
+    def admin() -> 'Role | None':
+        """The built-in Admin role."""
+        return Role.query.filter(Role.built_in.is_(True)).first()
 
 
 class RolePermission(db.Model):
@@ -5895,10 +5932,9 @@ class Site(db.Model):
         if hasattr(g, 'admin_ids'):
             return db.session.query(User).filter(User.id.in_(tuple(g.admin_ids))).all()
         else:
-            # D442: an EXISTS, not a join, so user 1 needs no user_role row to be listed.
-            # D481: matched by role name, as is_admin() is.
+            # D442: an EXISTS, not a join, so user 1 needs no grant to be listed. By the built-in role, as is_admin().
             return db.session.query(User).filter_by(deleted=False, banned=False).filter(
-                                          or_(User.roles.any(Role.name == ROLE_ADMIN_NAME), User.id == 1)).order_by(User.id).all()
+                                          or_(User.roles.any(Role.built_in.is_(True)), User.id == 1)).order_by(User.id).all()
 
     @staticmethod
     def staff() -> List[User]:

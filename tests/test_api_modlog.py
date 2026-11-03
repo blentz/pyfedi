@@ -14,7 +14,7 @@ from flask import g
 
 from app import db
 from app.models import (Community, ModLog, Post, PostReply, Role,
-                        RolePermission, Site, User, user_role)
+                        RolePermission, Site, User, role_grant)
 from tests.factories import (make_community, make_post, make_post_reply,
                              make_user)
 
@@ -26,10 +26,10 @@ def token(user):
 def with_role(user, name):
     """`is_admin()` and `is_staff()` read the role's NAME, not a permission
     (app/models.py:1264, 1271)."""
-    role = Role(name=name, weight=10)
+    role = Role(name=name, built_in=name == 'Admin')   # Admin is the built-in role (RB16)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id,
+    db.session.execute(role_grant.insert().values(user_id=user.id,
                                                  role_id=role.id))
     db.session.commit()
     return user

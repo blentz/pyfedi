@@ -181,14 +181,13 @@ def _make_admin(user):
     by the seed, and the assignment row goes through the plain `user_role`
     table -- there is no UserRole model (see tests/factories.py:365-381).
     """
-    from app.constants import ROLE_ADMIN
-    from app.models import Role, user_role
-    role = db.session.get(Role, ROLE_ADMIN)
+    from app.models import Role, role_grant
+    role = Role.admin()
     if role is None:
-        role = Role(id=ROLE_ADMIN, name='Admin', weight=0)
+        role = Role(name='Admin', built_in=True)
         db.session.add(role)
         db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
     return role
 

@@ -27,7 +27,7 @@ import pytest
 from app import db
 from app.constants import REPORT_TYPE_USER
 from app.models import (Community, CommunityMember, Instance, Notification,
-                        Report, Role, Site, User, UserBlock, user_role)
+                        Report, Role, Site, User, UserBlock, role_grant)
 from tests.factories import (grant_permission, make_community,
                              make_community_member, make_instance, make_user)
 
@@ -622,10 +622,10 @@ def test_you_cannot_ban_yourself(app, env):
 
 def make_admin(user):
     """`User.is_admin()` looks for a role NAMED 'Admin', not a permission."""
-    role = Role.query.filter_by(name='Admin').first() or Role(name='Admin', weight=0)
+    role = Role.query.filter_by(name='Admin').first() or Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
     return user
 
@@ -997,7 +997,7 @@ def test_deleting_an_account_with_role_permissions_says_so(app, env):
     client, founder, viewer, target = env
     grant_permission(viewer, 'manage users')
     grant_permission(target, 'change instance settings')
-    target.roles[0].name = 'Admin'
+    target.roles[0].built_in = True   # the built-in Admin role (RB16)
     db.session.commit()
     assert target.is_admin()
     token = csrf(app, client)

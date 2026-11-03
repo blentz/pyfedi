@@ -1,6 +1,6 @@
 from app import db
-from app.constants import ROLE_ADMIN, ROLE_ADMIN_NAME, ROLE_STAFF, ROLE_STAFF_NAME
-from app.models import Role, Site, user_role
+from app.constants import ROLE_STAFF_NAME
+from app.models import Role, Site, role_grant
 from app.utils import role_access, user_access
 from tests.factories import grant_permission, make_instance, make_user
 
@@ -109,27 +109,25 @@ class TestSiteAdmins:
 
         assert [u.id for u in Site.admins()] == [founder.id]
 
-    def test_admins_and_staff_are_matched_by_role_name_like_is_admin(self, app, db_session):
-        """D481, fixed: `Site.admins()` and `Site.staff()` matched the role ID
-        (ROLE_ADMIN, ROLE_STAFF) while `is_admin()` and `is_staff()` match the
-        role NAME, and only the CLI's seeding order made the two coincide. Per
-        the ruling the name wins: a role called 'Admin' under any other id makes
-        an admin in both, and a role with id ROLE_ADMIN by another name in
-        neither."""
+    def test_admins_are_matched_by_the_built_in_role_and_staff_by_name(self, app, db_session):
+        """D481, then RB16 (spec 2026-11-03-rbac-design.md). `Site.admins()` and `is_admin()` once matched the
+        role NAME 'Admin'. Admin is now the one built-in role, found by `Role.built_in`: renamed, it still makes an
+        admin, and an ordinary role that takes the name 'Admin' makes none. Staff is still matched by name until
+        `is_staff()` goes (RBAC step 6)."""
         make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
         make_user(None, 'founder', local=True)                 # user 1, listed regardless
-        named_admin = make_user(None, 'named-admin', local=True)
+        built_in_admin = make_user(None, 'built-in-admin', local=True)
         named_staff = make_user(None, 'named-staff', local=True)
-        id_only = make_user(None, 'id-only', local=True)
-        admin_role = Role(id=ROLE_ADMIN + 100, name=ROLE_ADMIN_NAME, weight=3)
-        staff_role = Role(id=ROLE_STAFF + 100, name=ROLE_STAFF_NAME, weight=2)
-        misnamed = Role(id=ROLE_ADMIN, name='role-4', weight=0)
-        db.session.add_all([admin_role, staff_role, misnamed])
+        name_only = make_user(None, 'name-only', local=True)
+        admin_role = Role(name='Superuser', built_in=True)
+        staff_role = Role(name=ROLE_STAFF_NAME)
+        impostor = Role(name='Admin')
+        db.session.add_all([admin_role, staff_role, impostor])
         db.session.commit()
-        for user, role in ((named_admin, admin_role), (named_staff, staff_role), (id_only, misnamed)):
-            db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+        for user, role in ((built_in_admin, admin_role), (named_staff, staff_role), (name_only, impostor)):
+            db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
         db.session.commit()
 
-        assert (named_admin.is_admin(), id_only.is_admin()) == (True, False)
-        assert [u.id for u in Site.admins()] == [1, named_admin.id]
+        assert (built_in_admin.is_admin(), name_only.is_admin()) == (True, False)
+        assert [u.id for u in Site.admins()] == [1, built_in_admin.id]
         assert [u.id for u in Site.staff()] == [named_staff.id]

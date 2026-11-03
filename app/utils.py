@@ -3094,10 +3094,15 @@ def user_access(permission: str, user_id: int) -> bool:
         return False
     if user_id == 1:
         return True
-    has_access = db.session.execute(text('SELECT * FROM "role_permission" as rp ' +
-                                         'INNER JOIN user_role ur on rp.role_id = ur.role_id ' +
-                                         'WHERE ur.user_id = :user_id AND rp.permission = :permission'),
-                                    {'user_id': user_id, 'permission': permission}).first()
+    # The built-in Admin role holds every permission (RB2); any other role, the ones it lists. Instance-wide,
+    # unexpired grants only: a domain-scoped grant answers only for the object acted on (build step 3).
+    has_access = db.session.execute(text(
+        'SELECT 1 FROM role_grant rg JOIN role r ON r.id = rg.role_id '
+        'WHERE rg.user_id = :user_id AND rg.site_domain_id IS NULL '
+        "AND (rg.expires_at IS NULL OR rg.expires_at > timezone('utc', now())) "
+        'AND (r.built_in OR EXISTS (SELECT 1 FROM role_permission rp '
+        '                          WHERE rp.role_id = r.id AND rp.permission = :permission)) LIMIT 1'),
+        {'user_id': user_id, 'permission': permission}).first()
     return has_access is not None
 
 
@@ -3113,6 +3118,13 @@ def role_access(permission: str, role_id: int) -> bool:
                                          'WHERE rp.role_id = :role_id AND rp.permission = :permission'),
                                     {'role_id': role_id, 'permission': permission}).first()
     return has_access is not None
+
+
+def staff_role_has(permission: str) -> bool:
+    """Whether the Staff role holds `permission`: who else is told of an application or a held post. Staff is found by
+    name until RBAC step 8 routes these notifications by permission (spec 2026-11-03-rbac-design.md, Notifications)."""
+    staff = Role.query.filter_by(name=ROLE_STAFF_NAME).first()
+    return staff is not None and role_access(permission, staff.id)
 
 
 @cache.memoize(timeout=10)
@@ -8379,8 +8391,9 @@ def get_event_start(post_id: int):
 def roles_with(permission):
     roles = Role.query.join(RolePermission, Role.id == RolePermission.role_id).\
         filter(RolePermission.permission == permission).\
-        order_by(Role.weight)
-    return ', '.join([role.name for role in roles.all()])
+        order_by(Role.name)
+    admin = Role.admin()
+    return ', '.join(([admin.name] if admin else []) + [role.name for role in roles.all() if not role.built_in])
 
 
 def make_gallery_thumbnail(images, size=600):

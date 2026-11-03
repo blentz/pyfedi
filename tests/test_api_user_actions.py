@@ -28,7 +28,7 @@ from unittest.mock import patch
 
 from app import db
 from app.models import (Role, RolePermission, RevokedToken, Site, User,
-                        UserBlock, UserFlair, UserNote, user_role)
+                        UserBlock, UserFlair, UserNote, role_grant)
 from tests.factories import make_community, make_user
 
 
@@ -39,11 +39,11 @@ def token(user):
 def give(user, permission):
     """`user_access(permission, id)` reads role_permission joined to the
     `user_role` association table; there is no UserRole model."""
-    role = Role(name=f'role-{user.id}-{permission}', weight=10)
+    role = Role(name=f'role-{user.id}-{permission}')
     db.session.add(role)
     db.session.commit()
     db.session.add(RolePermission(role_id=role.id, permission=permission))
-    db.session.execute(user_role.insert().values(user_id=user.id,
+    db.session.execute(role_grant.insert().values(user_id=user.id,
                                                  role_id=role.id))
     db.session.commit()
     return user
@@ -337,10 +337,10 @@ def test_unbanning_somebody_who_does_not_exist(app, env):
 
 def make_admin(user):
     """`User.is_admin()` looks for a role NAMED 'Admin', not a permission."""
-    role = Role.query.filter_by(name='Admin').first() or Role(name='Admin', weight=0)
+    role = Role.query.filter_by(name='Admin').first() or Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
     return user
 

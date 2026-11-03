@@ -77,11 +77,11 @@ from app import db
 from app.activitypub.util import update_post_from_activity
 from app.constants import (NOTIF_REPORT, POST_TYPE_ARTICLE, POST_TYPE_EVENT,
                            POST_TYPE_GALLERY, POST_TYPE_IMAGE, POST_TYPE_LINK, POST_TYPE_POLL,
-                           POST_TYPE_VIDEO, ROLE_ADMIN, ROLE_ADMIN_NAME)
+                           POST_TYPE_VIDEO)
 from app.models import (Event, File, Notification, PollChoice, PollChoiceVote,
                         Post, Role, User)
 from app.utils import set_setting, utcnow
-from tests.factories import (make_community, make_community_member,
+from tests.factories import (admin_role, make_community, make_community_member,
                              make_domain, make_instance, make_poll,
                              make_poll_choice, make_post, make_site, make_user)
 
@@ -3158,7 +3158,7 @@ def _suspicious_domain(notify_mods=False, notify_admins=False, banned=False):
     return domain
 
 
-def _make_admin(user, role_id=ROLE_ADMIN):
+def _make_admin(user, role_id=None):
     """Give `user` the role `role_id`, for `Site.admins()` (`:3529`) to count.
 
     tests/conftest.py clears `flask.g` before every test and nothing in this
@@ -3172,10 +3172,10 @@ def _make_admin(user, role_id=ROLE_ADMIN):
     Since D442 user 1 needs no role row at all; this file's user 1 is an admin
     as seeded, which is why the admin tests count it among the recipients.
     """
-    role = db.session.get(Role, role_id)
+    # role_id None is the built-in Admin role (RB16: found by Role.built_in, not by name or id)
+    role = admin_role() if role_id is None else db.session.get(Role, role_id)
     if role is None:
-        role = Role(id=role_id, name=ROLE_ADMIN_NAME if role_id == ROLE_ADMIN else f'role-{role_id}',
-                    weight=0)
+        role = Role(id=role_id, name=f'role-{role_id}')
         db.session.add(role)
         db.session.commit()
     user.roles.append(role)

@@ -23,7 +23,7 @@ from unittest.mock import patch
 import pytest
 
 from app import db
-from app.constants import (POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING, ROLE_ADMIN, ROLE_ADMIN_NAME, ROLE_STAFF,
+from app.constants import (POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING,
                            ROLE_STAFF_NAME)
 from app.models import Community, Language, Notification, Post, Role, RolePermission, Site
 from tests.factories import (make_community, make_community_member,
@@ -614,9 +614,11 @@ def test_a_post_held_for_review_tells_its_author_and_asks_the_admins_and_staff(a
     client, token, community, author, english = poster
     author.ban_posts = True
     admin, staffer = make_user(author.instance, 'boss', local=True), make_user(author.instance, 'helper', local=True)
-    admin.roles.append(db.session.get(Role, ROLE_ADMIN) or Role(id=ROLE_ADMIN, name=ROLE_ADMIN_NAME))
-    staffer.roles.append(db.session.get(Role, ROLE_STAFF) or Role(id=ROLE_STAFF, name=ROLE_STAFF_NAME))
-    db.session.add(RolePermission(role_id=ROLE_STAFF, permission='approve registrations'))
+    admin.roles.append(Role.admin() or Role(name='Admin', built_in=True))
+    staff_role = Role.query.filter_by(name=ROLE_STAFF_NAME).first() or Role(name=ROLE_STAFF_NAME)
+    staffer.roles.append(staff_role)
+    db.session.flush()
+    db.session.add(RolePermission(role_id=staff_role.id, permission='approve registrations'))
     db.session.commit()
     hooked = []
 

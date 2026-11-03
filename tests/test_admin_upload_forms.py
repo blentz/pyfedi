@@ -284,7 +284,7 @@ def _an_old_icon_and_banner(env, monkeypatch, request, storage):
 class TestEditingAnAccountAsAnAdmin:
     def payload(self, env, token, **overrides):
         data = {'about': '', 'matrix_user_id': '', 'hide_nsfw': '1',
-                'hide_nsfl': '1', 'role': '2', 'csrf_token': token}
+                'hide_nsfl': '1', 'role': '0', 'csrf_token': token}
         data.update(overrides)
         return data
 

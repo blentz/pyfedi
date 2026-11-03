@@ -27,7 +27,7 @@ from app.api.alpha.utils.private_message import get_private_message_list
 from app.constants import (NOTIF_MESSAGE, REPORT_STATE_NEW,
                            REPORT_STATE_RESOLVED, REPORT_TYPE_MESSAGE)
 from app.models import (ChatMessage, Conversation, Notification, Report, Role,
-                        RolePermission, Site, User, user_role)
+                        RolePermission, Site, User, role_grant)
 from tests.factories import make_chat_message, make_conversation, make_user
 
 
@@ -43,12 +43,12 @@ def make_admin(user):
     the fixture sets to [] so `private_message_view` can run -- so the new
     admin has to be added there too or nobody is notified (fact 548).
     """
-    role = Role(name=f'admin-{user.id}', weight=10)
+    role = Role(name=f'admin-{user.id}')
     db.session.add(role)
     db.session.commit()
     db.session.add(RolePermission(role_id=role.id,
                                   permission='administer all users'))
-    db.session.execute(user_role.insert().values(user_id=user.id,
+    db.session.execute(role_grant.insert().values(user_id=user.id,
                                                  role_id=role.id))
     db.session.commit()
     g.admin_ids = list(getattr(g, 'admin_ids', [])) + [user.id]

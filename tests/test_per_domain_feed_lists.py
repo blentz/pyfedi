@@ -10,9 +10,8 @@ from flask import g
 from sqlalchemy import select
 
 from app import cache, db
-from app.constants import ROLE_ADMIN_NAME
 from app.feed_domains import feed_view_domain, listed_feeds_clause
-from app.models import Feed, FeedItem, Role, user_role
+from app.models import Feed, FeedItem, Role, role_grant
 from app.storefront import clear_domain_cache, domain_for_host
 from app.utils import feed_tree_public, menu_instance_feeds
 from tests.conftest import forget_login
@@ -57,10 +56,10 @@ def world(app, three_domains, peer):  # noqa: F811
     remote.is_instance_feed = True
     feeds['remote'] = remote
     admin = d.account('theadmin', d.first)
-    role = Role(name=ROLE_ADMIN_NAME, weight=0)
+    role = Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=admin.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=admin.id, role_id=role.id))
     db.session.commit()
     people['admin'] = admin
     people['nobody'] = None

@@ -29,7 +29,7 @@ from sqlalchemy.orm.exc import NoResultFound
 from app import db
 from app.constants import SRC_API, SRC_WEB, SUBSCRIPTION_PENDING
 from app.models import (Community, CommunityMember, Feed, FeedItem, FeedJoinRequest,
-                        FeedMember, Role, User, user_role)
+                        FeedMember, Role, User, role_grant)
 from app.shared.feed import delete_feed, join_feed, leave_feed, make_feed
 from app.utils import feed_membership, joined_communities, menu_subscribed_feeds
 from tests.factories import (make_community, make_community_member, make_feed_item,
@@ -227,10 +227,10 @@ def _make_admin(user: User) -> Role:
     in this file has to come by the role, and the name has to be exact --
     grant_permission's f'role-{permission}' naming would not satisfy it.
     """
-    role = Role(name='Admin', weight=0)
+    role = Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
     return role
 

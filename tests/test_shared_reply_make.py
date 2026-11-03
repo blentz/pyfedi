@@ -638,13 +638,13 @@ class TestEditReply:
         staff conjunct would then still leave the guard false and M076
         would survive this test too.
         """
-        from app.models import Role, user_role
+        from app.models import Role, role_grant
         _burn_a_seed()
         s = _seed_for_reply()
-        role = Role(name='Staff', weight=0)
+        role = Role(name='Staff')
         db.session.add(role)
         db.session.commit()
-        db.session.execute(user_role.insert().values(user_id=s.author.id,
+        db.session.execute(role_grant.insert().values(user_id=s.author.id,
                                                      role_id=role.id))
         s.reply.distinguished = False
         db.session.commit()
@@ -678,13 +678,13 @@ class TestEditReply:
         (app/models.py:1274-1275) -- the distinguished value reaching the
         column is what proves `:239` was true.
         """
-        from app.models import Role, user_role
+        from app.models import Role, role_grant
         _burn_a_seed()
         s = _seed_for_reply()
-        role = Role(name='Admin', weight=0)
+        role = Role(name='Admin', built_in=True)
         db.session.add(role)
         db.session.commit()
-        db.session.execute(user_role.insert().values(user_id=s.author.id,
+        db.session.execute(role_grant.insert().values(user_id=s.author.id,
                                                      role_id=role.id))
         s.reply.distinguished = False
         db.session.commit()
@@ -1172,13 +1172,13 @@ class TestMakeReply:
         pass -- the role row is. No `_burn_a_seed()` is needed for the same
         reason.
         """
-        from app.models import Role, user_role
+        from app.models import Role, role_grant
         s = _seed_for_reply()
         _clear_creation_guards(s.actor)
-        role = Role(name='Admin', weight=0)
+        role = Role(name='Admin', built_in=True)
         db.session.add(role)
         db.session.commit()
-        db.session.execute(user_role.insert().values(user_id=s.actor.id,
+        db.session.execute(role_grant.insert().values(user_id=s.actor.id,
                                                      role_id=role.id))
         db.session.commit()
         assert s.actor.id != 1, 'the id-1 shortcut would make the role row moot'
@@ -1197,14 +1197,14 @@ class TestMakeReply:
         moderates nothing here keeps `distinguished`; the old spelling
         (moderator, owner, admin or staff) demoted it.
         """
-        from app.models import Role, RolePermission, user_role
+        from app.models import Role, RolePermission, role_grant
         s = _seed_for_reply()
         _clear_creation_guards(s.actor)
-        role = Role(name='community administrator', weight=0)
+        role = Role(name='community administrator')
         db.session.add(role)
         db.session.commit()
         db.session.add(RolePermission(role_id=role.id, permission='administer all communities'))
-        db.session.execute(user_role.insert().values(user_id=s.actor.id,
+        db.session.execute(role_grant.insert().values(user_id=s.actor.id,
                                                      role_id=role.id))
         db.session.commit()
         payload = {'body': 'speaking for the instance', 'notify_author': False,

@@ -12,7 +12,7 @@ from app import db
 from app.auth.oauth_util import initialize_new_user
 from app.auth.util import create_new_user, create_new_user_from_ldap
 from app.activitypub.util import find_microblogging_community
-from app.models import Community, Instance, Language, Role, RolePermission, Site, SiteDomain, User, user_role
+from app.models import Community, Instance, Language, Role, RolePermission, Site, SiteDomain, User, role_grant
 from app.storefront import clear_domain_cache, default_domain, domain_base_url, domain_by_id
 from app.utils import finalize_user_setup
 from app.constants import SRC_API
@@ -107,7 +107,7 @@ def test_an_admin_added_onion_user_gets_onion_urls(app, db_session, domains):
     roles = _roles()
     db.session.add(RolePermission(role_id=roles['Admin'].id, permission='administer all users'))
     db.session.add(RolePermission(role_id=roles['Admin'].id, permission='change user roles'))
-    db.session.execute(user_role.insert().values(user_id=admin.id, role_id=roles['Admin'].id))
+    db.session.execute(role_grant.insert().values(user_id=admin.id, role_id=roles['Admin'].id))
     db.session.commit()
     client = app.test_client()
     login(client, admin)
@@ -131,7 +131,7 @@ def test_an_admin_added_user_defaults_to_the_default_domain(app, db_session, dom
     roles = _roles()
     db.session.add(RolePermission(role_id=roles['Admin'].id, permission='administer all users'))
     db.session.add(RolePermission(role_id=roles['Admin'].id, permission='change user roles'))
-    db.session.execute(user_role.insert().values(user_id=admin.id, role_id=roles['Admin'].id))
+    db.session.execute(role_grant.insert().values(user_id=admin.id, role_id=roles['Admin'].id))
     db.session.commit()
     client = app.test_client()
     login(client, admin)
@@ -267,7 +267,7 @@ def test_an_admin_added_user_cannot_take_a_community_name_of_its_own_domain(app,
     db.session.commit()
     roles = _roles()
     db.session.add(RolePermission(role_id=roles['Admin'].id, permission='administer all users'))
-    db.session.execute(user_role.insert().values(user_id=admin.id, role_id=roles['Admin'].id))
+    db.session.execute(role_grant.insert().values(user_id=admin.id, role_id=roles['Admin'].id))
     db.session.commit()
     client = app.test_client()
     login(client, admin)

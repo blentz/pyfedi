@@ -462,7 +462,7 @@ def _admin_role():
     from app.models import Role
     role = Role.query.filter_by(name='Admin').first()
     if role is None:
-        role = Role(name='Admin', weight=10)
+        role = Role(name='Admin', built_in=True)
         db.session.add(role)
         db.session.commit()
     return role

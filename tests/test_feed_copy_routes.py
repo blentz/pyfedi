@@ -39,7 +39,7 @@ from flask_wtf.csrf import generate_csrf
 from app import db
 from app.constants import SUBSCRIPTION_MEMBER
 from app.models import Community, CommunityMember, Feed, FeedItem, FeedMember, \
-    Role, Site, User, user_role
+    Role, Site, User, role_grant
 from tests.factories import make_community, make_instance, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -69,10 +69,10 @@ def _seed():
 
 
 def _make_admin(user):
-    role = Role(name='Admin', weight=0)
+    role = Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
 
 

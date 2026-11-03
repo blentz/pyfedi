@@ -47,7 +47,7 @@ from app.chat.util import send_message
 from app.community.util import save_icon_file, save_banner_file, search_for_community, is_bad_name
 from app.instance.util import bulk_follow
 from app.community.routes import do_subscribe
-from app.constants import EDITABLE_ROLE_IDS, ROLE_PERMISSIONS, REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_REVIEWING, ROLE_ADMIN
+from app.constants import ROLE_PERMISSIONS, REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_REVIEWING
 from app.email import send_registration_approved_email
 from app.federation_urls import object_base
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
@@ -2549,8 +2549,10 @@ def admin_user_edit(user_id):
 
         # Update user roles. The UI only lets the user choose 1 role but the DB structure allows for multiple roles per user.
         if user_access('change user roles', current_user.id):
-            db.session.execute(text('DELETE FROM user_role WHERE user_id = :user_id'), {'user_id': user.id})
-            user.roles.append(db.session.get(Role, form.role.data))
+            db.session.execute(text('DELETE FROM role_grant WHERE user_id = :user_id AND site_domain_id IS NULL'),
+                               {'user_id': user.id})
+            if form.role.data:   # 0 is "no role"
+                user.roles.append(db.session.get(Role, form.role.data))
             # user_access is @cache.memoize(timeout=50), so without this an
             # administrator stripped of their role went on passing every
             # permission check for up to fifty seconds after the change was
@@ -2567,9 +2569,10 @@ def admin_user_edit(user_id):
                                 UNION
                                 SELECT u.id
                                 FROM "user" u
-                                JOIN user_role ur ON u.id = ur.user_id AND ur.role_id = :role_admin AND u.deleted = false AND u.banned = false
-                                ORDER BY id"""),
-            {'role_admin': ROLE_ADMIN}).scalars())
+                                JOIN role_grant rg ON u.id = rg.user_id AND rg.site_domain_id IS NULL
+                                     AND u.deleted = false AND u.banned = false
+                                JOIN role r ON r.id = rg.role_id AND r.built_in
+                                ORDER BY id""")).scalars())
         set_setting('admin_ids', g.admin_ids)
 
         flash(_('Saved'))
@@ -2692,7 +2695,8 @@ def admin_users_add():
         home = domain_by_id(form.site_domain.data) if form.site_domain.data else default_domain()
         user.instance_id = instance_id_of(home)
         user.site_domain_id = home.id
-        user.roles.append(db.session.get(Role, form.role.data))
+        if form.role.data:   # 0 is "no role"
+            user.roles.append(db.session.get(Role, form.role.data))
         db.session.add(user)
         db.session.commit()
         finalize_user_setup(user)
@@ -2823,30 +2827,32 @@ def newsletter():
                            roles_with=roles_with('change instance settings'))
 
 
+def editable_role_ids() -> list[int]:
+    """The roles /admin/permissions edits: every role but the built-in Admin."""
+    return list(db.session.execute(select(Role.id).where(Role.built_in.is_(False)).order_by(Role.id)).scalars())
+
+
 @bp.route('/permissions', methods=['GET', 'POST'])
 @login_required
 @permission_required('change user roles')
 def admin_permissions():
     form = FlaskForm()
     if request.method == 'POST':
-        # DELETE scoped to the roles this page edits. It used to clear the whole
-        # table, while only roles 3 and 4 were written back -- so a save that
-        # changed nothing about Staff or Admin silently stripped every
-        # permission from every other role. Measured with a 'Moderator' role
-        # holding 'manage users': [('manage users',)] before, [] after.
-        db.session.execute(
-            text('DELETE FROM "role_permission" WHERE role_id IN :role_ids'),
-            {'role_ids': tuple(EDITABLE_ROLE_IDS)})
+        # Every role but the built-in Admin, which holds every permission (RB2). The DELETE is scoped to the roles
+        # written back: it used to clear the whole table while writing back only two (D938).
+        editable_ids = editable_role_ids()
+        if editable_ids:
+            db.session.execute(
+                text('DELETE FROM "role_permission" WHERE role_id IN :role_ids'),
+                {'role_ids': tuple(editable_ids)})
 
-        # Every user holding either editable role, not just Staff: an admin
-        # whose permissions changed kept the old answer for the length of
-        # user_access's memoize timeout exactly as a staffer did.
+        # Every holder of an edited role: each kept the old answer for the length of user_access's memoize timeout.
         affected_user_ids = list(db.session.execute(
-            text('SELECT DISTINCT user_id FROM "user_role" WHERE role_id IN :role_ids'),
-            {'role_ids': tuple(EDITABLE_ROLE_IDS)}).scalars())
+            text('SELECT DISTINCT user_id FROM "role_grant" WHERE role_id IN :role_ids'),
+            {'role_ids': tuple(editable_ids)}).scalars()) if editable_ids else []
 
         for permission in ROLE_PERMISSIONS:
-            for role in EDITABLE_ROLE_IDS:
+            for role in editable_ids:
                 if request.form.get(f'role_{role}_{permission}'):
                     db.session.add(RolePermission(role_id=role, permission=permission))
             for affected_user_id in affected_user_ids:
@@ -2859,7 +2865,7 @@ def admin_permissions():
 
         flash(_('Settings saved'))
 
-    roles = Role.query.filter(Role.id > 2).order_by(Role.weight).all()
+    roles = Role.query.filter(Role.built_in.is_(False)).order_by(Role.name).all()
 
     return render_template('admin/permissions.html', title=_('Role permissions'), roles=roles,
                            form=form, permissions=ROLE_PERMISSIONS,

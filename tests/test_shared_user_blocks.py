@@ -48,11 +48,11 @@ import pytest
 from sqlalchemy import text
 
 from app import db
-from app.constants import NOTIF_USER, ROLE_ADMIN, ROLE_STAFF, SRC_API, SRC_WEB
+from app.constants import NOTIF_USER, SRC_API, SRC_WEB
 from app.models import (BotChallenge, ChatMessage, Conversation,
-                         NotificationSubscription, Role, UserBlock, user_role)
+                         NotificationSubscription, Role, UserBlock, role_grant)
 from app.shared.user import block_another_user, bot_challenge_user, unblock_another_user
-from tests.factories import bearer, make_instance, make_user, web_ctx
+from tests.factories import admin_role, bearer, grant_role, make_instance, make_user, web_ctx
 
 
 def _seed_blockers():
@@ -74,16 +74,16 @@ def _seed_blockers():
     return SimpleNamespace(blocker=blocker, target=target)
 
 
-def _give_role(user, role_id, name):
-    """Put `user` in `user_role` against a Role with this id and name.
+def _give_role(user, name):
+    """Grant `user` the built-in Admin role ('Admin') or a role of this name (Staff: `is_staff()` reads the name)."""
+    grant_role(user, admin_role() if name == 'Admin' else Role.query.filter_by(name=name).first() or _new_role(name))
 
-    `user_role.role_id` is a foreign key to `role.id`, so the Role row has to
-    exist. `is_admin_or_staff()` reads the name.
-    """
-    db.session.add(Role(id=role_id, name=name, weight=0))
+
+def _new_role(name):
+    role = Role(name=name)
+    db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role_id))
-    db.session.commit()
+    return role
 
 
 def test_block_another_user_api_creates_the_block_and_returns_the_blocker(app, db_session):
@@ -185,7 +185,7 @@ def test_block_another_user_web_refuses_self_without_raising(app, db_session):
 
 def test_block_another_user_api_refuses_an_admin(app, db_session):
     s = _seed_blockers()
-    _give_role(s.target, ROLE_ADMIN, 'Admin')
+    _give_role(s.target, 'Admin')
 
     with pytest.raises(Exception, match='cannot_block_admin_or_staff'):
         block_another_user(s.target.id, SRC_API, bearer(s.blocker))
@@ -197,7 +197,7 @@ def test_block_another_user_api_refuses_staff(app, db_session):
     """The staff half of `is_admin_or_staff()`. Without this test that half
     could be dropped and every other test in this file would stay green."""
     s = _seed_blockers()
-    _give_role(s.target, ROLE_STAFF, 'Staff')
+    _give_role(s.target, 'Staff')
 
     with pytest.raises(Exception, match='cannot_block_admin_or_staff'):
         block_another_user(s.target.id, SRC_API, bearer(s.blocker))
@@ -212,7 +212,7 @@ def test_block_another_user_allows_a_target_holding_an_unprivileged_role(app, db
     version of :35 that refused EVERY user holding any role at all.
     """
     s = _seed_blockers()
-    _give_role(s.target, 2, 'Moderator')
+    _give_role(s.target, 'Moderator')
 
     returned = block_another_user(s.target.id, SRC_API, bearer(s.blocker))
 
@@ -227,8 +227,8 @@ def test_block_another_user_refuses_an_admin_who_also_holds_another_role(app, db
     is inserted first so the old read would see it. It now asks
     `is_admin_or_staff()`, which considers every role."""
     s = _seed_blockers()
-    _give_role(s.target, 2, 'Moderator')
-    _give_role(s.target, ROLE_ADMIN, 'Admin')
+    _give_role(s.target, 'Moderator')
+    _give_role(s.target, 'Admin')
 
     with pytest.raises(Exception, match='cannot_block_admin_or_staff'):
         block_another_user(s.target.id, SRC_API, bearer(s.blocker))
@@ -238,7 +238,7 @@ def test_block_another_user_refuses_an_admin_who_also_holds_another_role(app, db
 
 def test_block_another_user_web_refuses_an_admin_without_raising(app, db_session):
     s = _seed_blockers()
-    _give_role(s.target, ROLE_ADMIN, 'Admin')
+    _give_role(s.target, 'Admin')
 
     with web_ctx(app, s.blocker):
         from flask import session

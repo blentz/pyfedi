@@ -69,7 +69,7 @@ def admin_form_errors(app, user_name):
                 'email': 'newaccount@example.com',
                 'password': 'Str0ngPassw0rd',
                 'password2': 'Str0ngPassw0rd',
-                'role': '2',
+                'role': '0',
                 'ignore_bots': '0',
                 'hide_nsfw': '1',
                 'hide_nsfl': '1',

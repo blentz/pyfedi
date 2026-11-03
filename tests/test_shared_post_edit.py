@@ -74,7 +74,6 @@ from app.constants import (
     NOTIF_REPORT, POST_TYPE_ARTICLE, POST_TYPE_EVENT, POST_TYPE_IMAGE,
     POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO, SRC_API, SRC_WEB,
 )
-from app.constants import ROLE_ADMIN, ROLE_ADMIN_NAME
 from app.models import Event, File, Notification, Poll, PollChoice, Role
 from app.shared.post import edit_post
 from tests.factories import (
@@ -225,9 +224,9 @@ def _make_admin(user):
     get-or-create below names the role ROLE_ADMIN_NAME. The id stays
     ROLE_ADMIN so the row is shared with any other helper that made it.
     """
-    role = db.session.get(Role, ROLE_ADMIN)
+    role = Role.admin()
     if role is None:
-        role = Role(id=ROLE_ADMIN, name=ROLE_ADMIN_NAME, weight=0)
+        role = Role(name='Admin', built_in=True)
         db.session.add(role)
         db.session.commit()
     user.roles.append(role)

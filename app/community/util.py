@@ -35,7 +35,7 @@ from app.local_names import local_named, named_by_actor
 from app.storefront import domain_for_host, is_hosted_server
 from app.utils import get_request, gibberish, ensure_directory_exists, ap_datetime, instance_banned, get_task_session, \
     store_files_in_s3, guess_mime_type, patch_db_session, instance_allowed, get_setting, scale_gif, theme_list, \
-    add_to_modlog, role_access, sanitize_svg, can_create_post, can_create_post_reply, save_image_without_metadata
+    add_to_modlog, staff_role_has, sanitize_svg, can_create_post, can_create_post_reply, save_image_without_metadata
 from sqlalchemy import desc, text
 import os
 import boto3
@@ -1358,7 +1358,7 @@ def notify_admins_of_post_needing_approval(post):
                               targets=targets_data)
         admin.unread_notifications += 1
         db.session.add(notify)
-    if role_access('approve registrations', 3):
+    if staff_role_has('approve registrations'):
         for admin in Site.staff():
             notify = Notification(title='Approve new post',
                                   url=f'/admin/content?show=approval', user_id=admin.id,

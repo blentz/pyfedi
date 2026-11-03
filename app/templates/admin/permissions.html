@@ -18,18 +18,22 @@
             <table class="table table-striped" style="max-width: 500px;">
                 <tr>
                    <th> </th>
-                   <th class="text-center">{{ _('Staff') }}</th>
+                   {% for role in roles -%}
+                   <th class="text-center">{{ role.name }}</th>
+                   {% endfor -%}
                    <th class="text-center">{{ _('Admin') }}</th>
                    <th class="text-center">{{ _('User ID #1') }}</th>
                 </tr>
                 {% for permission in permissions -%}
                 <tr>
                     <th>{{ permission }}</th>
+                    {% for role in roles -%}
                     <td class="text-center">
-                        <input type="checkbox" name="role_3_{{ permission }}" {{ 'checked' if role_access(permission, 3) else '' }}>
+                        <input type="checkbox" name="role_{{ role.id }}_{{ permission }}" {{ 'checked' if role_access(permission, role.id) else '' }}>
                     </td>
+                    {% endfor -%}
                     <td class="text-center">
-                        <input type="checkbox" name="role_4_{{ permission }}" {{ 'checked' if role_access(permission, 4) else '' }}>
+                        <input type="checkbox" name="admin_role" checked disabled>
                     </td>
                     <td class="text-center">
                         <input type="checkbox" name="user_1" checked disabled>

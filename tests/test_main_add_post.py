@@ -16,7 +16,6 @@ import pytest
 from flask import g
 
 from app import db
-from app.constants import ROLE_ADMIN, ROLE_ADMIN_NAME
 from app.models import Community, CommunityFavorite, CommunityMember, Language, Role, Site, User
 from tests.factories import (make_community, make_community_member,
                              make_instance, make_user)
@@ -124,7 +123,7 @@ class TestTheChooser:
         client, joined, elsewhere = env
         db.session.get(Site, 1).community_creation_admin_only = True
         db.session.commit()
-        User.query.filter_by(user_name='alice').one().roles.append(Role(id=ROLE_ADMIN + 100, name=ROLE_ADMIN_NAME))
+        User.query.filter_by(user_name='alice').one().roles.append(Role(name='Admin', built_in=True))
         db.session.commit()
 
         html = client.get('/add_post').get_data(as_text=True)

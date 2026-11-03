@@ -29,7 +29,7 @@ from sqlalchemy import text
 
 from app import cache, db
 from app.constants import ROLE_PERMISSIONS
-from app.models import Role, RolePermission, User, user_role
+from app.models import Role, RolePermission, User, role_grant
 from app.utils import user_access
 from tests.factories import make_instance, make_user
 
@@ -38,9 +38,8 @@ pytestmark = pytest.mark.usefixtures('site')
 
 def _roles():
     roles = {}
-    for name, weight in (('Anonymous user', 0), ('Authenticated user', 1),
-                         ('Staff', 2), ('Admin', 3)):
-        role = Role(name=name, weight=weight)
+    for name in ('Anonymous user', 'Authenticated user', 'Staff', 'Admin'):
+        role = Role(name=name, built_in=name == 'Admin')   # Admin is the built-in role (RB16)
         db.session.add(role)
         roles[name] = role
     db.session.commit()
@@ -90,7 +89,7 @@ def users_admin(app, db_session):
     for permission in ('administer all users', 'change user roles'):
         db.session.add(RolePermission(role_id=roles['Admin'].id,
                                       permission=permission))
-    db.session.execute(user_role.insert().values(user_id=admin.id,
+    db.session.execute(role_grant.insert().values(user_id=admin.id,
                                                  role_id=roles['Admin'].id))
     db.session.commit()
 
@@ -122,7 +121,7 @@ def _add_payload(token, **overrides):
     data = {'user_name': 'newbie', 'email': 'newbie@example.com',
             'password': 'password123', 'password2': 'password123',
             'about': '', 'matrix_user_id': '', 'ignore_bots': '0',
-            'hide_nsfw': '1', 'hide_nsfl': '1', 'role': '2',
+            'hide_nsfw': '1', 'hide_nsfl': '1', 'role': '0',
             'submit': 'Save', 'csrf_token': token,
             'profile_file': (io.BytesIO(b''), ''),
             'banner_file': (io.BytesIO(b''), '')}
@@ -142,7 +141,7 @@ def _add(client, token, **overrides):
 
 
 def _edit_payload(token, **overrides):
-    data = {'admin_note': '', 'hide_nsfw': '1', 'hide_nsfl': '1', 'role': '2',
+    data = {'admin_note': '', 'hide_nsfw': '1', 'hide_nsfl': '1', 'role': '0',
             'submit': 'Save', 'csrf_token': token}
     data.update(overrides)
     return data
@@ -195,14 +194,16 @@ def test_the_role_selector_needs_change_user_roles(app, db_session):
     admin.verified = True
     db.session.commit()
     roles = _roles()
-    db.session.add(RolePermission(role_id=roles['Admin'].id,
-                                  permission='administer all users'))
-    db.session.execute(user_role.insert().values(user_id=admin.id,
-                                                 role_id=roles['Admin'].id))
+    # An editor role, not the built-in Admin, which holds every permission and so 'change user roles' too
+    editor = Role(name='Editor')
+    db.session.add(editor)
+    db.session.commit()
+    db.session.add(RolePermission(role_id=editor.id, permission='administer all users'))
+    db.session.execute(role_grant.insert().values(user_id=admin.id, role_id=editor.id))
     db.session.commit()
 
     target = _target()
-    db.session.execute(user_role.insert().values(user_id=target.id,
+    db.session.execute(role_grant.insert().values(user_id=target.id,
                                                  role_id=roles['Staff'].id))
     db.session.commit()
 
@@ -455,7 +456,7 @@ def test_the_edit_form_is_prefilled_on_a_get(users_admin):
     target.can_send_pm = False
     target.admin_note = 'stored note'
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=target.id,
+    db.session.execute(role_grant.insert().values(user_id=target.id,
                                                  role_id=roles['Staff'].id))
     db.session.commit()
 
@@ -483,7 +484,7 @@ def test_a_user_with_no_role_leaves_the_selector_at_its_default(users_admin):
     with patch('app.admin.routes.render_template', return_value='rendered') as render:
         client.get(f'/admin/user/{target.id}/edit')
 
-    assert render.call_args.kwargs['form'].role.data == 2
+    assert render.call_args.kwargs['form'].role.data == 0   # 0 is the form's "no role"
 
 
 def test_editing_a_remote_user_warns_that_it_will_be_overwritten(users_admin):
@@ -624,12 +625,12 @@ def test_a_role_change_invalidates_the_permission_cache(users_admin):
     """
     client, token, roles, admin = users_admin
     target = _target()
-    db.session.execute(user_role.insert().values(user_id=target.id,
+    db.session.execute(role_grant.insert().values(user_id=target.id,
                                                  role_id=roles['Admin'].id))
     db.session.commit()
 
     with patch('app.admin.routes.cache.delete_memoized') as delete_memoized:
-        _edit(client, token, target.id, role='2')
+        _edit(client, token, target.id, role='0')
 
     invalidated = {call.args for call in delete_memoized.call_args_list
                    if call.args and call.args[0] is user_access}
@@ -645,12 +646,12 @@ def test_a_demotion_actually_removes_the_role(users_admin):
                                   permission='ban users'))
     db.session.commit()
     target = _target()
-    db.session.execute(user_role.insert().values(user_id=target.id,
+    db.session.execute(role_grant.insert().values(user_id=target.id,
                                                  role_id=roles['Admin'].id))
     db.session.commit()
     assert user_access('ban users', target.id) is True
 
-    _edit(client, token, target.id, role='2')
+    _edit(client, token, target.id, role='0')
 
     assert user_access('ban users', target.id) is False
 
@@ -678,7 +679,7 @@ def test_a_banned_user_is_not_counted_as_an_admin(users_admin):
 
     client, token, roles, admin = users_admin
     target = _target()
-    db.session.execute(user_role.insert().values(user_id=target.id,
+    db.session.execute(role_grant.insert().values(user_id=target.id,
                                                  role_id=roles['Admin'].id))
     db.session.commit()
 

@@ -83,11 +83,10 @@ from app.constants import (
     NOTIF_REPORT_ESCALATION,
     POST_STATUS_PUBLISHED,
     REPORT_TYPE_POST,
-    ROLE_ADMIN,
     SRC_API,
     SRC_WEB,
 )
-from app.models import Instance, Notification, Report, Role, User, user_role
+from app.models import Instance, Notification, Report, Role, User, role_grant
 from app.shared.post import delete_post, report_post, restore_post
 from tests.factories import (
     bearer,
@@ -137,14 +136,14 @@ def seed_site_admin(s, name='siteadmin'):
     foreign key to role.id and the query matches on that id, not on the role's
     name.
     """
-    role = db.session.get(Role, ROLE_ADMIN)
+    role = Role.admin()
     if role is None:
-        role = Role(id=ROLE_ADMIN, name='Admin', weight=0)
+        role = Role(name='Admin', built_in=True)
         db.session.add(role)
         db.session.commit()
     admin = make_user(s.instance, name, local=True)
-    db.session.execute(user_role.insert().values(user_id=admin.id,
-                                                 role_id=ROLE_ADMIN))
+    db.session.execute(role_grant.insert().values(user_id=admin.id,
+                                                 role_id=role.id))
     db.session.commit()
     return admin
 

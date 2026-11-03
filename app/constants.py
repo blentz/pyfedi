@@ -105,11 +105,9 @@ NOTIF_NEW_POST = 42         # a new post needs approval
 # --model/db default--
 NOTIF_DEFAULT = 999  # default entry
 
-ROLE_STAFF = 3
-ROLE_ADMIN = 4
-# D965: is_admin()/is_staff() match these role NAMES, so they are spelled once here
+# D965: is_staff() matches this role NAME, so it is spelled once here. Admin is the built-in role (Role.built_in),
+# found by that flag. RBAC build step 6 removes is_staff() and this with it.
 ROLE_STAFF_NAME = 'Staff'
-ROLE_ADMIN_NAME = 'Admin'
 
 DOWNVOTE_ACCEPT_NONE = -1
 DOWNVOTE_ACCEPT_ALL = 0
@@ -205,11 +203,6 @@ ROLE_PERMISSIONS = (
     'manage users',
 )
 
-# The roles the permissions page edits: 3 = Staff, 4 = Admin. Roles 1 and 2
-# (Anonymous, Authenticated) hold no permissions, and any role beyond these is
-# not represented on the page -- which is why the page's DELETE is scoped to
-# these ids rather than clearing the whole table.
-EDITABLE_ROLE_IDS = (3, 4)
 
 # ActivityPub media types (interop C1 item 5)
 AP_MEDIA_TYPE = 'application/activity+json'

@@ -9,8 +9,8 @@ from flask import g
 from app import db
 import app.api.alpha.utils.misc as misc
 from app.api.alpha.utils.misc import get_resolve_object
-from app.constants import POST_STATUS_DRAFT, ROLE_ADMIN, VISIBILITY_FOLLOWERS
-from app.models import CommunityMember, Feed, Post, Role, Site, User, UserFollower, user_role
+from app.constants import POST_STATUS_DRAFT, VISIBILITY_FOLLOWERS
+from app.models import CommunityMember, Feed, Post, Role, Site, User, UserFollower, role_grant
 from app.storefront import domain_for_host
 from tests.factories import make_community, make_instance, make_local_feed, make_post, make_post_reply, make_user
 from tests.test_local_only_invisible import _post, world  # noqa: F401
@@ -587,10 +587,10 @@ def moderator_of(community):
 
 def an_admin():
     user = caller('adam')
-    role = db.session.get(Role, ROLE_ADMIN) or Role(id=ROLE_ADMIN, name='Admin', weight=0)
+    role = Role.admin() or Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
     assert user.id != 1 and db.session.get(User, user.id).is_admin()
     return user

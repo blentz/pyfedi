@@ -527,11 +527,11 @@ def test_the_create_form_disables_the_instance_feed_box_for_non_admins(
     """
     instance, owner, stranger = _seed()
     if is_admin:
-        from app.models import Role, user_role
-        role = Role(name='Admin', weight=0)
+        from app.models import Role, role_grant
+        role = Role(name='Admin', built_in=True)
         db.session.add(role)
         db.session.commit()
-        db.session.execute(user_role.insert().values(user_id=owner.id, role_id=role.id))
+        db.session.execute(role_grant.insert().values(user_id=owner.id, role_id=role.id))
         db.session.commit()
 
     captured, fake_render = _capture_form()
@@ -652,11 +652,11 @@ def test_editing_someone_elses_feed_is_a_404(app, db_session):
 
 
 def _admin(user):
-    from app.models import Role, user_role
-    role = Role(name='Admin', weight=0)
+    from app.models import Role, role_grant
+    role = Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
     assert user.is_admin()
 
@@ -1143,13 +1143,13 @@ def test_an_admin_sees_the_instance_feed_box_enabled_on_the_edit_form(app, db_se
     """:154's False arm. The create route's twin is covered above; this one is
     separate because the two forms are different classes and the campaign has
     already watched a copy-pasted pair diverge inside this very function."""
-    from app.models import Role, user_role
+    from app.models import Role, role_grant
     instance, owner, stranger = _seed()
     feed = _feed(owner)
-    role = Role(name='Admin', weight=0)
+    role = Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=owner.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=owner.id, role_id=role.id))
     db.session.commit()
     assert owner.is_admin()
 

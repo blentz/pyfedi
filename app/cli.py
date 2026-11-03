@@ -36,7 +36,7 @@ from app.auth.util import random_token
 from app.community.util import is_bad_name
 from app.constants import NOTIF_COMMUNITY, NOTIF_POST, NOTIF_REPLY, POST_STATUS_SCHEDULED, POST_STATUS_PUBLISHED, \
     POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_IMAGE, NOTIF_REMINDER, POST_TYPE_VIDEO, POST_TYPE_ARTICLE, SRC_API, \
-    ROLE_ADMIN_NAME, ANNOUNCE_MAX_OBJECTS
+    ANNOUNCE_MAX_OBJECTS
 from app.email import mail_name, send_email
 from app.federation_urls import activity_id
 from app.error_counts import KEEP_DAYS
@@ -259,7 +259,7 @@ def register(app):
             db.session.add(Language(code='uk', name='Українська'))
 
             # Initial roles (ids 1-4, app/roles.py)
-            admin_role = seed_default_roles()[ROLE_ADMIN_NAME]   # the first account's, below
+            admin_role = seed_default_roles()['Admin']   # the first account's, below
 
             # Add cron jobs to db to display warning to user if not run recently.
             # Each job has its 'frequency' set with a slight buffer from the recommended time in INSTALL.md
@@ -345,7 +345,7 @@ def register(app):
                 return
 
             # Get the Admin role for assigning to Lemmy admins
-            admin_role = Role.query.filter_by(name=ROLE_ADMIN_NAME).first()
+            admin_role = Role.admin()
 
             print("\nImporting users...")
             with lemmy_engine.connect() as lemmy_conn:

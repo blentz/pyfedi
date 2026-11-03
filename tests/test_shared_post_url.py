@@ -93,7 +93,7 @@ from app import db
 from app.constants import (
     POST_STATUS_SCHEDULED, POST_TYPE_ARTICLE, POST_TYPE_EVENT,
     POST_TYPE_IMAGE, POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO,
-    ROLE_ADMIN, SRC_API, SRC_WEB,
+    SRC_API, SRC_WEB,
 )
 from app.models import (
     Domain, Event, File, Poll, PollChoice, PollChoiceVote, Role, utcnow,
@@ -165,9 +165,7 @@ def _make_is_admin(user):
     `tests/test_shared_post_lifecycle.py:143` builds the same combined shape
     (`Role(id=ROLE_ADMIN, name='Admin', weight=0)`) in one step.
     """
-    _make_admin(user)
-    db.session.get(Role, ROLE_ADMIN).name = 'Admin'
-    db.session.commit()
+    _make_admin(user)   # the built-in Admin role is what is_admin() reads now (RB16)
 
 
 class TestExistingUrlTypeDispatch:
@@ -435,7 +433,7 @@ class TestStickyPermission:
         this gate used to spell refused them."""
         s = self._seed_sticky()
         staffer = make_user(s.instance, 'staffer', local=True)
-        staffer.roles.append(Role(name='Staff', weight=0))
+        staffer.roles.append(Role(name='Staff'))
         db.session.commit()
 
         assert s.community.is_moderator(staffer) is False

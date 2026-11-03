@@ -1271,7 +1271,7 @@ def delete_profile(actor):
                 flash('This user cannot be deleted.')
                 return redirect(safe_redirect_target(request.args.get('redirect'), f'/u/{actor}'))
             # D1038. These two flags are read BEFORE `delete_dependencies()`,
-            # which executes `DELETE FROM "user_role" WHERE user_id = ...`.
+            # which executes `DELETE FROM "role_grant" WHERE user_id = ...`.
             # Read afterwards, as they were, `is_admin()` and `is_staff()` --
             # which both walk `self.roles` -- could only ever answer False, so
             # the warning below was dead code for every account it was written

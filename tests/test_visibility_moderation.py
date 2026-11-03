@@ -32,7 +32,7 @@ def world(app, db_session, monkeypatch):
     w.admin.private_key = 'a local account with keys'
     db.session.commit()
     role = grant_permission(w.admin, 'administer all communities')
-    role.name = 'Admin'  # the web removal routes act only for a user the model calls an admin
+    role.built_in = True  # the built-in Admin role (RB16): the web removal routes act only for an admin
     db.session.commit()
     w.stranger.private_key = 'a local account with keys'
     db.session.commit()

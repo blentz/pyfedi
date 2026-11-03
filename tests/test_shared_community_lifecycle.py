@@ -674,11 +674,11 @@ def _make_site_admin(user):
     produce a site admin however it is called -- the name must be the
     literal string 'Admin'.
     """
-    from app.models import Role, user_role
-    role = Role(name='Admin', weight=0)
+    from app.models import Role, role_grant
+    role = Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
     return role
 
@@ -695,11 +695,11 @@ def _make_site_staff(user):
     `is_admin()` alone, so a Staff-only user is refused here where the four
     siblings would admit them.
     """
-    from app.models import Role, user_role
-    role = Role(name='Staff', weight=0)
+    from app.models import Role, role_grant
+    role = Role(name='Staff')
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
     return role
 

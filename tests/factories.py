@@ -22,6 +22,7 @@ from unittest.mock import patch
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from flask import current_app
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from flask_login import login_user
 
 from app import db, storefront
@@ -36,7 +37,7 @@ from app.models import (ActivityPubLog, BannedInstances, ChatMessage, Community,
                         InstanceBlock, Notification, NotificationSubscription, Poll, PollChoice, Post, PostReply,
                         PostReplyBookmark, PostReplyVote, PostVote, Role, RolePermission, Site, SiteDomain, User,
                         UserBlock, UserFollower, UserFollowRequest, UserRegistration, hidden_posts, read_posts,
-                        user_role, utcnow)
+                        role_grant, utcnow)
 from app.utils import get_deduped_post_ids
 
 
@@ -429,22 +430,44 @@ def make_site() -> Site:
 
 
 def grant_permission(user: User, permission: str) -> Role:
-    """Create a Role carrying `permission`, and assign it to `user`.
+    """Create a Role carrying `permission`, and grant it to `user` instance-wide.
 
-    `user_access(permission, user.id)` reads role_permission joined to the
-    `user_role` association table (app/utils.py) -- there is no UserRole model,
-    `user_role` is a plain db.Table (app/models.py:918), so the assignment row
-    is inserted directly through it rather than via a relationship object.
+    `user_access(permission, user.id)` reads role_permission joined to `role_grant` (app/utils.py). The role is
+    named after the permission, so a second grant of the same permission reuses it (role names are unique).
     """
-    role = Role(name=f'role-{permission}', weight=0)
-    db.session.add(role)
+    role = Role.query.filter_by(name=f'role-{permission}').first()
+    if role is None:
+        role = Role(name=f'role-{permission}')
+        db.session.add(role)
+        db.session.commit()
+        db.session.add(RolePermission(role_id=role.id, permission=permission))
+    grant_role(user, role)
+    return role
+
+
+def admin_role() -> Role:
+    """The built-in Admin role (spec 2026-11-03-rbac-design.md RB16), made if this test has none yet."""
+    role = Role.admin()
+    if role is None:
+        role = Role(name='Admin', built_in=True)
+        db.session.add(role)
+        db.session.commit()
+    return role
+
+
+def grant_role(user: User, role: Role, site_domain_id: int | None = None) -> None:
+    """Grant `role` to `user`, instance-wide unless `site_domain_id` names a domain."""
+    # Granting what is already granted changes nothing, as a second grant of a permission did before roles were
+    # unique by name (each grant_permission call used to make its own role).
+    db.session.execute(postgresql_insert(role_grant).values(user_id=user.id, role_id=role.id,
+                                                            site_domain_id=site_domain_id).on_conflict_do_nothing())
     db.session.commit()
 
-    role_permission = RolePermission(role_id=role.id, permission=permission)
-    db.session.add(role_permission)
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
-    db.session.commit()
-    return role
+
+def make_admin(user: User) -> User:
+    """Give `user` the built-in Admin role."""
+    grant_role(user, admin_role())
+    return user
 
 
 def make_community_member(user: User, community: Community, is_moderator: bool = False) -> CommunityMember:

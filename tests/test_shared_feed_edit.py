@@ -26,7 +26,7 @@ from flask import g
 from app import db
 from app.constants import SRC_API, SRC_WEB
 from app.models import (Community, Feed, FeedItem, FeedJoinRequest, FeedMember, File,
-                        Role, Site, SiteDomain, User, user_role)
+                        Role, Site, SiteDomain, User, role_grant)
 from app.shared.feed import edit_feed
 from app.storefront import clear_domain_cache, domain_for_host
 from tests.factories import (make_community, make_feed_item, make_feed_join_request,
@@ -64,10 +64,10 @@ def _burn_a_seed():
 def _make_admin(user: User) -> Role:
     """A role named exactly 'Admin' -- what is_admin() looks for once the id-1
     seat is burned (app/models.py:1258-1264)."""
-    role = Role(name='Admin', weight=0)
+    role = Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
     return role
 

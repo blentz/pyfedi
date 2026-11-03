@@ -30,7 +30,7 @@ from flask import g
 
 from app import db
 from app.constants import ALLOWLIST_INTENSE
-from app.models import AllowedInstances, BannedInstances, Role, user_role, utcnow
+from app.models import AllowedInstances, BannedInstances, Role, role_grant, utcnow
 from app.utils import can_create_post, can_create_post_reply, get_setting, set_setting
 from tests.factories import (ban_user_from_community, make_community, make_community_member,
                              make_instance, make_instance_ban, make_user)
@@ -42,10 +42,10 @@ def _make_admin(user):
     grant_permission's `role-<permission>` naming, is needed to prove the
     is_admin() path without relying on the id==1 special case.
     """
-    role = Role(name='Admin', weight=0)
+    role = Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
     return role
 

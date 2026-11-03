@@ -330,11 +330,11 @@ def make_site_admin(user):
     is called. The name must be the literal string 'Admin' -- sub-project 39
     lost a task to a helper that named the role 'role-4'.
     """
-    from app.models import Role, user_role
-    role = Role(name='Admin', weight=0)
+    from app.models import Role, role_grant
+    role = Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
     return role
 

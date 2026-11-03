@@ -728,16 +728,16 @@ def _staff(name='staffer'):
     (app/models.py:1259-1275). A permission granted through a bespoke role, as
     `grant_permission` makes, does not satisfy it.
     """
-    from app.models import Role, user_role
+    from app.models import Role, role_grant
 
     user = make_user(instance(), name, local=True)
     db.session.commit()
     role = Role.query.filter_by(name='Staff').first()
     if role is None:
-        role = Role(name='Staff', weight=2)
+        role = Role(name='Staff')
         db.session.add(role)
         db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
     assert user.is_admin_or_staff()
     return user

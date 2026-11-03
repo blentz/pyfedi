@@ -19,7 +19,7 @@ from app.auth.util import can_be_a_local_user_name, create_new_user
 from app.community.forms import AddCommunityForm
 from app.constants import SRC_API
 from app.feed.forms import AddCopyFeedForm
-from app.models import Community, Feed, Instance, RolePermission, Site, User, user_role
+from app.models import Community, Feed, Instance, RolePermission, Site, User, role_grant
 from app.shared.community import make_community
 from app.storefront import default_domain
 from app.utils import user_name_is_taken
@@ -43,7 +43,7 @@ def _admin(app, domains):
     roles = _roles()
     db.session.add(RolePermission(role_id=roles['Admin'].id, permission='administer all users'))
     db.session.add(RolePermission(role_id=roles['Admin'].id, permission='change user roles'))
-    db.session.execute(user_role.insert().values(user_id=admin.id, role_id=roles['Admin'].id))
+    db.session.execute(role_grant.insert().values(user_id=admin.id, role_id=roles['Admin'].id))
     db.session.commit()
     client = app.test_client()
     login(client, admin)

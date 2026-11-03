@@ -6,7 +6,7 @@ import pytest
 from flask import g
 
 from app import db
-from app.models import Instance, Referral, Role, Site, SiteDomain, User, UserRegistration, user_role
+from app.models import Instance, Referral, Role, Site, SiteDomain, User, UserRegistration, role_grant
 from app.referral import (REFERRAL_MODE, derive_code, generate_code, may_generate, open_registrations, record_referral,
                           referral_link, referral_namespace, referral_qr_svg, referrer_for, remaining_signups)
 from app.storefront import clear_domain_cache, default_domain, domain_by_id, registration_mode_on
@@ -31,10 +31,10 @@ def _mode(mode=REFERRAL_MODE):
 def _role(user, name, weight):
     role = Role.query.filter_by(name=name).first()
     if role is None:
-        role = Role(name=name, weight=weight)
+        role = Role(name=name, built_in=name == 'Admin')   # Admin is the built-in role (RB16)
         db.session.add(role)
         db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
 
 

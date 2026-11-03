@@ -9,9 +9,9 @@ from flask import session as flask_session
 from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.constants import POST_STATUS_DRAFT, ROLE_ADMIN_NAME, VISIBILITY_FOLLOWERS
+from app.constants import POST_STATUS_DRAFT, VISIBILITY_FOLLOWERS
 from app.discovery import views
-from app.models import Role, user_role
+from app.models import Role, role_grant
 from app.utils import set_setting
 from tests.discovery_fixtures import fresh_cache  # noqa: F401
 from tests.factories import make_user
@@ -172,10 +172,10 @@ def test_staff_and_the_author_may_open_what_is_hidden_from_others(app, world, wh
     viewer = {'author': world.bob, 'moderator': world.alice, 'admin': None}[who]
     if viewer is None:
         viewer = _viewer(client)
-        role = Role(name=ROLE_ADMIN_NAME)
+        role = Role(name='Admin', built_in=True)
         db.session.add(role)
         db.session.flush()
-        db.session.execute(user_role.insert().values(user_id=viewer.id, role_id=role.id))
+        db.session.execute(role_grant.insert().values(user_id=viewer.id, role_id=role.id))
         db.session.commit()
     else:
         login(client, viewer)

@@ -28,8 +28,9 @@ import pytest
 from sqlalchemy import text
 
 from app import cache, db
-from app.constants import EDITABLE_ROLE_IDS, ROLE_ADMIN_NAME, ROLE_PERMISSIONS, ROLE_STAFF_NAME
-from app.models import Role, RolePermission, user_role
+from app.constants import ROLE_PERMISSIONS, ROLE_STAFF_NAME
+from app.roles import seed_default_roles
+from app.models import Role, RolePermission, role_grant
 from app.utils import role_access, user_access
 from tests.factories import make_instance, make_user
 
@@ -97,17 +98,18 @@ def test_the_vocabulary_has_no_duplicates():
 
 
 def _role_name_literals_in_source():
-    """Every `'Admin'`/`'Staff'` literal used as a role name in `app/`: compared
-    against something (`role.name == 'Admin'`) or passed as `name=` (`Role(name=
-    'Admin')`, `filter_by(name='Admin')`). Display strings like `_('Admin')` are
-    neither, so they are not collected."""
+    """Every `'Admin'`/`'Staff'` literal used to FIND a role in `app/`: compared
+    against something (`role.name == 'Admin'`) or passed as `name=` to a lookup
+    (`filter_by(name='Admin')`). Creating a role is not finding one, so
+    `Role(name='Admin', built_in=True)` in app/roles.py is not collected, and
+    display strings like `_('Admin')` are neither."""
     names = {'Admin', 'Staff'}
     found = []
     for path in sorted(APP_ROOT.rglob('*.py')):
         for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
             if isinstance(node, ast.Compare):
                 operands = [node.left, *node.comparators]
-            elif isinstance(node, ast.Call):
+            elif isinstance(node, ast.Call) and getattr(node.func, 'id', None) != 'Role':
                 operands = [k.value for k in node.keywords if k.arg == 'name']
             else:
                 continue
@@ -117,13 +119,13 @@ def _role_name_literals_in_source():
     return found
 
 
-def test_role_names_are_spelled_only_through_their_constants():
-    """D965, fixed: `is_admin()` and `is_staff()` matched the role NAMES 'Admin'
-    and 'Staff' as bare literals, and the CLI seeded and looked them up the same
-    way, with no constant behind them -- one rename away from every admin
-    silently losing `is_admin()`. They now go through ROLE_ADMIN_NAME and
-    ROLE_STAFF_NAME, and this ratchet keeps a new literal from creeping back."""
-    assert (ROLE_ADMIN_NAME, ROLE_STAFF_NAME) == ('Admin', 'Staff')
+def test_no_role_is_found_by_a_literal_name():
+    """D965, then RB16: `is_admin()` and `is_staff()` matched the role NAMES
+    'Admin' and 'Staff' as bare literals -- one rename away from every admin
+    silently losing `is_admin()`. Admin is now the built-in role, found by
+    `Role.built_in`; Staff is found through ROLE_STAFF_NAME until RBAC step 6
+    removes `is_staff()`. This ratchet keeps a literal lookup from creeping back."""
+    assert ROLE_STAFF_NAME == 'Staff'
     assert _role_name_literals_in_source() == []
 
 
@@ -133,16 +135,13 @@ def test_role_names_are_spelled_only_through_their_constants():
 
 
 def _roles():
-    """The four seeded roles, in the order `flask init-db` creates them, so
-    Staff is 3 and Admin is 4 -- which is what EDITABLE_ROLE_IDS hard-codes."""
-    roles = {}
-    for name, weight in (('Anonymous user', 0), ('Authenticated user', 1),
-                         ('Staff', 2), ('Admin', 3)):
-        role = Role(name=name, weight=weight)
-        db.session.add(role)
-        roles[name] = role
+    """The roles `flask init-db` seeds (the built-in Admin, and Staff with its
+    permissions) plus a Moderator role, so the page has two roles to edit: it
+    edits every role but the built-in Admin, which holds every permission."""
+    roles = seed_default_roles()
+    roles['Moderator'] = Role(name='Moderator')
+    db.session.add(roles['Moderator'])
     db.session.commit()
-    assert (roles['Staff'].id, roles['Admin'].id) == EDITABLE_ROLE_IDS
     return roles
 
 
@@ -182,10 +181,8 @@ def no_memoized_answers():
 
 @pytest.fixture
 def permissions_admin(app, db_session):
-    """An admin who is NOT user 1 (fact 347) and holds the role the page
-    itself requires, through the Admin role rather than a bespoke one -- the
-    page rewrites that role's permissions, so the caller's own access is part
-    of what is under test."""
+    """An admin who is NOT user 1 (fact 347) and holds the built-in Admin role,
+    which the page cannot edit: a save never takes away the caller's own access."""
     instance = make_instance('test.piefed.local', software='piefed')
     founder = make_user(instance, 'founder', local=True)
     assert founder.id == 1
@@ -195,9 +192,7 @@ def permissions_admin(app, db_session):
     assert admin.id != 1
 
     roles = _roles()
-    _grant(roles['Admin'], *ROLE_PERMISSIONS)
-    _grant(roles['Staff'], 'approve registrations', 'ban users')
-    db.session.execute(user_role.insert().values(user_id=admin.id,
+    db.session.execute(role_grant.insert().values(user_id=admin.id,
                                                  role_id=roles['Admin'].id))
     db.session.commit()
 
@@ -272,7 +267,7 @@ def test_unchecking_every_box_for_a_permission_does_not_delete_it(
     client, token, roles, admin = permissions_admin
 
     kept = [p for p in ROLE_PERMISSIONS if p != 'approve registrations']
-    _response, render = _save(client, token, **{str(roles['Admin'].id): kept})
+    _response, render = _save(client, token, **{str(roles['Moderator'].id): kept})
 
     # Gone from the table, as it should be -- nobody holds it any more.
     assert ('approve registrations' not in
@@ -282,8 +277,8 @@ def test_unchecking_every_box_for_a_permission_does_not_delete_it(
 
     # And grantable again: the second save restores it.
     _response, _render = _save(client, token,
-                               **{str(roles['Admin'].id): list(ROLE_PERMISSIONS)})
-    assert role_access('approve registrations', roles['Admin'].id) is True
+                               **{str(roles['Moderator'].id): list(ROLE_PERMISSIONS)})
+    assert role_access('approve registrations', roles['Moderator'].id) is True
 
 
 def test_the_page_offers_every_permission_even_on_a_fresh_instance(
@@ -315,23 +310,20 @@ def test_the_page_offers_every_permission_even_on_a_fresh_instance(
 def test_a_save_does_not_strip_a_role_the_page_does_not_edit(permissions_admin):
     """D938's pin, inverted.
 
-    `DELETE FROM role_permission` cleared the whole table, and only roles 3 and
-    4 were written back -- so a save that changed nothing about Staff or Admin
-    silently removed every permission from every other role. Measured with a
-    'Moderator' role holding 'manage users': `[('manage users',)]` before,
-    `[]` after.
+    `DELETE FROM role_permission` cleared the whole table, and only the edited
+    roles were written back -- so a save silently removed every permission from
+    every other role. Measured with a 'Moderator' role holding 'manage users':
+    `[('manage users',)]` before, `[]` after. The page now edits every role but
+    the built-in Admin, so Admin is the role it must leave alone.
     """
     client, token, roles, admin = permissions_admin
-    moderator = Role(name='Moderator', weight=5)
-    db.session.add(moderator)
-    db.session.commit()
-    _grant(moderator, 'manage users', 'ban users')
+    _grant(roles['Admin'], 'manage users')
 
-    _save(client, token, **{str(roles['Admin'].id): list(ROLE_PERMISSIONS)})
+    _save(client, token, **{str(roles['Moderator'].id): list(ROLE_PERMISSIONS)})
 
     surviving = sorted(permission for role_id, permission in _rows()
-                       if role_id == moderator.id)
-    assert surviving == ['ban users', 'manage users']
+                       if role_id == roles['Admin'].id)
+    assert surviving == ['manage users']
 
 
 def test_a_save_still_replaces_the_editable_roles_entirely(permissions_admin):
@@ -342,7 +334,7 @@ def test_a_save_still_replaces_the_editable_roles_entirely(permissions_admin):
     assert role_access('ban users', roles['Staff'].id) is True
 
     _save(client, token, **{str(roles['Staff'].id): ['approve registrations'],
-                            str(roles['Admin'].id): list(ROLE_PERMISSIONS)})
+                            str(roles['Moderator'].id): list(ROLE_PERMISSIONS)})
 
     assert role_access('ban users', roles['Staff'].id) is False
     assert role_access('approve registrations', roles['Staff'].id) is True
@@ -375,13 +367,16 @@ def test_the_cache_invalidation_names_the_permission_and_every_affected_user(
     client, token, roles, admin = permissions_admin
     instance = make_instance('other.example', software='piefed')
     staffer = make_user(instance, 'staffer', local=True)
+    moderator = make_user(instance, 'moderator', local=True)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=staffer.id,
+    db.session.execute(role_grant.insert().values(user_id=staffer.id,
                                                  role_id=roles['Staff'].id))
+    db.session.execute(role_grant.insert().values(user_id=moderator.id,
+                                                 role_id=roles['Moderator'].id))
     db.session.commit()
 
     with patch('app.admin.routes.cache.delete_memoized') as delete_memoized:
-        _save(client, token, **{str(roles['Admin'].id): list(ROLE_PERMISSIONS)})
+        _save(client, token, **{str(roles['Moderator'].id): list(ROLE_PERMISSIONS)})
 
     # `cache` is shared, so the patch also catches invalidations other code
     # makes during the request; only the user_access ones are this page's.
@@ -394,11 +389,12 @@ def test_the_cache_invalidation_names_the_permission_and_every_affected_user(
         assert isinstance(permission, str), (
             f'{permission!r} is not the key user_access is memoized under')
 
-    # Every permission, for every user holding either editable role -- the
-    # staffer AND the admin, which is the half the old code never attempted.
+    # Every permission, for every user holding an edited role -- the staffer
+    # AND the moderator; the old code only ever collected one role's holders.
+    # The admin holds only the built-in role, which the page does not edit.
     assert set(calls) == {(user_access, permission, user_id)
                           for permission in ROLE_PERMISSIONS
-                          for user_id in (staffer.id, admin.id)}
+                          for user_id in (staffer.id, moderator.id)}
 
 
 def test_a_revoked_permission_is_actually_revoked(permissions_admin):
@@ -409,13 +405,13 @@ def test_a_revoked_permission_is_actually_revoked(permissions_admin):
     instance = make_instance('other.example', software='piefed')
     staffer = make_user(instance, 'staffer', local=True)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=staffer.id,
+    db.session.execute(role_grant.insert().values(user_id=staffer.id,
                                                  role_id=roles['Staff'].id))
     db.session.commit()
     assert user_access('ban users', staffer.id) is True
 
     _save(client, token, **{str(roles['Staff'].id): ['approve registrations'],
-                            str(roles['Admin'].id): list(ROLE_PERMISSIONS)})
+                            str(roles['Moderator'].id): list(ROLE_PERMISSIONS)})
 
     assert user_access('ban users', staffer.id) is False
     assert user_access('approve registrations', staffer.id) is True
@@ -436,19 +432,15 @@ def test_a_save_reports_that_it_saved(permissions_admin):
     assert [call.args[0] for call in flashed.call_args_list] == ['Settings saved']
 
 
-def test_the_page_lists_the_roles_above_authenticated_user(permissions_admin):
-    """`Role.id > 2`, ordered by weight. Anonymous and Authenticated hold no
-    permissions and have no column on the page."""
+def test_the_page_lists_every_role_but_the_built_in_admin(permissions_admin):
+    """By name. Admin holds every permission and has no column on the page."""
     client, token, roles, admin = permissions_admin
-    moderator = Role(name='Moderator', weight=5)
-    db.session.add(moderator)
-    db.session.commit()
 
     with patch('app.admin.routes.render_template', return_value='rendered') as render:
         client.get('/admin/permissions')
 
     listed = [role.name for role in render.call_args.kwargs['roles']]
-    assert listed == ['Staff', 'Admin', 'Moderator']
+    assert listed == ['Moderator', 'Staff']
 
 
 def test_a_get_changes_nothing(permissions_admin):
@@ -470,11 +462,11 @@ def test_a_permission_ticked_for_one_role_is_not_granted_to_the_other(
     client, token, roles, admin = permissions_admin
 
     _save(client, token, **{str(roles['Staff'].id): ['ban users'],
-                            str(roles['Admin'].id): ['approve registrations']})
+                            str(roles['Moderator'].id): ['approve registrations']})
 
     assert role_access('ban users', roles['Staff'].id) is True
-    assert role_access('ban users', roles['Admin'].id) is False
-    assert role_access('approve registrations', roles['Admin'].id) is True
+    assert role_access('ban users', roles['Moderator'].id) is False
+    assert role_access('approve registrations', roles['Moderator'].id) is True
     assert role_access('approve registrations', roles['Staff'].id) is False
 
 
@@ -499,11 +491,12 @@ def test_the_template_renders_a_checkbox_for_every_permission(permissions_admin)
     body = response.get_data(as_text=True)
     assert response.status_code == 200
     for permission in ROLE_PERMISSIONS:
-        for role_id in EDITABLE_ROLE_IDS:
-            assert f'name="role_{role_id}_{permission}"' in body, (
-                f'no checkbox for {permission} on role {role_id}')
+        for role in (roles['Staff'], roles['Moderator']):
+            assert f'name="role_{role.id}_{permission}"' in body, (
+                f'no checkbox for {permission} on role {role.name}')
+        assert f'name="role_{roles["Admin"].id}_{permission}"' not in body
     # The old bug would have rendered the first character of each string.
-    assert not re.search(r'name="role_3_[a-z]"', body)
+    assert not re.search(rf'name="role_{roles["Staff"].id}_[a-z]"', body)
 
 
 # --------------------------------------------------------------------------

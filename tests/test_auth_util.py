@@ -32,7 +32,7 @@ from app.auth.util import (configure_bandwidth_cookies, create_new_user_from_lda
                            random_token, render_registration_form,
                            send_email_verification)
 from app.models import (Instance, Notification, Role, Site, User,
-                        UserRegistration, user_role)
+                        UserRegistration, role_grant)
 from tests.factories import make_community, make_community_member, make_instance, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -74,10 +74,10 @@ def answering(payload, status_code=200):
 
 
 def give_role(user, role_id, name):
-    role = db.session.get(Role, role_id) or Role(id=role_id, name=name)
+    role = db.session.get(Role, role_id) or Role(id=role_id, name=name, built_in=name == 'Admin')
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id,
+    db.session.execute(role_grant.insert().values(user_id=user.id,
                                                  role_id=role.id))
     db.session.commit()
     return role
@@ -333,7 +333,7 @@ def test_the_admins_are_told(app, env):
     client, founder = env
     give_role(founder, 4, 'Admin')
 
-    with patch('app.auth.util.role_access', return_value=False):
+    with patch('app.auth.util.staff_role_has', return_value=False):
         notify_admins_of_registration(an_application())
     db.session.commit()
 
@@ -347,7 +347,7 @@ def test_the_staff_are_told_when_the_permission_allows_it(app, env):
     staff = make_user(instance(), 'staff', local=True)
     give_role(staff, 3, 'Staff')
 
-    with patch('app.auth.util.role_access', return_value=True):
+    with patch('app.auth.util.staff_role_has', return_value=True):
         notify_admins_of_registration(an_application())
     db.session.commit()
 
@@ -360,7 +360,7 @@ def test_the_staff_are_not_told_when_it_does_not(app, env):
     staff = make_user(instance(), 'staff', local=True)
     give_role(staff, 3, 'Staff')
 
-    with patch('app.auth.util.role_access', return_value=False):
+    with patch('app.auth.util.staff_role_has', return_value=False):
         notify_admins_of_registration(an_application())
     db.session.commit()
 
@@ -376,7 +376,7 @@ def test_somebody_who_is_both_is_told_once(app, env):
     give_role(founder, 4, 'Admin')
     give_role(founder, 3, 'Staff')
 
-    with patch('app.auth.util.role_access', return_value=True):
+    with patch('app.auth.util.staff_role_has', return_value=True):
         notify_admins_of_registration(an_application())
     db.session.commit()
 
@@ -388,7 +388,7 @@ def test_the_plugins_are_told_too(app, env):
     client, founder = env
 
     with patch('app.auth.util.plugins.fire_hook') as fired:
-        with patch('app.auth.util.role_access', return_value=False):
+        with patch('app.auth.util.staff_role_has', return_value=False):
             application = an_application()
             notify_admins_of_registration(application)
 
@@ -420,7 +420,7 @@ def test_a_verified_application_goes_straight_to_the_queue(app, env):
     applicant.verified = True
     db.session.commit()
 
-    with patch('app.auth.util.role_access', return_value=False):
+    with patch('app.auth.util.staff_role_has', return_value=False):
         application = create_registration_application(applicant, 'because')
     db.session.commit()
 

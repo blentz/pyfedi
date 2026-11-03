@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import patch
 
 from app import db
-from app.models import Role, user_role
+from app.models import Role, role_grant
 from app.utils import can_upload_audio, can_upload_video, get_setting, set_setting, upload_access_allows
 from tests.factories import make_instance, make_user
 from tests.test_admin_routes_entry import (_language, _seed, _settings_admin, _valid_misc_payload, csrf, login)
@@ -16,10 +16,10 @@ def _users():
     first = make_user(instance, 'first', local=True)
     assert first.id == 1
     admin = make_user(instance, 'adminuser', local=True)
-    role = Role(name='Admin', weight=0)
+    role = Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=admin.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=admin.id, role_id=role.id))
     db.session.commit()
     plain = make_user(instance, 'plainuser', local=True)
     return {'first': first, 'admin': admin, 'plain': plain}

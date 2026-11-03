@@ -12,7 +12,6 @@ from sqlalchemy import event
 
 import app.api.alpha.utils.misc as misc_utils
 from app import db
-from app.constants import ROLE_ADMIN_NAME
 from app.models import CommunityMember, CommunityWikiPage, File, ModLog, Role, Topic, utcnow
 from tests.conftest import forget_login
 from tests.factories import make_feed_item, make_local_feed, make_post, make_post_reply
@@ -280,7 +279,7 @@ def api_get(app, path, world, signed_in, host=FIRST):
 @pytest.fixture
 def api(app, world, monkeypatch):
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
-    world.onion_bob.roles.append(Role.query.filter_by(name=ROLE_ADMIN_NAME).first() or Role(name=ROLE_ADMIN_NAME))
+    world.onion_bob.roles.append(Role.query.filter_by(name='Admin').first() or Role(name='Admin', built_in=True))
     db.session.commit()   # an onion admin, for the site view's admin list
     return world
 

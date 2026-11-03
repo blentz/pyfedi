@@ -6,7 +6,7 @@ from flask import g
 
 from app import db
 from app.api.alpha.views import site_view
-from app.models import Instance, Role, RolePermission, Site, SiteDomain, User, user_role
+from app.models import Instance, Role, RolePermission, Site, SiteDomain, User, role_grant
 from app.storefront import clear_domain_cache, domain_for_host, public_registration_open
 from tests.factories import make_instance, make_user
 from tests.test_admin_user_administration import _add_payload
@@ -101,16 +101,16 @@ def _staff_and_admin(onion_row_registration):
     admin = make_user(instance, 'useradmin', local=True)
     admin.verified = True
     db.session.commit()
-    staff_role = Role(name='Staff', weight=2)
-    admin_role = Role(name='Admin', weight=3)
-    db.session.add_all([Role(name='Anonymous user', weight=0), Role(name='Authenticated user', weight=1),
+    staff_role = Role(name='Staff')
+    admin_role = Role(name='Admin', built_in=True)
+    db.session.add_all([Role(name='Anonymous user'), Role(name='Authenticated user'),
                         staff_role, admin_role])
     db.session.commit()
     for role in (staff_role, admin_role):
         db.session.add(RolePermission(role_id=role.id, permission='administer all users'))
         db.session.add(RolePermission(role_id=role.id, permission='change user roles'))
-    db.session.execute(user_role.insert().values(user_id=staff.id, role_id=staff_role.id))
-    db.session.execute(user_role.insert().values(user_id=admin.id, role_id=admin_role.id))
+    db.session.execute(role_grant.insert().values(user_id=staff.id, role_id=staff_role.id))
+    db.session.execute(role_grant.insert().values(user_id=admin.id, role_id=admin_role.id))
     db.session.commit()
     return _onion_row(onion_row_registration), staff, admin
 

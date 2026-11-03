@@ -42,7 +42,7 @@ pins the fixed behaviour.
 
 from flask_login import AnonymousUserMixin, current_user, login_user
 
-from app.models import Role, user_role
+from app.models import Role, role_grant
 from app import db
 from app.utils import can_upload_video, get_setting, set_setting
 from tests.factories import make_instance, make_user
@@ -53,10 +53,10 @@ def _make_admin(user):
     (app/models.py) special-cases id==1 -- every test that uses this gives
     the admin user a filler id-1 user first, so a pass can only be explained
     by the role, not the id shortcut."""
-    role = Role(name='Admin', weight=0)
+    role = Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
     return role
 

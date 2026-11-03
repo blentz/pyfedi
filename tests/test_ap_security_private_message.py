@@ -146,7 +146,7 @@ def test_a_deleted_message_is_404_to_a_member_browser(app, db_session):
 def test_an_admin_browser_is_sent_to_the_conversation(app, db_session):
     message, conversation, bob, dave = _dm()
     root = make_user(None, 'root', local=True)
-    root.roles.append(db.session.query(Role).filter_by(name='Admin').first() or Role(name='Admin'))
+    root.roles.append(db.session.query(Role).filter_by(name='Admin').first() or Role(name='Admin', built_in=True))
     db.session.commit()
 
     assert _login(app, root).get(f'/private_message/{message.id}').status_code == 302

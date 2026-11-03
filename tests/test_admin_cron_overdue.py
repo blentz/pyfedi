@@ -58,7 +58,7 @@ def env(app, db_session, site):
     staffer.verified = True
     role = Role.query.filter_by(name='Staff').first()
     if role is None:
-        role = Role(name='Staff', weight=5)
+        role = Role(name='Staff')
         db.session.add(role)
         db.session.commit()
     staffer.roles.append(role)

@@ -14,12 +14,19 @@ from flask_babel import _, lazy_gettext as _l
 from app import db
 from app.constants import DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
     DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE, MAX_ALBUM_IMAGES_CEILING
-from app.models import Community, User, CmsPage, Instance, SiteDomain, InstanceInUse, instance_row_to_take
+from app.models import Community, User, CmsPage, Instance, Role, SiteDomain, InstanceInUse, instance_row_to_take
 from app.utils import get_setting, REDIRECT_POLICY_ALL_REFERRERS, REDIRECT_POLICY_FEDERATED_SERVERS, REDIRECT_POLICY_SAME_ORIGIN, REDIRECT_POLICY_TRUSTED_SERVERS, validate_user_name_charset
 from app.storefront import REFERRAL_MODE, default_domain, domain_rows, domain_by_id
 from app.local_names import local_named
 from app.onion_guard import MAX_POW_DIFFICULTY
 from app.form_choices import select_choices
+
+
+def role_choices():
+    """The user forms' Role drop-down: no role (0), the built-in Admin, then every other role by name. Read from the
+    role table, so a role an admin adds is offered and none is named by id (RB16)."""
+    roles = Role.query.order_by(Role.built_in.desc(), Role.name).all()
+    return select_choices([(0, _('User'))] + [(role.id, role.name) for role in roles])
 
 
 def no_nul(form, field):
@@ -411,16 +418,13 @@ class AddUserForm(FlaskForm):
     hide_nsfl = SelectField(_l('NSFL posts'), choices=select_choices(hide_type_choices), default=1,
                             coerce=int, render_kw={'class': 'form-select'})
 
-    role_options = [(2, _l('User')),
-               (3, _l('Staff')),
-               (4, _l('Admin')),
-               ]
-    role = SelectField(_l('Role'), choices=select_choices(role_options), default=2, coerce=int, render_kw={'class': 'form-select'})
+    role = SelectField(_l('Role'), choices=[], default=0, coerce=int, render_kw={'class': 'form-select'})
     site_domain = SelectField(_l('Domain'), choices=[], coerce=int, render_kw={'class': 'form-select'})
     submit = SubmitField(_l('Save'))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.role.choices = role_choices()
         rows = [row for row in domain_rows() if row.id is not None]
         # 0 stands for the synthesised default of an install whose site_domain table is empty
         self.site_domain.choices = select_choices([(row.id, row.domain) for row in rows] or [(0, default_domain().domain)])
@@ -500,15 +504,15 @@ class EditUserForm(FlaskForm):
                             coerce=int, render_kw={'class': 'form-select'})
     hide_nsfl = SelectField(_l('NSFL posts'), choices=select_choices(hide_type_choices), default=1,
                             coerce=int, render_kw={'class': 'form-select'})
-    role_options = [(2, _l('User')),
-               (3, _l('Staff')),
-               (4, _l('Admin')),
-               ]
-    role = SelectField(_l('Role'), choices=select_choices(role_options), default=2, coerce=int, render_kw={'class': 'form-select'})
+    role = SelectField(_l('Role'), choices=[], default=0, coerce=int, render_kw={'class': 'form-select'})
     remove_avatar = BooleanField(_l('Remove avatar'))
     remove_banner = BooleanField(_l('Remove banner'))
     admin_note = TextAreaField(_l('Notes about this user (only visible to other admins)'))
     submit = SubmitField(_l('Save'))
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.role.choices = role_choices()
 
 
 class SendNewsletterForm(FlaskForm):

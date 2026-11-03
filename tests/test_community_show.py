@@ -397,7 +397,7 @@ def an_admin_who_is_not_a_mod(community):
     admin = make_user(instance(), 'sysadmin', local=True)
     db.session.commit()
     grant_permission(admin, 'change instance settings')
-    admin.roles[0].name = 'Admin'
+    admin.roles[0].built_in = True   # the built-in Admin role (RB16)
     db.session.commit()
     return admin
 

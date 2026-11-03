@@ -84,7 +84,7 @@ from werkzeug.exceptions import NotFound
 
 from app import db
 from app.constants import NOTIF_NEW_MOD, SRC_API, SRC_WEB
-from app.models import CommunityMember, Conversation, ModLog, Notification, Role, user_role
+from app.models import CommunityMember, Conversation, ModLog, Notification, Role, role_grant
 from app.shared.community import (add_mod_to_community, delete_community, remove_mod_from_community,
                                   restore_community)
 from tests.factories import (bearer, make_community, make_community_member, make_conversation,
@@ -152,10 +152,10 @@ from tests.factories import (bearer, make_community, make_community_member, make
 def grant_role(user, name):
     """A role with exactly this NAME, which is what `is_admin()` and
     `is_staff()` read."""
-    role = Role(name=name, weight=0)
+    role = Role(name=name)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
 
 
@@ -169,11 +169,11 @@ def _make_site_admin(user):
     produce a site admin however it is called -- the name must be the
     literal string 'Admin'.
     """
-    from app.models import Role, user_role
-    role = Role(name='Admin', weight=0)
+    from app.models import Role, role_grant
+    role = Role(name='Admin', built_in=True)
     db.session.add(role)
     db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
     return role
 

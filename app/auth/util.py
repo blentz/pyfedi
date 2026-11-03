@@ -35,7 +35,7 @@ from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, captcha_enabled, \
     finalize_user_setup, get_request, get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
-    user_ip_banned, log_login_failure, role_access, actor_contains_blocked_words, get_site_as_dict, user_name_is_taken, \
+    user_ip_banned, log_login_failure, staff_role_has, actor_contains_blocked_words, get_site_as_dict, user_name_is_taken, \
     decode_captcha
 from app.shared.tasks import task_selector
 
@@ -154,7 +154,7 @@ def notify_admins_of_registration(application):
     # one application and had `unread_notifications` moved by two. Measured:
     # `PROBE az4 notifications: 2 | unread counter: 2`.
     recipients = list(Site.admins())
-    if role_access('approve registrations', 3):
+    if staff_role_has('approve registrations'):
         known = {admin.id for admin in recipients}
         recipients += [member for member in Site.staff() if member.id not in known]
 
@@ -403,7 +403,7 @@ def create_new_user_from_ldap(user_name, email, password, ip):
     db.session.commit()
     finalize_user_setup(user)
     if users_total() == 0:
-        user.roles.append(db.session.get(Role, 4))
+        user.roles.append(Role.admin())   # the first account is the instance's admin
         db.session.commit()
     return user
 

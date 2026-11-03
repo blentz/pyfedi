@@ -21,7 +21,7 @@ from app.auth.util import create_new_user, create_new_user_from_ldap
 from app.activitypub.util import find_microblogging_community
 from app.constants import POST_TYPE_ARTICLE, SRC_API
 from app.models import (Community, Instance, InstanceInUse, Language, RolePermission, Site, SiteDomain, User,
-                        user_role)
+                        role_grant)
 from app.shared.community import make_community as make_community_api
 from app.shared.post import make_post as make_post_through
 from app.shared.reply import make_reply
@@ -501,7 +501,7 @@ def _admin_adding(app):
     roles = _roles()
     db.session.add(RolePermission(role_id=roles['Admin'].id, permission='administer all users'))
     db.session.add(RolePermission(role_id=roles['Admin'].id, permission='change user roles'))
-    db.session.execute(user_role.insert().values(user_id=admin.id, role_id=roles['Admin'].id))
+    db.session.execute(role_grant.insert().values(user_id=admin.id, role_id=roles['Admin'].id))
     db.session.commit()
     client = app.test_client()
     login(client, admin)

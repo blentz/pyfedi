@@ -19,7 +19,6 @@ from sqlalchemy import event, text
 from werkzeug.exceptions import NotFound
 
 from app import db
-from app.constants import ROLE_ADMIN_NAME
 from app.local_only import content_local_only, hidden_default_domain
 from app.models import ChatMessage, CommunityMember, Conversation, Domain, File, Notification, Post, PostBookmark, \
     PostReplyBookmark, PostVote, Report, Role, Topic, UserRegistration, read_posts, user_file, utcnow
@@ -72,7 +71,7 @@ def onion(app, world, scene, two_domains):  # noqa: F811
     world.first_post = make_post(world.first_art, world.first_bob, f'https://{FIRST}/post/first', title='FIRSTPOST')
     world.admin = two_domains.local_user('boss', first)
     world.admin.private_key = 'a key'
-    world.admin.roles.append(Role.query.filter_by(name=ROLE_ADMIN_NAME).first() or Role(name=ROLE_ADMIN_NAME))
+    world.admin.roles.append(Role.query.filter_by(name='Admin').first() or Role(name='Admin', built_in=True))
     for user in (world.first_bob, world.admin):
         user.rss_token = f'{TOKEN}-{user.id}'
     db.session.commit()

@@ -39,7 +39,7 @@ from types import SimpleNamespace
 from sqlalchemy import text
 
 from app import db
-from app.constants import REPORT_TYPE_REPLY, ROLE_ADMIN, SRC_API, SRC_WEB
+from app.constants import REPORT_TYPE_REPLY, SRC_API, SRC_WEB
 from app.models import Instance, Notification, Report, User
 import app.shared.reply as reply_module
 from app.shared.reply import report_reply
@@ -120,16 +120,16 @@ def make_site_admin(s, name='site-admin'):
     `unread_notifications` is seeded at 3 so `:388`'s increment is a
     transition rather than a move off the column default.
     """
-    from app.models import Role, user_role
+    from app.models import Role, role_grant
     make_site()
     admin = make_user(s.local_instance, name, local=True)
     db.session.commit()
-    role = db.session.get(Role, ROLE_ADMIN)
+    role = Role.admin()
     if role is None:
-        role = Role(id=ROLE_ADMIN, name='Admin', weight=0)
+        role = Role(name='Admin', built_in=True)
         db.session.add(role)
         db.session.commit()
-    db.session.execute(user_role.insert().values(user_id=admin.id,
+    db.session.execute(role_grant.insert().values(user_id=admin.id,
                                                  role_id=role.id))
     admin.unread_notifications = 3
     db.session.commit()
@@ -661,11 +661,11 @@ class TestReportReply:
         make_site()
         admin = make_user(s.local_instance, 'site-admin', local=True)
         db.session.commit()
-        from app.models import Role, user_role
-        role = Role(id=ROLE_ADMIN, name='Admin', weight=0)
+        from app.models import Role, role_grant
+        role = Role(name='Admin', built_in=True)
         db.session.add(role)
         db.session.commit()
-        db.session.execute(user_role.insert().values(user_id=admin.id,
+        db.session.execute(role_grant.insert().values(user_id=admin.id,
                                                      role_id=role.id))
         admin.unread_notifications = 3
         db.session.commit()
@@ -816,11 +816,11 @@ class TestReportReply:
         make_site()
         admin = make_user(s.local_instance, 'site-admin', local=True)
         db.session.commit()
-        from app.models import Role, user_role
-        role = Role(id=ROLE_ADMIN, name='Admin', weight=0)
+        from app.models import Role, role_grant
+        role = Role(name='Admin', built_in=True)
         db.session.add(role)
         db.session.commit()
-        db.session.execute(user_role.insert().values(user_id=admin.id,
+        db.session.execute(role_grant.insert().values(user_id=admin.id,
                                                      role_id=role.id))
         admin.unread_notifications = 3
         db.session.commit()
@@ -1096,11 +1096,11 @@ class TestReportReply:
         admin = make_user(s.local_instance, 'site-admin', local=True)
         add_moderator(s, admin)
         db.session.commit()
-        from app.models import Role, user_role
-        role = Role(id=ROLE_ADMIN, name='Admin', weight=0)
+        from app.models import Role, role_grant
+        role = Role(name='Admin', built_in=True)
         db.session.add(role)
         db.session.commit()
-        db.session.execute(user_role.insert().values(user_id=admin.id,
+        db.session.execute(role_grant.insert().values(user_id=admin.id,
                                                      role_id=role.id))
         admin.unread_notifications = 3
         db.session.commit()
