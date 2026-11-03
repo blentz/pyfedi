@@ -707,6 +707,21 @@ def test_an_admin_editing_somebody_elses_feed_may_put_it_under_the_owners_feed(a
     assert db.session.get(Feed, mine.id).parent_feed_id == public.id
 
 
+def test_an_admin_may_not_edit_somebody_elses_private_feed(app, env):
+    """O5 (owner ruling 2026-11-03, spec 2026-11-03-rbac-design.md): an API edit of a private feed is refused to all
+    but its owner, admins included. It used to be saved, and the reply (get_feed, which shows a private feed to its
+    owner alone) then raised feed_not_found, after the write."""
+    from app.api.alpha.utils.feed import put_feed
+
+    owner, stranger, public, private = env
+    admin = db.session.get(User, 1)
+    assert admin.is_admin() and not private.public and private.user_id == owner.id
+    with pytest.raises(Exception, match='incorrect_login|not_found'):
+        put_feed(token(admin), {'feed_id': private.id, 'title': 'edited by an admin'})
+    db.session.expire_all()
+    assert db.session.get(Feed, private.id).title != 'edited by an admin'
+
+
 def test_an_admin_may_not_put_somebody_elses_feed_under_the_admins_own(app, env):
     from app.api.alpha.utils.feed import put_feed
 

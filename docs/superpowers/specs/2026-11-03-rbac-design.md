@@ -317,11 +317,10 @@ Instance-wide holders are still notified as they are today. A replacement helper
   on the Staff role in the UI after upgrading.
 - **O3. Feeds.** Feeds have `site_domain_id`, but RB3 doesn't give domain admins feeds. `manage instance feeds` stays
   instance-only in v1, and the permission can become scopable later without a migration.
-- **O5. An admin's API edit of a private feed (found by the parity table).** `put_feed` lets an admin edit another
-  user's private feed and saves the edit, then answers with `get_feed`, which shows a private feed to its owner
-  alone, so the call raises `feed_not_found` after succeeding. Either `get_feed` should show it to whoever may edit
-  it, or `put_feed` should refuse. The parity row (`api.feed.put`) records only that the edit is saved, so it holds
-  either way. Awaiting the owner.
+- **O5 (ruled 2026-11-03).** An API edit of a private feed is refused to all but its owner, admins included. Owner's
+  wider principle: admin actions should be visible to content creators, and admins should not edit content; by default
+  an administrative action is limited to removal or turning comments and reactions off. Only the private-feed API edit
+  was changed for this ruling; the wider principle is for discussion (see the follow-ups in the step 2 report).
 - **O4. Referral caps for scoped holders.** Viewing `/admin/referrals` filtered to X comes with `administer all users`
   on X. `exempt from account limits` is instance-only, so a holder scoped to a domain can't be exempted from
   referral caps.

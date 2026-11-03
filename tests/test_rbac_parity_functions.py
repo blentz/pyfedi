@@ -120,11 +120,13 @@ API = [
                 'Insufficient permissions')),
     Row('api.reply.like_list', '-DAAA',
         refuses(lambda w, u: get_reply_like_list(bearer(u), {'comment_id': w.reply.id}), 'Not a moderator')),
-    # The write is the answer: an admin's edit of someone else's private feed is saved, then get_feed refuses to
-    # show it back (feed_not_found), so the call raises after succeeding.
-    Row('api.feed.put', '-DDAA',
+    # A public feed: an admin may edit someone else's (D697). This row was the world's private feed until O5 (owner
+    # ruling 2026-11-03) made that the owner's alone, admins included -- a row nobody passes, so it is pinned in
+    # tests/test_api_feeds.py (test_an_admin_may_not_edit_somebody_elses_private_feed) instead.
+    Row('api.feed.put.public', '-DDAA',
         call(lambda w, u: (quietly(put_feed, bearer(u), {'feed_id': w.feed.id, 'title': 'edited'}),
-                           db.session.get(Feed, w.feed.id).title == 'edited')[1])),
+                           db.session.get(Feed, w.feed.id).title == 'edited')[1]),
+        setup=lambda ctx: (setattr(ctx.world.feed, 'public', True), db.session.commit())),
     Row('api.feed.view_private', '-DDAA',
         refuses(lambda w, u: feed_view(w.feed, variant=1, user_id=u.id, subscribed=[], include_communities=False,
                                        communities_moderating=[], banned_from=[], communities_joined=[],
