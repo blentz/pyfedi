@@ -79,3 +79,19 @@ def test_an_actor_url_becomes_its_handle(actor_id, handle):
     take in a remote person or update anyone already here. And `/u/alice` split on '/' is ['', 'u', 'alice'], whose
     [1] is 'u', not the name."""
     assert actor_id_to_ap_id(actor_id) == handle
+
+
+def test_a_user_already_here_is_updated_and_made_an_admin(commands):
+    """A person the import has seen before is updated in place. The update read `row.instance.id`, which no row has
+    -- the query selects `p.instance_id` -- so re-running an import raised AttributeError on the first such user."""
+    make_instance(current_app.config['SERVER_NAME'], software='piefed')
+    make_user(None, 'founder', local=True)
+    admin_role()
+    existing = make_user(None, 'before', local=True)
+    db.session.commit()
+
+    run_import(commands, [], [lemmy_person(existing.id, 'after', admin=True)])
+
+    db.session.expire_all()
+    updated = db.session.get(User, existing.id)
+    assert (updated.user_name, updated.instance_id, updated.is_admin()) == ('after', 1, True)

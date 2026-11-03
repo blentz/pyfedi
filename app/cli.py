@@ -392,7 +392,7 @@ def register(app):
                         existing_user.public_key = row.public_key
                         existing_user.matrix_user_id = row.matrix_user_id
                         existing_user.bot = row.bot_account if row.bot_account else False
-                        existing_user.instance_id = row.instance.id
+                        existing_user.instance_id = row.instance_id
                         existing_user.ap_id = actor_id_to_ap_id(row.actor_id)
                         existing_user.ap_profile_id = row.actor_id
                         existing_user.ap_public_url = row.actor_id
