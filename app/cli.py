@@ -36,12 +36,13 @@ from app.auth.util import random_token
 from app.community.util import is_bad_name
 from app.constants import NOTIF_COMMUNITY, NOTIF_POST, NOTIF_REPLY, POST_STATUS_SCHEDULED, POST_STATUS_PUBLISHED, \
     POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_IMAGE, NOTIF_REMINDER, POST_TYPE_VIDEO, POST_TYPE_ARTICLE, SRC_API, \
-    ROLE_ADMIN_NAME, ROLE_STAFF_NAME, ANNOUNCE_MAX_OBJECTS
+    ROLE_ADMIN_NAME, ANNOUNCE_MAX_OBJECTS
 from app.email import mail_name, send_email
 from app.federation_urls import activity_id
 from app.error_counts import KEEP_DAYS
 from app.onion_media import DEFAULT_CACHE_BYTES, evict
-from app.models import CronJobLog, Settings, BannedInstances, Role, User, RolePermission, Domain, ActivityPubLog, utcnow, \
+from app.roles import seed_default_roles
+from app.models import CronJobLog, Settings, BannedInstances, Role, User, Domain, ActivityPubLog, utcnow, \
     utcnow, Site, Instance, File, Notification, Post, CommunityMember, NotificationSubscription, PostReply, Language, \
     Community, SendQueue, _store_files_in_s3, PostVote, Poll, \
     ActivityBatch, Reminder, RssFeed, RssFeedItem, Feed, media_of, ErrorCount, SiteDomain
@@ -257,32 +258,8 @@ def register(app):
             db.session.add(Language(code='pl', name='Polski'))
             db.session.add(Language(code='uk', name='Українська'))
 
-            # Initial roles
-            # These roles will create rows in the 'role' table with IDs of 1,2,3,4. There are some constants (ROLE_*) in
-            # constants.py that will need to be updated if the role IDs ever change.
-            anon_role = Role(name='Anonymous user', weight=0)
-            db.session.add(anon_role)
-
-            auth_role = Role(name='Authenticated user', weight=1)
-            db.session.add(auth_role)
-
-            staff_role = Role(name=ROLE_STAFF_NAME, weight=2)
-            staff_role.permissions.append(RolePermission(permission='approve registrations'))
-            staff_role.permissions.append(RolePermission(permission='ban users'))
-            staff_role.permissions.append(RolePermission(permission='administer all communities'))
-            staff_role.permissions.append(RolePermission(permission='manage users'))
-            db.session.add(staff_role)
-
-            admin_role = Role(name=ROLE_ADMIN_NAME, weight=3)
-            admin_role.permissions.append(RolePermission(permission='approve registrations'))
-            admin_role.permissions.append(RolePermission(permission='change user roles'))
-            admin_role.permissions.append(RolePermission(permission='ban users'))
-            admin_role.permissions.append(RolePermission(permission='manage users'))
-            admin_role.permissions.append(RolePermission(permission='change instance settings'))
-            admin_role.permissions.append(RolePermission(permission='administer all communities'))
-            admin_role.permissions.append(RolePermission(permission='administer all users'))
-            admin_role.permissions.append(RolePermission(permission='edit cms pages'))
-            db.session.add(admin_role)
+            # Initial roles (ids 1-4, app/roles.py)
+            seed_default_roles()
 
             # Add cron jobs to db to display warning to user if not run recently.
             # Each job has its 'frequency' set with a slight buffer from the recommended time in INSTALL.md
