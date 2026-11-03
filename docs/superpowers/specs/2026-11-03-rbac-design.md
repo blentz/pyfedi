@@ -1,6 +1,7 @@
 # Custom roles with domain scope (RBAC) — design
 
-Date: 2026-11-03. Status: spec only. Nothing has been built.
+Date: 2026-11-03. Status: being built on blentz. Step 1 (the parity table) is done: tests/rbac_parity.py and
+tests/test_rbac_parity_*.py, 171 rows. The defect it found is fixed at 296d8a174; O5 came out of it.
 
 ## Summary
 
@@ -309,6 +310,11 @@ Instance-wide holders are still notified as they are today. A replacement helper
   on the Staff role in the UI after upgrading.
 - **O3. Feeds.** Feeds have `site_domain_id`, but RB3 doesn't give domain admins feeds. `manage instance feeds` stays
   instance-only in v1, and the permission can become scopable later without a migration.
+- **O5. An admin's API edit of a private feed (found by the parity table).** `put_feed` lets an admin edit another
+  user's private feed and saves the edit, then answers with `get_feed`, which shows a private feed to its owner
+  alone, so the call raises `feed_not_found` after succeeding. Either `get_feed` should show it to whoever may edit
+  it, or `put_feed` should refuse. The parity row (`api.feed.put`) records only that the edit is saved, so it holds
+  either way. Awaiting the owner.
 - **O4. Referral caps for scoped holders.** Viewing `/admin/referrals` filtered to X comes with `administer all users`
   on X. `exempt from account limits` is instance-only, so a holder scoped to a domain can't be exempted from
   referral caps.
