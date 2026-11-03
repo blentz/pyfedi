@@ -259,7 +259,7 @@ def register(app):
             db.session.add(Language(code='uk', name='Українська'))
 
             # Initial roles (ids 1-4, app/roles.py)
-            seed_default_roles()
+            admin_role = seed_default_roles()[ROLE_ADMIN_NAME]   # the first account's, below
 
             # Add cron jobs to db to display warning to user if not run recently.
             # Each job has its 'frequency' set with a slight buffer from the recommended time in INSTALL.md

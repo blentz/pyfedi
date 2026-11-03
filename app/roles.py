@@ -19,10 +19,13 @@ DEFAULT_ROLES = (
 )
 
 
-def seed_default_roles() -> None:
-    """Add the default roles to the session. The caller commits."""
+def seed_default_roles() -> dict[str, Role]:
+    """Add the default roles to the session, and return them by name. The caller commits."""
+    roles = {}
     for name, weight, permissions in DEFAULT_ROLES:
         role = Role(name=name, weight=weight)
         for permission in permissions:
             role.permissions.append(RolePermission(permission=permission))
         db.session.add(role)
+        roles[name] = role
+    return roles
