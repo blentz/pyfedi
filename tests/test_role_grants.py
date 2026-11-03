@@ -5,6 +5,7 @@ Spec docs/superpowers/specs/2026-11-03-rbac-design.md (RB1, RB2, RB11, RB16). Th
 the model reads instance-wide, unexpired grants; user_access, is_admin and Site.admins find Admin by `built_in`.
 """
 from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
 from alembic.migration import MigrationContext
@@ -13,11 +14,14 @@ from sqlalchemy import inspect, text
 
 from app import db
 from app.admin.forms import role_choices
-from app.models import Role, RolePermission, Site, SiteDomain, role_grant, utcnow
+from app.community.util import notify_admins_of_post_needing_approval
+from app.models import Notification, Role, RolePermission, Site, SiteDomain, role_grant, utcnow
 from app.roles import STAFF_PERMISSIONS, seed_default_roles
 from app.utils import roles_with, staff_role_has, user_access
-from tests.factories import admin_role, grant_permission, grant_role, make_instance, make_user
+from tests.factories import (admin_role, grant_permission, grant_role, make_community, make_instance, make_post,
+                             make_user)
 from tests.test_branding import load_migration
+from tests.test_role_permissions import csrf
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -251,3 +255,43 @@ def test_staff_role_has_reads_the_staff_role(db_session):
     db.session.commit()
     assert staff_role_has('ban users') is True
     assert staff_role_has('edit cms pages') is False
+
+
+def test_a_held_post_is_shown_to_staff_only_while_staff_may_approve(people):
+    """notify_admins_of_post_needing_approval: the admins always, Staff only while the Staff role holds
+    'approve registrations' -- the role found by name now, not as id 3."""
+    roles = seed_default_roles()
+    db.session.commit()
+    admin, staffer, author = people[:3]
+    grant_role(admin, roles['Admin'])
+    grant_role(staffer, roles['Staff'])
+    community = make_community('held')
+    post = make_post(community, author, 'https://test.piefed.local/post/9')
+
+    def told():
+        return sorted(n.user_id for n in Notification.query.filter_by(subtype='new_post_for_approval'))
+
+    notify_admins_of_post_needing_approval(post)
+    assert told() == sorted([1, admin.id, staffer.id])
+
+    Notification.query.delete()
+    RolePermission.query.filter_by(role_id=roles['Staff'].id, permission='approve registrations').delete()
+    db.session.commit()
+    notify_admins_of_post_needing_approval(post)
+    assert told() == sorted([1, admin.id])
+
+
+def test_the_permissions_page_saves_when_admin_is_the_only_role(app, people):
+    """With no role but the built-in Admin there is nothing to edit: the save changes nothing and still says so."""
+    grant_role(people[0], admin_role())
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session['_user_id'] = str(people[0].id)
+        session['_fresh'] = True
+    token = csrf(app, client)
+    with patch('app.admin.routes.render_template', return_value='rendered'), \
+            patch('app.admin.routes.flash') as flashed:
+        response = client.post('/admin/permissions', data={'csrf_token': token})
+    assert response.status_code == 200
+    assert [call.args[0] for call in flashed.call_args_list] == ['Settings saved']
+    assert RolePermission.query.count() == 0
