@@ -25,6 +25,7 @@ from app.ldap_utils import sync_user_to_ldap, login_with_ldap
 from app.local_names import local_named
 from app.storefront import (DomainInfo, current_storefront, default_domain, domain_base_url, domain_for_host, home_storefront,
                             instance_id_of, public_registration_open)
+from app.permission_cache import permissions_changed
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role, dummy_password_hash, \
     verify_password_hash
 from app.onion import apply_audit, is_onion_request, stamp_activity
@@ -405,6 +406,7 @@ def create_new_user_from_ldap(user_name, email, password, ip):
     if users_total() == 0:
         user.roles.append(Role.admin())   # the first account is the instance's admin
         db.session.commit()
+        permissions_changed(user.id)   # an is_admin() answer cached during signup is not read again
     return user
 
 

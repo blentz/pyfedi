@@ -88,6 +88,7 @@ from app.branding import branding_for
 from collections import Counter
 from flask import has_request_context
 import app as app_pkg
+from app import permissions
 
 logger = logging.getLogger(__name__)
 
@@ -3088,22 +3089,10 @@ def decrement_unread_counts(user_ids) -> None:
             {'how_many': how_many, 'user_id': user_id})
 
 
-@cache.memoize(timeout=50)
-def user_access(permission: str, user_id: int) -> bool:
-    if user_id == 0:
-        return False
-    if user_id == 1:
-        return True
-    # The built-in Admin role holds every permission (RB2); any other role, the ones it lists. Instance-wide,
-    # unexpired grants only: a domain-scoped grant answers only for the object acted on (build step 3).
-    has_access = db.session.execute(text(
-        'SELECT 1 FROM role_grant rg JOIN role r ON r.id = rg.role_id '
-        'WHERE rg.user_id = :user_id AND rg.site_domain_id IS NULL '
-        "AND (rg.expires_at IS NULL OR rg.expires_at > timezone('utc', now())) "
-        'AND (r.built_in OR EXISTS (SELECT 1 FROM role_permission rp '
-        '                          WHERE rp.role_id = r.id AND rp.permission = :permission)) LIMIT 1'),
-        {'user_id': user_id, 'permission': permission}).first()
-    return has_access is not None
+def user_access(permission: str, user_id: int, on=None, anywhere: bool = False) -> bool:
+    """Whether `user_id` may `permission`: instance-wide, or on `on`'s home domain for a scopable permission. See
+    app/permissions.py, which holds the rule and its cache."""
+    return permissions.user_access(permission, user_id, on=on, anywhere=anywhere)
 
 
 def can_moderate(community, user) -> bool:

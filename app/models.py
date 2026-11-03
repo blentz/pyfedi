@@ -39,6 +39,7 @@ from sqlalchemy_utils.types import \
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from app import db, login, cache, celery, httpx_client, constants, app_bcrypt, shaped_memo_name
+from app.permission_cache import permission_version
 from app.constants import AUTOMATED_REPORTER, SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPTION_MODERATOR, SUBSCRIPTION_OWNER, \
     SUBSCRIPTION_BANNED, SUBSCRIPTION_PENDING, NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC, NOTIF_POST, NOTIF_REPLY, \
     NOTIF_FEED, NOTIF_DEFAULT, NOTIF_REPORT, NOTIF_MENTION, POST_STATUS_REVIEWING, \
@@ -2096,6 +2097,15 @@ class Community(db.Model):
         db.session.commit()
 
 
+@cache.memoize(timeout=30)
+def _holds_built_in_role(user_id: int, version: int) -> bool:
+    """`version` only keys the cache (app/permission_cache.py), so a grant or revoke is seen at once."""
+    return db.session.execute(
+        select(role_grant.c.id).join(Role, Role.id == role_grant.c.role_id)
+        .where(role_grant.c.user_id == user_id, role_grant.c.site_domain_id.is_(None), Role.built_in.is_(True),
+               unexpired_grant()).limit(1)).first() is not None
+
+
 class RoleGrant(db.Model):
     """A user holds a role instance-wide (site_domain_id NULL) or on one domain, until `expires_at` if it is set
     (spec 2026-11-03-rbac-design.md RB1, RB11). Only Admin makes or revokes grants (RB5)."""
@@ -2493,11 +2503,11 @@ class User(UserMixin, db.Model):
         application = UserRegistration.query.filter_by(user_id=self.id, status=0).first()
         return application is not None
 
-    @cache.memoize(timeout=30)
     def is_admin(self):
+        """User 1, or a holder of the built-in Admin role instance-wide (RB2, RB16)."""
         if self.id == 1:
             return True
-        return self.roles.filter(Role.built_in.is_(True)).first() is not None
+        return _holds_built_in_role(self.id, permission_version(self.id))
 
     @cache.memoize(timeout=30)
     def is_staff(self):

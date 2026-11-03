@@ -4,6 +4,8 @@ Date: 2026-11-03. Status: being built on blentz.
 
 - Step 1 (the parity table) is done: tests/rbac_parity.py and tests/test_rbac_parity_*.py, 171 rows. The defect it
   found is fixed at 296d8a174; O5 came out of it.
+- Step 3 (the check) is done: app/permissions.py (`user_access(perm, user, on=, anywhere=)`, `home_domain_id`,
+  `may_act_on_user`), app/permission_cache.py (the per-user version). No call site names an object yet (step 5).
 - Step 2 (schema) is done at b00564760: `role_grant`, `role.built_in`/`listed_publicly`, migration b4e8d2a6f1c9.
   Admin is found by `built_in` everywhere. Staff is still found by name (`ROLE_STAFF_NAME`) in `is_staff()`,
   `Site.staff()` and `staff_role_has()`, the two "may Staff approve" notification checks, until steps 6 and 8.
@@ -97,9 +99,11 @@ user_access(permission: str, user: User | int, on=None) -> bool
 - The check passes when the user is Admin (or user 1), **or** holds an unexpired instance-wide grant whose role
   has the permission, **or** the permission is scopable, `on` resolves to domain D, and the user holds an unexpired
   grant on D whose role has the permission. An instance-wide grant always covers scoped checks.
-- `on=None` with a scopable permission asks "does the user hold it **anywhere**". It is used only for showing
-  menus and nav items, never to authorise an action. A lint test fails if a route or a `shared/` function calls
-  it with `on=None` for a scopable permission outside nav and template code.
+- `on=None` asks about the **whole instance**: only instance-wide holders (and Admin, and user 1) pass. *Changed
+  while building step 3 (2026-11-03), from "holds it anywhere":* every check written before RBAC names no object,
+  so with "anywhere" each would have let domain-scoped holders through until converted. With "instance", a check
+  not yet converted can only refuse a scoped holder. Menus ask "holds it anywhere" explicitly with
+  `user_access(perm, user, anywhere=True)`; a lint test (step 6) keeps `anywhere=True` out of routes and `shared/`.
 - RB6 lives in one helper, `may_act_on_user(actor, target, permission)`: the target must resolve to a domain the
   actor holds the permission on, and if the actor's only qualifying grant is scoped, the target must hold no
   grant at all. The existing rule "staff/admin targets can't be banned" in `shared/user.py` and `user/routes.py`

@@ -375,26 +375,14 @@ def test_the_cache_invalidation_names_the_permission_and_every_affected_user(
                                                  role_id=roles['Moderator'].id))
     db.session.commit()
 
-    with patch('app.admin.routes.cache.delete_memoized') as delete_memoized:
+    with patch('app.admin.routes.permissions_changed') as changed:
         _save(client, token, **{str(roles['Moderator'].id): list(ROLE_PERMISSIONS)})
 
-    # `cache` is shared, so the patch also catches invalidations other code
-    # makes during the request; only the user_access ones are this page's.
-    calls = [call.args for call in delete_memoized.call_args_list
-             if call.args and call.args[0] is user_access]
-    assert calls, 'user_access was never invalidated at all'
-
-    # Every argument is the string, never a Row or a 1-tuple.
-    for _function, permission, _user_id in calls:
-        assert isinstance(permission, str), (
-            f'{permission!r} is not the key user_access is memoized under')
-
-    # Every permission, for every user holding an edited role -- the staffer
-    # AND the moderator; the old code only ever collected one role's holders.
-    # The admin holds only the built-in role, which the page does not edit.
-    assert set(calls) == {(user_access, permission, user_id)
-                          for permission in ROLE_PERMISSIONS
-                          for user_id in (staffer.id, moderator.id)}
+    # RB10 replaced the per-permission delete_memoized with one version bump per user. Every holder of an edited
+    # role -- the staffer AND the moderator; the old code only ever collected one role's holders. The admin holds
+    # only the built-in role, which the page does not edit.
+    assert len(changed.call_args_list) == 1
+    assert sorted(changed.call_args.args) == sorted([staffer.id, moderator.id])
 
 
 def test_a_revoked_permission_is_actually_revoked(permissions_admin):

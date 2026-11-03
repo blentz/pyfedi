@@ -629,13 +629,11 @@ def test_a_role_change_invalidates_the_permission_cache(users_admin):
                                                  role_id=roles['Admin'].id))
     db.session.commit()
 
-    with patch('app.admin.routes.cache.delete_memoized') as delete_memoized:
+    with patch('app.admin.routes.permissions_changed') as changed:
         _edit(client, token, target.id, role='0')
 
-    invalidated = {call.args for call in delete_memoized.call_args_list
-                   if call.args and call.args[0] is user_access}
-    assert invalidated == {(user_access, permission, target.id)
-                           for permission in ROLE_PERMISSIONS}
+    # RB10: one bump of the target's permission version retires every cached answer about them
+    assert [call.args for call in changed.call_args_list] == [(target.id,)]
 
 
 def test_a_demotion_actually_removes_the_role(users_admin):

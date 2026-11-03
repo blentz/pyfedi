@@ -49,6 +49,7 @@ from app.instance.util import bulk_follow
 from app.community.routes import do_subscribe
 from app.constants import ROLE_PERMISSIONS, REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_REVIEWING
 from app.email import send_registration_approved_email
+from app.permission_cache import permissions_changed
 from app.federation_urls import object_base
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
     CommunityMember, \
@@ -2553,14 +2554,9 @@ def admin_user_edit(user_id):
                                {'user_id': user.id})
             if form.role.data:   # 0 is "no role"
                 user.roles.append(db.session.get(Role, form.role.data))
-            # user_access is @cache.memoize(timeout=50), so without this an
-            # administrator stripped of their role went on passing every
-            # permission check for up to fifty seconds after the change was
-            # saved -- which is the direction that matters. The page used to
-            # apologise for exactly this in a flash message; the invalidation
-            # is the same one admin_permissions does.
-            for permission in ROLE_PERMISSIONS:
-                cache.delete_memoized(user_access, permission, user.id)
+            # Without this an administrator stripped of their role went on passing every permission check until the
+            # cached answers timed out -- which is the direction that matters (RB10).
+            permissions_changed(user.id)
 
         db.session.commit()
         cache.delete_memoized(low_value_reposters)
@@ -2855,13 +2851,10 @@ def admin_permissions():
             for role in editable_ids:
                 if request.form.get(f'role_{role}_{permission}'):
                     db.session.add(RolePermission(role_id=role, permission=permission))
-            for affected_user_id in affected_user_ids:
-                # `permission`, a str. This used to be the Row from the
-                # SELECT -- repr ('change instance settings',) -- so the
-                # memoize key never matched the one user_access is called
-                # with and the invalidation did nothing at all.
-                cache.delete_memoized(user_access, permission, affected_user_id)
         db.session.commit()
+        # Every holder of an edited role stops reading its cached answers (RB10). (D939: the per-permission
+        # delete_memoized this replaces was keyed by the SELECT's Row, not the string, and invalidated nothing.)
+        permissions_changed(*affected_user_ids)
 
         flash(_('Settings saved'))
 
