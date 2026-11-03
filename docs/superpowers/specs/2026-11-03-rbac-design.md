@@ -1,7 +1,14 @@
 # Custom roles with domain scope (RBAC) — design
 
-Date: 2026-11-03. Status: being built on blentz. Step 1 (the parity table) is done: tests/rbac_parity.py and
-tests/test_rbac_parity_*.py, 171 rows. The defect it found is fixed at 296d8a174; O5 came out of it.
+Date: 2026-11-03. Status: being built on blentz.
+
+- Step 1 (the parity table) is done: tests/rbac_parity.py and tests/test_rbac_parity_*.py, 171 rows. The defect it
+  found is fixed at 296d8a174; O5 came out of it.
+- Step 2 (schema) is done at b00564760: `role_grant`, `role.built_in`/`listed_publicly`, migration b4e8d2a6f1c9.
+  Admin is found by `built_in` everywhere. Staff is still found by name (`ROLE_STAFF_NAME`) in `is_staff()`,
+  `Site.staff()` and `staff_role_has()`, the two "may Staff approve" notification checks, until steps 6 and 8.
+  `/admin/permissions` and the user forms already read the role table instead of ids 2-4. Covering the CLI's
+  Lemmy import found two defects there, fixed at a396c78ab and d3a77074a.
 
 ## Summary
 
