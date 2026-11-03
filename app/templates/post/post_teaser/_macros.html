@@ -28,7 +28,14 @@
 {% else -%}
     {% if embed -%}
     <div class="embed_logo">
-        <a href="/" target="_blank" title="{{ current_branding().name }}"><img src="{{ current_branding().logo or '/static/images/piefed_logo_full_t_300x300.svg' }}" alt="Logo" width="40" height="40"></a>
+        {% set embed_branding = current_branding() -%}
+        <a href="/" target="_blank" title="{{ embed_branding.name }}">
+            {%- if embed_branding.embed_logo_dark != embed_branding.embed_logo -%}
+            <img src="{{ embed_branding.embed_logo }}" class="logo_light" alt="Logo" width="40" height="40"><img src="{{ embed_branding.embed_logo_dark }}" class="logo_dark" alt="Logo" width="40" height="40">
+            {%- else -%}
+            <img src="{{ embed_branding.embed_logo }}" alt="Logo" width="40" height="40">
+            {%- endif -%}
+        </a>
     </div>
     {% endif -%}
     <h3 lang="{{ v.code }}">{% if post.sticky -%}<span class="fe fe-sticky-left"></span>{% endif -%}<a href="{{ post.slug if post.slug else url_for('activitypub.post_ap', post_id=post.id, sort='new' if sort == 'active' else None, _external=embed) }}" {% if embed %}target="_blank"{% endif %} class="post_teaser_title_a" {% if not post.indexable %}rel="noindex"{% endif %} >{{ v.title if v.title != '(content in post body)' else '' }}</a>

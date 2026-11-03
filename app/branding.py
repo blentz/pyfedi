@@ -49,10 +49,20 @@ class Branding(NamedTuple):
         """What the header shows in dark mode: the dark logo, chosen as `header_logo` chooses, else `header_logo`."""
         return _header_image(self.logo_dark, self.logo_dark_152) or self.header_logo
 
+    @property
+    def embed_logo(self) -> str:
+        """What an embedded post shows: the logo of at most 100 pixels (or an SVG), else PieFed's."""
+        return self.logo or PIEFED_LOGO
+
+    @property
+    def embed_logo_dark(self) -> str:
+        """What an embedded post shows in dark mode: the dark logo, else `embed_logo`."""
+        return self.logo_dark or self.embed_logo
+
 
 PIEFED_LOGO = '/static/images/piefed_logo_full_t_300x300.svg'
 # What templates may read of a Branding besides its fields (app/request_hooks.py's BrandingOnUse)
-DERIVED_FIELDS = ('header_logo', 'header_logo_dark')
+DERIVED_FIELDS = ('header_logo', 'header_logo_dark', 'embed_logo', 'embed_logo_dark')
 
 
 def _header_image(logo: str, logo_152: str) -> str:

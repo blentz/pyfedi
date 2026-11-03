@@ -48,6 +48,16 @@ def test_an_embed_shows_the_instances_logo(app, embedded):
         '<img src="/static/media/golden_100.png" alt="Logo" width="40" height="40">']
 
 
+def test_an_embed_shows_the_dark_logo_beside_it(app, embedded):
+    site = db.session.get(Site, 1)
+    site.logo_dark = '/static/media/dark_100.png'
+    db.session.commit()
+    clear_domain_cache()
+    assert embed_logo(page(app, f'/post/{embedded.id}/embed')) == [
+        '<img src="/static/media/golden_100.png" class="logo_light" alt="Logo" width="40" height="40">',
+        '<img src="/static/media/dark_100.png" class="logo_dark" alt="Logo" width="40" height="40">']
+
+
 def test_an_embeds_links_are_absolute_and_open_in_a_new_tab(app, embedded):
     body = page(app, f'/post/{embedded.id}/embed')
     link = title_link(body)

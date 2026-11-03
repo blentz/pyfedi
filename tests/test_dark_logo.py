@@ -58,10 +58,21 @@ def test_the_header_shows_the_logo_and_dark_mode_its_dark_logo(values, header, h
     assert (shown.header_logo, shown.header_logo_dark) == (header, header_dark)
 
 
+@pytest.mark.parametrize('values, embed, embed_dark', [
+    ({}, PIEFED_LOGO, PIEFED_LOGO),
+    ({'logo': '/m/a_100.png'}, '/m/a_100.png', '/m/a_100.png'),
+    ({'logo': '/m/a_100.png', 'logo_dark': '/m/d_100.png'}, '/m/a_100.png', '/m/d_100.png'),
+], ids=['none', 'logo', 'dark'])
+def test_an_embed_shows_the_logo_and_dark_mode_its_dark_logo(values, embed, embed_dark):
+    shown = branding(**values)
+    assert (shown.embed_logo, shown.embed_logo_dark) == (embed, embed_dark)
+
+
 def test_templates_may_read_what_a_branding_shows(app, two_domains):
     on_use = BrandingOnUse()
     with onion_request(app):
         assert on_use.header_logo_dark == PIEFED_LOGO
+        assert on_use.embed_logo_dark == PIEFED_LOGO
     with pytest.raises(AttributeError):
         on_use.items
 
