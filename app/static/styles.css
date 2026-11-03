@@ -1088,6 +1088,17 @@ div.navbar {
   margin-right: var(--spacing-20);
 }
 
+img.logo_dark {
+  display: none;
+}
+
+[data-bs-theme=dark] img.logo_light {
+  display: none;
+}
+[data-bs-theme=dark] img.logo_dark {
+  display: inline;
+}
+
 .navbar-light .navbar-nav .nav-link {
   outline-style: none;
 }

@@ -8,6 +8,7 @@ import orjson
 import shutil
 
 from flask import request, flash, json, url_for, current_app, redirect, g, abort, send_file, make_response
+from werkzeug.exceptions import HTTPException
 from markupsafe import Markup
 from flask_login import current_user, login_user
 from flask_babel import _, ngettext
@@ -152,6 +153,12 @@ def admin_home():
 # in the settings of the same names; a domain keeps all seven on its DomainBranding row.
 SITE_LOGO_FIELDS = ('logo', 'logo_180', 'logo_152', 'logo_32', 'logo_16')
 LOGO_FIELDS = SITE_LOGO_FIELDS + ('logo_192', 'logo_512')
+# The dark-mode logo's files, on Site's row and a domain's alike: the upload and the copy the header shows
+DARK_LOGO_FIELDS = ('logo_dark', 'logo_dark_152')
+# The sized copies a logo upload makes (Site keeps the last two in settings), and the one a dark logo upload makes
+LOGO_SIZES = (('logo_180', 180), ('logo_152', 152), ('logo_32', 32), ('logo_16', 16), ('logo_512', 512),
+              ('logo_192', 192))
+DARK_LOGO_SIZES = (('logo_152', 152),)
 LOGO_MEDIA = 'app/static/media'
 # What the domain branding form edits besides the logo
 BRANDING_TEXT_FIELDS = ('name', 'description', 'default_theme', 'additional_css', 'sidebar', 'about')
@@ -161,7 +168,8 @@ _UPLOADED_LOGO = re.compile(r'/static/media/logo_[0-9A-Za-z]{5}(_(100|180|152|32
                             re.IGNORECASE)
 
 
-def _png_copies(directory: str, base_filename: str, file_ext: str, written: list[str]) -> tuple[dict[str, str], bool]:
+def _png_copies(directory: str, base_filename: str, file_ext: str, written: list[str],
+                sizes=LOGO_SIZES) -> tuple[dict[str, str], bool]:
     """The PNG copies of the decoded upload `base_filename` + `file_ext` in `directory`: each one's URL path by field,
     and whether the upload itself is then to be removed (it is not when it is one of the copies). Each file's path is
     appended to `written` as soon as it is saved, so a failure part way removes exactly those."""
@@ -190,8 +198,7 @@ def _png_copies(directory: str, base_filename: str, file_ext: str, written: list
 
     # Save multiple copies of the logo - different sizes, all as PNG
     # Create 512x512 and 192x192 versions too, which Site keeps in settings
-    for field, size in (('logo_180', 180), ('logo_152', 152), ('logo_32', 32), ('logo_16', 16), ('logo_512', 512),
-                        ('logo_192', 192)):
+    for field, size in sizes:
         img = Image.open(f'{directory}/{base_filename}{file_ext}')
         img.thumbnail((size, size))
         img.save(f'{directory}/{base_filename}_{size}.png')
@@ -201,10 +208,11 @@ def _png_copies(directory: str, base_filename: str, file_ext: str, written: list
     return logos, delete_original
 
 
-def save_logo_upload(upload, directory: str) -> dict[str, str]:
+def save_logo_upload(upload, directory: str, sizes=LOGO_SIZES) -> dict[str, str]:
     """Store an uploaded logo in `directory` (the served media directory, app/static/media) and make its sized PNG
     copies. Returns the URL path of each file, by field: the five Site keeps on its row, then `logo_192` and `logo_512`,
-    the PWA manifest's icons. An SVG is stored as uploaded, once sanitized, with no copies: every other field is ''.
+    the PWA manifest's icons; with `sizes`, `logo` and those copies only. An SVG is stored as uploaded, once
+    sanitized, with no copies: every other field is ''.
 
     Removes nothing a logo already occupies: the caller does, once the replacement is assigned. An upload this will not
     take (not one of the image types, an SVG that cannot be sanitized, an image Pillow cannot decode or cannot
@@ -264,14 +272,13 @@ def save_logo_upload(upload, directory: str) -> dict[str, str]:
     # root with nothing to remove it.
     if file_ext.lower() == '.svg':
         # For SVG uploads, clear all logo fields and settings
-        return {'logo': f'/static/media/{base_filename}{file_ext}', 'logo_180': '', 'logo_152': '', 'logo_32': '',
-                'logo_16': '', 'logo_512': '', 'logo_192': ''}
+        return {'logo': f'/static/media/{base_filename}{file_ext}', **{field: '' for field, _size in sizes}}
 
     # A decodable image can still be one Pillow will not write as PNG (a CMYK JPEG): every copy `_png_copies` makes is a PNG. That
     # is a 400 with every file of this upload removed, never a 500 with them left in the media root.
     written = [f'{directory}/{base_filename}{file_ext}']
     try:
-        logos, delete_original = _png_copies(directory, base_filename, file_ext, written)
+        logos, delete_original = _png_copies(directory, base_filename, file_ext, written, sizes)
     except Exception:
         # Exactly the files this upload wrote, never whatever else shares their names' prefix
         for path in dict.fromkeys(written):
@@ -286,12 +293,33 @@ def save_logo_upload(upload, directory: str) -> dict[str, str]:
     return logos
 
 
+def save_dark_logo_upload(upload, directory: str) -> dict[str, str]:
+    """Store an uploaded dark-mode logo as `save_logo_upload` stores a logo, with the one copy pages show: by field,
+    `logo_dark` (the upload, or its 100 pixel copy) and `logo_dark_152` (what the header shows of a raster upload, ''
+    for an SVG)."""
+    logos = save_logo_upload(upload, directory, DARK_LOGO_SIZES)
+    return {'logo_dark': logos['logo'], 'logo_dark_152': logos['logo_152']}
+
+
+def save_logo_upload_after(upload, directory: str, earlier: dict[str, str]) -> dict[str, str]:
+    """`save_logo_upload`, in a save that has already stored another upload, whose files by field are `earlier`: an
+    upload this refuses removes those too, so a refused save leaves nothing of either on disk."""
+    try:
+        return save_logo_upload(upload, directory)
+    except HTTPException:
+        for path in earlier.values():
+            if path and os.path.isfile(f'app{path}'):
+                os.unlink(f'app{path}')
+        raise
+
+
 def _logo_paths_in_use() -> set[str]:
-    """The real path of every logo file something names: Site's logo fields and icon settings, and every domain's row."""
+    """The real path of every logo file something names: Site's logo fields and icon settings, and every domain's row,
+    dark logos included."""
     site = db.session.get(Site, 1)
-    paths = [getattr(site, field, None) for field in SITE_LOGO_FIELDS] + \
+    paths = [getattr(site, field, None) for field in SITE_LOGO_FIELDS + DARK_LOGO_FIELDS] + \
         [get_setting('logo_192', ''), get_setting('logo_512', '')] + \
-        [getattr(row, field) for row in db.session.query(DomainBranding) for field in LOGO_FIELDS]
+        [getattr(row, field) for row in db.session.query(DomainBranding) for field in LOGO_FIELDS + DARK_LOGO_FIELDS]
     return {os.path.realpath(f'app{path}') for path in paths if path}
 
 
@@ -320,7 +348,7 @@ def remove_superseded_logos(paths: list[str | None]) -> None:
 
 
 def offsite_by_field(own_host: str, css: str = '', sidebar_html: str = '', about_html: str = '',
-                     logos: list[str] = (), description: str = '') -> dict[str, list[str]]:
+                     logos: list[str] = (), description: str = '', dark_logos: list[str] = ()) -> dict[str, list[str]]:
     """Each branding form field with an off-site reference (spec §3.4), and its references. The sidebar and About are
     checked as the HTML made from their Markdown: a Markdown image is not HTML, the HTML it becomes loads. The tagline
     is checked as HTML: pages write it as it is stored. CSS is checked as HTML too, for markup that would load were its
@@ -329,7 +357,8 @@ def offsite_by_field(own_host: str, css: str = '', sidebar_html: str = '', about
              'additional_css': offsite_references(css=css, html=css, own_host=own_host),
              'sidebar': offsite_references(html=sidebar_html, own_host=own_host),
              'about': offsite_references(html=about_html, own_host=own_host),
-             'logo': offsite_references(urls=logos, own_host=own_host)}
+             'logo': offsite_references(urls=logos, own_host=own_host),
+             'logo_dark': offsite_references(urls=dark_logos, own_host=own_host)}
     return {field: references for field, references in found.items() if references}
 
 
@@ -389,6 +418,19 @@ def admin_site():
         site.contact_email = form.contact_email.data
         if site.id is None:
             db.session.add(site)
+        # The dark mode icon, before the icon: replaced by an upload, or cleared so that dark mode shows the icon. The
+        # files it named go once the row no longer names them. Stored first so that an icon upload refused below can
+        # take its files with it.
+        uploaded_dark = request.files.get('icon_dark')
+        dark_logos, superseded_dark = {}, []
+        if uploaded_dark and uploaded_dark.filename != '':
+            dark_logos = save_dark_logo_upload(uploaded_dark, LOGO_MEDIA)
+        elif form.remove_icon_dark.data:
+            dark_logos = dict.fromkeys(DARK_LOGO_FIELDS, '')
+        if dark_logos:
+            superseded_dark = [getattr(site, field) for field in DARK_LOGO_FIELDS]
+            for field in DARK_LOGO_FIELDS:
+                setattr(site, field, dark_logos[field])
         # Save site icon
         # `.get`, not `['icon']`: `request.files[...]` is a
         # BadRequestKeyError -- a 400 -- for a submission that does not
@@ -409,7 +451,7 @@ def admin_site():
                            site.logo_16, get_setting('logo_512', ''),
                            get_setting('logo_192', '')) if path]
 
-            logos = save_logo_upload(uploaded_icon, 'app/static/media')
+            logos = save_logo_upload_after(uploaded_icon, 'app/static/media', dark_logos)
             for field in SITE_LOGO_FIELDS:
                 setattr(site, field, logos[field])
             # Site keeps its 512x512 and 192x192 versions in settings
@@ -421,6 +463,7 @@ def admin_site():
                 if os.path.isfile(superseded_path):
                     os.unlink(superseded_path)
         db.session.commit()
+        remove_superseded_logos(superseded_dark)
         cache.delete_memoized(get_site_as_dict)
         clear_domain_cache()   # the first domain's branding is Site row 1's, memoised (app/branding.py)
         set_setting('announcement', form.announcement.data)
@@ -440,7 +483,7 @@ def admin_site():
         form.tos_url.data = site.tos_url
         form.contact_email.data = site.contact_email
         form.announcement.data = get_setting('announcement', '')
-    return render_template('admin/site.html', title=_('Site profile'), form=form,
+    return render_template('admin/site.html', title=_('Site profile'), form=form, site=site,
                            roles_with=roles_with('change instance settings'))
 
 
@@ -485,7 +528,7 @@ def admin_domains_delete(domain_id):
         instance_id = row.instance_id
         # Its branding row goes with it: the files its logo upload wrote go once nothing names them
         branding = db.session.get(DomainBranding, row.id)
-        logos = [getattr(branding, field) for field in LOGO_FIELDS] if branding is not None else []
+        logos = [getattr(branding, field) for field in LOGO_FIELDS + DARK_LOGO_FIELDS] if branding is not None else []
         db.session.delete(row)
         db.session.flush()
         db.session.query(Instance).filter(Instance.id == instance_id).delete(synchronize_session='fetch')
@@ -519,8 +562,13 @@ def admin_domain_branding(domain_id):
         replacing = uploading or form.remove_logo.data
         # The logo the row keeps when it is not replaced. A new upload is this site's own media: never off-site.
         kept_logos = [] if replacing or branding is None else [getattr(branding, field) or '' for field in LOGO_FIELDS]
+        upload_dark = request.files.get('logo_dark')
+        uploading_dark = bool(upload_dark and upload_dark.filename)
+        replacing_dark = uploading_dark or form.remove_logo_dark.data
+        kept_dark = [] if replacing_dark or branding is None else \
+            [getattr(branding, field) or '' for field in DARK_LOGO_FIELDS]
         found = offsite_by_field(row.domain, values['additional_css'], sidebar_html, about_html, kept_logos,
-                                 values['description'])
+                                 values['description'], kept_dark)
         # A field that ends inside markup is finished by whatever the page writes after it, which nothing here can
         # check: the onion's pages would drop it (app/branding.py), so the onion refuses it; elsewhere it is advised.
         # The CSS is read as HTML on the onion only, as its pages read it.
@@ -536,7 +584,10 @@ def admin_domain_branding(domain_id):
                 getattr(form, field).errors.append(_('This ends inside an unfinished tag or other markup, which the '
                                                      'onion cannot check. Finish or remove it.'))
         else:
-            logos = save_logo_upload(upload, LOGO_MEDIA) if uploading else dict.fromkeys(LOGO_FIELDS, '')
+            dark_logos = save_dark_logo_upload(upload_dark, LOGO_MEDIA) if uploading_dark else \
+                dict.fromkeys(DARK_LOGO_FIELDS, '')
+            logos = save_logo_upload_after(upload, LOGO_MEDIA, dark_logos) if uploading else \
+                dict.fromkeys(LOGO_FIELDS, '')
             if branding is None:
                 branding = DomainBranding(site_domain_id=row.id)
                 db.session.add(branding)
@@ -545,6 +596,10 @@ def admin_domain_branding(domain_id):
                 superseded = [getattr(branding, field) for field in LOGO_FIELDS]
                 for field in LOGO_FIELDS:
                     setattr(branding, field, logos[field])
+            if replacing_dark:
+                superseded += [getattr(branding, field) for field in DARK_LOGO_FIELDS]
+                for field in DARK_LOGO_FIELDS:
+                    setattr(branding, field, dark_logos[field])
             for field, value in values.items():
                 setattr(branding, field, value)
             branding.sidebar_html = sidebar_html
@@ -560,7 +615,8 @@ def admin_domain_branding(domain_id):
         for field in BRANDING_TEXT_FIELDS:
             getattr(form, field).data = getattr(branding, field) or ''
     return render_template('admin/domain_branding.html', title=_('Branding: %(domain)s', domain=row.domain),
-                           form=form, row=row, logo=branding.logo if branding is not None else '')
+                           form=form, row=row, logo=branding.logo if branding is not None else '',
+                           logo_dark=branding.logo_dark if branding is not None else '')
 
 
 @bp.route('/misc', methods=['GET', 'POST'])

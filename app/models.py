@@ -5878,6 +5878,8 @@ class Site(db.Model):
     logo_152 = db.Column(db.String(40), default='')
     logo_32 = db.Column(db.String(40), default='')
     logo_16 = db.Column(db.String(40), default='')
+    logo_dark = db.Column(db.String(40), default='')       # what dark mode shows instead of logo, '' for logo itself
+    logo_dark_152 = db.Column(db.String(40), default='')   # and instead of logo_152
     show_inoculation_block = db.Column(db.Boolean, default=True)
     additional_css = db.Column(db.Text)
     additional_js = db.Column(db.Text)
@@ -6021,6 +6023,8 @@ class DomainBranding(db.Model):
     logo_16 = db.Column(db.String(40))
     logo_192 = db.Column(db.String(40))   # the PWA manifest's icons: Site keeps its own in settings of these names
     logo_512 = db.Column(db.String(40))
+    logo_dark = db.Column(db.String(40))       # what dark mode shows instead of logo
+    logo_dark_152 = db.Column(db.String(40))
     default_theme = db.Column(db.String(20))
     additional_css = db.Column(db.Text)
     sidebar = db.Column(db.Text)

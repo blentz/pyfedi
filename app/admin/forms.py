@@ -34,6 +34,10 @@ class SiteProfileForm(FlaskForm):
     description = StringField(_l('Tagline'), validators=[no_nul])
     icon = FileField(_l('Icon'), validators=[FileAllowed(['jpg', 'jpeg', 'png', 'webp', 'svg'], 'Images only!')],
                      render_kw={'accept': 'image/*'})
+    icon_dark = FileField(_l('Icon for dark mode'),
+                          validators=[FileAllowed(['jpg', 'jpeg', 'png', 'webp', 'svg'], 'Images only!')],
+                          render_kw={'accept': 'image/*'})
+    remove_icon_dark = BooleanField(_l('Remove the dark mode icon'))
     sidebar = TextAreaField(_l('Sidebar'), validators=[no_nul])
     about = TextAreaField(_l('About'), validators=[no_nul])
     announcement = TextAreaField(_l('Announcement at top of home page'))
@@ -50,6 +54,8 @@ class DomainBrandingForm(FlaskForm):
     description = StringField(_l('Tagline'), validators=[Length(max=256), no_nul])
     logo = FileField(_l('Logo'), render_kw={'accept': 'image/*'})
     remove_logo = BooleanField(_l("Remove this domain's logo"))
+    logo_dark = FileField(_l('Logo for dark mode'), render_kw={'accept': 'image/*'})
+    remove_logo_dark = BooleanField(_l("Remove this domain's dark mode logo"))
     default_theme = SelectField(_l('Default theme'), choices=[], render_kw={'class': 'form-select'})
     additional_css = TextAreaField(_l('Additional CSS'), validators=[no_nul])
     sidebar = TextAreaField(_l('Sidebar'), validators=[no_nul])

@@ -27,6 +27,12 @@
             <p class="small field_hint">{{ _('Provide a square image, minimum 50 pixels wide but ideally 152+ pixels.') }}
             {{ _('It is best to use the PNG file format as that is most widely compatible for PWA icons.') }}</p>
             {{ render_field(form.remove_logo) }}
+            {% if logo_dark %}
+            <p><img src="{{ logo_dark }}" alt="{{ _('This domain\'s dark mode logo') }}" height="50"></p>
+            {% endif %}
+            {{ render_field(form.logo_dark) }}
+            <p class="small field_hint">{{ _('Shown instead of the logo when the page is in dark mode. Leave it unset to show the logo in both modes.') }}</p>
+            {{ render_field(form.remove_logo_dark) }}
             {{ render_field(form.default_theme) }}
             {{ render_field(form.additional_css) }}
             {{ render_field(form.sidebar) }}

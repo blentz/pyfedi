@@ -159,6 +159,21 @@ div.navbar {
   }
 }
 
+// A logo and its dark mode logo (app/branding.py): the page shows the one that matches data-bs-theme, the logo when
+// it has none (no JavaScript)
+img.logo_dark {
+  display: none;
+}
+
+[data-bs-theme="dark"] {
+  img.logo_light {
+    display: none;
+  }
+  img.logo_dark {
+    display: inline;
+  }
+}
+
 .navbar-light .navbar-nav {
   .nav-link {
     outline-style: none;

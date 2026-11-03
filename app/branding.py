@@ -31,11 +31,32 @@ class Branding(NamedTuple):
     logo_152: str
     logo_32: str
     logo_16: str
+    logo_dark: str       # dark mode's logo and its 152 pixel copy: '' shows the logo in dark mode too
+    logo_dark_152: str
     default_theme: str
     additional_css: str
     sidebar: str   # the Markdown sidebar_html is made from: page descriptions are its text
     sidebar_html: str
     about_html: str
+
+    @property
+    def header_logo(self) -> str:
+        """What the header shows: an SVG logo as uploaded, else its 152 pixel copy, else PieFed's."""
+        return _header_image(self.logo, self.logo_152) or PIEFED_LOGO
+
+    @property
+    def header_logo_dark(self) -> str:
+        """What the header shows in dark mode: the dark logo, chosen as `header_logo` chooses, else `header_logo`."""
+        return _header_image(self.logo_dark, self.logo_dark_152) or self.header_logo
+
+
+PIEFED_LOGO = '/static/images/piefed_logo_full_t_300x300.svg'
+# What templates may read of a Branding besides its fields (app/request_hooks.py's BrandingOnUse)
+DERIVED_FIELDS = ('header_logo', 'header_logo_dark')
+
+
+def _header_image(logo: str, logo_152: str) -> str:
+    return logo if logo.lower().endswith('.svg') else logo_152
 
 
 def own_branding(domain: storefront.DomainInfo) -> models.DomainBranding | None:
@@ -52,19 +73,23 @@ def own_value(domain: storefront.DomainInfo, field: str) -> str:
 
 # A logo's sized copies: a domain with a logo of its own shows only its own (spec §5, how a blank logo falls back)
 _ICON_FIELDS = frozenset({'logo_180', 'logo_152', 'logo_32', 'logo_16'})
+# A domain with a logo or a dark logo of its own never shows the first domain's dark logo: a blank one is its own logo
+_DARK_FIELDS = frozenset({'logo_dark', 'logo_dark_152'})
 
 
 @cache.memoize(timeout=300, make_name=shaped_memo_name)
 def _effective(site_domain_id: int | None, is_default: bool) -> Branding:
     """Each field the row sets, else Site's. A row with its own `logo` takes its icon sizes from itself alone: a
     blank size is PieFed's default, as the manifest's icons are, never the first domain's icon beside the domain's
-    logo."""
+    logo. Its dark logo likewise: a row with its own logo or dark logo takes its dark logo from itself alone, a blank one
+    being its logo in dark mode."""
     site = db.session.get(models.Site, 1)
     row = None if is_default else db.session.get(models.DomainBranding, site_domain_id)
     own_logo = bool(getattr(row, 'logo', None))
+    own_dark = own_logo or bool(getattr(row, 'logo_dark', None))
 
     def value(field):
-        if own_logo and field in _ICON_FIELDS:
+        if (own_logo and field in _ICON_FIELDS) or (own_dark and field in _DARK_FIELDS):
             return getattr(row, field) or ''
         return getattr(row, field, None) or getattr(site, field) or ''
     return Branding(*(value(field) for field in Branding._fields))
@@ -98,7 +123,7 @@ def _style_kept_open(branding: Branding) -> Branding:
 # the page's own domain. CSS is tokenised as the onion media proxy tokenises it (`_css_url_spans`): every `url(...)`,
 # quoted or not, and every string, which covers `@import "x"` and `image-set("x" 1x)`; escapes are undone.
 
-_URL_FIELDS = ('logo', 'logo_180', 'logo_152', 'logo_32', 'logo_16')
+_URL_FIELDS = ('logo', 'logo_180', 'logo_152', 'logo_32', 'logo_16', 'logo_dark', 'logo_dark_152')
 # The tagline is HTML too: every page that shows it writes it `|safe`, as Site's always was
 _HTML_FIELDS = ('description', 'sidebar_html', 'about_html')
 # What a browser loads as soon as it parses the element, without the visitor following anything: never an `a`'s href

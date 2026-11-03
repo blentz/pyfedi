@@ -163,13 +163,12 @@
             <a href="#" id="navbar-back-ios"><span class="fe fe-back"></span></a>
             <a class="navbar-brand" href="/" aria-label="{{ _('To home page') }}">
                 {% if not low_bandwidth -%}
-                    <img src="{% if branding.logo and branding.logo.endswith('.svg') -%}
-                                    {{ branding.logo }}
-                                {%- elif branding.logo_152 -%}
-                                    {{ branding.logo_152 }}
-                                {%- else -%}
-                                    /static/images/piefed_logo_full_t_300x300.svg
-                                {%- endif %}" alt="Logo" width="50" height="50" fetchpriority="high" />
+                    {% if branding.header_logo_dark != branding.header_logo -%}
+                    <img src="{{ branding.header_logo }}" class="logo_light" alt="Logo" width="50" height="50" fetchpriority="high" />
+                    <img src="{{ branding.header_logo_dark }}" class="logo_dark" alt="Logo" width="50" height="50" fetchpriority="high" />
+                    {%- else -%}
+                    <img src="{{ branding.header_logo }}" alt="Logo" width="50" height="50" fetchpriority="high" />
+                    {%- endif %}
                 {%- endif %}{{ branding.name }}</a>
             {% if current_user.is_authenticated -%}
                 <a class="nav-link ms-auto d-lg-none" href="/notifications" aria-label="{{ _('Notifications') }}">

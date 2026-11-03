@@ -8,7 +8,7 @@ from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.referral import referrals_available
-from app.branding import Branding, current_branding
+from app.branding import DERIVED_FIELDS, Branding, current_branding
 from app.activitypub.entitlement import secure_mode_cache_headers, signed_fetch_refusal
 from app.community.live import post_community_link
 from app.community.util import actor_to_community
@@ -90,7 +90,7 @@ class BrandingOnUse:
         self._branding = None
 
     def __getattr__(self, field):
-        if field not in Branding._fields:
+        if field not in Branding._fields and field not in DERIVED_FIELDS:
             raise AttributeError(field)
         if self._branding is None:
             self._branding = current_branding()

@@ -25,7 +25,13 @@
             <p class="small field_hint">{{ _('You can use markdown here.') }}</p>
             {{ render_field(form.icon) }}
             <p class="small field_hint">{{ _('Provide a square image, minimum 50 pixels wide but ideally 152+ pixels.') }}
-            {{ _('It is best to use the PNG file format as that is most widely compatible for PWA icons.') }}
+            {{ _('It is best to use the PNG file format as that is most widely compatible for PWA icons.') }}</p>
+            {% if site.logo_dark %}
+            <p><img src="{{ site.logo_dark }}" alt="{{ _('The dark mode icon') }}" height="50"></p>
+            {% endif %}
+            {{ render_field(form.icon_dark) }}
+            <p class="small field_hint">{{ _('Shown instead of the icon when the page is in dark mode. Leave it unset to show the icon in both modes.') }}</p>
+            {{ render_field(form.remove_icon_dark) }}
             <h2>{{ _('About this instance') }}</h2>
             <p>{{ _('Provide a more extensive description of the instance, set a contact address and provide legal information. This information appears on the <a href="/about">about</a> page.') }}</p>
             {{ render_field(form.about) }}

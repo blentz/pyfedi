@@ -29,7 +29,7 @@ from tests.fuzz.targets.urls import _no_domain_rows
 
 MAX_INPUT = 4096
 ONION_HOST = 'fuzzfuzzfuzzfuzz.onion'
-_URL_FIELDS = ('logo', 'logo_180', 'logo_152', 'logo_32', 'logo_16')
+_URL_FIELDS = ('logo', 'logo_180', 'logo_152', 'logo_32', 'logo_16', 'logo_dark', 'logo_dark_152')
 _HTML_FIELDS = ('description', 'sidebar_html', 'about_html')
 _TEXT_FIELDS = ('name', 'default_theme', 'sidebar')
 
