@@ -484,7 +484,7 @@ class TestTheTopicCounts:
 
 
 def test_the_page_needs_the_permission(app, api_baseline):
-    """`permission_required('administer all communities')`. An ordinary account is
+    """`permission_required('administer communities pages')`. An ordinary account is
     refused before any of the above runs."""
     from tests.factories import make_user
     g.admin_ids = []

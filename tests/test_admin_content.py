@@ -51,7 +51,7 @@ def env(app, db_session):
     """An admin, a community, and one post/reply pair per view.
 
     User id 1 is an admin (fact 347), which is what `permission_required(
-    'administer all communities')` needs.
+    'administer communities pages')` needs.
     """
     site = db.session.get(Site, 1)
     site.private_instance = False
@@ -332,7 +332,7 @@ class TestWhoMaySeeIt:
         assert response.status_code in (302, 401, 403)
 
     def test_an_ordinary_user_may_not(self, app, env):
-        """`permission_required('administer all communities')`."""
+        """`permission_required('administer communities pages')`."""
         local = make_instance('other.piefed.local')
         ordinary = make_user(local, 'ordinaryperson', local=True)
         db.session.commit()

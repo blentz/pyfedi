@@ -29,7 +29,7 @@ from app import db
 from app.admin.routes import (unsubscribe_everyone_then_delete,
                               unsubscribe_everyone_then_delete_task)
 from app.models import ActivityPubLog, Community, CommunityMember, Site
-from tests.factories import (grant_permission, make_community, make_community_member,
+from tests.factories import (grant_permissions, COMMUNITY_ADMINISTRATION, grant_permission, make_community, make_community_member,
                              make_instance, make_user)
 
 
@@ -60,7 +60,7 @@ def env(app, api_baseline):
     admin.verified = True
     admin.private_key = 'x'
     grant_permission(admin, 'change instance settings')
-    grant_permission(admin, 'administer all communities')
+    grant_permissions(admin, *COMMUNITY_ADMINISTRATION)
     db.session.commit()
     client = app.test_client()
     with client.session_transaction() as session:

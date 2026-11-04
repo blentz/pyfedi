@@ -22,7 +22,7 @@ from app import db
 from app.local_only import content_local_only, hidden_default_domain
 from app.models import ChatMessage, CommunityMember, Conversation, Domain, File, Notification, Post, PostBookmark, \
     PostReplyBookmark, PostVote, Report, Role, Topic, UserRegistration, read_posts, user_file, utcnow
-from tests.factories import grant_permission, make_instance, make_post, make_post_reply, make_user
+from tests.factories import COMMUNITY_ADMINISTRATION, grant_permissions, grant_permission, make_instance, make_post, make_post_reply, make_user
 import app.hidden_routes as hidden_routes
 from app.hidden_routes import hidden_notifications, notification_hidden
 from app.post.routes import refuse_invisible_unless_moderating
@@ -523,7 +523,7 @@ def panel(onion):
         db.session.flush()
         db.session.execute(user_file.insert().values(user_id=user.id, file_id=file.id))
     db.session.commit()
-    grant_permission(onion.admin, 'administer all communities')
+    grant_permissions(onion.admin, *COMMUNITY_ADMINISTRATION)
     grant_permission(onion.admin, 'approve registrations')
     return onion
 

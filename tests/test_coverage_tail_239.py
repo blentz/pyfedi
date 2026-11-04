@@ -25,7 +25,7 @@ from flask import g
 
 from app import db
 from app.models import (Community, File, Language, Site, User, UserRegistration, utcnow)
-from tests.factories import grant_permission, make_community, make_user
+from tests.factories import COMMUNITY_ADMINISTRATION, grant_permissions, grant_permission, make_community, make_user
 
 
 @pytest.fixture
@@ -41,7 +41,7 @@ def env(app, api_baseline):
             db.session.add(Language(code=code, name=name))
     db.session.commit()
     admin = api_baseline.user1
-    grant_permission(admin, 'administer all communities')
+    grant_permissions(admin, *COMMUNITY_ADMINISTRATION)
     grant_permission(admin, 'approve registrations')
     db.session.commit()
     client = app.test_client()

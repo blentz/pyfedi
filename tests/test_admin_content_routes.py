@@ -6,8 +6,8 @@ and each is gated on a DIFFERENT permission:
 
 * CMS pages -- `edit cms pages`
 * emoji -- `change instance settings`
-* blocked images -- `administer all communities`
-* the media list -- `administer all communities`, but deleting from it needs
+* blocked images -- `manage blocklists`
+* the media list -- `manage media`, but deleting from it needs
   `administer all users`
 * masquerade -- `change instance settings`, and it hands the caller another
   account's session
@@ -30,7 +30,7 @@ from tests.factories import (grant_permission, make_community,
                              make_user)
 
 PERMISSIONS = ('edit cms pages', 'change instance settings',
-               'administer all communities', 'administer all users')
+               'manage blocklists', 'manage media', 'administer all users')
 
 
 @pytest.fixture
@@ -107,9 +107,9 @@ GATES = [
     ('/admin/pages/add', 'edit cms pages'),
     ('/admin/emoji', 'change instance settings'),
     ('/admin/emoji/add', 'change instance settings'),
-    ('/admin/blocked_images', 'administer all communities'),
-    ('/admin/blocked_image/add', 'administer all communities'),
-    ('/admin/media', 'administer all communities'),
+    ('/admin/blocked_images', 'manage blocklists'),
+    ('/admin/blocked_image/add', 'manage blocklists'),
+    ('/admin/media', 'manage media'),
 ]
 
 
@@ -306,7 +306,7 @@ class TestTheEmoji:
 class TestBlockedImages:
     @pytest.fixture
     def moderator(self, env):
-        admin = an_admin(env, 'administer all communities')
+        admin = an_admin(env, 'manage blocklists')
         login(env.client, admin)
         return admin
 
@@ -408,7 +408,7 @@ class TestBlockedImages:
 class TestTheMediaList:
     @pytest.fixture
     def moderator(self, env):
-        admin = an_admin(env, 'administer all communities')
+        admin = an_admin(env, 'manage media')
         login(env.client, admin)
         return admin
 

@@ -22,7 +22,7 @@ ADMIN = [
     Row('admin.settings.masquerade', 'DDDAA', gate(lambda w: f'/admin/masquerade/{w.target.id}')),
     # admin_domain_branding: in-body user_access('change instance settings') + abort(403)
     Row('admin.domain_branding', 'DDDAA', gate(lambda w: f'/admin/domains/{w.shop.id}/branding')),
-    # @permission_required('administer all communities')
+    # @permission_required('administer all communities'); since step 4, the permission split from it for each page
     *[Row(f'admin.communities{path.replace("/", ".")}', 'DDAAA', gate(f'/admin{path}')) for path in (
         '/communities', '/communities/no-topic', '/communities/low-quality', '/communities/un-moderated',
         '/topics', '/topic/add', '/content', '/blocked_images', '/blocked_image/add', '/media', '/votes',
@@ -42,7 +42,7 @@ ADMIN = [
     # @permission_required('edit cms pages')
     Row('admin.pages', 'DDDAA', gate('/admin/pages')),
     Row('admin.pages.edit', 'DDDAA', gate(lambda w: f'/admin/pages/{w.page.id}/edit')),
-    # @permission_required('change user roles')
+    # Admin only (RB5): it was @permission_required('change user roles')
     Row('admin.permissions', 'DDDAA', gate('/admin/permissions')),
 ]
 

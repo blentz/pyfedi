@@ -12,7 +12,7 @@ from app.admin import routes as admin_routes
 from app.constants import POST_STATUS_REVIEWING
 from app.models import Conversation, Emoji, InstanceRole, Site
 from app.utils import get_setting, set_setting
-from tests.factories import grant_permission, make_community, make_instance, make_post, make_user
+from tests.factories import COMMUNITY_ADMINISTRATION, grant_permission, make_community, make_instance, make_post, make_user
 from tests.test_admin_content_routes import assert_refused, login
 from tests.test_per_domain_html_routes import Visitor
 from tests.two_domains import FIRST
@@ -29,7 +29,7 @@ def admin(app, api_baseline, monkeypatch):
     user.verified = True
     user.private_key = 'a key'
     db.session.commit()
-    for permission in ('administer all communities', 'administer all users', 'change instance settings'):
+    for permission in (*COMMUNITY_ADMINISTRATION, 'administer all users', 'change instance settings'):
         grant_permission(user, permission)
     return SimpleNamespace(user=user, client=Visitor(app, user, FIRST), baseline=api_baseline)
 

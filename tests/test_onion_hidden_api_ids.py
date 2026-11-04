@@ -13,7 +13,7 @@ from app.local_only import found_here, hidden_report_clause, prime_reporters, re
 from app.models import ChatMessage, CommunityBan, CommunityFlair, CommunityMember, Conversation, Post, Notification, \
     PostReply, Report, User, UserBlock, UserFlair, UserFollower, UserNote, UserRegistration, read_posts
 from tests.conftest import forget_login
-from tests.factories import grant_permission, make_post_reply, make_user
+from tests.factories import COMMUNITY_ADMINISTRATION, grant_permissions, grant_permission, make_post_reply, make_user
 from tests.test_hidden_routes import talking  # noqa: F401 -- a fixture
 from tests.test_instance_visible_here import HOSTS, scene  # noqa: F401 -- scene is a fixture
 from tests.test_local_only_actors_hidden import ONION_ART, ONION_BOB, world  # noqa: F401 -- world is a fixture
@@ -32,7 +32,7 @@ NOBODY = 2 ** 30   # an id no row holds
 def alpha(app, onion, monkeypatch):
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
     grant_permission(onion.admin, 'ban users')
-    grant_permission(onion.admin, 'administer all communities')
+    grant_permissions(onion.admin, *COMMUNITY_ADMINISTRATION)
     grant_permission(onion.admin, 'administer all users')
     return onion
 

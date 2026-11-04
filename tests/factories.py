@@ -445,6 +445,18 @@ def grant_permission(user: User, permission: str) -> Role:
     return role
 
 
+# What a role holding the legacy 'administer all communities' holds after RBAC step 4's migration
+# (migrations/versions/c5f9e3b7a2d1_split_permissions.py): every permission split from it.
+COMMUNITY_ADMINISTRATION = ('moderate all communities', 'manage topics', 'manage blocklists', 'view vote analytics',
+                            'manage media', 'manage remote instances', 'administer communities pages')
+
+
+def grant_permissions(user: User, *permissions: str) -> None:
+    """`grant_permission` for each of `permissions`."""
+    for permission in permissions:
+        grant_permission(user, permission)
+
+
 def admin_role() -> Role:
     """The built-in Admin role (spec 2026-11-03-rbac-design.md RB16), made if this test has none yet."""
     role = Role.admin()

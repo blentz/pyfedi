@@ -104,7 +104,7 @@ class TestEditingACommunityAsAnAdmin:
         """D1299. `request.files['icon_file']` was a 400 for every client that
         does not send an empty file input -- which is every client that is not
         a browser."""
-        an_admin(env, 'administer all communities')
+        an_admin(env, 'administer communities pages')
         token = csrf(env.app, env.client)
         response = env.client.post(f'/admin/community/{env.community.id}/edit',
                                    data=self.payload(env, token))
@@ -115,7 +115,7 @@ class TestEditingACommunityAsAnAdmin:
 
     def test_one_with_the_fields_present_but_empty(self, env):
         """What a browser sends."""
-        an_admin(env, 'administer all communities')
+        an_admin(env, 'administer communities pages')
         token = csrf(env.app, env.client)
         data = self.payload(env, token)
         data['icon_file'] = (io.BytesIO(b''), '')
@@ -126,7 +126,7 @@ class TestEditingACommunityAsAnAdmin:
         assert response.status_code == 302
 
     def test_one_that_does_carry_an_icon(self, env):
-        an_admin(env, 'administer all communities')
+        an_admin(env, 'administer communities pages')
         token = csrf(env.app, env.client)
         data = self.payload(env, token)
         data['icon_file'] = (a_png(), 'icon.png')
@@ -147,7 +147,7 @@ class TestEditingACommunityAsAnAdmin:
                 os.unlink(community.icon.thumbnail_path)
 
     def test_a_community_nobody_hosts(self, env):
-        an_admin(env, 'administer all communities')
+        an_admin(env, 'administer communities pages')
         token = csrf(env.app, env.client)
         response = env.client.post('/admin/community/999999/edit',
                                    data=self.payload(env, token))
@@ -172,7 +172,7 @@ class TestEditingACommunityAsAnAdmin:
         new images are stored before anything old is touched, a refused banner deletes the new icon again, and
         the old files go only once the edit is committed."""
         old = _an_old_icon_and_banner(env, monkeypatch, request, storage)
-        an_admin(env, 'administer all communities')
+        an_admin(env, 'administer communities pages')
         names = iter(['storediconfile', 'refusedbanner0'] if uploads == 'icon and banner' else ['refusedbanner0'])
         monkeypatch.setattr('app.community.util.gibberish', lambda length: next(names) + '0')
         data = self.payload(env, csrf(env.app, env.client), title='Changed')
@@ -197,7 +197,7 @@ class TestEditingACommunityAsAnAdmin:
     def test_new_images_replace_the_old_ones_whose_files_go_after(self, env, monkeypatch, request, storage):
         """Both accepted: the community points at the new pair, and the old pair's files are deleted."""
         old = _an_old_icon_and_banner(env, monkeypatch, request, storage)
-        an_admin(env, 'administer all communities')
+        an_admin(env, 'administer communities pages')
         names = iter(['newiconfile000', 'newbannerfile0'])
         monkeypatch.setattr('app.community.util.gibberish', lambda length: next(names) + '0')
         data = self.payload(env, csrf(env.app, env.client))

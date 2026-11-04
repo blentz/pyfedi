@@ -15,7 +15,7 @@ from cachelib import SimpleCache
 from app import cache, db
 from app.constants import POST_TYPE_LINK
 from app.models import Community, Domain, utcnow
-from tests.factories import grant_permission, make_post, make_post_vote
+from tests.factories import grant_permissions, COMMUNITY_ADMINISTRATION, grant_permission, make_post, make_post_vote
 from tests.test_instance_visible_here import scene  # noqa: F401 -- scene is a fixture
 from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
 from tests.test_per_domain_html_routes import Visitor
@@ -29,7 +29,7 @@ def admins(app, scene, monkeypatch):  # noqa: F811
     """first_bob administers on the first domain, onion_bob on the onion; a real cache, as production has."""
     monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
     for user in (scene.first_bob, scene.onion_bob):
-        grant_permission(user, 'administer all communities')
+        grant_permissions(user, *COMMUNITY_ADMINISTRATION)
         grant_permission(user, 'manage users')
     return scene
 

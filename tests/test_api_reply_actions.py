@@ -511,7 +511,7 @@ def test_somebody_who_administers_communities_reads_them_all(app, env):
     author, stranger, community, post, reply, baseline = env
     admin = with_permission(make_user(baseline.instance_local, 'theadmin',
                                       local=True),
-                            'administer all communities')
+                            'moderate all communities')
     report = a_report(stranger, reply, community)
 
     for data in ({}, {'comment_id': reply.id}, {'community_id': community.id}):
@@ -693,7 +693,7 @@ def test_somebody_who_administers_communities_may_distinguish_their_own(app,
     from app.api.alpha.utils.reply import post_reply_distinguish
 
     author, stranger, community, post, reply, baseline = env
-    with_permission(author, 'administer all communities')
+    with_permission(author, 'moderate all communities')
 
     post_reply_distinguish(token(author), {'comment_reply_id': reply.id,
                                            'distinguished': True})

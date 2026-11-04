@@ -222,7 +222,7 @@ def modlogged(world):
     w = world
     set_setting('public_modlog', True)
     w.admin = make_user(w.stranger.instance, 'ada', local=True)
-    role = grant_permission(w.admin, 'administer all communities')
+    role = grant_permission(w.admin, 'moderate all communities')
     role.built_in = True   # the built-in Admin role (RB16)
     w.reply.body = 'secret reply'
     db.session.commit()

@@ -6,7 +6,7 @@ from app import db
 from app.api.alpha import views
 from app.post.util import post_replies, get_comment_branch
 from app.visibility import RestrictedReply
-from tests.factories import bearer, grant_permission, make_community_member, make_post_reply, make_user, \
+from tests.factories import COMMUNITY_ADMINISTRATION, grant_permissions, bearer, make_community_member, make_post_reply, make_user, \
     make_visibility_world
 from tests.test_visibility_single_object import client_as, world  # noqa: F401  (world is a fixture)
 
@@ -181,7 +181,7 @@ def test_admin_and_moderator_get_the_placeholder_too(app, db_session):
     admin = make_user(w.stranger.instance, 'ada', local=True)
     moderator = make_user(w.stranger.instance, 'mo', local=True)
     db.session.commit()
-    grant_permission(admin, 'administer all communities')
+    grant_permissions(admin, *COMMUNITY_ADMINISTRATION)
     make_community_member(moderator, w.community, is_moderator=True)
     for viewer in (admin, moderator):
         entry = next(e for e in post_replies(w.public_post, 'new', viewer) if e['comment'].id == w.reply.id)

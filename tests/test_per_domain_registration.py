@@ -108,7 +108,6 @@ def _staff_and_admin(onion_row_registration):
     db.session.commit()
     for role in (staff_role, admin_role):
         db.session.add(RolePermission(role_id=role.id, permission='administer all users'))
-        db.session.add(RolePermission(role_id=role.id, permission='change user roles'))
     db.session.execute(role_grant.insert().values(user_id=staff.id, role_id=staff_role.id))
     db.session.execute(role_grant.insert().values(user_id=admin.id, role_id=admin_role.id))
     db.session.commit()

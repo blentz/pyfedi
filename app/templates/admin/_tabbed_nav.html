@@ -7,12 +7,16 @@
                 <a class="nav-link{% if active_child == 'admin_domains' %} active{% endif %}" id="domains-tab" type="button" role="tab" href="/admin/domains" style="view-transition-name: misc">{{ _('Domains') }}</a>
                 <a class="nav-link{% if active_child == 'admin_instance_chooser' %} active{% endif %}" id="instance-chooser-tab" type="button" role="tab" href="/admin/instance_chooser" style="view-transition-name: misc">{{ _('Chooser') }}</a>
             {% endif -%}
-            {% if user_access('administer all communities', current_user.id) %}
+            {% if user_access('administer communities pages', current_user.id) %}
                 <a class="nav-link{% if active_child == 'admin_communities' %} active{% endif %}" id="communities-tab" type="button" role="tab" href="/admin/communities" style="view-transition-name: communities">{{ _('Communities') }}</a>
+            {% endif -%}
+            {% if user_access('manage topics', current_user.id) %}
                 <a class="nav-link{% if active_child == 'admin_topics' %} active{% endif %}" id="topics-tab" type="button" role="tab" href="/admin/topics" style="view-transition-name: topics">{{ _('Topics') }}</a>
             {% endif -%}
             {% if user_access('administer all users', current_user.id) %}
                 <a class="nav-link{% if active_child == 'admin_users' %} active{% endif %}" id="users-tab" type="button" role="tab" href="/admin/users" style="view-transition-name: users">{{ _('Users') }}</a>
+            {% endif -%}
+            {% if user_access('manage media', current_user.id) %}
                 <a class="nav-link{% if active_child == 'admin_media' %} active{% endif %}" id="media-tab" type="button" role="tab" href="/admin/media" style="view-transition-name: users">{{ _('Media') }}</a>
             {% endif -%}
             {% if g.site.registration_mode == 'RequireApplication' and user_access('approve registrations', current_user.id) %}
@@ -21,9 +25,13 @@
             {% if g.site.registration_mode == 'ReferralCode' and user_access('administer all users', current_user.id) %}
                 <a class="nav-link{% if active_child == 'admin_referrals' %} active{% endif %}" id="referrals-tab" type="button" role="tab" href="/admin/referrals" style="view-transition-name: referrals">{{ _('Referrals') }}</a>
             {% endif -%}
-            {% if user_access('administer all communities', current_user.id) %}
+            {% if user_access('administer communities pages', current_user.id) %}
                 <a class="nav-link{% if active_child == 'admin_content' %} active{% endif %}" id="content-tab" type="button" role="tab" href="/admin/content" style="view-transition-name: content">{{ _('Content') }}</a>
+            {% endif -%}
+            {% if user_access('administer all users', current_user.id) %}
                 <a class="nav-link{% if active_child == 'admin_reports' %} active{% endif %}" id="moderation-tab" type="button" role="tab" href="/admin/reports" style="view-transition-name: reports">{{ _('Moderation') }}</a>
+            {% endif -%}
+            {% if user_access('view vote analytics', current_user.id) %}
                 <a class="nav-link{% if active_child == 'admin_votes' %} active{% endif %}" id="votes-tab" type="button" role="tab" href="/admin/votes" style="view-transition-name: votes">{{ _('Votes') }}</a>
             {% endif -%}
             {% if user_access('edit cms pages', current_user.id) %}
@@ -37,7 +45,7 @@
                 <a class="nav-link{% if active_child == 'admin_newsletter' %} active{% endif %}" id="newsletter-tab" type="button" role="tab" href="/admin/newsletter" style="view-transition-name: newsletter">{{ _('Newsletter') }}</a>
                 <a class="nav-link{% if active_child == 'admin_activities' %} active{% endif %}" id="activities-tab" type="button" role="tab" href="/admin/activities" style="view-transition-name: activities">{{ _('Activities') }}</a>
             {% endif -%}
-            {% if user_access('change user roles', current_user.id) %}
+            {% if current_user.is_admin() %}
                 <a class="nav-link{% if active_child == 'admin_permissions' %} active{% endif %}" id="permissions-tab" type="button" role="tab" href="/admin/permissions" style="view-transition-name: permissions">{{ _('Permissions') }}</a>
             {% endif -%}
         </div>

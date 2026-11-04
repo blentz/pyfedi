@@ -1966,7 +1966,7 @@ def post_mea_culpa(post_id: int):
 def post_sticky(post_id: int, mode):
     post = db.session.get(Post, post_id) or abort(404)
     refuse_invisible_unless_moderating(post)
-    if post.community.is_moderator(current_user) or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):
+    if post.community.is_moderator(current_user) or current_user.is_admin() or user_access('moderate all communities', current_user.get_id()):
         shared_post.sticky_post(post.id, mode == 'yes', SRC_WEB)
     if mode == 'yes':
         flash(_('%(name)s has been stickied.', name=post_title_for(post, current_user.id)))
@@ -2023,7 +2023,7 @@ def post_hide(post_id: int, mode):
 def post_set_flair(post_id):
     post = db.session.get(Post, post_id) or abort(404)
     refuse_invisible(post)
-    if post.user_id == current_user.id or post.community.is_moderator(current_user) or current_user.is_staff() or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):
+    if post.user_id == current_user.id or post.community.is_moderator(current_user) or current_user.is_staff() or current_user.is_admin() or user_access('moderate all communities', current_user.get_id()):
 
         # D1090. This branch WRITES -- it resets the post's flair and its
         # nsfw / nsfl / ai_generated marks from `request.form`, which a GET
@@ -2134,7 +2134,7 @@ def post_flair_list(post_id):
 
 @bp.route('/post/<int:post_id>/approve', methods=['POST'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('moderate all communities')
 def post_approve(post_id):
     post = db.session.get(Post, post_id) or abort(404)
     refuse_invisible_unless_moderating(post)
@@ -2187,7 +2187,7 @@ def post_reply_collapse(post_id: int, post_reply_id: int, mode):
 def post_move(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     refuse_invisible(post)
-    if current_user.id == post.user_id or post.community.is_moderator(current_user) or (post.community.is_local() and (post.community.is_admin_or_staff(current_user)  or user_access('administer all communities', current_user.get_id()))):
+    if current_user.id == post.user_id or post.community.is_moderator(current_user) or (post.community.is_local() and (post.community.is_admin_or_staff(current_user)  or user_access('moderate all communities', current_user.get_id()))):
         form = MovePostForm()
         if form.validate_on_submit():
             search = form.which_community.data.lower().strip()
@@ -2561,11 +2561,11 @@ def post_reply_delete(post_id: int, comment_id: int):
 
     form = ConfirmationMultiDeleteForm()
 
-    if not (community.is_moderator() or community.is_owner() or current_user.is_admin_or_staff() or user_access('administer all communities', current_user.get_id())):
+    if not (community.is_moderator() or community.is_owner() or current_user.is_admin_or_staff() or user_access('moderate all communities', current_user.get_id())):
         form.also_delete_replies.label = Label(field_id="also_delete_replies",
                                                text=_("Delete all my comments in this chain"))
 
-    if post_reply.user_id == current_user.id or community.is_moderator() or community.is_owner() or current_user.is_admin_or_staff() or user_access('administer all communities', current_user.get_id()):
+    if post_reply.user_id == current_user.id or community.is_moderator() or community.is_owner() or current_user.is_admin_or_staff() or user_access('moderate all communities', current_user.get_id()):
         if form.validate_on_submit():
             if form.also_delete_replies.data:
                 num_deleted = 0
@@ -2726,7 +2726,7 @@ def post_reply_purge(post_id: int, comment_id: int):
 
     if not post_reply.deleted:
         abort(404)
-    if post_reply.deleted_by == current_user.id or post.community.is_moderator() or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):
+    if post_reply.deleted_by == current_user.id or post.community.is_moderator() or current_user.is_admin() or user_access('moderate all communities', current_user.get_id()):
         if not post_reply.has_replies():
             with app_pkg.redis_client.lock(f"lock:post_reply:{post_reply.id}", timeout=10, blocking_timeout=6):
                 post_reply.delete_dependencies()

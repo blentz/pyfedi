@@ -161,16 +161,16 @@ class TestEditingAnInstance:
         return data
 
     def test_the_form(self, env):
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         response = get(client, f'/admin/instance/{env.remote.id}/edit')
         assert response.status_code == 200
 
     def test_an_instance_nobody_has(self, env):
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         assert get(client, '/admin/instance/999999/edit').status_code == 404
 
     def test_the_inbox_it_names_is_saved(self, env):
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         post(client, f'/admin/instance/{env.remote.id}/edit', **self.payload(env))
         db.session.expire_all()
         assert db.session.get(Instance, env.remote.id).inbox == 'https://remote.test/inbox'
@@ -182,9 +182,9 @@ class TestEditingAnInstance:
         clear_domain_cache()
         hosted = db.session.query(SiteDomain).filter_by(domain='abc.onion').one().instance_id
         # on the onion: off it the onion's instance row answers as an id nobody holds (follow-up F6)
-        assert post(client_for(env, 'administer all communities', 'clearadmin'), f'/admin/instance/{hosted}/edit',
+        assert post(client_for(env, 'manage remote instances', 'clearadmin'), f'/admin/instance/{hosted}/edit',
                     **self.payload(env, trusted='y')).status_code == 404
-        client = client_for(env, 'administer all communities', base_url='http://abc.onion')
+        client = client_for(env, 'manage remote instances', base_url='http://abc.onion')
         response = post(client, f'/admin/instance/{hosted}/edit', base_url='http://abc.onion',
                         **self.payload(env, inbox='http://abc.onion/inbox', trusted='y'))
         assert response.status_code == 302
@@ -194,7 +194,7 @@ class TestEditingAnInstance:
         clear_domain_cache()
 
     def test_marking_one_trusted(self, env):
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         response = post(client, f'/admin/instance/{env.remote.id}/edit',
                         **self.payload(env, trusted='y'))
         assert response.status_code == 302
@@ -203,7 +203,7 @@ class TestEditingAnInstance:
 
     def test_the_trusted_cache_is_dropped(self, env):
         from app.utils import trusted_instance_ids
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         assert env.remote.id not in trusted_instance_ids()
         post(client, f'/admin/instance/{env.remote.id}/edit',
              **self.payload(env, trusted='y'))
@@ -217,7 +217,7 @@ class TestEditingAnInstance:
         community.show_all = True
         community.show_popular = True
         db.session.commit()
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         post(client, f'/admin/instance/{env.remote.id}/edit',
              **self.payload(env, silenced='y'))
         db.session.expire_all()
@@ -232,7 +232,7 @@ class TestEditingAnInstance:
         community.show_all = False
         env.remote.silenced = True
         db.session.commit()
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         post(client, f'/admin/instance/{env.remote.id}/edit', **self.payload(env))
         db.session.expire_all()
         assert db.session.get(Community, community.id).show_all is True
@@ -244,14 +244,14 @@ class TestEditingAnInstance:
         community.show_popular = False
         env.remote.silenced = True
         db.session.commit()
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         post(client, f'/admin/instance/{env.remote.id}/edit',
              **self.payload(env, trusted='y'))
         db.session.expire_all()
         assert db.session.get(Community, community.id).show_popular is True
 
     def test_the_other_fields_are_saved(self, env):
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         post(client, f'/admin/instance/{env.remote.id}/edit',
              **self.payload(env, dormant='y', gone_forever='y',
                             posting_warning='careful', admin_note='a note',
@@ -277,11 +277,11 @@ class TestEditingAnInstance:
 
 class TestTheOfflineInstanceShortcut:
     def test_the_form(self, env):
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         assert get(client, '/admin/instance/create_offline').status_code == 200
 
     def test_one_is_created_as_gone_forever(self, env):
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         response = post(client, '/admin/instance/create_offline',
                         csrf_token=env.token, domain='offline.test')
         assert response.status_code == 302
@@ -292,7 +292,7 @@ class TestTheOfflineInstanceShortcut:
     def test_a_domain_that_is_already_here(self, env):
         """The form refuses it (D1321), so the route's own handler is not
         reached -- and one row remains either way."""
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         post(client, '/admin/instance/create_offline',
              csrf_token=env.token, domain='offline.test')
         response = post(client, '/admin/instance/create_offline',
@@ -312,7 +312,7 @@ class TestTheOfflineInstanceShortcut:
         from app.admin.forms import CreateOfflineInstanceForm
         monkeypatch.setattr(CreateOfflineInstanceForm, 'validate_domain',
                             lambda self, field: None)
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         db.session.add(Instance(domain='offline.test',
                                 inbox='https://offline.test/inbox',
                                 created_at=utcnow(), gone_forever=True))
@@ -331,7 +331,7 @@ class TestTheOfflineInstanceShortcut:
         Instance with an empty domain and `inbox = 'https:///inbox'`. The shape
         check refuses it -- an empty string has no dot -- which is why there is
         no separate `DataRequired` to go stale beside it."""
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         response = post(client, '/admin/instance/create_offline',
                         csrf_token=env.token, domain='')
         assert response.status_code == 200
@@ -342,21 +342,21 @@ class TestTheOfflineInstanceShortcut:
     def test_something_that_is_not_a_domain(self, env, domain):
         """The value is interpolated into the inbox URL, so a path or a space in
         it builds an inbox pointing somewhere else."""
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         response = post(client, '/admin/instance/create_offline',
                         csrf_token=env.token, domain=domain)
         assert response.status_code == 200
         assert Instance.query.filter_by(domain=domain).count() == 0
 
     def test_a_domain_already_here_is_refused_by_the_form(self, env):
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         response = post(client, '/admin/instance/create_offline',
                         csrf_token=env.token, domain='remote.test')
         assert response.status_code == 200
         assert Instance.query.filter_by(domain='remote.test').count() == 1
 
     def test_the_same_domain_in_another_case(self, env):
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         response = post(client, '/admin/instance/create_offline',
                         csrf_token=env.token, domain='REMOTE.test')
         assert response.status_code == 200
@@ -364,7 +364,7 @@ class TestTheOfflineInstanceShortcut:
             func.lower(Instance.domain) == 'remote.test').count() == 1
 
     def test_a_domain_with_stray_spaces_is_stored_trimmed(self, env):
-        client = client_for(env, 'administer all communities')
+        client = client_for(env, 'manage remote instances')
         post(client, '/admin/instance/create_offline',
              csrf_token=env.token, domain='  Offline.TEST  ')
         instance = Instance.query.filter_by(domain='offline.test').one()

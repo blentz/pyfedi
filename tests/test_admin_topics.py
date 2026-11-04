@@ -26,7 +26,7 @@ from flask import g
 
 from app import cache, db
 from app.models import Community, CommunityMember, Site, Topic, User
-from tests.factories import (grant_permission, make_community,
+from tests.factories import (COMMUNITY_ADMINISTRATION, grant_permissions, grant_permission, make_community,
                              make_community_member, make_user)
 
 
@@ -43,7 +43,7 @@ def env(app, api_baseline):
     admin.verified = True
     admin.private_key = 'x'
     db.session.commit()
-    grant_permission(admin, 'administer all communities')
+    grant_permissions(admin, *COMMUNITY_ADMINISTRATION)
     with app.test_request_context():
         token = generate_csrf()
         raw = flask_session['csrf_token']

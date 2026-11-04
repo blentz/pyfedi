@@ -20,8 +20,9 @@ from app.user.utils import (
     _get_user_posts_and_replies,
 )
 from tests.factories import (
+    COMMUNITY_ADMINISTRATION,
     bearer,
-    grant_permission,
+    grant_permissions,
     make_community,
     make_community_member,
     make_notification_subscription,
@@ -92,7 +93,7 @@ def test_profile_hides_followers_only_from_an_admin_too(app, world):
     w = world
     admin = make_user(w.stranger.instance, 'ada', local=True)
     db.session.commit()
-    grant_permission(admin, 'administer all communities')
+    grant_permissions(admin, *COMMUNITY_ADMINISTRATION)
     posts, replies, o_posts, o_replies = profile(app, w, admin)
     assert w.post.id not in posts and w.post.id not in o_posts
     assert w.reply.id not in replies and w.reply.id not in o_replies

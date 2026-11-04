@@ -31,7 +31,7 @@ in tests/README.md 206-212. The three that bind hardest here:
 
 THE GATES ARE THE POINT OF THIS FILE. Since D422's fix (owner ruling) all five
 gate on one predicate, `can_mod_post` -- moderator, admin, staff or
-'administer all communities' -- and edit_post's sticky field asks it too. The
+'moderate all communities' -- and edit_post's sticky field asks it too. The
 history below describes the predicates it replaced:
 
   P1  is_moderator or user.is_admin_or_staff()
@@ -887,7 +887,7 @@ def test_an_administer_all_communities_holder_may_remove_and_restore(db_session)
     treats the permission as an admin (owner ruling 2026-09-30). `s.voter` is
     not id 1, for which `user_access` is True unconditionally."""
     s = seed_post_context(community_name='moderation')
-    grant_permission(s.voter, 'administer all communities')
+    grant_permission(s.voter, 'moderate all communities')
 
     mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
     db.session.refresh(s.post)

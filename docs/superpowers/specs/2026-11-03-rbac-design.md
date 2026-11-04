@@ -6,6 +6,13 @@ Date: 2026-11-03. Status: being built on blentz.
   found is fixed at 296d8a174; O5 came out of it.
 - Step 3 (the check) is done: app/permissions.py (`user_access(perm, user, on=, anywhere=)`, `home_domain_id`,
   `may_act_on_user`), app/permission_cache.py (the per-user version). No call site names an object yet (step 5).
+- Step 4 (the catalogue) is done: `CATALOGUE` in app/permissions.py (name, group, scopable, Staff, guards), migration
+  c5f9e3b7a2d1 moving every role onto it (note 1), and `change user roles` gone (RB5: /admin/permissions and the
+  user form's role field are Admin-only). Every check of `administer all communities` now asks the permission split
+  from it for what it guards: the /admin pages their own, and every check outside /admin `moderate all communities`.
+  No check asks the narrowed `administer all communities` yet; step 5 gives it the is_admin-only sites. The
+  permissions not yet checked anywhere are listed in tests/test_role_permissions.py `NOT_YET_CHECKED`, which step 5
+  empties.
 - Step 2 (schema) is done at b00564760: `role_grant`, `role.built_in`/`listed_publicly`, migration b4e8d2a6f1c9.
   Admin is found by `built_in` everywhere. Staff is still found by name (`ROLE_STAFF_NAME`) in `is_staff()`,
   `Site.staff()` and `staff_role_has()`, the two "may Staff approve" notification checks, until steps 6 and 8.
@@ -175,6 +182,17 @@ it, which keeps today's behaviour (RB2). "DA" says whether the acceptance test's
 | `administer communities pages` *(split, O2)* | /admin/communities*, /admin/community/<id>/edit and /delete, /admin/content (each filtered by domain) | `administer all communities` | yes | yes |
 | `view modlog` *(new)* | private entries in `/modlog` and API `get_modlog`, filtered to the actor's domains; `add_to_modlog` "admin" type | is_admin / is_staff | yes | yes |
 | `shown as admin` *(new, RB12)* | admin=true in the API and listing among the domain's admins (API site `admins`, `/about`, nodeinfo) on the domain's own host. Grants no power by itself | is_admin | no | yes |
+
+Corrections found while building step 4, from the parity table: today `post_sticky`, `post_reply_purge`, `post_move`,
+reply delete and the API report lists and resolve pass `administer all communities`, so default Staff passes them
+(parity rows `post.sticky`, `post.reply_purge`: Staff allowed). They are `moderate all communities` sites, not the
+narrowed `administer all communities`. `post_purge` and `post_edit` are is_admin only and stay with the narrowed one.
+The admin nav's Moderation link (/admin/reports) follows its route's `administer all users`, and its Media tab
+follows `manage media`.
+
+The migration also gives `manage blocklists` to a role holding `ban users` or `manage users` (the link-domain and
+tag bans those guard today), and the permissions `is_staff()` becomes to the role named Staff, which is the last
+lookup by that name.
 
 Notes:
 

@@ -34,7 +34,7 @@ from app.admin.util import (create_topic_and_children, process_topic_communities
 from app.constants import POST_TYPE_EVENT
 from app.models import Community, CommunityMember, Event, Site, Topic
 from app.utils import get_event_start, topic_tree
-from tests.factories import (grant_permission, make_community, make_community_member,
+from tests.factories import (COMMUNITY_ADMINISTRATION, grant_permissions, grant_permission, make_community, make_community_member,
                              make_post, make_user)
 
 
@@ -49,7 +49,7 @@ def env(app, api_baseline):
     admin.verified = True
     admin.private_key = 'x'
     db.session.commit()
-    grant_permission(admin, 'administer all communities')
+    grant_permissions(admin, *COMMUNITY_ADMINISTRATION)
     grant_permission(admin, 'administer all users')
     with app.test_request_context():
         token = generate_csrf()

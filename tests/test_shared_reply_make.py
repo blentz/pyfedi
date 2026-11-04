@@ -1193,7 +1193,7 @@ class TestMakeReply:
 
     def test_a_community_administrator_keeps_distinguished_on_a_new_reply(self, db_session):
         """D551 residue, fixed (owner ruling). make_reply asks `can_moderate`,
-        as edit_reply does, so a holder of 'administer all communities' who
+        as edit_reply does, so a holder of 'moderate all communities' who
         moderates nothing here keeps `distinguished`; the old spelling
         (moderator, owner, admin or staff) demoted it.
         """
@@ -1203,7 +1203,7 @@ class TestMakeReply:
         role = Role(name='community administrator')
         db.session.add(role)
         db.session.commit()
-        db.session.add(RolePermission(role_id=role.id, permission='administer all communities'))
+        db.session.add(RolePermission(role_id=role.id, permission='moderate all communities'))
         db.session.execute(role_grant.insert().values(user_id=s.actor.id,
                                                      role_id=role.id))
         db.session.commit()

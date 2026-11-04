@@ -539,7 +539,7 @@ class TestReportListing:
             [report.id]
 
     def test_an_administrator_reads_one_posts_reports(self, env, report):
-        with_permission(env.stranger, 'administer all communities')
+        with_permission(env.stranger, 'moderate all communities')
         res = get_post_report_list(token(env.stranger),
                                    {'post_id': env.post.id})
         assert len(res['post_reports']) == 1
@@ -556,13 +556,13 @@ class TestReportListing:
         assert len(res['post_reports']) == 1
 
     def test_an_administrator_reads_a_communitys_reports(self, env, report):
-        with_permission(env.stranger, 'administer all communities')
+        with_permission(env.stranger, 'moderate all communities')
         res = get_post_report_list(token(env.stranger),
                                    {'community_id': env.community.id})
         assert len(res['post_reports']) == 1
 
     def test_an_administrator_reads_every_report(self, env, report):
-        with_permission(env.stranger, 'administer all communities')
+        with_permission(env.stranger, 'moderate all communities')
         res = get_post_report_list(token(env.stranger), {})
         assert len(res['post_reports']) == 1
 
@@ -657,7 +657,7 @@ class TestReportResolution:
         assert db.session.get(Report, report.id).status == REPORT_STATE_NEW
 
     def test_an_administrator_resolves(self, env, report):
-        with_permission(env.stranger, 'administer all communities')
+        with_permission(env.stranger, 'moderate all communities')
         put_post_report_resolve(token(env.stranger),
                                 {'report_id': report.id, 'resolved': True})
         assert db.session.get(Report, report.id).status == REPORT_STATE_RESOLVED

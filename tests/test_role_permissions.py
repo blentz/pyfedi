@@ -15,7 +15,7 @@ rows it was about to delete.
 
 The durable artefact is `test_the_permission_vocabulary_matches_the_codebase`:
 a ratchet that fails if a `permission_required(...)` or `user_access(...)`
-string is added without being added to `ROLE_PERMISSIONS`. Without it the
+string is added without being added to the catalogue (`ROLE_PERMISSIONS`, app/permissions.py). Without it the
 constant is just a list that goes stale, and a permission the code checks but
 the page cannot grant is the same one-way door as D937 by another route.
 """
@@ -28,7 +28,8 @@ import pytest
 from sqlalchemy import text
 
 from app import cache, db
-from app.constants import ROLE_PERMISSIONS, ROLE_STAFF_NAME
+from app.constants import ROLE_STAFF_NAME
+from app.permissions import ROLE_PERMISSIONS
 from app.roles import seed_default_roles
 from app.models import Role, RolePermission, role_grant
 from app.utils import role_access, user_access
@@ -86,9 +87,20 @@ def test_the_permission_vocabulary_matches_the_codebase():
         'permissions page cannot grant it and the check can never pass: '
         + '; '.join(f'{p} ({", ".join(in_source[p])})' for p in unreachable))
 
-    unused = sorted(set(ROLE_PERMISSIONS) - set(in_source))
-    assert unused == [], (
-        f'offered by the permissions page but checked nowhere: {unused}')
+    unused = set(ROLE_PERMISSIONS) - set(in_source)
+    assert unused == NOT_YET_CHECKED, (
+        f'offered by the permissions page but checked nowhere: {sorted(unused - NOT_YET_CHECKED)}; '
+        f'now checked, so take them off NOT_YET_CHECKED: {sorted(NOT_YET_CHECKED - unused)}')
+
+
+# RBAC step 4 put the whole catalogue on the page; step 5 converts the call sites that check these, one area at a
+# time, and takes each off this list as it does. Step 6 asserts the list is empty.
+NOT_YET_CHECKED = {
+    'masquerade', 'send newsletter', 'manage domains', 'edit domain branding', 'view user details',
+    'generate referral codes', 'create local communities', 'add remote communities', 'administer all communities',
+    'feature instance-wide', 'view modlog', 'read private messages', 'manage instance feeds',
+    'exempt from upload limits', 'exempt from account limits', 'shown as admin',
+}
 
 
 def test_the_vocabulary_has_no_duplicates():
@@ -224,10 +236,9 @@ def _rows():
 # --------------------------------------------------------------------------
 
 
-def test_the_permissions_page_needs_change_user_roles(app, db_session):
-    """Not 'change instance settings': the page that decides what every role
-    may do is behind the permission for changing roles, which is the narrower
-    one and the one an instance is likely to hand out least."""
+def test_the_permissions_page_is_refused_to_a_plain_user(app, db_session):
+    """The page that decides what every role may do is Admin's alone (RB5); the
+    permission it used to sit behind, 'change user roles', is gone."""
     instance = make_instance('test.piefed.local', software='piefed')
     make_user(instance, 'founder', local=True)
     ordinary = make_user(instance, 'ordinary', local=True)

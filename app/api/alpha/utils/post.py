@@ -1978,7 +1978,7 @@ def get_post_report_list(auth, data):
         mods = post.community.moderators()
         mod_ids = [mod.user_id for mod in mods]
 
-        if user.id in mod_ids or user_access('administer all communities', user.id):
+        if user.id in mod_ids or user_access('moderate all communities', user.id):
             reports = Report.query.filter(Report.suspect_post_id == post_id,
                                           Report.suspect_post_reply_id == None)
         else:
@@ -1989,7 +1989,7 @@ def get_post_report_list(auth, data):
         mods = community.moderators()
         mod_ids = [mod.user_id for mod in mods]
 
-        if user.id in mod_ids or user_access("administer all communities", user.id):
+        if user.id in mod_ids or user_access("moderate all communities", user.id):
             reports = Report.query.filter(Report.in_community_id == community_id,
                                           Report.suspect_post_id != None,
                                           Report.suspect_post_reply_id == None)
@@ -1997,7 +1997,7 @@ def get_post_report_list(auth, data):
             raise Exception('incorrect login')
     else:
         # Don't restrict reports to single post or community
-        if user_access('administer all communities', user.id):
+        if user_access('moderate all communities', user.id):
             # Privileged user, don't filter by community
             reports = Report.query.filter(Report.suspect_post_id != None,
                                           Report.suspect_post_reply_id == None)
@@ -2052,7 +2052,7 @@ def put_post_report_resolve(auth, data):
     mods = community.moderators()
     mod_ids = [mod.user_id for mod in mods]
 
-    if user.id in mod_ids or user_access('administer all communities', user.id):
+    if user.id in mod_ids or user_access('moderate all communities', user.id):
         if resolved:
             report.status = REPORT_STATE_RESOLVED
         else:

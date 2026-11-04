@@ -47,9 +47,10 @@ from app.chat.util import send_message
 from app.community.util import save_icon_file, save_banner_file, search_for_community, is_bad_name
 from app.instance.util import bulk_follow
 from app.community.routes import do_subscribe
-from app.constants import ROLE_PERMISSIONS, REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_REVIEWING
+from app.constants import REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_REVIEWING
 from app.email import send_registration_approved_email
 from app.permission_cache import permissions_changed
+from app.permissions import ROLE_PERMISSIONS
 from app.federation_urls import object_base
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
     CommunityMember, \
@@ -62,7 +63,7 @@ from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
 from app.translation import LibreTranslateAPI
-from app.utils import canonical_host, captcha_enabled, render_template, permission_required, set_setting, get_setting, gibberish, markdown_to_html, \
+from app.utils import canonical_host, captcha_enabled, render_template, permission_required, admin_required, set_setting, get_setting, gibberish, markdown_to_html, \
     max_album_images, \
     moderating_communities, joined_communities, finalize_user_setup, theme_list, blocked_phrases, blocked_referrers, \
     topic_tree, languages_for_form, menu_topics, ensure_directory_exists, add_to_modlog, get_request, \
@@ -100,7 +101,7 @@ def admin_home():
     # already uses to decide whether to show this page's link at all
     # (app/templates/base.html:268), so nobody who can reach it today loses it.
     # NOT permission_required('change instance settings'): that would exclude
-    # staff holding only 'manage users' or 'administer all communities'.
+    # staff holding only 'manage users' or 'moderate all communities'.
     if not current_user.is_admin_or_staff():
         abort(403)
 
@@ -1822,7 +1823,7 @@ def activity_replay(activity_id):
 
 @bp.route('/communities', methods=['GET'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('administer communities pages')
 def admin_communities():
     page = request.args.get('page', 1, type=int)
     search = request.args.get('search', '')
@@ -1846,13 +1847,13 @@ def admin_communities():
 
     return render_template('admin/communities.html', title=_('Communities'), next_url=next_url, prev_url=prev_url,
                            communities=communities,
-                           search=search, sort_by=sort_by, roles_with=roles_with('administer all communities')
+                           search=search, sort_by=sort_by, roles_with=roles_with('administer communities pages')
                            )
 
 
 @bp.route('/communities/no-topic', methods=['GET'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('administer communities pages')
 def admin_communities_no_topic():
     page = request.args.get('page', 1, type=int)
     search = request.args.get('search', '')
@@ -1867,12 +1868,12 @@ def admin_communities_no_topic():
 
     return render_template('admin/communities.html', title=_('Communities with no topic'), next_url=next_url,
                            prev_url=prev_url,
-                           communities=communities, roles_with=roles_with('administer all communities'))
+                           communities=communities, roles_with=roles_with('administer communities pages'))
 
 
 @bp.route('/communities/low-quality', methods=['GET'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('administer communities pages')
 def admin_communities_low_quality():
     page = request.args.get('page', 1, type=int)
     search = request.args.get('search', '')
@@ -1889,12 +1890,12 @@ def admin_communities_low_quality():
 
     return render_template('admin/communities.html', title=_('Communities with low_quality == True'), next_url=next_url,
                            prev_url=prev_url,
-                           communities=communities, roles_with=roles_with('administer all communities'))
+                           communities=communities, roles_with=roles_with('administer communities pages'))
 
 
 @bp.route('/communities/un-moderated', methods=['GET'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('administer communities pages')
 def admin_communities_unmoderated():
     page = request.args.get('page', 1, type=int)
     search = request.args.get('search', '')
@@ -1913,12 +1914,12 @@ def admin_communities_unmoderated():
 
     return render_template('admin/communities.html', title=_('Unmoderated communities'), next_url=next_url,
                            prev_url=prev_url,
-                           communities=communities, roles_with=roles_with('administer all communities'))
+                           communities=communities, roles_with=roles_with('administer communities pages'))
 
 
 @bp.route('/community/<int:community_id>/edit', methods=['GET', 'POST'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('administer communities pages')
 def admin_community_edit(community_id):
     form = EditCommunityForm()
     community = db.session.get(Community, community_id) or abort(404)
@@ -2046,12 +2047,12 @@ def admin_community_edit(community_id):
         form.can_be_archived.data = community.can_be_archived
         form.downvote_accept_mode.data = community.downvote_accept_mode
     return render_template('admin/edit_community.html', title=_('Edit community'), form=form, community=community,
-                           roles_with=roles_with('administer all communities'))
+                           roles_with=roles_with('administer communities pages'))
 
 
 @bp.route('/community/<int:community_id>/delete', methods=['POST'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('administer communities pages')
 def admin_community_delete(community_id):
     community = db.session.get(Community, community_id) or abort(404)
 
@@ -2103,16 +2104,16 @@ def unsubscribe_everyone_then_delete_task(community_id):
 
 @bp.route('/topics', methods=['GET'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('manage topics')
 def admin_topics():
     topics = topic_tree()
     return render_template('admin/topics.html', title=_('Topics'), topics=topics,
-                           roles_with=roles_with('administer all communities'))
+                           roles_with=roles_with('manage topics'))
 
 
 @bp.route('/topics/export', methods=['GET'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('manage topics')
 def admin_topics_export():
     topics = topic_tree()
 
@@ -2134,7 +2135,7 @@ def admin_topics_export():
 
 @bp.route('/topics/import', methods=['GET', 'POST'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('manage topics')
 def admin_topics_import():
     form = TopicImportForm()
     if form.validate_on_submit():
@@ -2166,12 +2167,12 @@ def admin_topics_import():
             flash(_('No file uploaded'), 'error')
     
     return render_template('admin/topic_import.html', title=_('Topic import'), form=form,
-                           roles_with=roles_with('administer all communities'))
+                           roles_with=roles_with('manage topics'))
 
 
 @bp.route('/topic/add', methods=['GET', 'POST'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('manage topics')
 def admin_topic_add():
     form = EditTopicForm()
     form.parent_id.choices = select_choices(topics_for_form(0))
@@ -2192,12 +2193,12 @@ def admin_topic_add():
         return redirect(url_for('admin.admin_topics'))
 
     return render_template('admin/edit_topic.html', title=_('Add topic'), form=form,
-                           roles_with=roles_with('administer all communities'))
+                           roles_with=roles_with('manage topics'))
 
 
 @bp.route('/topic/<int:topic_id>/edit', methods=['GET', 'POST'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('manage topics')
 def admin_topic_edit(topic_id):
     form = EditTopicForm()
     topic = db.session.get(Topic, topic_id) or abort(404)
@@ -2226,12 +2227,12 @@ def admin_topic_edit(topic_id):
         if topic.countries and len(topic.countries):
             form.countries.data = "\n".join(topic.countries)
     return render_template('admin/edit_topic.html', title=_('Edit topic'), form=form, topic=topic,
-                           roles_with=roles_with('administer all communities'))
+                           roles_with=roles_with('manage topics'))
 
 
 @bp.route('/topic/<int:topic_id>/delete', methods=['POST'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('manage topics')
 def admin_topic_delete(topic_id):
     topic = db.session.get(Topic, topic_id) or abort(404)
     topic.num_communities = topic.communities.count()
@@ -2330,7 +2331,7 @@ def admin_users():
 
 @bp.route('/content', methods=['GET'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('administer communities pages')
 def admin_content():
     page = request.args.get('page', 1, type=int)
     replies_page = request.args.get('replies_page', 1, type=int)
@@ -2429,7 +2430,7 @@ def admin_content():
                            posts_replies=posts_replies, show=show, days=days,
                            reported_posts=reported_posts(current_user.get_id(), current_user.get_id() in g.admin_ids),
                            moderated_community_ids=moderating_communities_ids(current_user.get_id()),
-                           roles_with=roles_with('administer all communities'),
+                           roles_with=roles_with('administer communities pages'),
                            admin_ids=g.admin_ids
                            )
 
@@ -2549,7 +2550,7 @@ def admin_user_edit(user_id):
             db.session.delete(file)
 
         # Update user roles. The UI only lets the user choose 1 role but the DB structure allows for multiple roles per user.
-        if user_access('change user roles', current_user.id):
+        if current_user.is_admin():   # grants are Admin's alone (RB5)
             db.session.execute(text('DELETE FROM role_grant WHERE user_id = :user_id AND site_domain_id IS NULL'),
                                {'user_id': user.id})
             if form.role.data:   # 0 is "no role"
@@ -2830,7 +2831,7 @@ def editable_role_ids() -> list[int]:
 
 @bp.route('/permissions', methods=['GET', 'POST'])
 @login_required
-@permission_required('change user roles')
+@admin_required
 def admin_permissions():
     form = FlaskForm()
     if request.method == 'POST':
@@ -2862,7 +2863,7 @@ def admin_permissions():
 
     return render_template('admin/permissions.html', title=_('Role permissions'), roles=roles,
                            form=form, permissions=ROLE_PERMISSIONS,
-                           roles_with=roles_with('change user roles'))
+                           roles_with=roles_with(None))
 
 
 @bp.route('/instances', methods=['GET', 'POST'])
@@ -2920,7 +2921,7 @@ def admin_instances():
 
 @bp.route('/instance/<int:instance_id>/edit', methods=['GET', 'POST'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('manage remote instances')
 def admin_instance_edit(instance_id):
     form = EditInstanceForm()
     instance = db.session.get(Instance, instance_id) or abort(404)
@@ -2966,12 +2967,12 @@ def admin_instance_edit(instance_id):
             form.hide.data = hide
 
     return render_template('admin/edit_instance.html', title=_('Edit instance'), form=form, instance=instance,
-                           roles_with=roles_with('administer all communities'))
+                           roles_with=roles_with('manage remote instances'))
 
 
 @bp.route('/instance/<int:instance_id>/contact', methods=['GET', 'POST'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('manage remote instances')
 def admin_instance_contact(instance_id):
     form = ContactInstanceForm()
     instance = db.session.get(Instance, instance_id) or abort(404)
@@ -3000,12 +3001,12 @@ def admin_instance_contact(instance_id):
         return redirect(url_for('chat.chat_home', conversation_id=conversation.id, _anchor='message'))
     return render_template('admin/instance_contact.html', title=_('Contact instance admins on %(instance_name)s', instance_name=instance.domain),
                            form=form, instance=instance,
-                           roles_with=roles_with('administer all communities'))
+                           roles_with=roles_with('manage remote instances'))
 
 
 @bp.route('/instance/create_offline', methods=['GET', 'POST'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('manage remote instances')
 def admin_instance_create_offline():
     form = CreateOfflineInstanceForm()
     if form.validate_on_submit():
@@ -3029,7 +3030,7 @@ def admin_instance_create_offline():
         return redirect(url_for("admin.admin_instances"))
     
     return render_template("admin/create_offline_instance.html", form=form,
-                           roles_with=roles_with('administer all communities'))
+                           roles_with=roles_with('manage remote instances'))
 
 
 @bp.route('/community/<int:community_id>/move/<int:new_owner>', methods=['GET', 'POST'])
@@ -3115,19 +3116,19 @@ def admin_community_move(community_id, new_owner):
 
 @bp.route('/blocked_images', methods=['GET'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('manage blocklists')
 def admin_blocked_images():
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
     blocked_images = BlockedImage.query.order_by(desc(BlockedImage.id)).all()
     return render_template('admin/blocked_images.html', blocked_images=blocked_images,
                            title=_('Blocked images'),
                            low_bandwidth=low_bandwidth,
-                           roles_with=roles_with('administer all communities'))
+                           roles_with=roles_with('manage blocklists'))
 
 
 @bp.route('/blocked_image/<int:image_id>/edit', methods=['GET', 'POST'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('manage blocklists')
 def admin_blocked_image_edit(image_id):
     form = EditBlockedImageForm()
     image = db.session.get(BlockedImage, image_id) or abort(404)
@@ -3145,12 +3146,12 @@ def admin_blocked_image_edit(image_id):
         form.note.data = image.note
 
     return render_template('admin/edit_blocked_image.html', title=_('Edit blocked image'), form=form,
-                           blocked_image=image, roles_with=roles_with('administer all communities'))
+                           blocked_image=image, roles_with=roles_with('manage blocklists'))
 
 
 @bp.route('/blocked_image/add', methods=['GET', 'POST'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('manage blocklists')
 def admin_blocked_image_add():
     form = AddBlockedImageForm()
     if form.validate_on_submit():
@@ -3171,12 +3172,12 @@ def admin_blocked_image_add():
     flash(_('Provide the url of an image or the hash (and file name) of it, but not both.'))
 
     return render_template('admin/edit_blocked_image.html', title=_('Add blocked image'), form=form,
-                           roles_with=roles_with('administer all communities'))
+                           roles_with=roles_with('manage blocklists'))
 
 
 @bp.route('/block_image_purge_posts', methods=['GET', 'POST'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('manage blocklists')
 def admin_blocked_image_purge_posts():
     form = FlaskForm()
     if request.method == 'POST':
@@ -3193,12 +3194,12 @@ def admin_blocked_image_purge_posts():
     return render_template('post/post_block_image_purge_posts.html', posts=posts,
                            title=_('Posts containing blocked images'),
                            form=form, referrer=request.args.get('referrer'),
-                           roles_with=roles_with('administer all communities'))
+                           roles_with=roles_with('manage blocklists'))
 
 
 @bp.route('/blocked_image/<int:image_id>/delete', methods=['POST'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('manage blocklists')
 def admin_blocked_image_delete(image_id):
     image = db.session.get(BlockedImage, image_id) or abort(404)
 
@@ -3393,7 +3394,7 @@ def perf_test():
 
 @bp.route('/media', methods=['GET', 'POST'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('manage media')
 def admin_media():
     page = request.args.get('page', 1, int)
     user_id = request.args.get('user_id', 0, int)
@@ -3408,7 +3409,7 @@ def admin_media():
 
     return render_template('admin/media.html', files=files,
                            next_url=next_url, prev_url=prev_url, user_id=user_id,
-                           roles_with=roles_with('administer all communities'))
+                           roles_with=roles_with('manage media'))
 
 
 @bp.route('/media/<int:file_id>/delete', methods=['POST'])
@@ -3546,51 +3547,51 @@ def _vote_manipulation_findings(targeting_sql, namesake_sql):
 
 @bp.route('/votes', methods=['GET'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('view vote analytics')
 def admin_votes():
     if request.args.get('refresh'):
         cache.delete_memoized(_vote_manipulation_findings)   # every storefront's
         return redirect(url_for('admin.admin_votes'))
     return render_template('admin/votes.html',
                            findings=vote_manipulation_findings(),
-                           roles_with=roles_with('administer all communities'))
+                           roles_with=roles_with('view vote analytics'))
 
 
 @bp.route('/votes_for_noone', methods=['GET'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('view vote analytics')
 def admin_votes_for_noone():
     rows = db.session.execute(text(accounts_shown_here_sql(sql_file('accounts_no_votes')))).all()
     return render_template('admin/votes_for_noone.html',
                            rows=rows,
-                           roles_with=roles_with('administer all communities'))
+                           roles_with=roles_with('view vote analytics'))
 
 
 @bp.route('/serial_downvoters', methods=['GET'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('view vote analytics')
 def admin_votes_serial_downvoters():
     rows = db.session.execute(text(accounts_shown_here_sql(sql_file('serial_downvoters')))).all()
     return render_template('admin/votes_serial_downvoters.html',
                            rows=rows,
-                           roles_with=roles_with('administer all communities'))
+                           roles_with=roles_with('view vote analytics'))
 
 
 @bp.route('/high_posts_per_day', methods=['GET'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('view vote analytics')
 def admin_high_posts_per_day():
     rows = db.session.execute(text(accounts_shown_here_sql(sql_file('high_posts_per_day')))).all()
     return render_template('admin/high_posts_per_day.html',
                            rows=rows,
-                           roles_with=roles_with('administer all communities'))
+                           roles_with=roles_with('view vote analytics'))
 
 
 @bp.route('/no_link_diversity', methods=['GET'])
 @login_required
-@permission_required('administer all communities')
+@permission_required('view vote analytics')
 def admin_no_link_diversity():
     rows = db.session.execute(text(accounts_shown_here_sql(sql_file('no_link_diversity')))).all()
     return render_template('admin/no_link_diversity.html',
                            rows=rows,
-                           roles_with=roles_with('administer all communities'))
+                           roles_with=roles_with('view vote analytics'))

@@ -10,8 +10,7 @@ admin may edit, rename or delete.
 from app import db
 from app.constants import ROLE_STAFF_NAME
 from app.models import Role, RolePermission
-
-STAFF_PERMISSIONS = ('approve registrations', 'ban users', 'administer all communities', 'manage users')
+from app.permissions import STAFF_PERMISSIONS
 
 
 def seed_default_roles() -> dict[str, Role]:

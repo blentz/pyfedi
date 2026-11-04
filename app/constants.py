@@ -176,33 +176,6 @@ ALLOWLIST_STRONG = 1    # Strong allowlists drop activities from instances not o
 ALLOWLIST_INTENSE = 2   # As above but also drops activities originally authored by non-allowlist instances and relayed on via allowed instances. See can_create_post() for usage.
 
 
-# Every permission string this codebase checks, and therefore every row the
-# role-permissions page must be able to offer.
-#
-# It is a CONSTANT and not a `SELECT DISTINCT permission FROM role_permission`,
-# which is where admin_permissions used to get it. Deriving the vocabulary from
-# the rows meant that unchecking every box for a permission deleted the last row
-# naming it, so it vanished from the page and could never be granted again --
-# a one-way door on a security control, measured as:
-#
-#     PROBE p1 before: ['approve registrations', 'change user roles', 'manage users']
-#     PROBE p1 after unchecking "approve registrations": ['change user roles', 'manage users']
-#     PROBE p1 offered on the page now: ['change user roles', 'manage users']
-#
-# A permission nobody currently holds is still a permission. Keep this in step
-# with the strings passed to permission_required() and user_access();
-# tests/test_role_permissions.py fails if it drifts.
-ROLE_PERMISSIONS = (
-    'administer all communities',
-    'administer all users',
-    'approve registrations',
-    'ban users',
-    'change instance settings',
-    'change user roles',
-    'edit cms pages',
-    'manage users',
-)
-
 
 # ActivityPub media types (interop C1 item 5)
 AP_MEDIA_TYPE = 'application/activity+json'

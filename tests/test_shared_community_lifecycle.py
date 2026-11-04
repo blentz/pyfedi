@@ -869,7 +869,7 @@ def test_edit_community_permission_guard_neither_raises_and_leaves_community_unt
 
 def test_edit_community_permission_guard_staff_alone_is_admitted(app, db_session):
     """D642, fixed (owner ruling): edit_community asks `can_moderate` --
-    moderator, admin, staff or 'administer all communities' -- so a staff
+    moderator, admin, staff or 'moderate all communities' -- so a staff
     user with no CommunityMember row and no 'Admin' role may edit. It spelled
     bare `is_admin()` and refused them while its siblings admitted staff.
     """

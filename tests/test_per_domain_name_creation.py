@@ -42,7 +42,6 @@ def _admin(app, domains):
     db.session.commit()
     roles = _roles()
     db.session.add(RolePermission(role_id=roles['Admin'].id, permission='administer all users'))
-    db.session.add(RolePermission(role_id=roles['Admin'].id, permission='change user roles'))
     db.session.execute(role_grant.insert().values(user_id=admin.id, role_id=roles['Admin'].id))
     db.session.commit()
     client = app.test_client()

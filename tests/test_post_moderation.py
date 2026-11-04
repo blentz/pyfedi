@@ -373,7 +373,7 @@ def test_an_administer_all_communities_holder_may_remove_a_post(app, env):
     did not, so the removal was a 500. Both now ask `can_mod_post`, and the
     permission removes a post as an admin would (owner ruling 2026-09-30)."""
     anon, community, post, mod, author, outsider = env
-    grant_permission(outsider, 'administer all communities')
+    grant_permission(outsider, 'moderate all communities')
     client = as_user(app, outsider)
     token = csrf(app, client)
 

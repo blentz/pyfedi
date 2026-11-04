@@ -16,7 +16,7 @@ from app import db
 from app.constants import POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING
 from app.models import Language, Post, PostReply, Site
 from tests.conftest import forget_login
-from tests.factories import grant_permission, make_community, make_instance, make_post, make_post_reply, make_user
+from tests.factories import COMMUNITY_ADMINISTRATION, grant_permissions, make_community, make_instance, make_post, make_post_reply, make_user
 from tests.test_per_domain_html_routes import Visitor
 from tests.two_domains import FIRST
 
@@ -32,7 +32,7 @@ def held(app, db_session, monkeypatch):
     author.ban_posts = True
     db.session.get(Site, 1).private_instance = False
     db.session.commit()
-    grant_permission(admin, 'administer all communities')
+    grant_permissions(admin, *COMMUNITY_ADMINISTRATION)
     community = make_community('talk')
     post = make_post(community, author, None, title='held post')
     post.status = POST_STATUS_REVIEWING

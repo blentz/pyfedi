@@ -3097,9 +3097,9 @@ def user_access(permission: str, user_id: int, on=None, anywhere: bool = False) 
 
 def can_moderate(community, user) -> bool:
     # D422/D521/D642/D963: the one moderation gate -- a moderator (owners included), an admin, staff, or a holder of
-    # 'administer all communities'. Deleting or restoring a whole community is narrower: owner and admins (D615).
+    # 'moderate all communities'. Deleting or restoring a whole community is narrower: owner and admins (D615).
     return community.is_moderator(user) or user.is_admin_or_staff() or \
-        user_access('administer all communities', user.id)
+        user_access('moderate all communities', user.id)
 
 
 def role_access(permission: str, role_id: int) -> bool:
@@ -3595,6 +3595,17 @@ def permission_required(permission):
         return decorated_view
 
     return decorator
+
+
+def admin_required(func):
+    """For the pages only the built-in Admin (and user 1) may reach: roles and grants (RB5)."""
+    @wraps(func)
+    def decorated_view(*args, **kwargs):
+        if current_user.is_authenticated and current_user.is_admin():
+            return func(*args, **kwargs)
+        return redirect(url_for('auth.permission_denied'))
+
+    return decorated_view
 
 
 def login_required(csrf=True):
@@ -8377,11 +8388,14 @@ def get_event_start(post_id: int):
     return None
 
 
-def roles_with(permission):
+def roles_with(permission: str | None) -> str:
+    """The roles that may reach a page, Admin first, for its footer. None: a page only Admin may reach."""
+    admin = Role.admin()
+    if permission is None:
+        return admin.name if admin else ''
     roles = Role.query.join(RolePermission, Role.id == RolePermission.role_id).\
         filter(RolePermission.permission == permission).\
         order_by(Role.name)
-    admin = Role.admin()
     return ', '.join(([admin.name] if admin else []) + [role.name for role in roles.all() if not role.built_in])
 
 

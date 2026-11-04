@@ -28,7 +28,6 @@ import pytest
 from sqlalchemy import text
 
 from app import cache, db
-from app.constants import ROLE_PERMISSIONS
 from app.models import Role, RolePermission, User, role_grant
 from app.utils import user_access
 from tests.factories import make_instance, make_user
@@ -74,9 +73,8 @@ def no_memoized_answers():
 
 @pytest.fixture
 def users_admin(app, db_session):
-    """An admin who is NOT user 1 (fact 347) and holds exactly the two
-    permissions these routes check -- 'administer all users' for the pages and
-    'change user roles' for the role selector, which is separately gated."""
+    """An admin who is NOT user 1 (fact 347) and holds the built-in Admin role:
+    'administer all users' opens the pages, and only Admin may change a role (RB5)."""
     instance = _instance()
     founder = make_user(instance, 'founder', local=True)
     assert founder.id == 1
@@ -86,9 +84,6 @@ def users_admin(app, db_session):
     assert admin.id != 1
 
     roles = _roles()
-    for permission in ('administer all users', 'change user roles'):
-        db.session.add(RolePermission(role_id=roles['Admin'].id,
-                                      permission=permission))
     db.session.execute(role_grant.insert().values(user_id=admin.id,
                                                  role_id=roles['Admin'].id))
     db.session.commit()
@@ -194,7 +189,7 @@ def test_the_role_selector_needs_change_user_roles(app, db_session):
     admin.verified = True
     db.session.commit()
     roles = _roles()
-    # An editor role, not the built-in Admin, which holds every permission and so 'change user roles' too
+    # An editor role, not the built-in Admin: only Admin may change a role (RB5)
     editor = Role(name='Editor')
     db.session.add(editor)
     db.session.commit()
@@ -218,7 +213,7 @@ def test_the_role_selector_needs_change_user_roles(app, db_session):
     target = db.session.get(User, target.id)
     assert target.admin_note == 'a note that should be saved'
     assert [role.name for role in target.roles] == ['Staff'], (
-        'the role changed without the change user roles permission')
+        'the role changed for an editor who is not Admin')
 
 
 # --------------------------------------------------------------------------

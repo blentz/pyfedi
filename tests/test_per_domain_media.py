@@ -43,7 +43,7 @@ from app.shared.upload import process_file_delete, process_upload
 from app.shared.feed import store_icon_and_banner
 from app.storefront import canonicalise_links, canonicalise_text
 from app.utils import set_setting
-from tests.factories import grant_permission, make_community_member
+from tests.factories import COMMUNITY_ADMINISTRATION, grant_permissions, grant_permission, make_community_member
 from tests.test_admin_user_administration import _add_payload, _roles
 from tests.test_community_lifecycle import _add_payload as _community_payload, able_to_create, csrf
 from tests.test_per_domain_actor_documents import site_named_first  # noqa: F401  (fixture)
@@ -615,7 +615,7 @@ def test_a_private_message_and_its_api_edit_are_stored_on_the_senders_base(app, 
 
 def test_an_admins_edit_of_a_shop_communitys_texts_is_on_the_shop(app, onion_rows):
     db.session.add(Language(code='und', name='Undetermined'))
-    grant_permission(onion_rows.hal, 'administer all communities')
+    grant_permissions(onion_rows.hal, *COMMUNITY_ADMINISTRATION)
     db.session.commit()
     client, token = signed_in(app, onion_rows.hal)
     data = {'csrf_token': token, 'url': 'wares', 'title': 'Wares', 'description': f'see {ONION_LINK}',

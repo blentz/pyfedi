@@ -21,7 +21,7 @@ from flask import g
 
 from app import db
 from app.models import Instance, Site
-from tests.factories import grant_permission, make_instance, make_user
+from tests.factories import grant_permissions, COMMUNITY_ADMINISTRATION, grant_permission, make_instance, make_user
 
 
 @pytest.fixture
@@ -37,7 +37,7 @@ def env(app, api_baseline):
     admin.email = 'admin@test.piefed.local'
     grant_permission(admin, 'change instance settings')
     # `/admin/instance/<id>/edit` is gated on a DIFFERENT permission from the newsletter.
-    grant_permission(admin, 'administer all communities')
+    grant_permissions(admin, *COMMUNITY_ADMINISTRATION)
     db.session.commit()
     client = app.test_client()
     with client.session_transaction() as session:

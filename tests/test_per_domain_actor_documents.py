@@ -17,7 +17,7 @@ from app import cache, cli, db
 from app.models import Community, CommunityMember, File, Instance, Language, Site, SiteDomain, User, UserExtraField
 from app.shared.tasks.groups import edit_community
 from app.storefront import default_domain, domain_for_host
-from tests.factories import a_keypair, grant_permission, make_user
+from tests.factories import COMMUNITY_ADMINISTRATION, grant_permissions, a_keypair, grant_permission, make_user
 from tests.test_dev_tools import csrf
 from tests.test_c3_golden_documents import AP, CREATED, SHOP, UPDATED, golden_site, pem  # noqa: F401  (fixture)
 from tests.test_onion_guard_limits import PROXY, a_session, onion_get
@@ -362,7 +362,7 @@ def test_dev_communities_are_made_on_their_creators_domain(app, shop_rows):
 
 def _an_admin(app):
     admin = User.query.filter_by(user_name='goldie', site_domain_id=default_domain().id).one()
-    grant_permission(admin, 'administer all communities')
+    grant_permissions(admin, *COMMUNITY_ADMINISTRATION)
     grant_permission(admin, 'change instance settings')
     g.admin_ids = [admin.id]
     return admin
