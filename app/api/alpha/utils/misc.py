@@ -30,6 +30,7 @@ from app.utils import authorise_api_user, gibberish, subscribed_feeds, communiti
 from app import db
 
 
+from app.permissions import user_access
 def get_search(auth, data):
     # D1189. The guard was `'q' not in data and 'type_' not in data`, so
     # EITHER key satisfied it -- and `data['type_']` is read on the next line.
@@ -147,7 +148,7 @@ def _feed_open_to(feed: Feed, user_id: int | None) -> bool:
     `feed_view` has it)."""
     if feed.banned or not feed_shown_here(feed, user_id is not None):
         return False
-    return feed.public or user_id == feed.user_id or db.session.get(User, user_id).is_admin()
+    return feed.public or user_id == feed.user_id or user_access('manage instance feeds', user_id)
 
 
 def _post_result(post: Post, user_id: int, recursive: bool = False):
@@ -628,7 +629,7 @@ def get_modlog(auth, data):
     comment_id = int(data['comment_id']) if 'comment_id' in data else 0
 
     user = authorise_api_user(auth, return_type='model') if auth else None
-    is_admin = user and (user.is_admin() or user.is_staff())
+    is_admin = user and user_access('view modlog', user.id)
 
     # Build base query with common filters shared by all categories
     base_q = ModLog.query

@@ -14,7 +14,7 @@
                 {{ _('Edit') }}
             </a>
         </li>
-    {% elif post_reply.deleted and post_reply.user_id == current_user.id and (current_user.is_staff() or current_user.get_id() in admin_ids) -%}
+    {% elif post_reply.deleted and post_reply.user_id == current_user.id and user_access('moderate all communities', current_user.get_id(), on=post_reply) -%}
         <li>
             <a class="dropdown-item no-underline" role="button"
                     href="{{ url_for('post.post_reply_edit', post_id=post.id, comment_id=post_reply.id) }}"
@@ -31,7 +31,7 @@
     {# Delete/Restore section #}
     {% if not post_reply.deleted -%}
         {# Normal delete permissions #}
-        {% if post_reply.user_id == current_user.id or post.community.is_moderator() or post.community.is_owner() or current_user.get_id() in admin_ids or user_access('moderate all communities', current_user.get_id()) -%}
+        {% if post_reply.user_id == current_user.id or post.community.is_moderator() or post.community.is_owner() or user_access('moderate all communities', current_user.get_id(), on=post_reply) -%}
             <li>
                 <a href="{{ url_for('post.post_reply_delete', post_id=post.id, comment_id=post_reply.id) }}" class="dropdown-item no-underline" rel="nofollow">
                     <span class="fe fe-delete"></span>
@@ -41,7 +41,7 @@
         {% endif -%}
     {% else -%}
         {# Special restore permissions for deleted replies #}
-        {% if post.community.is_moderator() or post.community.is_owner() or current_user.get_id() in admin_ids or current_user.is_staff() or user_access('moderate all communities', current_user.get_id()) -%}
+        {% if post.community.is_moderator() or post.community.is_owner() or user_access('moderate all communities', current_user.get_id(), on=post_reply) -%}
             <li>
                 <a href='#' data-url="{{ url_for('post.post_reply_restore', post_id=post.id, comment_id=post_reply.id) }}" class="confirm_first send_post dropdown-item no-underline" rel="nofollow">
                     <span class="fe fe-arrow-up"></span>
@@ -59,7 +59,7 @@
         
         {# Purge option #}
         {% if not post_reply.has_replies() -%}
-            {% if post.community.is_moderator() or current_user.get_id() in admin_ids or (post_reply.user_id == current_user.id and post_reply.deleted_by == post_reply.user_id) or user_access('moderate all communities', current_user.get_id()) -%}
+            {% if post.community.is_moderator() or (post_reply.user_id == current_user.id and post_reply.deleted_by == post_reply.user_id) or user_access('moderate all communities', current_user.get_id(), on=post_reply) -%}
                 <li>
                     <a href='#' data-url="{{ url_for('post.post_reply_purge', post_id=post.id, comment_id=post_reply.id) }}" class="confirm_first send_post dropdown-item no-underline" rel="nofollow">
                         <span class="fe fe-delete red"></span>
@@ -124,7 +124,7 @@
                 {{ _('Block @%(author_name)s', author_name=post_reply.author.user_name if not post_reply.deleted else '') }}
             </a>
         </li>
-        {% if post.community.is_moderator() or current_user.get_id() in admin_ids -%}
+        {% if post.community.is_moderator() or user_access('moderate all communities', current_user.get_id(), on=post_reply) -%}
             <li>
                 <a href="{{ url_for('community.community_ban_user', community_id=post.community.id, user_id=post_reply.author.id) }}" 
                         style="white-space: normal" class="dropdown-item no-underline">
@@ -145,7 +145,7 @@
             </li>
         {% endif -%}
     {% endif -%}
-    {% if current_user.is_authenticated and (current_user.get_id() in admin_ids or current_user.is_staff() or post_reply.community.is_moderator() ) or user_access('moderate all communities', current_user.get_id()) -%}
+    {% if current_user.is_authenticated and (post_reply.community.is_moderator() ) or user_access('moderate all communities', current_user.get_id(), on=post_reply) -%}
         {% if post_reply.replies_enabled -%}
             <li>
                 <a href="#" data-url="{{ url_for('post.post_reply_lock', post_id=post_reply.post_id, post_reply_id=post_reply.id, mode='yes') }}" 

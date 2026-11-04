@@ -4,7 +4,7 @@ import pytest
 from app import db
 from app.local_only import domain_has_owners
 from app.models import Community, Instance, SiteDomain
-from tests.factories import grant_permission, make_instance, make_user
+from tests.factories import grant_permissions, INSTANCE_SETTINGS, grant_permission, make_instance, make_user
 from tests.test_admin_site_profile import csrf, login
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -67,7 +67,7 @@ def _admin():
     user = make_user(instance, 'lockadmin', local=True)
     user.verified = True
     db.session.commit()
-    grant_permission(user, 'change instance settings')
+    grant_permissions(user, *INSTANCE_SETTINGS)
     return user
 
 

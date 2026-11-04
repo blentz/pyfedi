@@ -43,7 +43,7 @@ from app import db
 from app.constants import SRC_API, SRC_WEB
 from app.models import InstanceRole, IpBan, ModLog, Post, PostReply, User
 from app.shared.user import ban_user, unban_user
-from tests.factories import (bearer, grant_permission, make_community,
+from tests.factories import (staff_role, bearer, grant_permission, make_community,
                              make_instance, make_post, make_post_reply,
                              make_user, web_ctx)
 
@@ -268,16 +268,13 @@ def test_ban_user_web_flashes_the_plain_message(app, db_session):
 def test_ban_user_warns_instead_when_the_target_holds_a_role(app, db_session):
     """:195-196 -- and the suppression at :197-198 that follows from it.
 
-    `is_admin()` matches on the role NAME (app/models.py:1263), so the role
-    granted here is named 'Admin' deliberately. The assertion is that the
-    plain "has been banned" message is ABSENT: that absence is the whole
-    behaviour of the else at :197.
+    The target holds the seeded Staff role: any role that confers something
+    counts. The assertion is that the plain "has been banned" message is
+    ABSENT: that absence is the whole behaviour of the else.
     """
     s = _seed_ban_scenario()
-    from app.models import Role, role_grant
-    role = Role(name='Admin', built_in=True)
-    db.session.add(role)
-    db.session.commit()
+    from app.models import role_grant
+    role = staff_role()   # a role holder, not an Admin: only an Admin may ban an Admin (D1178)
     db.session.execute(role_grant.insert().values(user_id=s.target.id,
                                                  role_id=role.id))
     db.session.commit()
@@ -681,15 +678,12 @@ def test_ban_user_purging_an_instance_admin_warns_first(
 
 def test_ban_user_purging_a_role_holder_warns_about_permissions(
         app, db_session, no_real_purge, redis_lock_only_double):
-    """:164-165. Named 'Admin' because is_admin() matches the role NAME
-    (app/models.py:1263). Independent of the instance-admin warning above:
+    """The role-holder warning, independent of the instance-admin warning above:
     this target has no InstanceRole, so only one of the two warnings fires,
     which is what separates :162 from :164."""
     s = _seed_ban_scenario(target_local=False)
-    from app.models import Role, role_grant
-    role = Role(name='Admin', built_in=True)
-    db.session.add(role)
-    db.session.commit()
+    from app.models import role_grant
+    role = staff_role()   # a role holder, not an Admin: only an Admin may ban an Admin (D1178)
     db.session.execute(role_grant.insert().values(user_id=s.target.id,
                                                  role_id=role.id))
     db.session.commit()

@@ -41,6 +41,7 @@ from app.models import (ActivityPubLog, BannedInstances, ChatMessage, Community,
 from app.utils import get_deduped_post_ids
 
 
+from app.permissions import STAFF_PERMISSIONS
 def make_instance(domain: str, software: str = 'mastodon') -> Instance:
     """A new Instance row, or the hosted domain's row when a SiteDomain already names `domain`: a domain row makes
     its own instance row on insert, and a test that adds the default domain before its instance gets that row back
@@ -451,10 +452,28 @@ COMMUNITY_ADMINISTRATION = ('moderate all communities', 'manage topics', 'manage
                             'manage media', 'manage remote instances', 'administer communities pages')
 
 
+# What a role holding the legacy 'change instance settings' holds after the same migration.
+INSTANCE_SETTINGS = ('change instance settings', 'manage domains', 'masquerade', 'send newsletter',
+                     'manage remote instances', 'edit domain branding')
+
+
 def grant_permissions(user: User, *permissions: str) -> None:
     """`grant_permission` for each of `permissions`."""
     for permission in permissions:
         grant_permission(user, permission)
+
+
+def staff_role() -> Role:
+    """The seeded Staff role, holding what `flask init-db` and an upgraded instance give it (app/roles.py): made if
+    this test has none yet. Staff is an ordinary role found by its permissions, never by its name (RB16)."""
+    role = Role.query.filter_by(name='Staff').first()
+    if role is None:
+        role = Role(name='Staff', listed_publicly=True)
+        for permission in STAFF_PERMISSIONS:
+            role.permissions.append(RolePermission(permission=permission))
+        db.session.add(role)
+        db.session.commit()
+    return role
 
 
 def admin_role() -> Role:

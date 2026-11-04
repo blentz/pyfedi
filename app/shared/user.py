@@ -12,6 +12,7 @@ from app.models import UserBlock, NotificationSubscription, User, IpBan, UserFol
 from app.shared.tasks import task_selector
 from app.user.utils import purge_user_then_delete, purge_remote_user_then_delete
 from app.utils import authorise_api_user, blocked_users, render_template, add_to_modlog, gibberish, user_access
+from app.permissions import holds_any_grant, may_ban
 import app.chat.util as chat_util
 import app as app_pkg
 
@@ -36,7 +37,7 @@ def block_another_user(person_id, src, auth=None):
 
     # Every role counts: reading one user_role row let a multi-role admin be blocked (D558)
     person = db.session.get(User, person_id)
-    if person is not None and person.is_admin_or_staff():
+    if person is not None and holds_any_grant(person.id):
         if src == SRC_API:
             raise Exception('cannot_block_admin_or_staff')
         else:
@@ -159,7 +160,7 @@ def ban_user(input, src, auth=None):
         ban_ip_address = input.ip_address.data
         reason = input.reason.data
         flush_cdn = input.flush.data
-    if not (user_access('ban users', user.id) or user_access('manage users', user.id)):
+    if to_ban is None or not may_ban(user, to_ban):
         abort(403)
     to_ban.deleted_by = user.id
     to_ban.banned = True
@@ -170,7 +171,7 @@ def ban_user(input, src, auth=None):
         if src == SRC_WEB:
             if to_ban.is_instance_admin():
                 flash(_('Purged user was a remote instance admin.'), 'warning')
-            if to_ban.is_admin() or to_ban.is_staff():
+            if holds_any_grant(to_ban.id):
                 flash(_('Purged user with role permissions.'), 'warning')
 
         # federate deletion
@@ -193,7 +194,7 @@ def ban_user(input, src, auth=None):
         if src == SRC_WEB:
             if to_ban.is_instance_admin():
                 flash(_('Banned user was a remote instance admin.'), 'warning')
-            if to_ban.is_admin() or to_ban.is_staff():
+            if holds_any_grant(to_ban.id):
                 flash(_('Banned user with role permissions.'), 'warning')
             else:
                 flash(_('%(actor)s has been banned.', actor=to_ban.display_name()))

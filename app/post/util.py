@@ -22,6 +22,7 @@ from app.utils import blocked_or_banned_instances, blocked_users, is_video_hosti
 from app.local_only import content_local_only, hidden_here, without_local_only
 
 
+from app.permissions import user_access
 @cache.memoize(timeout=600)
 def retrieve_archived_post(archived_url: str) -> dict:
     """Load archived post data from S3 or local disk"""
@@ -200,7 +201,8 @@ def post_replies(post: Post, sort_by: str, viewer: User, db_only=False) -> List[
         # all (a direct call, as the tests make) `current_user` is None and
         # the line is an AttributeError. The web callers pass `current_user`
         # as `viewer`, so naming it changes nothing for them.
-        if viewer.reply_hide_threshold and not (viewer.is_admin_or_staff() or post.community.is_moderator(viewer)):
+        if viewer.reply_hide_threshold and not (user_access('moderate all communities', viewer.id, on=post) or
+                                                post.community.is_moderator(viewer)):
             comments = comments.filter(or_(PostReply.score > viewer.reply_hide_threshold, PostReply.collapsible == False))
         if viewer.read_language_ids and len(viewer.read_language_ids) > 0:
             comments = comments.filter(
@@ -271,7 +273,8 @@ def get_comment_branch(post: Post, comment_id: int, sort_by: str, viewer: User) 
         # all (a direct call, as the tests make) `current_user` is None and
         # the line is an AttributeError. The web callers pass `current_user`
         # as `viewer`, so naming it changes nothing for them.
-        if viewer.reply_hide_threshold and not (viewer.is_admin_or_staff() or post.community.is_moderator(viewer)):
+        if viewer.reply_hide_threshold and not (user_access('moderate all communities', viewer.id, on=post) or
+                                                post.community.is_moderator(viewer)):
             comments = comments.filter(PostReply.score > viewer.reply_hide_threshold)
         if viewer.read_language_ids and len(viewer.read_language_ids) > 0:
             comments = comments.filter(
@@ -450,7 +453,8 @@ def deleted_post_state(post: Post, viewer: User | None = None) -> str:
     if post.deleted_by == post.user_id:
         return 'author'
     who = current_user if viewer is None else viewer
-    if who.is_authenticated and (post.community.is_moderator(viewer) or who.is_admin_or_staff()
+    if who.is_authenticated and (post.community.is_moderator(viewer) or
+                                 user_access('moderate all communities', who.get_id(), on=post)
                                  or who.id == post.user_id):
         return 'staff'
     return 'gone'
@@ -485,7 +489,8 @@ def post_refusal(post: Post, viewer: User | None = None, check_visibility: bool 
         if community.private and community.id not in community_membership_private(who.id):
             return 403
     if post.status < POST_STATUS_PUBLISHED and (who.is_anonymous or not (
-            who.id == post.user_id or community.is_moderator(viewer) or who.is_admin_or_staff())):
+            who.id == post.user_id or community.is_moderator(viewer) or
+            user_access('moderate all communities', who.get_id(), on=community))):
         return 404
     return None
 

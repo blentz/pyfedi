@@ -15,6 +15,7 @@ from app.utils import blocked_communities, communities_banned_from, blocked_or_b
     joined_or_modding_communities, pending_communities
 
 
+from app.permissions import here, user_access
 @cache.memoize(timeout=10, make_name=shaped_memo_name)
 def sidebar_active_communities(user_id: int) -> List:
     if not user_id:   # a logged-out visitor (get_id() is None): no local-only community (owner ruling 2026-10-21)
@@ -72,20 +73,25 @@ def sidebar_upcoming_events(hidden: str) -> List:
                               {'reviewing': POST_STATUS_REVIEWING}).all()
 
 
+def community_adding_rights() -> dict:
+    """Whether the current user may create a local community here when only some may, and add a remote one when
+    ordinary users may not: what the community lists and menus show."""
+    user_id = current_user.get_id()
+    return {'can_create_local': user_access('create local communities', user_id, on=here()),
+            'can_add_remote': user_access('add remote communities', user_id)}
+
+
 def _base_list_communities_context():
     create_admin_only = g.site.community_creation_admin_only
     default_user_add_remote = get_setting("allow_default_user_add_remote_community", True)
 
-    is_admin = current_user.is_authenticated and current_user.is_admin()
-    is_staff = current_user.is_authenticated and current_user.is_staff()
     return {
         "SUBSCRIPTION_PENDING": SUBSCRIPTION_PENDING,
         "SUBSCRIPTION_MEMBER": SUBSCRIPTION_MEMBER,
         "SUBSCRIPTION_OWNER": SUBSCRIPTION_OWNER,
         "SUBSCRIPTION_MODERATOR": SUBSCRIPTION_MODERATOR,
         "current_user": current_user,
-        "is_admin": is_admin,
-        "is_staff": is_staff,
+        **community_adding_rights(),
         "create_admin_only": create_admin_only,
         "default_user_add_remote": default_user_add_remote,
         "joined_communities": joined_or_modding_communities(current_user.get_id()),

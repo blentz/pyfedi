@@ -48,7 +48,7 @@
                 </div>
                 <div class="card-body">
                     <div class="row">
-                        {% if user_access('ban users', current_user.id) or user_access('manage users', current_user.id) %}
+                        {% if user_access('manage blocklists', current_user.id) %}
                             {% if tag.banned %}
                                 <div class="col-8">
                                     <a class="w-100 btn btn-primary confirm_first send_post" href='#' data-url="/tag/{{ tag.name }}/unban">{{ _('Unban') }}</a>

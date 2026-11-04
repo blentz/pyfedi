@@ -96,6 +96,7 @@ from flask import render_template as flask_render_template
 from app.form_choices import select_choices
 
 
+from app.permissions import here, user_access
 def _forget_sidebar_new_communities(user_id):
     from app.main.util import sidebar_new_communities  # cycle: importing app.main runs app.main.routes, which reaches app.activitypub.routes, which imports this module
     cache.delete_memoized(sidebar_new_communities, user_id)
@@ -115,7 +116,7 @@ def add_local():
     except:
         site = db.session.get(Site, 1)
 
-    if not current_user.is_admin() and site.community_creation_admin_only:
+    if not user_access('create local communities', current_user.get_id(), on=here()) and site.community_creation_admin_only:
         flash(_('Community creation has been restricted to admins on this site'))
         return redirect(url_for('main.list_communities'))
 
@@ -236,7 +237,7 @@ def add_remote():
     new_community = None
     lookup_failed = False
     
-    if get_setting("allow_default_user_add_remote_community", True) is False and not current_user.is_admin_or_staff():
+    if get_setting("allow_default_user_add_remote_community", True) is False and not user_access('add remote communities', current_user.get_id()):
         flash(_('Adding remote communities is restricted to admin and staff users only.'))
         return redirect(url_for('main.list_communities'))
 
@@ -495,7 +496,7 @@ def show_community(community: Community, from_instance=None):
     if current_user.is_authenticated and not user_banned_from_community(current_user.id, community.id):  # D995
         is_moderator = any(mod.user_id == current_user.id for mod in mods)
         is_owner = any(mod.user_id == current_user.id and mod.is_owner == True for mod in mods)
-        is_admin = current_user.id in g.admin_ids
+        is_admin = user_access('administer all communities', current_user.get_id(), on=community)
     else:
         is_moderator = False
         is_owner = False
@@ -530,7 +531,7 @@ def show_community(community: Community, from_instance=None):
         for mod in mod_list:
             if mod.last_seen < utcnow() - timedelta(days=60):
                 inactive_mods.append(mod)
-    if current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff()):
+    if current_user.is_authenticated and user_access('moderate all communities', current_user.get_id(), on=community):
         un_moderated = len(mod_user_ids) == len(inactive_mods)
 
     # user flair in sidebar and teasers
@@ -855,7 +856,7 @@ def show_community(community: Community, from_instance=None):
                                          microblog_servers=busiest_microblog_servers(community.id)
                                          if is_local_microblogs(community) and not view_actor else None,
                                          live_sse_feed=f'instance:{from_instance.id}' if from_instance is not None else f'community:{community.id}',
-                                         reported_posts=reported_posts(current_user.get_id(), current_user.get_id() in g.admin_ids),
+                                         reported_posts=reported_posts(current_user.get_id(), user_access('administer all communities', current_user.get_id())),
                                          user_notes=user_notes(current_user.get_id()), banned_from_community=banned_from_community,
                                          moderated_community_ids=moderating_communities_ids(current_user.get_id()),
                                          inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None,
@@ -1060,7 +1061,7 @@ def live_posts_fragment(actor):
         'community/_live_posts.html', posts=posts, community=community, sort='new',
         content_filters=content_filters, show_post_community=False,
         low_bandwidth=request.cookies.get('low_bandwidth', '0') == '1',
-        reported_posts=reported_posts(current_user.get_id(), current_user.get_id() in g.admin_ids),
+        reported_posts=reported_posts(current_user.get_id(), user_access('administer all communities', current_user.get_id())),
         user_notes=user_notes(current_user.get_id()), user_flair=user_flair,
         recently_upvoted=recently_upvoted_posts(current_user.id),
         recently_downvoted=recently_downvoted_posts(current_user.id),
@@ -1392,7 +1393,7 @@ def add_post(actor, type=None):
     if community.ai_generated:
         form.ai_generated.data = True
         form.ai_generated.render_kw = {'disabled': True}
-    if not (community.is_moderator() or community.is_owner() or current_user.is_admin()):
+    if not (community.is_moderator() or community.is_owner() or user_access('administer all communities', current_user.get_id(), on=community)):
         form.sticky.render_kw = {'disabled': True}
 
     form.communities.choices = select_choices(possible_communities())
@@ -1745,7 +1746,7 @@ def remove_icon(community_id):
     # relationship to the community: `PROBE i4 status: 200 / icon_id now:
     # None`. The check is the one `community_edit` -- the page these buttons
     # live on -- applies before showing them.
-    if not (community.is_owner() or community.is_moderator() or current_user.is_admin()):
+    if not (community.is_owner() or community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community)):
         abort(403)
     if community.icon_id:
         # The nested `if community.icon_id:` this used to carry could not be
@@ -1766,7 +1767,7 @@ def remove_icon(community_id):
 def remove_header(community_id):
     community = db.session.get(Community, community_id) or abort(404)
     # D1028's second site, identical in every respect but the column.
-    if not (community.is_owner() or community.is_moderator() or current_user.is_admin()):
+    if not (community.is_owner() or community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community)):
         abort(403)
     if community.image_id:
         # The same unreachable nested check as `remove_icon` above.
@@ -1807,7 +1808,7 @@ def community_delete(community_id: int):
     if current_user.banned:
         return show_ban_message()
     community = db.session.get(Community, community_id) or abort(404)
-    if community.is_owner() or current_user.is_admin():
+    if community.is_owner() or user_access('administer all communities', current_user.get_id(), on=community):
         form = DeleteCommunityForm()
         if form.validate_on_submit():
             # The community and who is deleting it, by id: the task runs in a worker, where there is no
@@ -1833,7 +1834,7 @@ def community_mod_list(community_id: int):
         return show_ban_message()
     community = db.session.get(Community, community_id) or abort(404)
     is_owner = community.is_owner()
-    if is_owner or current_user.is_admin() or community.is_moderator(current_user):
+    if is_owner or user_access('administer all communities', current_user.get_id(), on=community) or community.is_moderator(current_user):
 
         moderators = User.query.filter(User.banned == False).join(CommunityMember, CommunityMember.user_id == User.id). \
             filter(CommunityMember.community_id == community_id,
@@ -1856,7 +1857,7 @@ def community_make_owner(community_id: int, user_id: int):
     community = db.session.get(Community, community_id) or abort(404)
     user = db.session.get(User, user_id) or abort(404)
 
-    if (community.is_owner() or current_user.is_admin_or_staff()) and community.is_moderator(user):
+    if (community.is_owner() or user_access('moderate all communities', current_user.get_id(), on=community)) and community.is_moderator(user):
 
         new_owner_membership = CommunityMember.query.filter(CommunityMember.community_id == community_id, CommunityMember.user_id == user.id).first()
         new_owner_membership.is_owner = True
@@ -1895,7 +1896,7 @@ def community_remove_owner(community_id: int, user_id: int):
     community = db.session.get(Community, community_id) or abort(404)
     user = db.session.get(User, user_id) or abort(404)
 
-    if ((current_user.is_admin_or_staff() and community.is_owner(user)) or
+    if ((user_access('moderate all communities', current_user.get_id(), on=community) and community.is_owner(user)) or
         (community.is_owner() and community.is_moderator(user) and not community.is_owner(user)) or
         (community.is_owner() and user.id == current_user.id)):
 
@@ -1971,7 +1972,7 @@ def community_find_moderator(community_id: int):
     if current_user.banned:
         return show_ban_message()
     community = db.session.get(Community, community_id) or abort(404)
-    if community.is_owner() or current_user.is_admin():
+    if community.is_owner() or user_access('administer all communities', current_user.get_id(), on=community):
         form = AddModeratorForm()
         potential_moderators = None
         if form.validate_on_submit():
@@ -2038,7 +2039,7 @@ def community_ban_user(community_id: int, user_id: int):
     user = db.session.get(User, user_id) or abort(404)
     existing = CommunityBan.query.filter_by(community_id=community.id, user_id=user.id).first()
 
-    if (community.is_moderator() or current_user.is_admin_or_staff()) and not community.is_moderator(user):
+    if (community.is_moderator() or user_access('moderate all communities', current_user.get_id(), on=community)) and not community.is_moderator(user):
         form = BanUserCommunityForm()
         if form.validate_on_submit():
             # Both CommunityBan and CommunityMember need to be updated. CommunityBan is under the control of moderators while
@@ -2130,7 +2131,7 @@ def community_unban_user(community_id: int, user_id: int):
     community = db.session.get(Community, community_id) or abort(404)
     user = db.session.get(User, user_id) or abort(404)
 
-    if (community.is_moderator() or current_user.is_admin_or_staff()) and not community.is_moderator(user):
+    if (community.is_moderator() or user_access('moderate all communities', current_user.get_id(), on=community)) and not community.is_moderator(user):
         existing_ban = CommunityBan.query.filter_by(community_id=community.id, user_id=user.id).first()
         if existing_ban:
             db.session.delete(existing_ban)
@@ -2245,7 +2246,7 @@ def community_moderate(actor):
     community = actor_to_community(actor)
 
     if community is not None:
-        if community.is_moderator() or current_user.is_admin():
+        if community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community):
 
             page = request.args.get('page', 1, type=int)
             local_remote = request.args.get('local_remote', '')
@@ -2297,7 +2298,7 @@ def community_rss_feeds(actor):
     # anyone who is not a moderator. Measured.
     if community is None:
         abort(404)
-    if not (community.is_moderator() or current_user.is_admin()):
+    if not (community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community)):
         abort(403)
 
     rss_feeds = RssFeed.query.filter(RssFeed.community_id == community.id).order_by(RssFeed.title).all()
@@ -2318,7 +2319,7 @@ def community_rss_feed_edit(community_id, rss_feed_id=None):
     community = db.session.get(Community, community_id) or abort(404)
 
     if community is not None:
-        if (community.is_moderator() or current_user.is_admin()) and current_app.config['RSS_FEEDS']:
+        if (community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community)) and current_app.config['RSS_FEEDS']:
             rss_feed = db.session.get(RssFeed, rss_feed_id) if rss_feed_id else None
             # D1010. `rss_feed_id` came straight from the URL and nothing tied it
             # to `community_id`, which comes from the same URL -- so a
@@ -2372,7 +2373,7 @@ def community_rss_feed_delete(community_id, rss_feed_id):
         return show_ban_message()
     community = db.session.get(Community, community_id) or abort(404)
 
-    if community.is_moderator() or current_user.is_admin():
+    if community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community):
         rss_feed = db.session.get(RssFeed, rss_feed_id) or abort(404)
         # D1010's second site, and the more destructive one:
         # `delete_dependencies()` deletes every post this feed created. A
@@ -2502,11 +2503,11 @@ def community_moderate_comments(actor):
     # written from the same template and lost its else arms.
     if community is None:
         abort(404)
-    if not (community.is_moderator() or current_user.is_admin()):
+    if not (community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community)):
         abort(401)
 
     if community is not None:
-        if community.is_moderator() or current_user.is_admin():
+        if community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community):
             replies_page = request.args.get('replies_page', 1, type=int)
             # D19: moderators get no exemption outside the report queue
             post_replies = PostReply.query.filter_by(community_id=community.id, deleted=False).filter(
@@ -2533,7 +2534,7 @@ def community_kick_user(community_id: int, user_id: int):
     # line above already aborts for a community that does not exist, so the
     # false arm could never run. Removed rather than covered -- the D983
     # precedent.
-    if current_user.is_admin():
+    if user_access('administer all communities', current_user.get_id(), on=community):
         db.session.query(CommunityMember).filter_by(user_id=user.id, community_id=community.id).delete()
         db.session.commit()
     else:
@@ -2548,7 +2549,7 @@ def community_wiki_list(actor):
     community = actor_to_community(actor)
 
     if community is not None:
-        if community.is_moderator() or current_user.is_admin():
+        if community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community):
             low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
             pages = CommunityWikiPage.query.filter(CommunityWikiPage.community_id == community.id).order_by(
                 CommunityWikiPage.title).all()
@@ -2570,7 +2571,7 @@ def community_wiki_add(actor):
     community = actor_to_community(actor)
 
     if community is not None:
-        if community.is_moderator() or current_user.is_admin():
+        if community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community):
             low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
             form = EditCommunityWikiPageForm()
             if form.validate_on_submit():
@@ -2838,7 +2839,7 @@ def community_modlog(actor):
     community = actor_to_community(actor)
 
     if community is not None:
-        if community.is_moderator() or current_user.is_admin():
+        if community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community):
 
             page = request.args.get('page', 1, type=int)
             low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
@@ -2872,7 +2873,7 @@ def community_moderate_report_escalate(community_id, report_id):
         return show_ban_message()
 
     community = db.session.get(Community, community_id) or abort(404)
-    if community.is_moderator() or current_user.is_admin():
+    if community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community):
         report = Report.query.filter_by(in_community_id=community.id, id=report_id, status=REPORT_STATE_NEW).first()
         if report:
             form = EscalateReportForm()
@@ -2912,7 +2913,7 @@ def community_moderate_report_resolve(community_id, report_id):
         return show_ban_message()
 
     community = db.session.get(Community, community_id) or abort(404)
-    if community.is_moderator() or current_user.is_admin():
+    if community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community):
         report = Report.query.filter_by(in_community_id=community.id, id=report_id).first()
         if report:
             form = ResolveReportForm()
@@ -2974,7 +2975,7 @@ def community_moderate_report_ignore(community_id, report_id):
         return show_ban_message()
 
     community = db.session.get(Community, community_id) or abort(404)
-    if community.is_moderator() or current_user.is_admin():
+    if community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community):
         report = Report.query.filter_by(in_community_id=community.id, id=report_id).first()
         if report:
             # THIS report is marked first. The sweep below only updates reports
@@ -3061,7 +3062,7 @@ def community_flair(actor):
     community = actor_to_community(actor)
 
     if community is not None:
-        if community.is_moderator() or current_user.is_admin():
+        if community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community):
 
             low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
 
@@ -3085,7 +3086,7 @@ def community_flair_edit(community_id, flair_id):
 
     community = db.session.get(Community, community_id) or abort(404)
 
-    if community.is_moderator() or current_user.is_admin():
+    if community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community):
         # Scoped to this community. `db.session.get(CommunityFlair, flair_id)`
         # took whatever id was in the URL, so a moderator of one community
         # rewrote another community's flair: measured, the other community's
@@ -3141,7 +3142,7 @@ def community_flair_delete(community_id, flair_id):
 
     community = db.session.get(Community, community_id) or abort(404)
 
-    if community.is_moderator() or current_user.is_admin():
+    if community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community):
         # The flair must belong to THIS community. Without this the deletes
         # below removed another community's flair outright, along with its
         # post_flair rows and its CommunityFlairBlock rows, and cleared
@@ -3210,7 +3211,7 @@ def community_invite(actor):
 
     community = actor_to_community(actor)
 
-    if current_user.created_very_recently() and not current_user.is_admin():
+    if current_user.created_very_recently() and not user_access('exempt from account limits', current_user.get_id()):
         flash(_('Sorry your account is too new to do this.'), 'warning')
         return redirect(referrer())
 
@@ -3483,7 +3484,7 @@ def retrieve_metadata_of_url(url):
 @login_required
 @permission_required('change instance settings')
 def fixup_from_remote(actor: str):
-    if not current_user.is_admin():
+    if not user_access('administer all communities', current_user.get_id()):
         flash(_("This function is only for admins"), "warning")
         return redirect(url_for('activitypub.community_profile', actor=actor))
 

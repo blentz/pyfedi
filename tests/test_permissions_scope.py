@@ -7,13 +7,14 @@ from unittest.mock import patch
 
 import pytest
 from cachelib import SimpleCache
+from flask import g
 
 from app import db, permission_cache
 from app.models import (Conversation, Report, Role, RolePermission, SiteDomain, Topic, UserRegistration, role_grant,
                         utcnow)
-from app.permissions import (INSTANCE_ONLY_PERMISSIONS, SCOPABLE_PERMISSIONS, holds_any_grant, home_domain_id,
-                             is_scopable, may_act_on_user, user_access)
-from app.storefront import clear_domain_cache
+from app.permissions import (INSTANCE_ONLY_PERMISSIONS, SCOPABLE_PERMISSIONS, here, holds_any_grant, home_domain_id,
+                             is_scopable, may_act_on_user, may_ban, user_access)
+from app.storefront import clear_domain_cache, domain_for_host
 from tests.factories import (admin_role, grant_role, make_community, make_instance, make_local_feed, make_post,
                              make_post_reply, make_user)
 
@@ -231,3 +232,47 @@ def test_every_cached_answer_is_keyed_by_the_version(world):
             patch('app.models._holds_built_in_role', return_value=False) as holds:
         world.on_x.is_admin()
     assert holds.call_args.args == (world.on_x.id, 9)
+
+
+# --------------------------------------------------------------------------
+# Step 5: the helpers the converted call sites use
+# --------------------------------------------------------------------------
+
+def test_nobody_but_an_admin_acts_on_an_admin(world):
+    """D1178, now in may_act_on_user: an instance-wide holder may act on anyone else, but not on an Admin."""
+    banner = make_user(world.local, 'banner', local=True)
+    grant_role(banner, role_with('Banners', 'ban users'))
+    admin = make_user(world.local, 'anadmin', local=True)
+    grant_role(admin, admin_role())
+    other_admin = make_user(world.local, 'otheradmin', local=True)
+    grant_role(other_admin, admin_role())
+    assert may_act_on_user(banner, admin, 'ban users') is False
+    assert may_act_on_user(other_admin, admin, 'ban users') is True
+
+
+def test_may_ban_takes_either_permission(world):
+    purger = make_user(world.local, 'purger', local=True)
+    grant_role(purger, role_with('Purgers', 'manage users'))
+    assert may_ban(purger, world.on_x) is True
+    assert may_ban(world.on_y, world.on_x) is False
+
+
+def test_a_role_that_confers_nothing_makes_nobody_privileged(world):
+    holder = make_user(world.local, 'emptyrole', local=True)
+    grant_role(holder, role_with('Empty'))
+    assert holds_any_grant(holder.id) is False
+    assert holds_any_grant(None) is False
+    grant_role(holder, admin_role())
+    assert holds_any_grant(holder.id) is True
+
+
+def test_a_storefront_resolves_to_its_own_domain(app, world):
+    """`g.storefront` is app.storefront's view of a site_domain row; `here()` asks about the domain served on."""
+    holder = scoped_holder(world, 'xcreator', world.x, 'create local communities')
+    info = domain_for_host(world.x.domain)
+    assert home_domain_id(info) == world.x.id
+    with app.test_request_context('/'):
+        g.storefront = info
+        assert user_access('create local communities', holder.id, on=here()) is True
+        g.storefront = domain_for_host(world.y.domain)
+        assert user_access('create local communities', holder.id, on=here()) is False

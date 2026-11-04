@@ -50,7 +50,7 @@ from app.community.routes import do_subscribe
 from app.constants import REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_REVIEWING
 from app.email import send_registration_approved_email
 from app.permission_cache import permissions_changed
-from app.permissions import ROLE_PERMISSIONS
+from app.permissions import ROLE_PERMISSIONS, holds_any_grant
 from app.federation_urls import object_base
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
     CommunityMember, \
@@ -97,12 +97,10 @@ def admin_home():
     # Every other route on this blueprint carries @permission_required(...);
     # this one carried nothing but @login_required, so any registered account
     # could read the host's load averages, core count, disk usage, plugin list
-    # and overdue cron tasks. is_admin_or_staff() is the check the navigation
-    # already uses to decide whether to show this page's link at all
-    # (app/templates/base.html:268), so nobody who can reach it today loses it.
-    # NOT permission_required('change instance settings'): that would exclude
-    # staff holding only 'manage users' or 'moderate all communities'.
-    if not current_user.is_admin_or_staff():
+    # and overdue cron tasks. The dashboard is for anyone who holds a role
+    # (RBAC: 'see admin dashboard' is holding any grant), which is what the
+    # navigation asks before showing this page's link (app/templates/base.html).
+    if not holds_any_grant(current_user.get_id()):   # 'see admin dashboard' is holding any grant at all
         abort(403)
 
     load1, load5, load15 = os.getloadavg()
@@ -491,7 +489,7 @@ def admin_site():
 
 @bp.route('/domains', methods=['GET', 'POST'])
 @login_required
-@permission_required('change instance settings')
+@permission_required('manage domains')
 def admin_domains():
     form = SiteDomainForm()
     if form.validate_on_submit():
@@ -515,7 +513,7 @@ def admin_domains():
 
 @bp.route('/domains/<int:domain_id>/delete', methods=['POST'])
 @login_required
-@permission_required('change instance settings')
+@permission_required('manage domains')
 def admin_domains_delete(domain_id):
     row = db.session.get(SiteDomain, domain_id) or abort(404)
     if row.is_default:
@@ -545,9 +543,9 @@ def admin_domains_delete(domain_id):
 @login_required
 def admin_domain_branding(domain_id):
     """A sister domain's own branding (spec §3.5). The first domain's is Site row 1's, edited at the site settings."""
-    if not user_access('change instance settings', current_user.get_id()):
-        abort(403)
     row = db.session.get(SiteDomain, domain_id) or abort(404)
+    if not user_access('edit domain branding', current_user.get_id(), on=row):
+        abort(403)
     if row.is_default:
         return redirect(url_for('admin.admin_site'))
     branding = db.session.get(DomainBranding, row.id)
@@ -2428,7 +2426,8 @@ def admin_content():
                            posts=posts, post_replies=post_replies,
                            user_notes=user_notes(current_user.get_id()),
                            posts_replies=posts_replies, show=show, days=days,
-                           reported_posts=reported_posts(current_user.get_id(), current_user.get_id() in g.admin_ids),
+                           reported_posts=reported_posts(current_user.get_id(),
+                                                         user_access('administer all communities', current_user.get_id())),
                            moderated_community_ids=moderating_communities_ids(current_user.get_id()),
                            roles_with=roles_with('administer communities pages'),
                            admin_ids=g.admin_ids
@@ -2812,7 +2811,7 @@ def admin_reports():
 
 @bp.route('/newsletter', methods=['GET', 'POST'])
 @login_required
-@permission_required('change instance settings')
+@permission_required('send newsletter')
 def newsletter():
     form = SendNewsletterForm()
     if form.validate_on_submit():
@@ -2821,7 +2820,7 @@ def newsletter():
         return redirect(url_for('admin.newsletter'))
 
     return render_template("admin/newsletter.html", form=form, title=_('Send newsletter'),
-                           roles_with=roles_with('change instance settings'))
+                           roles_with=roles_with('send newsletter'))
 
 
 def editable_role_ids() -> list[int]:
@@ -3357,7 +3356,7 @@ def admin_emoji_filter():
 
 @bp.route('/masquerade/<int:user_id>')
 @login_required
-@permission_required('change instance settings')
+@permission_required('masquerade')
 def masquerade(user_id):
     user = db.session.get(User, user_id)
     if user is not None and user.is_local():

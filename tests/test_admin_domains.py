@@ -7,7 +7,7 @@ from flask import current_app
 from app import db
 from app.models import Instance, InstanceBlock, Site, SiteDomain, refuse_a_federating_onion
 from app.storefront import clear_domain_cache, domain_for_host
-from tests.factories import grant_permission, make_instance, make_user
+from tests.factories import grant_permissions, INSTANCE_SETTINGS, grant_permission, make_instance, make_user
 from tests.test_admin_site_profile import csrf, login
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -19,7 +19,7 @@ def _admin(name='domainadmin'):
     user = make_user(instance, name, local=True)
     user.verified = True
     db.session.commit()
-    grant_permission(user, 'change instance settings')
+    grant_permissions(user, *INSTANCE_SETTINGS)
     return user
 
 

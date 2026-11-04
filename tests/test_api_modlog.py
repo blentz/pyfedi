@@ -15,7 +15,7 @@ from flask import g
 from app import db
 from app.models import (Community, ModLog, Post, PostReply, Role,
                         RolePermission, Site, User, role_grant)
-from tests.factories import (make_community, make_post, make_post_reply,
+from tests.factories import (staff_role, make_community, make_post, make_post_reply,
                              make_user)
 
 
@@ -26,7 +26,7 @@ def token(user):
 def with_role(user, name):
     """`is_admin()` and `is_staff()` read the role's NAME, not a permission
     (app/models.py:1264, 1271)."""
-    role = Role(name=name, built_in=name == 'Admin')   # Admin is the built-in role (RB16)
+    role = staff_role() if name == 'Staff' else Role(name=name, built_in=name == 'Admin')   # Admin: built in (RB16)
     db.session.add(role)
     db.session.commit()
     db.session.execute(role_grant.insert().values(user_id=user.id,

@@ -183,7 +183,7 @@ def refuse_unpublished_post(post):
         return
     if current_user.is_anonymous or not (current_user.id == post.user_id or
                                          post.community.is_moderator() or
-                                         current_user.is_admin_or_staff()):
+                                         user_access('moderate all communities', current_user.get_id(), on=post)):
         abort(404)
 
 
@@ -251,7 +251,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
             flash(_('This post is scheduled to be published at %(when)s in %(_tz)s', when=str(post.scheduled_for), _tz=str(post.timezone)))
 
         if current_user.is_authenticated:
-            if not post.community.is_moderator() and not post.community.is_owner() and not current_user.is_staff() and not current_user.is_admin():
+            if not post.community.is_moderator() and not post.community.is_owner() and not user_access('moderate all communities', current_user.get_id(), on=post):
                 form.distinguished.render_kw = {'disabled': True}
 
             show_reason_why_no_federation(community.instance_id)
@@ -307,7 +307,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
         # but its moderators and the admins -- here for the page title and link previews, in _post_full.html for the page
         page_title = post.title
         if post.deleted and post.deleted_by == post.user_id and not (
-                is_moderator or community.is_owner() or current_user.get_id() in g.admin_ids):
+                is_moderator or community.is_owner() or user_access('administer all communities', current_user.get_id(), on=post)):
             page_title = _('deleted by author')
             og_image = description = None
 
@@ -451,7 +451,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
                                    user_flair=user_flair, lazy_load_replies=lazy_load_replies,
                                    THREAD_CUTOFF_DEPTH=constants.THREAD_CUTOFF_DEPTH,
                                    description=description, og_image=og_image, sort=sort,
-                                   show_deleted=current_user.is_authenticated and current_user.is_admin_or_staff(),
+                                   show_deleted=user_access('moderate all communities', current_user.get_id(), on=post),
                                    autoplay=autoplay, archive_link=archive_link,
                                    noindex=not post.author.indexable, preconnect=post.url if post.url else None,
                                    recently_upvoted=recently_upvoted, recently_downvoted=recently_downvoted,
@@ -566,7 +566,7 @@ def post_lazy_replies(post_id, nonce):
                            can_downvote_here=can_downvote(user, community),
                            communities_banned_from_list=communities_banned_from_list,
                            user_notes=user_notes(current_user.get_id()) if current_user.is_authenticated else {},
-                           show_deleted=current_user.is_authenticated and current_user.is_admin_or_staff() if current_user.is_authenticated else False,
+                           show_deleted=user_access('moderate all communities', current_user.get_id(), on=post),
                            low_bandwidth=request.cookies.get('low_bandwidth', '0') == '1',
                            user_flair=user_flair if current_user.is_authenticated else {},
                            user_pronouns=user_pronouns_on_post(post),
@@ -584,7 +584,7 @@ def post_embed(post_id):
 
         if community.banned or post.deleted:
             if current_user.is_anonymous or not (
-                    current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff())):
+                    user_access('moderate all communities', current_user.get_id(), on=post)):
                 abort(404)
             else:
                 if post.deleted_by == post.user_id:
@@ -702,7 +702,7 @@ def post_oembed(post_id):
         # D1085: the page's placeholder title for a post its author deleted, with the same exception for its viewers
         title = post.title
         if post.deleted and post.deleted_by == post.user_id and not (
-                post.community.is_moderator() or post.community.is_owner() or current_user.get_id() in g.admin_ids):
+                post.community.is_moderator() or post.community.is_owner() or user_access('administer all communities', current_user.get_id(), on=post)):
             title = _('deleted by author')
 
         iframe_url = url_for('post.post_embed', post_id=post.id, _external=True)
@@ -878,7 +878,7 @@ def continue_discussion(post_id, comment_id):
     refuse_local_only_comment(comment)
 
     if post.community.banned or post.deleted or comment.deleted:
-        if current_user.is_anonymous or not (current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff())):
+        if not user_access('moderate all communities', current_user.get_id(), on=post):
             abort(404)
         else:
             if comment.deleted:
@@ -1022,7 +1022,7 @@ def continue_discussion_ajax(post_id, comment_id, nonce):
                                can_downvote_here=can_downvote(current_user, post.community) if current_user.is_authenticated else True,
                                communities_banned_from_list=communities_banned_from_list,
                                user_notes=user_notes(current_user.get_id()) if current_user.is_authenticated else {},
-                               show_deleted=current_user.is_authenticated and current_user.is_admin_or_staff() if current_user.is_authenticated else False,
+                               show_deleted=user_access('moderate all communities', current_user.get_id(), on=post),
                                low_bandwidth=request.cookies.get('low_bandwidth', '0') == '1',
                                user_flair=user_flair if current_user.is_authenticated else {},
                                user_pronouns=user_pronouns_on_post(post),
@@ -1293,7 +1293,7 @@ def post_source(post_id: int, state: str):
                              not can_view(post, current_user.get_id())):
         post = None
 
-    if not post or state not in ['show', 'hide'] or (post.deleted and not current_user.is_admin()):
+    if not post or state not in ['show', 'hide'] or (post.deleted and not user_access('administer all communities', current_user.get_id(), on=post)):
         post_body = markdown_to_html(_("Something went wrong and a post could not be found."))
         
         return render_template("post/_post_source_swap.html", post_body=post_body, state="hide", post_id=post_id)
@@ -1482,7 +1482,7 @@ def post_edit(post_id: int):
                     form.irl_country.data = event.location['country']
                 event_online = event.online
 
-            if not (post.community.is_moderator() or post.community.is_owner() or current_user.is_admin()):
+            if not (post.community.is_moderator() or post.community.is_owner() or user_access('administer all communities', current_user.get_id(), on=post)):
                 form.sticky.render_kw = {'disabled': True}
             return render_template('post/post_edit.html', title=_('Edit post'), form=form,
                                    post_type=post_type, community=post.community, post=post,
@@ -1563,7 +1563,7 @@ def post_purge(post_id: int):
     refuse_invisible_unless_moderating(post)
     if not post.deleted:
         abort(404)
-    if post.deleted_by == current_user.id or post.community.is_moderator() or current_user.is_admin():
+    if post.deleted_by == current_user.id or post.community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=post):
         post.delete_dependencies()
         db.session.delete(post)
         db.session.commit()
@@ -1966,7 +1966,7 @@ def post_mea_culpa(post_id: int):
 def post_sticky(post_id: int, mode):
     post = db.session.get(Post, post_id) or abort(404)
     refuse_invisible_unless_moderating(post)
-    if post.community.is_moderator(current_user) or current_user.is_admin() or user_access('moderate all communities', current_user.get_id()):
+    if post.community.is_moderator(current_user) or user_access('moderate all communities', current_user.get_id(), on=post):
         shared_post.sticky_post(post.id, mode == 'yes', SRC_WEB)
     if mode == 'yes':
         flash(_('%(name)s has been stickied.', name=post_title_for(post, current_user.id)))
@@ -1987,7 +1987,7 @@ def post_instance_sticky(post_id: int, mode):
     post = db.session.get(Post, post_id) or abort(404)
     refuse_invisible_unless_moderating(post)
     
-    if current_user.is_admin():
+    if user_access('feature instance-wide', current_user.get_id()):
         if mode == 'yes':
             post.instance_sticky = True
             flash(_('%(name)s has been stickied to the instance.', name=post_title_for(post, current_user.id)))
@@ -2023,7 +2023,7 @@ def post_hide(post_id: int, mode):
 def post_set_flair(post_id):
     post = db.session.get(Post, post_id) or abort(404)
     refuse_invisible(post)
-    if post.user_id == current_user.id or post.community.is_moderator(current_user) or current_user.is_staff() or current_user.is_admin() or user_access('moderate all communities', current_user.get_id()):
+    if post.user_id == current_user.id or post.community.is_moderator(current_user) or user_access('moderate all communities', current_user.get_id(), on=post):
 
         # D1090. This branch WRITES -- it resets the post's flair and its
         # nsfw / nsfl / ai_generated marks from `request.form`, which a GET
@@ -2109,7 +2109,7 @@ def post_set_flair(post_id):
 def post_flair_list(post_id):
     post = db.session.get(Post, post_id) or abort(404)
     refuse_invisible(post)
-    if post.user_id == current_user.id or post.community.is_moderator(current_user) or current_user.is_staff() or current_user.is_admin():
+    if post.user_id == current_user.id or post.community.is_moderator(current_user) or user_access('moderate all communities', current_user.get_id(), on=post):
         # D1091. Measured: `TypeError: argument of type 'NoneType' is not
         # iterable` (app/post/routes.py:1736) for a request without the
         # header -- a 500 in place of the fragment.
@@ -2134,15 +2134,16 @@ def post_flair_list(post_id):
 
 @bp.route('/post/<int:post_id>/approve', methods=['POST'])
 @login_required
-@permission_required('moderate all communities')
 def post_approve(post_id):
     post = db.session.get(Post, post_id) or abort(404)
+    if not user_access('moderate all communities', current_user.get_id(), on=post):
+        return redirect(url_for('auth.permission_denied'))
     refuse_invisible_unless_moderating(post)
     # only a post held for review is published here: one already published, or deleted, would be federated again
     if post.deleted or post.status != POST_STATUS_REVIEWING:
         abort(404)
-    if not (post.user_id == current_user.id or post.community.is_moderator(current_user) or current_user.is_staff()
-            or current_user.is_admin()):
+    if not (post.user_id == current_user.id or post.community.is_moderator(current_user) or
+            user_access('moderate all communities', current_user.get_id(), on=post)):
         abort(403)   # v1.8.10 fell off the end here: None, a 500
     post.status = POST_STATUS_PUBLISHED
     post.posted_at = utcnow()
@@ -2187,7 +2188,7 @@ def post_reply_collapse(post_id: int, post_reply_id: int, mode):
 def post_move(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     refuse_invisible(post)
-    if current_user.id == post.user_id or post.community.is_moderator(current_user) or (post.community.is_local() and (post.community.is_admin_or_staff(current_user)  or user_access('moderate all communities', current_user.get_id()))):
+    if current_user.id == post.user_id or post.community.is_moderator(current_user) or (post.community.is_local() and user_access('moderate all communities', current_user.get_id(), on=post)):
         form = MovePostForm()
         if form.validate_on_submit():
             search = form.which_community.data.lower().strip()
@@ -2426,7 +2427,7 @@ def post_reply_source(post_id: int, comment_id: int, state: str):
                                    not can_view(post_reply, current_user.get_id())):
         post_reply = None
 
-    if not post_reply or state not in ['show', 'hide'] or (post_reply.deleted and not current_user.is_admin()):
+    if not post_reply or state not in ['show', 'hide'] or (post_reply.deleted and not user_access('administer all communities', current_user.get_id(), on=post_reply)):
         reply_body = markdown_to_html(_("Something went wrong and a comment could not be found."))
         
         return render_template("post/_post_reply_source_swap.html", reply_body=reply_body, state="hide",
@@ -2486,7 +2487,7 @@ def post_reply_edit_inline(post_id: int, comment_id: int):
                 form.notify_author.data = post_reply.notify_author
                 form.language_id.data = post_reply.language_id
                 form.distinguished.data = post_reply.distinguished
-                if not post.community.is_moderator() and not post.community.is_owner() and not current_user.is_staff() and not current_user.is_admin():
+                if not post.community.is_moderator() and not post.community.is_owner() and not user_access('moderate all communities', current_user.get_id(), on=post):
                     form.distinguished.render_kw = {'disabled': True}
             
             return render_template(
@@ -2528,7 +2529,7 @@ def post_reply_edit(post_id: int, comment_id: int):
             form.notify_author.data = post_reply.notify_author
             form.language_id.data = post_reply.language_id
             form.distinguished.data = post_reply.distinguished
-            if not post.community.is_moderator() and not post.community.is_owner() and not current_user.is_staff() and not current_user.is_admin():
+            if not post.community.is_moderator() and not post.community.is_owner() and not user_access('moderate all communities', current_user.get_id(), on=post):
                 form.distinguished.render_kw = {'disabled': True}
             return render_template('post/post_reply_edit.html', title=_('Edit comment'), form=form, post=post,
                                    post_reply=post_reply,
@@ -2561,11 +2562,11 @@ def post_reply_delete(post_id: int, comment_id: int):
 
     form = ConfirmationMultiDeleteForm()
 
-    if not (community.is_moderator() or community.is_owner() or current_user.is_admin_or_staff() or user_access('moderate all communities', current_user.get_id())):
+    if not (community.is_moderator() or community.is_owner() or user_access('moderate all communities', current_user.get_id(), on=community)):
         form.also_delete_replies.label = Label(field_id="also_delete_replies",
                                                text=_("Delete all my comments in this chain"))
 
-    if post_reply.user_id == current_user.id or community.is_moderator() or community.is_owner() or current_user.is_admin_or_staff() or user_access('moderate all communities', current_user.get_id()):
+    if post_reply.user_id == current_user.id or community.is_moderator() or community.is_owner() or user_access('moderate all communities', current_user.get_id(), on=community):
         if form.validate_on_submit():
             if form.also_delete_replies.data:
                 num_deleted = 0
@@ -2580,7 +2581,7 @@ def post_reply_delete(post_id: int, comment_id: int):
                         if reply.user_id == current_user.id:
                             # User is deleting their own reply
                             delete_reply(reply.id, SRC_WEB, None)
-                        elif post.community.is_moderator() or current_user.is_admin():
+                        elif post.community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=post):
                             # Moderator or admin is deleting the reply
                             if form.reason.data:
                                 reason = 'Deleted by mod: ' + form.reason.data
@@ -2594,7 +2595,7 @@ def post_reply_delete(post_id: int, comment_id: int):
                     # User is deleting their own reply
                     delete_reply(post_reply.id, SRC_WEB, None)
                     num_deleted = 1
-                elif community.is_moderator() or current_user.is_admin():
+                elif community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community):
                     # Moderator or admin is deleting the reply
                     if form.reason.data:
                         reason = 'Deleted by mod: ' + form.reason.data
@@ -2726,7 +2727,7 @@ def post_reply_purge(post_id: int, comment_id: int):
 
     if not post_reply.deleted:
         abort(404)
-    if post_reply.deleted_by == current_user.id or post.community.is_moderator() or current_user.is_admin() or user_access('moderate all communities', current_user.get_id()):
+    if post_reply.deleted_by == current_user.id or post.community.is_moderator() or user_access('moderate all communities', current_user.get_id(), on=post):
         if not post_reply.has_replies():
             with app_pkg.redis_client.lock(f"lock:post_reply:{post_reply.id}", timeout=10, blocking_timeout=6):
                 post_reply.delete_dependencies()
@@ -2846,7 +2847,7 @@ def post_view_voting_activity(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     refuse_invisible(post)
 
-    if current_user.is_admin_or_staff() or post.community.is_moderator():
+    if user_access('moderate all communities', current_user.get_id(), on=post) or post.community.is_moderator():
 
         post_title = post.title
         upvoters = (
@@ -2876,7 +2877,7 @@ def post_reply_view_voting_activity(comment_id: int):
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
     refuse_invisible(post_reply)
 
-    if current_user.is_admin_or_staff() or post_reply.community.is_moderator():
+    if user_access('moderate all communities', current_user.get_id(), on=post_reply) or post_reply.community.is_moderator():
 
         reply_text = post_reply.body
         upvoters = (
@@ -3152,7 +3153,7 @@ def post_set_ai(post_id):
     # than either a refusal or a success.
     post = db.session.get(Post, post_id) or abort(404)
     refuse_invisible(post)
-    if current_user.is_authenticated and (current_user.is_admin_or_staff() or post.user_id == current_user.id or post.community.is_moderator()):
+    if current_user.is_authenticated and (user_access('moderate all communities', current_user.get_id(), on=post) or post.user_id == current_user.id or post.community.is_moderator()):
         post.ai_generated = True
         db.session.commit()
         return _('Done')

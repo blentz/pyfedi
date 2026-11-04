@@ -3,7 +3,7 @@
 {% from 'post/_quote_card.html' import render_quote %}
 {% set v = shown(post) -%}
 {# D1085: moderators and admins see a deleted post's original; anyone else sees a placeholder where its author deleted it #}
-{% set sees_deleted_original = not post.deleted or post.community.is_moderator() or post.community.is_owner() or current_user.get_id() in admin_ids -%}
+{% set sees_deleted_original = not post.deleted or post.community.is_moderator() or post.community.is_owner() or user_access('administer all communities', current_user.get_id(), on=post) -%}
 {% set deleted_by_author_placeholder = post.deleted and post.deleted_by == post.user_id and not sees_deleted_original -%}
 <div class="row position-relative post_full {{ ' my_post' if current_user.get_id() == post.user_id }}">
     <div class="col post_col {% if post.type == POST_TYPE_IMAGE %}post_col post_type_image{% elif post.type == POST_TYPE_GALLERY %}post_col post_type_gallery{% else %}post_type_normal{% endif %} {{ 'reported' if post.has_been_reported() }}">
@@ -36,7 +36,7 @@
                     <div class="time text-muted small"><time datetime="{{ pendulum.instance(post.posted_at).format('YYYY-MM-DD HH:mm:ss ZZ') }}" title="{{ pendulum.instance(post.posted_at).format('YYYY-MM-DD HH:mm:ss ZZ') }}">{{ localize_datetime(post.posted_at, locale) }}</time></div>
                 {% endif -%}
 
-                {% if not post.deleted or post.community.is_moderator() or post.community.is_owner() or current_user.get_id() in admin_ids -%}
+                {% if not post.deleted or post.community.is_moderator() or post.community.is_owner() or user_access('administer all communities', current_user.get_id(), on=post) -%}
                     {{ render_username(post.author, htmx_redirect_back_to=request.path, user_notes=user_notes, current_user=current_user, admin_ids=admin_ids, low_bandwidth=low_bandwidth) }} {{ local_only_badge(post) }} {{ followers_only_badge(post) }}
                     {% set byline = podcast_byline(post) -%}
                     {% if byline %}{% include 'discovery/_byline.html' %}{% endif %}
@@ -75,7 +75,7 @@
                 {% endif -%}
                 {% if post.type != POST_TYPE_EVENT -%}
                     <small>{{ _('submitted') }} <time datetime="{{ pendulum.instance(post.posted_at).format('YYYY-MM-DD HH:mm:ss ZZ') }}" title="{{ pendulum.instance(post.posted_at).format('YYYY-MM-DD HH:mm:ss ZZ') }}">{{ localize_datetime(post.posted_at, locale) }}</time> {{ _('by') }}
-                        {% if not post.deleted or post.community.is_moderator() or post.community.is_owner() or current_user.get_id() in admin_ids -%}
+                        {% if not post.deleted or post.community.is_moderator() or post.community.is_owner() or user_access('administer all communities', current_user.get_id(), on=post) -%}
                             {{ render_username(post.author, htmx_redirect_back_to=request.path, user_notes=user_notes, current_user=current_user, admin_ids=admin_ids, low_bandwidth=low_bandwidth) }} {{ local_only_badge(post) }} {{ followers_only_badge(post) }}
                             {% set byline = podcast_byline(post) -%}
                             {% if byline %}{% include 'discovery/_byline.html' %}{% endif %}
@@ -438,7 +438,7 @@
                 {{ _('Add to calendar') }}
             </a>
             <small>{{ _('submitted') }} <time datetime="{{ pendulum.instance(post.posted_at).format('YYYY-MM-DD HH:mm:ss ZZ') }}" title="{{ pendulum.instance(post.posted_at).format('YYYY-MM-DD HH:mm:ss ZZ') }}">{{ localize_datetime(post.posted_at, locale) }}</time> {{ _('by') }}
-            {% if not post.deleted or post.community.is_moderator() or post.community.is_owner() or current_user.get_id() in admin_ids -%}
+            {% if not post.deleted or post.community.is_moderator() or post.community.is_owner() or user_access('administer all communities', current_user.get_id(), on=post) -%}
                 {{ render_username(post.author, htmx_redirect_back_to=request.path, user_notes=user_notes, current_user=current_user, admin_ids=admin_ids, low_bandwidth=low_bandwidth) }} {{ local_only_badge(post) }} {{ followers_only_badge(post) }}
             {% else -%}
                 [{{ _('deleted') }}]
@@ -573,7 +573,7 @@
                 </a>
             </div>
         {% endif -%}
-        {% if post.community.is_moderator() or post.community.is_owner() or current_user.get_id() in admin_ids -%}
+        {% if post.community.is_moderator() or post.community.is_owner() or user_access('administer all communities', current_user.get_id(), on=post) -%}
             <div class="dropdown flair_dropdown" id="flair_dropdown_{{ post.id }}">
                 <a href="{{ url_for("post.post_set_flair", post_id=post.id) if low_bandwidth else '#' }}"
                         data-bs-toggle="dropdown"

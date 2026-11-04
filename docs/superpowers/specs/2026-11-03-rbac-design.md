@@ -6,6 +6,22 @@ Date: 2026-11-03. Status: being built on blentz.
   found is fixed at 296d8a174; O5 came out of it.
 - Step 3 (the check) is done: app/permissions.py (`user_access(perm, user, on=, anywhere=)`, `home_domain_id`,
   `may_act_on_user`), app/permission_cache.py (the per-user version). No call site names an object yet (step 5).
+- Step 5 (the call sites) is done, in one commit rather than one per area. Every `is_admin()`, `is_staff()`,
+  `is_admin_or_staff()` and `g.admin_ids` check that authorises something now asks a catalogue permission, naming its
+  object (`on=`) where one is at hand. Left as they are: Admin-only by RB5 (roles, grants, the user form's role
+  field), the `'admins'` referral setting, RB13's `'admin'` registration mode (step 9), `Site.admins()`/`Site.staff()`
+  (step 8), the profile and preview role badges (step 7) and the API's `is_admin` flags (RB12, step 10).
+  Where the catalogue's "Today" column and the parity table disagreed, the parity table won, so default Staff keeps
+  exactly what it had (RB2): a user's moderated communities, upvoted posts and posting-pattern charts, and an
+  instance's unsearchable people, are `administer all users` (Staff no), not `view user details` or
+  `view vote analytics`; `fixup_from_remote` and the remote-community side-pane link are `administer all communities`,
+  not `manage remote instances`; the web reply delete's form is `moderate all communities` but its effect on
+  another's reply is `administer all communities`, as today (parity rows `post.reply_delete.form`/`.done`).
+  Three things changed on purpose: (1) D1178 ("only an Admin may ban an Admin") lives in `may_act_on_user`, so it now
+  also covers unban and delete, which let a `manage users` holder delete an Admin; (2) "holds a role" (blocking,
+  the ban and delete warnings, the admin dashboard and menu) means a grant of Admin or of a role with at least one
+  permission, so an empty role makes nobody privileged; (3) the post and reply menus' community-ban link shows to
+  `moderate all communities` holders, who may already ban through the route.
 - Step 4 (the catalogue) is done: `CATALOGUE` in app/permissions.py (name, group, scopable, Staff, guards), migration
   c5f9e3b7a2d1 moving every role onto it (note 1), and `change user roles` gone (RB5: /admin/permissions and the
   user form's role field are Admin-only). Every check of `administer all communities` now asks the permission split

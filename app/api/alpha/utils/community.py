@@ -30,6 +30,7 @@ from app.utils import communities_banned_from, blocked_instances, blocked_commun
     feed_membership
 
 
+from app.permissions import user_access
 def a_ban_expiry(expires_at):
     """`expires_at` read as a naive UTC datetime.
 
@@ -401,7 +402,7 @@ def get_community_moderate_bans(auth, data):
         limit = current_app.config["PAGE_LENGTH"]
 
     # validate that the user is a mod or owner of the community, or an instance admin
-    if not (community.is_owner(user) or community.is_moderator(user) or user.is_admin_or_staff()):
+    if not (community.is_owner(user) or community.is_moderator(user) or user_access('moderate all communities', user.id, on=community)):
         raise Exception('incorrect_login')
     if not community.is_local():
         raise Exception('Community not local to this instance.')
@@ -453,7 +454,7 @@ def put_community_moderate_unban(auth, data):
     user = authorise_api_user(auth, return_type='model')
 
     # validate that the user is a mod or owner of the community, or an instance admin
-    if not (community.is_owner(user) or community.is_moderator(user) or user.is_admin_or_staff()):
+    if not (community.is_owner(user) or community.is_moderator(user) or user_access('moderate all communities', user.id, on=community)):
         raise Exception('incorrect_login')
     if not community.is_local():
         raise Exception('Community not local to this instance.')
@@ -526,7 +527,7 @@ def post_community_moderate_ban(auth, data):
     blocker = authorise_api_user(auth, return_type='model')
 
     # validate that the user is a mod or owner of the community, or an instance admin
-    if not (community.is_owner(blocker) or community.is_moderator(blocker) or blocker.is_admin_or_staff()):
+    if not (community.is_owner(blocker) or community.is_moderator(blocker) or user_access('moderate all communities', blocker.id, on=community)):
         raise Exception('incorrect_login')
     if not community.is_local():
         raise Exception('Community not local to this instance.')
@@ -613,7 +614,7 @@ def post_community_moderate_post_nsfw(auth, data):
     community = db.session.get(Community, post.community_id)
 
     # validate that the user is a mod or owner of the community, or an instance admin
-    if not (community.is_owner(mod_user) or community.is_moderator(mod_user) or mod_user.is_admin_or_staff()):
+    if not (community.is_owner(mod_user) or community.is_moderator(mod_user) or user_access('moderate all communities', mod_user.id, on=community)):
         raise Exception('incorrect_login')
     if not community.is_local():
         raise Exception('Community not local to this instance.')
@@ -648,7 +649,7 @@ def post_community_flair_create(auth, data):
     user = authorise_api_user(auth, return_type='model')
     community = a_community(data['community_id'])
 
-    if not (community.is_owner(user) or community.is_moderator(user) or user.is_admin_or_staff()):
+    if not (community.is_owner(user) or community.is_moderator(user) or user_access('moderate all communities', user.id, on=community)):
         raise Exception('insufficient permissions')
 
     data['flair_title'] = data['flair_title'].strip()
@@ -704,7 +705,7 @@ def put_community_flair_edit(auth, data):
     
     community = db.session.get(Community, flair.community_id)
 
-    if not (community.is_owner(user) or community.is_moderator(user) or user.is_admin_or_staff()):
+    if not (community.is_owner(user) or community.is_moderator(user) or user_access('moderate all communities', user.id, on=community)):
         raise Exception('insufficient permissions')
     
     if 'flair_title' in data:
@@ -744,7 +745,7 @@ def post_community_flair_delete(auth, data):
     
     community = db.session.get(Community, flair.community_id)
 
-    if not (community.is_owner(user) or community.is_moderator(user) or user.is_admin_or_staff()):
+    if not (community.is_owner(user) or community.is_moderator(user) or user_access('moderate all communities', user.id, on=community)):
         raise Exception('insufficient permissions')
     
     db.session.execute(text('DELETE FROM "post_flair" WHERE flair_id = :flair_id'), {'flair_id': flair.id})

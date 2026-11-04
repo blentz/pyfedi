@@ -11,12 +11,12 @@
         {% if current_user.is_authenticated -%}
             <div class="col-me-auto">
                 <div class="d-flex justify-content-end align-items-center">
-                    {% if is_admin or not create_admin_only -%}
+                    {% if can_create_local or not create_admin_only -%}
                         <div class="p-1">
                             <a href="{{ url_for('community.add_local') }}" class="btn btn-sm btn-primary" aria-label="{{ _('Create local community') }}">{{ _('Create local community') }}</a>
                         </div>
                     {% endif -%}
-                    {% if default_user_add_remote or (is_staff or is_admin)  %}
+                    {% if default_user_add_remote or can_add_remote %}
                         <div class="p-1">
                             <a href="{{ url_for('community.add_remote') }}" class="btn btn-sm btn-primary" aria-label="{{ _('Add community from another instance') }}">
                                 {{ _('Add remote community') }}

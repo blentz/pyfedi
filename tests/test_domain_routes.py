@@ -921,7 +921,7 @@ def test_banning_a_domain_hides_it_and_purges_its_content(app, db_session):
     would still pass an assertion on the flag alone.
     """
     instance, alice, bob = _seed()
-    grant_permission(alice, 'manage users')
+    grant_permission(alice, 'manage blocklists')
     domain = _domain()
     community = make_community('microblogs')
     _post_on(domain, community, alice, title='an article')
@@ -940,7 +940,7 @@ def test_banning_a_domain_hides_it_and_purges_its_content(app, db_session):
 
 def test_unbanning_a_domain_makes_it_visible_again(app, db_session):
     instance, alice, bob = _seed()
-    grant_permission(alice, 'manage users')
+    grant_permission(alice, 'manage blocklists')
     domain = _domain(banned=True)
     client = app.test_client()
     login(client, alice)
@@ -976,7 +976,7 @@ def test_unban_all_clears_every_ban_at_once(app, db_session):
     which is what the statement says and what an operator gets.
     """
     instance, alice, bob = _seed()
-    grant_permission(alice, 'manage users')
+    grant_permission(alice, 'manage blocklists')
     _domain('one.test', banned=True)
     _domain('two.test', banned=True)
     _domain('three.test', banned=False)

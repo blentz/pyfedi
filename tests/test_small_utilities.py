@@ -416,29 +416,21 @@ def test_upcoming_events_are_future_undeleted_and_published(app, db_session):
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize('role, is_admin, is_staff', [
-    ('admin', True, False),
-    ('staff', False, True),
+@pytest.mark.parametrize('role, can_create_local, can_add_remote', [
+    ('admin', True, True),
+    ('staff', False, True),     # Staff adds remote communities, as it did; only admins create local ones
     ('ordinary', False, False),
 ])
 def test_the_community_list_context_names_the_readers_powers(app, db_session, role,
-                                                             is_admin, is_staff):
-    """`current_user.is_authenticated and current_user.is_X()` twice. The
-    template hangs the "create a community" control on these, and an anonymous
-    reader is the row that makes the first conjunct load-bearing --
-    is_admin() does not exist on an anonymous user.
+                                                             can_create_local, can_add_remote):
+    """The template hangs the "create a community" and "add a remote community"
+    controls on these.
     """
-    from app.models import Role
+    from tests.factories import admin_role, staff_role
 
     instance, alice = _seed()
     if role in ('admin', 'staff'):
-        name = 'Admin' if role == 'admin' else 'Staff'
-        existing = Role.query.filter_by(name=name).first()
-        if existing is None:
-            existing = Role(name=name, built_in=name == 'Admin')   # Admin is the built-in role (RB16)
-            db.session.add(existing)
-            db.session.commit()
-        alice.roles.append(existing)
+        alice.roles.append(admin_role() if role == 'admin' else staff_role())
         db.session.commit()
 
     with app.test_request_context('/'):
@@ -446,8 +438,8 @@ def test_the_community_list_context_names_the_readers_powers(app, db_session, ro
         login_user(alice)
         context = _base_list_communities_context()
 
-    assert context['is_admin'] is is_admin
-    assert context['is_staff'] is is_staff
+    assert context['can_create_local'] is can_create_local
+    assert context['can_add_remote'] is can_add_remote
 
 
 def test_the_community_list_context_for_an_anonymous_reader(app, db_session):
@@ -459,8 +451,8 @@ def test_the_community_list_context_for_an_anonymous_reader(app, db_session):
         _with_site()
         context = _base_list_communities_context()
 
-    assert context['is_admin'] is False
-    assert context['is_staff'] is False
+    assert context['can_create_local'] is False
+    assert context['can_add_remote'] is False
     assert context['joined_communities'] == []
     assert context['pending_communities'] == []
 

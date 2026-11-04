@@ -40,6 +40,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 from app import db, login, cache, celery, httpx_client, constants, app_bcrypt, shaped_memo_name
 from app.permission_cache import permission_version
+from app.permissions import user_access
 from app.constants import AUTOMATED_REPORTER, SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPTION_MODERATOR, SUBSCRIPTION_OWNER, \
     SUBSCRIPTION_BANNED, SUBSCRIPTION_PENDING, NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC, NOTIF_POST, NOTIF_REPLY, \
     NOTIF_FEED, NOTIF_DEFAULT, NOTIF_REPORT, NOTIF_MENTION, POST_STATUS_REVIEWING, \
@@ -1901,9 +1902,6 @@ class Community(db.Model):
         else:
             return False
 
-    def is_admin_or_staff(self, user):
-        return user.is_admin_or_staff()
-
     # A local community with no stored URL is named on its home domain (plan C3). home_domain, not owner_base:
     # is_local reads profile_id, so asking whether the community is local here would never return.
     def profile_id(self):
@@ -2537,7 +2535,7 @@ class User(UserMixin, db.Model):
         return self.bot and self.user_name == 'feed_bot'
 
     def trustworthy(self):
-        if self.is_admin():
+        if user_access('exempt from account limits', self.id):
             return True
         if self.created_recently() and self.reputation < 100:
             return False
@@ -2970,7 +2968,8 @@ class User(UserMixin, db.Model):
             or self.banned
             or not self.verified
             or not self.can_send_pm
-        ) and not (self.is_admin_or_staff() or recipient.is_admin_or_staff()):
+        ) and not (user_access('exempt from upload limits', self.id) or
+                   user_access('exempt from upload limits', recipient.id)):
             return False
 
         return True
@@ -5399,15 +5398,15 @@ class CommunityWikiPage(db.Model):
             return False
         if user.is_anonymous:
             return False
+        moderates = community.is_moderator(user) or user_access('moderate all communities', user.id, on=community)
         if self.who_can_edit == 0:
-            if user.is_admin() or user.is_staff() or community.is_moderator(user):
+            if moderates:
                 return True
         elif self.who_can_edit == 1:
-            if user.is_admin() or user.is_staff() or community.is_moderator(user) or user.trustworthy():
+            if moderates or user.trustworthy():
                 return True
         elif self.who_can_edit == 2:
-            if user.is_admin() or user.is_staff() or community.is_moderator(
-                    user) or user.trustworthy() or community.is_member(user):
+            if moderates or user.trustworthy() or community.is_member(user):
                 return True
         elif self.who_can_edit == 3:
             return True

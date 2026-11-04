@@ -31,6 +31,7 @@ from app.utils import render_template, permission_required, user_filters_posts, 
 from app.rss_extras import RSSFeed
 
 
+from app.permissions import user_access
 @bp.route('/tag/<tag>', methods=['GET'])
 @login_required_if_private_instance
 def show_tag(tag):
@@ -188,7 +189,7 @@ def tags():
 
     ban_visibility_permission = False
 
-    if current_user.is_authenticated and current_user.is_admin_or_staff():
+    if user_access('manage blocklists', current_user.get_id()):
         ban_visibility_permission = True
 
     next_url = url_for('tag.tags', page=tags.next_num) if tags.has_next else None
@@ -226,7 +227,7 @@ def tags_blocked_list():
 
 @bp.route('/tag/<tag>/ban', methods=['POST'])
 @login_required
-@permission_required('manage users')
+@permission_required('manage blocklists')
 def tag_ban(tag):
     tag = Tag.query.filter(Tag.name == tag.lower()).first()
     if tag:
@@ -245,7 +246,7 @@ def tag_ban(tag):
 
 @bp.route('/tag/<tag>/unban', methods=['POST'])
 @login_required
-@permission_required('manage users')
+@permission_required('manage blocklists')
 def tag_unban(tag):
     tag = Tag.query.filter(Tag.name == tag.lower()).first()
     if tag:

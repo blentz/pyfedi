@@ -37,6 +37,7 @@ from app.visibility import visible_to_clause
 from app.storefront import canonicalise_text, current_instance_id, current_storefront, domain_for_host, link_on, on_domain, storefront_link
 
 
+from app.permissions import may_ban
 def get_user(auth, data):
     if 'person_id' not in data and 'username' not in data:
         raise Exception('person_id or username required')
@@ -1095,17 +1096,18 @@ def post_user_ban(auth, data):
     purge_content = data['purge_content'] if 'purge_content' in data else False
     reason = data['reason'] if 'reason' in data else ''
 
-    if user_access('ban users', user.id) or user_access('manage users', user.id):
+    # D1177. `ban_user` does `db.session.get(User, person_id)` and then
+    # `to_ban.banned = True`, so an id that does not resolve was
+    # `AttributeError: 'NoneType' object has no attribute 'banned'`.
+    # Measured as PROBE bf5.
+    target = a_person(target_user_id)   # hidden here or nobody's: one answer (follow-up F6)
+    if user_access('ban users', user.id, on=target) or user_access('manage users', user.id, on=target):
         if user.id == target_user_id:
             raise Exception('cannot_ban_self')
 
-        # D1177. `ban_user` does `db.session.get(User, person_id)` and then
-        # `to_ban.banned = True`, so an id that does not resolve was
-        # `AttributeError: 'NoneType' object has no attribute 'banned'`.
-        # Measured as PROBE bf5.
-        target = a_person(target_user_id)   # hidden here or nobody's: one answer (follow-up F6)
-        # D1178: only an admin may ban an admin, and nobody may ban user 1.
-        if target.is_ban_exempt() or (target.is_admin() and not user.is_admin()):
+        # D1178: only an admin may ban an admin, and nobody may ban user 1. RB6: nor may a holder scoped to a domain
+        # ban anyone holding a role.
+        if target.is_ban_exempt() or not may_ban(user, target):
             raise Exception('cannot_ban_admin')
 
         shared_user.ban_user({'person_id': target_user_id,
@@ -1122,11 +1124,10 @@ def post_user_unban(auth, data):
     user = authorise_api_user(auth, return_type='model')
     target_user_id = data["person_id"]
 
-    if user_access('ban users', user.id) or user_access('manage users', user.id):
+    target = a_person(target_user_id)  # D1177's twin; hidden here or nobody's: one answer (follow-up F6)
+    if may_ban(user, target):
         if user.id == target_user_id:
             raise Exception('cannot_unban_self')
-
-        a_person(target_user_id)  # D1177's twin; hidden here or nobody's: one answer (follow-up F6)
 
         shared_user.unban_user({'person_id': target_user_id}, SRC_API, auth)
     else:

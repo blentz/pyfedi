@@ -46,7 +46,7 @@
             <p>
                 {{ _('See and change who moderates this community') }}
             </p>
-            {% if is_owner or (current_user.is_admin_or_staff() and community.is_local()) -%}
+            {% if is_owner or (user_access('moderate all communities', current_user.get_id(), on=community) and community.is_local()) -%}
                 <div class="col-12 text-right">
                     <a class="btn btn-primary" href="{{ url_for('community.community_find_moderator', community_id=community.id) }}">
                         {{ _('Add moderator') }}
@@ -79,7 +79,7 @@
                         </td>
                         <td>
                             <ul class="list-unstyled my-0">
-                                {% if (is_owner and not community.is_owner(moderator)) or (current_user.is_admin_or_staff() and not community.is_owner(moderator)) %}
+                                {% if (is_owner and not community.is_owner(moderator)) or (user_access('moderate all communities', current_user.get_id(), on=community) and not community.is_owner(moderator)) %}
                                     <li>
                                         <a class="no-underline confirm_first send_post" 
                                                 href="#"
@@ -89,7 +89,7 @@
                                         </a>
                                     </li>
                                 {% endif %}
-                                {% if not community.is_owner(moderator) and ((is_owner and moderator.id != current_user.id) or current_user.is_admin_or_staff()) %}
+                                {% if not community.is_owner(moderator) and ((is_owner and moderator.id != current_user.id) or user_access('moderate all communities', current_user.get_id(), on=community)) %}
                                     <li>
                                         <a class="no-underline confirm_first send_post"
                                                 href="#"
@@ -99,7 +99,7 @@
                                         </a>
                                     </li>
                                 {% endif %}
-                                {% if (current_user.is_admin_or_staff() and community.is_owner(moderator)) or (is_owner and moderator.id == current_user.id) %}
+                                {% if (user_access('moderate all communities', current_user.get_id(), on=community) and community.is_owner(moderator)) or (is_owner and moderator.id == current_user.id) %}
                                     <li>
                                         <a class="no-underline confirm_first send_post"
                                                 href="#"

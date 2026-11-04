@@ -9,7 +9,7 @@ and each is gated on a DIFFERENT permission:
 * blocked images -- `manage blocklists`
 * the media list -- `manage media`, but deleting from it needs
   `administer all users`
-* masquerade -- `change instance settings`, and it hands the caller another
+* masquerade -- `masquerade`, and it hands the caller another
   account's session
 
 Every route is exercised from both sides: by somebody holding the permission
@@ -512,7 +512,7 @@ class TestTheMediaList:
 
 class TestMasquerading:
     def test_an_admin_becomes_the_account_they_name(self, env):
-        login(env.client, an_admin(env, 'change instance settings'))
+        login(env.client, an_admin(env, 'masquerade'))
         response = env.client.get(f'/admin/masquerade/{env.member.id}')
         assert response.status_code == 302
         assert response.headers['Location'] == '/'
@@ -524,7 +524,7 @@ class TestMasquerading:
         account and the time -- never public, even on an instance whose modlog
         is, because only admins see non-public entries."""
         set_setting('public_modlog', True)
-        admin = an_admin(env, 'change instance settings')
+        admin = an_admin(env, 'masquerade')
         login(env.client, admin)
 
         env.client.get(f'/admin/masquerade/{env.member.id}')
@@ -536,7 +536,7 @@ class TestMasquerading:
         assert entry.public is False
 
     def test_a_refused_masquerade_records_nothing(self, env):
-        login(env.client, an_admin(env, 'change instance settings'))
+        login(env.client, an_admin(env, 'masquerade'))
         env.client.get('/admin/masquerade/999999')
         assert ModLog.query.filter_by(action='masquerade').count() == 0
 
@@ -545,7 +545,7 @@ class TestMasquerading:
         remote.ap_id = 'faraway@remote.test'
         remote.ap_profile_id = 'https://remote.test/u/faraway'
         db.session.commit()
-        admin = an_admin(env, 'change instance settings')
+        admin = an_admin(env, 'masquerade')
         login(env.client, admin)
         response = env.client.get(f'/admin/masquerade/{remote.id}')
         assert response.status_code == 200
@@ -553,7 +553,7 @@ class TestMasquerading:
         assert signed_in_as(env.client) == str(admin.id)
 
     def test_an_account_nobody_holds(self, env):
-        admin = an_admin(env, 'change instance settings')
+        admin = an_admin(env, 'masquerade')
         login(env.client, admin)
         response = env.client.get('/admin/masquerade/999999')
         assert response.data == b''

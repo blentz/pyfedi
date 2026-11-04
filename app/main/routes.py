@@ -74,6 +74,8 @@ import app as app_pkg
 from app.form_choices import select_choices
 
 
+from app.permissions import here, user_access
+from app.main.util import community_adding_rights
 @bp.route('/', methods=['HEAD', 'GET'])
 @bp.route('/home', methods=['GET'])
 @bp.route('/home/<sort>', methods=['GET'])
@@ -142,7 +144,7 @@ def home_live_posts(view_filter):
         recently_upvoted=recently_upvoted_posts(current_user.id),
         recently_downvoted=recently_downvoted_posts(current_user.id),
         communities_banned_from_list=communities_banned_from(current_user.id),
-        reported_posts=reported_posts(user_id, user_id in g.admin_ids), user_notes=user_notes(user_id),
+        reported_posts=reported_posts(user_id, user_access('administer all communities', user_id)), user_notes=user_notes(user_id),
         joined_communities=joined_or_modding_communities(user_id),
         moderated_community_ids=moderating_communities_ids(user_id), user_pronouns=user_pronouns()))
     response.headers['X-Live-Cursor'] = str(max(post_ids))
@@ -291,7 +293,7 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag, live=False
                                              etag=f"{sort}_{view_filter}_{storefront_host()}_{etag_stamp(g.site.last_active)}",
                                              instance_stickies=instance_stickies,
                                              content_filters=content_filters, sort=sort, view_filter=view_filter,
-                                             reported_posts=reported_posts(user_id, user_id in g.admin_ids),
+                                             reported_posts=reported_posts(user_id, user_access('administer all communities', user_id)),
                                              user_notes=user_notes(user_id),
                                              joined_communities=joined_or_modding_communities(user_id),
                                              moderated_community_ids=moderating_communities_ids(user_id),
@@ -313,7 +315,7 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag, live=False
                                description=shorten_string(html_to_text(branding.sidebar), 150),
                                content_filters=content_filters, sort=sort, view_filter=view_filter,
                                announcement=get_setting('announcement_html', get_setting('announcement')),
-                               reported_posts=reported_posts(user_id, user_id in g.admin_ids),
+                               reported_posts=reported_posts(user_id, user_access('administer all communities', user_id)),
                                user_notes=user_notes(user_id),
                                joined_communities=joined_or_modding_communities(user_id),
                                moderated_community_ids=moderating_communities_ids(user_id),
@@ -368,7 +370,8 @@ def add_post():
             kind = request.args.get('type')
             return redirect(url_for('community.add_post', actor=community.link(),
                                     type=kind if kind in POST_FORM_TYPES else None))
-    can_create = current_user.is_admin() or not g.site.community_creation_admin_only
+    can_create = user_access('create local communities', current_user.get_id(), on=here()) or \
+        not g.site.community_creation_admin_only
     return render_template('choose_community.html', title=_('Create post'), sections=post_destination_sections(),
                            can_create=can_create)
 
@@ -481,8 +484,6 @@ def list_communities():
         server_has_feeds = True
 
     create_admin_only = g.site.community_creation_admin_only
-
-    is_admin = current_user.is_authenticated and current_user.is_admin()
 
     # if filtering by public feed
     # get all the ids of the communities
@@ -618,7 +619,6 @@ def list_communities():
         "public_feeds": public_feeds,
         "hide_nsfw": hide_nsfw,
         "create_admin_only": create_admin_only,
-        "is_admin": is_admin,
         "discovered": discovered,
     })
 
@@ -680,7 +680,7 @@ def modlog():
         suspect_user_name = modlog_shown_name(suspect_user_name)
         if user:
             modlog_entries = modlog_entries.filter(ModLog.target_user_id == user.id)
-            if not (current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff())):
+            if not user_access('view modlog', current_user.get_id()):
                 # R3: an entry about content that is not open names no target user to this reader
                 modlog_entries = modlog_entries.filter(modlog_open_clause())
     if user_name:
@@ -699,7 +699,7 @@ def modlog():
         modlog_entries = modlog_entries.filter(ModLog.community_id == community_id)
 
     if current_user.is_authenticated:
-        if current_user.is_admin() or current_user.is_staff():
+        if user_access('view modlog', current_user.get_id()):
             is_admin = True
             modlog_entries = modlog_entries.order_by(desc(ModLog.created_at))
             can_see_names = True
@@ -1032,8 +1032,7 @@ def communities_menu():
     return render_template('communities_menu.html',
                            moderating_communities=shown_here(moderating_communities(current_user.get_id())),
                            joined_communities=shown_here(joined_communities(current_user.get_id())),
-                           is_admin=current_user.is_authenticated and current_user.is_admin(),
-                           is_staff=current_user.is_authenticated and current_user.is_staff(),
+                           **community_adding_rights(),
                            default_user_add_remote=get_setting("allow_default_user_add_remote_community", True),
                            favorite_communities=favorites
                            )

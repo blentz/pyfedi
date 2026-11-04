@@ -22,7 +22,7 @@ from app import db
 from app.models import (Community, CommunityMember, Language, Notification,
                         Post, PostReply, PostReplyVote, Report, Role,
                         RolePermission, Site, User, role_grant)
-from tests.factories import (make_community_member, make_post_reply,
+from tests.factories import (staff_role, make_community_member, make_post_reply,
                              make_post_reply_vote, make_user)
 
 
@@ -709,7 +709,7 @@ def test_a_staff_member_may_distinguish_their_own(app, env):
     from app.api.alpha.utils.reply import post_reply_distinguish
 
     author, stranger, community, post, reply, baseline = env
-    role = Role(name=ROLE_STAFF_NAME)
+    role = staff_role()
     db.session.add(role)
     db.session.commit()
     db.session.execute(role_grant.insert().values(user_id=author.id,

@@ -65,7 +65,7 @@
                               <a class="w-100 btn btn-primary" role="button" aria-label="{{ _('Block') }}" hx-post="/d/{{ domain.id }}/block" hx-trigger="click throttle:1s"tabindex="0">{{ _('Block') }}</a>
                             </div>
                         {% endif %}
-                        {% if user_access('ban users', current_user.id) or user_access('manage users', current_user.id) %}
+                        {% if user_access('manage blocklists', current_user.id) %}
                             {% if domain.banned %}
                                 <div class="col-8">
                                     <a class="w-100 btn btn-primary confirm_first send_post" href="#" data-url="/d/{{ domain.id }}/unban">{{ _('Unban') }}</a>

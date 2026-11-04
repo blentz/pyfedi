@@ -27,7 +27,7 @@ import pytest
 from app import db
 from app.models import (Community, CommunityBan, CommunityBlock,
                         CommunityMember, User)
-from tests.factories import (make_community, make_community_member,
+from tests.factories import (staff_role, make_community, make_community_member,
                              make_instance, make_user)
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -734,7 +734,7 @@ def _staff(name='staffer'):
     db.session.commit()
     role = Role.query.filter_by(name='Staff').first()
     if role is None:
-        role = Role(name='Staff')
+        role = staff_role()
         db.session.add(role)
         db.session.commit()
     db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))

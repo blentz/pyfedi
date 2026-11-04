@@ -150,7 +150,7 @@ from app import db
 from app.constants import SRC_API, SRC_WEB
 from app.models import Language, PostReply, PostReplyValidationError
 from app.shared.reply import edit_reply, make_reply
-from tests.factories import (
+from tests.factories import (staff_role, 
     bearer, make_community, make_community_member, make_instance, make_post,
     make_post_reply, make_site, make_user, web_ctx,
 )
@@ -641,7 +641,7 @@ class TestEditReply:
         from app.models import Role, role_grant
         _burn_a_seed()
         s = _seed_for_reply()
-        role = Role(name='Staff')
+        role = staff_role()
         db.session.add(role)
         db.session.commit()
         db.session.execute(role_grant.insert().values(user_id=s.author.id,

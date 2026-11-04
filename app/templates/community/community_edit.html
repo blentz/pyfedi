@@ -101,7 +101,7 @@
             </div>
             <div class="row">
                 <div class="col-auto pt-4">
-                {% if community.is_local() and (community.is_owner() or current_user.is_admin()) %}
+                {% if community.is_local() and (community.is_owner() or user_access('administer all communities', current_user.get_id(), on=community)) %}
                     <p><a class="btn btn-primary btn-warning confirm_first send_post" href="#" data-url="{{ url_for('community.community_delete', community_id=community.id) }}" rel="nofollow">{{ _('Delete community') }}</a></p>
                 {% endif %}
                 </div>

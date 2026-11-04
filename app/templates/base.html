@@ -267,7 +267,7 @@
                                     {% endif -%}
                                 </ul>
                             </li>
-                            {% if current_user.is_admin_or_staff() %}
+                            {% if holds_any_grant(current_user.get_id()) %}
                                 <li class="nav-item dropdown{% if active_parent == 'admin' %} active{% endif %} admin_menu_parent">
                                     <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="/admin/" aria-haspopup="true" aria-expanded="false">{{ _('Admin') }}</a>
                                     <ul class="dropdown-menu text-end text-lg-start">

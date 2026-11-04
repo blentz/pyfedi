@@ -22,7 +22,7 @@
     <span class="render_username" xmlns="http://www.w3.org/1999/xhtml">
 {% endif -%}
     {% if user.deleted -%}
-        {% if current_user and current_user.is_authenticated and current_user.get_id() in admin_ids -%}
+        {% if current_user and user_access('administer all users', current_user.get_id(), on=user) -%}
             <a href="/u/{{ user.link() }}" title="{{ user.ap_id if user.ap_id != none else user.user_name }}">
                 [deleted]
             </a>

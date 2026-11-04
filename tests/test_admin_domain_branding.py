@@ -28,7 +28,7 @@ from app.models import DomainBranding, Language, Site, SiteDomain
 from app.storefront import clear_domain_cache, domain_for_host
 from app.utils import get_setting, set_setting
 from tests.conftest import forget_login
-from tests.factories import grant_permission, make_instance, make_user
+from tests.factories import grant_permissions, INSTANCE_SETTINGS, grant_permission, make_instance, make_user
 from tests.test_admin_site_profile import HOSTILE_SVG, SVG, csrf, login
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -87,7 +87,7 @@ def admin(app, domains):
     user = make_user(domains['instance'], 'brandadmin', local=True)
     user.verified = True
     db.session.commit()
-    grant_permission(user, 'change instance settings')
+    grant_permissions(user, *INSTANCE_SETTINGS)
     client = app.test_client()
     login(client, user)
     return client, csrf(app, client)

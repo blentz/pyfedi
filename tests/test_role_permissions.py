@@ -93,13 +93,10 @@ def test_the_permission_vocabulary_matches_the_codebase():
         f'now checked, so take them off NOT_YET_CHECKED: {sorted(NOT_YET_CHECKED - unused)}')
 
 
-# RBAC step 4 put the whole catalogue on the page; step 5 converts the call sites that check these, one area at a
-# time, and takes each off this list as it does. Step 6 asserts the list is empty.
+# RBAC step 4 put the whole catalogue on the page and step 5 converted the call sites that check it. What is left is
+# checked by a later step.
 NOT_YET_CHECKED = {
-    'masquerade', 'send newsletter', 'manage domains', 'edit domain branding', 'view user details',
-    'generate referral codes', 'create local communities', 'add remote communities', 'administer all communities',
-    'feature instance-wide', 'view modlog', 'read private messages', 'manage instance feeds',
-    'exempt from upload limits', 'exempt from account limits', 'shown as admin',
+    'shown as admin',   # step 10 (RB12)
 }
 
 

@@ -23,6 +23,7 @@ from app.utils import get_request, get_task_session, patch_db_session, \
 from app.local_only import hidden_here_sql, without_local_only, without_local_only_actors
 from app.visibility import visible_to_clause, visible_to_sql
 
+from app.permissions import user_access
 import httpx
 import app as app_pkg
 
@@ -270,7 +271,7 @@ def _get_user_posts(user, post_page):
     base_query = without_local_only(Post.query.filter_by(user_id=user.id).filter(visible_to_clause(Post, viewer_id)),
                                     Post)
 
-    if current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff()):
+    if current_user.is_authenticated and user_access('view user details', current_user.id, on=user):
         # Admins see everything
         query = base_query.filter(_not_in_ids(Post.community_id, community_membership_private(user.id))).order_by(
             desc(Post.posted_at))
@@ -310,7 +311,7 @@ def _get_user_post_replies(user, replies_page):
     base_query = without_local_only(PostReply.query.filter_by(user_id=user.id).filter(
         visible_to_clause(PostReply, viewer_id)), PostReply)
 
-    if current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff()):
+    if current_user.is_authenticated and user_access('view user details', current_user.id, on=user):
         # Admins see everything
         query = base_query.filter(_not_in_ids(PostReply.community_id, community_membership_private(user.id))).order_by(
             desc(PostReply.posted_at))
@@ -352,7 +353,7 @@ def _get_user_posts_and_replies(user, page):
     private = ','.join(intlist_to_strlist(community_membership_private(user_id)))
     # no role exempts the viewer from the audience of a post or reply (D19)
     viewer_id = current_user.get_id() or None
-    if current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff()):
+    if current_user.is_authenticated and user_access('view user details', current_user.id, on=user):
         # Admins see everything
         post_select = f"SELECT id, posted_at, 'post' AS type FROM post WHERE user_id = {user_id}"
         reply_select = f"SELECT id, posted_at, 'reply' AS type FROM post_reply WHERE user_id = {user_id}"
@@ -412,7 +413,7 @@ def _get_user_moderates(user):
         order_by(Community.name)
 
     # Hide private mod communities unless user is admin or viewing their own profile
-    if current_user.is_anonymous or (user.id != current_user.id and not current_user.is_admin()):
+    if current_user.is_anonymous or (user.id != current_user.id and not user_access('administer all users', current_user.id, on=user)):
         moderates = moderates.filter(Community.private_mods == False)
 
     return without_local_only_actors(moderates, Community).all()   # a logged-out visitor: no local-only community
@@ -421,7 +422,7 @@ def _get_user_moderates(user):
 def _get_user_same_ip(user):
     """Get users that have the same IP address as this user"""
 
-    if current_user.is_anonymous or not current_user.is_admin_or_staff():
+    if current_user.is_anonymous or not user_access('view user details', current_user.id, on=user):
         return []       # the template gates this too; the gate belongs here as well
     if not has_real_ip(user):
         return []
@@ -440,7 +441,8 @@ def _get_user_same_name(user):
 
 def _get_user_upvoted_posts(user):
     """Get posts upvoted by user (only for user themselves or admins)."""
-    if current_user.is_authenticated and (user.id == current_user.get_id() or current_user.is_admin()):
+    if current_user.is_authenticated and (user.id == current_user.get_id() or
+                                          user_access('administer all users', current_user.id, on=user)):
         sql = """
             SELECT p.id as post_id, pv.created_at as vote_created_at
             FROM "post" p
@@ -474,7 +476,7 @@ def _get_user_upvoted_posts(user):
 def _get_user_subscribed_communities(user):
     """Get communities subscribed to by user."""
     if current_user.is_authenticated and (user.id == current_user.get_id()
-                                          or current_user.is_staff() or current_user.is_admin()
+                                          or user_access('view user details', current_user.id, on=user)
                                           or user.show_subscribed_communities):
         subscribed = Community.query.filter_by(banned=False).join(CommunityMember).filter(CommunityMember.user_id == user.id)
         return without_local_only_actors(subscribed, Community).order_by(Community.name).all()   # follow-up F6

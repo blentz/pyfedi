@@ -14,10 +14,10 @@ or to a role they hold, bumps (RB10), so a revocation is seen on the next reques
 """
 from typing import NamedTuple
 
+from flask import g
 from sqlalchemy import text
 
 from app import cache, db
-from app.models import Community, Feed, Post, PostReply, Report, SiteDomain, User, UserRegistration
 from app.permission_cache import permission_version, permissions_changed  # noqa: F401 (re-exported)
 
 
@@ -114,26 +114,39 @@ def is_scopable(permission: str) -> bool:
     return permission in SCOPABLE_PERMISSIONS
 
 
+def _domain_of(table: str, row_id) -> int | None:
+    if not row_id:
+        return None
+    return db.session.execute(text(f'SELECT site_domain_id FROM "{table}" WHERE id = :id'), {'id': row_id}).scalar()
+
+
 def home_domain_id(on) -> int | None:
     """The `site_domain.id` an object belongs to, or None when it belongs to no domain of ours: remote rows, and the
-    kinds of object that are the whole instance's (conversations, instances, topics, link domains, tags, files)."""
-    if isinstance(on, SiteDomain):
+    kinds of object that are the whole instance's (conversations, instances, topics, link domains, tags, files).
+
+    By table name, not by class, so that app.models may import this module."""
+    if type(on).__name__ == 'DomainInfo':   # app.storefront's view of a site_domain row (None: the default's own)
         return on.id
-    if isinstance(on, (Community, User, Feed)):
+    table = getattr(on, '__tablename__', None)
+    if table == 'site_domain':
+        return on.id
+    if table in ('community', 'user', 'feed'):
         return on.site_domain_id
-    if isinstance(on, (Post, PostReply)):
-        community = db.session.get(Community, on.community_id) if on.community_id else None
-        return community.site_domain_id if community else None
-    if isinstance(on, UserRegistration):
-        user = db.session.get(User, on.user_id) if on.user_id else None
-        return user.site_domain_id if user else None
-    if isinstance(on, Report):
+    if table in ('post', 'post_reply'):
+        return _domain_of('community', on.community_id)
+    if table == 'user_registration':
+        return _domain_of('user', on.user_id)
+    if table == 'report':
         if on.type == REPORT_ON_USER:
-            user = db.session.get(User, on.suspect_user_id) if on.suspect_user_id else None
-            return user.site_domain_id if user else None
-        community = db.session.get(Community, on.in_community_id) if on.in_community_id else None
-        return community.site_domain_id if community else None
+            return _domain_of('user', on.suspect_user_id)
+        return _domain_of('community', on.in_community_id)
     return None
+
+
+def here():
+    """The domain this request is served on: what a check asks about when the object acted on is the domain itself,
+    such as where a new community will be homed."""
+    return getattr(g, 'storefront', None)
 
 
 def user_access(permission: str, user_id: int, on=None, anywhere: bool = False) -> bool:
@@ -174,23 +187,35 @@ def _access(permission: str, user_id: int, scope, version: int) -> bool:
 
 
 def holds_any_grant(user_id: int) -> bool:
-    """Whether a user holds any unexpired grant, of any role, on any scope -- or is user 1."""
+    """Whether a user holds an unexpired grant, on any scope, of a role that confers something -- the built-in Admin,
+    or a role with at least one permission -- or is user 1. A role with no permissions makes nobody privileged."""
+    if not user_id:
+        return False
     if user_id == 1:
         return True
     return db.session.execute(text(
-        'SELECT 1 FROM role_grant WHERE user_id = :user_id '
-        "AND (expires_at IS NULL OR expires_at > timezone('utc', now())) LIMIT 1"),
+        'SELECT 1 FROM role_grant rg JOIN role r ON r.id = rg.role_id WHERE rg.user_id = :user_id '
+        "AND (rg.expires_at IS NULL OR rg.expires_at > timezone('utc', now())) "
+        'AND (r.built_in OR EXISTS (SELECT 1 FROM role_permission rp WHERE rp.role_id = r.id)) LIMIT 1'),
         {'user_id': user_id}).first() is not None
 
 
-def may_act_on_user(actor: User, target: User, permission: str) -> bool:
+def may_act_on_user(actor, target, permission: str) -> bool:
     """RB6. The actor holds `permission` on the target's home domain; and an actor who holds it only through a grant
     on a domain may not act on anyone who holds any grant at all, nor on user 1 -- only an instance-wide holder may.
-    A remote target belongs to no domain of ours, so only an instance-wide holder may act on one (RB4)."""
+    A remote target belongs to no domain of ours, so only an instance-wide holder may act on one (RB4). Nobody but an
+    Admin acts on an Admin (D1178)."""
     if actor is None or target is None or not actor.id:
+        return False
+    if target.is_admin() and not actor.is_admin():
         return False
     if user_access(permission, actor.id):   # instance-wide, the built-in Admin, or user 1
         return True
     if not user_access(permission, actor.id, on=target):
         return False
     return not holds_any_grant(target.id)
+
+
+def may_ban(actor, target) -> bool:
+    """An instance ban: `ban users`, or `manage users`, which may purge and so may ban (RB6 through may_act_on_user)."""
+    return may_act_on_user(actor, target, 'ban users') or may_act_on_user(actor, target, 'manage users')

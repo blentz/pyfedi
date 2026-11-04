@@ -996,10 +996,8 @@ def test_deleting_an_account_with_role_permissions_says_so(app, env):
     delete two lines above. The flags are now read first."""
     client, founder, viewer, target = env
     grant_permission(viewer, 'manage users')
-    grant_permission(target, 'change instance settings')
-    target.roles[0].built_in = True   # the built-in Admin role (RB16)
+    grant_permission(target, 'change instance settings')   # a role holder; not an Admin, whom only an Admin deletes
     db.session.commit()
-    assert target.is_admin()
     token = csrf(app, client)
 
     with patch('app.user.routes.flash') as flashed:

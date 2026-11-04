@@ -33,6 +33,7 @@ from app.community.util import search_for_community
 from app.feed.util import actor_to_feed
 
 
+from app.permissions import user_access
 def join_feed(actor, user_id, src=SRC_WEB):
     member_id = join_request_id = None
     follow_sent = False
@@ -334,7 +335,7 @@ def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_fi
     # forwarded the flag verbatim (app/api/alpha/utils/feed.py:157). One predicate,
     # two policies -- the API caller is told it asked for something it may not have,
     # while a web POST carrying a field the form never offered is simply ignored.
-    if is_instance_feed and not user.is_admin():
+    if is_instance_feed and not user_access('manage instance feeds', user.id):
         if src == SRC_API:
             raise Exception('is_instance_feed requires an admin account')
         is_instance_feed = False
@@ -455,7 +456,7 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
     # in the same session persisted the rejected edit. app/api/alpha/utils/
     # feed.py:202's put_feed has no ownership check of its own, so this is the
     # only gate on the API path. It runs for from_scratch too (D694).
-    if not (feed.user_id == user.id or user.is_admin()):
+    if not (feed.user_id == user.id or user_access('manage instance feeds', user.id)):
         raise Exception('incorrect_login')
 
     # Resolve the parent here too, before any field is assigned to the live feed: a refusal raises without rolling
@@ -580,7 +581,7 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
         feed.subscriptions_count = db.session.query(FeedMember).filter(
             FeedMember.feed_id == feed.id).count()
     feed.public = public
-    if user.is_admin():
+    if user_access('manage instance feeds', user.id):
         feed.is_instance_feed = is_instance_feed
         cache.delete_memoized(menu_instance_feeds)
     db.session.add(feed)

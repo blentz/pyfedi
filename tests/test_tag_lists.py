@@ -75,7 +75,7 @@ def _moderator(user):
     `trustworthy()` does not refuse: reputation below 100 on a recently created
     account is what tags_blocked_list turns into a 404.
     """
-    grant_permission(user, 'manage users')
+    grant_permission(user, 'manage blocklists')
     user.reputation = 100
     db.session.commit()
     return user

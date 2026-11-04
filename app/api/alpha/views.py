@@ -37,6 +37,7 @@ from app.feed_domains import shown_community_count, shown_feed_communities
 from app.visibility import can_view, visible_to_sql
 
 
+from app.permissions import user_access
 # 'stub' param: set to True to exclude optional fields
 
 
@@ -87,7 +88,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
                    'language_variants': post.language_variants})
         if post.body:
             v1['body'] = post.body
-        if post.deleted and (user_id is None or user_id not in g.admin_ids):
+        if post.deleted and not user_access('administer all communities', user_id, on=post):
             v1['body'] = ''
             v1['quote_ap_id'] = None
             v1['language_variants'] = None
@@ -1271,8 +1272,7 @@ def feed_view(feed: Feed | int, variant: int, user_id, subscribed, include_commu
             if not user_id:
                 raise Exception("insufficient permissions")
             if not user_id == feed.user_id:
-                user = db.session.get(User, user_id)
-                if not user.is_admin():
+                if not user_access('manage instance feeds', user_id):
                     raise Exception("insufficient permissions")
 
         # This used to be `public_url() + "/" + feed.name.rsplit("/", 1)[1]`

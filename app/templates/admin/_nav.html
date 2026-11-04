@@ -4,6 +4,8 @@
     {% if user_access('change instance settings', current_user.id) %}
         <a href="{{ url_for('admin.admin_site') }}">{{ _('Site profile') }}</a> |
         <a href="{{ url_for('admin.admin_misc') }}">{{ _('Misc settings') }}</a> |
+    {% endif %}
+    {% if user_access('manage domains', current_user.id) %}
         <a href="{{ url_for('admin.admin_domains') }}">{{ _('Domains') }}</a> |
     {% endif %}
     {% if user_access('administer communities pages', current_user.id) %}
@@ -33,8 +35,10 @@
         <a href="{{ url_for('admin.admin_federation_discovery') }}">{{ _('Discovery') }}</a> |
         <a href="{{ url_for('admin.admin_federation_relays') }}">{{ _('Relays') }}</a> |
         <a href="{{ url_for('admin.admin_instances') }}">{{ _('Instances') }}</a> |
-        <a href="{{ url_for('admin.newsletter') }}">{{ _('Newsletter') }}</a> |
         <a href="{{ url_for('admin.admin_activities') }}">{{ _('Activities') }}</a> |
+    {% endif %}
+    {% if user_access('send newsletter', current_user.id) %}
+        <a href="{{ url_for('admin.newsletter') }}">{{ _('Newsletter') }}</a> |
     {% endif %}
     {% if current_user.is_admin() %}
         <a href="{{ url_for('admin.admin_permissions') }}">{{ _('Permissions') }}</a> |

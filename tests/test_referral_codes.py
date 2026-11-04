@@ -11,7 +11,7 @@ from app.referral import (REFERRAL_MODE, derive_code, generate_code, may_generat
                           referral_link, referral_namespace, referral_qr_svg, referrer_for, remaining_signups)
 from app.storefront import clear_domain_cache, default_domain, domain_by_id, registration_mode_on
 from app.utils import get_setting, set_setting
-from tests.factories import make_instance, make_user
+from tests.factories import staff_role, make_instance, make_user
 from tests.test_admin_routes_entry import _language, _valid_misc_payload, csrf, login
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -29,7 +29,7 @@ def _mode(mode=REFERRAL_MODE):
 
 
 def _role(user, name, weight):
-    role = Role.query.filter_by(name=name).first()
+    role = staff_role() if name == 'Staff' else Role.query.filter_by(name=name).first()
     if role is None:
         role = Role(name=name, built_in=name == 'Admin')   # Admin is the built-in role (RB16)
         db.session.add(role)

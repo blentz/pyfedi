@@ -7,7 +7,7 @@
             </a>
         </li>
     {% endif -%}
-    {% if post.user_id == current_user.id or post.community.is_moderator() or post.community.is_owner() or current_user.get_id() in admin_ids or user_access('moderate all communities', current_user.get_id()) -%}
+    {% if post.user_id == current_user.id or post.community.is_moderator() or post.community.is_owner() or user_access('moderate all communities', current_user.get_id(), on=post) -%}
         {% if post.deleted -%}
             <li>
                 <a href="#" data-url="{{ url_for('post.post_restore', post_id=post.id) }}" style="white-space: normal" class="dropdown-item no-underline confirm_first send_post" rel="nofollow noindex">
@@ -28,7 +28,7 @@
                     {{ _('Delete') }}
                 </a>
             </li>
-            {% if post.visibility in ('public', 'unlisted') and (post.user_id == current_user.id or post.community.is_moderator() or post.community.is_owner() or (post.community.is_local() and current_user.get_id() in admin_ids) or user_access('moderate all communities', current_user.get_id())) -%}
+            {% if post.visibility in ('public', 'unlisted') and (post.user_id == current_user.id or post.community.is_moderator() or post.community.is_owner() or (post.community.is_local() and user_access('moderate all communities', current_user.get_id(), on=post))) -%}
                 <li>
                     <a href="{{ url_for('post.post_move', post_id=post.id) }}" style="white-space: normal" class="dropdown-item no-underline" rel="nofollow noindex">
                         <span class="fe fe-move"></span>
@@ -46,7 +46,7 @@
             </a>
         </li>
     {% endif -%}
-    {% if post.community.is_moderator() or post.community.is_owner() or current_user.get_id() in admin_ids or user_access('moderate all communities', current_user.get_id()) -%}
+    {% if post.community.is_moderator() or post.community.is_owner() or user_access('moderate all communities', current_user.get_id(), on=post) -%}
         <li>
             <a href="{{ url_for('post.post_set_flair', post_id=post.id) }}" style="white-space: normal" class="dropdown-item no-underline" rel="nofollow noindex">
                 <span class="fe fe-label"></span>
@@ -72,7 +72,7 @@
                 </a>
             </li>
         {% endif -%}
-        {% if current_user.get_id() in admin_ids -%}
+        {% if user_access('feature instance-wide', current_user.get_id()) -%}
             {% if post.instance_sticky -%}
                 <li>
                     <a href="#" data-url="{{ url_for('post.post_instance_sticky', post_id=post.id, mode='no') }}" style="white-space: normal" class="dropdown-item no-underline send_post" rel="nofollow noindex">
@@ -184,7 +184,7 @@
                 {{ _('Block community %(community_name)s', community_name=post.community.display_name()) }}
             </a>
         </li>
-        {% if post.community.is_moderator() or current_user.get_id() in admin_ids -%}
+        {% if post.community.is_moderator() or user_access('moderate all communities', current_user.get_id(), on=post) -%}
             <li>
                 <a href='#' data-url="{{ url_for('community.community_ban_user', community_id=post.community.id, user_id=post.author.id) }}" style="white-space: normal" class="send_post confirm_first dropdown-item no-underline">
                     <span class="fe fe-block red"></span>
@@ -211,7 +211,7 @@
             </li>
         {% endif -%}
     {% endif -%}
-    {% if post.type == POST_TYPE_IMAGE and post.image.hash and (current_user.get_id() in admin_ids or current_user.is_staff()) -%}
+    {% if post.type == POST_TYPE_IMAGE and post.image.hash and user_access('manage blocklists', current_user.get_id()) -%}
         <li>
             <a href="{{ url_for('post.post_block_image', post_id=post.id) }}" style="white-space: normal" class="dropdown-item no-underline">
                 <span class="fe fe-block red"></span>
@@ -263,7 +263,7 @@
     </a>
 </li>
 {% endif -%}
-{% if current_user.is_authenticated and (current_user.get_id() in admin_ids or current_user.is_staff() or post.community.is_moderator() or user_access('moderate all communities', current_user.get_id())) -%}
+{% if current_user.is_authenticated and (post.community.is_moderator() or user_access('moderate all communities', current_user.get_id(), on=post)) -%}
     <li>
         <a href="{{ url_for('post.post_view_voting_activity', post_id=post.id) }}" style="white-space: normal" class="dropdown-item no-underline" rel="nofollow noindex">
             <span class="fe fe-sticky-left"></span>

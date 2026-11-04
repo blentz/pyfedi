@@ -14,9 +14,9 @@ import pytest
 
 from app import db
 from app.constants import POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING
-from app.models import Language, Post, PostReply, Site
+from app.models import Language, Post, PostReply, Role, Site, SiteDomain
 from tests.conftest import forget_login
-from tests.factories import COMMUNITY_ADMINISTRATION, grant_permissions, make_community, make_instance, make_post, make_post_reply, make_user
+from tests.factories import COMMUNITY_ADMINISTRATION, grant_permissions, grant_role, make_community, make_instance, make_post, make_post_reply, make_user
 from tests.test_per_domain_html_routes import Visitor
 from tests.two_domains import FIRST
 
@@ -71,15 +71,23 @@ def test_a_post_not_held_for_review_is_not_published_again(app, held, state):
     assert federated == [] and notified == []
 
 
-def test_a_permission_holder_with_no_say_over_the_post_is_refused(app, held, monkeypatch):
-    """The permission lets the route run; the post's community still decides. v1.8.10 answered None, a 500."""
+def test_a_permission_holder_with_no_say_over_the_post_is_refused(app, held):
+    """The permission is what lets the route run, and on the post's own domain. A holder of it on another domain only
+    has no say over a post homed elsewhere. v1.8.10 answered None, a 500."""
     admin, author, community, post, federated, notified = held
-    monkeypatch.setattr('app.models.User.is_admin', lambda self: False)
-    monkeypatch.setattr('app.models.User.is_staff', lambda self: False)
+    elsewhere = SiteDomain(domain='elsewhere.approval.example', scheme='https', federates=False)
+    shop = SiteDomain(domain='shop.approval.example', scheme='https', federates=False)
+    db.session.add_all([elsewhere, shop])
+    db.session.commit()
+    community.site_domain_id = shop.id
+    holder = make_user(author.instance, 'elsewhereadmin', local=True)   # not `admin`, who is user 1 and passes all
+    holder.private_key = 'a key'
+    db.session.commit()
+    grant_role(holder, Role.query.filter_by(name='role-moderate all communities').one(), site_domain_id=elsewhere.id)
 
-    response = Visitor(app, admin, FIRST).post(f'/post/{post.id}/approve')
+    response = Visitor(app, holder, FIRST).post(f'/post/{post.id}/approve')
 
-    assert response.status_code == 403
+    assert response.status_code == 302 and '/auth/permission_denied' in response.location
     db.session.expire_all()
     assert db.session.get(Post, post.id).status == POST_STATUS_REVIEWING and federated == []
 

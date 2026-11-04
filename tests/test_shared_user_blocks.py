@@ -52,7 +52,7 @@ from app.constants import NOTIF_USER, SRC_API, SRC_WEB
 from app.models import (BotChallenge, ChatMessage, Conversation,
                          NotificationSubscription, Role, UserBlock, role_grant)
 from app.shared.user import block_another_user, bot_challenge_user, unblock_another_user
-from tests.factories import admin_role, bearer, grant_role, make_instance, make_user, web_ctx
+from tests.factories import staff_role, admin_role, bearer, grant_role, make_instance, make_user, web_ctx
 
 
 def _seed_blockers():
@@ -75,8 +75,9 @@ def _seed_blockers():
 
 
 def _give_role(user, name):
-    """Grant `user` the built-in Admin role ('Admin') or a role of this name (Staff: `is_staff()` reads the name)."""
-    grant_role(user, admin_role() if name == 'Admin' else Role.query.filter_by(name=name).first() or _new_role(name))
+    """Grant `user` the built-in Admin role ('Admin'), the seeded Staff role, or a role of this name holding nothing."""
+    grant_role(user, admin_role() if name == 'Admin' else staff_role() if name == 'Staff' else
+               Role.query.filter_by(name=name).first() or _new_role(name))
 
 
 def _new_role(name):

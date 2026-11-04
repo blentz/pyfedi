@@ -73,6 +73,7 @@ from app.utils import canonical_host
 import app as app_pkg
 from app.form_choices import select_choices
 
+from app.permissions import holds_any_grant, may_act_on_user, may_ban
 # D1042. A settings export is a few kilobytes; this is two orders of magnitude
 # above the largest real one, and the application sets no MAX_CONTENT_LENGTH of
 # its own, so without a limit here the upload size is whatever the client sends.
@@ -257,8 +258,8 @@ def show_profile(user):
                            post_next_url=post_next_url, post_prev_url=post_prev_url,
                            replies_next_url=replies_next_url, replies_prev_url=replies_prev_url,
                            noindex=not user.indexable, show_post_community=True, hide_vote_buttons=True,
-                           show_deleted=current_user.is_authenticated and current_user.is_admin_or_staff(),
-                           reported_posts=reported_posts(current_user.get_id(), current_user.get_id() in g.admin_ids),
+                           show_deleted=user_access('view user details', current_user.get_id(), on=user),
+                           reported_posts=reported_posts(current_user.get_id(), user_access('administer all communities', current_user.get_id())),
                            moderated_community_ids=moderating_communities_ids(current_user.get_id()),
                            rss_feed=f"{storefront_url()}/u/{user.link()}/feed" if user.post_count > 0 else None,
                            rss_feed_name=f"{user.display_name()} on {current_branding().name}" if user.post_count > 0 else None,
@@ -980,19 +981,20 @@ def user_notification(user_id: int):
 @login_required
 def ban_profile(actor):
     form = BanUserForm()
-    if user_access('ban users', current_user.id) or user_access('manage users', current_user.id):
-        actor = actor.strip()
-        user = user_for_actor(actor)
-        if user is None:
-            abort(404)
-
+    actor = actor.strip()
+    user = user_for_actor(actor)
+    if user is None:
+        abort(404)
+    if user_access('ban users', current_user.id, on=user) or user_access('manage users', current_user.id, on=user):
         if user.id == current_user.id:
             flash(_('You cannot ban yourself.'), 'error')
             goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
             return redirect(goto)
-        # D1178: only an admin may ban an admin, and nobody may ban user 1.
-        elif user.is_ban_exempt() or (user.is_admin() and not current_user.is_admin()):
-            flash(_('You cannot ban an administrator.'), 'error')
+        # D1178: only an admin may ban an admin, and nobody may ban user 1. RB6: a holder scoped to a domain bans no
+        # one who holds a role.
+        elif user.is_ban_exempt() or not may_ban(current_user, user):
+            flash(_('You cannot ban an administrator.') if user.is_admin() or user.is_ban_exempt()
+                  else _('You cannot ban someone who holds a role.'), 'error')
             goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
             return redirect(goto)
         else:
@@ -1004,7 +1006,7 @@ def ban_profile(actor):
 
             form.ip_address.data = True
             form.purge.data = True
-            if not user_access('manage users', current_user.id):
+            if not may_act_on_user(current_user, user, 'manage users'):
                 form.purge.render_kw = {'disabled': True}
                 form.purge.data = False
             if not has_real_ip(user):
@@ -1019,12 +1021,11 @@ def ban_profile(actor):
 @bp.route('/u/<actor>/unban', methods=['POST'])
 @login_required
 def unban_profile(actor):
-    if user_access('ban users', current_user.id):
-        actor = actor.strip()
-        user = user_for_actor(actor, allow_banned=True)
-        if user is None:
-            abort(404)
-
+    actor = actor.strip()
+    user = user_for_actor(actor, allow_banned=True)
+    if user is None:
+        abort(404)
+    if may_act_on_user(current_user, user, 'ban users'):
         if user.id == current_user.id:
             flash(_('You cannot unban yourself.'), 'error')
         else:
@@ -1259,11 +1260,11 @@ def report_profile(actor):
 @bp.route('/u/<actor>/delete', methods=['POST'])
 @login_required
 def delete_profile(actor):
-    if user_access('manage users', current_user.id):
-        actor = actor.strip()
-        user = user_for_actor(actor)
-        if user is None:
-            abort(404)
+    actor = actor.strip()
+    user = user_for_actor(actor)
+    if user is None:
+        abort(404)
+    if may_act_on_user(current_user, user, 'manage users'):
         if user.id == current_user.id:
             flash(_('You cannot delete yourself.'), 'error')
         else:
@@ -1277,7 +1278,7 @@ def delete_profile(actor):
             # the warning below was dead code for every account it was written
             # for. (`is_admin()` also returns True for user id 1, and user 1
             # cannot be deleted, so that arm was unreachable too.)
-            was_privileged = user.is_admin() or user.is_staff()
+            was_privileged = holds_any_grant(user.id)
             was_instance_admin = user.is_instance_admin()
 
             user.banned = True

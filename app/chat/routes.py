@@ -16,6 +16,7 @@ from app.shared.tasks import task_selector
 from app.utils import render_template, login_required, trustworthy_account_required
 
 
+from app.permissions import user_access
 @bp.route('/chat', methods=['GET', 'POST'])
 @bp.route('/chat/<int:conversation_id>', methods=['GET', 'POST'])
 @login_required
@@ -53,7 +54,7 @@ def chat_home(conversation_id=None):
         else:
             conversation = db.session.get(Conversation, conversation_id) or abort(404)
             conversation.read = True
-            if not current_user.is_admin() and not conversation.is_member(current_user):
+            if not user_access('read private messages', current_user.get_id()) and not conversation.is_member(current_user):
                 abort(400)
             if conversations:
                 messages = conversation.messages.order_by(ChatMessage.created_at).all()
@@ -151,7 +152,8 @@ def empty():
 @login_required
 def ban_from_mod(user_id, community_id):
     community = db.session.get(Community, community_id) or abort(404)
-    if not (community.is_moderator() or community.is_owner() or current_user.is_admin()):
+    if not (community.is_moderator() or community.is_owner() or
+            user_access('administer all communities', current_user.get_id(), on=community)):
         abort(401)
     banned_user = db.session.get(User, user_id) or abort(404)
     active_ban = CommunityBan.query.filter_by(user_id=user_id, community_id=community_id).order_by(
@@ -171,7 +173,7 @@ def ban_from_mod(user_id, community_id):
 @login_required
 def chat_options(conversation_id):
     conversation = db.session.get(Conversation, conversation_id) or abort(404)
-    if not (current_user.is_admin() or conversation.is_member(current_user)):
+    if not (user_access('read private messages', current_user.get_id()) or conversation.is_member(current_user)):
         abort(400)
     return render_template('chat/chat_options.html', conversation=conversation)
 
@@ -180,7 +182,7 @@ def chat_options(conversation_id):
 @login_required
 def chat_delete(conversation_id):
     conversation = db.session.get(Conversation, conversation_id) or abort(404)
-    if not (current_user.is_admin() or conversation.is_member(current_user)):
+    if not (user_access('read private messages', current_user.get_id()) or conversation.is_member(current_user)):
         abort(403)  # D761: not a silent no-op that answers like a delete
     Report.query.filter(Report.suspect_conversation_id == conversation.id).delete()
     db.session.delete(conversation)
@@ -231,7 +233,7 @@ def block_instance(instance_id):
 @login_required
 def chat_report(conversation_id):
     conversation = db.session.get(Conversation, conversation_id) or abort(404)
-    if not (current_user.is_admin() or conversation.is_member(current_user)):
+    if not (user_access('read private messages', current_user.get_id()) or conversation.is_member(current_user)):
         abort(400)
     form = ReportConversationForm()
 
@@ -292,7 +294,7 @@ def chat_report(conversation_id):
 def chat_conversation(conversation_id):
     # reload a conversation when an SSE message arrives. See notifs.js
     conversation = db.session.get(Conversation, conversation_id) or abort(404)
-    if current_user.is_admin() or conversation.is_member(current_user):
+    if user_access('read private messages', current_user.get_id()) or conversation.is_member(current_user):
         messages = conversation.messages.order_by(ChatMessage.created_at).all()
         for message in messages:
             if message.recipient_id == current_user.id:

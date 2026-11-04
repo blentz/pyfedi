@@ -189,7 +189,7 @@ from app.utils import markdown_to_html, piefed_markdown_to_lemmy_markdown
 # `app.shared.community.make_community`, the production function under test,
 # so the row-builder of the same name is aliased instead. `_seed()`'s two
 # call sites below are the only places the factory is still called by name.
-from tests.factories import bearer, make_community as make_community_factory, make_community_member, \
+from tests.factories import staff_role, bearer, make_community as make_community_factory, make_community_member, \
     make_instance, make_user, web_ctx
 
 
@@ -696,7 +696,7 @@ def _make_site_staff(user):
     siblings would admit them.
     """
     from app.models import Role, role_grant
-    role = Role(name='Staff')
+    role = staff_role()
     db.session.add(role)
     db.session.commit()
     db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))

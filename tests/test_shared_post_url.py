@@ -100,7 +100,7 @@ from app.models import (
 )
 from app.shared.post import edit_post
 from app.utils import store_files_in_s3
-from tests.factories import make_community_member, make_poll_choice, make_user
+from tests.factories import staff_role, make_community_member, make_poll_choice, make_user
 from tests.test_shared_post_edit import _api_input, _make_admin, _seed, _web_form
 from tests.test_shared_post_upload import chdir_upload  # noqa: F401
 
@@ -433,7 +433,7 @@ class TestStickyPermission:
         this gate used to spell refused them."""
         s = self._seed_sticky()
         staffer = make_user(s.instance, 'staffer', local=True)
-        staffer.roles.append(Role(name='Staff'))
+        staffer.roles.append(staff_role())
         db.session.commit()
 
         assert s.community.is_moderator(staffer) is False

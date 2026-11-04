@@ -886,7 +886,7 @@ def get_reply_like_list(auth, data):
     user = authorise_api_user(auth, return_type='model')
     post_reply = a_visible_reply(comment_id, auth)
 
-    if post_reply.community.is_moderator(user) or user.is_admin() or user.is_staff():
+    if post_reply.community.is_moderator(user) or user_access('moderate all communities', user.id, on=post_reply):
         banned_from_site_user_ids = list(db.session.execute(text('SELECT id FROM "user" WHERE banned = true')).scalars())
         banned_from_community_user_ids = list(db.session.execute(text
             ('SELECT user_id from "community_ban" WHERE community_id = :community_id'), {"community_id": post_reply.community_id}).scalars())

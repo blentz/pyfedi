@@ -10,6 +10,7 @@ from app.user import bp
 from app.utils import login_required, render_template
 
 
+from app.permissions import user_access
 def _available_or_404():
     if not referrals_available(current_user):
         abort(404)
@@ -26,7 +27,7 @@ def user_referrals():
                            qr_svg=referral_qr_svg(link) if link else None,
                            uses=uses_of_current_code(current_user), lifetime=lifetime_referrals(current_user),
                            per_code=per_code, per_user=per_user, code_left=code_left, lifetime_left=lifetime_left,
-                           exempt=current_user.is_admin())
+                           exempt=user_access('exempt from account limits', current_user.id))
 
 
 @bp.route('/user/settings/referrals/generate', methods=['POST'])

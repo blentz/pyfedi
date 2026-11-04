@@ -24,6 +24,7 @@ from app.utils import render_template, blocked_domains, blocked_or_banned_instan
     user_pronouns
 
 
+from app.main.util import community_adding_rights
 @bp.route('/search', methods=['GET', 'POST'])
 @limiter.limit("100 per day;20 per 5 minutes", exempt_when=lambda: current_user.is_authenticated)
 @login_required_if_private_instance
@@ -250,8 +251,7 @@ def run_search():
         return render_template('search/start.html', title=_('Search'), communities=communities.all(),
                                languages=languages, instance_software=instance_software,
                                external_allowed=external_allowed,
-                               is_admin=current_user.is_authenticated and current_user.is_admin(),
-                               is_staff=current_user.is_authenticated and current_user.is_staff(),
+                               **community_adding_rights(),
                                default_user_add_remote=get_setting("allow_default_user_add_remote_community", True)
                                )
 

@@ -215,8 +215,8 @@ def test_the_bare_search_page_lists_communities_and_languages(app, db_session):
     assert response.status_code == 200
     assert render.call_args.args[0] == 'search/start.html'
     assert [c.name for c in render.call_args.kwargs['communities']] == ['microblogs']
-    assert render.call_args.kwargs['is_admin'] is False
-    assert render.call_args.kwargs['is_staff'] is False
+    assert render.call_args.kwargs['can_create_local'] is False
+    assert render.call_args.kwargs['can_add_remote'] is False
 
 
 def test_the_start_page_hides_communities_the_reader_is_banned_from(app, db_session):
@@ -243,7 +243,8 @@ def test_an_admin_sees_the_admin_controls_on_the_start_page(app, db_session):
     with patch('app.search.routes.render_template', return_value='rendered') as render:
         client.get('/search')
 
-    assert render.call_args.kwargs['is_admin'] is True
+    assert render.call_args.kwargs['can_create_local'] is True
+    assert render.call_args.kwargs['can_add_remote'] is True
 
 
 def _make_admin(user):
@@ -1194,10 +1195,7 @@ def test_relevance_ranking_is_asked_for_only_when_no_sort_was(app, db_session, s
 
 
 def test_an_ordinary_reader_is_not_offered_the_admin_controls(app, db_session):
-    """`is_authenticated and is_admin()` -- an ANONYMOUS reader fails the first
-    operand, so the row that makes the second load-bearing is a logged-in
-    reader who is not an admin.
-    """
+    """A logged-in reader who holds no role is offered neither control."""
     instance, alice, bob = _seed()
     client = app.test_client()
     login(client, alice)
@@ -1205,5 +1203,5 @@ def test_an_ordinary_reader_is_not_offered_the_admin_controls(app, db_session):
     with patch('app.search.routes.render_template', return_value='rendered') as render:
         client.get('/search')
 
-    assert render.call_args.kwargs['is_admin'] is False
-    assert render.call_args.kwargs['is_staff'] is False
+    assert render.call_args.kwargs['can_create_local'] is False
+    assert render.call_args.kwargs['can_add_remote'] is False

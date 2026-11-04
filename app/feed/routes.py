@@ -52,6 +52,7 @@ import app.community.routes as community_routes
 from app.form_choices import select_choices
 
 
+from app.permissions import user_access
 @bp.route('/feed/new', methods=['GET', 'POST'])
 @login_required
 def feed_new():
@@ -63,7 +64,7 @@ def feed_new():
         form.nsfw.render_kw = {'disabled': True}
     if g.site.enable_nsfl is False:
         form.nsfl.render_kw = {'disabled': True}
-    if not current_user.is_admin():
+    if not user_access('manage instance feeds', current_user.get_id()):
         form.is_instance_feed.render_kw = {'disabled': True}
     form.parent_feed_id.choices = select_choices(feeds_for_form(0, current_user.id, current_user.home_domain()))
 
@@ -174,7 +175,7 @@ def feed_edit(feed_id: int):
     # load the feed
     feed_to_edit: Feed = db.session.get(Feed, feed_id) or abort(404)
     # make sure the user owns this feed, or is an admin (D697: as the API allows)
-    if feed_to_edit.user_id != current_user.id and not current_user.is_admin():
+    if feed_to_edit.user_id != current_user.id and not user_access('manage instance feeds', current_user.get_id()):
         abort(404)
     edit_feed_form = EditFeedForm()
     edit_feed_form.parent_feed_id.choices = select_choices(feeds_for_form(feed_id, feed_to_edit.user_id, feed_to_edit.home_domain()))
@@ -182,7 +183,7 @@ def feed_edit(feed_id: int):
     edit_feed_form.feed_domain = feed_to_edit.home_domain()   # a rename keeps the feed's home domain, and is checked there
     edit_feed_form.owner_user_name = db.session.get(User, feed_to_edit.user_id).user_name
 
-    if not current_user.is_admin():
+    if not user_access('manage instance feeds', current_user.get_id()):
         edit_feed_form.is_instance_feed.render_kw = {'disabled': True}
 
     if feed_to_edit.subscriptions_count > 1:
@@ -272,7 +273,7 @@ def feed_copy(feed_id: int):
     copy_feed_form = AddCopyFeedForm()
     copy_feed_form.parent_feed_id.choices = select_choices(feeds_for_form(0, current_user.id, current_user.home_domain()))
 
-    if not current_user.is_admin():
+    if not user_access('manage instance feeds', current_user.get_id()):
         copy_feed_form.is_instance_feed.render_kw = {'disabled': True}
 
     if copy_feed_form.validate_on_submit():
@@ -290,7 +291,7 @@ def feed_copy(feed_id: int):
         # enforced here, on the same terms: only an admin may publish an
         # instance feed, and the site's own NSFW/NSFL switches win over whatever
         # the form carries, since the disabled widgets are a browser-side hint.
-        if not current_user.is_admin():
+        if not user_access('manage instance feeds', current_user.get_id()):
             copy_feed_form.is_instance_feed.data = False
         if g.site.enable_nsfw is False:
             copy_feed_form.nsfw.data = False
@@ -641,7 +642,7 @@ def show_feed(feed):
                                              joined_communities=joined_or_modding_communities(current_user.get_id()),
                                              moderated_community_ids=moderating_communities_ids(current_user.get_id()),
                                              recently_upvoted=recently_upvoted, recently_downvoted=recently_downvoted,
-                                             reported_posts=reported_posts(current_user.get_id(), current_user.get_id() in g.admin_ids),
+                                             reported_posts=reported_posts(current_user.get_id(), user_access('administer all communities', current_user.get_id())),
                                              user_notes=user_notes(current_user.get_id()),
                                              user_pronouns=user_pronouns(),
                                              inoculation=inoculation[

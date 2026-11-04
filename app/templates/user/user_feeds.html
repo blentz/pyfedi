@@ -21,7 +21,7 @@
             <th>{{ _('# Communities') }}</th>
             <th>{{ _('Creator') }}</th>
             <th>{{ _('Public') }}</th>
-            {% if current_user.get_id() in admin_ids %}
+            {% if user_access('manage instance feeds', current_user.get_id()) %}
                 <th>{{ _('Instance') }}</th>
             {% endif %}
             <th>{{ _('Actions') }}</th>

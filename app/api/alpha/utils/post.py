@@ -2105,7 +2105,7 @@ def post_post_feature(auth, data):
         user_id = user.id
         post = db.session.get(Post, post_id)
         
-        if user.is_admin():
+        if user_access('feature instance-wide', user.id):
             post.instance_sticky = featured
 
             cache.delete_memoized(instance_sticky_posts)
@@ -2170,7 +2170,7 @@ def get_post_like_list(auth, data):
     user = authorise_api_user(auth, return_type='model')
     post = a_visible_post(post_id, auth)
 
-    if post.community.is_moderator(user) or user.is_admin() or user.is_staff():
+    if post.community.is_moderator(user) or user_access('moderate all communities', user.id, on=post):
         banned_from_site_user_ids = list(db.session.execute(text('SELECT id FROM "user" WHERE banned = true')).scalars())
         banned_from_community_user_ids = list(db.session.execute(text
             ('SELECT user_id from "community_ban" WHERE community_id = :community_id'), {"community_id": post.community_id}).scalars())
@@ -2201,7 +2201,7 @@ def put_post_set_flair(auth, data):
     post = a_visible_post(post_id, auth)
     user = authorise_api_user(auth, return_type='model')
     
-    if post.community.is_moderator(user) or user.is_admin_or_staff() or post.user_id == user.id:
+    if post.community.is_moderator(user) or user_access('moderate all communities', user.id, on=post) or post.user_id == user.id:
         # Start by clearing the existing flair
         post.flair = []
 

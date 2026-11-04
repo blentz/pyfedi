@@ -3098,8 +3098,7 @@ def user_access(permission: str, user_id: int, on=None, anywhere: bool = False) 
 def can_moderate(community, user) -> bool:
     # D422/D521/D642/D963: the one moderation gate -- a moderator (owners included), an admin, staff, or a holder of
     # 'moderate all communities'. Deleting or restoring a whole community is narrower: owner and admins (D615).
-    return community.is_moderator(user) or user.is_admin_or_staff() or \
-        user_access('moderate all communities', user.id)
+    return community.is_moderator(user) or user_access('moderate all communities', user.id, on=community)
 
 
 def role_access(permission: str, role_id: int) -> bool:
@@ -3441,7 +3440,7 @@ def approval_required(func):
 def trustworthy_account_required(func):
     @wraps(func)
     def decorated_view(*args, **kwargs):
-        if current_user.trustworthy() or current_user.get_id() in g.admin_ids:
+        if current_user.trustworthy() or user_access('exempt from account limits', current_user.get_id()):
             return func(*args, **kwargs)
         else:
             return redirect(url_for('auth.not_trustworthy'))
@@ -3452,7 +3451,7 @@ def trustworthy_account_required(func):
 def aged_account_required(func):
     @wraps(func)
     def decorated_view(*args, **kwargs):
-        if current_user.get_id() in g.admin_ids or not current_user.created_very_recently():
+        if user_access('exempt from account limits', current_user.get_id()) or not current_user.created_very_recently():
             return func(*args, **kwargs)
         else:
             return redirect(url_for('auth.not_trustworthy'))
@@ -4247,7 +4246,7 @@ def can_create_post(user, content: Community) -> bool:
     if content.banned or content.is_gone():   # interop C1 item 10: a Group deleted on its home server is read-only
         return False
 
-    if user.is_rss_bot() or content.is_moderator(user) or user.is_admin():
+    if user.is_rss_bot() or content.is_moderator(user) or user_access('administer all communities', user.id, on=content):
         return True
 
     if content.restricted_to_mods and not is_podcast_owner:
@@ -4294,7 +4293,7 @@ def can_create_post_reply(user, content: Community) -> bool:
     if content.banned or content.is_gone():   # interop C1 item 10: a Group deleted on its home server is read-only
         return False
 
-    if content.is_moderator(user) or user.is_admin():
+    if content.is_moderator(user) or user_access('administer all communities', user.id, on=content):
         return True
 
     if content.local_only and not user.is_local():
@@ -4318,7 +4317,7 @@ def upload_access_allows(setting: str, user: User | None = None) -> bool:
         return False
     elif upload_access == 'user 1' and upload_user.get_id() != 1:
         return False
-    elif upload_access == 'admins' and not upload_user.is_admin_or_staff():
+    elif upload_access == 'admins' and not user_access('exempt from upload limits', upload_user.get_id()):
         return False
     elif upload_access == 'users' and not upload_user.is_authenticated:
         return False
@@ -5572,7 +5571,7 @@ def add_to_modlog(action: str, actor: User, target_user: User = None, reason: st
     """ Adds a new entry to the Moderation Log """
     if action not in ModLog.action_map.keys():
         raise Exception('Invalid action: ' + action)
-    if actor.is_instance_admin() or actor.is_admin() or actor.is_staff():
+    if actor.is_instance_admin() or user_access('view modlog', actor.id, on=community):
         action_type = 'admin'
     else:
         action_type = 'mod'

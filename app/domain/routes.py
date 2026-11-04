@@ -27,6 +27,7 @@ from app.utils import render_template, permission_required, user_filters_posts, 
 from app.rss_extras import RSSFeed
 
 
+from app.permissions import user_access
 @bp.route('/d/<domain_id>', methods=['GET', 'POST'])
 @login_required_if_private_instance
 @check_anoobis
@@ -46,7 +47,7 @@ def show_domain(domain_id):
         if domain and host_hidden_here(domain.name):   # a sister local-only domain: not shown off its own
             domain = None
         if domain:
-            if current_user.is_authenticated and (current_user.is_staff() or current_user.is_admin()):
+            if user_access('manage blocklists', current_user.get_id()):
                 form = PostWarningForm()
                 if form.validate_on_submit():
                     domain.post_warning = form.post_warning.data
@@ -110,7 +111,7 @@ def show_domain(domain_id):
                                    content_filters=content_filters, recently_upvoted=recently_upvoted,
                                    recently_downvoted=recently_downvoted,
                                    user_pronouns=user_pronouns(),
-                                   reported_posts=reported_posts(current_user.get_id(), current_user.get_id() in g.admin_ids),
+                                   reported_posts=reported_posts(current_user.get_id(), user_access('administer all communities', current_user.get_id())),
                                    joined_communities=joined_or_modding_communities(current_user.get_id()),
                                    moderated_community_ids=moderating_communities_ids(current_user.get_id()),
                                    rss_feed=f"{storefront_url()}/d/{domain.id}/feed" if domain.post_count > 0 else None,
@@ -187,7 +188,7 @@ def domains():
 
     ban_visibility_permission = False
 
-    if current_user.is_authenticated and current_user.is_admin_or_staff():
+    if user_access('manage blocklists', current_user.get_id()):
         ban_visibility_permission = True
 
     next_url = url_for('domain.domains', page=domains.next_num) if domains.has_next else None
@@ -222,7 +223,7 @@ def domains_blocked_list():
 
 @bp.route('/domains/unban_all', methods=['POST'])
 @login_required
-@permission_required('manage users')
+@permission_required('manage blocklists')
 def unban_all():
     db.session.execute(text('UPDATE "domain" SET banned = false'))
     db.session.commit()
@@ -276,7 +277,7 @@ def domain_unblock(domain_id):
 
 @bp.route('/d/<int:domain_id>/ban', methods=['POST'])
 @login_required
-@permission_required('manage users')
+@permission_required('manage blocklists')
 def domain_ban(domain_id):
     domain = db.session.get(Domain, domain_id) or abort(404)
     domain.banned = True
@@ -288,7 +289,7 @@ def domain_ban(domain_id):
 
 @bp.route('/d/<int:domain_id>/unban', methods=['POST'])
 @login_required
-@permission_required('manage users')
+@permission_required('manage blocklists')
 def domain_unban(domain_id):
     domain = db.session.get(Domain, domain_id) or abort(404)
     domain.banned = False

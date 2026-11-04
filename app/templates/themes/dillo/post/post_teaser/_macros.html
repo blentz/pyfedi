@@ -156,7 +156,7 @@
                     </a>
                 </div>
             {% endif -%}
-            {% if (moderated_community_ids and post.community_id in moderated_community_ids) or current_user.get_id() in admin_ids -%}
+            {% if (moderated_community_ids and post.community_id in moderated_community_ids) or user_access('administer all communities', current_user.get_id(), on=post) -%}
               <div class="dropdown" id="flair_dropdown_{{ post.id }}">
                 <a href='{{ '/post/' + post.id|string + '/set_flair' if low_bandwidth else '#' }}'
                   data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" id="flair_link_{{ post.id }}"

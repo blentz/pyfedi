@@ -7,6 +7,7 @@ from flask_login import current_user
 from flask_wtf.csrf import generate_csrf
 
 from app import db
+from app.permissions import holds_any_grant, may_act_on_user, may_ban
 from app.referral import referrals_available
 from app.branding import DERIVED_FIELDS, Branding, current_branding
 from app.activitypub.entitlement import secure_mode_cache_headers, signed_fetch_refusal
@@ -137,6 +138,9 @@ def register_request_hooks(app):
     app.jinja_env.globals['feed_membership'] = feed_membership
     app.jinja_env.globals['json_loads'] = json.loads
     app.jinja_env.globals['user_access'] = user_access
+    app.jinja_env.globals['may_ban'] = may_ban
+    app.jinja_env.globals['may_act_on_user'] = may_act_on_user
+    app.jinja_env.globals['holds_any_grant'] = holds_any_grant
     app.jinja_env.globals['can_moderate'] = can_moderate
     app.jinja_env.globals['role_access'] = role_access
     app.jinja_env.globals['referrals_available'] = referrals_available

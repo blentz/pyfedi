@@ -36,6 +36,7 @@ from app.utils import authorise_api_user, blocked_communities, shorten_string, m
     communities_banned_from, piefed_markdown_to_lemmy_markdown, community_moderators, add_to_modlog, \
     get_recipient_language, moderating_communities_ids, moderating_communities_ids_all_users, gibberish, \
     favorite_communities, render_template, can_moderate, sanitise_posting_warning, community_membership_private
+from app.permissions import user_access
 import app.api.alpha.views as alpha_views
 
 
@@ -718,7 +719,7 @@ def delete_community(community_id: int, src, auth=None):
 
     community = db.session.get(Community, community_id) or abort(404)
     # D615: the owner and instance admins only, as the web route community_delete requires
-    if not (community.is_owner(user) or user.is_admin()):
+    if not (community.is_owner(user) or user_access('administer all communities', user.id, on=community)):
         raise Exception('incorrect_login')
     if not community.is_local():
         raise Exception('Only local communities can be deleted')
@@ -747,7 +748,7 @@ def restore_community(community_id: int, src, auth=None):
         user = current_user
 
     community = db.session.get(Community, community_id) or abort(404)
-    if not (community.is_owner(user) or user.is_admin()):  # D615
+    if not (community.is_owner(user) or user_access('administer all communities', user.id, on=community)):  # D615
         raise Exception('incorrect_login')
     if not community.is_local():
         raise Exception('Only local communities can be restored')
@@ -773,7 +774,7 @@ def add_mod_to_community(community_id: int, person_id: int, src, auth=None):
     # a row hidden here is as one nobody holds: the same NoResultFound (follow-up F6)
     community = one_here(db.session.query(Community).filter_by(id=community_id), Community)
     new_moderator = one_here(User.query.filter_by(id=person_id, banned=False), User)
-    if not community.is_owner(user) and not user.is_admin_or_staff():
+    if not community.is_owner(user) and not user_access('moderate all communities', user.id, on=community):
         raise Exception('no_permission')
     # a local-only account does not exist to other servers, so it cannot moderate a community they follow
     if user_local_only(new_moderator) and not community_local_only(community):
@@ -844,7 +845,7 @@ def remove_mod_from_community(community_id: int, person_id: int, src, auth=None)
     # a row hidden here is as one nobody holds: the same NoResultFound (follow-up F6)
     community = one_here(db.session.query(Community).filter_by(id=community_id), Community)
     old_moderator = one_here(User.query.filter_by(id=person_id), User)
-    if not community.is_owner(user) and not user.is_admin_or_staff():
+    if not community.is_owner(user) and not user_access('moderate all communities', user.id, on=community):
         raise Exception('incorrect_login')
 
     existing_member = db.session.query(CommunityMember).filter(

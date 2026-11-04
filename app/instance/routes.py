@@ -26,6 +26,7 @@ from app.utils import render_template, blocked_domains, \
     silenced_instances, login_required_if_private_instance
 
 
+from app.permissions import user_access
 @bp.route('/instances', methods=['GET'])
 @login_required_if_private_instance
 def list_instances():
@@ -150,7 +151,7 @@ def instance_people(instance_domain):
         if instance is None or not instance_visible_here(instance.id):
             abort(404)
 
-    if current_user.is_authenticated and current_user.is_admin():
+    if user_access('administer all users', current_user.get_id()):
         people = User.query.filter_by(deleted=False, banned=False, bot=False, bot_override=False)
         if instance_ids := silenced_instances():
             people = people.filter(or_(User.instance_id.not_in(instance_ids), User.instance_id == None))
@@ -344,7 +345,7 @@ def instance_posts(instance_domain):
                            low_bandwidth=low_bandwidth, recently_upvoted=recently_upvoted, breadcrumbs=breadcrumbs,
                            recently_downvoted=recently_downvoted,
                            next_url=next_url, prev_url=prev_url,
-                           reported_posts=reported_posts(current_user.get_id(), current_user.get_id() in g.admin_ids),
+                           reported_posts=reported_posts(current_user.get_id(), user_access('administer all communities', current_user.get_id())),
                            moderated_community_ids=moderating_communities_ids(current_user.get_id()),
                            # rss_feed=f"{current_app.config.server_name()}/feed",
                            # rss_feed_name=f"Posts on " + g.site.name,

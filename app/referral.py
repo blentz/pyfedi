@@ -18,6 +18,7 @@ from app.models import Referral, User, utcnow
 from app.storefront import REFERRAL_MODE, DomainInfo, domain_base_url, open_registrations  # noqa: F401 (re-exported)
 from app.utils import get_setting
 
+from app.permissions import user_access
 GENERATORS_SETTING = 'referral_generators'
 MAX_PER_CODE_SETTING = 'referral_max_per_code'
 MAX_PER_USER_SETTING = 'referral_max_per_user'
@@ -53,7 +54,7 @@ def may_generate(user: User) -> bool:
     if who == 'all':
         return True
     if who == 'staff':
-        return user.is_admin_or_staff()
+        return user_access('generate referral codes', user.id)
     return user.is_admin()
 
 
@@ -76,7 +77,7 @@ def caps() -> tuple[int, int]:
 def remaining_signups(user: User) -> tuple[int | None, int | None]:
     """(signups left on the current code, signups left in total); None is unlimited. The code can never take more than
     the lifetime cap has left, so its figure is the lower of the two. Admins are exempt (RC4)."""
-    if user.is_admin():
+    if user_access('exempt from account limits', user.id):
         return None, None
     per_code, per_user = caps()
     lifetime_left = max(per_user - lifetime_referrals(user), 0) if per_user else None
