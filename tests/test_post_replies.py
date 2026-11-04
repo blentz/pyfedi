@@ -584,6 +584,26 @@ def test_deleting_a_chain_takes_the_replies_too(app, env):
         sorted([parent.id, child.id])
 
 
+def test_an_author_deleting_a_chain_leaves_other_peoples_replies(app, env):
+    """Without moderating, "Delete all my comments in this chain" takes only the author's own: someone else's reply
+    under it is neither deleted nor removed."""
+    client, community, post, mod, author, outsider = env
+    parent = a_reply(post, author, body='parent')
+    parent.path = [0, parent.id]
+    child = a_reply(post, outsider, body='child', parent_id=parent.id)
+    child.path = [0, parent.id, child.id]
+    db.session.commit()
+    token = csrf(app, client)
+
+    with patch('app.post.routes.delete_reply') as deleted:
+        with patch('app.post.routes.mod_remove_reply') as removed:
+            client.post(f'/post/{post.id}/comment/{parent.id}/delete',
+                        data={'submit': 'Yes', 'also_delete_replies': 'y', 'csrf_token': token})
+
+    assert [call.args[0] for call in deleted.call_args_list] == [parent.id]
+    removed.assert_not_called()
+
+
 def test_a_moderator_deleting_a_chain_removes_other_peoples_replies(app, env):
     """The author's own go through `delete_reply`; everyone else's go through
     `mod_remove_reply` with the reason, in the same walk."""

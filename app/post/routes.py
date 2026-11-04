@@ -2142,9 +2142,6 @@ def post_approve(post_id):
     # only a post held for review is published here: one already published, or deleted, would be federated again
     if post.deleted or post.status != POST_STATUS_REVIEWING:
         abort(404)
-    if not (post.user_id == current_user.id or post.community.is_moderator(current_user) or
-            user_access('moderate all communities', current_user.get_id(), on=post)):
-        abort(403)   # v1.8.10 fell off the end here: None, a 500
     post.status = POST_STATUS_PUBLISHED
     post.posted_at = utcnow()
     post.author.ban_posts = False

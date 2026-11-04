@@ -2506,22 +2506,20 @@ def community_moderate_comments(actor):
     if not (community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community)):
         abort(401)
 
-    if community is not None:
-        if community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community):
-            replies_page = request.args.get('replies_page', 1, type=int)
-            # D19: moderators get no exemption outside the report queue
-            post_replies = PostReply.query.filter_by(community_id=community.id, deleted=False).filter(
-                visible_to_clause(PostReply, current_user.id)).order_by(
-                desc(PostReply.posted_at)).paginate(page=replies_page, per_page=50, error_out=False)
+    replies_page = request.args.get('replies_page', 1, type=int)
+    # D19: moderators get no exemption outside the report queue
+    post_replies = PostReply.query.filter_by(community_id=community.id, deleted=False).filter(
+        visible_to_clause(PostReply, current_user.id)).order_by(
+        desc(PostReply.posted_at)).paginate(page=replies_page, per_page=50, error_out=False)
 
-            replies_next_url = url_for('community.community_moderate_comments', actor=community.link(),
-                                       replies_page=post_replies.next_num) if post_replies.has_next else None
-            replies_prev_url = url_for('community.community_moderate_comments', actor=community.link(),
-                                       replies_page=post_replies.prev_num) if post_replies.has_prev and replies_page != 1 else None
+    replies_next_url = url_for('community.community_moderate_comments', actor=community.link(),
+                               replies_page=post_replies.next_num) if post_replies.has_next else None
+    replies_prev_url = url_for('community.community_moderate_comments', actor=community.link(),
+                               replies_page=post_replies.prev_num) if post_replies.has_prev and replies_page != 1 else None
 
-            return render_template('community/community_moderate_comments.html', post_replies=post_replies,
-                                   replies_next_url=replies_next_url, replies_prev_url=replies_prev_url,
-                                   disable_voting=True, community=community, current='comments')
+    return render_template('community/community_moderate_comments.html', post_replies=post_replies,
+                           replies_next_url=replies_next_url, replies_prev_url=replies_prev_url,
+                           disable_voting=True, community=community, current='comments')
 
 
 @bp.route('/community/<int:community_id>/<int:user_id>/kick_user_community', methods=['POST'])
