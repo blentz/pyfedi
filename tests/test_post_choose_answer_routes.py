@@ -99,7 +99,7 @@ class TestAReplyIdThatDoesNotExist:
     @pytest.mark.parametrize('path', ['choose_answer', 'unchoose_answer'])
     def test_an_admin_gets_a_404(self, env, path):
         """An admin passes the first disjunct, so nothing else stopped the None."""
-        assert env.baseline.user1.is_admin_or_staff() is True
+        assert env.baseline.user1.is_admin() is True
         login(env.client, env.baseline.user1)
 
         response = env.client.post(f'/post_reply/999999/{path}')

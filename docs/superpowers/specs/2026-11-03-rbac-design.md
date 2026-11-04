@@ -6,6 +6,15 @@ Date: 2026-11-03. Status: being built on blentz.
   found is fixed at 296d8a174; O5 came out of it.
 - Step 3 (the check) is done: app/permissions.py (`user_access(perm, user, on=, anywhere=)`, `home_domain_id`,
   `may_act_on_user`), app/permission_cache.py (the per-user version). No call site names an object yet (step 5).
+- Step 6 is done: `is_staff()`, `is_admin_or_staff()` and `ROLE_STAFF_NAME` are gone, and tests/test_rbac_lint.py
+  keeps them, role constants, roles found by name or fixed id, and `anywhere=True` outside menus from coming back. The
+  profile and preview badges moved here from step 7, being `is_staff()`'s last callers: they show Admin plus each
+  listed role held instance-wide, by name (`User.listed_role_names`). Step 8 still finds Staff by name in
+  `Site.staff()` and `staff_role_has`, listed in the lint test. The "no scopable permission with `on=None`" lint counts
+  what is still asked about the whole instance, by file: lists and counts until step 8's filtering, and three that are
+  instance-wide on purpose (fixup_from_remote, a remote instance's people, reporting a conversation). Writing it found
+  six API report checks that step 5 missed (post and comment report lists by post, comment or community, and their
+  resolve), which now name their object.
 - Step 5 (the call sites) is done, in one commit rather than one per area. Every `is_admin()`, `is_staff()`,
   `is_admin_or_staff()` and `g.admin_ids` check that authorises something now asks a catalogue permission, naming its
   object (`on=`) where one is at hand. Left as they are: Admin-only by RB5 (roles, grants, the user form's role

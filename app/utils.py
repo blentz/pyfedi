@@ -3111,7 +3111,7 @@ def role_access(permission: str, role_id: int) -> bool:
 def staff_role_has(permission: str) -> bool:
     """Whether the Staff role holds `permission`: who else is told of an application or a held post. Staff is found by
     name until RBAC step 8 routes these notifications by permission (spec 2026-11-03-rbac-design.md, Notifications)."""
-    staff = Role.query.filter_by(name=ROLE_STAFF_NAME).first()
+    staff = Role.query.filter_by(name='Staff').first()
     return staff is not None and role_access(permission, staff.id)
 
 

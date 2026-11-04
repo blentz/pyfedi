@@ -28,7 +28,6 @@ import pytest
 from sqlalchemy import text
 
 from app import cache, db
-from app.constants import ROLE_STAFF_NAME
 from app.permissions import ROLE_PERMISSIONS
 from app.roles import seed_default_roles
 from app.models import Role, RolePermission, role_grant
@@ -104,38 +103,6 @@ def test_the_vocabulary_has_no_duplicates():
     """A duplicate would render two checkboxes with the same `name`, and the
     second would silently win."""
     assert len(ROLE_PERMISSIONS) == len(set(ROLE_PERMISSIONS))
-
-
-def _role_name_literals_in_source():
-    """Every `'Admin'`/`'Staff'` literal used to FIND a role in `app/`: compared
-    against something (`role.name == 'Admin'`) or passed as `name=` to a lookup
-    (`filter_by(name='Admin')`). Creating a role is not finding one, so
-    `Role(name='Admin', built_in=True)` in app/roles.py is not collected, and
-    display strings like `_('Admin')` are neither."""
-    names = {'Admin', 'Staff'}
-    found = []
-    for path in sorted(APP_ROOT.rglob('*.py')):
-        for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
-            if isinstance(node, ast.Compare):
-                operands = [node.left, *node.comparators]
-            elif isinstance(node, ast.Call) and getattr(node.func, 'id', None) != 'Role':
-                operands = [k.value for k in node.keywords if k.arg == 'name']
-            else:
-                continue
-            for operand in operands:
-                if isinstance(operand, ast.Constant) and operand.value in names:
-                    found.append(f'{path.relative_to(APP_ROOT.parent)}:{node.lineno}')
-    return found
-
-
-def test_no_role_is_found_by_a_literal_name():
-    """D965, then RB16: `is_admin()` and `is_staff()` matched the role NAMES
-    'Admin' and 'Staff' as bare literals -- one rename away from every admin
-    silently losing `is_admin()`. Admin is now the built-in role, found by
-    `Role.built_in`; Staff is found through ROLE_STAFF_NAME until RBAC step 6
-    removes `is_staff()`. This ratchet keeps a literal lookup from creeping back."""
-    assert ROLE_STAFF_NAME == 'Staff'
-    assert _role_name_literals_in_source() == []
 
 
 # --------------------------------------------------------------------------

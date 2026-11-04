@@ -23,8 +23,7 @@ from unittest.mock import patch
 import pytest
 
 from app import db
-from app.constants import (POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING,
-                           ROLE_STAFF_NAME)
+from app.constants import POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING
 from app.models import Community, Language, Notification, Post, Role, RolePermission, Site
 from tests.factories import (make_community, make_community_member,
                              make_instance, make_user)
@@ -615,7 +614,7 @@ def test_a_post_held_for_review_tells_its_author_and_asks_the_admins_and_staff(a
     author.ban_posts = True
     admin, staffer = make_user(author.instance, 'boss', local=True), make_user(author.instance, 'helper', local=True)
     admin.roles.append(Role.admin() or Role(name='Admin', built_in=True))
-    staff_role = Role.query.filter_by(name=ROLE_STAFF_NAME).first() or Role(name=ROLE_STAFF_NAME)
+    staff_role = Role.query.filter_by(name='Staff').first() or Role(name='Staff')
     staffer.roles.append(staff_role)
     db.session.flush()
     db.session.add(RolePermission(role_id=staff_role.id, permission='approve registrations'))

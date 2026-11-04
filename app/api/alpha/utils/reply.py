@@ -656,7 +656,7 @@ def get_reply_report_list(auth, data):
         mods = reply.community.moderators()
         mod_ids = [mod.user_id for mod in mods]
 
-        if user.id in mod_ids or user_access('moderate all communities', user.id):
+        if user.id in mod_ids or user_access('moderate all communities', user.id, on=reply):
             reports = Report.query.filter(Report.suspect_post_reply_id == comment_id)
         else:
             raise Exception('incorrect login')
@@ -666,7 +666,7 @@ def get_reply_report_list(auth, data):
         mods = community.moderators()
         mod_ids = [mod.user_id for mod in mods]
 
-        if user.id in mod_ids or user_access("moderate all communities", user.id):
+        if user.id in mod_ids or user_access("moderate all communities", user.id, on=community):
             reports = Report.query.filter(Report.in_community_id == community_id, Report.suspect_post_reply_id != None)
         else:
             raise Exception('incorrect login')
@@ -726,7 +726,7 @@ def put_reply_report_resolve(auth, data):
     mods = community.moderators()
     mod_ids = [mod.user_id for mod in mods]
 
-    if user.id in mod_ids or user_access('moderate all communities', user.id):
+    if user.id in mod_ids or user_access('moderate all communities', user.id, on=community):
         if resolved:
             report.status = REPORT_STATE_RESOLVED
         else:

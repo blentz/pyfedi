@@ -1,5 +1,4 @@
 from app import db
-from app.constants import ROLE_STAFF_NAME
 from app.models import Role, Site, role_grant
 from app.utils import role_access, user_access
 from tests.factories import grant_permission, make_instance, make_user
@@ -113,14 +112,14 @@ class TestSiteAdmins:
         """D481, then RB16 (spec 2026-11-03-rbac-design.md). `Site.admins()` and `is_admin()` once matched the
         role NAME 'Admin'. Admin is now the one built-in role, found by `Role.built_in`: renamed, it still makes an
         admin, and an ordinary role that takes the name 'Admin' makes none. Staff is still matched by name until
-        `is_staff()` goes (RBAC step 6)."""
+        RBAC step 8 routes notifications by permission."""
         make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
         make_user(None, 'founder', local=True)                 # user 1, listed regardless
         built_in_admin = make_user(None, 'built-in-admin', local=True)
         named_staff = make_user(None, 'named-staff', local=True)
         name_only = make_user(None, 'name-only', local=True)
         admin_role = Role(name='Superuser', built_in=True)
-        staff_role = Role(name=ROLE_STAFF_NAME)
+        staff_role = Role(name='Staff')
         impostor = Role(name='Admin')
         db.session.add_all([admin_role, staff_role, impostor])
         db.session.commit()

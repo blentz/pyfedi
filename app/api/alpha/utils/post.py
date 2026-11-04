@@ -1978,7 +1978,7 @@ def get_post_report_list(auth, data):
         mods = post.community.moderators()
         mod_ids = [mod.user_id for mod in mods]
 
-        if user.id in mod_ids or user_access('moderate all communities', user.id):
+        if user.id in mod_ids or user_access('moderate all communities', user.id, on=post):
             reports = Report.query.filter(Report.suspect_post_id == post_id,
                                           Report.suspect_post_reply_id == None)
         else:
@@ -1989,7 +1989,7 @@ def get_post_report_list(auth, data):
         mods = community.moderators()
         mod_ids = [mod.user_id for mod in mods]
 
-        if user.id in mod_ids or user_access("moderate all communities", user.id):
+        if user.id in mod_ids or user_access("moderate all communities", user.id, on=community):
             reports = Report.query.filter(Report.in_community_id == community_id,
                                           Report.suspect_post_id != None,
                                           Report.suspect_post_reply_id == None)
@@ -2052,7 +2052,7 @@ def put_post_report_resolve(auth, data):
     mods = community.moderators()
     mod_ids = [mod.user_id for mod in mods]
 
-    if user.id in mod_ids or user_access('moderate all communities', user.id):
+    if user.id in mod_ids or user_access('moderate all communities', user.id, on=community):
         if resolved:
             report.status = REPORT_STATE_RESOLVED
         else:

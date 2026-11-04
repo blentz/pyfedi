@@ -12,7 +12,7 @@
                 <h4 class="mb-0"><a href="/u/{{ user.link() }}">{{ user.display_name() }}</a></h4>
                 <p>{{ _('Instance') }}: <a href="{{ url_for('instance.instance_overview', instance_domain=user.instance_domain()) }}">{{ user.instance_domain() }}</a><br>
                 {% if user.is_instance_admin() or (user.is_local() and user.get_id() in admin_ids) %}<span class="red">({{ _('Admin') }})</span><br>{% endif %}
-                {% if user.get_id() in admin_ids or user.is_staff() %}{{ _('Roles') }}: {% if user.get_id() in admin_ids %}{{ _('Admin') }}{% endif %} {% if user.is_staff() %}{{ _('Staff') }}{% endif %}<br />{% endif %}
+                {% set listed_roles = user.listed_role_names() %}{% if user.get_id() in admin_ids or listed_roles %}{{ _('Roles') }}: {% if user.get_id() in admin_ids %}{{ _('Admin') }}{% endif %} {{ listed_roles|join(', ') }}<br />{% endif %}
                 </p>
             </div>
         </div>

@@ -105,10 +105,6 @@ NOTIF_NEW_POST = 42         # a new post needs approval
 # --model/db default--
 NOTIF_DEFAULT = 999  # default entry
 
-# D965: is_staff() matches this role NAME, so it is spelled once here. Admin is the built-in role (Role.built_in),
-# found by that flag. RBAC build step 6 removes is_staff() and this with it.
-ROLE_STAFF_NAME = 'Staff'
-
 DOWNVOTE_ACCEPT_NONE = -1
 DOWNVOTE_ACCEPT_ALL = 0
 DOWNVOTE_ACCEPT_MEMBERS = 2

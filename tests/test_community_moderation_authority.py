@@ -25,6 +25,7 @@ from unittest.mock import patch
 import pytest
 
 from app import db
+from app.permissions import user_access
 from app.models import (Community, CommunityBan, CommunityBlock,
                         CommunityMember, User)
 from tests.factories import (staff_role, make_community, make_community_member,
@@ -739,7 +740,7 @@ def _staff(name='staffer'):
         db.session.commit()
     db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
-    assert user.is_admin_or_staff()
+    assert user_access('moderate all communities', user.id)
     return user
 
 

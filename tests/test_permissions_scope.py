@@ -276,3 +276,79 @@ def test_a_storefront_resolves_to_its_own_domain(app, world):
         assert user_access('create local communities', holder.id, on=here()) is True
         g.storefront = domain_for_host(world.y.domain)
         assert user_access('create local communities', holder.id, on=here()) is False
+
+
+# --------------------------------------------------------------------------
+# The API's report lists and resolutions ask about the post, comment or community they name
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def reported(world):
+    """A post and a comment reported in a community on each of two domains, and a moderator scoped to the first."""
+    from app.models import Site
+    g.site = db.session.get(Site, 1)
+    g.admin_ids = []
+    # X and Y are local-only, and a local-only domain's rows are hidden off its storefront: report on two that federate
+    fx = SiteDomain(domain='fx.parity.example', scheme='https', federates=True)
+    fy = SiteDomain(domain='fy.parity.example', scheme='https', federates=True)
+    db.session.add_all([fx, fy])
+    db.session.commit()
+    clear_domain_cache()
+    holder = scoped_holder(world, 'xmod', fx, 'moderate all communities')
+
+    def homed(name, domain):
+        community = make_community(name)
+        community.site_domain_id = domain.id
+        author = make_user(world.local, f'{name}author', local=True)
+        author.site_domain_id = domain.id
+        db.session.commit()
+        return community, author
+
+    def report_in(community, author, n):
+        post = make_post(community, author, f'https://test.piefed.local/post/r{n}')
+        reply = make_post_reply(post, author)
+        on_post = Report(reasons='spam', type=1, reporter_id=world.founder.id, suspect_post_id=post.id,
+                         suspect_user_id=author.id, in_community_id=community.id, source_instance_id=1)
+        on_reply = Report(reasons='spam', type=2, reporter_id=world.founder.id, suspect_post_id=post.id,
+                          suspect_post_reply_id=reply.id, suspect_user_id=author.id, in_community_id=community.id,
+                          source_instance_id=1)
+        db.session.add_all([on_post, on_reply])
+        db.session.commit()
+        return post, reply, on_post, on_reply
+
+    (on_x, author_x), (on_y, author_y) = homed('fxcomm', fx), homed('fycomm', fy)
+    return holder, on_x, on_y, report_in(on_x, author_x, 1), report_in(on_y, author_y, 2)
+
+
+def bearer(user):
+    return f'Bearer {user.encode_jwt_token()}'
+
+
+def test_a_scoped_moderator_reads_the_post_reports_on_their_domain_only(world, reported):
+    from app.api.alpha.utils.post import get_post_report_list, put_post_report_resolve
+    holder, community_x, community_y, (post_x, _, report_x, _), (post_y, _, report_y, _) = reported
+    by_post = get_post_report_list(bearer(holder), {'post_id': post_x.id})
+    assert [r['post_report']['id'] for r in by_post['post_reports']] == [report_x.id]
+    by_community = get_post_report_list(bearer(holder), {'community_id': community_x.id})
+    assert [r['post_report']['id'] for r in by_community['post_reports']] == [report_x.id]
+    put_post_report_resolve(bearer(holder), {'report_id': report_x.id, 'resolved': True})
+    for refused in ({'post_id': post_y.id}, {'community_id': community_y.id}):
+        with pytest.raises(Exception, match='incorrect login'):
+            get_post_report_list(bearer(holder), refused)
+    with pytest.raises(Exception, match='incorrect login'):
+        put_post_report_resolve(bearer(holder), {'report_id': report_y.id, 'resolved': True})
+
+
+def test_a_scoped_moderator_reads_the_comment_reports_on_their_domain_only(world, reported):
+    from app.api.alpha.utils.reply import get_reply_report_list, put_reply_report_resolve
+    holder, community_x, community_y, (_, reply_x, _, report_x), (_, reply_y, _, report_y) = reported
+    by_reply = get_reply_report_list(bearer(holder), {'comment_id': reply_x.id})
+    assert [r['comment_report']['id'] for r in by_reply['comment_reports']] == [report_x.id]
+    by_community = get_reply_report_list(bearer(holder), {'community_id': community_x.id})
+    assert [r['comment_report']['id'] for r in by_community['comment_reports']] == [report_x.id]
+    put_reply_report_resolve(bearer(holder), {'report_id': report_x.id, 'resolved': True})
+    for refused in ({'comment_id': reply_y.id}, {'community_id': community_y.id}):
+        with pytest.raises(Exception, match='incorrect login'):
+            get_reply_report_list(bearer(holder), refused)
+    with pytest.raises(Exception, match='incorrect login'):
+        put_reply_report_resolve(bearer(holder), {'report_id': report_y.id, 'resolved': True})

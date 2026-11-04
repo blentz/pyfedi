@@ -6659,7 +6659,7 @@ not enough either when the predicate itself branches on context.
 (`app/models.py:1259-1265`) and `User.is_staff()` (`:1268-1272`) iterate
 `self.roles` and compare `role.name` to the literals `'Admin'` and `'Staff'`.
 **A role carrying every permission in the system but named anything else is
-not an admin to any gate in `app/shared/`.** So
+not an admin to any gate in `app/shared/`.** *(Superseded by RBAC: see fact 401's note.)* So
 `grant_permission(user, 'change instance settings')`
 (`tests/factories.py:365`) is the wrong tool for any test that needs to
 witness an admin disjunct — and the test **passes anyway**, exercising the
@@ -9775,6 +9775,9 @@ role called `Admin` and `is_staff()` for one called `Staff`
 (`app/models.py:1259-1275`), so `grant_permission(user, 'administer all
 communities')` -- which makes a bespoke role -- does not satisfy it. A fixture
 for staff has to attach the actual named role. See D965.
+*Superseded by RBAC (2026-11-03 spec): `is_staff()` and `is_admin_or_staff()` are gone (step 6). Admin is the
+built-in role; give a test one with `tests/factories.py` `make_admin`, the seeded Staff with `staff_role()`, or a
+single permission with `grant_permissions`. `tests/test_rbac_lint.py` keeps the name checks from coming back.*
 
 **402. HOISTING A GUARD CAN ORPHAN THE ONE BELOW IT.** Moving
 `community_moderate_subscribers`'s authorization check above its form made the
@@ -14107,3 +14110,10 @@ Lesson 671's `tryfirst` mark-adding hook could not help, since the marks were re
 `WorkerGroupScheduling` now does the grouping itself, from the node id, through xdist's public
 `pytest_xdist_make_scheduler` hook. When a parallel-only failure looks like interference, check `[gwN]` per module in
 a `-v` run first, as 671 says.
+
+**1070. A SCOPABLE PERMISSION ASKED WITH NO OBJECT REFUSES EVERY SCOPED HOLDER.**
+`user_access(perm, user_id)` with no `on=` asks about the whole instance, so a role granted on one domain passes
+nowhere, even on that domain's own communities. A check that has the post, comment, community or user at hand
+passes it as `on=`. `tests/test_rbac_lint.py` counts the ones still asked with no object, by file, and fails when
+one is added or one goes without the list being shortened. A test of a scoped grant uses
+`tests/test_permissions_scope.py`'s `world` fixture (domains X and Y) and its `scoped_holder`.

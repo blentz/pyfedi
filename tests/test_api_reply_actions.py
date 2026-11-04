@@ -17,7 +17,7 @@ from unittest.mock import patch
 import pytest
 from flask import g
 
-from app.constants import REPORT_STATE_NEW, REPORT_STATE_RESOLVED, ROLE_STAFF_NAME
+from app.constants import REPORT_STATE_NEW, REPORT_STATE_RESOLVED
 from app import db
 from app.models import (Community, CommunityMember, Language, Notification,
                         Post, PostReply, PostReplyVote, Report, Role,

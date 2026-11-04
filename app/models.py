@@ -45,7 +45,7 @@ from app.constants import AUTOMATED_REPORTER, SUBSCRIPTION_NONMEMBER, SUBSCRIPTI
     SUBSCRIPTION_BANNED, SUBSCRIPTION_PENDING, NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC, NOTIF_POST, NOTIF_REPLY, \
     NOTIF_FEED, NOTIF_DEFAULT, NOTIF_REPORT, NOTIF_MENTION, POST_STATUS_REVIEWING, \
     POST_STATUS_PUBLISHED, POST_TYPE_VIDEO, INVITE_MEMBERS_ONLY, INVITE_MODS_ONLY, INVITE_OWNER_ONLY, POST_TYPE_GALLERY, \
-    POST_TYPE_IMAGE, ROLE_STAFF_NAME, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC, VISIBILITY_UNLISTED
+    POST_TYPE_IMAGE, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC, VISIBILITY_UNLISTED
 import app as app_pkg
 # The module, not the name: app.storefront reads SiteDomain from this module (import cycle: storefront)
 import app.storefront as storefront
@@ -2507,15 +2507,11 @@ class User(UserMixin, db.Model):
             return True
         return _holds_built_in_role(self.id, permission_version(self.id))
 
-    @cache.memoize(timeout=30)
-    def is_staff(self):
-        for role in self.roles:
-            if role.name == ROLE_STAFF_NAME:
-                return True
-        return False
-
-    def is_admin_or_staff(self):
-        return self.is_admin() or self.is_staff()
+    def listed_role_names(self) -> list[str]:
+        """The ordinary roles this user holds instance-wide that are listed publicly, by name: what their profile shows
+        beside Admin (spec 2026-11-03-rbac-design.md, Public display of roles)."""
+        return [role.name for role in self.roles.filter(Role.built_in.is_(False), Role.listed_publicly.is_(True))
+                .order_by(Role.name)]
 
     def is_ban_exempt(self):
         # D583: user 1 is the account that set the instance up. No ban -- account, IP or cookie -- stops it logging
@@ -5948,7 +5944,7 @@ class Site(db.Model):
     @staticmethod
     def staff() -> List[User]:
         return db.session.query(User).filter_by(deleted=False, banned=False).filter(
-                                      User.roles.any(Role.name == ROLE_STAFF_NAME)).order_by(User.id).all()  # D481: by name, as is_staff()
+                                      User.roles.any(Role.name == 'Staff')).order_by(User.id).all()  # by name until RBAC step 8 (Notifications)
 
     def active_now(self):
         return db.session.execute(text(
