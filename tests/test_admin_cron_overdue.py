@@ -27,8 +27,8 @@ import pytest
 from flask import g
 
 from app import db
-from app.models import CronJobLog, Role, Site, utcnow
-from tests.factories import make_instance, make_user
+from app.models import CronJobLog, Site, utcnow
+from tests.factories import make_instance, make_user, staff_role
 
 # The eight names and their schedules, read off `get_frequency`'s own arms. Kept
 # here as data so a change to one of them has to be made twice, deliberately.
@@ -56,12 +56,7 @@ def env(app, db_session, site):
     make_user(instance, 'founder', local=True)
     staffer = make_user(instance, 'staffer', local=True)
     staffer.verified = True
-    role = Role.query.filter_by(name='Staff').first()
-    if role is None:
-        role = Role(name='Staff')
-        db.session.add(role)
-        db.session.commit()
-    staffer.roles.append(role)
+    staffer.roles.append(staff_role())   # the seeded Staff: a role holding nothing opens no dashboard
     db.session.commit()
     client = app.test_client()
     with client.session_transaction() as session:

@@ -26,7 +26,7 @@ from unittest.mock import patch
 from app import db
 from app.form_choices import select_choices
 from app.models import CronJobLog, Language, Site, utcnow
-from tests.factories import grant_permission, make_instance, make_user
+from tests.factories import grant_permission, make_instance, make_user, staff_role
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -47,16 +47,9 @@ def _staff(instance, name='staffer'):
     menu exists at all (app/templates/base.html:268), and therefore what
     `admin_home` now requires.
     """
-    from app.models import Role
-
     user = make_user(instance, name, local=True)
     user.verified = True
-    role = Role.query.filter_by(name='Staff').first()
-    if role is None:
-        role = Role(name='Staff')
-        db.session.add(role)
-        db.session.commit()
-    user.roles.append(role)
+    user.roles.append(staff_role())   # the seeded Staff: a role holding nothing opens no dashboard
     db.session.commit()
     return user
 
