@@ -21,7 +21,7 @@ Date: 2026-11-03. Status: being built on blentz.
   also covers unban and delete, which let a `manage users` holder delete an Admin; (2) "holds a role" (blocking,
   the ban and delete warnings, the admin dashboard and menu) means a grant of Admin or of a role with at least one
   permission, so an empty role makes nobody privileged; (3) the post and reply menus' community-ban link shows to
-  `moderate all communities` holders, who may already ban through the route.
+  `moderate all communities` holders, who may already ban through the route. The owner kept all three (2026-11-04).
 - Step 4 (the catalogue) is done: `CATALOGUE` in app/permissions.py (name, group, scopable, Staff, guards), migration
   c5f9e3b7a2d1 moving every role onto it (note 1), and `change user roles` gone (RB5: /admin/permissions and the
   user form's role field are Admin-only). Every check of `administer all communities` now asks the permission split
