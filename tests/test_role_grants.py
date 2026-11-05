@@ -275,3 +275,12 @@ def test_a_held_post_is_shown_to_whoever_may_open_the_queue(people):
     db.session.commit()
     notify_admins_of_post_needing_approval(post)
     assert told() == sorted([1, admin.id])
+
+
+def test_seeding_where_the_upgrade_left_its_marker_keeps_the_one_row(db_session):
+    from app.models import Settings
+    db.session.add(Settings(name='rbac_staff_gained_user_administration', value='true'))
+    db.session.commit()
+    seed_default_roles()
+    db.session.commit()
+    assert Settings.query.filter_by(name='rbac_staff_gained_user_administration').count() == 1
