@@ -229,7 +229,7 @@ class TestReportingAnAccount:
     def test_the_admins_are_told(self, env):
         admin = env.baseline.user1
         g.admin_ids = [admin.id]
-        with patch.object(Site, 'admins', staticmethod(lambda: [admin])):
+        with patch.object(g, 'admin_ids', [admin.id], create=True):   # whom recipients_for reads as the admins
             process_report(env.voter, env.author, a_flag(), db.session)
         assert Notification.query.filter_by(user_id=admin.id,
                                             notif_type=NOTIF_REPORT).count() == 1
@@ -322,7 +322,7 @@ class TestReportingAPost:
         admin = env.baseline.user1
         env.community.un_moderated = True
         db.session.commit()
-        with patch.object(Site, 'admins', staticmethod(lambda: [admin])):
+        with patch.object(g, 'admin_ids', [admin.id], create=True):   # whom recipients_for reads as the admins
             process_report(env.voter, env.post, a_flag(), db.session)
         assert Notification.query.filter_by(user_id=admin.id).count() >= 1
 
@@ -330,7 +330,7 @@ class TestReportingAPost:
         admin = env.baseline.user1
         env.community.un_moderated = False
         db.session.commit()
-        with patch.object(Site, 'admins', staticmethod(lambda: [admin])):
+        with patch.object(g, 'admin_ids', [admin.id], create=True):   # whom recipients_for reads as the admins
             process_report(env.voter, env.post, a_flag(), db.session)
         assert Notification.query.filter_by(user_id=admin.id).count() == 0
 
