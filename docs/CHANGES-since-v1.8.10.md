@@ -468,8 +468,9 @@ than stored (`c0ac3305`).
 says, and the form no longer offers the choice (D798, `986c32ce`).
 
 **Feeds.** The server refuses to rename a feed that has subscribers, including
-crafted POSTs and the API (D696, `b9ff5cd5`). Admins may edit any feed on the
-web as the API already allowed (D697, `0186638a`). Creating an NSFW or NSFL
+crafted POSTs and the API (D696, `b9ff5cd5`). Admins may edit any public feed on
+the web as the API already allowed (D697, `0186638a`); a private feed is its
+owner's alone, admins included, on both (O5, `dc94f723c`). Creating an NSFW or NSFL
 feed through the API is refused where the site disallows it (D708,
 `31374f29`). `feed_auto_leave` defaults to off in the model as in the form
 (D663, `4cf60b08`).
