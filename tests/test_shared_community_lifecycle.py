@@ -825,12 +825,14 @@ def test_edit_community_permission_guard_admin_not_member_is_admitted(
     _seed_und_language()
     _make_site_admin(s.user)
     monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
-    api_input = _api_input(title='Admin Title')
+    # The text is its moderators' (tests/test_community_text.py), so the settings show the admin was let in
+    api_input = _api_input(title=s.community.title, description=s.community.description, rules=s.community.rules,
+                           restricted_to_mods=True)
 
     result = edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
 
     assert result == s.user.id
-    assert s.community.title == 'Admin Title'
+    assert s.community.restricted_to_mods is True
 
 
 def test_edit_community_permission_guard_neither_raises_and_leaves_community_untouched(
@@ -875,11 +877,12 @@ def test_edit_community_permission_guard_staff_alone_is_admitted(app, db_session
     """
     s = _seed()
     _make_site_staff(s.user)
-    api_input = _api_input(title='Staff May Land This')
+    api_input = _api_input(title=s.community.title, description=s.community.description, rules=s.community.rules,
+                           restricted_to_mods=True)
 
     edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
 
-    assert s.community.title == 'Staff May Land This'
+    assert s.community.restricted_to_mods is True
 
 
 # `edit_community` (app/shared/community.py:325-333), the icon block.

@@ -47,7 +47,7 @@ COMMUNITY = [
         post_effect(lambda w: f'/community/community/{CID(w)}/{w.target.id}/kick_user_community',
                     lambda w, r: membership(w, w.target.id) is None)),
     Row('community.wiki_list', 'DDDAA', page('/community/parity/moderate/wiki')),
-    Row('community.wiki_add', 'DDDAA', page('/community/parity/moderate/wiki/add')),
+    Row('community.wiki_add', 'DDDDD', page('/community/parity/moderate/wiki/add')),
     Row('community.modlog', 'DDDAA', page('/community/parity/moderate/modlog')),
     Row('community.report_escalate', 'DDDAA',
         page(lambda w: f'/community/community/{CID(w)}/moderate_report/{w.report.id}/escalate')),

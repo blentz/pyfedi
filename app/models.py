@@ -5392,7 +5392,8 @@ class CommunityWikiPage(db.Model):
             return False
         if user.is_anonymous:
             return False
-        moderates = community.is_moderator(user) or user_access('moderate all communities', user.id, on=community)
+        # Its own moderators', not an instance role's, Admin included (spec 2026-11-03-rbac-design.md, follow-up 2)
+        moderates = community.is_moderator(user)
         if self.who_can_edit == 0:
             if moderates:
                 return True

@@ -23,7 +23,7 @@ from flask import g
 
 from app import db
 from app.models import Community, Site
-from tests.factories import make_community
+from tests.factories import make_community, make_community_member
 
 LISTINGS = ['/admin/communities', '/admin/communities/no-topic',
             '/admin/communities/low-quality', '/admin/communities/un-moderated']
@@ -483,6 +483,7 @@ class TestRenamingALocalCommunity:
         community = self.a_local_community(env)
         community.ap_profile_id = 'https://test.piefed.local/c/beforerename?legacy=1'
         db.session.commit()
+        make_community_member(env.baseline.user1, community, is_moderator=True)   # its text is its moderators'
 
         self.edit(env, community, title='A New Title')
 

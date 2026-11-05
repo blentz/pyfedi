@@ -382,6 +382,19 @@ def _refuse_community_settings_the_form_would_not_offer(settings):
         raise Exception('topic not found')
 
 
+def hold_community_text(form, community, user) -> None:
+    """A community's title, description and rules are its own moderators', not an instance role's, Admin included (spec
+    2026-11-03-rbac-design.md, follow-up 2). For anyone else the form shows them read-only and holds the stored values,
+    whatever a POST says. Call it before the form is validated: a disabled field is not submitted."""
+    if community.is_moderator(user):
+        return
+    for name, value in (('title', community.title), ('description', community.description), ('rules', community.rules)):
+        field = getattr(form, name, None)
+        if field is not None:
+            field.data = value
+            field.render_kw = {**(field.render_kw or {}), 'disabled': True}
+
+
 def edit_community(input, community, src, auth=None, uploaded_icon_file=None, uploaded_banner_file=None, from_scratch=False):
     settings = {}
     link_base = object_base(community)   # a local-only host in its texts is stored on its federating base (plan C3)
@@ -462,6 +475,13 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
     if not from_scratch:
         if not can_moderate(community, user):
             raise Exception('incorrect_login')
+
+        # hold_community_text's rule. A client that sends the text it read back unchanged is changing none of it.
+        if src == SRC_API and not community.is_moderator(user) and any(
+                (new or '') != (old or '') for new, old in ((title, community.title),
+                                                            (description, community.description),
+                                                            (rules, community.rules))):
+            raise Exception('community_text_is_for_moderators')
 
         if src == SRC_API and 'kind' in input:
             refusal = apply_kind(community, input['kind'], user)

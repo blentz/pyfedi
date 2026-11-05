@@ -616,6 +616,7 @@ def test_a_private_message_and_its_api_edit_are_stored_on_the_senders_base(app, 
 def test_an_admins_edit_of_a_shop_communitys_texts_is_on_the_shop(app, onion_rows):
     db.session.add(Language(code='und', name='Undetermined'))
     grant_permissions(onion_rows.hal, *COMMUNITY_ADMINISTRATION)
+    make_community_member(onion_rows.hal, onion_rows.wares, is_moderator=True)   # its text is its moderators'
     db.session.commit()
     client, token = signed_in(app, onion_rows.hal)
     data = {'csrf_token': token, 'url': 'wares', 'title': 'Wares', 'description': f'see {ONION_LINK}',

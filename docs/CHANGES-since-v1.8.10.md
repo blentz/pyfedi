@@ -674,6 +674,12 @@ turns its comments off or on, or changes the labels on their post (flair, NSFW,
 NSFL, AI). It gives the content, the community, the reason and "a moderator" or "an
 admin", and names no one. A label change is also a new modlog entry.
 
+**A community's text is its moderators' (not yet pushed).** Its wiki pages, title,
+description and rules can now be changed only by its own moderators. Instance roles,
+Admin included, keep its other settings and may delete a wiki page. For an abandoned
+community, an admin appoints a moderator first. The API refuses such a change with
+`community_text_is_for_moderators`.
+
 **Roles and permissions (RBAC; not yet pushed).** An instance
 admin now builds named roles in the admin area (`/admin/roles`, replacing
 `/admin/permissions`). Each permission in a role reaches all domains or selected

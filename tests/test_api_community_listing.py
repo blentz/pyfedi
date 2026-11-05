@@ -605,6 +605,7 @@ class TestEdit:
         assert community.rules == 'be kind'
 
     def test_every_field_at_once(self, maker, env):
+        make_community_member(env.admin, env.community, is_moderator=True)   # its text is its moderators'
         put_community(token(env.admin),
                       {'community_id': env.community.id, 'title': 'elsewhere',
                        'description': 'a new place', 'rules': 'be kinder',

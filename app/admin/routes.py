@@ -62,6 +62,7 @@ from app.referral import DEFAULT_GENERATORS, GENERATOR_CHOICES, GENERATORS_SETTI
 from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default, federating_base, is_hosted_uri
 from app.onion_media import DEFAULT_CACHE_BYTES
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
+from app.shared.community import hold_community_text
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
 from app.translation import LibreTranslateAPI
@@ -1943,6 +1944,7 @@ def admin_community_edit(community_id):
     old_topic_id = community.topic_id if community.topic_id else None
     form.topic.choices = select_choices(topics_for_form(0))
     form.languages.choices = select_choices(languages_for_form(all_languages=True))
+    hold_community_text(form, community, current_user)
     if form.validate_on_submit():
         # D1370. `community.name` is half of a local community's ActivityPub identity:
         # `admin_community_move`, which the template links to from this very page,

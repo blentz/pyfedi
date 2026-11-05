@@ -68,8 +68,8 @@ CATALOGUE = (
                "Everything a community's moderators may do, in every community: bans, moderators, flair, approvals, "
                'removing and restoring content, seeing deleted content'),
     Permission('administer all communities', 'communities', True, False,
-               "What only admins may do in a community: delete or restore it, edit its settings, its wiki and RSS "
-               'feeds, kick users, edit and purge posts'),
+               "What only admins may do in a community: delete or restore it, edit its settings and RSS feeds, kick "
+               'users, purge posts'),
     Permission('administer communities pages', 'communities', True, True,
                'The admin pages listing and editing communities and their content'),
     Permission('manage topics', 'communities', False, True, 'Create, edit, import and delete topics'),

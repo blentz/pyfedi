@@ -104,7 +104,8 @@ class TestEditingACommunityAsAnAdmin:
         """D1299. `request.files['icon_file']` was a 400 for every client that
         does not send an empty file input -- which is every client that is not
         a browser."""
-        an_admin(env, 'administer communities pages')
+        make_community_member(an_admin(env, 'administer communities pages'), env.community,
+                              is_moderator=True)   # its text is its moderators'
         token = csrf(env.app, env.client)
         response = env.client.post(f'/admin/community/{env.community.id}/edit',
                                    data=self.payload(env, token))

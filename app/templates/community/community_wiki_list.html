@@ -40,17 +40,19 @@
                     <tr>
                         <td>{{ page.title }}</td>
                         <td><a href="{{ url_for('community.community_wiki_view', actor=community.link(), slug=page.slug) }}">{{ page.slug }}</a></td>
-                        <td class="text-right">{% if page.can_edit(current_user, community) %}
+                        <td class="text-right">{% if page.can_edit(current_user, community) or may_remove %}
                             <div class="dropdown">
                               <button class="btn btn-primary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
                                 Actions
                               </button>
                               <ul class="dropdown-menu">
                                   <li><a class="dropdown-item" href="{{ url_for('community.community_wiki_view', actor=community.link(), slug=page.slug) }}">{{ _('View page') }}</a></li>
+                                {% if page.can_edit(current_user, community) %}
                                   <li><a class="dropdown-item" href="{{ url_for('community.community_wiki_revisions', actor=community.link(), page_id=page.id) }}">{{ _('View revisions') }}</a></li>
                                 <li><a class="dropdown-item"
                                        href="{{ url_for('community.community_wiki_edit', actor=community.link(), page_id=page.id, return='list') }}">
                                     {{ _('Edit') }}</a></li>
+                                {% endif %}
                                 <li><a class="confirm_first dropdown-item send_post"
                                        href="#" data-url="{{ url_for('community.community_wiki_delete', actor=community.link(), page_id=page.id) }}">
                                     {{ _('Delete') }}</a></li>

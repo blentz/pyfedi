@@ -1686,6 +1686,7 @@ def community_edit(community_id: int):
             locked = True
         if locked:
             form.kind.render_kw = {'class': 'form-select', 'disabled': True}
+        shared_community.hold_community_text(form, community, current_user)
         if form.validate_on_submit():
             kind = form.kind.data if form.kind.raw_data else community.kind   # a disabled select is not submitted
             refusal = shared_community.apply_kind(community, kind, current_user)
@@ -2553,6 +2554,7 @@ def community_wiki_list(actor):
                 CommunityWikiPage.title).all()
             return render_template('community/community_wiki_list.html', title=_('Community Wiki'), community=community,
                                    pages=pages, low_bandwidth=low_bandwidth, current='wiki',
+                                   may_remove=can_moderate(community, current_user),
                                    )
         else:
             abort(401)
@@ -2569,7 +2571,7 @@ def community_wiki_add(actor):
     community = actor_to_community(actor)
 
     if community is not None:
-        if community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community):
+        if community.is_moderator():   # as CommunityWikiPage.can_edit: an instance role may delete a page, not write one
             low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
             form = EditCommunityWikiPageForm()
             if form.validate_on_submit():
@@ -2822,7 +2824,8 @@ def community_wiki_delete(actor, page_id):
 
     if community is not None:
         page: CommunityWikiPage = db.session.get(CommunityWikiPage, page_id) or abort(404)
-        if page.can_edit(current_user, community):
+        if page.community_id == community.id and (page.can_edit(current_user, community) or
+                                                  can_moderate(community, current_user)):
             db.session.delete(page)
             db.session.commit()
             flash(_('Page deleted'))
