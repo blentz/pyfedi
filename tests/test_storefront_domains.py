@@ -14,7 +14,7 @@ from cachelib import SimpleCache
 from app import cache, db
 from app.models import Site, SiteDomain
 from app.storefront import (check_default_domain, clear_domain_cache, default_domain, domain_for_host,
-                            domain_rows, is_registered_host, normalise_host, registration_from_mode)
+                            domain_rows, is_registered_host, normalise_host)
 
 
 def add_domain(domain, **kw):
