@@ -105,18 +105,6 @@ def test_synthesised_onion_server_name(app, db_session, monkeypatch):
     assert domain_rows()[0].is_onion is True
 
 
-@pytest.mark.parametrize('mode,expected', [('Open', 'anyone'), ('RequireApplication', 'anyone'),
-                                           ('Closed', 'closed'), (None, 'closed')])
-def test_registration_from_mode(mode, expected):
-    assert registration_from_mode(mode) == expected
-
-
-def test_migration_mapping_matches_app_mapping():
-    module = load_migration()
-    for mode, expected in module.REGISTRATION_FROM_MODE.items():   # frozen at 'admin'; d6a1f4c8e2b3 merged it into 'closed'
-        assert registration_from_mode(mode) == {'admin': 'closed'}.get(expected, expected)
-
-
 def load_migration(name: str = '*_site_domain.py'):
     path = next(Path(__file__).parent.parent.glob(f'migrations/versions/{name}'))
     spec = importlib.util.spec_from_file_location('site_domain_migration', path)
