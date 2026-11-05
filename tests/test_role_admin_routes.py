@@ -406,3 +406,14 @@ def test_a_revoke_without_its_csrf_token_changes_nothing(env, monkeypatch):
     monkeypatch.setitem(env.app.config, 'WTF_CSRF_ENABLED', True)   # the app is session-scoped: restored after
     env.client.post(f'/admin/grants/{grant.id}/revoke', data={})
     assert db.session.get(RoleGrant, grant.id) is not None
+
+
+def test_the_user_pages_role_list_makes_nobody_an_admin_by_default(env):
+    """Seen in a browser: it opened on Admin, so "Add grant" with nothing chosen made an admin."""
+    response = post(env, f'/admin/user/{env.holder.id}/grants', **{'grant-role': '0'})
+    assert response.status_code == 302
+    assert RoleGrant.query.filter_by(user_id=env.holder.id).count() == 0
+    with env.app.test_request_context():
+        from app.admin.forms import GrantForm
+        first = GrantForm().role.choices[0]
+    assert (first.value, str(first.label)) == (0, 'Choose a role')

@@ -52,7 +52,7 @@ CATALOGUE = (
     Permission('approve registrations', 'users', True, True, 'Approve and refuse registration applications'),
     Permission('administer all users', 'users', True, True,
                'The user list, editing and deleting accounts, adding users, referrals, reports on users'),
-    Permission('ban users', 'users', True, True, 'Ban and unban accounts instance-wide'),
+    Permission('ban users', 'users', True, True, 'Ban and unban accounts'),
     Permission('manage users', 'users', True, True, 'Delete or purge a profile, and the profile admin panel'),
     Permission('view user details', 'users', True, True,
                "Accounts sharing an IP address, a user's subscriptions and moderated communities, deleted items on a "

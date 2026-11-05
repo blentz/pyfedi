@@ -526,7 +526,8 @@ class GrantForm(FlaskForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.role.choices = select_choices([(role.id, role.name) for role in
+        # Nothing chosen by default: the first role is Admin, one click away from making somebody one
+        self.role.choices = select_choices([(0, _('Choose a role'))] + [(role.id, role.name) for role in
                                             Role.query.order_by(Role.built_in.desc(), Role.name)])
 
 

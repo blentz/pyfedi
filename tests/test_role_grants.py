@@ -238,7 +238,7 @@ def test_the_grant_forms_offer_admin_then_the_rest_by_name(app, db_session):
     db.session.add(Role(name='Moderator'))
     db.session.commit()
     with app.test_request_context():
-        assert [choice.label for choice in GrantForm().role.choices] == ['Admin', 'Moderator', 'Staff']
+        assert [choice.label for choice in GrantForm().role.choices] == ['Choose a role', 'Admin', 'Moderator', 'Staff']
         assert [choice.label for choice in AddUserForm().grants.choices] == ['Admin', 'Moderator', 'Staff']
 
 

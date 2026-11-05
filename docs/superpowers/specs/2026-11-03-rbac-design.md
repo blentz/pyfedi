@@ -10,6 +10,9 @@ Date: 2026-11-03. Status: being built on blentz.
   in about five seconds. It found two defects, both fixed: `administer all users` no longer maps to `read private
   messages` (web conversations were an admin's alone; the API's report lists ask `administer all users` themselves), and
   the downgrade takes `administer all users` from Staff only if the upgrade gave it.
+- Checked in a real browser on that copy, with real CSRF and a real Redis cache: every role and grant page works, and a
+  role edit reached the holder on the next request. It found that the user page's role list opened on Admin, so "Add
+  grant" with nothing chosen made an admin; it now opens on "Choose a role".
 - Step 10 is done, and with it the build. Expired grants are removed by `remove_expired_grants` (app/roles.py), with a
   modlog entry naming no actor. The project has no Celery beat, so RB11's task runs from cron through `flask send-queue`,
   every few minutes. `shown as admin` (RB12) goes through `admins_shown_on(domain)` for the API's site `admins`, /about,
