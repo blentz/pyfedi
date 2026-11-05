@@ -493,3 +493,8 @@ def test_the_requests_admin_list_is_told_as_site_admins_reads_it(app, world):
     with app.test_request_context('/'):
         g.admin_ids = [world.on_y.id]
         assert world.on_y.id in recipient_ids('approve registrations')
+
+
+def test_a_row_that_is_gone_belongs_to_no_domain(world):
+    from app.permissions import _domain_of
+    assert _domain_of('user', 987654) is None
