@@ -141,7 +141,9 @@ def test_a_holder_of_remove_alone_can_open_what_they_removed_to_restore_it(app, 
 
     client = logged_in(app, s.voter)
 
-    assert client.get(f'/post/{s.post.id}').status_code == 200
+    page = client.get(f'/post/{s.post.id}')
+    assert page.status_code == 200
+    assert s.author.user_name in page.get_data(as_text=True)   # who wrote it, not [deleted]
     assert f'/post/{s.post.id}/restore' in client.get(f'/post/{s.post.id}/options_menu').get_data(as_text=True)
 
 

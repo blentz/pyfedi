@@ -207,7 +207,7 @@ class EditCommunityWikiPageForm(FlaskForm):
     title = StringField(_l('Title'), validators=[DataRequired()])
     slug = StringField(_l('Slug'), validators=[DataRequired()])
     body = TextAreaField(_l('Body'), render_kw={'rows': '10'})
-    edit_options = [(0, _l('Mods and admins')),
+    edit_options = [(0, _l('Moderators')),
                     (1, _l('Trusted accounts')),
                     (2, _l('Community members')),
                     (3, _l('Any account'))

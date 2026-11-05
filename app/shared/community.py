@@ -393,6 +393,7 @@ def hold_community_text(form, community, user) -> None:
         if field is not None:
             field.data = value
             field.render_kw = {**(field.render_kw or {}), 'disabled': True}
+            field.description = _("Only this community's moderators can change this.")
 
 
 def edit_community(input, community, src, auth=None, uploaded_icon_file=None, uploaded_banner_file=None, from_scratch=False):

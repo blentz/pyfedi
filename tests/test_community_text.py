@@ -8,6 +8,7 @@ from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.api.alpha.utils.community import put_community
+from app.community.forms import EditCommunityWikiPageForm
 from app.models import Community, CommunityWikiPage, Language
 from tests.factories import (bearer, grant_permission, make_admin, make_community_member, seed_post_context)
 
@@ -105,6 +106,19 @@ def test_a_moderator_may_add_a_wiki_page(app, s):
     assert CommunityWikiPage.query.filter_by(slug='new').first() is not None
 
 
+def test_the_wiki_list_offers_a_moderator_add_and_an_instance_role_not(app, s, instance_role):
+    add = '/community/textroom/moderate/wiki/add'
+    assert add not in logged_in(app, instance_role).get('/community/textroom/moderate/wiki').get_data(as_text=True)
+
+    make_community_member(s.voter, s.community, is_moderator=True)
+
+    assert add in logged_in(app, s.voter).get('/community/textroom/moderate/wiki').get_data(as_text=True)
+
+
+def test_the_page_option_says_who_it_lets_edit(app, s):
+    assert 'Mods and admins' not in str(EditCommunityWikiPageForm.edit_options)
+
+
 def test_an_instance_role_may_still_delete_a_wiki_page(app, s, instance_role):
     """Removal stays."""
     client = logged_in(app, instance_role)
@@ -149,6 +163,7 @@ def test_the_edit_page_shows_an_instance_role_the_text_as_read_only(app, s, inst
 
     title_input = page[page.index('id="title"') - 200:page.index('id="title"') + 200]
     assert 'disabled' in title_input
+    assert 'moderators can change this.' in page
 
 
 def test_a_community_with_no_description_is_no_change_of_text(app, s, instance_role):
@@ -214,6 +229,7 @@ def test_the_admin_page_shows_an_instance_role_the_text_as_read_only(app, s, ins
 
     title_input = page[page.index('id="title"') - 200:page.index('id="title"') + 200]
     assert 'disabled' in title_input
+    assert 'moderators can change this.' in page
 
 
 # The API

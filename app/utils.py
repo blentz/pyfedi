@@ -5652,7 +5652,7 @@ def _tell_author(action: str, action_type: str, actor: User, author: User | None
     if post is None or author is None or author.id == actor.id or not author.is_local():
         return
     community = community or post.community
-    if post.deleted:   # the post page is a 404 for its author
+    if post.deleted and post.user_id != author.id:   # a removed post's page opens for its author alone
         url = f'/c/{community.link()}'
     else:
         url = f'/post/{post.id}' + (f'#comment_{reply.id}' if reply else '')

@@ -5371,7 +5371,7 @@ class CommunityWikiPage(db.Model):
     body_html = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=utcnow)
     edited_at = db.Column(db.DateTime, default=utcnow)
-    who_can_edit = db.Column(db.Integer, default=0)  # 0 = mods & admins, 1 = trusted, 2 = community members, 3 = anyone
+    who_can_edit = db.Column(db.Integer, default=0)  # 0 = mods, 1 = trusted, 2 = community members, 3 = anyone
     revisions = db.relationship('CommunityWikiPageRevision', backref=db.backref('page'), cascade='all,delete',
                                 lazy='dynamic')
 

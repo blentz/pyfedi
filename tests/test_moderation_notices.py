@@ -13,6 +13,7 @@ from app.api.alpha.utils.post import put_post_set_flair
 from app.api.alpha.utils.user import get_user_notifications
 from app.constants import NOTIF_MODERATION, SRC_API
 from app.models import ModLog, Notification, Post, User
+from app.post.util import deleted_post_state
 from app.shared.post import lock_post, mod_remove_post, mod_restore_post
 from app.shared.reply import mod_remove_reply, mod_restore_reply
 from app.utils import add_to_modlog, notif_id_to_string
@@ -55,11 +56,11 @@ def test_removing_a_post_clears_other_notifications_about_it_and_keeps_the_notic
     assert [n.notif_type for n in Notification.query.filter_by(user_id=s.author.id)] == [NOTIF_MODERATION]
 
 
-def test_a_notice_about_a_removed_post_goes_to_its_community_which_the_author_can_open(s):
-    """The post page is a 404 for its author once it has been removed."""
+def test_a_notice_about_a_removed_post_goes_to_the_post_which_its_author_can_open(s):
     mod_remove_post(s.post.id, 'off topic', SRC_API, bearer(s.voter))
 
-    assert notices(s.author)[0].url == f'/c/{s.community.link()}'
+    assert notices(s.author)[0].url == f'/post/{s.post.id}'
+    assert deleted_post_state(db.session.get(Post, s.post.id), db.session.get(User, s.author.id)) == 'staff'
 
 
 def test_the_notice_names_no_one(s):
@@ -124,15 +125,18 @@ def test_turning_replies_off_under_a_comment_tells_its_author(s):
     assert notice.targets['post_id'] == s.post.id and notice.targets['comment_id'] == reply.id
 
 
-def test_a_comment_on_a_removed_post_links_to_the_community(s):
-    reply = make_post_reply(s.post, s.author, body='a comment')
+def test_a_comment_on_someone_elses_removed_post_links_to_the_community_as_the_post_is_a_404_for_its_author(s):
+    commenter = make_user(s.instance, 'commenter', local=True)
+    reply = make_post_reply(s.post, commenter, body='a comment')
     s.post.deleted = True
+    s.post.deleted_by = s.voter.id
     db.session.commit()
 
-    add_to_modlog('delete_post_reply', actor=s.voter, target_user=s.author, community=s.community, post=s.post,
+    add_to_modlog('delete_post_reply', actor=s.voter, target_user=commenter, community=s.community, post=s.post,
                   reply=reply)
 
-    assert notices(s.author)[0].url == f'/c/{s.community.link()}'
+    assert notices(commenter)[0].url == f'/c/{s.community.link()}'
+    assert deleted_post_state(db.session.get(Post, s.post.id), db.session.get(User, commenter.id)) == 'gone'
 
 
 def test_nobody_is_told_of_their_own_action(s):
