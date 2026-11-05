@@ -115,6 +115,7 @@ NON_OBJECT_ARGUMENTS = {
     'activity_id': None, 'page_id': None, 'revision_id': None, 'slug': None, 'plan': None, 'subscription': None,
     'account_id': None,   # a Stripe customer, compared with the reader's own
     'domain_id': None,   # a link domain (/d/) or, for an admin, a hosted domain's settings
+    'role_id': ('/admin/',), 'grant_id': ('/admin/',),   # a role and a grant (RBAC), Admin's pages alone
     # the reader's own rows, which show a hidden target as text with a note (app/local_names.py)
     'notification_id': None, 'report_id': None,
     # an activity: the result of one sent here, for its sender, and this storefront's own logged outbound ones, which
