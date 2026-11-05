@@ -58,9 +58,13 @@ def burst(voter, author, n=10):
     downvoting, targeting (every vote on one account, too fast to be human) and, as both are called bob, a namesake."""
     community = Community.query.filter(Community.site_domain_id == author.site_domain_id,
                                        Community.title.like('% art')).one()
+    # One clock minute, whenever the test runs: vote_targeting.sql's rate is votes over the distinct minutes they fall
+    # in, so ten votes across a minute's end read as five a minute, under its six, and the test failed now and then
+    minute = utcnow().replace(second=0, microsecond=0) - timedelta(minutes=1)
     for i in range(n):
         post = make_post(community, author, f'https://{community.id}.example/post/{author.id}-{i}', title=f'b{i}')
-        make_post_vote(voter, post, -1)
+        make_post_vote(voter, post, -1).created_at = minute + timedelta(seconds=i)
+    db.session.commit()
 
 
 DIRECTIONS = ['onion voter', 'onion target']
