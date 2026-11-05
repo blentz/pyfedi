@@ -10,7 +10,7 @@ from typing import Optional
 
 from flask import current_app
 from flask_babel import _
-from sqlalchemy import and_, exists, false, inspect as sa_inspect, or_, select, true
+from sqlalchemy import and_, exists, false, inspect as sa_inspect, or_, select
 from sqlalchemy.orm import aliased
 
 from app import db
@@ -192,11 +192,9 @@ def modlog_open_clause():
     return and_(~hidden_post, ~hidden_reply)
 
 
-def modlog_domain_clause(domains: frozenset[int] | None):
+def modlog_domain_clause(domains: frozenset[int]):
     """ModLog entries about one of `domains` (RB9): taken under a grant on it, or about a community or an account
-    homed there. Everything for None, nothing for an empty set (as app.permissions.domain_clause)."""
-    if domains is None:
-        return true()
+    homed there. Nothing for an empty set."""
     if not domains:
         return false()
     ids = sorted(domains)

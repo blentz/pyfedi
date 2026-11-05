@@ -6900,12 +6900,10 @@ def notify_admin(title, url, author_id, notif_type, subtype, targets):
     db.session.commit()
 
 
-def reachable_community_ids(permission: str, user_id: int | None) -> set[int] | None:
+def reachable_community_ids(permission: str, user_id: int) -> set[int] | None:
     """The communities whose reports and content this user deals with: None (every one) for an instance-wide holder
     of `permission`; otherwise those they moderate and, under a grant on some domains, those homed there (spec
     2026-11-03-rbac-design.md, What scoped holders see)."""
-    if user_id is None:
-        return set()
     domains = permissions.domains_for(permission, user_id)
     if domains is None:
         return None

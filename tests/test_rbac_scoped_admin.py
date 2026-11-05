@@ -13,7 +13,7 @@ import pytest
 from app import db
 from app.constants import REPORT_STATE_NEW
 from app.models import Referral, Report, Role, RolePermission, SiteDomain, UserRegistration, role_grant
-from app.storefront import clear_domain_cache
+from app.storefront import clear_domain_cache, default_domain, domain_by_id
 from tests.factories import admin_role, grant_role, make_community, make_instance, make_post, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -322,3 +322,20 @@ def test_the_apis_registrations_are_a_holder_on_xs_only(world):
     with pytest.raises(Exception, match='Insufficient permissions'):
         put_registration_approve(bearer(user), {'user_id': world.on_y[0].id, 'approve': True})
     assert UserRegistration.query.filter_by(user_id=world.on_y[0].id).one().status == 0
+
+
+def test_a_local_only_domain_is_offered_by_the_picker_on_its_own_storefront_alone(app, db_session):
+    """Follow-up F6: it is never named off its own domain, and an admin there still needs to pick it."""
+    from app.admin.scope import domain_choices
+    make_instance('test.piefed.local', software='piefed')
+    closed = SiteDomain(domain='closed.scoped.example', scheme='https', federates=False)
+    db.session.add(closed)
+    db.session.commit()
+    clear_domain_cache()
+    try:
+        with patch('app.admin.scope.current_storefront', return_value=domain_by_id(closed.id)):
+            assert (closed.id, closed.domain) in domain_choices(None)
+        with patch('app.admin.scope.current_storefront', return_value=default_domain()):
+            assert (closed.id, closed.domain) not in domain_choices(None)
+    finally:
+        clear_domain_cache()
