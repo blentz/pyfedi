@@ -352,3 +352,92 @@ def test_a_scoped_moderator_reads_the_comment_reports_on_their_domain_only(world
             get_reply_report_list(bearer(holder), refused)
     with pytest.raises(Exception, match='incorrect login'):
         put_reply_report_resolve(bearer(holder), {'report_id': report_y.id, 'resolved': True})
+
+
+# --------------------------------------------------------------------------
+# domains_for: which domains a list is filtered to (spec, What scoped holders see)
+# --------------------------------------------------------------------------
+
+def test_domains_for_names_the_domains_a_holder_is_granted_on(world):
+    from app.permissions import domains_for
+    holder = scoped_holder(world, 'xlister', world.x, 'administer all users')
+    role = Role.query.filter_by(name='role-xlister').one()
+    db.session.execute(role_grant.insert().values(user_id=holder.id, role_id=role.id, site_domain_id=world.y.id,
+                                                  expires_at=utcnow() - timedelta(days=1)))   # expired: not counted
+    db.session.commit()
+    assert domains_for('administer all users', holder.id) == frozenset({world.x.id})
+    assert domains_for('approve registrations', holder.id) == frozenset()
+
+
+def test_domains_for_is_everything_for_an_instance_wide_holder_or_admin_and_nothing_for_nobody(world):
+    from app.permissions import domains_for
+    wide = make_user(world.local, 'widelister', local=True)
+    grant_role(wide, role_with('Wide', 'administer all users'))
+    assert domains_for('administer all users', wide.id) is None
+    assert domains_for('administer all users', world.founder.id) is None
+    assert domains_for('administer all users', None) == frozenset()
+    assert domains_for('administer all users', world.on_x.id) == frozenset()
+
+
+def test_an_instance_only_permission_held_on_a_domain_names_no_domain(world):
+    """A domain grant never carries one (RB7); were a row to say so, it would still reach nothing."""
+    from app.permissions import domains_for
+    holder = scoped_holder(world, 'oddlister', world.x, 'masquerade')
+    assert domains_for('masquerade', holder.id) == frozenset()
+
+
+def test_domain_clause_filters_a_query_to_the_domains(world):
+    from app.models import User
+    from app.permissions import domain_clause
+    homed = User.query.filter(User.id.in_([world.on_x.id, world.on_y.id]))
+    assert {u.id for u in homed.filter(domain_clause(User.site_domain_id, None))} == {world.on_x.id, world.on_y.id}
+    assert [u.id for u in homed.filter(domain_clause(User.site_domain_id, frozenset({world.x.id})))] == [world.on_x.id]
+    assert homed.filter(domain_clause(User.site_domain_id, frozenset())).count() == 0
+
+
+# --------------------------------------------------------------------------
+# recipient_ids: who is told (spec, Notifications)
+# --------------------------------------------------------------------------
+
+def test_the_admins_the_wide_holders_and_the_holders_on_its_domain_are_told(world):
+    from app.permissions import recipient_ids
+    admin = make_user(world.local, 'toldadmin', local=True)
+    grant_role(admin, admin_role())
+    wide = make_user(world.local, 'toldwide', local=True)
+    grant_role(wide, role_with('Wide approvers', 'approve registrations'))
+    on_x = scoped_holder(world, 'toldx', world.x, 'approve registrations')
+    on_y = scoped_holder(world, 'toldy', world.y, 'approve registrations')
+    other = scoped_holder(world, 'toldother', world.x, 'ban users')
+    assert recipient_ids('approve registrations', on=world.on_x) == sorted([1, admin.id, wide.id, on_x.id])
+    assert recipient_ids('approve registrations', on=world.on_y) == sorted([1, admin.id, wide.id, on_y.id])
+    assert recipient_ids('approve registrations') == sorted([1, admin.id, wide.id])
+    assert other.id not in recipient_ids('approve registrations', on=world.on_x)
+
+
+def test_a_content_report_goes_to_moderate_all_communities_on_its_domain(world):
+    from app.permissions import recipient_ids
+    post = make_post(world.community_x, world.on_x, 'https://test.piefed.local/post/told')
+    on_x = scoped_holder(world, 'modx', world.x, 'moderate all communities')
+    on_y = scoped_holder(world, 'mody', world.y, 'moderate all communities')
+    told = recipient_ids('moderate all communities', on=post)
+    assert on_x.id in told and on_y.id not in told
+
+
+def test_the_banned_the_deleted_and_the_expired_are_not_told(world):
+    from app.permissions import recipient_ids
+    banned = scoped_holder(world, 'bannedtold', world.x, 'approve registrations')
+    banned.banned = True
+    gone = scoped_holder(world, 'gonetold', world.x, 'approve registrations')
+    gone.deleted = True
+    expired = scoped_holder(world, 'expiredtold', world.x, 'approve registrations',
+                            expires_at=utcnow() - timedelta(days=1))
+    db.session.commit()
+    told = recipient_ids('approve registrations', on=world.on_x)
+    assert not {banned.id, gone.id, expired.id} & set(told)
+
+
+def test_the_requests_admin_list_is_told_as_site_admins_reads_it(app, world):
+    from app.permissions import recipient_ids
+    with app.test_request_context('/'):
+        g.admin_ids = [world.on_y.id]
+        assert world.on_y.id in recipient_ids('approve registrations')

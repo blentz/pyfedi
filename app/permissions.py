@@ -15,7 +15,7 @@ or to a role they hold, bumps (RB10), so a revocation is seen on the next reques
 from typing import NamedTuple
 
 from flask import g
-from sqlalchemy import text
+from sqlalchemy import false, text, true
 
 from app import cache, db
 from app.permission_cache import permission_version, permissions_changed  # noqa: F401 (re-exported)
@@ -184,6 +184,56 @@ def _access(permission: str, user_id: int, scope, version: int) -> bool:
         {'user_id': user_id, 'permission': permission,
          'domain_id': scope if isinstance(scope, int) else None}).first()
     return row is not None
+
+
+def domains_for(permission: str, user_id: int) -> frozenset[int] | None:
+    """The domains a list is filtered to for this user (spec, What scoped holders see): None when they hold
+    `permission` instance-wide (or are Admin, or user 1), so nothing is filtered out; otherwise the domains they hold it
+    on through an unexpired grant, which is empty for someone who holds it nowhere."""
+    if not user_id:
+        return frozenset()
+    if user_access(permission, user_id):
+        return None
+    if not is_scopable(permission):
+        return frozenset()
+    return _domains(permission, user_id, permission_version(user_id))
+
+
+@cache.memoize(timeout=50)
+def _domains(permission: str, user_id: int, version: int) -> frozenset[int]:
+    return frozenset(db.session.execute(text(
+        'SELECT DISTINCT rg.site_domain_id FROM role_grant rg '
+        'JOIN role_permission rp ON rp.role_id = rg.role_id AND rp.permission = :permission '
+        'WHERE rg.user_id = :user_id AND rg.site_domain_id IS NOT NULL '
+        "AND (rg.expires_at IS NULL OR rg.expires_at > timezone('utc', now()))"),
+        {'user_id': user_id, 'permission': permission}).scalars())
+
+
+def domain_clause(column, domains: frozenset[int] | None):
+    """`column` (a `site_domain_id`) within `domains`, as `domains_for` gives them: anything for None, nothing for an
+    empty set. Rows that belong to no domain of ours (remote ones, NULL) are only in an unfiltered list."""
+    if domains is None:
+        return true()
+    if not domains:
+        return false()
+    return column.in_(sorted(domains))
+
+
+def recipient_ids(permission: str, on=None) -> list[int]:
+    """Who is told of something `permission` deals with (spec 2026-11-03-rbac-design.md, Notifications): the admins
+    (user 1 and the built-in role's holders), every instance-wide holder of `permission`, and, when it is scopable and
+    `on` belongs to a domain, its holders on that domain. Active accounts only, by id."""
+    domain_id = home_domain_id(on) if on is not None and is_scopable(permission) else None
+    admins = set(getattr(g, 'admin_ids', None) or ())   # the request's admin list, as Site.admins() reads it
+    held = set(db.session.execute(text(
+        'SELECT u.id FROM "user" u WHERE u.deleted = false AND u.banned = false AND (u.id = 1 OR EXISTS ('
+        '  SELECT 1 FROM role_grant rg JOIN role r ON r.id = rg.role_id WHERE rg.user_id = u.id '
+        "  AND (rg.expires_at IS NULL OR rg.expires_at > timezone('utc', now())) "
+        '  AND ((r.built_in AND rg.site_domain_id IS NULL) OR ('
+        '       EXISTS (SELECT 1 FROM role_permission rp WHERE rp.role_id = r.id AND rp.permission = :permission) '
+        '       AND (rg.site_domain_id IS NULL OR rg.site_domain_id = :domain_id))))) ORDER BY u.id'),
+        {'permission': permission, 'domain_id': domain_id}).scalars())
+    return sorted(held | admins)
 
 
 def holds_any_grant(user_id: int) -> bool:

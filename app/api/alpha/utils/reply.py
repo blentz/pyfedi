@@ -18,7 +18,7 @@ from app.local_only import found_here, hidden_here, prime_reporters, without_hid
 from app.api.alpha.utils.found import a_community, a_post, a_reply
 from app.visibility import can_view, listable_clause, visible_to_clause
 from app.utils import authorise_api_user, blocked_users, blocked_or_banned_instances, site_language_id, \
-    communities_banned_from, in_sorted_list, moderating_communities_ids, joined_communities, user_access, \
+    communities_banned_from, in_sorted_list, moderating_communities_ids, joined_communities, user_access, reachable_community_ids, \
     can_moderate
 
 
@@ -672,13 +672,10 @@ def get_reply_report_list(auth, data):
             raise Exception('incorrect login')
     else:
         # Don't restrict reports to single comment or community
-        if user_access('moderate all communities', user.id):
-            # Privileged user, don't filter by community
-            reports = Report.query.filter(Report.suspect_post_reply_id != None)
-        else:
-            modded_comm_ids = moderating_communities_ids(user.id)
-            reports = Report.query.filter(Report.suspect_post_reply_id != None,
-                                          Report.in_community_id.in_(modded_comm_ids))
+        reports = Report.query.filter(Report.suspect_post_reply_id != None)
+        reachable = reachable_community_ids('moderate all communities', user.id)
+        if reachable is not None:   # those they moderate, and those on the domains they hold it on (RBAC step 8)
+            reports = reports.filter(Report.in_community_id.in_(sorted(reachable)))
     
     if unresolved_only:
         reports = reports.filter(Report.status < REPORT_STATE_RESOLVED)

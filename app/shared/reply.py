@@ -15,6 +15,7 @@ from app.onion import apply_audit
 from app.onion_account import audit_ip
 from app.shared.tasks import task_selector
 from app.visibility import post_title_for
+from app.utils import recipients_for
 from app.utils import render_template, authorise_api_user, shorten_string, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, add_to_modlog, can_create_post_reply, \
     can_upvote, can_downvote, get_recipient_language, user_ip_banned, ip_address, can_moderate
@@ -449,7 +450,7 @@ def report_reply(reply, input, src, auth=None):
                     remote_instance_ids.add(moderator.instance_id)
 
     if notify_admins:
-        for admin in Site.admins():
+        for admin in recipients_for('moderate all communities', on=reply):
             if admin.id not in already_notified:
                 notify = Notification(title='Suspicious content', url='/admin/reports', user_id=admin.id,
                                       author_id=reporter_user.id, notif_type=NOTIF_REPORT,

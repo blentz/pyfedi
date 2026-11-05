@@ -36,7 +36,7 @@ from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, captcha_enabled, \
     finalize_user_setup, get_request, get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
-    user_ip_banned, log_login_failure, staff_role_has, actor_contains_blocked_words, get_site_as_dict, user_name_is_taken, \
+    user_ip_banned, log_login_failure, recipients_for, actor_contains_blocked_words, get_site_as_dict, user_name_is_taken, \
     decode_captcha
 from app.shared.tasks import task_selector
 
@@ -121,11 +121,8 @@ def no_admins_logged_in_recently():
     registration page, so the exception closed registration by crashing it.
     """
     a_week_ago = utcnow() - timedelta(days=7)
-    for user in Site.admins():
-        if user.last_seen is not None and user.last_seen > a_week_ago:
-            return False
-
-    for user in Site.staff():
+    # the admins, and whoever else may approve registrations: those who would notice an abandoned open instance
+    for user in recipients_for('approve registrations'):
         if user.last_seen is not None and user.last_seen > a_week_ago:
             return False
 
@@ -154,10 +151,9 @@ def notify_admins_of_registration(application):
     # instance, where the founder is admin and staff -- was told twice about
     # one application and had `unread_notifications` moved by two. Measured:
     # `PROBE az4 notifications: 2 | unread counter: 2`.
-    recipients = list(Site.admins())
-    if staff_role_has('approve registrations'):
-        known = {admin.id for admin in recipients}
-        recipients += [member for member in Site.staff() if member.id not in known]
+    # The admins, and the holders of `approve registrations` instance-wide or on the applicant's domain (RB13): each
+    # account once, however many of those it is.
+    recipients = recipients_for('approve registrations', on=db.session.get(User, application.user_id))
 
     for admin in recipients:
         notify = Notification(title='New registration',

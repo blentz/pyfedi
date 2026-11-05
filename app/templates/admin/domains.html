@@ -47,8 +47,10 @@
                         <td>{{ row.registration }}</td>
                         <td>
                             {% if not row.is_default %}
-                            <a href="{{ url_for('admin.admin_domain_branding', domain_id=row.id) }}">{{ _('Branding') }}</a> |
+                            <a href="{{ url_for('admin.admin_domain_branding', domain_id=row.id) }}">{{ _('Branding') }}</a>
+                            {%- if can_manage %} |
                             <a href="#" data-url="{{ url_for('admin.admin_domains_delete', domain_id=row.id) }}" class="confirm_first send_post">{{ _('Delete') }}</a>
+                            {%- endif %}
                             {% endif %}
                         </td>
                     </tr>
@@ -58,8 +60,10 @@
         </div>
         <p class="text-muted">{{ _('The default domain is the one this site federates as, and changing the default domain is not supported yet.') }}</p>
 
+        {% if can_manage -%}
         <h3>{{ _('Add a domain') }}</h3>
         {{ render_form(form) }}
+        {%- endif %}
     </div>
 </div>
 {% endblock %}

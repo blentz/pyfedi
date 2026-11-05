@@ -11,6 +11,7 @@ import app.chat.util as chat_util
 from app.federation_urls import object_base
 from app.models import ChatMessage, Conversation, User, Notification, Report, Site
 from app.storefront import canonicalise_text
+from app.utils import recipients_for
 from app.utils import authorise_api_user, markdown_to_html, user_access
 from app.local_only import REMOTE_CONTACT_REFUSAL, found_here, one_here, prime_reporters, \
     refuses_remote_contact, without_hidden_conversations, without_hidden_reports, without_local_only_actors
@@ -276,7 +277,7 @@ def post_private_message_report(auth, data):
     # so the test was always true. A de-duplication that de-duplicates nothing
     # reads like the question has been dealt with; `Site.admins()` answers
     # distinct rows, so there is nothing here to de-duplicate.
-    for admin in Site.admins():
+    for admin in recipients_for('administer all users'):   # a conversation has no domain
         notify = Notification(title='Reported conversation with user', url='/admin/reports',
                               user_id=admin.id,
                               author_id=user_id, notif_type=NOTIF_REPORT,
@@ -336,7 +337,7 @@ def post_private_message_conversation_report(auth, data):
     report.targets = targets_data
 
     # Create the notifications
-    for admin in Site.admins():
+    for admin in recipients_for('administer all users'):   # a conversation has no domain
         notify = Notification(title='Reported conversation with user',
                               url='/admin/reports',
                               user_id=admin.id,

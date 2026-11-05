@@ -1,0 +1,16 @@
+{# The domain picker (RB8): shown on an /admin list whose route asked scope_for, when it may show more than one domain. #}
+{% set admin_scope = g.admin_scope if g.admin_scope is defined else none %}
+{% if admin_scope and admin_scope.choices|length > 1 -%}
+<form method="get" class="d-flex gap-2 align-items-center mt-2" id="domain-picker">
+    <label for="domain-picker-select" class="form-label mb-0">{{ _('Domain') }}</label>
+    <select name="domain" id="domain-picker-select" class="form-select form-select-sm w-auto">
+        <option value="0"{{ ' selected' if not admin_scope.picked }}>{{ _('All') if admin_scope.unfiltered else _('All of mine') }}</option>
+        {% for domain_id, domain in admin_scope.choices -%}
+        <option value="{{ domain_id }}"{{ ' selected' if admin_scope.picked == domain_id }}>{{ domain }}</option>
+        {% endfor -%}
+    </select>
+    <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Show') }}</button>
+</form>
+{%- elif admin_scope and admin_scope.choices|length == 1 and not admin_scope.unfiltered -%}
+<p class="small mt-2" id="domain-picker">{{ _('Showing %(domain)s.', domain=admin_scope.choices[0][1]) }}</p>
+{%- endif %}

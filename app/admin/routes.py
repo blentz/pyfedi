@@ -14,7 +14,7 @@ from flask_login import current_user, login_user
 from flask_babel import _, ngettext
 from flask_smorest import abort as abort_with_message
 from slugify import slugify
-from sqlalchemy import text, desc, or_, and_, delete, update, select, func
+from sqlalchemy import text, desc, or_, and_, delete, update, select, func, true
 from sqlalchemy.orm import aliased
 from sqlalchemy.exc import SQLAlchemyError
 from PIL import Image
@@ -50,8 +50,9 @@ from app.community.routes import do_subscribe
 from app.constants import REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_REVIEWING
 from app.email import send_registration_approved_email
 from app.admin.roles_routes import user_grants_panel
+from app.admin.scope import scope_for
 from app.roles import grant_role, scope_refusal
-from app.permissions import holds_any_grant
+from app.permissions import holds_any_grant, may_act_on_user
 from app.federation_urls import object_base
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
     CommunityMember, \
@@ -64,7 +65,7 @@ from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
 from app.translation import LibreTranslateAPI
-from app.utils import canonical_host, captcha_enabled, render_template, permission_required, admin_required, set_setting, get_setting, gibberish, markdown_to_html, \
+from app.utils import canonical_host, captcha_enabled, render_template, permission_required, permission_held_anywhere, admin_required, set_setting, get_setting, gibberish, markdown_to_html, \
     max_album_images, \
     moderating_communities, joined_communities, finalize_user_setup, theme_list, blocked_phrases, blocked_referrers, \
     topic_tree, languages_for_form, menu_topics, ensure_directory_exists, add_to_modlog, get_request, \
@@ -490,9 +491,16 @@ def admin_site():
 
 @bp.route('/domains', methods=['GET', 'POST'])
 @login_required
-@permission_required('manage domains')
 def admin_domains():
+    """Every domain, and the form to add one, for `manage domains`. A holder of `edit domain branding` alone sees the
+    domains they hold it on, with branding links only (spec, What scoped holders see)."""
+    can_manage = user_access('manage domains', current_user.get_id())
+    scope = scope_for('edit domain branding')
+    if not can_manage and not scope.held:
+        return redirect(url_for('auth.permission_denied'))
     form = SiteDomainForm()
+    if request.method == 'POST' and not can_manage:
+        return redirect(url_for('auth.permission_denied'))
     if form.validate_on_submit():
         # The default row is locked to SERVER_NAME (spec §3.1). Nothing the form posts can set it. An install
         # that never ran the seed has no rows, and adding the first would unregister SERVER_NAME, so seed it.
@@ -507,9 +515,10 @@ def admin_domains():
         clear_domain_cache()
         flash(_('Domain added.'))
         return redirect(url_for('admin.admin_domains'))
-    rows = db.session.query(SiteDomain).order_by(SiteDomain.id).all()
-    return render_template('admin/domains.html', title=_('Domains'), form=form, rows=rows,
-                           implicit_default=default_domain() if not rows else None)
+    rows = db.session.query(SiteDomain).filter(true() if can_manage else scope.clause(SiteDomain.id)) \
+        .order_by(SiteDomain.id).all()
+    return render_template('admin/domains.html', title=_('Domains'), form=form, rows=rows, can_manage=can_manage,
+                           implicit_default=default_domain() if not rows and can_manage else None)
 
 
 @bp.route('/domains/<int:domain_id>/delete', methods=['POST'])
@@ -1822,8 +1831,9 @@ def activity_replay(activity_id):
 
 @bp.route('/communities', methods=['GET'])
 @login_required
-@permission_required('administer communities pages')
+@permission_held_anywhere('administer communities pages')
 def admin_communities():
+    scope = scope_for('administer communities pages')
     page = request.args.get('page', 1, type=int)
     search = request.args.get('search', '')
     sort_by = request.args.get('sort_by', 'title ASC')
@@ -1831,7 +1841,7 @@ def admin_communities():
     if current_user.page_length and current_user.page_length < page_length:
         page_length = current_user.page_length
 
-    communities = without_local_only_actors(Community.query, Community)   # admins manage the onion's on the onion (F6)
+    communities = without_local_only_actors(Community.query.filter(scope.clause(Community.site_domain_id)), Community)   # F6
     if search:
         communities = communities.filter(or_(Community.title.ilike(f"%{search}%"), Community.ap_id.ilike(f"%{search}%")))
     communities = communities.order_by(safe_order_by(sort_by, Community, {'title', 'topic_id', 'subscriptions_count',
@@ -1852,12 +1862,14 @@ def admin_communities():
 
 @bp.route('/communities/no-topic', methods=['GET'])
 @login_required
-@permission_required('administer communities pages')
+@permission_held_anywhere('administer communities pages')
 def admin_communities_no_topic():
+    scope = scope_for('administer communities pages')
     page = request.args.get('page', 1, type=int)
     search = request.args.get('search', '')
 
-    communities = without_local_only_actors(Community.query.filter(Community.topic_id == None), Community)   # F6
+    communities = without_local_only_actors(Community.query.filter(Community.topic_id == None,
+                                                                   scope.clause(Community.site_domain_id)), Community)   # F6
     if search:
         communities = communities.filter(Community.title.ilike(f"%{search}%"))
     communities = communities.order_by(-Community.post_count).paginate(page=page, per_page=1000, error_out=False)
@@ -1872,12 +1884,14 @@ def admin_communities_no_topic():
 
 @bp.route('/communities/low-quality', methods=['GET'])
 @login_required
-@permission_required('administer communities pages')
+@permission_held_anywhere('administer communities pages')
 def admin_communities_low_quality():
+    scope = scope_for('administer communities pages')
     page = request.args.get('page', 1, type=int)
     search = request.args.get('search', '')
 
-    communities = without_local_only_actors(Community.query.filter(Community.low_quality == True), Community)   # F6
+    communities = without_local_only_actors(Community.query.filter(Community.low_quality == True,
+                                                                   scope.clause(Community.site_domain_id)), Community)   # F6
     if search:
         communities = communities.filter(Community.title.ilike(f"%{search}%"))
     communities = communities.order_by(-Community.post_count).paginate(page=page, per_page=1000, error_out=False)
@@ -1894,12 +1908,14 @@ def admin_communities_low_quality():
 
 @bp.route('/communities/un-moderated', methods=['GET'])
 @login_required
-@permission_required('administer communities pages')
+@permission_held_anywhere('administer communities pages')
 def admin_communities_unmoderated():
+    scope = scope_for('administer communities pages')
     page = request.args.get('page', 1, type=int)
     search = request.args.get('search', '')
 
-    communities = without_local_only_actors(Community.query.filter(Community.un_moderated == True), Community)   # F6
+    communities = without_local_only_actors(Community.query.filter(Community.un_moderated == True,
+                                                                   scope.clause(Community.site_domain_id)), Community)   # F6
     if search:
         communities = communities.filter(Community.title.ilike(f"%{search}%"))
     communities = communities.order_by(-Community.post_count).paginate(page=page, per_page=1000, error_out=False)
@@ -1918,10 +1934,12 @@ def admin_communities_unmoderated():
 
 @bp.route('/community/<int:community_id>/edit', methods=['GET', 'POST'])
 @login_required
-@permission_required('administer communities pages')
+@permission_held_anywhere('administer communities pages')
 def admin_community_edit(community_id):
     form = EditCommunityForm()
     community = db.session.get(Community, community_id) or abort(404)
+    if not user_access('administer communities pages', current_user.get_id(), on=community):
+        return redirect(url_for('auth.permission_denied'))
     old_topic_id = community.topic_id if community.topic_id else None
     form.topic.choices = select_choices(topics_for_form(0))
     form.languages.choices = select_choices(languages_for_form(all_languages=True))
@@ -2051,9 +2069,11 @@ def admin_community_edit(community_id):
 
 @bp.route('/community/<int:community_id>/delete', methods=['POST'])
 @login_required
-@permission_required('administer communities pages')
+@permission_held_anywhere('administer communities pages')
 def admin_community_delete(community_id):
     community = db.session.get(Community, community_id) or abort(404)
+    if not user_access('administer communities pages', current_user.get_id(), on=community):
+        return redirect(url_for('auth.permission_denied'))
 
     community.banned = True  # Unsubscribing everyone could take a long time so until that is completed hide this community from the UI by banning it.
     community.last_active = utcnow()
@@ -2262,13 +2282,14 @@ def admin_topic_delete(topic_id):
 
 @bp.route('/referrals', methods=['GET'])
 @login_required
-@permission_required('administer all users')
+@permission_held_anywhere('administer all users')
 def admin_referrals():
+    scope = scope_for('administer all users')
     """Who referred whom (spec 2026-10-31 RC13), newest first; `?by=<user name>` narrows it to one referrer."""
     page = request.args.get('page', 1, type=int)
     referrer_name = request.args.get('by', '').strip()
     referrer = aliased(User)
-    rows = Referral.query.outerjoin(referrer, Referral.referrer_id == referrer.id)
+    rows = Referral.query.outerjoin(referrer, Referral.referrer_id == referrer.id).filter(scope.user_clause(Referral.referred_id))
     if referrer_name:
         rows = rows.filter(func.lower(referrer.user_name) == referrer_name.lower())
     rows = rows.order_by(desc(Referral.created_at)).paginate(page=page, per_page=100, error_out=False)
@@ -2280,8 +2301,9 @@ def admin_referrals():
 
 @bp.route('/users', methods=['GET'])
 @login_required
-@permission_required('administer all users')
+@permission_held_anywhere('administer all users')
 def admin_users():
+    scope = scope_for('administer all users')
     page = request.args.get('page', 1, type=int)
     search = request.args.get('search', '')
     local_remote = request.args.get('local_remote', '')
@@ -2296,7 +2318,7 @@ def admin_users():
     if sort_by_btn:
         return redirect(url_for('admin.admin_users', page=page, search=search, local_remote=local_remote, sort_by=sort_by_btn, last_seen=last_seen))
 
-    users = without_local_only_actors(User.query.filter_by(deleted=False), User)   # admins manage the onion's there (F6)
+    users = without_local_only_actors(User.query.filter_by(deleted=False).filter(scope.clause(User.site_domain_id)), User)   # F6
     if local_remote == 'local':
         users = users.filter_by(ap_id=None)
     elif local_remote == 'remote':
@@ -2330,8 +2352,9 @@ def admin_users():
 
 @bp.route('/content', methods=['GET'])
 @login_required
-@permission_required('administer communities pages')
+@permission_held_anywhere('administer communities pages')
 def admin_content():
+    scope = scope_for('administer communities pages')
     page = request.args.get('page', 1, type=int)
     replies_page = request.args.get('replies_page', 1, type=int)
     posts_replies = request.args.get('posts_replies', '')
@@ -2403,6 +2426,8 @@ def admin_content():
         post_replies = post_replies.order_by(desc(PostReply.posted_at))
 
     posts, post_replies = without_local_only(posts, Post), without_local_only(post_replies, PostReply)   # F6
+    posts = posts.filter(scope.community_clause(Post.community_id))
+    post_replies = post_replies.filter(scope.community_clause(PostReply.community_id))
     if posts_replies == 'posts':
         post_replies = post_replies.filter(False)
     elif posts_replies == 'replies':
@@ -2427,8 +2452,7 @@ def admin_content():
                            posts=posts, post_replies=post_replies,
                            user_notes=user_notes(current_user.get_id()),
                            posts_replies=posts_replies, show=show, days=days,
-                           reported_posts=reported_posts(current_user.get_id(),
-                                                         user_access('administer all communities', current_user.get_id())),
+                           reported_posts=reported_posts(current_user.get_id()),
                            moderated_community_ids=moderating_communities_ids(current_user.get_id()),
                            roles_with=roles_with('administer communities pages'),
                            admin_ids=g.admin_ids
@@ -2437,8 +2461,9 @@ def admin_content():
 
 @bp.route('/approve_registrations', methods=['GET'])
 @login_required
-@permission_required('approve registrations')
+@permission_held_anywhere('approve registrations')
 def admin_approve_registrations():
+    scope = scope_for('approve registrations')
     if current_app.config['FLAG_THROWAWAY_EMAILS'] and os.path.isfile('app/static/tmp/disposable_domains.txt'):
         with open('app/static/tmp/disposable_domains.txt', 'r', encoding='utf-8') as f:
             disposable_domains = [line.rstrip('\n') for line in f]
@@ -2446,8 +2471,8 @@ def admin_approve_registrations():
         disposable_domains = []
 
     # the onion's accounts are approved on the onion (follow-up F6)
-    registrations = without_local_only_actors(UserRegistration.query.join(User, User.id == UserRegistration.user_id),
-                                              User)
+    registrations = without_local_only_actors(UserRegistration.query.join(User, User.id == UserRegistration.user_id)
+                                              .filter(scope.clause(User.site_domain_id)), User)
     recently_approved = registrations.filter(UserRegistration.status == 1).order_by(
         desc(UserRegistration.approved_at)).limit(30)
     registrations = registrations.filter(UserRegistration.status == 0).order_by(UserRegistration.created_at).all()
@@ -2461,9 +2486,11 @@ def admin_approve_registrations():
 
 @bp.route('/approve_registrations/<int:user_id>/approve', methods=['POST'])
 @login_required
-@permission_required('approve registrations')
+@permission_held_anywhere('approve registrations')
 def admin_approve_registrations_approve(user_id):
     user = db.session.get(User, user_id) or abort(404)
+    if not user_access('approve registrations', current_user.get_id(), on=user):   # the application's domain (RB13)
+        return redirect(url_for('auth.permission_denied'))
     registration = UserRegistration.query.filter_by(status=0, user_id=user_id).first()
     if registration:
         registration.status = 1
@@ -2481,9 +2508,11 @@ def admin_approve_registrations_approve(user_id):
 
 @bp.route('/approve_registrations/<int:user_id>/deny', methods=['POST'])
 @login_required
-@permission_required('approve registrations')
+@permission_held_anywhere('approve registrations')
 def admin_approve_registrations_denied(user_id):
     user = db.session.get(User, user_id) or abort(404)
+    if not user_access('approve registrations', current_user.get_id(), on=user):   # the application's domain (RB13)
+        return redirect(url_for('auth.permission_denied'))
     registration = UserRegistration.query.filter_by(status=0, user_id=user_id).first()
     if registration:
         # remove the registration attempt
@@ -2515,10 +2544,12 @@ def admin_approve_registrations_denied(user_id):
 
 @bp.route('/user/<int:user_id>/edit', methods=['GET', 'POST'])
 @login_required
-@permission_required('administer all users')
+@permission_held_anywhere('administer all users')
 def admin_user_edit(user_id):
     form = EditUserForm()
     user = db.session.get(User, user_id) or abort(404)
+    if not may_act_on_user(current_user, user, 'administer all users'):   # RB6, and only an Admin edits an Admin
+        return redirect(url_for('auth.permission_denied'))
     if user.is_local() and get_setting('ban_posts', False):
         form.ban_posts.label = Label("ban_posts", _("Manually approve posts"))
     if form.validate_on_submit():
@@ -2586,13 +2617,15 @@ def admin_user_edit(user_id):
 
 @bp.route('/user/<int:user_id>/resend_email', methods=['POST'])
 @login_required
-@permission_required('administer all users')
+@permission_held_anywhere('administer all users')
 def admin_user_resend_email(user_id):
     is_htmx = request.headers.get('HX-Request') == 'true'
     if not is_htmx:
         abort(400)
     
     user = db.session.get(User, user_id) or abort(404)
+    if not user_access('administer all users', current_user.get_id(), on=user):
+        return redirect(url_for('auth.permission_denied'))
     
     # Create verification token if it doesn't exist already or else verification is impossible
     if not user.verification_token:
@@ -2696,12 +2729,14 @@ def admin_users_add():
 
 @bp.route('/user/<int:user_id>/delete', methods=['POST'])
 @login_required
-@permission_required('administer all users')
+@permission_held_anywhere('administer all users')
 def admin_user_delete(user_id):
     if user_id == 1:
         flash(_('This user cannot be deleted.'))
         return redirect(referrer())
     user = db.session.get(User, user_id) or abort(404)
+    if not may_act_on_user(current_user, user, 'administer all users'):   # RB6, and only an Admin deletes an Admin
+        return redirect(url_for('auth.permission_denied'))
 
     user.banned = True  # Unsubscribing everyone could take a long time so until that is completed hide this user from the UI by banning it.
     user.last_active = utcnow()
@@ -2757,8 +2792,9 @@ def admin_user_delete_task(user_id, current_user_id):
 
 @bp.route('/reports', methods=['GET'])
 @login_required
-@permission_required('administer all users')
+@permission_held_anywhere('administer all users')
 def admin_reports():
+    scope = scope_for('administer all users')
     page = request.args.get('page', 1, type=int)
     search = request.args.get('search', '')
     local_remote = request.args.get('local_remote', '')
@@ -2767,7 +2803,8 @@ def admin_reports():
     if len(report_types) == 0:
         report_types = [-1]
     
-    reports = Report.query.filter(or_(Report.status == REPORT_STATE_NEW, Report.status == REPORT_STATE_ESCALATED))
+    reports = Report.query.filter(or_(Report.status == REPORT_STATE_NEW, Report.status == REPORT_STATE_ESCALATED),
+                                  scope.report_clause())
     # D1384. `search` was read from the query string and passed to the template --
     # which renders `<input type="search" name="search" value="{{ search }}">` --
     # and never used in the query. An admin typed a term, the page reloaded with

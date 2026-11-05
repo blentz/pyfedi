@@ -38,6 +38,12 @@
             <option value="">{{ _('All communities') }}</option>
             {% for value, label in communities.items() -%}<option value="{{ value }}"{% if value == community_id %} selected{% endif %}>{{ label }}</option>{%- endfor %}
         </select>
+        {% if domain_choices|length > 1 -%}
+        <select name="domain" id="modlog-domain" class="form-select" aria-label="{{ _('Domain') }}">
+            <option value="0">{{ _('All domains') }}</option>
+            {% for domain_id, domain in domain_choices -%}<option value="{{ domain_id }}"{% if domain_id == picked_domain %} selected{% endif %}>{{ domain }}</option>{%- endfor %}
+        </select>
+        {%- endif %}
         {% if is_admin %}
             <input type="search" name="user_name" placeholder="{{ _('Moderator user@instance') }}" value="{{ user_name }}"
                    class="form-control"
@@ -66,7 +72,7 @@
                     <tr>
                         <td>{{ localize_datetime(modlog_entry.created_at, locale) }}</td>
                         <td>
-                            {% if can_see_names %}
+                            {% if can_see_names or modlog_entry.id in named_ids %}
                                 {{ render_username(modlog_entry.author) if modlog_entry.author else '' }}
                             {% else %}
                                 {% if modlog_entry.community_id %}
@@ -91,7 +97,7 @@
                             {% if modlog_entry.community_id -%}
                                 <a href="/c/{{ modlog_entry.community.link() }}">{{ _(' in %(community_name)s', community_name='' + modlog_entry.community.display_name()) }}</a>
                             {% endif -%}
-                            {% if modlog_entry.reason and (user_access('administer all communities', current_user.get_id()) or modlog_entry.community_id in community_trusted) -%}
+                            {% if modlog_entry.reason and (modlog_entry.id in reason_ids or modlog_entry.community_id in community_trusted) -%}
                                 <br>{{ _('Reason:') }} {{ modlog_entry.reason }}
                             {% endif -%}
                         </td>

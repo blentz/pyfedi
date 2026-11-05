@@ -49,6 +49,7 @@ from app.user.utils import unsubscribe_from_community, search_for_user, _get_use
     _get_user_upvoted_posts, _get_user_subscribed_communities, _get_user_posts, _get_user_post_replies, \
     _get_user_archived_replies, _get_user_posts_and_replies, _get_user_same_ip, insert_or_update_user_note, \
     _get_user_same_name, user_for_actor
+from app.utils import recipients_for
 from app.utils import etag_stamp, feed_open_to_clause
 from app.utils import render_template, markdown_to_html, user_access, markdown_to_text, shorten_string, back, user_banned_from_community, \
     gibberish, community_membership, user_filters_home, \
@@ -259,7 +260,7 @@ def show_profile(user):
                            replies_next_url=replies_next_url, replies_prev_url=replies_prev_url,
                            noindex=not user.indexable, show_post_community=True, hide_vote_buttons=True,
                            show_deleted=user_access('view user details', current_user.get_id(), on=user),
-                           reported_posts=reported_posts(current_user.get_id(), user_access('administer all communities', current_user.get_id())),
+                           reported_posts=reported_posts(current_user.get_id()),
                            moderated_community_ids=moderating_communities_ids(current_user.get_id()),
                            rss_feed=f"{storefront_url()}/u/{user.link()}/feed" if user.post_count > 0 else None,
                            rss_feed_name=f"{user.display_name()} on {current_branding().name}" if user.post_count > 0 else None,
@@ -1233,7 +1234,7 @@ def report_profile(actor):
 
             # Notify site admin
             already_notified = set()
-            for admin in Site.admins():
+            for admin in recipients_for('administer all users', on=user):
                 if admin.id not in already_notified:
                     notify = Notification(title='Reported user', url='/admin/reports', user_id=admin.id,
                                           author_id=current_user.id, notif_type=NOTIF_REPORT,

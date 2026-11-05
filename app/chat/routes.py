@@ -13,6 +13,7 @@ from app.models import Site, User, Report, ChatMessage, Notification, Conversati
     Community, CommunityBan, ModLog
 from app.shared.site import block_remote_instance
 from app.shared.tasks import task_selector
+from app.utils import recipients_for
 from app.utils import render_template, login_required, trustworthy_account_required
 
 
@@ -258,7 +259,7 @@ def chat_report(conversation_id):
 
         # Notify site admin
         already_notified = set()
-        for admin in Site.admins():
+        for admin in recipients_for('administer all users'):   # a conversation has no domain
             if admin.id not in already_notified:
                 notify = Notification(title='Reported conversation with user', url='/admin/reports',
                                       user_id=admin.id,

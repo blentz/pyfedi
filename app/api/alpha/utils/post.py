@@ -29,7 +29,7 @@ from app.utils import can_moderate, authorise_api_user, blocked_users, blocked_c
     site_language_id, filtered_out_communities, joined_or_modding_communities, \
     user_filters_home, user_filters_posts, in_sorted_list, instance_sticky_posts, instance_sticky_post_ids, \
     communities_banned_from_all_users, moderating_communities_ids_all_users, blocked_domains, SqlKeysetPagination, \
-    community_membership_private, paginate_post_ids, post_ids_to_models, user_access, moderating_communities_ids, \
+    community_membership_private, paginate_post_ids, post_ids_to_models, user_access, moderating_communities_ids, reachable_community_ids, \
     user_filters_languages, feed_readable_by
 from app.shared.tasks import task_selector
 from app.feed_domains import shown_feed_communities
@@ -1997,15 +1997,10 @@ def get_post_report_list(auth, data):
             raise Exception('incorrect login')
     else:
         # Don't restrict reports to single post or community
-        if user_access('moderate all communities', user.id):
-            # Privileged user, don't filter by community
-            reports = Report.query.filter(Report.suspect_post_id != None,
-                                          Report.suspect_post_reply_id == None)
-        else:
-            modded_comm_ids = moderating_communities_ids(user.id)
-            reports = Report.query.filter(Report.suspect_post_id != None,
-                                          Report.in_community_id.in_(modded_comm_ids),
-                                          Report.suspect_post_reply_id == None)
+        reports = Report.query.filter(Report.suspect_post_id != None, Report.suspect_post_reply_id == None)
+        reachable = reachable_community_ids('moderate all communities', user.id)
+        if reachable is not None:   # those they moderate, and those on the domains they hold it on (RBAC step 8)
+            reports = reports.filter(Report.in_community_id.in_(sorted(reachable)))
     
     if unresolved_only:
         reports = reports.filter(Report.status < REPORT_STATE_RESOLVED)

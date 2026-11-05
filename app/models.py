@@ -40,7 +40,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 from app import db, login, cache, celery, httpx_client, constants, app_bcrypt, shaped_memo_name
 from app.permission_cache import permission_version
-from app.permissions import user_access
+from app.permissions import recipient_ids, user_access
 from app.constants import AUTOMATED_REPORTER, SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPTION_MODERATOR, SUBSCRIPTION_OWNER, \
     SUBSCRIPTION_BANNED, SUBSCRIPTION_PENDING, NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC, NOTIF_POST, NOTIF_REPLY, \
     NOTIF_FEED, NOTIF_DEFAULT, NOTIF_REPORT, NOTIF_MENTION, POST_STATUS_REVIEWING, \
@@ -3568,7 +3568,8 @@ class Post(db.Model):
                     # and the context matters most. The other two producers
                     # (app/shared/post.py, app/activitypub/util.py) both give
                     # admins the same dict as moderators.
-                    for admin in Site.admins():
+                    told = recipient_ids('moderate all communities', on=post)   # admins, and holders on its domain
+                    for admin in User.query.filter(User.id.in_(told)).order_by(User.id):
                         if admin.id not in already_notified:
                             notify = Notification(title='Suspicious content',
                                                   url=post.ap_id, user_id=admin.id,
@@ -5959,11 +5960,6 @@ class Site(db.Model):
         listed, so this is Staff's holders until an admin edits it."""
         return db.session.query(User).filter_by(deleted=False, banned=False).filter(
             User.roles.any(and_(Role.built_in.is_(False), Role.listed_publicly.is_(True)))).order_by(User.id).all()
-
-    @staticmethod
-    def staff() -> List[User]:
-        return db.session.query(User).filter_by(deleted=False, banned=False).filter(
-                                      User.roles.any(Role.name == 'Staff')).order_by(User.id).all()  # by name until RBAC step 8 (Notifications)
 
     def active_now(self):
         return db.session.execute(text(

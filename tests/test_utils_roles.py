@@ -108,11 +108,10 @@ class TestSiteAdmins:
 
         assert [u.id for u in Site.admins()] == [founder.id]
 
-    def test_admins_are_matched_by_the_built_in_role_and_staff_by_name(self, app, db_session):
+    def test_admins_are_matched_by_the_built_in_role(self, app, db_session):
         """D481, then RB16 (spec 2026-11-03-rbac-design.md). `Site.admins()` and `is_admin()` once matched the
         role NAME 'Admin'. Admin is now the one built-in role, found by `Role.built_in`: renamed, it still makes an
-        admin, and an ordinary role that takes the name 'Admin' makes none. Staff is still matched by name until
-        RBAC step 8 routes notifications by permission."""
+        admin, and an ordinary role that takes the name 'Admin' makes none."""
         make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
         make_user(None, 'founder', local=True)                 # user 1, listed regardless
         built_in_admin = make_user(None, 'built-in-admin', local=True)
@@ -129,4 +128,3 @@ class TestSiteAdmins:
 
         assert (built_in_admin.is_admin(), name_only.is_admin()) == (True, False)
         assert [u.id for u in Site.admins()] == [1, built_in_admin.id]
-        assert [u.id for u in Site.staff()] == [named_staff.id]

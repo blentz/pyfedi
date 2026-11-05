@@ -111,7 +111,7 @@ def show_domain(domain_id):
                                    content_filters=content_filters, recently_upvoted=recently_upvoted,
                                    recently_downvoted=recently_downvoted,
                                    user_pronouns=user_pronouns(),
-                                   reported_posts=reported_posts(current_user.get_id(), user_access('administer all communities', current_user.get_id())),
+                                   reported_posts=reported_posts(current_user.get_id()),
                                    joined_communities=joined_or_modding_communities(current_user.get_id()),
                                    moderated_community_ids=moderating_communities_ids(current_user.get_id()),
                                    rss_feed=f"{storefront_url()}/d/{domain.id}/feed" if domain.post_count > 0 else None,

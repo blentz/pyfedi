@@ -34,6 +34,7 @@ from app.storefront import is_upload_link, link_on, stored_link
 from app.shared.tasks import task_selector
 from app.shared.upload import open_uploaded_image
 from app.visibility import is_open, post_title_for
+from app.utils import recipients_for
 from app.utils import build_gallery_thumbnail, render_template, authorise_api_user, shorten_string, gibberish, ensure_directory_exists, \
     max_album_images, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, fixup_url, domain_from_url, \
@@ -950,7 +951,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                             db.session.add(notify)
                             already_notified.add(community_member.user_id)
                 if domain.notify_admins:
-                    for admin in Site.admins():
+                    for admin in recipients_for('moderate all communities', on=post):
                         if admin.id not in already_notified:
                             notify = Notification(title='Suspicious content', url=post.ap_id,
                                                   user_id=admin.id, author_id=user.id,
@@ -1320,7 +1321,7 @@ def report_post(post: Post, input, src, auth=None):
                 remote_instance_ids.add(moderator.instance_id)
 
     if notify_admins:
-        for admin in Site.admins():
+        for admin in recipients_for('moderate all communities', on=post):
             if admin.id not in already_notified:
                 notify = Notification(title='Suspicious content', url='/admin/reports', user_id=admin.id,
                                       author_id=reporter_user.id, notif_type=NOTIF_REPORT,

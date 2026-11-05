@@ -856,7 +856,7 @@ def show_community(community: Community, from_instance=None):
                                          microblog_servers=busiest_microblog_servers(community.id)
                                          if is_local_microblogs(community) and not view_actor else None,
                                          live_sse_feed=f'instance:{from_instance.id}' if from_instance is not None else f'community:{community.id}',
-                                         reported_posts=reported_posts(current_user.get_id(), user_access('administer all communities', current_user.get_id())),
+                                         reported_posts=reported_posts(current_user.get_id()),
                                          user_notes=user_notes(current_user.get_id()), banned_from_community=banned_from_community,
                                          moderated_community_ids=moderating_communities_ids(current_user.get_id()),
                                          inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None,
@@ -1061,7 +1061,7 @@ def live_posts_fragment(actor):
         'community/_live_posts.html', posts=posts, community=community, sort='new',
         content_filters=content_filters, show_post_community=False,
         low_bandwidth=request.cookies.get('low_bandwidth', '0') == '1',
-        reported_posts=reported_posts(current_user.get_id(), user_access('administer all communities', current_user.get_id())),
+        reported_posts=reported_posts(current_user.get_id()),
         user_notes=user_notes(current_user.get_id()), user_flair=user_flair,
         recently_upvoted=recently_upvoted_posts(current_user.id),
         recently_downvoted=recently_downvoted_posts(current_user.id),

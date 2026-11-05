@@ -10,7 +10,8 @@ Spec docs/superpowers/specs/2026-11-03-rbac-design.md, Tests and Schema (RB16):
 
 Each test walks the source with `ast` for Python (a regex cannot tell a call from the same words in a docstring) and
 with a parenthesis-balanced scan for templates. What a later step removes is listed here, by file and count, and
-the test fails both when a new one appears and when one goes without being taken off the list.
+the test fails both when a new one appears and when one goes without being taken off the list. Step 8 emptied the
+lists of what it was to scope; what is left is instance-wide on purpose.
 """
 import ast
 import pathlib
@@ -112,9 +113,6 @@ def test_no_role_constant_is_left():
     assert found == []
 
 
-# Step 8 routes the registration and held-post notifications by permission (spec, Notifications); until then these
-# two still find the seeded Staff role by its name.
-FOUND_BY_NAME_UNTIL_STEP_8 = {'app/models.py': {'Site.staff'}, 'app/utils.py': {'staff_role_has'}}
 
 
 def role_lookups(path):
@@ -167,7 +165,7 @@ def test_no_role_is_found_by_its_name_or_id():
         where = role_lookups(path)
         if where:
             found[f'app/{rel(path)}'] = set(where)
-    assert found == FOUND_BY_NAME_UNTIL_STEP_8
+    assert found == {}
 
 
 def test_the_role_lookup_lint_catches_each_form(tmp_path):
@@ -211,32 +209,12 @@ def test_anywhere_is_asked_only_by_menus():
 # A scopable permission names what it is about
 # --------------------------------------------------------------------------
 
-# What is still checked about the whole instance, by file, permission and count.
-#
-# Step 8 (scoped list filtering): a list or count over many communities, posts or users, which a scoped holder
-# should see filtered to their domains rather than refused.
-UNSCOPED_UNTIL_STEP_8 = {
-    'admin/routes.py': {'administer all communities': 1},       # the reported-posts count
-    'community/routes.py': {'administer all communities': 2},   # the reported-posts count
-    'domain/routes.py': {'administer all communities': 1},      # the reported-posts count
-    'feed/routes.py': {'administer all communities': 1},        # the reported-posts count
-    'instance/routes.py': {'administer all communities': 1},    # the reported-posts count
-    'main/routes.py': {'administer all communities': 3,         # the reported-posts count
-                       'view modlog': 2},                       # the modlog
-    'topic/routes.py': {'administer all communities': 1},       # the reported-posts count
-    'user/routes.py': {'administer all communities': 1},        # the reported-posts count
-    'api/alpha/utils/misc.py': {'view modlog': 1},              # the modlog
-    'api/alpha/utils/post.py': {'moderate all communities': 1},  # every post report
-    'api/alpha/utils/reply.py': {'moderate all communities': 1},  # every comment report
-    'api/alpha/utils/private_message.py': {'administer all users': 4},  # every private message report
-    'api/alpha/utils/admin.py': {'approve registrations': 2},   # the registration applications
-    'templates/modlog.html': {'administer all communities': 1},  # the modlog's reasons
-}
 # About the whole instance on purpose: what is acted on has no home domain, so no scoped grant could reach it.
 UNSCOPED_ON_PURPOSE = {
     'community/routes.py': {'administer all communities': 1},   # fixup_from_remote: a remote community
     'instance/routes.py': {'administer all users': 1},          # a remote instance's people
-    'api/alpha/utils/private_message.py': {'administer all users': 1},  # reporting a conversation
+    # a conversation, and so its reports: reporting one, and listing and resolving them
+    'api/alpha/utils/private_message.py': {'administer all users': 5},
 }
 
 
@@ -263,13 +241,52 @@ def unscoped_checks():
 def test_a_scopable_permission_names_what_it_is_about():
     """`on=None` asks about the whole instance, so a holder scoped to a domain is refused even on that domain's own
     objects. Outside the menus, a scopable permission is asked about the object acted on."""
-    expected = {}
-    for listing in (UNSCOPED_UNTIL_STEP_8, UNSCOPED_ON_PURPOSE):
-        for path, counts in listing.items():
-            expected.setdefault(path, Counter()).update(counts)
-    assert unscoped_checks() == expected
+    assert unscoped_checks() == {path: Counter(counts) for path, counts in UNSCOPED_ON_PURPOSE.items()}
 
 
 def test_the_template_scan_reads_nested_parentheses():
     text = "{% if user_access('ban users', current_user.get_id(), on=user) %}\n{% if user_access('ban users', x()) %}"
     assert [(n, '=' in a) for n, a in template_calls(text, 'user_access')] == [(1, True), (2, False)]
+
+
+# --------------------------------------------------------------------------
+# A route a scoped holder may open filters what it shows, or asks about what it acts on
+# --------------------------------------------------------------------------
+
+def held_anywhere_routes_that_neither_filter_nor_name_an_object():
+    """Each function under `@permission_held_anywhere(...)` must call `scope_for` (a list, filtered to the holder's
+    domains), or ask `user_access(..., on=...)` / `may_act_on_user` (one object, on its home domain). Otherwise a
+    holder on domain X would see, or act on, everything."""
+    found = []
+    for path in python_files():
+        for node in ast.walk(parsed(path)):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not any(isinstance(d, ast.Call) and call_name(d) == 'permission_held_anywhere'
+                       for d in node.decorator_list):
+                continue
+            calls = [n for n in ast.walk(node) if isinstance(n, ast.Call)]
+            if not any(call_name(c) in ('scope_for', 'may_act_on_user') or
+                       (call_name(c) == 'user_access' and any(k.arg == 'on' for k in c.keywords)) for c in calls):
+                found.append(f'{rel(path)}:{node.name}')
+    return found
+
+
+def test_every_route_a_scoped_holder_may_open_filters_or_names_its_object():
+    assert held_anywhere_routes_that_neither_filter_nor_name_an_object() == []
+
+
+def test_the_held_anywhere_lint_finds_a_route_that_does_neither(tmp_path, monkeypatch):
+    sample = tmp_path / 'app'
+    sample.mkdir()
+    (sample / 'routes.py').write_text('\n'.join([
+        "@permission_held_anywhere('administer all users')",
+        'def lists_everything(): return User.query.all()',
+        "@permission_held_anywhere('administer all users')",
+        "def filtered(): return User.query.filter(scope_for('administer all users').clause(User.site_domain_id))",
+        "@permission_held_anywhere('administer all users')",
+        "def one(user): return user_access('administer all users', 1, on=user)",
+    ]))
+    import tests.test_rbac_lint as lint
+    monkeypatch.setattr(lint, 'APP_ROOT', sample)
+    assert lint.held_anywhere_routes_that_neither_filter_nor_name_an_object() == ['routes.py:lists_everything']

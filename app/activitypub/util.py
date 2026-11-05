@@ -70,6 +70,7 @@ import app.activitypub.serializers.microblog as microblog_serializer   # the mod
 import app.activitypub.serializers.peertube as peertube_serializer   # likewise
 import app.activitypub.serializers.podcast as podcast_serializer   # likewise
 import urllib.parse
+from app.utils import recipients_for
 from app.utils import captcha_enabled, feed_open_to, random_chars, site_language_id, is_hex_color, save_image_without_metadata, \
     refuse_over_remote_thumbnail_cap
 from app.visibility import OPEN_VISIBILITIES, can_view, is_open, post_served_to_any_peer, post_title_for, \
@@ -5475,7 +5476,7 @@ def update_post_from_activity(post: Post, request_json: dict):
                                     db.session.add(notify)
                                     already_notified.add(community_member.user_id)
                         if new_domain.notify_admins:
-                            for admin in Site.admins():
+                            for admin in recipients_for('moderate all communities', on=post):
                                 if admin.id not in already_notified:
                                     # D1391. Rebuilt per admin with `post.domain`, the
                                     # same unserialisable object as above; the dict
@@ -5697,7 +5698,7 @@ def process_report(user, reported, request_json, session) -> bool:
 
         # Notify site admin
         already_notified = set()
-        for admin in Site.admins():
+        for admin in recipients_for('administer all users', on=reported):
             if admin.id not in already_notified:
                 notify = Notification(title='Reported user', url='/admin/reports', user_id=admin.id,
                                       author_id=user.id, notif_type=NOTIF_REPORT,
@@ -5751,7 +5752,7 @@ def process_report(user, reported, request_json, session) -> bool:
         if reported.community.is_local() and reported.community.un_moderated:
             # Notify site admin if community is un-moderated
             already_notified = set()
-            for admin in Site.admins():
+            for admin in recipients_for('moderate all communities', on=reported):
                 if admin.id not in already_notified:
                     # D1392. This is the POST branch, and the moderators above
                     # are told `post_reported` for the same report -- the admin
@@ -5825,7 +5826,7 @@ def process_report(user, reported, request_json, session) -> bool:
         if reported.community.is_local() and reported.community.un_moderated:
             # Notify site admin if community is un-moderated
             already_notified = set()
-            for admin in Site.admins():
+            for admin in recipients_for('moderate all communities', on=reported):
                 if admin.id not in already_notified:
                     # D1392, the same mislabelling in the PostReply branch: the
                     # moderators above get `comment_reported`, the admin got

@@ -3,7 +3,7 @@ import re
 from urllib.parse import urlparse
 
 from flask import g
-from sqlalchemy import desc, not_
+from sqlalchemy import desc, not_, or_
 
 from app.activitypub.util import find_actor_or_create, remote_object_to_json, actor_json_to_model, is_user_actor, \
     find_community, create_resolved_object, normalise_actor_string, host_of, find_microblogging_community, NEW_CONTENT_TYPES
@@ -22,7 +22,7 @@ from app.storefront import current_storefront, default_domain, domain_authority,
 from app.user.utils import search_for_user
 from app.feed_domains import feed_shown_here
 from app.local_only import hidden_here, without_local_only_actors
-from app.visibility import can_view, is_open, modlog_local_only_clause, modlog_open_clause
+from app.visibility import can_view, is_open, modlog_domain_clause, modlog_local_only_clause, modlog_open_clause
 from app.feed.util import search_for_feed
 from app.utils import authorise_api_user, gibberish, subscribed_feeds, communities_banned_from, \
     moderating_communities_ids, joined_or_modding_communities, blocked_communities, blocked_or_banned_instances, \
@@ -30,7 +30,7 @@ from app.utils import authorise_api_user, gibberish, subscribed_feeds, communiti
 from app import db
 
 
-from app.permissions import user_access
+from app.permissions import domains_for, user_access
 def get_search(auth, data):
     # D1189. The guard was `'q' not in data and 'type_' not in data`, so
     # EITHER key satisfied it -- and `data['type_']` is read on the next line.
@@ -629,12 +629,15 @@ def get_modlog(auth, data):
     comment_id = int(data['comment_id']) if 'comment_id' in data else 0
 
     user = authorise_api_user(auth, return_type='model') if auth else None
-    is_admin = user and user_access('view modlog', user.id)
+    # As the web modlog (RB9): every entry for an instance-wide holder of `view modlog`; for a holder on some
+    # domains, those about their domains beside the public ones
+    view_domains = domains_for('view modlog', user.id) if user else frozenset()
+    is_admin = view_domains is None
 
     # Build base query with common filters shared by all categories
     base_q = ModLog.query
     if not is_admin:
-        base_q = base_q.filter(ModLog.public == True)
+        base_q = base_q.filter(or_(ModLog.public == True, modlog_domain_clause(view_domains)))
     unhidden = modlog_local_only_clause(user is not None)   # as the web modlog (spec §3.4, F6)
     if mod_person_id:
         base_q = base_q.filter(ModLog.user_id == mod_person_id)
@@ -642,8 +645,8 @@ def get_modlog(auth, data):
         base_q = base_q.filter(ModLog.community_id == community_id)
     if other_person_id:
         base_q = base_q.filter(ModLog.target_user_id == other_person_id)
-        if not is_admin:
-            base_q = base_q.filter(modlog_open_clause())  # R3: those entries name no target user to this reader
+        if not is_admin:   # R3: those entries name no target user to this reader, outside their own domains'
+            base_q = base_q.filter(or_(modlog_open_clause(), modlog_domain_clause(view_domains)))
     if post_id:
         base_q = base_q.filter(ModLog.post_id == post_id)
     if comment_id:

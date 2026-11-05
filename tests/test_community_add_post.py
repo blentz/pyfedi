@@ -614,10 +614,11 @@ def test_a_post_held_for_review_tells_its_author_and_asks_the_admins_and_staff(a
     author.ban_posts = True
     admin, staffer = make_user(author.instance, 'boss', local=True), make_user(author.instance, 'helper', local=True)
     admin.roles.append(Role.admin() or Role(name='Admin', built_in=True))
+    # RBAC step 8: the queue's openers are told, the holders of `administer communities pages` (seeded Staff is one)
     staff_role = Role.query.filter_by(name='Staff').first() or Role(name='Staff')
     staffer.roles.append(staff_role)
     db.session.flush()
-    db.session.add(RolePermission(role_id=staff_role.id, permission='approve registrations'))
+    db.session.add(RolePermission(role_id=staff_role.id, permission='administer communities pages'))
     db.session.commit()
     hooked = []
 

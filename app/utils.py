@@ -3108,13 +3108,6 @@ def role_access(permission: str, role_id: int) -> bool:
     return has_access is not None
 
 
-def staff_role_has(permission: str) -> bool:
-    """Whether the Staff role holds `permission`: who else is told of an application or a held post. Staff is found by
-    name until RBAC step 8 routes these notifications by permission (spec 2026-11-03-rbac-design.md, Notifications)."""
-    staff = Role.query.filter_by(name='Staff').first()
-    return staff is not None and role_access(permission, staff.id)
-
-
 @cache.memoize(timeout=10)
 def community_membership(user: User, community: Community) -> int:
     if community is None:
@@ -3590,6 +3583,22 @@ def permission_required(permission):
             else:
                 # Handle the case where the user doesn't have the required permission
                 return redirect(url_for('auth.permission_denied'))
+
+        return decorated_view
+
+    return decorator
+
+
+def permission_held_anywhere(permission):
+    """For a list route a holder scoped to some domains may open: it passes anyone who holds `permission` on any domain,
+    and the route filters what it lists to `app.admin.scope.scope_for(permission)` (spec 2026-11-03-rbac-design.md,
+    What scoped holders see). tests/test_rbac_lint.py checks each such route asks scope_for."""
+    def decorator(func):
+        @wraps(func)
+        def decorated_view(*args, **kwargs):
+            if user_access(permission, current_user.get_id(), anywhere=True):
+                return func(*args, **kwargs)
+            return redirect(url_for('auth.permission_denied'))
 
         return decorated_view
 
@@ -6870,8 +6879,17 @@ def posts_with_blocked_images() -> List[int]:
     return list(db.session.execute(text(sql)).scalars())
 
 
+def recipients_for(permission: str, on=None) -> List[User]:
+    """The accounts told of something `permission` deals with: the admins, its instance-wide holders and its holders
+    on `on`'s domain (app.permissions.recipient_ids). This replaces `Site.admins()` and `Site.staff()` as a list of
+    whom to notify (spec 2026-11-03-rbac-design.md, Notifications)."""
+    ids = permissions.recipient_ids(permission, on=on)
+    return User.query.filter(User.id.in_(ids)).order_by(User.id).all() if ids else []
+
+
 def notify_admin(title, url, author_id, notif_type, subtype, targets):
-    for admin in Site.admins():
+    """About an account (an automatic ban): the admins and the instance-wide holders of `administer all users`."""
+    for admin in recipients_for('administer all users'):
         notify = Notification(title=title, url=url,
                               user_id=admin.id,
                               author_id=author_id, notif_type=notif_type,
@@ -6882,49 +6900,52 @@ def notify_admin(title, url, author_id, notif_type, subtype, targets):
     db.session.commit()
 
 
-@cache.memoize(timeout=60)
-def reported_posts(user_id: int, is_admin: bool) -> List[int]:
+def reachable_community_ids(permission: str, user_id: int | None) -> set[int] | None:
+    """The communities whose reports and content this user deals with: None (every one) for an instance-wide holder
+    of `permission`; otherwise those they moderate and, under a grant on some domains, those homed there (spec
+    2026-11-03-rbac-design.md, What scoped holders see)."""
+    if user_id is None:
+        return set()
+    domains = permissions.domains_for(permission, user_id)
+    if domains is None:
+        return None
+    community_ids = set(moderating_communities_ids(user_id))
+    if domains:
+        community_ids |= set(db.session.execute(select(Community.id).where(
+            Community.site_domain_id.in_(sorted(domains)))).scalars())
+    return community_ids
+
+
+def _reported(table: str, user_id: int | None) -> List[int]:
+    """The ids of `table`'s reported rows this user may deal with (`reachable_community_ids`, for `administer all
+    communities`)."""
     if user_id is None:
         return []
-    if is_admin:
-        post_ids = list(db.session.execute(text('SELECT id FROM "post" WHERE reports > 0')).scalars())
-    else:
-        community_ids = moderating_communities_ids(user_id)
-        if len(community_ids) > 0:
-            post_ids = list(db.session.execute(text('SELECT id FROM "post" WHERE reports > 0 AND community_id IN :community_ids'),
-                                               {'community_ids': tuple(community_ids)}).scalars())
-        else:
-            return []
-    return post_ids
+    community_ids = reachable_community_ids('administer all communities', user_id)
+    if community_ids is None:
+        return list(db.session.execute(text(f'SELECT id FROM "{table}" WHERE reports > 0')).scalars())
+    if not community_ids:
+        return []
+    return list(db.session.execute(
+        text(f'SELECT id FROM "{table}" WHERE reports > 0 AND community_id IN :community_ids'),
+        {'community_ids': tuple(sorted(community_ids))}).scalars())
 
 
-def reported_post_replies(user_id: int, is_admin: bool) -> List[int]:
-    """The reply twin of `reported_posts`, which is called from nine templates.
+@cache.memoize(timeout=60)
+def reported_posts(user_id: int | None) -> List[int]:
+    """The reported posts behind the sidebar's report count, called from nine route contexts."""
+    return _reported('post', user_id)
+
+
+def reported_post_replies(user_id: int | None) -> List[int]:
+    """The reply twin of `reported_posts`.
 
     D1366. This one had no callers and could not have run either way. It passed a
     LIST to an `IN :community_ids` parameter, which `text()` renders as a Postgres
     array literal rather than expanding, and it had no guard for the empty case.
-    Measured for a moderator of no communities:
-
-        reported_posts         -> []
-        reported_post_replies  -> ProgrammingError: (psycopg2.errors.SyntaxError)
-                                  syntax error at or near "'{}'"
-
-    It also took `admin_ids` and tested membership itself while its twin takes
-    `is_admin`, so the same question had two shapes. Both are the live one's now:
-    nothing called this, so there was no signature to keep compatible.
+    Both share one body now, so they cannot disagree.
     """
-    if user_id is None:
-        return []
-    if is_admin:
-        return list(db.session.execute(
-            text('SELECT id FROM "post_reply" WHERE reports > 0')).scalars())
-    community_ids = moderating_communities_ids(user_id)
-    if len(community_ids) == 0:
-        return []
-    return list(db.session.execute(
-        text('SELECT id FROM "post_reply" WHERE reports > 0 AND community_id IN :community_ids'),
-        {'community_ids': tuple(community_ids)}).scalars())
+    return _reported('post_reply', user_id)
 
 
 def post_destination_sections():

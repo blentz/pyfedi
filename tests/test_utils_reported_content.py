@@ -13,9 +13,9 @@ moderates nothing. Measured for a moderator of no communities:
     reported_post_replies  -> ProgrammingError: (psycopg2.errors.SyntaxError)
                               syntax error at or near "'{}'"
 
-It also took `admin_ids` and did the membership test itself, while the live one takes
-`is_admin` -- the same question in two shapes. Both are the live one's now, because
-nothing called it and there was no signature to keep compatible.
+Both take the user alone since RBAC step 8, and work out from their grants which communities' reports they may
+see: every one for an instance-wide holder of `administer all communities`, else the ones they moderate and those
+homed on the domains they hold it on.
 """
 import pytest
 from flask import g
@@ -72,23 +72,23 @@ class TestAModeratorOfNothing:
     """The empty-`IN` case. `reported_posts` returns `[]`; the reply twin raised."""
 
     def test_posts(self, env):
-        assert reported_posts(env.moderator.id, False) == []
+        assert reported_posts(env.moderator.id) == []
 
     def test_replies(self, env):
-        assert reported_post_replies(env.moderator.id, False) == []
+        assert reported_post_replies(env.moderator.id) == []
 
     def test_replies_even_when_some_exist_elsewhere(self, env):
         a_reported_reply(env, env.community)
 
-        assert reported_post_replies(env.moderator.id, False) == []
+        assert reported_post_replies(env.moderator.id) == []
 
 
 class TestNoUser:
     def test_posts(self, env):
-        assert reported_posts(None, False) == []
+        assert reported_posts(None) == []
 
     def test_replies(self, env):
-        assert reported_post_replies(None, False) == []
+        assert reported_post_replies(None) == []
 
     def test_a_missing_user_claiming_admin_is_still_answered_first(self, env):
         """`if user_id is None` comes before the admin branch, so an anonymous
@@ -101,8 +101,8 @@ class TestNoUser:
         a_reported_post(env, env.community)
         a_reported_reply(env, env.community)
 
-        assert reported_post_replies(None, True) == []
-        assert reported_posts(None, True) == []
+        assert reported_post_replies(None) == []
+        assert reported_posts(None) == []
 
 
 class TestAModeratorOfOneCommunity:
@@ -110,29 +110,29 @@ class TestAModeratorOfOneCommunity:
         moderates(env.moderator, env.community)
         post = a_reported_post(env, env.community)
 
-        assert reported_posts(env.moderator.id, False) == [post.id]
+        assert reported_posts(env.moderator.id) == [post.id]
 
     def test_a_reported_reply_in_their_community(self, env):
         moderates(env.moderator, env.community)
         reply = a_reported_reply(env, env.community)
 
-        assert reported_post_replies(env.moderator.id, False) == [reply.id]
+        assert reported_post_replies(env.moderator.id) == [reply.id]
 
     def test_a_report_in_a_community_they_do_not_moderate(self, env):
         moderates(env.moderator, env.community)
         a_reported_post(env, env.other)
         a_reported_reply(env, env.other)
 
-        assert reported_posts(env.moderator.id, False) == []
-        assert reported_post_replies(env.moderator.id, False) == []
+        assert reported_posts(env.moderator.id) == []
+        assert reported_post_replies(env.moderator.id) == []
 
     def test_unreported_content_is_not_listed(self, env):
         moderates(env.moderator, env.community)
         a_reported_post(env, env.community, reports=0)
         a_reported_reply(env, env.community, reports=0)
 
-        assert reported_posts(env.moderator.id, False) == []
-        assert reported_post_replies(env.moderator.id, False) == []
+        assert reported_posts(env.moderator.id) == []
+        assert reported_post_replies(env.moderator.id) == []
 
     def test_two_communities_are_both_included(self, env):
         """More than one id in the `IN` list, which is what the list-versus-tuple
@@ -142,7 +142,7 @@ class TestAModeratorOfOneCommunity:
         first = a_reported_reply(env, env.community)
         second = a_reported_reply(env, env.other)
 
-        assert sorted(reported_post_replies(env.moderator.id, False)) == \
+        assert sorted(reported_post_replies(env.moderator.id)) == \
             sorted([first.id, second.id])
 
 
@@ -151,7 +151,7 @@ class TestAnAdmin:
         first = a_reported_post(env, env.community)
         second = a_reported_post(env, env.other)
 
-        assert sorted(reported_posts(env.admin.id, True)) == \
+        assert sorted(reported_posts(env.admin.id)) == \
             sorted([first.id, second.id])
 
     def test_every_reported_reply(self, env):
@@ -160,16 +160,34 @@ class TestAnAdmin:
         first = a_reported_reply(env, env.community)
         second = a_reported_reply(env, env.other)
 
-        assert sorted(reported_post_replies(env.admin.id, True)) == \
+        assert sorted(reported_post_replies(env.admin.id)) == \
             sorted([first.id, second.id])
 
-    def test_an_admin_who_is_not_flagged_as_one_sees_only_their_own(self, env):
-        """`is_admin` is the caller's claim: the templates pass
-        `current_user.get_id() in g.admin_ids`, so passing False makes even an admin
-        take the moderator path."""
-        a_reported_reply(env, env.community)
-
-        assert reported_post_replies(env.admin.id, False) == []
+    def test_a_holder_scoped_to_a_domain_sees_that_domains_reports(self, env):
+        """RBAC step 8: `administer all communities` on a domain reaches the reports in that domain's communities,
+        and no other community's the holder does not moderate."""
+        from app.models import Role, RolePermission, SiteDomain, role_grant
+        from app.storefront import clear_domain_cache
+        domain = SiteDomain(domain='x.reported.example', scheme='https', federates=True)
+        db.session.add(domain)
+        db.session.commit()
+        clear_domain_cache()
+        env.community.site_domain_id = domain.id
+        role = Role(name='Domain admins')
+        db.session.add(role)
+        db.session.commit()
+        db.session.add(RolePermission(role_id=role.id, permission='administer all communities'))
+        db.session.execute(role_grant.insert().values(user_id=env.moderator.id, role_id=role.id,
+                                                      site_domain_id=domain.id))
+        db.session.commit()
+        mine, theirs = a_reported_post(env, env.community), a_reported_post(env, env.other)
+        mine_reply, theirs_reply = a_reported_reply(env, env.community), a_reported_reply(env, env.other)
+        try:
+            assert reported_posts(env.moderator.id) == [mine.id]
+            assert reported_post_replies(env.moderator.id) == [mine_reply.id]
+        finally:
+            clear_domain_cache()
+        assert theirs.id and theirs_reply.id
 
 
 class TestTheTwoAgree:
@@ -185,13 +203,13 @@ class TestTheTwoAgree:
         assert list(posts) == list(replies)
 
     def test_both_answer_empty_for_a_moderator_of_nothing(self, env):
-        assert reported_posts(env.moderator.id, False) == \
-            reported_post_replies(env.moderator.id, False) == []
+        assert reported_posts(env.moderator.id) == \
+            reported_post_replies(env.moderator.id) == []
 
     def test_both_see_their_own_communitys_reports(self, env):
         moderates(env.moderator, env.community)
         post = a_reported_post(env, env.community)
         reply = a_reported_reply(env, env.community)
 
-        assert reported_posts(env.moderator.id, False) == [post.id]
-        assert reported_post_replies(env.moderator.id, False) == [reply.id]
+        assert reported_posts(env.moderator.id) == [post.id]
+        assert reported_post_replies(env.moderator.id) == [reply.id]

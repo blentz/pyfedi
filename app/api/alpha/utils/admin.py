@@ -7,12 +7,15 @@ from app.utils import authorise_api_user, user_access, finalize_user_setup, \
 from app.email import send_registration_approved_email
 from app.local_only import found_here, without_local_only_actors
 from app.models import utcnow, UserRegistration, User, Notification
+from app.permissions import domain_clause, domains_for
 
 
 def get_registration_list(auth, data):
     user = authorise_api_user(auth, return_type='model')
-    
-    if not user_access("approve registrations", user.id):
+
+    # an instance-wide holder sees every application; a holder on some domains, those of accounts homed there (RB13)
+    domains = domains_for("approve registrations", user.id)
+    if domains is not None and not domains:
         raise Exception("Insufficient permissions to manage registrations")
     
     limit = data["limit"] if "limit" in data else 30
@@ -21,8 +24,8 @@ def get_registration_list(auth, data):
     sort = data["sort"] if "sort" in data else "New"
 
     # the onion's applicants are approved on the onion, as in the web queue (follow-up F6, R3)
-    registrations = without_local_only_actors(UserRegistration.query.join(User, User.id == UserRegistration.user_id),
-                                              User, True)
+    registrations = without_local_only_actors(UserRegistration.query.join(User, User.id == UserRegistration.user_id)
+                                              .filter(domain_clause(User.site_domain_id, domains)), User, True)
     if pending_only:
         registrations = registrations.filter(UserRegistration.status == 0)
     order = desc if sort == "New" else asc
@@ -39,14 +42,16 @@ def get_registration_list(auth, data):
 
 def put_registration_approve(auth, data):
     user = authorise_api_user(auth, return_type='model')
-    
-    if not user_access("approve registrations", user.id):
+
+    if domains_for("approve registrations", user.id) == frozenset():
         raise Exception("Insufficient permissions to manage registrations")
     
     new_user_id = data["user_id"]
     approve = data["approve"]
     
     new_user = found_here(User, new_user_id)   # hidden here or nobody's: one answer (follow-up F6, R3)
+    if new_user is not None and not user_access("approve registrations", user.id, on=new_user):
+        raise Exception("Insufficient permissions to manage registrations")   # another domain's application (RB13)
     registration = UserRegistration.query.filter_by(status=0, user_id=new_user.id).first() if new_user else None
 
     if not registration:

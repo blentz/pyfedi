@@ -345,7 +345,7 @@ def instance_posts(instance_domain):
                            low_bandwidth=low_bandwidth, recently_upvoted=recently_upvoted, breadcrumbs=breadcrumbs,
                            recently_downvoted=recently_downvoted,
                            next_url=next_url, prev_url=prev_url,
-                           reported_posts=reported_posts(current_user.get_id(), user_access('administer all communities', current_user.get_id())),
+                           reported_posts=reported_posts(current_user.get_id()),
                            moderated_community_ids=moderating_communities_ids(current_user.get_id()),
                            # rss_feed=f"{current_app.config.server_name()}/feed",
                            # rss_feed_name=f"Posts on " + g.site.name,

@@ -17,7 +17,7 @@ from app.admin.forms import AddUserForm, GrantForm
 from app.community.util import notify_admins_of_post_needing_approval
 from app.models import Notification, Role, RolePermission, Site, SiteDomain, role_grant, utcnow
 from app.roles import STAFF_PERMISSIONS, seed_default_roles
-from app.utils import roles_with, staff_role_has, user_access
+from app.utils import roles_with, user_access
 from tests.factories import (admin_role, grant_permission, grant_role, make_community, make_instance, make_post,
                              make_user)
 from tests.test_branding import load_migration
@@ -249,17 +249,9 @@ def test_roles_with_names_admin_first(db_session):
     assert roles_with('edit cms pages') == 'Admin'
 
 
-def test_staff_role_has_reads_the_staff_role(db_session):
-    assert staff_role_has('ban users') is False   # no Staff role at all
-    seed_default_roles()
-    db.session.commit()
-    assert staff_role_has('ban users') is True
-    assert staff_role_has('edit cms pages') is False
-
-
-def test_a_held_post_is_shown_to_staff_only_while_staff_may_approve(people):
-    """notify_admins_of_post_needing_approval: the admins always, Staff only while the Staff role holds
-    'approve registrations' -- the role found by name now, not as id 3."""
+def test_a_held_post_is_shown_to_whoever_may_open_the_queue(people):
+    """notify_admins_of_post_needing_approval: the admins always, and the holders of 'administer communities pages',
+    which opens the approval queue it links to (RBAC step 8). The seeded Staff role holds it."""
     roles = seed_default_roles()
     db.session.commit()
     admin, staffer, author = people[:3]
@@ -275,7 +267,7 @@ def test_a_held_post_is_shown_to_staff_only_while_staff_may_approve(people):
     assert told() == sorted([1, admin.id, staffer.id])
 
     Notification.query.delete()
-    RolePermission.query.filter_by(role_id=roles['Staff'].id, permission='approve registrations').delete()
+    RolePermission.query.filter_by(role_id=roles['Staff'].id, permission='administer communities pages').delete()
     db.session.commit()
     notify_admins_of_post_needing_approval(post)
     assert told() == sorted([1, admin.id])

@@ -8,7 +8,7 @@ from random import randint
 import flask
 from markupsafe import Markup, escape
 from pyld import jsonld
-from sqlalchemy import or_, and_, func
+from sqlalchemy import or_, and_, func, select
 from sqlalchemy.orm import joinedload
 from ua_parser import parse as uaparse
 
@@ -45,9 +45,11 @@ from app.translation import LibreTranslateAPI
 from app.feed_domains import feed_view_domain, listed_feeds_clause
 from app.local_only import hidden_here, hidden_here_sql, shown_here, without_local_only, without_local_only_actors
 from app.local_names import local_named, split_local_name
-from app.visibility import listable_clause, modlog_local_only_clause, modlog_open_clause, visible_to_clause
+from app.visibility import listable_clause, modlog_domain_clause, modlog_local_only_clause, modlog_open_clause, \
+    visible_to_clause
 from app.federation_urls import domain_site_name, federating_storefront, instance_actor_public_key, instance_actor_url
 from app.storefront import ON_DOMAIN_PARAM, current_instance_id, current_storefront, default_domain, domain_authority, \
+    domain_rows, \
     domain_base_url, hidden_instance_ids, hosted_instance_ids, on_domain, on_domain_sql, storefront_host, storefront_cache_key, \
     storefront_link, storefront_url
 from app.utils import etag_stamp
@@ -74,7 +76,7 @@ import app as app_pkg
 from app.form_choices import select_choices
 
 
-from app.permissions import here, user_access
+from app.permissions import domains_for, here, user_access
 from app.main.util import community_adding_rights
 @bp.route('/', methods=['HEAD', 'GET'])
 @bp.route('/home', methods=['GET'])
@@ -144,7 +146,7 @@ def home_live_posts(view_filter):
         recently_upvoted=recently_upvoted_posts(current_user.id),
         recently_downvoted=recently_downvoted_posts(current_user.id),
         communities_banned_from_list=communities_banned_from(current_user.id),
-        reported_posts=reported_posts(user_id, user_access('administer all communities', user_id)), user_notes=user_notes(user_id),
+        reported_posts=reported_posts(user_id), user_notes=user_notes(user_id),
         joined_communities=joined_or_modding_communities(user_id),
         moderated_community_ids=moderating_communities_ids(user_id), user_pronouns=user_pronouns()))
     response.headers['X-Live-Cursor'] = str(max(post_ids))
@@ -293,7 +295,7 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag, live=False
                                              etag=f"{sort}_{view_filter}_{storefront_host()}_{etag_stamp(g.site.last_active)}",
                                              instance_stickies=instance_stickies,
                                              content_filters=content_filters, sort=sort, view_filter=view_filter,
-                                             reported_posts=reported_posts(user_id, user_access('administer all communities', user_id)),
+                                             reported_posts=reported_posts(user_id),
                                              user_notes=user_notes(user_id),
                                              joined_communities=joined_or_modding_communities(user_id),
                                              moderated_community_ids=moderating_communities_ids(user_id),
@@ -315,7 +317,7 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag, live=False
                                description=shorten_string(html_to_text(branding.sidebar), 150),
                                content_filters=content_filters, sort=sort, view_filter=view_filter,
                                announcement=get_setting('announcement_html', get_setting('announcement')),
-                               reported_posts=reported_posts(user_id, user_access('administer all communities', user_id)),
+                               reported_posts=reported_posts(user_id),
                                user_notes=user_notes(user_id),
                                joined_communities=joined_or_modding_communities(user_id),
                                moderated_community_ids=moderating_communities_ids(user_id),
@@ -664,8 +666,17 @@ def modlog():
     user_name = request.args.get('user_name', '')
     can_see_names = False
     is_admin = False
+    # Who sees which entries in full (RB9): an instance-wide holder of `view modlog` every one; a holder on some
+    # domains those about their domains, beside the public ones everyone sees. `?domain=` narrows to one domain.
+    view_domains = domains_for('view modlog', current_user.get_id()) if current_user.is_authenticated else frozenset()
+    domain_choices = [(row.id, row.domain) for row in domain_rows()
+                      if row.id is not None and (view_domains is None or row.id in view_domains)]
+    picked_domain = request.args.get('domain', 0, type=int)
+    if picked_domain not in {domain_id for domain_id, _ in domain_choices}:
+        picked_domain = 0
 
     arg_dict = {"low_bandwidth": low_bandwidth,
+                "domain": picked_domain,
                 "mod_action": mod_action,
                 "suspect_user_name": suspect_user_name,
                 "communities": community_id,
@@ -680,9 +691,10 @@ def modlog():
         suspect_user_name = modlog_shown_name(suspect_user_name)
         if user:
             modlog_entries = modlog_entries.filter(ModLog.target_user_id == user.id)
-            if not user_access('view modlog', current_user.get_id()):
-                # R3: an entry about content that is not open names no target user to this reader
-                modlog_entries = modlog_entries.filter(modlog_open_clause())
+            if view_domains is not None:
+                # R3: an entry about content that is not open names no target user to this reader, unless it is about
+                # a domain they may see the whole log of
+                modlog_entries = modlog_entries.filter(or_(modlog_open_clause(), modlog_domain_clause(view_domains)))
     if user_name:
         # `user_name`, not `suspect_user_name`: this block filters by the
         # MODERATOR who acted, and it was searching for the suspect's name
@@ -698,15 +710,14 @@ def modlog():
     if community_id:
         modlog_entries = modlog_entries.filter(ModLog.community_id == community_id)
 
-    if current_user.is_authenticated:
-        if user_access('view modlog', current_user.get_id()):
-            is_admin = True
-            modlog_entries = modlog_entries.order_by(desc(ModLog.created_at))
-            can_see_names = True
-        else:
-            modlog_entries = modlog_entries.filter(ModLog.public == True).order_by(desc(ModLog.created_at))
+    if view_domains is None:
+        is_admin = True
+        can_see_names = True
     else:
-        modlog_entries = modlog_entries.filter(ModLog.public == True).order_by(desc(ModLog.created_at))
+        modlog_entries = modlog_entries.filter(or_(ModLog.public == True, modlog_domain_clause(view_domains)))
+    if picked_domain:
+        modlog_entries = modlog_entries.filter(modlog_domain_clause(frozenset({picked_domain})))
+    modlog_entries = modlog_entries.order_by(desc(ModLog.created_at))
     if (unhidden := modlog_local_only_clause()) is not None:   # an entry names nothing hidden here (§3.4, F6)
         modlog_entries = modlog_entries.filter(unhidden)
 
@@ -714,6 +725,15 @@ def modlog():
     modlog_entries = modlog_entries.paginate(page=page, per_page=100 if not low_bandwidth else 50, error_out=False)
     next_url = url_for('main.modlog', page=modlog_entries.next_num, **arg_dict) if modlog_entries.has_next else None
     prev_url = url_for('main.modlog', page=modlog_entries.prev_num, **arg_dict) if modlog_entries.has_prev and page != 1 else None
+
+    # The entries on this page whose moderator's name, and whose reason, this reader may see
+    page_ids = [entry.id for entry in modlog_entries.items]
+    named_ids = set(page_ids) if view_domains is None else set(db.session.execute(
+        select(ModLog.id).where(ModLog.id.in_(page_ids), modlog_domain_clause(view_domains))).scalars())
+    reason_domains = domains_for('administer all communities', current_user.get_id()) \
+        if current_user.is_authenticated else frozenset()
+    reason_ids = set(page_ids) if reason_domains is None else set(db.session.execute(
+        select(ModLog.id).where(ModLog.id.in_(page_ids), modlog_domain_clause(reason_domains))).scalars())
 
     instances = {instance.id: instance.domain for instance in Instance.query.filter(Instance.id.not_in(hidden_instance_ids()))}
     communities = {community.id: community.display_name()
@@ -727,6 +747,8 @@ def modlog():
                            instances=instances, is_admin=is_admin, communities=communities,
                            mod_action=mod_action, suspect_user_name=suspect_user_name, community_id=community_id,
                            user_name=user_name, community_trusted=list(community_trusted),
+                           named_ids=named_ids, reason_ids=reason_ids, domain_choices=domain_choices,
+                           picked_domain=picked_domain,
                            inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None,
                            )
 

@@ -31,9 +31,9 @@ from app.auth.util import (configure_bandwidth_cookies, create_new_user_from_lda
                            normalize_username, notify_admins_of_registration,
                            random_token, render_registration_form,
                            send_email_verification)
-from app.models import (Instance, Notification, Role, Site, User,
+from app.models import (Instance, Notification, Role, RolePermission, Site, User,
                         UserRegistration, role_grant)
-from tests.factories import make_community, make_community_member, make_instance, make_user
+from tests.factories import grant_role, make_community, make_community_member, make_instance, make_user, staff_role
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -281,7 +281,7 @@ def test_a_staff_member_who_was_here_this_week(app, env):
     give_role(founder, 4, 'Admin')
     founder.last_seen = utcnow_a_month_ago()
     staff = make_user(instance(), 'staff', local=True)
-    give_role(staff, 3, 'Staff')
+    grant_role(staff, staff_role())
     db.session.commit()
 
     assert no_admins_logged_in_recently() is False
@@ -306,7 +306,7 @@ def test_a_staff_member_who_has_never_logged_in_either(app, env):
     give_role(founder, 4, 'Admin')
     founder.last_seen = utcnow_a_month_ago()
     staff = make_user(instance(), 'staff', local=True)
-    give_role(staff, 3, 'Staff')
+    grant_role(staff, staff_role())
     staff.last_seen = None
     db.session.commit()
 
@@ -333,35 +333,36 @@ def test_the_admins_are_told(app, env):
     client, founder = env
     give_role(founder, 4, 'Admin')
 
-    with patch('app.auth.util.staff_role_has', return_value=False):
-        notify_admins_of_registration(an_application())
+    notify_admins_of_registration(an_application())
     db.session.commit()
 
     assert Notification.query.filter_by(user_id=founder.id).count() == 1
     assert founder.unread_notifications == 1
 
 
-def test_the_staff_are_told_when_the_permission_allows_it(app, env):
+def test_the_holders_of_approve_registrations_are_told(app, env):
+    """RBAC step 8: the seeded Staff role holds the permission, so its holders are told, as they were."""
     client, founder = env
     give_role(founder, 4, 'Admin')
     staff = make_user(instance(), 'staff', local=True)
-    give_role(staff, 3, 'Staff')
+    grant_role(staff, staff_role())
 
-    with patch('app.auth.util.staff_role_has', return_value=True):
-        notify_admins_of_registration(an_application())
+    notify_admins_of_registration(an_application())
     db.session.commit()
 
     assert Notification.query.filter_by(user_id=staff.id).count() == 1
 
 
-def test_the_staff_are_not_told_when_it_does_not(app, env):
+def test_a_role_without_approve_registrations_is_not_told(app, env):
     client, founder = env
     give_role(founder, 4, 'Admin')
     staff = make_user(instance(), 'staff', local=True)
-    give_role(staff, 3, 'Staff')
+    staff_without = staff_role()
+    RolePermission.query.filter_by(role_id=staff_without.id, permission='approve registrations').delete()
+    db.session.commit()
+    grant_role(staff, staff_without)
 
-    with patch('app.auth.util.staff_role_has', return_value=False):
-        notify_admins_of_registration(an_application())
+    notify_admins_of_registration(an_application())
     db.session.commit()
 
     assert Notification.query.filter_by(user_id=staff.id).count() == 0
@@ -374,10 +375,9 @@ def test_somebody_who_is_both_is_told_once(app, env):
     unread counter: 2`."""
     client, founder = env
     give_role(founder, 4, 'Admin')
-    give_role(founder, 3, 'Staff')
+    grant_role(founder, staff_role())
 
-    with patch('app.auth.util.staff_role_has', return_value=True):
-        notify_admins_of_registration(an_application())
+    notify_admins_of_registration(an_application())
     db.session.commit()
 
     assert Notification.query.filter_by(user_id=founder.id).count() == 1
@@ -388,9 +388,8 @@ def test_the_plugins_are_told_too(app, env):
     client, founder = env
 
     with patch('app.auth.util.plugins.fire_hook') as fired:
-        with patch('app.auth.util.staff_role_has', return_value=False):
-            application = an_application()
-            notify_admins_of_registration(application)
+        application = an_application()
+        notify_admins_of_registration(application)
 
     assert fired.call_args.args == ('new_registration_for_approval',
                                     application)
@@ -420,8 +419,7 @@ def test_a_verified_application_goes_straight_to_the_queue(app, env):
     applicant.verified = True
     db.session.commit()
 
-    with patch('app.auth.util.staff_role_has', return_value=False):
-        application = create_registration_application(applicant, 'because')
+    application = create_registration_application(applicant, 'because')
     db.session.commit()
 
     assert application.status == 0

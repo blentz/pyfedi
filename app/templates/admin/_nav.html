@@ -5,28 +5,28 @@
         <a href="{{ url_for('admin.admin_site') }}">{{ _('Site profile') }}</a> |
         <a href="{{ url_for('admin.admin_misc') }}">{{ _('Misc settings') }}</a> |
     {% endif %}
-    {% if user_access('manage domains', current_user.id) %}
+    {% if (user_access('manage domains', current_user.id) or user_access('edit domain branding', current_user.id, anywhere=True)) %}
         <a href="{{ url_for('admin.admin_domains') }}">{{ _('Domains') }}</a> |
     {% endif %}
-    {% if user_access('administer communities pages', current_user.id) %}
+    {% if user_access('administer communities pages', current_user.id, anywhere=True) %}
         <a href="{{ url_for('admin.admin_communities') }}">{{ _('Communities') }}</a> |
     {% endif %}
     {% if user_access('manage topics', current_user.id) %}
         <a href="{{ url_for('admin.admin_topics') }}">{{ _('Topics') }}</a> |
     {% endif %}
-    {% if user_access('administer all users', current_user.id) %}
+    {% if user_access('administer all users', current_user.id, anywhere=True) %}
         <a href="{{ url_for('admin.admin_users', local_remote='local') }}">{{ _('Users') }}</a> |
     {% endif %}
-    {% if user_access('administer communities pages', current_user.id) %}
+    {% if user_access('administer communities pages', current_user.id, anywhere=True) %}
         <a href="{{ url_for('admin.admin_content') }}">{{ _('Content') }}</a> |
     {% endif %}
-    {% if g.site.registration_mode == 'RequireApplication' and user_access('approve registrations', current_user.id) %}
+    {% if g.site.registration_mode == 'RequireApplication' and user_access('approve registrations', current_user.id, anywhere=True) %}
         <a href="{{ url_for('admin.admin_approve_registrations') }}">{{ _('Registration applications') }}</a> |
     {% endif %}
-    {% if g.site.registration_mode == 'ReferralCode' and user_access('administer all users', current_user.id) %}
+    {% if g.site.registration_mode == 'ReferralCode' and user_access('administer all users', current_user.id, anywhere=True) %}
         <a href="{{ url_for('admin.admin_referrals') }}">{{ _('Referrals') }}</a> |
     {% endif %}
-    {% if user_access('administer all users', current_user.id) %}
+    {% if user_access('administer all users', current_user.id, anywhere=True) %}
         <a href="{{ url_for('admin.admin_reports') }}">{{ _('Moderation') }}</a> |
     {% endif %}
     {% if user_access('change instance settings', current_user.id) %}

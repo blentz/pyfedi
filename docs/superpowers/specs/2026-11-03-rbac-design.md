@@ -6,6 +6,26 @@ Date: 2026-11-03. Status: being built on blentz.
   found is fixed at 296d8a174; O5 came out of it.
 - Step 3 (the check) is done: app/permissions.py (`user_access(perm, user, on=, anywhere=)`, `home_domain_id`,
   `may_act_on_user`), app/permission_cache.py (the per-user version). No call site names an object yet (step 5).
+- Step 8 is done. `domains_for(permission, user)` (app/permissions.py) is None for an instance-wide holder and
+  otherwise the domains held on; `app/admin/scope.py`'s `scope_for` turns it into a list filter plus the domain
+  picker (kept in the session so paging keeps it). Routes a scoped holder may open carry
+  `@permission_held_anywhere(...)`, and a lint test fails one that neither calls `scope_for` nor names its object.
+  Filtered: /admin/users, /admin/referrals, /admin/communities (all four), /admin/content, /admin/reports (an
+  account's report by where it is homed, any other by its community), /admin/approve_registrations, /admin/domains
+  (a branding holder sees their domains with branding links only; adding and deleting stay `manage domains`), the
+  report counts (`reported_posts`), the web and API modlog (RB9: an instance-wide `view modlog` holder sees all and
+  filters by domain; one on some domains sees the public log plus their domains' entries, with names and reasons
+  for those only) and the API's report and registration lists. Per-object /admin actions ask about their object:
+  community edit and delete, approve and deny, resend email, and user edit and delete through `may_act_on_user`
+  (RB6). Notifications go to `recipients_for(permission, on=obj)` (admins, instance-wide holders, holders on the
+  object's domain): registrations `approve registrations`, held posts `administer communities pages` (who can open
+  the queue), content reports and suspicious content `moderate all communities`, reports on an account and
+  automatic bans `administer all users`, conversation reports `administer all users` instance-wide. `Site.staff()`
+  and `staff_role_has` are gone; nothing finds a role by name. Two consequences for the owner: default Staff (which
+  holds `moderate all communities`) is now told of content reports, which went to admins alone; and a non-admin
+  holder of `administer all users` can no longer edit or delete an Admin from /admin (D1178, since the edit form
+  can ban). What stays instance-wide on purpose is listed in tests/test_rbac_lint.py: a remote community's fixup, a
+  remote instance's people, and private-message reports (a conversation has no domain).
 - Step 7 is done: /admin/roles lists, shows, creates, duplicates, edits (asking first when the change alters
   access for holders) and deletes roles (only with "revoke all grants" ticked), and grants are added, re-dated and
   revoked from a role's page and from the Roles panel of /admin/user/<id>/edit; /admin/users/add takes roles to grant

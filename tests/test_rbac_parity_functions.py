@@ -63,7 +63,8 @@ FUNCTIONS = [
         call(lambda w, u: w.reply.id in [r['comment'].id for r in post_replies(w.post, 'hot', u)]),
         setup=low_reply),
     Row('fn.site.admins', '-DDAA', call(lambda w, u: u.id in [a.id for a in Site.admins()])),
-    Row('fn.site.staff', '-DADD', call(lambda w, u: u.id in [a.id for a in Site.staff()])),
+    # Site.staff() went in step 8; the list it fed (/about, the API's site admins) is the listed roles' holders
+    Row('fn.site.staff', '-DADD', call(lambda w, u: u.id in [a.id for a in Site.listed_role_holders()])),
     Row('target.api.user_view.is_admin', '-DDAA', call(lambda w, u: user_view(u, variant=2)['is_admin'])),
     Row('fn.feed_open_to.private', '-DDAA', call(lambda w, u: _feed_open_to(w.feed, u.id))),
     Row('fn.shared.delete_community', '-DDAA',

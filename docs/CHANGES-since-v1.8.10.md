@@ -689,8 +689,21 @@ request.
   setting "Admins + Staff" reads "Admins and holders of 'generate referral
   codes'", and a domain's registration mode "Staff only" reads "User
   administrators only".
-- Only an admin may act on an admin: unbanning or deleting an admin is now
-  refused to everyone else, as banning one already was.
+- Only an admin may act on an admin: unbanning, deleting or editing an admin
+  (the admin user form can ban) is now refused to everyone else, as banning
+  one already was.
+- A role granted on one domain reaches that domain in the admin area: its
+  lists of users, communities, content, reports, registration applications,
+  referrals and domains, the report counts and the modlog show that domain's
+  rows, with a domain picker for anyone who may see more than one. The modlog
+  can be filtered by domain.
+- Notifications follow permissions. Registration applications go to holders
+  of "approve registrations", held posts to "administer communities pages",
+  reports on content to "moderate all communities" and reports on accounts to
+  "administer all users", each instance-wide or on the domain concerned, as
+  well as to the admins. The Staff role holds "moderate all communities", so
+  Staff members are now told of content reports, which used to reach admins
+  only.
 
 The work follows `docs/superpowers/specs/2026-11-03-rbac-design.md`; its
 Status section records what is done.
