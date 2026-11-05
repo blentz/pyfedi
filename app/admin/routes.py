@@ -50,7 +50,7 @@ from app.community.routes import do_subscribe
 from app.constants import REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_REVIEWING
 from app.email import send_registration_approved_email
 from app.admin.roles_routes import user_grants_panel
-from app.admin.scope import creatable_domains, may_create_account_on, scope_for
+from app.admin.scope import creatable_domains, scope_for
 from app.roles import grant_role, scope_refusal
 from app.permissions import domains_for, holds_any_grant, may_act_on_user
 from app.federation_urls import object_base
@@ -59,7 +59,7 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, Domain, \
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain, instance_row_referenced, DomainBranding, Referral
 from app.referral import DEFAULT_GENERATORS, GENERATOR_CHOICES, GENERATORS_SETTING, MAX_PER_CODE_SETTING, MAX_PER_USER_SETTING
-from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, live_registration, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default, federating_base, is_hosted_uri
+from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default, federating_base, is_hosted_uri
 from app.onion_media import DEFAULT_CACHE_BYTES
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.tasks import task_selector
@@ -2657,12 +2657,11 @@ def admin_users_add():
     if not creatable:
         return redirect(url_for('auth.permission_denied'))
     form = AddUserForm()
-    if domains_for('administer all users', current_user.get_id()) is not None:   # a scoped holder: their domains alone
+    # A scoped holder's choices are their domains alone, so the form refuses any other. An instance-wide holder may use all.
+    if domains_for('administer all users', current_user.get_id()) is not None:
         form.site_domain.choices = select_choices([(row.id, row.domain) for row in creatable])
     user = User()
     if form.validate_on_submit():
-        if not may_create_account_on(domain_by_id(form.site_domain.data)):
-            abort(403)
         grants = [db.session.get(Role, role_id) for role_id in form.grants.data or []]
         if grants and not current_user.is_admin():
             abort(403)   # RB5: only an admin grants roles
