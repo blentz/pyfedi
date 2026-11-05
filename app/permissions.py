@@ -224,16 +224,21 @@ def recipient_ids(permission: str, on=None) -> list[int]:
     (user 1 and the built-in role's holders), every instance-wide holder of `permission`, and, when it is scopable and
     `on` belongs to a domain, its holders on that domain. Active accounts only, by id."""
     domain_id = home_domain_id(on) if on is not None and is_scopable(permission) else None
-    admins = set(getattr(g, 'admin_ids', None) or ())   # the request's admin list, as Site.admins() reads it
+    # The admins as Site.admins() has them: the request's `g.admin_ids` when it has one, else user 1 and the built-in
+    # role's holders, read here
+    request_admins = getattr(g, 'admin_ids', None) if g else None
+    admins_clause = 'FALSE' if request_admins is not None else \
+        '(u.id = 1 OR EXISTS (SELECT 1 FROM role_grant ag JOIN role ar ON ar.id = ag.role_id ' \
+        "WHERE ag.user_id = u.id AND ar.built_in AND ag.site_domain_id IS NULL " \
+        "AND (ag.expires_at IS NULL OR ag.expires_at > timezone('utc', now()))))"
     held = set(db.session.execute(text(
-        'SELECT u.id FROM "user" u WHERE u.deleted = false AND u.banned = false AND (u.id = 1 OR EXISTS ('
-        '  SELECT 1 FROM role_grant rg JOIN role r ON r.id = rg.role_id WHERE rg.user_id = u.id '
+        f'SELECT u.id FROM "user" u WHERE u.deleted = false AND u.banned = false AND ({admins_clause} OR EXISTS ('
+        '  SELECT 1 FROM role_grant rg WHERE rg.user_id = u.id '
         "  AND (rg.expires_at IS NULL OR rg.expires_at > timezone('utc', now())) "
-        '  AND ((r.built_in AND rg.site_domain_id IS NULL) OR ('
-        '       EXISTS (SELECT 1 FROM role_permission rp WHERE rp.role_id = r.id AND rp.permission = :permission) '
-        '       AND (rg.site_domain_id IS NULL OR rg.site_domain_id = :domain_id))))) ORDER BY u.id'),
+        '  AND EXISTS (SELECT 1 FROM role_permission rp WHERE rp.role_id = rg.role_id AND rp.permission = :permission) '
+        '  AND (rg.site_domain_id IS NULL OR rg.site_domain_id = :domain_id))) ORDER BY u.id'),
         {'permission': permission, 'domain_id': domain_id}).scalars())
-    return sorted(held | admins)
+    return sorted(held | set(request_admins or ()))
 
 
 def holds_any_grant(user_id: int) -> bool:

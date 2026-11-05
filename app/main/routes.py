@@ -49,7 +49,6 @@ from app.visibility import listable_clause, modlog_domain_clause, modlog_local_o
     visible_to_clause
 from app.federation_urls import domain_site_name, federating_storefront, instance_actor_public_key, instance_actor_url
 from app.storefront import ON_DOMAIN_PARAM, current_instance_id, current_storefront, default_domain, domain_authority, \
-    domain_rows, \
     domain_base_url, hidden_instance_ids, hosted_instance_ids, on_domain, on_domain_sql, storefront_host, storefront_cache_key, \
     storefront_link, storefront_url
 from app.utils import etag_stamp
@@ -76,6 +75,7 @@ import app as app_pkg
 from app.form_choices import select_choices
 
 
+from app.admin.scope import domain_choices as picker_domains
 from app.permissions import domains_for, here, user_access
 from app.main.util import community_adding_rights
 @bp.route('/', methods=['HEAD', 'GET'])
@@ -669,8 +669,7 @@ def modlog():
     # Who sees which entries in full (RB9): an instance-wide holder of `view modlog` every one; a holder on some
     # domains those about their domains, beside the public ones everyone sees. `?domain=` narrows to one domain.
     view_domains = domains_for('view modlog', current_user.get_id()) if current_user.is_authenticated else frozenset()
-    domain_choices = [(row.id, row.domain) for row in domain_rows()
-                      if row.id is not None and (view_domains is None or row.id in view_domains)]
+    domain_choices = picker_domains(view_domains)
     picked_domain = request.args.get('domain', 0, type=int)
     if picked_domain not in {domain_id for domain_id, _ in domain_choices}:
         picked_domain = 0

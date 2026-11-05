@@ -1,5 +1,6 @@
 """Interop D24: a synced community an admin deletes is unfollowed and never re-added."""
 import inspect
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -198,7 +199,8 @@ def test_the_admin_click_excludes_both_urls_and_unfollows_before_the_task_runs(a
     synced(community)
 
     with app.test_request_context(), patch('app.admin.routes.unsubscribe_everyone_then_delete') as queued, \
-            patch('app.admin.routes.current_user'), patch('app.admin.routes.flash'):
+            patch('app.admin.routes.current_user', new=SimpleNamespace(get_id=lambda: 1, id=1)), \
+            patch('app.admin.routes.flash'):   # user 1: the route asks about the community itself (RBAC step 8)
         inspect.unwrap(admin_community_delete)(community.id)
 
     assert queued.called and undone == [TARGET]
