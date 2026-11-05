@@ -373,13 +373,10 @@ def test_an_expiry_in_the_past_or_unreadable_is_reported(env):
     assert RoleGrant.query.filter_by(role_id=role.id).one().expires_at is None
 
 
-def test_a_revoke_without_its_csrf_token_changes_nothing(env):
+def test_a_revoke_without_its_csrf_token_changes_nothing(env, monkeypatch):
     role = a_role('Helpers')
     grant_role(env.holder, role)
     grant = RoleGrant.query.filter_by(role_id=role.id).one()
-    env.app.config['WTF_CSRF_ENABLED'] = True
-    try:
-        env.client.post(f'/admin/grants/{grant.id}/revoke', data={})
-    finally:
-        env.app.config['WTF_CSRF_ENABLED'] = False
+    monkeypatch.setitem(env.app.config, 'WTF_CSRF_ENABLED', True)   # the app is session-scoped: restored after
+    env.client.post(f'/admin/grants/{grant.id}/revoke', data={})
     assert db.session.get(RoleGrant, grant.id) is not None
