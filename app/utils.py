@@ -5574,8 +5574,9 @@ def actor_profile_contains_blocked_words(user: User) -> bool:
     return False
 
 
-MODERATION_NOTICE_ACTIONS = frozenset({'delete_post', 'restore_post', 'lock_post', 'unlock_post', 'delete_post_reply',
-                                       'restore_post_reply', 'lock_post_reply', 'unlock_post_reply'})
+MODERATION_NOTICE_ACTIONS = frozenset({'delete_post', 'restore_post', 'lock_post', 'unlock_post', 'edit_post_labels',
+                                       'delete_post_reply', 'restore_post_reply', 'lock_post_reply',
+                                       'unlock_post_reply'})
 
 
 def add_to_modlog(action: str, actor: User, target_user: User = None, reason: str = '',
@@ -5618,6 +5619,7 @@ def _moderation_notice_title(action: str, action_type: str, community: Community
         'restore_post': _('%(who)s restored your post in %(community)s: %(title)s', **names),
         'lock_post': _('%(who)s turned comments off for your post in %(community)s: %(title)s', **names),
         'unlock_post': _('%(who)s turned comments back on for your post in %(community)s: %(title)s', **names),
+        'edit_post_labels': _('%(who)s changed the labels on your post in %(community)s: %(title)s', **names),
         'delete_post_reply': _('%(who)s removed your comment in %(community)s, on: %(title)s', **names),
         'restore_post_reply': _('%(who)s restored your comment in %(community)s, on: %(title)s', **names),
         'lock_post_reply': _('%(who)s turned replies off under your comment in %(community)s, on: %(title)s', **names),
@@ -5648,6 +5650,27 @@ def _tell_author(action: str, action_type: str, actor: User, author: User | None
                                     targets=targets))
     author.unread_notifications += 1
     db.session.commit()
+
+
+def post_labels(post: Post) -> dict:
+    """The labels on `post` that someone other than its author may change: take this before changing them, and give it
+    to `record_label_change` after."""
+    return {'NSFW': bool(post.nsfw), 'NSFL': bool(post.nsfl), 'AI': bool(post.ai_generated),
+            'flair': sorted(flair.flair for flair in post.flair)}
+
+
+def record_label_change(post: Post, before: dict, actor: User) -> None:
+    """A change to someone else's labels goes in the modlog and tells a local author (spec 2026-11-03-rbac-design.md,
+    follow-up 2). The reason says what changed, and stays in English as the modlog's other records do."""
+    after = post_labels(post)
+    if after == before or actor.id == post.user_id:
+        return
+    changes = [f"{name} {'on' if after[name] else 'off'}" for name in ('NSFW', 'NSFL', 'AI')
+               if after[name] != before[name]]
+    if after['flair'] != before['flair']:
+        changes.append('flair: ' + (', '.join(after['flair']) or 'none'))
+    add_to_modlog('edit_post_labels', actor=actor, target_user=post.author, reason='; '.join(changes),
+                  community=post.community, post=post, link_text=shorten_string(post.title), link=f'post/{post.id}')
 
 
 def authorise_api_user(auth, return_type=None, id_match=None) -> User | dict | int:

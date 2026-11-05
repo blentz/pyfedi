@@ -85,7 +85,7 @@ import pytest
 from contextlib import contextmanager
 
 from app import db
-from app.constants import (NOTIF_POST, NOTIF_REPORT, NOTIF_REPORT_ESCALATION, POST_STATUS_PUBLISHED,
+from app.constants import (NOTIF_MODERATION, NOTIF_POST, NOTIF_REPORT, NOTIF_REPORT_ESCALATION, POST_STATUS_PUBLISHED,
                            POST_STATUS_REVIEWING, SRC_API, SRC_WEB)
 from app.models import ModLog, Notification, hidden_posts, utcnow
 from app.shared.post import (
@@ -98,6 +98,11 @@ from app.shared.post import (
 )
 from tests.factories import bearer, grant_permission, make_community, make_community_member, \
     make_notification, make_post, make_user, seed_post_context, web_ctx
+
+
+def about_the_post():
+    """The notifications a removal looks at: the notice it sends the author stays, by test_moderation_notices.py."""
+    return Notification.query.filter(Notification.notif_type != NOTIF_MODERATION).all()
 
 
 def seed_moderator(s, user=None):
@@ -944,7 +949,7 @@ def test_removal_deletes_ordinary_notifications_about_the_post(db_session):
 
     mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
 
-    assert db.session.query(Notification).count() == 0
+    assert about_the_post() == []   # the author's own notice of the removal is not one of them
 
 
 def test_removal_keeps_report_notifications(db_session):
@@ -960,7 +965,7 @@ def test_removal_keeps_report_notifications(db_session):
 
     mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
 
-    remaining = db.session.query(Notification).all()
+    remaining = about_the_post()
     assert len(remaining) == 1
     assert remaining[0].notif_type == NOTIF_REPORT
 
@@ -979,7 +984,7 @@ def test_removal_keeps_escalated_report_notifications(db_session):
 
     mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
 
-    remaining = db.session.query(Notification).all()
+    remaining = about_the_post()
     assert len(remaining) == 1
     assert remaining[0].notif_type == NOTIF_REPORT_ESCALATION
 

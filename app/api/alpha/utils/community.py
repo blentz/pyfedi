@@ -25,7 +25,7 @@ from app.shared.tasks import task_selector
 from app.visibility import can_view
 from app.utils import user_banned_from_community, authorise_api_user, communities_banned_from_all_users, moderating_communities_ids, \
     blocked_or_banned_instances
-from app.utils import communities_banned_from, blocked_instances, blocked_communities, shorten_string, \
+from app.utils import post_labels, record_label_change, communities_banned_from, blocked_instances, blocked_communities, shorten_string, \
     joined_communities, moderating_communities, expand_hex_color, community_membership, subscribed_feeds, \
     feed_membership
 
@@ -620,8 +620,10 @@ def post_community_moderate_post_nsfw(auth, data):
         raise Exception('Community not local to this instance.')
 
     # set the post.nsfw to nsfw_status
+    labels_before = post_labels(post)
     post.nsfw = data['nsfw_status']
     db.session.commit()
+    record_label_change(post, labels_before, mod_user)
 
     # build the post view response
     res = post_view(post=post, variant=2, stub=True, user_id=mod_user.id)

@@ -5865,6 +5865,7 @@ class ModLog(db.Model):
         'lock_post_reply': _l('Lock comment'),
         'unlock_post_reply': _l('Un-lock comment'),
         'move_post': _l('Move post'),
+        'edit_post_labels': _l('Changed post labels'),
         'masquerade': _l('Masqueraded as account'),
         'create_role': _l('Created role'),
         'edit_role': _l('Edited role'),

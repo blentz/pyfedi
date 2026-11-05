@@ -24,6 +24,7 @@
             <option value="remove_mod" {{ 'selected' if mod_action == 'remove_mod' }}>{{ _('Remove moderator') }}</option>
             <option value="delete_post" {{ 'selected' if mod_action == 'delete_post' }}>{{ _('Delete post') }}</option>
             <option value="delete_post_reply" {{ 'selected' if mod_action == 'delete_post_reply' }}>{{ _('Delete comment') }}</option>
+            <option value="edit_post_labels" {{ 'selected' if mod_action == 'edit_post_labels' }}>{{ _('Change post labels') }}</option>
         </select>
         <input type="search" name="suspect_user_name" placeholder="{{ _('user@instance') }}" value="{{ suspect_user_name }}"
                class="form-control"

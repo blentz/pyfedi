@@ -24,7 +24,7 @@ from app.post.util import post_replies, get_comment_branch, tags_to_string, flai
 # The module, not the name: app.topic.routes reaches this file through
 # app.activitypub before get_all_child_topic_ids is defined (import cycle: topic.routes)
 import app.topic.routes as topic_routes
-from app.utils import can_moderate, authorise_api_user, blocked_users, blocked_communities, blocked_or_banned_instances, \
+from app.utils import post_labels, record_label_change, can_moderate, authorise_api_user, blocked_users, blocked_communities, blocked_or_banned_instances, \
     recently_upvoted_posts, \
     site_language_id, filtered_out_communities, joined_or_modding_communities, \
     user_filters_home, user_filters_posts, in_sorted_list, instance_sticky_posts, instance_sticky_post_ids, \
@@ -2197,6 +2197,7 @@ def put_post_set_flair(auth, data):
     user = authorise_api_user(auth, return_type='model')
     
     if post.community.is_moderator(user) or user_access('moderate all communities', user.id, on=post) or post.user_id == user.id:
+        labels_before = post_labels(post)
         # Start by clearing the existing flair
         post.flair = []
 
@@ -2210,6 +2211,7 @@ def put_post_set_flair(auth, data):
                     post.flair.append(flair)
 
         db.session.commit()
+        record_label_change(post, labels_before, user)
 
         if post.status == POST_STATUS_PUBLISHED:
             task_selector('edit_post', post_id=post.id)

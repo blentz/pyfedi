@@ -668,6 +668,12 @@ limits on input that could cost seconds of CPU or crash a request:
   (`a65b9389`). Malformed commands get an NNTP error reply instead of
   closing the connection (section 4).
 
+**Moderation is visible to the author (not yet pushed).** A local author gets a
+notification when a moderator or admin removes or restores their post or comment,
+turns its comments off or on, or changes the labels on their post (flair, NSFW,
+NSFL, AI). It gives the content, the community, the reason and "a moderator" or "an
+admin", and names no one. A label change is also a new modlog entry.
+
 **Roles and permissions (RBAC; not yet pushed).** An instance
 admin now builds named roles in the admin area (`/admin/roles`, replacing
 `/admin/permissions`). Each permission in a role reaches all domains or selected
@@ -721,6 +727,11 @@ section records what is done.
 
 ### 2.4 API contract changes (for client developers)
 
+- **`notif_type` 15, a moderation notice.** `GET /api/alpha/user/notifications`
+  now returns it (not yet pushed). `notif_subtype` is the modlog action, such as
+  `delete_post`; `notif_body` is the notice; `reason`, `post_id` and sometimes
+  `comment_id` come with it. `author` is the recipient, because the moderator is
+  not named. A client that lists unknown types should show `notif_body`.
 - **Internal errors are a generic 500.** Any exception that is not a
   deliberate refusal is logged in full and answered
   `{"code": 500, "message": "internal error"}` instead of echoing its text.

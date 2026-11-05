@@ -63,7 +63,7 @@ from app.shared.media import episode_form_wanted, episode_of, media_of
 from app.shared.tasks import task_selector
 import app.variants as variants
 from app.storefront import current_storefront, storefront_url
-from app.utils import etag_stamp, max_album_images
+from app.utils import etag_stamp, max_album_images, post_labels, record_label_change
 from app.utils import clean_ap_url, can_moderate, is_local_microblogs, render_template, markdown_to_html, validation_required, \
     shorten_string, markdown_to_text, ap_datetime, return_304, \
     request_etag_matches, ip_address, instance_banned, \
@@ -2047,6 +2047,7 @@ def post_set_flair(post_id):
             comm_flair = CommunityFlair.query.filter(CommunityFlair.community_id == post.community_id).\
                 order_by(CommunityFlair.flair).all()
 
+            labels_before = post_labels(post)
             post.nsfw = request.form.get('nsfw') == '1'
             post.nsfl = request.form.get('nsfl') == '1'
             post.ai_generated = request.form.get('ai_generated') == '1'
@@ -2063,6 +2064,7 @@ def post_set_flair(post_id):
                     post.flair.append(flair)
 
             db.session.commit()
+            record_label_change(post, labels_before, current_user)
             if post.status == POST_STATUS_PUBLISHED:
                 task_selector('edit_post', post_id=post.id)
 
@@ -2084,12 +2086,14 @@ def post_set_flair(post_id):
             form.flair.choices = select_choices(flair_choices)
 
         if form.validate_on_submit():
+            labels_before = post_labels(post)
             post.flair.clear()
             post.flair = flair_from_form(form.flair.data)
             post.nsfw = form.nsfw.data
             post.nsfl = form.nsfl.data
             post.ai_generated = form.ai_generated.data
             db.session.commit()
+            record_label_change(post, labels_before, current_user)
             if post.status == POST_STATUS_PUBLISHED:
                 task_selector('edit_post', post_id=post.id)
             return redirect(url_for('activitypub.community_profile', actor=post.community.link()))
@@ -3151,8 +3155,10 @@ def post_set_ai(post_id):
     post = db.session.get(Post, post_id) or abort(404)
     refuse_invisible(post)
     if current_user.is_authenticated and (user_access('moderate all communities', current_user.get_id(), on=post) or post.user_id == current_user.id or post.community.is_moderator()):
+        labels_before = post_labels(post)
         post.ai_generated = True
         db.session.commit()
+        record_label_change(post, labels_before, current_user)
         return _('Done')
     else:
         abort(401)
