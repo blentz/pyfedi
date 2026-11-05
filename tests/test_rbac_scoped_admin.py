@@ -464,3 +464,11 @@ def test_seeded_staff_reaches_no_remote_row_and_keeps_its_instance_only_permissi
     assert user_access('moderate all communities', uid, on=far) is False
     assert may_ban(seeded.holder, remote) is False
     assert user_access('manage topics', uid) is True
+
+
+def test_user_administration_does_not_open_other_peoples_conversations(seeded):
+    """Found on a copy of production: a role with `administer all users` must not gain `read private messages` on the way
+    up. On the web they were an admin's alone."""
+    from app.permissions import STAFF_PERMISSIONS, user_access
+    assert 'read private messages' not in STAFF_PERMISSIONS
+    assert user_access('read private messages', seeded.holder.id) is False

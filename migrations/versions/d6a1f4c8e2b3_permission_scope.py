@@ -25,6 +25,9 @@ down_revision = 'c5f9e3b7a2d1'
 branch_labels = None
 depends_on = None
 
+# Whether the upgrade gave Staff `administer all users`, so the downgrade takes back only that: an instance's Staff may
+# have held it already.
+GAINED_MARKER = 'rbac_staff_gained_user_administration'
 # Frozen here: the catalogue may change after this revision.
 STAFF_SCOPABLE = ('approve registrations', 'ban users', 'manage users', 'view user details',
                   'moderate all communities', 'administer communities pages', 'view modlog', 'administer all users')
@@ -72,8 +75,11 @@ def upgrade():
     staff = conn.execute(sa.text("SELECT id FROM role WHERE name = 'Staff' AND NOT built_in")).scalar()
     default = conn.execute(sa.text('SELECT id FROM site_domain WHERE is_default')).scalar()
     if staff is not None and default is not None:
-        conn.execute(sa.text("INSERT INTO role_permission (role_id, permission, all_domains) "
-                             "VALUES (:r, 'administer all users', true) ON CONFLICT DO NOTHING"), {'r': staff})
+        gained = conn.execute(sa.text("INSERT INTO role_permission (role_id, permission, all_domains) "
+                                      "VALUES (:r, 'administer all users', true) ON CONFLICT DO NOTHING "
+                                      "RETURNING permission"), {'r': staff}).first()
+        if gained:
+            conn.execute(sa.text("INSERT INTO settings (name, value) VALUES (:n, 'true')"), {'n': GAINED_MARKER})
         for permission in STAFF_SCOPABLE:
             held = conn.execute(sa.text('UPDATE role_permission SET all_domains = false WHERE role_id = :r '
                                         'AND permission = :p RETURNING permission'),
@@ -103,9 +109,11 @@ def downgrade():
 
     staff = conn.execute(sa.text("SELECT id FROM role WHERE name = 'Staff' AND NOT built_in")).scalar()
     if staff is not None:
-        conn.execute(sa.text("DELETE FROM role_permission WHERE role_id = :r AND permission = 'administer all users' "
-                             "AND NOT all_domains"), {'r': staff})
+        if conn.execute(sa.text('SELECT 1 FROM settings WHERE name = :n'), {'n': GAINED_MARKER}).first():
+            conn.execute(sa.text("DELETE FROM role_permission WHERE role_id = :r "
+                                 "AND permission = 'administer all users'"), {'r': staff})
         conn.execute(sa.text('UPDATE role_permission SET all_domains = true WHERE role_id = :r'), {'r': staff})
+    conn.execute(sa.text('DELETE FROM settings WHERE name = :n'), {'n': GAINED_MARKER})
     op.execute('DELETE FROM role_permission WHERE NOT all_domains')   # never let a limited permission widen
     op.drop_table('role_permission_domain')
     op.drop_column('role_permission', 'all_domains')

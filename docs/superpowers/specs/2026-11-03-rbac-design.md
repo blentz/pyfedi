@@ -6,6 +6,10 @@ Date: 2026-11-03. Status: being built on blentz.
   found is fixed at 296d8a174; O5 came out of it.
 - Step 3 (the check) is done: app/permissions.py (`user_access(perm, user, on=, anywhere=)`, `home_domain_id`,
   `may_act_on_user`), app/permission_cache.py (the per-user version). No call site names an object yet (step 5).
+- Checked on a copy of production's roles, domains and accounts (2026-11-05): the upgrade, downgrade and re-upgrade run
+  in about five seconds. It found two defects, both fixed: `administer all users` no longer maps to `read private
+  messages` (web conversations were an admin's alone; the API's report lists ask `administer all users` themselves), and
+  the downgrade takes `administer all users` from Staff only if the upgrade gave it.
 - Step 10 is done, and with it the build. Expired grants are removed by `remove_expired_grants` (app/roles.py), with a
   modlog entry naming no actor. The project has no Celery beat, so RB11's task runs from cron through `flask send-queue`,
   every few minutes. `shown as admin` (RB12) goes through `admins_shown_on(domain)` for the API's site `admins`, /about,

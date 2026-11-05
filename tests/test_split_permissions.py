@@ -122,7 +122,9 @@ def test_each_role_gains_what_its_legacy_permissions_were_split_into(people):
         assert _held(ids['settings']) == {
             'change instance settings', 'manage domains', 'masquerade', 'send newsletter', 'manage remote instances',
             'edit domain branding'}
-        assert _held(ids['users']) == {'administer all users', 'manage media', 'read private messages'}
+        # not `read private messages`: other people's conversations were an admin's alone on the web, and the API's
+        # report lists ask `administer all users` themselves
+        assert _held(ids['users']) == {'administer all users', 'manage media'}
         assert _held(ids['banners']) == {'ban users', 'manage blocklists'}
         assert _held(ids['roles']) == {'edit cms pages'}   # RB5
         # only the role named Staff passed is_staff(); a renamed one never did, so gains nothing for it
@@ -291,6 +293,31 @@ def test_the_registration_setting_merges_into_closed_and_the_downgrade_cannot_wi
             migration.upgrade()
             assert db.session.execute(text('SELECT registration FROM site_domain WHERE id = :i'),
                                       {'i': shop_id}).scalar() == 'closed'
+        db.session.commit()
+    finally:
+        db.session.rollback()
+
+
+@pytest.mark.parametrize('held_before', [True, False], ids=['held it before', 'gained it'])
+def test_the_downgrade_takes_staffs_user_administration_only_if_the_upgrade_gave_it(people, held_before):
+    """Found on a copy of production, whose Staff already held `administer all users`."""
+    db.session.add(SiteDomain(domain='first.split.example', scheme='https', federates=True, is_default=True))
+    db.session.commit()
+    migration = load_migration('d6a1f4c8e2b3_permission_scope.py')
+    staff = _role('Staff', 'ban users')
+    db.session.commit()
+    try:
+        with Operations.context(MigrationContext.configure(db.session.connection())):
+            migration.downgrade()
+            if held_before:
+                db.session.execute(text("INSERT INTO role_permission (role_id, permission) "
+                                        "VALUES (:r, 'administer all users')"), {'r': staff})
+            migration.upgrade()
+            assert 'administer all users' in _held(staff)
+            migration.downgrade()
+            assert ('administer all users' in _held(staff)) is held_before
+            assert 'ban users' in _held(staff)
+            migration.upgrade()
         db.session.commit()
     finally:
         db.session.rollback()

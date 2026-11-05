@@ -14,7 +14,8 @@ each permission split from one it holds, so that nothing it may do today is lost
   stays in the catalogue for what only admins may do in a community, which no role held before (note 4).
 - `change instance settings` is kept, and gains the parts split from it: domains, masquerade, the newsletter,
   remote instances and domain branding.
-- `administer all users` gains `manage media` and `read private messages` (the API's private message reports).
+- `administer all users` gains `manage media`. Not `read private messages`: other people's conversations were an admin's
+  alone on the web, and the API's private message reports ask `administer all users` themselves.
 - `ban users` and `manage users` gain `manage blocklists` (link-domain and tag bans).
 - `change user roles` is removed: roles and grants are Admin's alone (RB5).
 - The role named Staff passed every `is_staff()` check by its name. It gains the permissions those checks become, so
@@ -44,7 +45,7 @@ GAINS = {
     'administer all communities': SPLIT_FROM_COMMUNITIES,
     'change instance settings': ('manage domains', 'masquerade', 'send newsletter', 'manage remote instances',
                                  'edit domain branding'),
-    'administer all users': ('manage media', 'read private messages'),
+    'administer all users': ('manage media',),
     'ban users': ('manage blocklists',),
     'manage users': ('manage blocklists',),
 }

@@ -17,7 +17,7 @@ from sqlalchemy import func
 
 from app import cache, db
 from app.api.alpha.views import user_view
-from app.models import ModLog, Role, RoleGrant, RolePermission, RolePermissionDomain, SiteDomain, User, utcnow
+from app.models import ModLog, Role, RoleGrant, RolePermission, RolePermissionDomain, Settings, SiteDomain, User, utcnow
 from app.permission_cache import permissions_changed
 from app.permissions import BY_NAME, INSTANCE_ONLY_PERMISSIONS, STAFF_PERMISSIONS, STAFF_SCOPABLE_PERMISSIONS, \
     home_domain_id
@@ -41,6 +41,9 @@ def seed_default_roles() -> dict[str, Role]:
             row.domains.append(RolePermissionDomain(permission=permission, site_domain_id=first))
         staff.permissions.append(row)
     db.session.add_all([admin, staff])
+    # Migration d6a1f4c8e2b3's marker: this Staff's user administration was given to it, so a downgrade takes it back
+    if db.session.get(Settings, 'rbac_staff_gained_user_administration') is None:
+        db.session.add(Settings(name='rbac_staff_gained_user_administration', value='true'))
     return {admin.name: admin, staff.name: staff}
 
 
