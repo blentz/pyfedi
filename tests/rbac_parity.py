@@ -71,6 +71,8 @@ def build_world():
     server = current_app.config['SERVER_NAME']
     local = make_instance(server, software='piefed')                      # instance 1
     peer = make_instance('peer.example', software='piefed')               # instance 2
+    db.session.add(SiteDomain(domain=server, scheme='https', is_default=True))   # before the roles: Staff is limited to it
+    db.session.commit()
     seed_default_roles()
     db.session.commit()
     staff_role = Role.query.filter_by(name='Staff').one()
@@ -129,7 +131,6 @@ def build_world():
     activity = make_activitypub_log('https://peer.example/activities/1')
     file = make_file()
     registration = make_user_registration(target)
-    db.session.add(SiteDomain(domain=server, scheme='https', is_default=True))
     db.session.add(SiteDomain(domain=SHOP, scheme='https', federates=False))
     db.session.commit()
     clear_domain_cache()

@@ -19,7 +19,7 @@
                 <th>{{ _('Name') }}</th>
                 <th>{{ _('Description') }}</th>
                 <th class="text-center">{{ _('Permissions') }}</th>
-                <th class="text-center">{{ _('Can be granted on a domain') }}</th>
+                <th class="text-center">{{ _('Limited to some domains') }}</th>
                 <th class="text-center">{{ _('Listed publicly') }}</th>
                 <th class="text-center">{{ _('Holders') }}</th>
                 <th></th>
@@ -30,7 +30,7 @@
                     {% if row.role.built_in %}<span class="badge text-bg-secondary">{{ _('Built-in') }}</span>{% endif %}</td>
                 <td>{{ row.role.description or '' }}</td>
                 <td class="text-center">{% if row.role.built_in %}{{ _('All') }}{% else %}{{ row.permission_count }}{% endif %}</td>
-                <td class="text-center">{{ _('Yes') if row.scopable else _('No') }}</td>
+                <td class="text-center">{{ row.limited if not row.role.built_in else _('None') }}</td>
                 <td class="text-center">{{ _('Yes') if row.role.listed_publicly else _('No') }}</td>
                 <td class="text-center">{{ row.holders }}</td>
                 <td class="text-end">

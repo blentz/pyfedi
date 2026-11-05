@@ -27,20 +27,29 @@
             {{ render_field(form.listed_publicly) }}
 
             <h2>{{ _('Permissions') }}</h2>
-            <p class="small">{{ _('Instance-only permissions cannot be held on one domain: a role with any of them can only be granted instance-wide.') }}</p>
+            <p class="small">{{ _('Each permission reaches every domain, or the domains you select. Instance-only ones always apply to the whole instance.') }}</p>
             {% for group, permissions in groups -%}
             <fieldset class="mb-3 role-permission-group">
                 <legend class="h5">{{ group|capitalize }}</legend>
                 {% for permission in permissions -%}
                 <div class="form-check">
                     <input class="form-check-input" type="checkbox" name="permissions" value="{{ permission.name }}"
-                           id="perm-{{ loop.index }}-{{ group|replace(' ', '-') }}"{{ ' checked' if permission.name in chosen }}>
+                           id="perm-{{ loop.index }}-{{ group|replace(' ', '-') }}"{{ ' checked' if permission.name in scopes }}>
                     <label class="form-check-label" for="perm-{{ loop.index }}-{{ group|replace(' ', '-') }}">
                         <strong>{{ permission.name }}</strong>
-                        {% if permission.name in instance_only %}<span class="badge text-bg-warning">{{ _('instance-only') }}</span>
-                        {% else %}<span class="badge text-bg-info">{{ _('scopable') }}</span>{% endif %}
+                        {% if permission.name not in scopable %}<span class="badge text-bg-warning">{{ _('instance-only') }}</span>{% endif %}
                         <span class="small text-muted">{{ permission.guards }}</span>
                     </label>
+                    {% if permission.name in scopable -%}
+                    {% set limited = scopes.get(permission.name) -%}
+                    <div class="ms-3 small permission-scope">
+                        <label class="me-2"><input type="radio" name="scope-{{ permission.name }}" value="all"{{ ' checked' if limited is none }}> {{ _('All domains') }}</label>
+                        <label class="me-2"><input type="radio" name="scope-{{ permission.name }}" value="selected"{{ ' checked' if limited is not none }}> {{ _('Selected domains:') }}</label>
+                        {% for domain_id, domain in domains -%}
+                        <label class="me-2"><input type="checkbox" name="domains-{{ permission.name }}" value="{{ domain_id }}"{{ ' checked' if limited and domain_id in limited }}> {{ domain }}</label>
+                        {% endfor -%}
+                    </div>
+                    {% endif -%}
                 </div>
                 {% endfor -%}
             </fieldset>

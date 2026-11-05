@@ -2100,24 +2100,22 @@ def _holds_built_in_role(user_id: int, version: int) -> bool:
     """`version` only keys the cache (app/permission_cache.py), so a grant or revoke is seen at once."""
     return db.session.execute(
         select(role_grant.c.id).join(Role, Role.id == role_grant.c.role_id)
-        .where(role_grant.c.user_id == user_id, role_grant.c.site_domain_id.is_(None), Role.built_in.is_(True),
+        .where(role_grant.c.user_id == user_id, Role.built_in.is_(True),
                unexpired_grant()).limit(1)).first() is not None
 
 
 class RoleGrant(db.Model):
-    """A user holds a role instance-wide (site_domain_id NULL) or on one domain, until `expires_at` if it is set
-    (spec 2026-11-03-rbac-design.md RB1, RB11). Only Admin makes or revokes grants (RB5)."""
+    """A user holds a role, until `expires_at` if it is set (RB11). Which domains that reaches is the role's own
+    permissions' to say (RolePermission). Only Admin makes or revokes grants (RB5)."""
     __tablename__ = 'role_grant'
     __table_args__ = (
-        Index('uq_role_grant_user_role_scope', 'user_id', 'role_id', text('COALESCE(site_domain_id, 0)'), unique=True),
+        Index('uq_role_grant_user_role', 'user_id', 'role_id', unique=True),
     )
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id', name='fk_role_grant_user_id', ondelete='CASCADE'),
                         nullable=False, index=True)
     role_id = db.Column(db.Integer, db.ForeignKey('role.id', name='fk_role_grant_role_id', ondelete='RESTRICT'),
                         nullable=False, index=True)
-    site_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id', name='fk_role_grant_site_domain_id',
-                                                         ondelete='CASCADE'))
     granted_by = db.Column(db.Integer, db.ForeignKey('user.id', name='fk_role_grant_granted_by', ondelete='SET NULL'))
     granted_at = db.Column(db.DateTime, nullable=False, default=utcnow, server_default=text("timezone('utc', now())"))
     expires_at = db.Column(db.DateTime)
@@ -2328,8 +2326,7 @@ class User(UserMixin, db.Model):
     # The roles held instance-wide and not expired. A domain-scoped grant is not here: it is checked against the
     # object acted on (spec 2026-11-03-rbac-design.md, Check API). Appending adds an instance-wide grant.
     roles = db.relationship('Role', secondary=role_grant, lazy='dynamic',
-                            primaryjoin=lambda: and_(User.id == role_grant.c.user_id,
-                                                     role_grant.c.site_domain_id.is_(None), unexpired_grant()),
+                            primaryjoin=lambda: and_(User.id == role_grant.c.user_id, unexpired_grant()),
                             secondaryjoin=lambda: Role.id == role_grant.c.role_id)
     passkeys = db.relationship('Passkey', lazy='dynamic', cascade="all, delete-orphan")
     modlog_target = db.relationship('ModLog', lazy='dynamic', foreign_keys="ModLog.target_user_id", back_populates='target_user', cascade="all, delete-orphan")
@@ -5603,7 +5600,7 @@ class Role(db.Model):
     description = db.Column(db.String(512))
     created_at = db.Column(db.DateTime, default=utcnow, server_default=text("timezone('utc', now())"))
     updated_at = db.Column(db.DateTime, default=utcnow, onupdate=utcnow, server_default=text("timezone('utc', now())"))
-    permissions = db.relationship('RolePermission')
+    permissions = db.relationship('RolePermission', cascade='all, delete-orphan')
 
     @staticmethod
     def admin() -> 'Role | None':
@@ -5612,8 +5609,23 @@ class Role(db.Model):
 
 
 class RolePermission(db.Model):
+    """A permission a role holds, on every domain or on those `domains` lists. Limited with none listed reaches nowhere,
+    so removing a domain can never widen a role."""
     role_id = db.Column(db.Integer, db.ForeignKey('role.id'), primary_key=True)
     permission = db.Column(db.String, primary_key=True, index=True)
+    all_domains = db.Column(db.Boolean, nullable=False, default=True, server_default='true')
+    domains = db.relationship('RolePermissionDomain', cascade='all, delete-orphan', passive_deletes=True)
+
+
+class RolePermissionDomain(db.Model):
+    __tablename__ = 'role_permission_domain'
+    __table_args__ = (db.ForeignKeyConstraint(['role_id', 'permission'],
+                                              ['role_permission.role_id', 'role_permission.permission'],
+                                              name='fk_role_permission_domain_permission', ondelete='CASCADE'),)
+    role_id = db.Column(db.Integer, primary_key=True)
+    permission = db.Column(db.String, primary_key=True)
+    site_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id', name='fk_role_permission_domain_site_domain_id',
+                                                         ondelete='CASCADE'), primary_key=True)
 
 
 class Notification(db.Model):
@@ -6017,7 +6029,7 @@ class SiteDomain(db.Model):
     """One row per domain the site answers on (a storefront). Exactly one row is the default."""
     __tablename__ = 'site_domain'
     __table_args__ = (
-        CheckConstraint("registration IN ('anyone','staff','admin')", name='ck_site_domain_registration'),
+        CheckConstraint("registration IN ('anyone','closed')", name='ck_site_domain_registration'),
         Index('ix_site_domain_one_default', 'is_default', unique=True, postgresql_where=text('is_default')),
         db.UniqueConstraint('instance_id', name='uq_site_domain_instance_id'),
     )
@@ -6025,7 +6037,7 @@ class SiteDomain(db.Model):
     domain = db.Column(db.String(255), unique=True, nullable=False)  # lower-case host name, no scheme or port
     scheme = db.Column(db.String(5), nullable=False, default='https')  # https or http
     federates = db.Column(db.Boolean, nullable=False, default=True, server_default='true')
-    registration = db.Column(db.String(10), nullable=False, default='anyone', server_default='anyone')  # anyone, staff, admin
+    registration = db.Column(db.String(10), nullable=False, default='anyone', server_default='anyone')  # anyone, closed: whether the public may sign up
     is_default = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     is_onion = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     # Its own instance row (spec 2026-10-19 §3.1): row 1 for the default. Set on insert, below.

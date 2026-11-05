@@ -10,12 +10,12 @@ from cachelib import SimpleCache
 from flask import g
 
 from app import db, permission_cache
-from app.models import (Conversation, Report, Role, RolePermission, SiteDomain, Topic, UserRegistration, role_grant,
+from app.models import (Conversation, Report, Role, RolePermission, RolePermissionDomain, SiteDomain, Topic, UserRegistration, role_grant,
                         utcnow)
 from app.permissions import (INSTANCE_ONLY_PERMISSIONS, SCOPABLE_PERMISSIONS, here, holds_any_grant, home_domain_id,
                              is_scopable, may_act_on_user, may_ban, user_access)
 from app.storefront import clear_domain_cache, domain_for_host
-from tests.factories import (admin_role, grant_role, make_community, make_instance, make_local_feed, make_post,
+from tests.factories import (admin_role, grant_role, limit_role, make_community, make_instance, make_local_feed, make_post,
                              make_post_reply, make_user)
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -66,9 +66,8 @@ def role_with(name, *permissions):
 
 def scoped_holder(world, name, domain, *permissions, expires_at=None):
     holder = make_user(world.local, name, local=True)
-    role = role_with(f'role-{name}', *permissions)
-    db.session.execute(role_grant.insert().values(user_id=holder.id, role_id=role.id, site_domain_id=domain.id,
-                                                  expires_at=expires_at))
+    role = limit_role(role_with(f'role-{name}', *permissions), domain)
+    db.session.execute(role_grant.insert().values(user_id=holder.id, role_id=role.id, expires_at=expires_at))
     db.session.commit()
     return holder
 
@@ -164,14 +163,67 @@ def test_an_expired_scoped_grant_answers_nothing(world):
     assert holds_any_grant(holder.id) is False
 
 
-def test_the_built_in_role_counts_only_instance_wide(world):
-    """RB2: Admin is never scoped. A stray domain grant of it confers nothing, here or anywhere."""
-    holder = make_user(world.local, 'strayadmin', local=True)
-    grant_role(holder, admin_role(), site_domain_id=world.x.id)
-    assert user_access('ban users', holder.id, on=world.on_x) is False
-    assert holder.is_admin() is False
+def test_the_built_in_role_reaches_everything(world):
+    """RB2: Admin holds every permission on every domain, with no rows of its own to limit."""
+    holder = make_user(world.local, 'anadmin', local=True)
+    assert user_access('ban users', holder.id, on=world.on_y) is False
     grant_role(holder, admin_role())
     assert user_access('ban users', holder.id, on=world.on_y) is True
+    assert holder.is_admin() is True
+
+
+def test_a_permission_limited_to_several_domains_reaches_each_and_no_other(world):
+    """The owner's three scopes: one domain, a selection, or all."""
+    holder = make_user(world.local, 'selected', local=True)
+    third = SiteDomain(domain='z.parity.example', scheme='https', federates=False)
+    db.session.add(third)
+    db.session.commit()
+    role = limit_role(role_with('Selected', 'administer all users'), world.x, world.y)
+    grant_role(holder, role)
+    assert user_access('administer all users', holder.id, on=world.x) is True
+    assert user_access('administer all users', holder.id, on=world.y) is True
+    assert user_access('administer all users', holder.id, on=third) is False
+    assert user_access('administer all users', holder.id) is False
+
+
+def test_a_role_can_mix_a_limited_permission_with_one_on_every_domain(world):
+    """Why scope lives on the permission: Staff's shape, one permission narrowed, another not."""
+    holder = make_user(world.local, 'mixed', local=True)
+    role = role_with('Mixed', 'administer all users', 'view modlog')
+    row = RolePermission.query.filter_by(role_id=role.id, permission='administer all users').one()
+    row.all_domains = False
+    row.domains.append(RolePermissionDomain(permission=row.permission, site_domain_id=world.x.id))
+    db.session.commit()
+    grant_role(holder, role)
+    assert user_access('administer all users', holder.id, on=world.x) is True
+    assert user_access('administer all users', holder.id, on=world.y) is False
+    assert user_access('view modlog', holder.id, on=world.y) is True
+    assert user_access('view modlog', holder.id) is True
+
+
+def test_a_limited_permission_with_no_domain_left_reaches_nowhere(world):
+    """Removing a domain can never widen a role."""
+    holder = scoped_holder(world, 'emptied', world.x, 'ban users')
+    RolePermissionDomain.query.delete()
+    db.session.commit()
+    assert user_access('ban users', holder.id, on=world.x) is False
+    assert user_access('ban users', holder.id) is False
+    assert user_access('ban users', holder.id, anywhere=True) is False
+
+
+def test_a_local_row_no_domain_was_stamped_on_is_the_default_domains(world):
+    """storefront.on_domain has them on the default domain; so do the checks and the list filter. A remote row has no
+    domain, and is on no one's list."""
+    from app.models import User
+    from app.permissions import domain_clause
+    first = SiteDomain(domain='first.parity.example', scheme='https', federates=True, is_default=True)
+    db.session.add(first)
+    db.session.commit()
+    unstamped = make_user(world.local, 'unstamped', local=True)
+    assert unstamped.site_domain_id is None and home_domain_id(unstamped) == first.id
+    assert home_domain_id(world.remote) is None
+    listed = {u.id for u in User.query.filter(domain_clause(User.site_domain_id, frozenset({first.id})))}
+    assert unstamped.id in listed and world.remote.id not in listed and world.on_x.id not in listed
 
 
 # --------------------------------------------------------------------------
@@ -361,9 +413,9 @@ def test_a_scoped_moderator_reads_the_comment_reports_on_their_domain_only(world
 def test_domains_for_names_the_domains_a_holder_is_granted_on(world):
     from app.permissions import domains_for
     holder = scoped_holder(world, 'xlister', world.x, 'administer all users')
-    role = Role.query.filter_by(name='role-xlister').one()
-    db.session.execute(role_grant.insert().values(user_id=holder.id, role_id=role.id, site_domain_id=world.y.id,
-                                                  expires_at=utcnow() - timedelta(days=1)))   # expired: not counted
+    expired = limit_role(role_with('Expired lister', 'administer all users'), world.y)
+    db.session.execute(role_grant.insert().values(user_id=holder.id, role_id=expired.id,
+                                                  expires_at=utcnow() - timedelta(days=1)))   # not counted
     db.session.commit()
     assert domains_for('administer all users', holder.id) == frozenset({world.x.id})
     assert domains_for('approve registrations', holder.id) == frozenset()

@@ -285,6 +285,7 @@ scan. The backfill `UPDATE`s touch only rows that are actually NULL.
 | 26 | `3d52b8a19cf5` ipv6_canonical_hosts | Rewrites IPv6 hosts in `domain`, `banned_instances` and `allowed_instances` to one canonical spelling (`[0:0::1]` becomes `::1`). `domain` rows that name the same address are merged into the oldest or already-canonical row: flags are OR-ed, `post_count` is summed, a posting warning is kept, and every foreign key to `domain.id` (found from the catalogue: `post`, `post_reply`, `scheduled_post`, `domain_block`) is repointed before the duplicates are deleted. A user's block of a merged row is dropped when that user already blocks the survivor. A repeated `banned_instances` or `allowed_instances` row is deleted. Hosts without a `:` are untouched. (`bf837e71`) | Yes, IPv6 host rows only. Deletes duplicates. Not reversible |
 | 27 | `b4e8d2a6f1c9` role_grants | Replaces `user_role` with `role_grant` (user, role, optional domain, granted by, granted at, optional expiry), adds `role.built_in`, `role.listed_publicly`, `role.description` and `mod_log.site_domain_id`, deletes the roles "Anonymous user" and "Authenticated user", which conferred nothing, and marks the role named Admin as the built-in one. (`b0056476`) | Yes. The downgrade drops domain grants |
 | 28 | `c5f9e3b7a2d1` split_permissions | Moves every role onto the finer permission catalogue so that each keeps what it could do: each old permission's rows become the permissions split from it, and the role named Staff gains what its name used to give it. Removes `change user roles`. (`ec35df1e`) | Yes, `role_permission` rows. The downgrade does not restore `change user roles` |
+| 29 | `d6a1f4c8e2b3` permission_scope | Adds `role_permission.all_domains` and `role_permission_domain`, and drops `role_grant.site_domain_id`: a role granted on a domain becomes its own role limited to that domain. The role named Staff gains `administer all users` and its scopable permissions are limited to the default domain. `site_domain.registration` values `staff` and `admin` become `closed`. | Yes. The downgrade restores Staff's reach and drops other limited permissions rather than widen them |
 
 Downgrades remove defaults, constraints, columns and the new tables, but do
 not restore the NULLs, invented counters, rankings, cross-post links or
@@ -667,51 +668,49 @@ limits on input that could cost seconds of CPU or crash a request:
   closing the connection (section 4).
 
 **Roles and permissions (RBAC; in progress, not yet pushed).** An instance
-admin now builds roles in the admin area (`/admin/roles`, replacing
-`/admin/permissions`) and grants them instance-wide or on one domain, with an
-optional expiry. Admin is the only built-in role. Staff is an ordinary role
-that the upgrade keeps: what it could do before, it can still do, and an admin
-may now edit, rename or delete it. Changes take effect on the holder's next
-request.
+admin now builds named roles in the admin area (`/admin/roles`, replacing
+`/admin/permissions`). Each permission in a role reaches all domains or selected
+domains; a grant says who holds the role, with an optional expiry. Admin is the
+only built-in role. Changes take effect on the holder's next request.
 
-- Each role is created, edited, duplicated and deleted from `/admin/roles`.
-  A role holding a permission that is instance-only (the role editor marks
-  them) cannot be granted on a domain. A role with grants is deleted only once
-  its grants are revoked, which the delete page offers.
-- The user edit page's single Role drop-down is replaced by a Roles panel of
-  grants, and the add-user form takes a list of roles to grant. Only an admin
-  sees either, and only an admin may grant roles.
-- Every grant, revocation, expiry change and role change is in the modlog,
-  for admins only, whatever the public modlog setting.
+**Staff changes on upgrade.** Staff is now an ordinary role an admin may edit,
+rename or delete. It gains "administer all users", and all its domain-scopable
+permissions are limited to the instance's first domain. Staff members can now
+edit, add and delete that domain's accounts, and can no longer moderate or ban on
+other domains, or act on remote communities and remote accounts. An admin who
+wants the old reach sets those permissions to "All domains" on the role.
+
+- Roles are created, edited, duplicated and deleted from `/admin/roles`. An
+  instance-only permission (the editor marks them) always applies to the whole
+  instance. A role with grants is deleted only once its grants are revoked,
+  which the delete page offers.
+- The user edit page's single Role drop-down is replaced by a Roles panel, and
+  the add-user form takes a list of roles to grant. Only an admin sees either,
+  and only an admin may grant roles.
+- Every grant, revocation, expiry change and role change is in the modlog, for
+  admins only, whatever the public modlog setting.
 - Profiles, the user preview and the About page name the roles an admin has
   marked "listed publicly" (Staff is), by their own names.
-- Two settings are relabelled; their stored values are unchanged. The referral
-  setting "Admins + Staff" reads "Admins and holders of 'generate referral
-  codes'", and a domain's registration mode "Staff only" reads "User
-  administrators only".
-- Only an admin may act on an admin: unbanning, deleting or editing an admin
-  (the admin user form can ban) is now refused to everyone else, as banning
-  one already was.
-- A role granted on one domain reaches that domain in the admin area: its
-  lists of users, communities, content, reports, registration applications,
-  referrals and domains, the report counts and the modlog show that domain's
-  rows, with a domain picker for anyone who may see more than one. The modlog
-  can be filtered by domain.
-- A holder of "administer all users" on a domain may add accounts there while
-  its registration mode is closed to the public. A domain mode of "Admins only"
-  and a Closed site no longer limit adding accounts to admins: holders of
-  "administer all users" may too. The domain mode is relabelled "Closed: user
-  administrators only".
-- Notifications follow permissions. Registration applications go to holders
-  of "approve registrations", held posts to "administer communities pages",
-  reports on content to "moderate all communities" and reports on accounts to
-  "administer all users", each instance-wide or on the domain concerned, as
-  well as to the admins. The Staff role holds "moderate all communities", so
-  Staff members are now told of content reports, which used to reach admins
-  only.
+- A domain's registration setting is now "Anyone" or "Closed" and only governs
+  public sign-up; "Staff only" and "Admins only" both became "Closed". Whoever
+  holds "administer all users" on a domain may add accounts there, in any mode. A
+  Closed site's accounts are no longer an admin's alone.
+- The referral setting "Admins + Staff" reads "Admins and holders of 'generate
+  referral codes'". Its stored value is unchanged.
+- Only an admin may act on an admin: unbanning, deleting or editing an admin (the
+  admin user form can ban) is refused to everyone else, as banning one was.
+- A permission limited to some domains reaches those domains in the admin area:
+  its lists of users, communities, content, reports, registration applications,
+  referrals and domains, the report counts and the modlog show their rows, with
+  a domain picker for anyone who may see more than one. The modlog can be filtered
+  by domain.
+- Notifications follow permissions. Registration applications go to holders of
+  "approve registrations", held posts to "administer communities pages", reports
+  on content to "moderate all communities" and reports on accounts to "administer
+  all users", on all domains or the one concerned, as well as to the admins.
 
-The work follows `docs/superpowers/specs/2026-11-03-rbac-design.md`; its
-Status section records what is done.
+The work follows `docs/superpowers/specs/2026-11-03-rbac-design.md`; its Status
+section records what is done.
 
 ### 2.4 API contract changes (for client developers)
 

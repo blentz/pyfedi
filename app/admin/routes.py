@@ -51,7 +51,7 @@ from app.constants import REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_
 from app.email import send_registration_approved_email
 from app.admin.roles_routes import user_grants_panel
 from app.admin.scope import creatable_domains, scope_for
-from app.roles import grant_role, scope_refusal
+from app.roles import grant_role
 from app.permissions import domains_for, holds_any_grant, may_act_on_user
 from app.federation_urls import object_base
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
@@ -2665,12 +2665,6 @@ def admin_users_add():
         grants = [db.session.get(Role, role_id) for role_id in form.grants.data or []]
         if grants and not current_user.is_admin():
             abort(403)   # RB5: only an admin grants roles
-        scope = form.grant_scope.data or None
-        refusals = [refusal for refusal in (scope_refusal(role, scope) for role in grants) if refusal]
-        if refusals:   # before the account exists, so a refused grant leaves nothing half made
-            form.grants.errors = list(form.grants.errors) + refusals
-            return render_template('admin/add_user.html', title=_('Add user'), form=form, user=user,
-                                   roles_with=roles_with('administer all users'))
         user.user_name = form.user_name.data
         user.title = form.user_name.data
         user.set_password(form.password.data)
@@ -2722,7 +2716,7 @@ def admin_users_add():
         db.session.commit()
         finalize_user_setup(user)
         for role in grants:   # each one of the form's choices, so a role that exists
-            grant_role(current_user, user, role, site_domain_id=scope)
+            grant_role(current_user, user, role)
 
         flash(_('User added'))
         return redirect(url_for('admin.admin_users', local_remote='local'))

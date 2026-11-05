@@ -11,10 +11,11 @@ import pytest
 from cachelib import SimpleCache
 
 from app import db, permission_cache
-from app.models import ModLog, Role, RoleGrant, RolePermission, SiteDomain, utcnow
+from app.models import ModLog, Role, RoleGrant, RolePermission, RolePermissionDomain, SiteDomain, utcnow
 from app.permission_cache import permission_version
 from app.permissions import user_access
-from app.roles import (RoleError, change_expiry, create_role, delete_role, grant_role, revoke_grant, update_role)
+from app.roles import (RoleError, change_expiry, create_role, delete_role, grant_role, permission_scopes, revoke_grant,
+                       seed_default_roles, update_role)
 from app.storefront import clear_domain_cache
 from tests.factories import admin_role, make_instance, make_user, staff_role
 
@@ -134,15 +135,61 @@ def test_the_built_in_role_cannot_be_edited_or_deleted(people):
         delete_role(people.admin, Role.admin(), revoke=True)
 
 
-def test_an_edit_adding_an_instance_only_permission_is_refused_while_the_role_is_granted_on_a_domain(people):
-    """RB7, on edit: the error names the grants in the way."""
-    role = create_role(people.admin, 'Domain helpers', '', False, ['ban users'])
-    grant_role(people.admin, people.holder, role, site_domain_id=people.domain.id)
-    with pytest.raises(RoleError) as refused:
-        update_role(people.admin, role, 'Domain helpers', '', False, ['ban users', 'masquerade'])
-    assert 'masquerade' in str(refused.value) and 'holder' in str(refused.value)
-    assert refused.value.grants == [RoleGrant.query.filter_by(role_id=role.id).one()]
-    assert permissions_of(role) == ['ban users']
+def test_a_permission_is_limited_to_selected_domains_and_all_is_the_default(people):
+    role = create_role(people.admin, 'Helpers', '', False, {'ban users': {people.domain.id}, 'view modlog': None})
+    assert permission_scopes(role) == {'ban users': {people.domain.id}, 'view modlog': None}
+    entry, = logged('create_role')
+    assert entry.reason == f'ban users ({people.domain.domain}), view modlog'
+    update_role(people.admin, role, 'Helpers', '', False, {'ban users': None})
+    assert permission_scopes(role) == {'ban users': None}
+    assert RolePermissionDomain.query.filter_by(role_id=role.id).count() == 0
+
+
+def test_an_instance_only_permission_cannot_be_limited(people):
+    """RB7 as the owner ruled it: it applies to the whole instance, in any role."""
+    with pytest.raises(RoleError, match='masquerade'):
+        create_role(people.admin, 'Mixed', '', False, {'masquerade': {people.domain.id}})
+    assert permission_scopes(create_role(people.admin, 'Mixed', '', False, {'masquerade': None})) == {'masquerade': None}
+
+
+def test_a_limited_permission_names_at_least_one_domain_and_only_real_ones(people):
+    with pytest.raises(RoleError, match='at least one domain'):
+        create_role(people.admin, 'Helpers', '', False, {'ban users': set()})
+    with pytest.raises(RoleError, match='no such domain'):
+        create_role(people.admin, 'Helpers', '', False, {'ban users': {987654}})
+
+
+def test_an_edit_narrowing_a_permission_takes_effect_for_holders(people):
+    role = create_role(people.admin, 'Helpers', '', False, ['ban users'])
+    grant_role(people.admin, people.holder, role)
+    people.holder.site_domain_id = people.domain.id
+    db.session.commit()
+    other = make_user(people.instance, 'other', local=True)
+    assert user_access('ban users', people.holder.id, on=other) is True
+    before = permission_version(people.holder.id)
+    update_role(people.admin, role, 'Helpers', '', False, {'ban users': {people.domain.id}})
+    assert permission_version(people.holder.id) > before
+    assert user_access('ban users', people.holder.id, on=people.holder) is True
+    assert user_access('ban users', people.holder.id) is False
+
+
+def test_the_seeded_staff_role_reaches_the_first_domain_and_holds_user_administration(people):
+    """Owner ruling 2026-11-05: its scopable permissions are the first domain's; its instance-only ones stay."""
+    first = SiteDomain(domain='first.roles.example', scheme='https', federates=True, is_default=True)
+    db.session.add(first)
+    db.session.commit()
+    Role.query.filter(Role.built_in.is_(True)).update({'name': 'Old admin'})
+    db.session.commit()
+    RoleGrant.query.delete()
+    Role.query.delete()
+    db.session.commit()
+    staff = seed_default_roles()['Staff']
+    db.session.commit()
+    scopes = permission_scopes(staff)
+    assert scopes['administer all users'] == {first.id}
+    assert scopes['moderate all communities'] == {first.id}
+    assert scopes['manage topics'] is None
+    assert staff.built_in is False and staff.listed_publicly is True
 
 
 def test_deleting_a_role_with_grants_needs_their_revocation(people):
@@ -157,7 +204,7 @@ def test_deleting_a_role_revokes_its_grants_and_logs_each(people):
     role = create_role(people.admin, 'Helpers', '', False, ['ban users'])
     role_id = role.id
     grant_role(people.admin, people.holder, role)
-    grant_role(people.admin, people.founder, role, site_domain_id=people.domain.id)
+    grant_role(people.admin, people.founder, role)
     before = permission_version(people.holder.id)
     delete_role(people.admin, role, revoke=True)
     assert db.session.get(Role, role_id) is None
@@ -180,32 +227,14 @@ def test_staff_is_an_ordinary_role_an_admin_may_delete(people):
 # Grants
 # --------------------------------------------------------------------------
 
-def test_a_grant_takes_effect_at_once_and_is_logged_with_its_domain(people):
+def test_a_grant_takes_effect_at_once_and_is_logged(people):
     role = create_role(people.admin, 'Helpers', '', False, ['ban users'])
-    assert user_access('ban users', people.holder.id, on=people.holder) is False   # cached as no
-    grant = grant_role(people.admin, people.holder, role, site_domain_id=people.domain.id)
-    assert (grant.user_id, grant.role_id, grant.site_domain_id, grant.granted_by) == \
-        (people.holder.id, role.id, people.domain.id, people.admin.id)
-    people.holder.site_domain_id = people.domain.id
-    db.session.commit()
+    assert user_access('ban users', people.holder.id, on=people.holder) is False
+    grant = grant_role(people.admin, people.holder, role)
+    assert (grant.user_id, grant.role_id, grant.granted_by) == (people.holder.id, role.id, people.admin.id)
     assert user_access('ban users', people.holder.id, on=people.holder) is True
     entry, = logged('grant_role')
-    assert (entry.target_user_id, entry.site_domain_id, entry.public) == (people.holder.id, people.domain.id, False)
-    assert 'Helpers' in entry.reason and people.domain.domain in entry.reason
-
-
-def test_a_domain_grant_of_a_role_with_an_instance_only_permission_is_refused_naming_it(people):
-    """RB7, on grant."""
-    role = create_role(people.admin, 'Mixed', '', False, ['ban users', 'masquerade'])
-    with pytest.raises(RoleError, match='masquerade'):
-        grant_role(people.admin, people.holder, role, site_domain_id=people.domain.id)
-    assert grant_role(people.admin, people.holder, role) is not None   # instance-wide is fine
-
-
-def test_admin_is_never_granted_on_a_domain(people):
-    """RB2."""
-    with pytest.raises(RoleError):
-        grant_role(people.admin, people.holder, Role.admin(), site_domain_id=people.domain.id)
+    assert (entry.target_user_id, entry.public, entry.reason) == (people.holder.id, False, 'Helpers')
 
 
 def test_the_same_grant_twice_is_refused(people):
@@ -213,7 +242,6 @@ def test_the_same_grant_twice_is_refused(people):
     grant_role(people.admin, people.holder, role)
     with pytest.raises(RoleError, match='already'):
         grant_role(people.admin, people.holder, role)
-    grant_role(people.admin, people.holder, role, site_domain_id=people.domain.id)   # another scope is another grant
 
 
 def test_an_expiry_in_the_past_is_refused(people):
@@ -246,14 +274,14 @@ def test_an_expiry_is_set_and_cleared_and_logged(people):
 
 def test_a_revoke_takes_effect_at_once_and_is_logged(people):
     role = create_role(people.admin, 'Helpers', '', False, ['ban users'])
-    grant = grant_role(people.admin, people.holder, role, site_domain_id=people.domain.id)
+    grant = grant_role(people.admin, people.holder, role)
     grant_id = grant.id
     assert user_access('ban users', people.holder.id, anywhere=True) is True
     revoke_grant(people.admin, grant)
     assert db.session.get(RoleGrant, grant_id) is None
     assert user_access('ban users', people.holder.id, anywhere=True) is False
     entry, = logged('revoke_role')
-    assert (entry.target_user_id, entry.site_domain_id) == (people.holder.id, people.domain.id)
+    assert entry.target_user_id == people.holder.id
 
 
 def test_an_admin_cannot_revoke_their_own_admin_grant_but_another_admin_can(people):
@@ -276,17 +304,3 @@ def test_only_an_admin_changes_roles_or_grants(people):
                     lambda: revoke_grant(people.holder, grant)):
         with pytest.raises(RoleError, match='Only an admin'):
             attempt()
-
-
-def test_an_instance_only_permission_may_be_added_to_a_role_granted_only_instance_wide(people):
-    """RB7 refuses an edit only while the role has a domain grant."""
-    role = create_role(people.admin, 'Helpers', '', False, ['ban users'])
-    grant_role(people.admin, people.holder, role)
-    update_role(people.admin, role, 'Helpers', '', False, ['ban users', 'masquerade'])
-    assert permissions_of(role) == ['ban users', 'masquerade']
-
-
-def test_a_grant_on_a_domain_that_does_not_exist_is_refused(people):
-    role = create_role(people.admin, 'Helpers', '', False, ['ban users'])
-    with pytest.raises(RoleError, match='no such domain'):
-        grant_role(people.admin, people.holder, role, site_domain_id=987654)

@@ -41,7 +41,7 @@ def _register_payload(**overrides):
 
 def test_the_onion_register_page_refuses(app, onion):
     _mode('Open')
-    _onion_row('admin')
+    _onion_row('closed')
     client = app.test_client()
     a_session(client)
     page = onion_get(client, '/auth/register')
@@ -54,7 +54,7 @@ def test_the_onion_register_page_refuses(app, onion):
 
 def test_a_staff_row_refuses_public_sign_up(app, onion):
     _mode('Open')
-    _onion_row('staff')
+    _onion_row('closed')
     client = app.test_client()
     a_session(client)
     assert CLOSED_TEXT in onion_get(client, '/auth/register').get_data(as_text=True)
@@ -76,7 +76,7 @@ def test_an_anyone_row_follows_the_site_registration_mode(app, onion, mode, clos
 
 
 def test_public_registration_open_is_true_only_for_anyone(app, onion):
-    for registration, expected in (('anyone', True), ('staff', False), ('admin', False)):
+    for registration, expected in (('anyone', True), ('closed', False)):
         _onion_row(registration)
         assert public_registration_open(domain_for_host('abc.onion')) is expected
 
@@ -85,7 +85,7 @@ def test_api_registration_follows_the_storefront(app, onion):
     """The API has no register endpoint yet (D1181); what it can do is advertise the mode, and a refused domain
     advertises Closed."""
     _mode('Open')
-    for registration, advertised in (('anyone', 'Open'), ('admin', 'Closed'), ('staff', 'Closed')):
+    for registration, advertised in (('anyone', 'Open'), ('closed', 'Closed')):
         _onion_row(registration)
         with app.test_request_context():
             g.site = db.session.get(Site, 1)
@@ -126,24 +126,17 @@ def _add_user(app, who, domain_id):
                                content_type='multipart/form-data')
 
 
-def test_adding_a_user_to_an_admin_row_allows_a_holder_of_the_permission(app, onion):
-    """RB13: 'admin' opens to holders of `administer all users` as 'staff' does; it was an admin's alone."""
-    row, staff, admin = _staff_and_admin('admin')
+def test_adding_a_user_to_a_closed_row_allows_a_holder_of_the_permission(app, onion):
+    row, staff, admin = _staff_and_admin('closed')
     _add_user(app, staff, row.id)
     assert User.query.filter_by(user_name='newbie').one().site_domain_id == row.id
 
 
-def test_adding_a_user_to_a_staff_row_allows_staff(app, onion):
-    row, staff, admin = _staff_and_admin('staff')
-    _add_user(app, staff, row.id)
-    assert User.query.filter_by(user_name='newbie').one().site_domain_id == row.id
-
-
-@pytest.mark.parametrize('row, mode, staff_may', [('admin', 'Open', True), ('admin', 'RequireApplication', True),
+@pytest.mark.parametrize('row, mode, staff_may', [('closed', 'Open', True), ('closed', 'RequireApplication', True),
                                                   ('anyone', 'Closed', True)])
 def test_adding_a_default_domain_user_is_open_to_an_instance_wide_holder_in_every_mode(app, onion, row, mode, staff_may):
-    """F7: the default domain's own `registration` column is dead data. RB13: an instance-wide holder of `administer
-    all users` adds accounts whatever the mode, a Closed site's included."""
+    """F7: the default domain's own `registration` column is dead data. An instance-wide holder of `administer all
+    users` adds accounts whatever the mode, a Closed site's included."""
     _, staff, admin = _staff_and_admin('anyone')
     _mode(mode)
     _default_row(row)
@@ -162,7 +155,7 @@ def _default_row(registration):
     clear_domain_cache()
 
 
-@pytest.mark.parametrize('row,mode,closed', [('admin', 'Open', False), ('anyone', 'Closed', True)])
+@pytest.mark.parametrize('row,mode,closed', [('closed', 'Open', False), ('anyone', 'Closed', True)])
 def test_the_default_domain_follows_the_site_mode_whatever_its_row_says(app, onion, monkeypatch, row, mode, closed):
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
     monkeypatch.setattr('app.auth.routes.handle_abandoned_open_instance', lambda: None)
@@ -187,7 +180,7 @@ def test_a_new_oauth_account_is_refused_off_the_default_domain(app, onion):
 def test_an_existing_oauth_user_logs_in_on_a_refused_storefront(app, onion):
     from app.auth.oauth_util import handle_oauth_authorize
     _mode('Open')
-    _onion_row('admin')
+    _onion_row('closed')
     instance = db.session.get(Instance, 1) or make_instance('test.piefed.local')
     make_user(instance, 'founder', local=True)
     existing = make_user(instance, 'oauthy', local=True)

@@ -29,8 +29,10 @@
         <p id="every-permission">{{ _('Has every permission.') }}</p>
         {% else -%}
         <ul id="permissions">
-            {% for permission in permissions -%}
-            <li><strong>{{ permission.name }}</strong>{% if not permission.scopable %} <span class="badge text-bg-warning">{{ _('instance-only') }}</span>{% endif %}: {{ permission.guards }}</li>
+            {% for row in permissions -%}
+            <li><strong>{{ row.permission.name }}</strong>{% if not row.permission.scopable %} <span class="badge text-bg-warning">{{ _('instance-only') }}</span>{% endif %}:
+                {{ row.permission.guards }}.
+                {% if row.permission.scopable %}<em>{% if row.domains is none %}{{ _('All domains') }}{% elif row.domains %}{{ _('Only on: %(domains)s', domains=row.domains|join(', ')) }}{% else %}{{ _('No domain') }}{% endif %}</em>{% endif %}</li>
             {% else -%}
             <li>{{ _('None.') }}</li>
             {% endfor -%}
@@ -46,7 +48,6 @@
             {{ grant_form.hidden_tag() }}
             <input type="hidden" name="next" value="{{ next }}">
             {{ render_field(grant_form.user) }}
-            {% if role.built_in %}<input type="hidden" name="grant-scope" value="0">{% else %}{{ render_field(grant_form.scope) }}{% endif %}
             {{ render_field(grant_form.expires) }}
             {{ render_field(grant_form.submit) }}
         </form>

@@ -15,7 +15,7 @@ or to a role they hold, bumps (RB10), so a revocation is seen on the next reques
 from typing import NamedTuple
 
 from flask import g
-from sqlalchemy import false, text, true
+from sqlalchemy import and_, false, or_, text, true
 
 from app import cache, db
 from app.permission_cache import permission_version, permissions_changed  # noqa: F401 (re-exported)
@@ -50,7 +50,7 @@ CATALOGUE = (
                "A domain's name, description, logos and registration mode"),
     # users
     Permission('approve registrations', 'users', True, True, 'Approve and refuse registration applications'),
-    Permission('administer all users', 'users', True, False,
+    Permission('administer all users', 'users', True, True,
                'The user list, editing and deleting accounts, adding users, referrals, reports on users'),
     Permission('ban users', 'users', True, True, 'Ban and unban accounts instance-wide'),
     Permission('manage users', 'users', True, True, 'Delete or purge a profile, and the profile admin panel'),
@@ -106,6 +106,7 @@ ROLE_PERMISSIONS = tuple(permission.name for permission in CATALOGUE)
 SCOPABLE_PERMISSIONS = frozenset(p.name for p in CATALOGUE if p.scopable)
 INSTANCE_ONLY_PERMISSIONS = frozenset(p.name for p in CATALOGUE if not p.scopable)
 STAFF_PERMISSIONS = tuple(p.name for p in CATALOGUE if p.staff)
+STAFF_SCOPABLE_PERMISSIONS = frozenset(p.name for p in CATALOGUE if p.staff and p.scopable)   # on the first domain alone
 
 REPORT_ON_USER = 0
 
@@ -114,10 +115,18 @@ def is_scopable(permission: str) -> bool:
     return permission in SCOPABLE_PERMISSIONS
 
 
+def default_domain_id() -> int | None:
+    """The default domain's row, the first domain. It owns the local rows no domain was stamped on (storefront.on_domain)."""
+    return db.session.execute(text('SELECT id FROM site_domain WHERE is_default')).scalar()
+
+
 def _domain_of(table: str, row_id) -> int | None:
     if not row_id:
         return None
-    return db.session.execute(text(f'SELECT site_domain_id FROM "{table}" WHERE id = :id'), {'id': row_id}).scalar()
+    row = db.session.execute(text(f'SELECT site_domain_id, ap_id FROM "{table}" WHERE id = :id'), {'id': row_id}).first()
+    if row is None:
+        return None
+    return row.site_domain_id if row.site_domain_id is not None or row.ap_id is not None else default_domain_id()
 
 
 def home_domain_id(on) -> int | None:
@@ -131,6 +140,8 @@ def home_domain_id(on) -> int | None:
     if table == 'site_domain':
         return on.id
     if table in ('community', 'user', 'feed'):
+        if on.site_domain_id is None and on.ap_id is None:   # local, unstamped: the default domain's
+            return default_domain_id()
         return on.site_domain_id
     if table in ('post', 'post_reply'):
         return _domain_of('community', on.community_id)
@@ -166,21 +177,23 @@ def user_access(permission: str, user_id: int, on=None, anywhere: bool = False) 
 
 @cache.memoize(timeout=50)
 def _access(permission: str, user_id: int, scope, version: int) -> bool:
-    """`scope` is 'instance' (instance-wide grants only), 'anywhere' (a grant on any domain will do) or a domain id
-    (an instance-wide grant, or one on that domain). `version` only keys the cache."""
+    """`scope` is 'instance' (the permission reaches every domain), 'anywhere' (it reaches some domain) or a domain id
+    (it reaches every domain, or that one). `version` only keys the cache."""
     if scope == 'instance':
-        scope_clause = 'rg.site_domain_id IS NULL'
+        scope_clause = 'rp.all_domains'
     elif scope == 'anywhere':
-        scope_clause = 'TRUE'
+        scope_clause = ('(rp.all_domains OR EXISTS (SELECT 1 FROM role_permission_domain d WHERE d.role_id = rp.role_id '
+                        'AND d.permission = rp.permission))')
     else:
-        scope_clause = '(rg.site_domain_id IS NULL OR rg.site_domain_id = :domain_id)'
+        scope_clause = ('(rp.all_domains OR EXISTS (SELECT 1 FROM role_permission_domain d WHERE d.role_id = rp.role_id '
+                        'AND d.permission = rp.permission AND d.site_domain_id = :domain_id))')
     row = db.session.execute(text(
         'SELECT 1 FROM role_grant rg JOIN role r ON r.id = rg.role_id '
-        f'WHERE rg.user_id = :user_id AND {scope_clause} '
+        'WHERE rg.user_id = :user_id '
         "AND (rg.expires_at IS NULL OR rg.expires_at > timezone('utc', now())) "
-        # the built-in Admin role holds everything, but only instance-wide: it is never scoped (RB2)
-        'AND ((r.built_in AND rg.site_domain_id IS NULL) OR EXISTS (SELECT 1 FROM role_permission rp '
-        '                          WHERE rp.role_id = r.id AND rp.permission = :permission)) LIMIT 1'),
+        # the built-in Admin role holds everything, everywhere (RB2)
+        'AND (r.built_in OR EXISTS (SELECT 1 FROM role_permission rp '
+        f'                          WHERE rp.role_id = r.id AND rp.permission = :permission AND {scope_clause})) LIMIT 1'),
         {'user_id': user_id, 'permission': permission,
          'domain_id': scope if isinstance(scope, int) else None}).first()
     return row is not None
@@ -202,20 +215,24 @@ def domains_for(permission: str, user_id: int) -> frozenset[int] | None:
 @cache.memoize(timeout=50)
 def _domains(permission: str, user_id: int, version: int) -> frozenset[int]:
     return frozenset(db.session.execute(text(
-        'SELECT DISTINCT rg.site_domain_id FROM role_grant rg '
-        'JOIN role_permission rp ON rp.role_id = rg.role_id AND rp.permission = :permission '
-        'WHERE rg.user_id = :user_id AND rg.site_domain_id IS NOT NULL '
+        'SELECT DISTINCT d.site_domain_id FROM role_grant rg '
+        'JOIN role_permission_domain d ON d.role_id = rg.role_id AND d.permission = :permission '
+        'WHERE rg.user_id = :user_id '
         "AND (rg.expires_at IS NULL OR rg.expires_at > timezone('utc', now()))"),
         {'user_id': user_id, 'permission': permission}).scalars())
 
 
 def domain_clause(column, domains: frozenset[int] | None):
     """`column` (a `site_domain_id`) within `domains`, as `domains_for` gives them: anything for None, nothing for an
-    empty set. Rows that belong to no domain of ours (remote ones, NULL) are only in an unfiltered list."""
+    empty set. Remote rows (NULL) are only in an unfiltered list; local rows no domain was stamped on are the default
+    domain's (storefront.on_domain)."""
     if domains is None:
         return true()
     if not domains:
         return false()
+    model = getattr(column, 'class_', None)
+    if hasattr(model, 'ap_id') and default_domain_id() in domains:
+        return or_(column.in_(sorted(domains)), and_(column.is_(None), model.ap_id.is_(None)))
     return column.in_(sorted(domains))
 
 
@@ -229,14 +246,15 @@ def recipient_ids(permission: str, on=None) -> list[int]:
     request_admins = getattr(g, 'admin_ids', None) if g else None
     admins_clause = 'FALSE' if request_admins is not None else \
         '(u.id = 1 OR EXISTS (SELECT 1 FROM role_grant ag JOIN role ar ON ar.id = ag.role_id ' \
-        "WHERE ag.user_id = u.id AND ar.built_in AND ag.site_domain_id IS NULL " \
+        "WHERE ag.user_id = u.id AND ar.built_in " \
         "AND (ag.expires_at IS NULL OR ag.expires_at > timezone('utc', now()))))"
     held = set(db.session.execute(text(
         f'SELECT u.id FROM "user" u WHERE u.deleted = false AND u.banned = false AND ({admins_clause} OR EXISTS ('
         '  SELECT 1 FROM role_grant rg WHERE rg.user_id = u.id '
         "  AND (rg.expires_at IS NULL OR rg.expires_at > timezone('utc', now())) "
-        '  AND EXISTS (SELECT 1 FROM role_permission rp WHERE rp.role_id = rg.role_id AND rp.permission = :permission) '
-        '  AND (rg.site_domain_id IS NULL OR rg.site_domain_id = :domain_id))) ORDER BY u.id'),
+        '  AND EXISTS (SELECT 1 FROM role_permission rp WHERE rp.role_id = rg.role_id AND rp.permission = :permission '
+        '              AND (rp.all_domains OR EXISTS (SELECT 1 FROM role_permission_domain d WHERE d.role_id = rp.role_id '
+        '                   AND d.permission = rp.permission AND d.site_domain_id = :domain_id))))) ORDER BY u.id'),
         {'permission': permission, 'domain_id': domain_id}).scalars())
     return sorted(held | set(request_admins or ()))
 

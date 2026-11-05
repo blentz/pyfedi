@@ -56,11 +56,14 @@ def _old_roles(*rows):
 def _migrate(old_shape):
     """Downgrade to the old schema, let `old_shape()` fill it, and upgrade again."""
     migration = load_migration('b4e8d2a6f1c9_role_grants.py')
+    later = load_migration('d6a1f4c8e2b3_permission_scope.py')
     db.session.commit()
     with Operations.context(MigrationContext.configure(db.session.connection())):
+        later.downgrade()
         migration.downgrade()
         old_shape()
         migration.upgrade()
+        later.upgrade()
 
 
 def test_the_migration_turns_assignments_into_grants_and_admin_into_the_built_in_role(people):
@@ -85,8 +88,8 @@ def test_the_migration_turns_assignments_into_grants_and_admin_into_the_built_in
         assert _rows('SELECT role_id, permission FROM role_permission ORDER BY role_id') == [
             (3, 'ban users'), (5, 'manage users')]
         # every assignment is an instance-wide grant; role 2's, which conferred nothing, is gone
-        assert _rows('SELECT user_id, role_id, site_domain_id FROM role_grant ORDER BY user_id, role_id') == [
-            (second.id, 3, None), (third.id, 4, None), (fourth.id, 5, None), (fourth.id, 6, None)]
+        assert _rows('SELECT user_id, role_id FROM role_grant ORDER BY user_id, role_id') == [
+            (second.id, 3), (third.id, 4), (fourth.id, 5), (fourth.id, 6)]
         assert not inspect(db.session.connection()).has_table('user_role')
         assert 'weight' not in _columns('role')
         assert 'site_domain_id' in _columns('mod_log')
@@ -138,14 +141,18 @@ def test_the_downgrade_keeps_instance_wide_grants_and_gives_admin_its_rows_back(
     migration = load_migration('b4e8d2a6f1c9_role_grants.py')
     admin, staff = seed_default_roles().values()
     db.session.commit()
+    grant_role(first, admin)
     shop = SiteDomain(domain='shop.grants.example', scheme='https', federates=False)
     db.session.add(shop)
     db.session.commit()
-    grant_role(first, admin)
-    grant_role(second, staff, site_domain_id=shop.id)   # a scoped grant: the old schema has no place for it
+    shop_id, second_id, staff_id = shop.id, second.id, staff.id
     first_id, admin_id = first.id, admin.id   # read now: the ORM cannot refresh a role from the old schema
     try:
         with Operations.context(MigrationContext.configure(db.session.connection())):
+            later = load_migration('d6a1f4c8e2b3_permission_scope.py')
+            later.downgrade()
+            db.session.execute(text('INSERT INTO role_grant (user_id, role_id, site_domain_id) VALUES (:u, :r, :d)'),
+                               {'u': second_id, 'r': staff_id, 'd': shop_id})   # the old schema has no place for it
             migration.downgrade()
             assert _rows('SELECT user_id, role_id FROM user_role') == [(first_id, admin_id)]
             assert 'role_grant' not in inspect(db.session.connection()).get_table_names()
@@ -153,6 +160,7 @@ def test_the_downgrade_keeps_instance_wide_grants_and_gives_admin_its_rows_back(
                                               r=admin_id)}
             assert 'change user roles' in admin_rows and 'ban users' in admin_rows
             migration.upgrade()
+            later.upgrade()
         db.session.commit()
     finally:
         db.session.rollback()
@@ -178,14 +186,8 @@ def test_the_built_in_role_holds_every_permission(people):
     assert people[0].id in [u.id for u in Site.admins()]
 
 
-def test_roles_hold_only_instance_wide_unexpired_grants(people):
+def test_roles_hold_only_unexpired_grants(people):
     holder = people[0]
-    shop = SiteDomain(domain='shop.grants.example', scheme='https', federates=False)
-    db.session.add(shop)
-    db.session.commit()
-    scoped = grant_permission(people[1], 'ban users')
-    scoped_grant = db.session.execute(role_grant.select().where(role_grant.c.user_id == people[1].id)).one()
-    db.session.execute(role_grant.update().where(role_grant.c.id == scoped_grant.id).values(site_domain_id=shop.id))
     expired = Role(name='Lapsed')
     db.session.add(expired)
     db.session.commit()
@@ -202,17 +204,15 @@ def test_roles_hold_only_instance_wide_unexpired_grants(people):
 
     assert [role.name for role in holder.roles] == ['Current']
     assert user_access('approve registrations', holder.id) and not user_access('manage users', holder.id)
-    assert list(people[1].roles) == [] and not user_access('ban users', people[1].id)   # scoped: step 3 reads it
-    assert scoped.name == 'role-ban users'
 
 
-def test_appending_a_role_grants_it_instance_wide(people):
+def test_appending_a_role_grants_it(people):
     role = Role(name='Helper')
     db.session.add(role)
     db.session.commit()
     people[0].roles.append(role)
     db.session.commit()
-    assert _rows('SELECT user_id, role_id, site_domain_id FROM role_grant') == [(people[0].id, role.id, None)]
+    assert _rows('SELECT user_id, role_id FROM role_grant') == [(people[0].id, role.id)]
 
 
 def test_a_role_name_is_unique_ignoring_case(db_session):
@@ -251,13 +251,17 @@ def test_roles_with_names_admin_first(db_session):
 
 def test_a_held_post_is_shown_to_whoever_may_open_the_queue(people):
     """notify_admins_of_post_needing_approval: the admins always, and the holders of 'administer communities pages',
-    which opens the approval queue it links to (RBAC step 8). The seeded Staff role holds it."""
+    which opens the approval queue it links to (RBAC step 8). The seeded Staff role holds it on the first domain."""
+    first = SiteDomain(domain='first.grants.example', scheme='https', federates=True, is_default=True)
+    db.session.add(first)
+    db.session.commit()
     roles = seed_default_roles()
     db.session.commit()
     admin, staffer, author = people[:3]
     grant_role(admin, roles['Admin'])
     grant_role(staffer, roles['Staff'])
     community = make_community('held')
+    community.site_domain_id = first.id
     post = make_post(community, author, 'https://test.piefed.local/post/9')
 
     def told():

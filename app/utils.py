@@ -5580,12 +5580,14 @@ def add_to_modlog(action: str, actor: User, target_user: User = None, reason: st
     """ Adds a new entry to the Moderation Log. `site_domain_id` is the domain a scoped grant acted under (RB9). """
     if action not in ModLog.action_map.keys():
         raise Exception('Invalid action: ' + action)
-    if actor.is_instance_admin() or user_access('view modlog', actor.id, on=community):
+    if actor.is_instance_admin() or user_access('view modlog', actor.id, on=community or target_user):
         action_type = 'admin'
     else:
         action_type = 'mod'
     community_id = community.id if community else None
     target_user_id = target_user.id if target_user else None
+    if site_domain_id is None and (community or target_user):   # RB9: the domain the action was about
+        site_domain_id = permissions.home_domain_id(community or target_user)
     # The modlog can be public. Content only some viewers may see (D19) is named neither by its title or body nor by its author.
     if any(obj is not None and (obj.visibility or 'public') not in OPEN_VISIBILITIES
            for obj in (post, reply, reply.post if reply else None)):
@@ -6910,7 +6912,7 @@ def reachable_community_ids(permission: str, user_id: int) -> set[int] | None:
     community_ids = set(moderating_communities_ids(user_id))
     if domains:
         community_ids |= set(db.session.execute(select(Community.id).where(
-            Community.site_domain_id.in_(sorted(domains)))).scalars())
+            permissions.domain_clause(Community.site_domain_id, domains))).scalars())
     return community_ids
 
 

@@ -13,7 +13,7 @@ from sqlalchemy import and_, or_, select, true
 
 from app.models import Community, Report, User
 from app.permissions import REPORT_ON_USER, domain_clause, domains_for, user_access
-from app.storefront import current_storefront, domain_rows, live_registration
+from app.storefront import current_storefront, domain_rows
 
 SESSION_KEY = 'admin_domain'
 
@@ -66,14 +66,9 @@ def domain_choices(held: frozenset[int] | None) -> list[tuple[int, str]]:
 
 
 def may_create_account_on(domain) -> bool:
-    """RB13: whether the current user may add an account to `domain`. An instance-wide holder of `administer all users`
-    (an admin included) on any domain; a holder on `domain` itself while its registration mode keeps the public out,
-    `'staff'` or `'admin'`. Under `'anyone'` people sign themselves up there."""
-    user_id = current_user.get_id()
-    if domains_for('administer all users', user_id) is None:
-        return True
-    return user_access('administer all users', user_id, on=domain) and \
-        live_registration(domain, g.site) in ('staff', 'admin')
+    """Whether the current user may add an account to `domain`: `administer all users` on it decides, whatever the
+    domain's registration setting, which only says whether the public may sign up (owner ruling 2026-11-05)."""
+    return user_access('administer all users', current_user.get_id(), on=domain)
 
 
 def creatable_domains() -> list:

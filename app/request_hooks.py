@@ -247,7 +247,6 @@ def register_request_hooks(app):
                             SELECT u.id
                             FROM "user" u
                             JOIN role_grant rg ON u.id = rg.user_id AND u.deleted = false AND u.banned = false
-                                 AND rg.site_domain_id IS NULL
                                  AND (rg.expires_at IS NULL OR rg.expires_at > timezone('utc', now()))
                             JOIN role r ON r.id = rg.role_id AND r.built_in
                             ORDER BY id""")).scalars())  # the built-in role, as is_admin()

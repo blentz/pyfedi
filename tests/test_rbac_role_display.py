@@ -121,7 +121,7 @@ def test_about_drops_staff_once_an_admin_unlists_it(people):
     assert 'holder' not in about_names(client)
 
 
-def test_listed_role_holders_are_each_listed_once_and_skip_the_banned_and_the_scoped(people):
+def test_listed_role_holders_are_each_listed_once_and_skip_the_banned(people):
     from app.models import Site, SiteDomain
     _, _, holder = people
     banned = make_user(holder.instance, 'banned', local=True)
@@ -134,7 +134,6 @@ def test_listed_role_holders_are_each_listed_once_and_skip_the_banned_and_the_sc
     for user in (holder, banned):
         grant_role(user, first)
     grant_role(holder, second)
-    grant_role(scoped, first, site_domain_id=domain.id)
     assert [user.id for user in Site.listed_role_holders()] == [holder.id]
 
 
@@ -145,4 +144,4 @@ def test_the_settings_that_named_staff_name_what_they_mean(app, people):
         referral = {choice.value: choice.label for choice in SiteMiscForm().referral_generators.choices}
         registration = {choice.value: choice.label for choice in SiteDomainForm().registration.choices}
     assert str(referral['staff']) == 'Admins and holders of "generate referral codes"'
-    assert str(registration['staff']) == 'User administrators only'
+    assert set(registration) == {'anyone', 'closed'}   # who adds accounts is the permission's to say

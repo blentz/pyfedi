@@ -14,9 +14,9 @@ import pytest
 
 from app import db
 from app.constants import POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING
-from app.models import Language, Post, PostReply, Role, Site, SiteDomain
+from app.models import Language, Post, PostReply, Role, RolePermission, Site, SiteDomain
 from tests.conftest import forget_login
-from tests.factories import COMMUNITY_ADMINISTRATION, grant_permissions, grant_role, make_community, make_instance, make_post, make_post_reply, make_user
+from tests.factories import COMMUNITY_ADMINISTRATION, grant_permissions, grant_role, limit_role, make_community, make_instance, make_post, make_post_reply, make_user
 from tests.test_per_domain_html_routes import Visitor
 from tests.two_domains import FIRST
 
@@ -83,7 +83,12 @@ def test_a_permission_holder_with_no_say_over_the_post_is_refused(app, held):
     holder = make_user(author.instance, 'elsewhereadmin', local=True)   # not `admin`, who is user 1 and passes all
     holder.private_key = 'a key'
     db.session.commit()
-    grant_role(holder, Role.query.filter_by(name='role-moderate all communities').one(), site_domain_id=elsewhere.id)
+    scoped = Role(name='Elsewhere moderators')
+    db.session.add(scoped)
+    db.session.commit()
+    db.session.add(RolePermission(role_id=scoped.id, permission='moderate all communities'))
+    db.session.commit()
+    grant_role(holder, limit_role(scoped, elsewhere))
 
     response = Visitor(app, holder, FIRST).post(f'/post/{post.id}/approve')
 

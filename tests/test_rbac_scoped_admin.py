@@ -13,8 +13,9 @@ import pytest
 from app import db
 from app.constants import REPORT_STATE_NEW
 from app.models import Referral, Report, Role, RolePermission, SiteDomain, UserRegistration, role_grant
+from app.roles import seed_default_roles
 from app.storefront import clear_domain_cache, default_domain, domain_by_id
-from tests.factories import admin_role, grant_role, make_community, make_instance, make_post, make_user
+from tests.factories import admin_role, grant_role, limit_role, make_community, make_instance, make_post, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -73,8 +74,10 @@ def holder(world, name, *permissions, domain=None):
     db.session.commit()
     for permission in permissions:
         db.session.add(RolePermission(role_id=role.id, permission=permission))
-    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id,
-                                                  site_domain_id=domain.id if domain else None))
+    db.session.commit()
+    if domain:
+        limit_role(role, domain)
+    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
     login(world.client, user)
     return user
@@ -151,9 +154,8 @@ def test_a_holder_on_one_domain_is_told_which_and_cannot_pick_another(world):
 
 def test_a_holder_on_both_domains_picks_between_them(world):
     user = holder(world, 'bothholder', 'administer all users', domain=world.x)
-    role = Role.query.filter_by(name='role-bothholder').one()
-    db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id, site_domain_id=world.y.id))
-    db.session.commit()
+    limit_role(Role.query.filter_by(name='role-bothholder').one(), world.x, world.y)
+    assert user
     page = body(world, '/admin/users?local_remote=local')
     assert 'xxuser' in page and 'yyuser' in page
     assert 'All of mine' in world.client.get('/admin/users').get_data(as_text=True)
@@ -275,7 +277,7 @@ def test_an_instance_wide_holder_filters_the_modlog_by_domain(world):
 
 
 def test_a_grant_logged_on_a_domain_is_that_domains_entry(world):
-    """A grant names the domain it was made on (ModLog.site_domain_id), so it is in that domain's log."""
+    """An entry that records a domain (ModLog.site_domain_id) is in that domain's log."""
     from app.visibility import modlog_domain_clause
     from app.models import ModLog
     entry = ModLog(user_id=world.founder.id, type='admin', action='grant_role', site_domain_id=world.x.id,
@@ -352,7 +354,7 @@ def modes(app, db_session):
     founder = make_user(local, 'founder', local=True)
     assert founder.id == 1
     rows = {mode: SiteDomain(domain=f'{mode}.modes.example', scheme='https', federates=True, registration=mode)
-            for mode in ('anyone', 'staff', 'admin')}
+            for mode in ('anyone', 'closed')}
     db.session.add_all(rows.values())
     db.session.commit()
     clear_domain_cache()
@@ -371,52 +373,39 @@ def add_user(world, domain, name='newbie'):
 def grant_on(world, name, *domains):
     """A holder of `administer all users` on each of `domains`, signed in."""
     user = holder(world, name, 'administer all users', domain=domains[0])
-    role = Role.query.filter_by(name=f'role-{name}').one()
-    for domain in domains[1:]:
-        db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id, site_domain_id=domain.id))
-    db.session.commit()
+    limit_role(Role.query.filter_by(name=f'role-{name}').one(), *domains)
     return user
 
 
-@pytest.mark.parametrize('mode,allowed', [('staff', True), ('admin', True), ('anyone', False)])
-def test_a_holder_on_a_domain_creates_its_accounts_only_in_a_closed_mode(modes, mode, allowed):
-    """RB13. Under 'anyone' the public signs up there, and a scoped holder is offered nothing."""
+@pytest.mark.parametrize('mode', ['closed', 'anyone'])
+def test_a_holder_on_a_domain_creates_its_accounts_whatever_its_registration_setting(modes, mode):
+    """Owner ruling 2026-11-05: the permission decides. The setting only says whether the public may sign up."""
     from app.models import User
     grant_on(modes, 'scoped', modes.rows[mode])
     add_user(modes, modes.rows[mode])
-    created = User.query.filter_by(user_name='newbie').first()
-    assert (created is not None) is allowed
-    if allowed:
-        assert created.site_domain_id == modes.rows[mode].id
+    assert User.query.filter_by(user_name='newbie').one().site_domain_id == modes.rows[mode].id
 
 
 def test_a_holder_on_one_domain_cannot_create_an_account_on_another(modes):
     from app.models import User
-    grant_on(modes, 'scoped', modes.rows['staff'])
-    add_user(modes, modes.rows['admin'])
+    grant_on(modes, 'scoped', modes.rows['closed'])
+    add_user(modes, modes.rows['anyone'])
     assert User.query.filter_by(user_name='newbie').first() is None
 
 
-def test_the_form_offers_a_scoped_holder_only_the_domains_they_may_create_on(modes):
-    grant_on(modes, 'scoped', modes.rows['staff'], modes.rows['anyone'])
+def test_the_form_offers_a_scoped_holder_only_the_domains_they_hold_it_on(modes):
+    grant_on(modes, 'scoped', modes.rows['closed'])
     with patch('app.admin.routes.render_template', return_value='rendered') as render:
         modes.client.get('/admin/users/add')
-    assert [c.label for c in render.call_args.kwargs['form'].site_domain.choices] == ['staff.modes.example']
-
-
-def test_a_holder_with_nowhere_to_create_is_refused_the_form_and_not_offered_the_button(modes):
-    grant_on(modes, 'scoped', modes.rows['anyone'])
-    response = modes.client.get('/admin/users/add')
-    assert response.status_code == 302 and 'permission_denied' in response.headers['Location']
-    assert 'Add local user' not in body(modes, '/admin/users?local_remote=local')
+    assert [c.label for c in render.call_args.kwargs['form'].site_domain.choices] == ['closed.modes.example']
 
 
 def test_a_holder_who_may_create_is_offered_the_button(modes):
-    grant_on(modes, 'scoped', modes.rows['staff'])
+    grant_on(modes, 'scoped', modes.rows['closed'])
     assert 'Add local user' in body(modes, '/admin/users?local_remote=local')
 
 
-@pytest.mark.parametrize('mode', ['anyone', 'staff', 'admin'])
+@pytest.mark.parametrize('mode', ['anyone', 'closed'])
 def test_an_instance_wide_holder_creates_accounts_on_any_domain(modes, mode):
     from app.models import User
     holder(modes, 'wide', 'administer all users')
@@ -425,6 +414,53 @@ def test_an_instance_wide_holder_creates_accounts_on_any_domain(modes, mode):
 
 
 def test_nobody_without_the_permission_opens_the_form(modes):
-    holder(modes, 'other', 'ban users', domain=modes.rows['staff'])
+    holder(modes, 'other', 'ban users', domain=modes.rows['closed'])
     response = modes.client.get('/admin/users/add')
     assert response.status_code == 302 and 'permission_denied' in response.headers['Location']
+
+
+# --------------------------------------------------------------------------
+# The seeded Staff role as the owner ruled it (2026-11-05)
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def seeded(app, db_session):
+    local = make_instance('test.piefed.local', software='piefed')
+    peer = make_instance('peer.example', software='piefed')
+    make_user(local, 'founder', local=True)
+    first = SiteDomain(domain='first.scoped.example', scheme='https', federates=True, is_default=True)
+    other = SiteDomain(domain='other.scoped.example', scheme='https', federates=True)
+    db.session.add_all([first, other])
+    db.session.commit()
+    clear_domain_cache()
+    staff = seed_default_roles()['Staff']
+    db.session.commit()
+    holder_ = make_user(local, 'staffer', local=True)
+    grant_role(holder_, staff)
+    yield type('Seeded', (), dict(local=local, peer=peer, first=first, other=other, holder=holder_))
+    clear_domain_cache()
+
+
+def test_seeded_staff_administers_and_moderates_the_first_domain_and_no_other(seeded):
+    from app.permissions import user_access
+    uid = seeded.holder.id
+    unstamped, elsewhere = make_user(seeded.local, 'unstamped', local=True), make_user(seeded.local, 'elsewhere', local=True)
+    elsewhere.site_domain_id = seeded.other.id
+    db.session.commit()
+    for permission in ('administer all users', 'ban users', 'moderate all communities'):
+        assert user_access(permission, uid, on=unstamped) is True, permission
+        assert user_access(permission, uid, on=seeded.first) is True, permission
+        assert user_access(permission, uid, on=elsewhere) is False, permission
+
+
+def test_seeded_staff_reaches_no_remote_row_and_keeps_its_instance_only_permissions(seeded):
+    """A consequence of the ruling that the owner's upgrade note names: a remote row belongs to no domain (RB4)."""
+    from app.permissions import may_ban, user_access
+    uid = seeded.holder.id
+    remote = make_user(seeded.peer, 'remy')
+    far = make_community('far', host='peer.example')
+    far.ap_id, far.instance_id = 'far@peer.example', seeded.peer.id
+    db.session.commit()
+    assert user_access('moderate all communities', uid, on=far) is False
+    assert may_ban(seeded.holder, remote) is False
+    assert user_access('manage topics', uid) is True

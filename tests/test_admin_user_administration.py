@@ -28,8 +28,7 @@ import pytest
 from sqlalchemy import text
 
 from app import cache, db
-from app.models import Role, RolePermission, SiteDomain, User, role_grant
-from app.storefront import clear_domain_cache
+from app.models import Role, RolePermission, User, role_grant
 from app.utils import user_access
 from tests.factories import grant_permissions, make_instance, make_user
 
@@ -117,7 +116,7 @@ def _add_payload(token, **overrides):
     data = {'user_name': 'newbie', 'email': 'newbie@example.com',
             'password': 'password123', 'password2': 'password123',
             'about': '', 'matrix_user_id': '', 'ignore_bots': '0',
-            'hide_nsfw': '1', 'hide_nsfl': '1', 'grant_scope': '0',
+            'hide_nsfw': '1', 'hide_nsfl': '1',
             'submit': 'Save', 'csrf_token': token,
             'profile_file': (io.BytesIO(b''), ''),
             'banner_file': (io.BytesIO(b''), '')}
@@ -515,24 +514,6 @@ def test_an_editor_who_is_not_admin_cannot_add_a_user_with_a_grant(app, db_sessi
     assert User.query.filter_by(user_name='newbie').first() is None
 
 
-def test_a_grant_refused_on_a_domain_makes_no_account(users_admin):
-    """RB7, checked before the account is made, so nothing is left half done."""
-    client, token, roles, admin = users_admin
-    domain = SiteDomain(domain='x.add.example', scheme='https', federates=True)
-    db.session.add(domain)
-    db.session.commit()
-    clear_domain_cache()
-    try:
-        response, render, _finalize = _add(client, token, grants=str(roles['Admin'].id), grant_scope=str(domain.id),
-                                           site_domain=str(domain.id))
-    finally:
-        clear_domain_cache()
-
-    form = render.call_args.kwargs['form']
-    assert 'Admin is granted instance-wide only.' in form.grants.errors, form.errors
-    assert User.query.filter_by(user_name='newbie').first() is None
-
-
 def test_editing_a_remote_user_warns_that_it_will_be_overwritten(users_admin):
     """Most of this form's fields are replaced on the next refresh of a remote
     actor, so the warning is the only thing telling the admin their edit is
@@ -708,7 +689,7 @@ def test_an_admin_grant_refreshes_the_cached_admin_ids(users_admin):
     assert target.id not in get_setting('admin_ids', [])
 
     client.post(f'/admin/user/{target.id}/grants',
-                data={'csrf_token': token, 'grant-role': roles['Admin'].id, 'grant-scope': '0'})
+                data={'csrf_token': token, 'grant-role': roles['Admin'].id})
     assert get_setting('admin_ids', None) is None
     client.get('/')
 

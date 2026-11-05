@@ -153,7 +153,7 @@ def _shop(registration):
 
 
 def test_a_staff_only_domain_refuses_outside_referral_mode(app, api):
-    _shop('staff')
+    _shop('closed')
     response = api['client'].post('/api/alpha/user/register', json=_body(), base_url='https://shop.example')
     _refused(response, 'registration_closed')
 
@@ -295,7 +295,7 @@ def test_a_valid_code_registers_a_referred_usable_account(app, api, referrer):
 
 
 def test_a_code_opens_its_referrers_staff_only_domain(app, api, referrer):
-    shop = _shop('staff')
+    shop = _shop('closed')
     referrer.site_domain_id = shop.id
     generate_code(referrer)
     db.session.commit()

@@ -133,9 +133,11 @@ API = [
                                        communities_moderating=[], banned_from=[], communities_joined=[],
                                        blocked_community_ids=[], blocked_instance_ids=[]),
                 'insufficient permissions')),
-    Row('api.modlog.private_entries', '-DAAA',
+    # this entry names no community or account, so no domain: only `view modlog` on all domains reaches it
+    Row('api.modlog.private_entries', '-DDAA',
         call(lambda w, u: 'the parity entry' in str(get_modlog(bearer(u), {}))), setup=modlog_entry),
-    Row('target.api.user_ban.by_staff', '-AADD',
+    # Staff's `ban users` is limited to the first domain, so it may not ban someone who holds a role (RB6)
+    Row('target.api.user_ban.by_staff', '-ADDD',
         refuses(lambda w, u: post_user_ban(bearer(w.staff2), {'person_id': u.id, 'reason': 'parity'}),
                 'cannot_ban_admin'), setup=staff2),
 ]

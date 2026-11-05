@@ -417,14 +417,12 @@ class AddUserForm(FlaskForm):
     # Grants are Admin's alone (RB5): the page shows these to an admin only, and the route refuses them from anyone else
     grants = SelectMultipleField(_l('Roles to grant'), choices=[], coerce=int, validators=[Optional()],
                                  render_kw={'class': 'form-select'})
-    grant_scope = SelectField(_l('Granted'), choices=[], coerce=int, default=0, render_kw={'class': 'form-select'})
     submit = SubmitField(_l('Save'))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.grants.choices = select_choices([(role.id, role.name)
                                               for role in Role.query.order_by(Role.built_in.desc(), Role.name)])
-        self.grant_scope.choices = scope_choices()
         rows = [row for row in domain_rows() if row.id is not None]
         # 0 stands for the synthesised default of an install whose site_domain table is empty
         self.site_domain.choices = select_choices([(row.id, row.domain) for row in rows] or [(0, default_domain().domain)])
@@ -519,23 +517,15 @@ class RoleForm(FlaskForm):
     submit = SubmitField(_l('Save'))
 
 
-def scope_choices():
-    """"Instance-wide" (0), then each hosted domain."""
-    return select_choices([(0, _('Instance-wide'))] +
-                          [(row.id, row.domain) for row in domain_rows() if row.id is not None])
-
-
 class GrantForm(FlaskForm):
     """A grant (RB1, RB11). On a role's page the user is named; on a user's page the role is chosen."""
     user = StringField(_l('User name'), validators=[Optional(), Length(max=255)])
     role = SelectField(_l('Role'), choices=[], coerce=int, validators=[Optional()], render_kw={'class': 'form-select'})
-    scope = SelectField(_l('Scope'), choices=[], coerce=int, default=0, render_kw={'class': 'form-select'})
     expires = DateField(_l('Expires (start of the day, UTC)'), validators=[Optional()])
     submit = SubmitField(_l('Add grant'))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.scope.choices = scope_choices()
         self.role.choices = select_choices([(role.id, role.name) for role in
                                             Role.query.order_by(Role.built_in.desc(), Role.name)])
 
@@ -622,8 +612,7 @@ class SiteDomainForm(FlaskForm):
     federates = BooleanField(_l('Federates'), default=False,
                              description=_l('Fixed once the domain has accounts or communities.'))
     registration = SelectField(_l('Who may register'),
-                               choices=select_choices([('anyone', _l('Anyone')), ('staff', _l('User administrators only')),
-                                        ('admin', _l('Closed: user administrators only'))]), default='anyone',
+                               choices=select_choices([('anyone', _l('Anyone')), ('closed', _l('Closed'))]), default='anyone',
                                description=_l('Registration per domain takes effect in a later release.'))
     submit = SubmitField(_l('Add domain'))
 

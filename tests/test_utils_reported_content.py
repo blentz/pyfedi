@@ -23,6 +23,7 @@ from flask import g
 from app import db
 from app.models import Community, CommunityMember, Post, PostReply, Site, utcnow
 from app.utils import reported_post_replies, reported_posts
+from tests.factories import limit_role
 
 
 @pytest.fixture
@@ -177,8 +178,9 @@ class TestAnAdmin:
         db.session.add(role)
         db.session.commit()
         db.session.add(RolePermission(role_id=role.id, permission='administer all communities'))
-        db.session.execute(role_grant.insert().values(user_id=env.moderator.id, role_id=role.id,
-                                                      site_domain_id=domain.id))
+        db.session.commit()
+        limit_role(role, domain)
+        db.session.execute(role_grant.insert().values(user_id=env.moderator.id, role_id=role.id))
         db.session.commit()
         mine, theirs = a_reported_post(env, env.community), a_reported_post(env, env.other)
         mine_reply, theirs_reply = a_reported_reply(env, env.community), a_reported_reply(env, env.other)

@@ -1,24 +1,24 @@
 """Roles and grants: the roles a new instance starts with, and every change an admin makes to them.
 
-`flask init-db` creates the default roles, and the RBAC parity table (tests/rbac_parity.py) seeds the same ones, so
-that table measures what a freshly installed instance's Staff and Admin may do.
+`flask init-db` creates the default roles, and the RBAC parity table (tests/rbac_parity.py) seeds the same ones.
 
 Admin is the one built-in role: it holds every permission and is found by `Role.built_in`, never by its name
 (spec 2026-11-03-rbac-design.md RB2, RB16). Staff is seeded, not built in: from then on it is an ordinary role an
-admin may edit, rename or delete.
+admin may edit, rename or delete. Its scopable permissions start out limited to the first (default) domain.
 
-The rest of this module is what the role and grant pages (app/admin/roles_routes.py) do, so that the rules hold
-however a change arrives: only an admin changes roles or grants (RB5); a role granted on a domain holds only
-scopable permissions (RB7); every change is in the modlog (RB9) and is seen on the holders' next request (RB10).
+A role says which domains each of its permissions reaches; a grant only says who holds the role. The rest of this
+module is what the role and grant pages (app/admin/roles_routes.py) do, so that the rules hold however a change
+arrives: only an admin changes roles or grants (RB5); an instance-only permission cannot be limited to domains (RB7);
+every change is in the modlog (RB9) and is seen on the holders' next request (RB10).
 """
 from datetime import datetime
 
 from sqlalchemy import func
 
 from app import db
-from app.models import Role, RoleGrant, RolePermission, User, utcnow
+from app.models import Role, RoleGrant, RolePermission, RolePermissionDomain, SiteDomain, User, utcnow
 from app.permission_cache import permissions_changed
-from app.permissions import BY_NAME, INSTANCE_ONLY_PERMISSIONS, STAFF_PERMISSIONS
+from app.permissions import BY_NAME, INSTANCE_ONLY_PERMISSIONS, STAFF_PERMISSIONS, STAFF_SCOPABLE_PERMISSIONS
 from app.storefront import domain_rows
 from app.utils import add_to_modlog, set_setting
 
@@ -27,11 +27,17 @@ RESERVED_NAME = 'admin'   # RB16: no role but the built-in one may be called thi
 
 
 def seed_default_roles() -> dict[str, Role]:
-    """Add Admin and Staff to the session, and return them by name. The caller commits."""
+    """Add Admin and Staff to the session, and return them by name. The caller commits. Staff's scopable permissions
+    reach the default domain alone; with no such row yet they reach nowhere, rather than everywhere."""
     admin = Role(name='Admin', built_in=True)
     staff = Role(name='Staff', listed_publicly=True)
+    first = db.session.query(SiteDomain.id).filter(SiteDomain.is_default.is_(True)).scalar()
     for permission in STAFF_PERMISSIONS:
-        staff.permissions.append(RolePermission(permission=permission))
+        scoped = permission in STAFF_SCOPABLE_PERMISSIONS
+        row = RolePermission(permission=permission, all_domains=not scoped)
+        if scoped and first is not None:
+            row.domains.append(RolePermissionDomain(permission=permission, site_domain_id=first))
+        staff.permissions.append(row)
     db.session.add_all([admin, staff])
     return {admin.name: admin, staff.name: staff}
 
@@ -48,29 +54,22 @@ class RoleError(Exception):
 # Reading
 # --------------------------------------------------------------------------
 
-def scope_name(site_domain_id: int | None) -> str:
-    if site_domain_id is None:
-        return 'instance-wide'
-    row = next((row for row in domain_rows() if row.id == site_domain_id), None)
-    return f'on {row.domain}' if row else f'on domain #{site_domain_id}'
-
-
-def grant_holder_names(grants: list[RoleGrant]) -> str:
-    users = {user.id: user for user in User.query.filter(User.id.in_({grant.user_id for grant in grants}))}
-    return ', '.join(f'{users[grant.user_id].user_name} {scope_name(grant.site_domain_id)}' for grant in grants)
-
-
 def holder_ids(role: Role) -> list[int]:
     return list(db.session.scalars(db.select(RoleGrant.user_id).where(RoleGrant.role_id == role.id).distinct()))
 
 
-def domain_grants(role: Role) -> list[RoleGrant]:
-    return RoleGrant.query.filter(RoleGrant.role_id == role.id, RoleGrant.site_domain_id.isnot(None)) \
-        .order_by(RoleGrant.id).all()
+def permission_scopes(role: Role) -> dict[str, set[int] | None]:
+    """What the role holds: each permission, with the domains it is limited to, or None for every domain."""
+    return {row.permission: None if row.all_domains else {d.site_domain_id for d in row.domains}
+            for row in role.permissions}
 
 
-def instance_only_in(permissions) -> list[str]:
-    return [permission for permission in permissions if permission in INSTANCE_ONLY_PERMISSIONS]
+def describe_scopes(scopes: dict[str, set[int] | None]) -> str:
+    """For the modlog: each permission, and its domains when it is limited to some."""
+    names = {row.id: row.domain for row in domain_rows()}
+    return ', '.join(permission if domains is None else
+                     f"{permission} ({', '.join(sorted(names.get(d, f'#{d}') for d in domains))})"
+                     for permission, domains in sorted(scopes.items()))
 
 
 # --------------------------------------------------------------------------
@@ -100,12 +99,32 @@ def _clean_name(name: str, role: Role | None = None) -> str:
     return name
 
 
-def _clean_permissions(permissions) -> list[str]:
-    chosen = sorted(set(permissions))
-    unknown = [permission for permission in chosen if permission not in BY_NAME]
+def _clean_scopes(permissions) -> dict[str, set[int] | None]:
+    """`permissions` as {permission: domain ids, or None for every domain}; a plain list means every domain. RB7: an
+    instance-only permission cannot be limited. A limited one names at least one domain, and only domains that exist."""
+    scopes = dict(permissions) if isinstance(permissions, dict) else dict.fromkeys(permissions)
+    unknown = sorted(permission for permission in scopes if permission not in BY_NAME)
     if unknown:
         raise RoleError(f'There is no such permission: {", ".join(unknown)}.')
-    return chosen
+    known = {row.id for row in domain_rows()}
+    for permission, domains in scopes.items():
+        if domains is None:
+            continue
+        if permission in INSTANCE_ONLY_PERMISSIONS:
+            raise RoleError(f'{permission} applies to the whole instance and cannot be limited to domains.')
+        if not domains:
+            raise RoleError(f'Choose at least one domain for {permission}, or all of them.')
+        if not set(domains) <= known:
+            raise RoleError('There is no such domain.')
+    return scopes
+
+
+def _write_permissions(role: Role, scopes: dict[str, set[int] | None]) -> None:
+    for permission, domains in sorted(scopes.items()):
+        row = RolePermission(permission=permission, all_domains=domains is None)
+        for domain_id in sorted(domains or ()):
+            row.domains.append(RolePermissionDomain(permission=permission, site_domain_id=domain_id))
+        role.permissions.append(row)
 
 
 def _clean_expiry(expires_at: datetime | None) -> datetime | None:
@@ -122,13 +141,12 @@ def _admins_changed(role: Role) -> None:
 
 
 def _log(action: str, actor: User, *, role_name: str, role: Role | None = None, target: User | None = None,
-         site_domain_id: int | None = None, reason: str = '') -> None:
+         reason: str = '') -> None:
     if target is not None:
         link, link_text = f'u/{target.link()}', target.display_name()
     else:
         link, link_text = (f'admin/roles/{role.id}' if role is not None else ''), role_name
-    add_to_modlog(action, actor=actor, target_user=target, reason=reason, link=link, link_text=link_text,
-                  site_domain_id=site_domain_id)
+    add_to_modlog(action, actor=actor, target_user=target, reason=reason, link=link, link_text=link_text)
 
 
 # --------------------------------------------------------------------------
@@ -137,39 +155,30 @@ def _log(action: str, actor: User, *, role_name: str, role: Role | None = None, 
 
 def create_role(actor: User, name: str, description: str, listed_publicly: bool, permissions) -> Role:
     _must_be_admin(actor)
+    scopes = _clean_scopes(permissions)
     role = Role(name=_clean_name(name), description=(description or '').strip()[:512],
                 listed_publicly=bool(listed_publicly))
-    for permission in _clean_permissions(permissions):
-        role.permissions.append(RolePermission(permission=permission))
+    _write_permissions(role, scopes)
     db.session.add(role)
     db.session.commit()
-    _log('create_role', actor, role_name=role.name, role=role, reason=', '.join(_clean_permissions(permissions)))
+    _log('create_role', actor, role_name=role.name, role=role, reason=describe_scopes(scopes))
     return role
 
 
 def update_role(actor: User, role: Role, name: str, description: str, listed_publicly: bool, permissions) -> Role:
-    """Replace the role's name, description, listing and permissions. RB7: gaining an instance-only permission is
-    refused while the role is granted on any domain, and the error lists those grants."""
+    """Replace the role's name, description, listing and permissions, each with the domains it reaches."""
     _must_be_admin(actor)
     if role.built_in:
         raise RoleError('The built-in Admin role holds every permission and cannot be edited.')
     name = _clean_name(name, role)
-    chosen = _clean_permissions(permissions)
-    held = {p.permission for p in role.permissions}
-    gained = instance_only_in(set(chosen) - held)
-    if gained:
-        blocking = domain_grants(role)
-        if blocking:
-            raise RoleError(f'{", ".join(gained)} cannot be granted on a domain, and this role is: '
-                            f'{grant_holder_names(blocking)}. Revoke those grants first.', blocking)
-    RolePermission.query.filter_by(role_id=role.id).delete()
+    scopes = _clean_scopes(permissions)
+    role.permissions.clear()
+    db.session.flush()   # the old rows go before rows with the same keys arrive
     role.name, role.description, role.listed_publicly = name, (description or '').strip()[:512], bool(listed_publicly)
-    for permission in chosen:
-        db.session.add(RolePermission(role_id=role.id, permission=permission))
+    _write_permissions(role, scopes)
     db.session.commit()
-    db.session.expire(role, ['permissions'])
     permissions_changed(*holder_ids(role))
-    _log('edit_role', actor, role_name=role.name, role=role, reason=', '.join(chosen))
+    _log('edit_role', actor, role_name=role.name, role=role, reason=describe_scopes(scopes))
     return role
 
 
@@ -182,17 +191,17 @@ def delete_role(actor: User, role: Role, revoke: bool) -> None:
     if grants and not revoke:
         raise RoleError(f'This role has {len(grants)} grant(s); confirm revoking them to delete it.', grants)
     holders = {user.id: user for user in User.query.filter(User.id.in_({grant.user_id for grant in grants}))}
-    name, revoked = role.name, [(holders[grant.user_id], grant.site_domain_id) for grant in grants]
+    name, revoked = role.name, [holders[grant.user_id] for grant in grants]
     for grant in grants:
         db.session.delete(grant)
     db.session.flush()   # before the role: nothing tells the session the grants depend on it
-    RolePermission.query.filter_by(role_id=role.id).delete()
+    role.permissions.clear()
+    db.session.flush()
     db.session.delete(role)
     db.session.commit()
     permissions_changed(*holders)
-    for user, site_domain_id in revoked:
-        _log('revoke_role', actor, role_name=name, target=user, site_domain_id=site_domain_id,
-             reason=f'{name} {scope_name(site_domain_id)} (role deleted)')
+    for user in revoked:
+        _log('revoke_role', actor, role_name=name, target=user, reason=f'{name} (role deleted)')
     _log('delete_role', actor, role_name=name)
 
 
@@ -200,43 +209,20 @@ def delete_role(actor: User, role: Role, revoke: bool) -> None:
 # Grants
 # --------------------------------------------------------------------------
 
-def scope_refusal(role: Role, site_domain_id: int | None) -> str | None:
-    """Why `role` cannot be granted on this domain, or None: Admin is instance-wide only (RB2), and a role holding an
-    instance-only permission is too (RB7)."""
-    if site_domain_id is None:
-        return None
-    if role.built_in:
-        return 'Admin is granted instance-wide only.'
-    refused = instance_only_in(p.permission for p in role.permissions)
-    if refused:
-        return f'{role.name} cannot be granted on a domain: {", ".join(sorted(refused))} cannot be held on one domain.'
-    if not any(row.id == site_domain_id for row in domain_rows()):
-        return 'There is no such domain.'
-    return None
-
-
-def grant_role(actor: User, user: User, role: Role, site_domain_id: int | None = None,
-               expires_at: datetime | None = None) -> RoleGrant:
+def grant_role(actor: User, user: User, role: Role, expires_at: datetime | None = None) -> RoleGrant:
     _must_be_admin(actor)
     if user is None or not user.is_local():
         raise RoleError('Roles are granted to local accounts only.')
-    refused = scope_refusal(role, site_domain_id)
-    if refused:
-        raise RoleError(refused)
     expires_at = _clean_expiry(expires_at)
-    same_scope = RoleGrant.site_domain_id.is_(None) if site_domain_id is None \
-        else RoleGrant.site_domain_id == site_domain_id
-    if RoleGrant.query.filter(RoleGrant.user_id == user.id, RoleGrant.role_id == role.id, same_scope).first():
-        raise RoleError(f'{user.user_name} already holds {role.name} {scope_name(site_domain_id)}.')
-    grant = RoleGrant(user_id=user.id, role_id=role.id, site_domain_id=site_domain_id, granted_by=actor.id,
-                      expires_at=expires_at)
+    if RoleGrant.query.filter_by(user_id=user.id, role_id=role.id).first():
+        raise RoleError(f'{user.user_name} already holds {role.name}.')
+    grant = RoleGrant(user_id=user.id, role_id=role.id, granted_by=actor.id, expires_at=expires_at)
     db.session.add(grant)
     db.session.commit()
     permissions_changed(user.id)
     _admins_changed(role)
-    _log('grant_role', actor, role_name=role.name, target=user, site_domain_id=site_domain_id,
-         reason=f'{role.name} {scope_name(site_domain_id)}' + (f', until {expires_at:%Y-%m-%d %H:%M} UTC'
-                                                               if expires_at else ''))
+    _log('grant_role', actor, role_name=role.name, target=user,
+         reason=role.name + (f', until {expires_at:%Y-%m-%d %H:%M} UTC' if expires_at else ''))
     return grant
 
 
@@ -247,9 +233,8 @@ def change_expiry(actor: User, grant: RoleGrant, expires_at: datetime | None) ->
     permissions_changed(grant.user_id)
     role, user = db.session.get(Role, grant.role_id), db.session.get(User, grant.user_id)
     _admins_changed(role)
-    _log('change_grant_expiry', actor, role_name=role.name, target=user, site_domain_id=grant.site_domain_id,
-         reason=f'{role.name} {scope_name(grant.site_domain_id)}: '
-                + (f'until {expires_at:%Y-%m-%d %H:%M} UTC' if expires_at else 'no expiry'))
+    _log('change_grant_expiry', actor, role_name=role.name, target=user,
+         reason=f'{role.name}: ' + (f'until {expires_at:%Y-%m-%d %H:%M} UTC' if expires_at else 'no expiry'))
     return grant
 
 
@@ -259,11 +244,8 @@ def revoke_grant(actor: User, grant: RoleGrant) -> None:
     role, user = db.session.get(Role, grant.role_id), db.session.get(User, grant.user_id)
     if role.built_in and grant.user_id == actor.id and actor.id != 1:
         raise RoleError('You cannot revoke your own Admin grant; another admin can.')
-    site_domain_id = grant.site_domain_id
     db.session.delete(grant)
     db.session.commit()
     permissions_changed(user.id)
     _admins_changed(role)
-    _log('revoke_role', actor, role_name=role.name, target=user, site_domain_id=site_domain_id,
-         reason=f'{role.name} {scope_name(site_domain_id)}')
-
+    _log('revoke_role', actor, role_name=role.name, target=user, reason=role.name)

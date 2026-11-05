@@ -390,7 +390,7 @@ def test_the_form_shows_in_referral_mode(app, people, monkeypatch):
 
 def test_a_referral_opens_a_staff_only_domain(app, people, no_captcha):
     """RC11: a valid code lets someone sign up where public registration is off; RC10: the account lands there."""
-    shop = _shop('staff')
+    shop = _shop('closed')
     admin = people['admin']
     admin.site_domain_id = shop.id
     code = _code(admin)
@@ -406,7 +406,7 @@ def test_a_referral_opens_a_staff_only_domain(app, people, no_captcha):
 
 
 def test_a_staff_only_domain_stays_closed_without_a_code(app, people, no_captcha):
-    _shop('staff')
+    _shop('closed')
     client = app.test_client()
     data = {'user_name': 'shopper', 'hp_field': '', 'real_email': 'shopper@example.com',
             'password': 'a-good-password', 'password2': 'a-good-password', 'timezone': 'UTC', 'question': 'hi',
@@ -584,14 +584,14 @@ def test_the_open_form_keeps_its_own_question_label(app, people):
 
 def test_a_staff_only_domain_is_closed_outside_referral_mode(app, people):
     _mode('Open')
-    _shop('staff')
+    _shop('closed')
     with patch('app.auth.util.render_template', return_value='rendered') as rt:
         app.test_client().get('/auth/register', base_url='https://shop.example')
     assert rt.call_args.kwargs['registration_open'] is False
 
 
 def test_a_staff_only_domain_advertises_closed(people):
-    shop = _shop('staff')
+    shop = _shop('closed')
     site = db.session.get(Site, 1)
     assert registration_mode_on(domain_by_id(shop.id), site) == 'Closed'
     assert open_registrations(domain_by_id(shop.id), site) is False

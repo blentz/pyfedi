@@ -58,12 +58,12 @@ DEFAULT_INSTANCE_ID = 1
 # Referral-code registration (app/referral.py): signup needs a referral code, so it is closed to the public
 REFERRAL_MODE = 'ReferralCode'
 
-_REGISTRATION_FROM_MODE = {'Open': 'anyone', 'RequireApplication': 'anyone', 'Closed': 'admin', REFERRAL_MODE: 'admin'}
+_REGISTRATION_FROM_MODE = {'Open': 'anyone', 'RequireApplication': 'anyone', 'Closed': 'closed', REFERRAL_MODE: 'closed'}
 
 
 def registration_from_mode(mode: str) -> str:
     """Map `site.registration_mode` to a `site_domain.registration` value. Unknown modes are closed."""
-    return _REGISTRATION_FROM_MODE.get(mode, 'admin')
+    return _REGISTRATION_FROM_MODE.get(mode, 'closed')
 
 
 def live_registration(storefront: DomainInfo, site) -> str:
@@ -75,7 +75,7 @@ def live_registration(storefront: DomainInfo, site) -> str:
 def public_registration_open(storefront: DomainInfo) -> bool:
     """Whether anyone may sign up on `storefront`. The default domain is governed by `Site.registration_mode` alone
     (its own `registration` column is ignored); any other domain takes public sign-ups only when it is 'anyone', and
-    then `Site.registration_mode` applies as well. A 'staff' or 'admin' domain's accounts are made by the admin
+    then `Site.registration_mode` applies as well. A 'closed' domain's accounts are made by the admin
     add-user form alone."""
     return storefront.is_default or storefront.registration == 'anyone'
 

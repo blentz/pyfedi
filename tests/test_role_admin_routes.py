@@ -3,6 +3,7 @@
 The rules behind them are tested in tests/test_role_admin.py; here, that each page reaches them, shows what the spec
 says it shows, and is Admin's alone.
 """
+import re
 from datetime import date, timedelta
 
 import pytest
@@ -12,7 +13,7 @@ from app import db
 from app.models import Role, RoleGrant, RolePermission, SiteDomain, utcnow
 from app.permissions import CATALOGUE, ROLE_PERMISSIONS, user_access
 from app.storefront import clear_domain_cache
-from tests.factories import admin_role, grant_permissions, grant_role, make_instance, make_user, staff_role
+from tests.factories import admin_role, grant_permissions, grant_role, limit_role, make_instance, make_user, staff_role
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -68,6 +69,11 @@ def post(env, path, **data):
     return env.client.post(path, data={'csrf_token': env.token, **data})
 
 
+def ticked(body):
+    """The permissions ticked on a role form."""
+    return re.findall(r'name="permissions" value="([^"]+)"\s+id="[^"]+" checked', body)
+
+
 def a_role(name='Helpers', *permissions, listed=False):
     role = Role(name=name, listed_publicly=listed)
     db.session.add(role)
@@ -120,21 +126,24 @@ def test_the_list_pins_admin_first_with_only_a_view_action(env):
     assert 'Built-in' in admin_row and 'Edit' not in admin_row and 'Delete' not in admin_row
     assert 'Staff' in staff_row and 'Edit' in staff_row and 'Duplicate' in staff_row and 'Delete' in staff_row
     cells = [cell.strip() for cell in staff_row.split('<td class="text-center">')[1:5]]
-    assert [c.split('<')[0] for c in cells] == [str(len(staff.permissions)), 'No', 'Yes', '1']   # Staff holds instance-only ones
+    assert [c.split('<')[0] for c in cells] == [str(len(staff.permissions)), '0', 'Yes', '1']
 
 
-def test_a_role_with_an_instance_only_permission_cannot_be_granted_on_a_domain(env):
-    a_role('Mixed', 'ban users', 'masquerade')
-    row = next(r for r in page(env, '/admin/roles').split('<tr>') if 'Mixed' in r)
-    assert row.split('<td class="text-center">')[2].startswith('No')
+def test_the_list_counts_the_permissions_limited_to_some_domains(env):
+    role = a_role('Mixed', 'ban users', 'masquerade')
+    row = RolePermission.query.filter_by(role_id=role.id, permission='ban users').one()
+    row.all_domains = False
+    db.session.commit()
+    listed = next(r for r in page(env, '/admin/roles').split('<tr>') if 'Mixed' in r)
+    assert listed.split('<td class="text-center">')[2].startswith('1')
 
 
-def test_the_view_page_names_the_permissions_and_the_grants(env):
-    role = a_role('Helpers', 'ban users')
-    grant_role(env.holder, role, site_domain_id=env.domain.id)
+def test_the_view_page_names_each_permissions_domains_and_the_grants(env):
+    role = limit_role(a_role('Helpers', 'ban users'), env.domain)
+    grant_role(env.holder, role)
     body = page(env, f'/admin/roles/{role.id}')
     assert 'ban users' in body and 'masquerade' not in body
-    assert 'holder' in body and 'on x.roles.example' in body
+    assert 'Only on: x.roles.example' in body and 'holder' in body
 
 
 def test_admins_view_page_says_it_has_every_permission(env):
@@ -179,8 +188,7 @@ def test_duplicate_prefills_the_form_but_copies_no_grants(env):
     grant_role(env.holder, role)
     body = page(env, f'/admin/roles/new?from={role.id}')
     assert 'value="Copy of Helpers"' in body
-    assert 'value="ban users"\n                           id' in body or 'value="ban users"' in body
-    assert body.count(' checked') == 2   # ban users and "listed publicly"
+    assert ticked(body) == ['ban users']
     post(env, '/admin/roles/new', name='Copy of Helpers', permissions=['ban users'])
     copy = Role.query.filter_by(name='Copy of Helpers').one()
     assert RoleGrant.query.filter_by(role_id=copy.id).count() == 0
@@ -189,7 +197,7 @@ def test_duplicate_prefills_the_form_but_copies_no_grants(env):
 def test_duplicating_admin_ticks_every_permission(env):
     body = page(env, f'/admin/roles/new?from={admin_role().id}')
     assert body.count('name="permissions"') == body.count('name="permissions" value') == len(CATALOGUE)
-    assert body.count(' checked>') == len(CATALOGUE)
+    assert len(ticked(body)) == len(CATALOGUE)
 
 
 def test_an_edit_of_a_role_nobody_holds_saves_at_once(env):
@@ -217,14 +225,34 @@ def test_a_rename_alone_needs_no_confirmation(env):
     assert role.name == 'Assistants'
 
 
-def test_an_edit_refused_by_rb7_names_the_grants(env):
-    role = a_role('Domain helpers', 'ban users')
-    grant_role(env.holder, role, site_domain_id=env.domain.id)
-    response = post(env, f'/admin/roles/{role.id}/edit', name='Domain helpers',
-                    permissions=['ban users', 'masquerade'], confirmed='1')
-    body = response.get_data(as_text=True)
-    assert response.status_code == 200 and 'masquerade' in body and 'holder on x.roles.example' in body
-    assert [p.permission for p in RolePermission.query.filter_by(role_id=role.id)] == ['ban users']
+def test_a_change_of_a_permissions_domains_alone_asks_first(env):
+    role = a_role('Helpers', 'ban users')
+    grant_role(env.holder, role)
+    form = {f'scope-ban users': 'selected', f'domains-ban users': str(env.domain.id)}
+    response = post(env, f'/admin/roles/{role.id}/edit', name='Helpers', permissions=['ban users'], **form)
+    assert 'This changes access for 1 user.' in response.get_data(as_text=True)
+    assert 'value="selected" checked' in response.get_data(as_text=True)   # the choice survives the second look
+    post(env, f'/admin/roles/{role.id}/edit', name='Helpers', permissions=['ban users'], confirmed='1', **form)
+    row = RolePermission.query.filter_by(role_id=role.id).one()
+    assert row.all_domains is False and [d.site_domain_id for d in row.domains] == [env.domain.id]
+
+
+def test_a_refused_scope_is_a_form_error(env):
+    response = post(env, '/admin/roles/new', name='Helpers', permissions=['ban users'],
+                    **{'scope-ban users': 'selected'})
+    assert response.status_code == 200 and 'Choose at least one domain' in response.get_data(as_text=True)
+    assert Role.query.filter_by(name='Helpers').first() is None
+
+
+def test_the_form_offers_domains_for_scopable_permissions_only(env):
+    body = page(env, '/admin/roles/new')
+    assert 'name="domains-ban users"' in body and 'name="domains-masquerade"' not in body
+
+
+def test_duplicate_keeps_the_domains(env):
+    role = limit_role(a_role('Helpers', 'ban users'), env.domain)
+    body = page(env, f'/admin/roles/new?from={role.id}')
+    assert f'name="domains-ban users" value="{env.domain.id}" checked' in body
 
 
 def test_admin_has_no_edit_form(env):
@@ -240,7 +268,7 @@ def test_the_delete_page_lists_the_grants_and_needs_the_tick(env):
     role = a_role('Helpers', 'ban users')
     grant_role(env.holder, role)
     body = page(env, f'/admin/roles/{role.id}/delete')
-    assert 'holder, instance-wide' in body and 'Revoke 1 grant' in body
+    assert 'holder' in body and 'Revoke 1 grant' in body
     post(env, f'/admin/roles/{role.id}/delete')
     assert db.session.get(Role, role.id) is not None
     response = post(env, f'/admin/roles/{role.id}/delete', revoke_all='1')
@@ -257,31 +285,29 @@ def test_admin_cannot_be_deleted_from_the_page(env):
 # Grants
 # --------------------------------------------------------------------------
 
-def test_a_grant_is_added_on_the_role_page_by_name_with_scope_and_expiry(env):
+def test_a_grant_is_added_on_the_role_page_by_name_with_an_expiry(env):
     role = a_role('Helpers', 'ban users')
     day = date.today() + timedelta(days=5)
-    response = post(env, f'/admin/roles/{role.id}/grants', **{'grant-user': 'holder', 'grant-scope': env.domain.id,
-                                                              'grant-expires': day.isoformat()})
+    response = post(env, f'/admin/roles/{role.id}/grants', **{'grant-user': 'holder', 'grant-expires': day.isoformat()})
     assert response.headers['Location'].endswith(f'/admin/roles/{role.id}')
     grant = RoleGrant.query.filter_by(role_id=role.id).one()
-    assert (grant.user_id, grant.site_domain_id, grant.expires_at.date(), grant.granted_by) == \
-        (env.holder.id, env.domain.id, day, env.admin.id)
+    assert (grant.user_id, grant.expires_at.date(), grant.granted_by) == (env.holder.id, day, env.admin.id)
 
 
-def test_a_grant_to_nobody_or_a_refused_one_is_reported(env):
-    role = a_role('Mixed', 'masquerade')
+def test_a_grant_to_nobody_or_a_second_one_is_reported(env):
+    role = a_role('Helpers', 'ban users')
+    grant_role(env.holder, role)
     with env.client:
-        post(env, f'/admin/roles/{role.id}/grants', **{'grant-user': 'nobody-here', 'grant-scope': 0})
-        post(env, f'/admin/roles/{role.id}/grants', **{'grant-user': 'holder', 'grant-scope': env.domain.id})
+        post(env, f'/admin/roles/{role.id}/grants', **{'grant-user': 'nobody-here'})
+        post(env, f'/admin/roles/{role.id}/grants', **{'grant-user': 'holder'})
         flashes = env.client.get(f'/admin/roles/{role.id}').get_data(as_text=True)
-    assert 'There is no local account called' in flashes
-    assert 'cannot be granted on a domain' in flashes
-    assert RoleGrant.query.filter_by(role_id=role.id).count() == 0
+    assert 'There is no local account called' in flashes and 'already holds' in flashes
+    assert RoleGrant.query.filter_by(role_id=role.id).count() == 1
 
 
 def test_a_grant_is_added_from_the_user_page(env):
     role = a_role('Helpers', 'ban users')
-    response = post(env, f'/admin/user/{env.holder.id}/grants', **{'grant-role': role.id, 'grant-scope': 0})
+    response = post(env, f'/admin/user/{env.holder.id}/grants', **{'grant-role': role.id})
     assert response.headers['Location'].endswith(f'/admin/user/{env.holder.id}/edit')
     assert RoleGrant.query.filter_by(role_id=role.id, user_id=env.holder.id).count() == 1
 
@@ -352,13 +378,13 @@ def test_an_edit_form_with_no_name_is_shown_again(env):
 
 def test_a_grant_form_that_cannot_be_read_is_reported(env):
     role = a_role('Helpers')
-    post(env, f'/admin/roles/{role.id}/grants', **{'grant-user': 'holder', 'grant-scope': '987654'})
+    post(env, f'/admin/roles/{role.id}/grants', **{'grant-user': 'holder', 'grant-expires': 'not a date'})
     assert any('could not be read' in message for message in flashed_after(env, ''))
     assert RoleGrant.query.filter_by(role_id=role.id).count() == 0
 
 
 def test_a_user_grant_with_no_role_is_reported(env):
-    post(env, f'/admin/user/{env.holder.id}/grants', **{'grant-role': '987654', 'grant-scope': 0})
+    post(env, f'/admin/user/{env.holder.id}/grants', **{'grant-role': '987654'})
     assert 'Choose a role to grant.' in flashed_after(env, '')
 
 

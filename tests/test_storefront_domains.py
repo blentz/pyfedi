@@ -106,15 +106,15 @@ def test_synthesised_onion_server_name(app, db_session, monkeypatch):
 
 
 @pytest.mark.parametrize('mode,expected', [('Open', 'anyone'), ('RequireApplication', 'anyone'),
-                                           ('Closed', 'admin'), (None, 'admin')])
+                                           ('Closed', 'closed'), (None, 'closed')])
 def test_registration_from_mode(mode, expected):
     assert registration_from_mode(mode) == expected
 
 
 def test_migration_mapping_matches_app_mapping():
     module = load_migration()
-    for mode, expected in module.REGISTRATION_FROM_MODE.items():
-        assert registration_from_mode(mode) == expected
+    for mode, expected in module.REGISTRATION_FROM_MODE.items():   # frozen at 'admin'; d6a1f4c8e2b3 merged it into 'closed'
+        assert registration_from_mode(mode) == {'admin': 'closed'}.get(expected, expected)
 
 
 def load_migration(name: str = '*_site_domain.py'):
@@ -129,15 +129,18 @@ def load_migration(name: str = '*_site_domain.py'):
 def seed_schema(db_session):
     """site_domain as the seed wrote into it: without the instance link plan C2's migration adds after it."""
     per_domain_instance = load_migration('c8f4d2a6b9e1_per_domain_instance.py')
-    with Operations.context(MigrationContext.configure(db.session.connection())):
+    with Operations.context(MigrationContext.configure(db.session.connection())) as ops:
         per_domain_instance.downgrade()
+        Operations(ops.migration_context).drop_constraint('ck_site_domain_registration', 'site_domain', type_='check')
     db.session.commit()
     try:
         yield
     finally:
         db.session.rollback()
         db.session.execute(text('DELETE FROM site_domain'))
-        with Operations.context(MigrationContext.configure(db.session.connection())):
+        with Operations.context(MigrationContext.configure(db.session.connection())) as ops:
+            Operations(ops.migration_context).create_check_constraint('ck_site_domain_registration', 'site_domain',
+                                                                      "registration IN ('anyone','closed')")
             per_domain_instance.upgrade()
         db.session.commit()
 

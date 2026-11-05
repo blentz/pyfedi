@@ -17,6 +17,7 @@ from app import db
 from app.constants import POST_STATUS_PUBLISHED, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC, VISIBILITY_UNLISTED
 from app.local_only import hidden_here, hidden_here_clause, hides_nothing
 from app.models import Community, Instance, ModLog, Post, PostReply, User, UserFollower
+from app.permissions import domain_clause
 from app.storefront import hosted_instance_ids
 
 OPEN_VISIBILITIES = (VISIBILITY_PUBLIC, VISIBILITY_UNLISTED)
@@ -197,10 +198,9 @@ def modlog_domain_clause(domains: frozenset[int]):
     homed there. Nothing for an empty set."""
     if not domains:
         return false()
-    ids = sorted(domains)
-    return or_(ModLog.site_domain_id.in_(ids),
-               ModLog.community_id.in_(select(Community.id).where(Community.site_domain_id.in_(ids))),
-               ModLog.target_user_id.in_(select(User.id).where(User.site_domain_id.in_(ids))))
+    return or_(ModLog.site_domain_id.in_(sorted(domains)),
+               ModLog.community_id.in_(select(Community.id).where(domain_clause(Community.site_domain_id, domains))),
+               ModLog.target_user_id.in_(select(User.id).where(domain_clause(User.site_domain_id, domains))))
 
 
 def modlog_local_only_clause(signed_in: bool | None = None):

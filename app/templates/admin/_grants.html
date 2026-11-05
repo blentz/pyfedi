@@ -3,7 +3,6 @@
 <table class="table table-sm" id="grants">
     <tr>
         <th>{{ _('User') if show == 'user' else _('Role') }}</th>
-        <th>{{ _('Scope') }}</th>
         <th>{{ _('Granted by') }}</th>
         <th>{{ _('Granted') }}</th>
         <th>{{ _('Expires') }}</th>
@@ -13,7 +12,6 @@
     <tr>
         <td>{% if show == 'user' %}{% if row.user %}<a href="/u/{{ row.user.link() }}">{{ row.user.user_name }}</a>{% endif %}
             {% else %}{% if row.role %}<a href="{{ url_for('admin.admin_role', role_id=row.role.id) }}">{{ row.role.name }}</a>{% endif %}{% endif %}</td>
-        <td>{{ row.scope }}</td>
         <td>{{ row.granted_by.user_name if row.granted_by else '' }}</td>
         <td>{{ row.grant.granted_at.strftime('%Y-%m-%d') if row.grant.granted_at else '' }}</td>
         <td>
@@ -33,6 +31,6 @@
         </td>
     </tr>
     {% else -%}
-    <tr><td colspan="6">{{ _('No grants.') }}</td></tr>
+    <tr><td colspan="5">{{ _('No grants.') }}</td></tr>
     {% endfor -%}
 </table>

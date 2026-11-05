@@ -8,7 +8,7 @@ from alembic.operations import Operations
 from sqlalchemy import text
 
 from app import db
-from app.models import Role
+from app.models import Role, SiteDomain
 from app.permissions import (BY_NAME, CATALOGUE, INSTANCE_ONLY_PERMISSIONS, ROLE_PERMISSIONS, SCOPABLE_PERMISSIONS,
                              STAFF_PERMISSIONS)
 from app.roles import seed_default_roles
@@ -81,16 +81,21 @@ def _role(name, *permissions, built_in=False):
 def _migrate(old_shape):
     """Downgrade to the eight legacy permissions, let `old_shape()` write rows in them, and upgrade again."""
     migration = load_migration('c5f9e3b7a2d1_split_permissions.py')
+    later = load_migration('d6a1f4c8e2b3_permission_scope.py')
     db.session.commit()
     with Operations.context(MigrationContext.configure(db.session.connection())):
+        later.downgrade()
         migration.downgrade()
         ids = old_shape()
         migration.upgrade()
+        later.upgrade()
     return ids
 
 
 def test_the_default_staff_role_becomes_exactly_the_seeded_one(people):
-    """An upgraded instance and a new one agree on what Staff may do: today's, permission for permission."""
+    """An upgraded instance and a new one agree on what Staff may do, permission for permission."""
+    db.session.add(SiteDomain(domain='first.split.example', scheme='https', federates=True, is_default=True))
+    db.session.commit()
     try:
         staff = _migrate(lambda: _role('Staff', *LEGACY_STAFF))
         assert _held(staff) == set(STAFF_PERMISSIONS)
@@ -141,10 +146,13 @@ def test_the_downgrade_gives_back_administer_all_communities_and_drops_the_rest(
     db.session.commit()
     try:
         with Operations.context(MigrationContext.configure(db.session.connection())):
+            later = load_migration('d6a1f4c8e2b3_permission_scope.py')
+            later.downgrade()
             migration.downgrade()
             assert _held(staff_id) == set(LEGACY_STAFF)
             assert _held(helpers_id) == set()
             migration.upgrade()
+            later.upgrade()
         db.session.commit()
     finally:
         db.session.rollback()
@@ -183,3 +191,106 @@ def test_an_admin_only_page_names_only_admin_as_able_to_reach_it(people):
 
 def test_with_no_admin_role_an_admin_only_page_names_nobody(people):
     assert roles_with(None) == ''
+
+
+# --------------------------------------------------------------------------
+# d6a1f4c8e2b3: a permission says which domains it reaches, and a grant only who holds the role
+# --------------------------------------------------------------------------
+
+def _downgrade_to_grant_scope(fill):
+    migration = load_migration('d6a1f4c8e2b3_permission_scope.py')
+    db.session.commit()
+    with Operations.context(MigrationContext.configure(db.session.connection())):
+        migration.downgrade()
+        fill()
+        migration.upgrade()
+
+
+def _limits(role_id, permission):
+    return [row[0] for row in db.session.execute(text(
+        'SELECT site_domain_id FROM role_permission_domain WHERE role_id = :r AND permission = :p'),
+        {'r': role_id, 'p': permission})]
+
+
+def test_the_upgrade_limits_staff_to_the_default_domain_and_gives_it_user_administration(people):
+    first = SiteDomain(domain='first.split.example', scheme='https', federates=True, is_default=True)
+    db.session.add(first)
+    db.session.commit()
+    first_id = first.id
+    staff = _role('Staff', 'moderate all communities', 'manage topics')
+    other = _role('Others', 'moderate all communities')
+    try:
+        _downgrade_to_grant_scope(lambda: None)
+        assert _limits(staff, 'moderate all communities') == [first_id]
+        assert _limits(staff, 'administer all users') == [first_id]
+        assert _limits(staff, 'manage topics') == []   # instance-only: untouched
+        wide = db.session.execute(text('SELECT permission, all_domains FROM role_permission WHERE role_id = :r'),
+                                  {'r': staff}).all()
+        assert dict(wide) == {'moderate all communities': False, 'administer all users': False, 'manage topics': True}
+        assert _limits(other, 'moderate all communities') == []   # another role is not Staff
+        db.session.commit()
+    finally:
+        db.session.rollback()
+
+
+def test_without_a_default_row_staff_is_left_alone(people):
+    staff = _role('Staff', 'moderate all communities')
+    try:
+        _downgrade_to_grant_scope(lambda: None)
+        assert _held(staff) == {'moderate all communities'}
+        db.session.commit()
+    finally:
+        db.session.rollback()
+
+
+def test_a_role_granted_on_a_domain_becomes_a_role_limited_to_it(people):
+    """Nobody gains or loses anything: the holder on X keeps X, under a role of its own."""
+    shop = SiteDomain(domain='shop.split.example', scheme='https', federates=False)
+    db.session.add(shop)
+    db.session.commit()
+    shop_id = shop.id
+    role = _role('Helpers', 'ban users')
+    holder = make_user(people, 'scopedone', local=True)
+    wide = make_user(people, 'wideone', local=True)
+    holder_id, wide_id = holder.id, wide.id
+    db.session.commit()
+
+    def fill():
+        db.session.execute(text('INSERT INTO role_grant (user_id, role_id, site_domain_id) VALUES (:u, :r, :d)'),
+                           {'u': holder_id, 'r': role, 'd': shop_id})
+        db.session.execute(text('INSERT INTO role_grant (user_id, role_id) VALUES (:u, :r)'),
+                           {'u': wide_id, 'r': role})
+    try:
+        _downgrade_to_grant_scope(fill)
+        made = db.session.execute(text("SELECT id FROM role WHERE name = 'Helpers on shop.split.example'")).scalar()
+        assert _limits(made, 'ban users') == [shop_id]
+        grants = dict(db.session.execute(text('SELECT user_id, role_id FROM role_grant')).all())
+        assert grants == {holder_id: made, wide_id: role}
+        db.session.commit()
+    finally:
+        db.session.rollback()
+
+
+def test_the_registration_setting_merges_into_closed_and_the_downgrade_cannot_widen(people):
+    shop = SiteDomain(domain='shop.split.example', scheme='https', federates=False)
+    db.session.add(shop)
+    db.session.commit()
+    shop_id = shop.id
+    limited = _role('Limited', 'ban users')
+    staff = _role('Staff', 'ban users')
+    migration = load_migration('d6a1f4c8e2b3_permission_scope.py')
+    for role_id in (limited, staff):
+        db.session.execute(text('UPDATE role_permission SET all_domains = false WHERE role_id = :r'), {'r': role_id})
+    db.session.commit()
+    try:
+        with Operations.context(MigrationContext.configure(db.session.connection())):
+            migration.downgrade()
+            db.session.execute(text("UPDATE site_domain SET registration = 'staff' WHERE id = :i"), {'i': shop_id})
+            assert _held(limited) == set()   # dropped, rather than become an instance-wide permission
+            assert _held(staff) == {'ban users'}   # Staff gets its old reach back
+            migration.upgrade()
+            assert db.session.execute(text('SELECT registration FROM site_domain WHERE id = :i'),
+                                      {'i': shop_id}).scalar() == 'closed'
+        db.session.commit()
+    finally:
+        db.session.rollback()

@@ -15,7 +15,7 @@
         <p>{{ ngettext('It has %(num)d grant, which deleting it revokes:', 'It has %(num)d grants, which deleting it revokes:', grants|length) }}</p>
         <ul id="grants">
             {% for row in grants -%}
-            <li>{{ row.user.user_name if row.user else '' }}, {{ row.scope }}{% if row.grant.expires_at %}, {{ _('until %(when)s', when=row.grant.expires_at.strftime('%Y-%m-%d')) }}{% endif %}</li>
+            <li>{{ row.user.user_name if row.user else '' }}{% if row.grant.expires_at %}, {{ _('until %(when)s', when=row.grant.expires_at.strftime('%Y-%m-%d')) }}{% endif %}</li>
             {% endfor -%}
         </ul>
         {% else -%}

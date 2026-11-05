@@ -35,7 +35,7 @@ from app.models import (ActivityPubLog, BannedInstances, ChatMessage, Community,
                         CommunityFlair, CommunityFlairBlock, CommunityJoinRequest, CommunityMember, Conversation,
                         Domain, DomainBlock, Feed, FeedItem, FeedJoinRequest, FeedMember, File, Instance, InstanceBan,
                         InstanceBlock, Notification, NotificationSubscription, Poll, PollChoice, Post, PostReply,
-                        PostReplyBookmark, PostReplyVote, PostVote, Role, RolePermission, Site, SiteDomain, User,
+                        PostReplyBookmark, PostReplyVote, PostVote, Role, RolePermission, RolePermissionDomain, Site, SiteDomain, User,
                         UserBlock, UserFollower, UserFollowRequest, UserRegistration, hidden_posts, read_posts,
                         role_grant, utcnow)
 from app.utils import get_deduped_post_ids
@@ -464,13 +464,15 @@ def grant_permissions(user: User, *permissions: str) -> None:
 
 
 def staff_role() -> Role:
-    """The seeded Staff role, holding what `flask init-db` and an upgraded instance give it (app/roles.py): made if
-    this test has none yet. Staff is an ordinary role found by its permissions, never by its name (RB16)."""
+    """A Staff role for a test with no domains of its own: what the seeded one holds, reaching every domain, without
+    user administration, which seeds on the first domain alone. A test of the seeded role itself uses
+    app.roles.seed_default_roles. Staff is an ordinary role found by its permissions, never by its name (RB16)."""
     role = Role.query.filter_by(name='Staff').first()
     if role is None:
         role = Role(name='Staff', listed_publicly=True)
         for permission in STAFF_PERMISSIONS:
-            role.permissions.append(RolePermission(permission=permission))
+            if permission != 'administer all users':
+                role.permissions.append(RolePermission(permission=permission))
         db.session.add(role)
         db.session.commit()
     return role
@@ -486,13 +488,23 @@ def admin_role() -> Role:
     return role
 
 
-def grant_role(user: User, role: Role, site_domain_id: int | None = None) -> None:
-    """Grant `role` to `user`, instance-wide unless `site_domain_id` names a domain."""
+def grant_role(user: User, role: Role) -> None:
+    """Grant `role` to `user`. Which domains it reaches is the role's own to say: see `limit_role`."""
     # Granting what is already granted changes nothing, as a second grant of a permission did before roles were
     # unique by name (each grant_permission call used to make its own role).
-    db.session.execute(postgresql_insert(role_grant).values(user_id=user.id, role_id=role.id,
-                                                            site_domain_id=site_domain_id).on_conflict_do_nothing())
+    db.session.execute(postgresql_insert(role_grant).values(user_id=user.id, role_id=role.id).on_conflict_do_nothing())
     db.session.commit()
+
+
+def limit_role(role: Role, *domains) -> Role:
+    """Limit every permission `role` holds to `domains` (rows or ids), as the role form's "Selected domains" does."""
+    ids = [getattr(domain, 'id', domain) for domain in domains]
+    for row in RolePermission.query.filter_by(role_id=role.id):
+        row.all_domains = False
+        row.domains = [RolePermissionDomain(role_id=role.id, permission=row.permission, site_domain_id=domain_id)
+                       for domain_id in ids]
+    db.session.commit()
+    return role
 
 
 def make_admin(user: User) -> User:

@@ -6,6 +6,13 @@ Date: 2026-11-03. Status: being built on blentz.
   found is fixed at 296d8a174; O5 came out of it.
 - Step 3 (the check) is done: app/permissions.py (`user_access(perm, user, on=, anywhere=)`, `home_domain_id`,
   `may_act_on_user`), app/permission_cache.py (the per-user version). No call site names an object yet (step 5).
+- **Ruled 2026-11-05, reworking steps 2, 7, 8 and 9** (migration d6a1f4c8e2b3): scope moved from the grant onto each
+  permission in a role (RB1, RB7), Staff seeds limited to the first domain with `administer all users` (RB2), and the
+  permission alone decides who adds accounts (RB13). Text below written before that ruling yields to the Rulings table.
+  A role granted on a domain became a role of its own, "<role> on <domain>". Local rows no domain was stamped on
+  count as the default domain's, in `home_domain_id` and `domain_clause` alike, as `storefront.on_domain` has them.
+  A consequence of narrowing Staff: remote communities, posts in them and remote accounts belong to no domain, so
+  default Staff no longer moderates or bans them, and neither does any other limited permission (RB4).
 - Step 9 is done. RB13's account creation is `app/admin/scope.py`'s `may_create_account_on`: an instance-wide holder of
   `administer all users` on any domain, whatever its mode, and a holder on a domain while its live mode is `'staff'` or
   `'admin'`. The form offers a scoped holder only those domains, and /admin/users hides "Add local user" from anyone
@@ -99,22 +106,22 @@ reach anything that isn't already one of today's 8 permission strings.
 
 | # | Ruling |
 |---|---|
-| RB1 | The scope goes on the assignment. A role is a reusable bundle of permissions. A **grant** is (user, role, `site_domain_id`), where NULL means instance-wide. A user may hold several grants, including different roles on different domains. |
-| RB2 | **Admin** stays a built-in role that can't be deleted. It implicitly holds every permission, is instance-wide only, and is never granted with a domain scope. User 1 stays a superuser who can't be banned. Every `is_staff()` / `is_admin_or_staff()` site, and every `is_admin()` site a delegate may need, becomes a named permission. **Staff** becomes an ordinary seeded role (RB16) whose permissions reproduce exactly what it can do today. |
+| RB1 | **(Ruled again 2026-11-05.)** The scope goes on the permission, inside the role. A role is a named collection of permissions, and each scopable permission in it reaches all domains or selected domains (one or several). A **grant** is (user, role): it only says who holds the role. A user may hold several roles. |
+| RB2 | **Admin** stays a built-in role that can't be deleted. It implicitly holds every permission on every domain. User 1 stays a superuser who can't be banned. Every `is_staff()` / `is_admin_or_staff()` site, and every `is_admin()` site a delegate may need, becomes a named permission. **Staff** is only the name of a seeded role (RB16). It seeds with the Staff column of the catalogue, its scopable permissions limited to the instance's first (default) domain, including `administer all users` (ruled 2026-11-05, replacing "reproduces exactly what it can do today"). New installs and upgrades alike. |
 | RB3 | **Acceptance use case, not a shipped role.** The catalogue must be fine-grained enough that an admin can compose a "domain admin" role that holds, on its domains: domain branding and settings (not adding or deleting domains, not `federates`), the users homed there (approve, edit, ban, purge, referrals), and the communities homed there (create, edit, delete, moderators, content, reports). It must be possible to leave out CMS pages and newsletters. |
 | RB4 | A domain-scoped grant reaches any content inside its domains' communities, and can community-ban any author, remote ones included. Instance-wide account actions (instance ban, edit, purge, delete) reach only users homed on its domains. Remote users and instances, and other domains' users, are out of reach. |
 | RB5 | Only Admin creates or edits roles and makes or revokes grants. There is no delegation. |
-| RB6 | A holder acting under a scoped grant can never act on any user who holds **any** grant, whether ban, edit, purge, delete or a role change. Only Admin can. |
-| RB7 | Each permission is flagged **scopable** or **instance-only**. A domain-scoped grant of a role containing an instance-only permission is refused, with an error naming the permission. Editing a role so that it gains an instance-only permission is refused while the role has any domain-scoped grant. |
+| RB6 | A holder acting through a permission limited to some domains can never act on any user who holds **any** role, whether ban, edit, purge, delete or a role change. Only one holding it on all domains, or Admin, can. |
+| RB7 | **(Ruled again 2026-11-05.)** Each permission is flagged **scopable** or **instance-only**. An instance-only permission always applies to the whole instance and cannot be limited to domains; the role form refuses it, with an error naming the permission. A limited permission with no domain left reaches nowhere, so removing a domain can never widen a role. |
 | RB8 | There is one `/admin` area. The menu shows only what the user's grants allow. Every list and form is filtered in its query to the user's domains, with a domain picker when the user holds more than one. |
 | RB9 | Every grant, revoke and role edit writes a ModLog entry. Every action taken under a scoped grant records the `site_domain_id` it was taken under. The admin modlog can be filtered by domain. |
 | RB10 | Revocation takes effect immediately. Any change to grants or roles clears that user's permission caches (`user_access`, `is_admin`, `is_staff`, `admin_ids`) on every worker. |
 | RB11 | Grants have an optional `expires_at`. An expired grant is ignored at check time. A Celery beat task deletes expired grants and writes a ModLog entry for each one. |
 | RB12 | A scopable permission, `shown as admin`, makes its holder appear as an admin of domain X on X's host: admin=true in the API (session/user views), and listed among X's admins (API site `admins`, `/about` admin list, nodeinfo). An admin ticks it to give a custom role this behaviour. Instance admins on sister domains keep today's behaviour (O1, ruled): a sister domain lists only the admins homed on it. |
-| RB13 | A holder of `approve registrations` on X approves X's applications and is notified of them. A holder of `administer all users` on X may create accounts on X when X's `registration` mode is `'staff'` or `'admin'`. Instance admins still are too. |
+| RB13 | **(Ruled again 2026-11-05.)** A holder of `approve registrations` on X approves X's applications and is notified of them. Holding `administer all users` on X alone decides who may add accounts on X. A domain's `registration` setting only says whether the public may sign up: `'anyone'` or `'closed'` (`'staff'` and `'admin'` merged into `'closed'`). |
 | RB14 | No custom role is seeded or shipped, including a "Domain admin". Every non-built-in role is created by an instance admin in the UI. |
 | RB16 | **Admin is the only hard-coded role.** It is identified by `role.built_in`, never by name or id. Its name is locked, and no other role may be named "Admin" (case-insensitive). Staff is a **seeded** role: created by `flask init-db` and kept by the upgrade migration, then an ordinary custom role an admin may rename, re-permission or delete. No code refers to Staff by name or id. |
-| RB17 | The admin RBAC UI supports full CRUD on custom roles (create, list/view, edit, duplicate, delete) and on grants (add, change expiry, revoke), all from `/admin/roles` and the user edit page. Admin's row is read-only apart from its grants. |
+| RB17 | The admin RBAC UI supports full CRUD on custom roles (create, list/view, edit, duplicate, delete), each permission with its domains, and on grants (add, change expiry, revoke), all from `/admin/roles` and the user edit page. Admin's row is read-only apart from its grants. |
 | RB15 | Live: roles, their permissions and grants are runtime data. Creating, editing, granting and revoking take effect on the next request for every holder, with no deploy, migration or restart (RB10). The permission catalogue is code-defined, because each permission guards a code path. A new permission ships with code and appears in the role editor once deployed. |
 
 ## Data
@@ -123,13 +130,13 @@ reach anything that isn't already one of today's 8 permission strings.
 role            id, name UNIQUE (lower(name)), built_in BOOL NOT NULL DEFAULT false, description,
                 listed_publicly BOOL NOT NULL DEFAULT false, created_at, updated_at
                 (weight dropped: RB6 makes rank irrelevant; partial unique index allows one built_in row)
-role_permission (role_id, permission) — unchanged
+role_permission (role_id, permission, all_domains BOOL NOT NULL DEFAULT true)
+role_permission_domain (role_id, permission, site_domain_id) → role_permission, site_domain ON DELETE CASCADE
 role_grant      id PK,
                 user_id → user ON DELETE CASCADE,
                 role_id → role ON DELETE RESTRICT,
-                site_domain_id → site_domain ON DELETE CASCADE, NULL = instance-wide,
                 granted_by → user ON DELETE SET NULL, granted_at, expires_at NULL
-                UNIQUE (user_id, role_id, COALESCE(site_domain_id, 0))
+                UNIQUE (user_id, role_id)
 mod_log         + site_domain_id → site_domain ON DELETE SET NULL, NULL
 ```
 
@@ -278,6 +285,8 @@ Notes:
 - No other role is seeded (RB14).
 
 ## Admin UI
+
+*The role form now has All domains / Selected domains per scopable permission, and grants have no scope (RB1).*
 
 All of it is Admin-only (RB5), POST + CSRF for every change, ModLog on every change (RB9), and live (RB15).
 It replaces `/admin/permissions` (which redirects to `/admin/roles`) and the single **Role** drop-down on the

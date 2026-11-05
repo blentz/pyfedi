@@ -61,7 +61,6 @@
             {{ grant_form.hidden_tag() }}
             <input type="hidden" name="next" value="{{ next }}">
             {{ render_field(grant_form.role) }}
-            {{ render_field(grant_form.scope) }}
             {{ render_field(grant_form.expires) }}
             {{ render_field(grant_form.submit) }}
         </form>

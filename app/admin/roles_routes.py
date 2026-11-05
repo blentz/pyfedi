@@ -16,9 +16,10 @@ from app.admin import bp
 from app.admin.forms import ExpiryForm, GrantForm, RoleForm
 from app.local_names import local_clause
 from app.models import Role, RoleGrant, User
-from app.permissions import CATALOGUE, INSTANCE_ONLY_PERMISSIONS
-from app.roles import (RoleError, change_expiry, create_role, delete_role, grant_role, holder_ids, revoke_grant,
-                       scope_name, update_role)
+from app.permissions import CATALOGUE, SCOPABLE_PERMISSIONS
+from app.roles import (RoleError, change_expiry, create_role, delete_role, grant_role, holder_ids, permission_scopes,
+                       revoke_grant, update_role)
+from app.storefront import domain_rows
 from app.utils import admin_required, safe_redirect_target
 
 
@@ -30,8 +31,8 @@ def catalogue_groups():
     return list(groups.items())
 
 
-def permissions_of(role: Role) -> list[str]:
-    return sorted(p.permission for p in role.permissions)
+def hosted_domains() -> list[tuple[int, str]]:
+    return [(row.id, row.domain) for row in domain_rows() if row.id is not None]
 
 
 def role_rows():
@@ -40,10 +41,17 @@ def role_rows():
                                       .group_by(RoleGrant.role_id)).all())
     rows = []
     for role in Role.query.order_by(Role.built_in.desc(), Role.name).all():
-        held = permissions_of(role)
-        rows.append(dict(role=role, permission_count=len(held), holders=holders.get(role.id, 0),
-                         scopable=not role.built_in and not any(p in INSTANCE_ONLY_PERMISSIONS for p in held)))
+        scopes = permission_scopes(role)
+        rows.append(dict(role=role, permission_count=len(scopes), holders=holders.get(role.id, 0),
+                         limited=sum(domains is not None for domains in scopes.values())))
     return rows
+
+
+def submitted_scopes() -> dict[str, set[int] | None]:
+    """The role form's permissions: each ticked one, with the domains picked when "Selected domains" is chosen."""
+    return {permission: ({int(d) for d in request.form.getlist(f'domains-{permission}') if d.isdigit()}
+                         if request.form.get(f'scope-{permission}') == 'selected' else None)
+            for permission in request.form.getlist('permissions')}
 
 
 def grant_rows(grants):
@@ -52,7 +60,7 @@ def grant_rows(grants):
                                                             {g.granted_by for g in grants if g.granted_by}))}
     roles = {r.id: r for r in Role.query.filter(Role.id.in_({g.role_id for g in grants}))}
     return [dict(grant=grant, user=users.get(grant.user_id), role=roles.get(grant.role_id),
-                 granted_by=users.get(grant.granted_by), scope=scope_name(grant.site_domain_id),
+                 granted_by=users.get(grant.granted_by),
                  expiry_form=ExpiryForm(prefix=f'grant{grant.id}',
                                         expires=grant.expires_at.date() if grant.expires_at else None))
             for grant in sorted(grants, key=lambda g: g.id)]
@@ -104,17 +112,21 @@ def admin_roles():
 @admin_required
 def admin_role(role_id):
     role = role_or_404(role_id)
-    held = set(permissions_of(role))
+    scopes = permission_scopes(role)
+    names = dict(hosted_domains())
+    permissions = [dict(permission=p, domains=None if scopes.get(p.name) is None else
+                        sorted(names.get(d, f'#{d}') for d in scopes[p.name]))
+                   for p in CATALOGUE if p.name in scopes]
     grant_form = GrantForm(prefix='grant')
-    return render_template('admin/role.html', title=role.name, role=role,
-                           permissions=[p for p in CATALOGUE if role.built_in or p.name in held],
+    return render_template('admin/role.html', title=role.name, role=role, permissions=permissions,
                            grants=grant_rows(RoleGrant.query.filter_by(role_id=role.id).all()),
                            grant_form=grant_form, revoke_form=FlaskForm())
 
 
-def _role_form_page(form, role, chosen, title, confirm=None):
-    return render_template('admin/role_form.html', title=title, form=form, role=role, chosen=set(chosen),
-                           groups=catalogue_groups(), instance_only=INSTANCE_ONLY_PERMISSIONS, confirm=confirm)
+def _role_form_page(form, role, scopes, title, confirm=None):
+    return render_template('admin/role_form.html', title=title, form=form, role=role, scopes=scopes,
+                           groups=catalogue_groups(), scopable=SCOPABLE_PERMISSIONS, domains=hosted_domains(),
+                           confirm=confirm)
 
 
 @bp.route('/roles/new', methods=['GET', 'POST'])
@@ -122,24 +134,23 @@ def _role_form_page(form, role, chosen, title, confirm=None):
 @admin_required
 def admin_role_new():
     form = RoleForm()
-    chosen = request.form.getlist('permissions')
+    scopes = submitted_scopes()
     if request.method == 'GET':
         source = db.session.get(Role, request.args.get('from', type=int) or 0)
         if source is not None:   # Duplicate: Admin's copy holds every permission, as Admin does
             form.name.data = _('Copy of %(name)s', name=source.name)[:50]
             form.description.data = source.description
             form.listed_publicly.data = source.listed_publicly
-            chosen = [p.name for p in CATALOGUE] if source.built_in else permissions_of(source)
+            scopes = dict.fromkeys(p.name for p in CATALOGUE) if source.built_in else permission_scopes(source)
     elif form.validate_on_submit():
         try:
-            role = create_role(current_user, form.name.data, form.description.data, form.listed_publicly.data,
-                               chosen)
+            role = create_role(current_user, form.name.data, form.description.data, form.listed_publicly.data, scopes)
         except RoleError as refused:
             form.name.errors.append(str(refused))
         else:
             flash(_('Role created'))
             return redirect(url_for('admin.admin_role', role_id=role.id))
-    return _role_form_page(form, None, chosen, _('New role'))
+    return _role_form_page(form, None, scopes, _('New role'))
 
 
 @bp.route('/roles/<int:role_id>/edit', methods=['GET', 'POST'])
@@ -151,22 +162,21 @@ def admin_role_edit(role_id):
         flash(_('The built-in Admin role holds every permission and cannot be edited.'), 'error')
         return redirect(url_for('admin.admin_role', role_id=role.id))
     form = RoleForm(obj=role) if request.method == 'GET' else RoleForm()
-    chosen = permissions_of(role) if request.method == 'GET' else request.form.getlist('permissions')
+    scopes = permission_scopes(role) if request.method == 'GET' else submitted_scopes()
     if form.validate_on_submit():
         holders = len(holder_ids(role))
-        changes_access = set(chosen) != set(permissions_of(role))
-        if holders and changes_access and not request.form.get('confirmed'):
+        if holders and scopes != permission_scopes(role) and not request.form.get('confirmed'):
             # A second look before access changes for people (spec, Admin UI: Edit)
-            return _role_form_page(form, role, chosen, _('Edit role'), confirm=holders)
+            return _role_form_page(form, role, scopes, _('Edit role'), confirm=holders)
         try:
-            update_role(current_user, role, form.name.data, form.description.data, form.listed_publicly.data, chosen)
+            update_role(current_user, role, form.name.data, form.description.data, form.listed_publicly.data, scopes)
         except RoleError as refused:
             db.session.rollback()
             form.name.errors.append(str(refused))
         else:
             flash(_('Role saved'))
             return redirect(url_for('admin.admin_role', role_id=role.id))
-    return _role_form_page(form, role, chosen, _('Edit role'))
+    return _role_form_page(form, role, scopes, _('Edit role'))
 
 
 @bp.route('/roles/<int:role_id>/delete', methods=['GET', 'POST'])
@@ -197,8 +207,7 @@ def admin_role_delete(role_id):
 
 def _add_grant(user, role, form, default):
     try:
-        grant_role(current_user, user, role, site_domain_id=form.scope.data or None,
-                   expires_at=expiry_of(form.expires.data))
+        grant_role(current_user, user, role, expires_at=expiry_of(form.expires.data))
     except RoleError as refused:
         flash(str(refused), 'error')
     else:

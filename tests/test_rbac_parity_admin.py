@@ -34,9 +34,10 @@ ADMIN = [
     Row('admin.communities.blocked_image_edit', 'DDAAA',
         gate(lambda w: f'/admin/blocked_image/{w.blocked_image.id}/edit')),
     # @permission_required('administer all users')
-    *[Row(f'admin.users{path.replace("/", ".")}', 'DDDAA', gate(f'/admin{path}')) for path in (
+    # Staff holds `administer all users` on the first domain, where this world's people are (owner ruling 2026-11-05)
+    *[Row(f'admin.users{path.replace("/", ".")}', 'DDAAA', gate(f'/admin{path}')) for path in (
         '/users', '/referrals', '/reports', '/users/add')],
-    Row('admin.users.user_edit', 'DDDAA', gate(lambda w: f'/admin/user/{w.target.id}/edit')),
+    Row('admin.users.user_edit', 'DDAAA', gate(lambda w: f'/admin/user/{w.target.id}/edit')),
     # @permission_required('approve registrations')
     Row('admin.registrations', 'DDAAA', gate('/admin/approve_registrations')),
     # @permission_required('edit cms pages')

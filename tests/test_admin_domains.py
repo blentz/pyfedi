@@ -32,7 +32,7 @@ def _default_row():
 
 
 def _form(token, **overrides):
-    data = {'domain': 'abc.onion', 'scheme': 'http', 'federates': '', 'registration': 'staff',
+    data = {'domain': 'abc.onion', 'scheme': 'http', 'federates': '', 'registration': 'closed',
             'csrf_token': token, 'submit': 'Add'}
     data.update(overrides)
     return data
@@ -62,7 +62,7 @@ def test_add_domain(app):
     assert response.status_code == 302
     row = db.session.query(SiteDomain).filter_by(domain='abc.onion').one()
     assert (row.is_onion, row.is_default, row.scheme, row.federates, row.registration) == \
-           (True, False, 'http', False, 'staff')
+           (True, False, 'http', False, 'closed')
     assert domain_for_host('abc.onion') is not None
 
 
