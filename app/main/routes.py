@@ -766,7 +766,7 @@ def about_page():
 
     # a logged-out visitor is shown no local-only account (owner ruling 2026-10-21)
     admins = [user for user in Site.admins() if not hidden_here(user)]
-    staff = [user for user in Site.staff() if not hidden_here(user)]
+    staff = [user for user in Site.listed_role_holders() if not hidden_here(user)]
     domains_amount = db.session.execute(text('SELECT COUNT(*) as c FROM "domain" WHERE "banned" IS false')).scalar()
     community_amount = local_communities(instance_id=current_instance_id())
     instance = db.session.get(Instance, current_instance_id())

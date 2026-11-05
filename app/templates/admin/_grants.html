@@ -1,0 +1,38 @@
+{# The grants panel of a role's page and a user's edit page. `grants` from roles_routes.grant_rows, `revoke_form` a
+   FlaskForm for its CSRF token, `next` where each change returns to, `show` 'user' or 'role': the other column. #}
+<table class="table table-sm" id="grants">
+    <tr>
+        <th>{{ _('User') if show == 'user' else _('Role') }}</th>
+        <th>{{ _('Scope') }}</th>
+        <th>{{ _('Granted by') }}</th>
+        <th>{{ _('Granted') }}</th>
+        <th>{{ _('Expires') }}</th>
+        <th></th>
+    </tr>
+    {% for row in grants -%}
+    <tr>
+        <td>{% if show == 'user' %}{% if row.user %}<a href="/u/{{ row.user.link() }}">{{ row.user.user_name }}</a>{% endif %}
+            {% else %}{% if row.role %}<a href="{{ url_for('admin.admin_role', role_id=row.role.id) }}">{{ row.role.name }}</a>{% endif %}{% endif %}</td>
+        <td>{{ row.scope }}</td>
+        <td>{{ row.granted_by.user_name if row.granted_by else '' }}</td>
+        <td>{{ row.grant.granted_at.strftime('%Y-%m-%d') if row.grant.granted_at else '' }}</td>
+        <td>
+            <form method="post" action="{{ url_for('admin.admin_grant_expiry', grant_id=row.grant.id) }}" class="d-flex gap-1">
+                {{ row.expiry_form.hidden_tag() }}
+                <input type="hidden" name="next" value="{{ next }}">
+                {{ row.expiry_form.expires(class_='form-control form-control-sm', **{'aria-label': _('Expires')}) }}
+                <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Save') }}</button>
+            </form>
+        </td>
+        <td>
+            <form method="post" action="{{ url_for('admin.admin_grant_revoke', grant_id=row.grant.id) }}">
+                {{ revoke_form.hidden_tag() }}
+                <input type="hidden" name="next" value="{{ next }}">
+                <button type="submit" class="btn btn-sm btn-outline-danger">{{ _('Revoke') }}</button>
+            </form>
+        </td>
+    </tr>
+    {% else -%}
+    <tr><td colspan="6">{{ _('No grants.') }}</td></tr>
+    {% endfor -%}
+</table>

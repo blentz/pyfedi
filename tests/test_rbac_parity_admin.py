@@ -42,8 +42,8 @@ ADMIN = [
     # @permission_required('edit cms pages')
     Row('admin.pages', 'DDDAA', gate('/admin/pages')),
     Row('admin.pages.edit', 'DDDAA', gate(lambda w: f'/admin/pages/{w.page.id}/edit')),
-    # Admin only (RB5): it was @permission_required('change user roles')
-    Row('admin.permissions', 'DDDAA', gate('/admin/permissions')),
+    # Admin only (RB5): it was @permission_required('change user roles'); /admin/roles replaced it in step 7
+    Row('admin.permissions', 'DDDAA', gate('/admin/roles')),
 ]
 
 ROWS = ADMIN

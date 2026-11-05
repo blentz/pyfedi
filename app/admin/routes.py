@@ -49,12 +49,13 @@ from app.instance.util import bulk_follow
 from app.community.routes import do_subscribe
 from app.constants import REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_REVIEWING
 from app.email import send_registration_approved_email
-from app.permission_cache import permissions_changed
-from app.permissions import ROLE_PERMISSIONS, holds_any_grant
+from app.admin.roles_routes import user_grants_panel
+from app.roles import grant_role, scope_refusal
+from app.permissions import holds_any_grant
 from app.federation_urls import object_base
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
     CommunityMember, \
-    User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, RolePermission, Domain, \
+    User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, Domain, \
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain, instance_row_referenced, DomainBranding, Referral
 from app.referral import DEFAULT_GENERATORS, GENERATOR_CHOICES, GENERATORS_SETTING, MAX_PER_CODE_SETTING, MAX_PER_USER_SETTING
 from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, live_registration, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default, federating_base, is_hosted_uri
@@ -2548,28 +2549,10 @@ def admin_user_edit(user_id):
             user.cover_id = None
             db.session.delete(file)
 
-        # Update user roles. The UI only lets the user choose 1 role but the DB structure allows for multiple roles per user.
-        if current_user.is_admin():   # grants are Admin's alone (RB5)
-            db.session.execute(text('DELETE FROM role_grant WHERE user_id = :user_id AND site_domain_id IS NULL'),
-                               {'user_id': user.id})
-            if form.role.data:   # 0 is "no role"
-                user.roles.append(db.session.get(Role, form.role.data))
-            # Without this an administrator stripped of their role went on passing every permission check until the
-            # cached answers timed out -- which is the direction that matters (RB10).
-            permissions_changed(user.id)
-
+        # Grants are changed in the Roles panel below the form (app/admin/roles_routes.py), Admin's alone (RB5).
         db.session.commit()
         cache.delete_memoized(low_value_reposters)
-        g.admin_ids = list(db.session.execute(
-            text("""SELECT u.id FROM "user" u WHERE u.id = 1
-                                UNION
-                                SELECT u.id
-                                FROM "user" u
-                                JOIN role_grant rg ON u.id = rg.user_id AND rg.site_domain_id IS NULL
-                                     AND u.deleted = false AND u.banned = false
-                                JOIN role r ON r.id = rg.role_id AND r.built_in
-                                ORDER BY id""")).scalars())
-        set_setting('admin_ids', g.admin_ids)
+        set_setting('admin_ids', None)   # a ban takes an admin off the list: the next request reads it afresh
 
         flash(_('Saved'))
         return redirect(url_for('admin.admin_users', local_remote='local' if user.is_local() else 'remote'))
@@ -2596,11 +2579,9 @@ def admin_user_edit(user_id):
         form.hide_nsfl.data = user.hide_nsfl
         form.can_send_pm.data = user.can_send_pm
         form.admin_note.data = user.admin_note
-        if user.roles and user.roles.count() > 0:
-            form.role.data = user.roles[0].id
 
     return render_template('admin/edit_user.html', title=_('Edit user'), form=form, user=user,
-                           roles_with=roles_with('administer all users'))
+                           roles_with=roles_with('administer all users'), **user_grants_panel(user))
 
 
 @bp.route('/user/<int:user_id>/resend_email', methods=['POST'])
@@ -2644,6 +2625,15 @@ def admin_users_add():
         # Staff reach this form for 'staff' domains; an 'admin' domain's accounts are made by an admin alone
         if live_registration(domain_by_id(form.site_domain.data), g.site) == 'admin' and not current_user.is_admin():
             abort(403)
+        grants = [db.session.get(Role, role_id) for role_id in form.grants.data or []]
+        if grants and not current_user.is_admin():
+            abort(403)   # RB5: only an admin grants roles
+        scope = form.grant_scope.data or None
+        refusals = [refusal for refusal in (scope_refusal(role, scope) for role in grants if role) if refusal]
+        if refusals:   # before the account exists, so a refused grant leaves nothing half made
+            form.grants.errors = list(form.grants.errors) + refusals
+            return render_template('admin/add_user.html', title=_('Add user'), form=form, user=user,
+                                   roles_with=roles_with('administer all users'))
         user.user_name = form.user_name.data
         user.title = form.user_name.data
         user.set_password(form.password.data)
@@ -2691,11 +2681,12 @@ def admin_users_add():
         home = domain_by_id(form.site_domain.data) if form.site_domain.data else default_domain()
         user.instance_id = instance_id_of(home)
         user.site_domain_id = home.id
-        if form.role.data:   # 0 is "no role"
-            user.roles.append(db.session.get(Role, form.role.data))
         db.session.add(user)
         db.session.commit()
         finalize_user_setup(user)
+        for role in grants:
+            if role is not None:
+                grant_role(current_user, user, role, site_domain_id=scope)
 
         flash(_('User added'))
         return redirect(url_for('admin.admin_users', local_remote='local'))
@@ -2821,48 +2812,6 @@ def newsletter():
 
     return render_template("admin/newsletter.html", form=form, title=_('Send newsletter'),
                            roles_with=roles_with('send newsletter'))
-
-
-def editable_role_ids() -> list[int]:
-    """The roles /admin/permissions edits: every role but the built-in Admin."""
-    return list(db.session.execute(select(Role.id).where(Role.built_in.is_(False)).order_by(Role.id)).scalars())
-
-
-@bp.route('/permissions', methods=['GET', 'POST'])
-@login_required
-@admin_required
-def admin_permissions():
-    form = FlaskForm()
-    if request.method == 'POST':
-        # Every role but the built-in Admin, which holds every permission (RB2). The DELETE is scoped to the roles
-        # written back: it used to clear the whole table while writing back only two (D938).
-        editable_ids = editable_role_ids()
-        if editable_ids:
-            db.session.execute(
-                text('DELETE FROM "role_permission" WHERE role_id IN :role_ids'),
-                {'role_ids': tuple(editable_ids)})
-
-        # Every holder of an edited role: each kept the old answer for the length of user_access's memoize timeout.
-        affected_user_ids = list(db.session.execute(
-            text('SELECT DISTINCT user_id FROM "role_grant" WHERE role_id IN :role_ids'),
-            {'role_ids': tuple(editable_ids)}).scalars()) if editable_ids else []
-
-        for permission in ROLE_PERMISSIONS:
-            for role in editable_ids:
-                if request.form.get(f'role_{role}_{permission}'):
-                    db.session.add(RolePermission(role_id=role, permission=permission))
-        db.session.commit()
-        # Every holder of an edited role stops reading its cached answers (RB10). (D939: the per-permission
-        # delete_memoized this replaces was keyed by the SELECT's Row, not the string, and invalidated nothing.)
-        permissions_changed(*affected_user_ids)
-
-        flash(_('Settings saved'))
-
-    roles = Role.query.filter(Role.built_in.is_(False)).order_by(Role.name).all()
-
-    return render_template('admin/permissions.html', title=_('Role permissions'), roles=roles,
-                           form=form, permissions=ROLE_PERMISSIONS,
-                           roles_with=roles_with(None))
 
 
 @bp.route('/instances', methods=['GET', 'POST'])

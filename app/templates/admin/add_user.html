@@ -34,7 +34,10 @@
             {{ render_field(form.newsletter) }}
             {{ render_field(form.hide_nsfw) }}
             {{ render_field(form.hide_nsfl) }}
-            {{ render_field(form.role) }}
+            {% if current_user.is_admin() -%}
+            {{ render_field(form.grants) }}
+            {{ render_field(form.grant_scope) }}
+            {%- endif %}
             {{ render_field(form.site_domain) }}
             {{ render_field(form.submit) }}
         </form>

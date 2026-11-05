@@ -90,3 +90,59 @@ def test_listed_role_names_are_in_name_order(people):
     for name in ('Zebra keepers', 'Archivists'):
         grant_role(holder, role(name, listed=True))
     assert holder.listed_role_names() == ['Archivists', 'Zebra keepers']
+
+
+# --------------------------------------------------------------------------
+# /about and the API's site admins name the listed roles' holders, not Staff by name
+# --------------------------------------------------------------------------
+
+def about_names(client):
+    page = client.get('/about').get_data(as_text=True)
+    line = next((line for line in page.splitlines() if 'It is moderated by' in line), '')
+    return line
+
+
+def test_about_lists_the_holders_of_each_listed_role(people):
+    client, founder, holder = people
+    other = make_user(holder.instance, 'unlisted', local=True)
+    grant_role(holder, role('Helpers', listed=True))
+    grant_role(other, role('Quiet ones', listed=False))
+    line = about_names(client)
+    assert 'holder' in line and 'unlisted' not in line
+
+
+def test_about_drops_staff_once_an_admin_unlists_it(people):
+    client, founder, holder = people
+    staff = staff_role()
+    grant_role(holder, staff)
+    assert 'holder' in about_names(client)
+    staff.listed_publicly = False
+    db.session.commit()
+    assert 'holder' not in about_names(client)
+
+
+def test_listed_role_holders_are_each_listed_once_and_skip_the_banned_and_the_scoped(people):
+    from app.models import Site, SiteDomain
+    _, _, holder = people
+    banned = make_user(holder.instance, 'banned', local=True)
+    banned.banned = True
+    scoped = make_user(holder.instance, 'scoped', local=True)
+    domain = SiteDomain(domain='x.listed.example', scheme='https', federates=False)
+    db.session.add(domain)
+    db.session.commit()
+    first, second = role('Helpers', listed=True), role('Greeters', listed=True)
+    for user in (holder, banned):
+        grant_role(user, first)
+    grant_role(holder, second)
+    grant_role(scoped, first, site_domain_id=domain.id)
+    assert [user.id for user in Site.listed_role_holders()] == [holder.id]
+
+
+def test_the_settings_that_named_staff_name_what_they_mean(app, people):
+    """Spec, Settings that named Staff: the stored values stay 'staff'; their labels name the permission."""
+    from app.admin.forms import SiteDomainForm, SiteMiscForm
+    with app.test_request_context():
+        referral = {choice.value: choice.label for choice in SiteMiscForm().referral_generators.choices}
+        registration = {choice.value: choice.label for choice in SiteDomainForm().registration.choices}
+    assert str(referral['staff']) == 'Admins and holders of "generate referral codes"'
+    assert str(registration['staff']) == 'User administrators only'

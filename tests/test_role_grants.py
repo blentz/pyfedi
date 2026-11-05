@@ -13,7 +13,7 @@ from alembic.operations import Operations
 from sqlalchemy import inspect, text
 
 from app import db
-from app.admin.forms import role_choices
+from app.admin.forms import AddUserForm, GrantForm
 from app.community.util import notify_admins_of_post_needing_approval
 from app.models import Notification, Role, RolePermission, Site, SiteDomain, role_grant, utcnow
 from app.roles import STAFF_PERMISSIONS, seed_default_roles
@@ -233,13 +233,13 @@ def test_only_one_role_is_built_in(db_session):
     db.session.rollback()
 
 
-def test_the_user_forms_offer_no_role_then_admin_then_the_rest_by_name(app, db_session):
+def test_the_grant_forms_offer_admin_then_the_rest_by_name(app, db_session):
     seed_default_roles()
     db.session.add(Role(name='Moderator'))
     db.session.commit()
     with app.test_request_context():
-        assert [choice.label for choice in role_choices()] == ['User', 'Admin', 'Moderator', 'Staff']
-        assert role_choices()[0].value == 0
+        assert [choice.label for choice in GrantForm().role.choices] == ['Admin', 'Moderator', 'Staff']
+        assert [choice.label for choice in AddUserForm().grants.choices] == ['Admin', 'Moderator', 'Staff']
 
 
 def test_roles_with_names_admin_first(db_session):
@@ -279,19 +279,3 @@ def test_a_held_post_is_shown_to_staff_only_while_staff_may_approve(people):
     db.session.commit()
     notify_admins_of_post_needing_approval(post)
     assert told() == sorted([1, admin.id])
-
-
-def test_the_permissions_page_saves_when_admin_is_the_only_role(app, people):
-    """With no role but the built-in Admin there is nothing to edit: the save changes nothing and still says so."""
-    grant_role(people[0], admin_role())
-    client = app.test_client()
-    with client.session_transaction() as session:
-        session['_user_id'] = str(people[0].id)
-        session['_fresh'] = True
-    token = csrf(app, client)
-    with patch('app.admin.routes.render_template', return_value='rendered'), \
-            patch('app.admin.routes.flash') as flashed:
-        response = client.post('/admin/permissions', data={'csrf_token': token})
-    assert response.status_code == 200
-    assert [call.args[0] for call in flashed.call_args_list] == ['Settings saved']
-    assert RolePermission.query.count() == 0

@@ -5567,8 +5567,8 @@ def actor_profile_contains_blocked_words(user: User) -> bool:
 
 def add_to_modlog(action: str, actor: User, target_user: User = None, reason: str = '',
                   community: Community = None, post: Post = None, reply: PostReply = None,
-                  link: str = '', link_text: str = ''):
-    """ Adds a new entry to the Moderation Log """
+                  link: str = '', link_text: str = '', site_domain_id: int | None = None):
+    """ Adds a new entry to the Moderation Log. `site_domain_id` is the domain a scoped grant acted under (RB9). """
     if action not in ModLog.action_map.keys():
         raise Exception('Invalid action: ' + action)
     if actor.is_instance_admin() or user_access('view modlog', actor.id, on=community):
@@ -5587,7 +5587,8 @@ def add_to_modlog(action: str, actor: User, target_user: User = None, reason: st
     public = get_setting('public_modlog', False) and action not in ModLog.admin_only_actions
     db.session.add(ModLog(user_id=actor.id, type=action_type, action=action, target_user_id=target_user_id,
                           community_id=community_id, post_id=post_id, reply_id=reply_id,
-                          reason=reason, link=link, link_text=link_text, public=public))
+                          reason=reason, link=link, link_text=link_text, public=public,
+                          site_domain_id=site_domain_id))
     db.session.commit()
 
 

@@ -69,7 +69,7 @@ KNOWN_GET_MUTATORS = {
     # A form does gate the write, but it is reached through a helper this
     # detector cannot follow -- a nested call, or a second form object.
     'admin.admin_federation_preload', 'admin.admin_federation_remote_scan',
-    'admin.admin_permissions', 'dev.tools', 'post.add_reply_inline',
+    'dev.tools', 'post.add_reply_inline',
     'search.run_search', 'user.notifications', 'user.user_files',
 
     # NOT YET FIXED. These are the ones that match D955's shape and change

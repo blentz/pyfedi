@@ -6,6 +6,15 @@ Date: 2026-11-03. Status: being built on blentz.
   found is fixed at 296d8a174; O5 came out of it.
 - Step 3 (the check) is done: app/permissions.py (`user_access(perm, user, on=, anywhere=)`, `home_domain_id`,
   `may_act_on_user`), app/permission_cache.py (the per-user version). No call site names an object yet (step 5).
+- Step 7 is done: /admin/roles lists, shows, creates, duplicates, edits (asking first when the change alters
+  access for holders) and deletes roles (only with "revoke all grants" ticked), and grants are added, re-dated and
+  revoked from a role's page and from the Roles panel of /admin/user/<id>/edit; /admin/users/add takes roles to grant
+  (one scope for all of them, refused before the account is made). The rules live in app/roles.py, whatever page
+  calls them. /admin/permissions redirects to /admin/roles. The modlog's role actions are admin-only whatever
+  `public_modlog` says, since a grant of an unlisted role is not public either. /about and the API's site admins
+  name `Site.listed_role_holders()` (instance-wide holders of listed roles) instead of `Site.staff()`, which only
+  notifications still use (step 8). A change to an Admin grant empties the `admin_ids` setting so the next request
+  reads it afresh. Not in step 7: the modlog's domain filter (RB9, with step 8's lists).
 - Step 6 is done: `is_staff()`, `is_admin_or_staff()` and `ROLE_STAFF_NAME` are gone, and tests/test_rbac_lint.py
   keeps them, role constants, roles found by name or fixed id, and `anywhere=True` outside menus from coming back. The
   profile and preview badges moved here from step 7, being `is_staff()`'s last callers: they show Admin plus each

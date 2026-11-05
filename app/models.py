@@ -5816,6 +5816,9 @@ class ModLog(db.Model):
     post_id = db.Column(db.Integer, db.ForeignKey('post.id'), nullable=True, index=True)
     reply_id = db.Column(db.Integer, db.ForeignKey('post_reply.id'), nullable=True, index=True)
     target_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    # the domain a scoped grant acted under, or a grant's own domain (RB9); NULL for instance-wide
+    site_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id', name='fk_mod_log_site_domain_id',
+                                                         ondelete='SET NULL'))
     type = db.Column(db.String(10))  # 'mod' or 'admin'
     action = db.Column(db.String(30))  # 'removing post', 'banning from community', etc
     reason = db.Column(db.String(512))
@@ -5849,11 +5852,19 @@ class ModLog(db.Model):
         'lock_post_reply': _l('Lock comment'),
         'unlock_post_reply': _l('Un-lock comment'),
         'move_post': _l('Move post'),
-        'masquerade': _l('Masqueraded as account')
+        'masquerade': _l('Masqueraded as account'),
+        'create_role': _l('Created role'),
+        'edit_role': _l('Edited role'),
+        'delete_role': _l('Deleted role'),
+        'grant_role': _l('Granted role'),
+        'change_grant_expiry': _l('Changed role expiry'),
+        'revoke_role': _l('Revoked role'),
     }
 
-    # Actions recorded for admins only, whatever the public_modlog setting (D942)
-    admin_only_actions = {'masquerade'}
+    # Actions recorded for admins only, whatever the public_modlog setting (D942). Role changes are among them: a
+    # grant of a role that is not listed publicly is not public either.
+    admin_only_actions = {'masquerade', 'create_role', 'edit_role', 'delete_role', 'grant_role', 'change_grant_expiry',
+                          'revoke_role'}
 
     def action_to_str(self):
         if self.action in self.action_map:
@@ -5863,7 +5874,7 @@ class ModLog(db.Model):
 
     def get_correct_link(self):
         user_action_list = ["add_mod", "remove_mod", "delete_user", "undelete_user", "ban_user", "unban_user",
-                            "masquerade"]
+                            "masquerade", "grant_role", "change_grant_expiry", "revoke_role"]
 
         if self.action in user_action_list and not self.link.startswith("u/"):
             return "u/" + self.link
@@ -5940,6 +5951,14 @@ class Site(db.Model):
             # D442: an EXISTS, not a join, so user 1 needs no grant to be listed. By the built-in role, as is_admin().
             return db.session.query(User).filter_by(deleted=False, banned=False).filter(
                                           or_(User.roles.any(Role.built_in.is_(True)), User.id == 1)).order_by(User.id).all()
+
+    @staticmethod
+    def listed_role_holders() -> List[User]:
+        """Who /about and the API's site admins name beside the admins: each holder of an ordinary role listed
+        publicly, instance-wide (spec 2026-11-03-rbac-design.md, Public display of roles). The seeded Staff role is
+        listed, so this is Staff's holders until an admin edits it."""
+        return db.session.query(User).filter_by(deleted=False, banned=False).filter(
+            User.roles.any(and_(Role.built_in.is_(False), Role.listed_publicly.is_(True)))).order_by(User.id).all()
 
     @staticmethod
     def staff() -> List[User]:

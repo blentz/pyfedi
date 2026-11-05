@@ -5,7 +5,7 @@ from flask_wtf.file import FileAllowed
 from slugify import slugify
 from sqlalchemy import func
 from wtforms import StringField, PasswordField, SubmitField, EmailField, BooleanField, TextAreaField, \
-    SelectField, FileField, IntegerField, RadioField
+    SelectField, FileField, IntegerField, RadioField, DateField
 from wtforms.fields.choices import SelectMultipleField
 from wtforms.validators import ValidationError, DataRequired, EqualTo, InputRequired, Length, \
     NumberRange, Optional
@@ -20,13 +20,6 @@ from app.storefront import REFERRAL_MODE, default_domain, domain_rows, domain_by
 from app.local_names import local_named
 from app.onion_guard import MAX_POW_DIFFICULTY
 from app.form_choices import select_choices
-
-
-def role_choices():
-    """The user forms' Role drop-down: no role (0), the built-in Admin, then every other role by name. Read from the
-    role table, so a role an admin adds is offered and none is named by id (RB16)."""
-    roles = Role.query.order_by(Role.built_in.desc(), Role.name).all()
-    return select_choices([(0, _('User'))] + [(role.id, role.name) for role in roles])
 
 
 def no_nul(form, field):
@@ -109,7 +102,9 @@ class SiteMiscForm(FlaskForm):
              (REFERRAL_MODE, _l('Referral code'))]
     registration_mode = SelectField(_l('Registration mode'), choices=select_choices(types), default=1, coerce=str, render_kw={'class': 'form-select'})
     application_question = TextAreaField(_l('Question to ask people applying for an account'))
-    referral_generator_options = [('admins', _l('Admins only')), ('staff', _l('Admins + Staff')),
+    # 'staff' is stored as it was; it means the holders of a permission now, which the seeded Staff role holds
+    referral_generator_options = [('admins', _l('Admins only')),
+                                  ('staff', _l('Admins and holders of "generate referral codes"')),
                                   ('all', _l('All local users'))]
     referral_generators = SelectField(_l('Who can generate referral codes?'),
                                       choices=select_choices(referral_generator_options), coerce=str,
@@ -418,13 +413,18 @@ class AddUserForm(FlaskForm):
     hide_nsfl = SelectField(_l('NSFL posts'), choices=select_choices(hide_type_choices), default=1,
                             coerce=int, render_kw={'class': 'form-select'})
 
-    role = SelectField(_l('Role'), choices=[], default=0, coerce=int, render_kw={'class': 'form-select'})
     site_domain = SelectField(_l('Domain'), choices=[], coerce=int, render_kw={'class': 'form-select'})
+    # Grants are Admin's alone (RB5): the page shows these to an admin only, and the route refuses them from anyone else
+    grants = SelectMultipleField(_l('Roles to grant'), choices=[], coerce=int, validators=[Optional()],
+                                 render_kw={'class': 'form-select'})
+    grant_scope = SelectField(_l('Granted'), choices=[], coerce=int, default=0, render_kw={'class': 'form-select'})
     submit = SubmitField(_l('Save'))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.role.choices = role_choices()
+        self.grants.choices = select_choices([(role.id, role.name)
+                                              for role in Role.query.order_by(Role.built_in.desc(), Role.name)])
+        self.grant_scope.choices = scope_choices()
         rows = [row for row in domain_rows() if row.id is not None]
         # 0 stands for the synthesised default of an install whose site_domain table is empty
         self.site_domain.choices = select_choices([(row.id, row.domain) for row in rows] or [(0, default_domain().domain)])
@@ -504,15 +504,45 @@ class EditUserForm(FlaskForm):
                             coerce=int, render_kw={'class': 'form-select'})
     hide_nsfl = SelectField(_l('NSFL posts'), choices=select_choices(hide_type_choices), default=1,
                             coerce=int, render_kw={'class': 'form-select'})
-    role = SelectField(_l('Role'), choices=[], default=0, coerce=int, render_kw={'class': 'form-select'})
     remove_avatar = BooleanField(_l('Remove avatar'))
     remove_banner = BooleanField(_l('Remove banner'))
     admin_note = TextAreaField(_l('Notes about this user (only visible to other admins)'))
     submit = SubmitField(_l('Save'))
 
+
+class RoleForm(FlaskForm):
+    """A role's name, description and listing (RB17). Its permissions are the `permissions` checkboxes, one per
+    catalogue entry, read with `request.form.getlist` so that a group needs no JavaScript to tick."""
+    name = StringField(_l('Name'), validators=[DataRequired(), Length(max=50)])
+    description = TextAreaField(_l('Description'), validators=[Length(max=512)], render_kw={'rows': 2})
+    listed_publicly = BooleanField(_l('Show this role on the profiles of those who hold it'))
+    submit = SubmitField(_l('Save'))
+
+
+def scope_choices():
+    """"Instance-wide" (0), then each hosted domain."""
+    return select_choices([(0, _('Instance-wide'))] +
+                          [(row.id, row.domain) for row in domain_rows() if row.id is not None])
+
+
+class GrantForm(FlaskForm):
+    """A grant (RB1, RB11). On a role's page the user is named; on a user's page the role is chosen."""
+    user = StringField(_l('User name'), validators=[Optional(), Length(max=255)])
+    role = SelectField(_l('Role'), choices=[], coerce=int, validators=[Optional()], render_kw={'class': 'form-select'})
+    scope = SelectField(_l('Scope'), choices=[], coerce=int, default=0, render_kw={'class': 'form-select'})
+    expires = DateField(_l('Expires (start of the day, UTC)'), validators=[Optional()])
+    submit = SubmitField(_l('Add grant'))
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.role.choices = role_choices()
+        self.scope.choices = scope_choices()
+        self.role.choices = select_choices([(role.id, role.name) for role in
+                                            Role.query.order_by(Role.built_in.desc(), Role.name)])
+
+
+class ExpiryForm(FlaskForm):
+    expires = DateField(_l('Expires (start of the day, UTC)'), validators=[Optional()])
+    submit = SubmitField(_l('Set expiry'))
 
 
 class SendNewsletterForm(FlaskForm):
@@ -592,7 +622,7 @@ class SiteDomainForm(FlaskForm):
     federates = BooleanField(_l('Federates'), default=False,
                              description=_l('Fixed once the domain has accounts or communities.'))
     registration = SelectField(_l('Who may register'),
-                               choices=select_choices([('anyone', _l('Anyone')), ('staff', _l('Staff only')),
+                               choices=select_choices([('anyone', _l('Anyone')), ('staff', _l('User administrators only')),
                                         ('admin', _l('Admins only'))]), default='anyone',
                                description=_l('Registration per domain takes effect in a later release.'))
     submit = SubmitField(_l('Add domain'))

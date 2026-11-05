@@ -1,0 +1,62 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% from 'bootstrap5/form.html' import render_field %}
+{% set active_child = 'admin_permissions' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h1>{{ role.name }} {% if role.built_in %}<span class="badge text-bg-secondary">{{ _('Built-in') }}</span>{% endif %}</h1>
+            <div>
+                <a class="btn btn-secondary" href="{{ url_for('admin.admin_roles') }}">{{ _('All roles') }}</a>
+                {% if not role.built_in -%}
+                <a class="btn btn-primary" href="{{ url_for('admin.admin_role_edit', role_id=role.id) }}">{{ _('Edit') }}</a>
+                {%- endif %}
+                <a class="btn btn-outline-primary" href="{{ url_for('admin.admin_role_new', **{'from': role.id}) }}">{{ _('Duplicate') }}</a>
+            </div>
+        </div>
+        {% if role.description %}<p>{{ role.description }}</p>{% endif %}
+        <p>{{ _('Shown on the profiles of those who hold it.') if role.listed_publicly else _('Not shown on profiles.') }}</p>
+
+        <h2>{{ _('Permissions') }}</h2>
+        {% if role.built_in -%}
+        <p id="every-permission">{{ _('Has every permission.') }}</p>
+        {% else -%}
+        <ul id="permissions">
+            {% for permission in permissions -%}
+            <li><strong>{{ permission.name }}</strong>{% if not permission.scopable %} <span class="badge text-bg-warning">{{ _('instance-only') }}</span>{% endif %}: {{ permission.guards }}</li>
+            {% else -%}
+            <li>{{ _('None.') }}</li>
+            {% endfor -%}
+        </ul>
+        {% endif -%}
+
+        <h2>{{ _('Grants') }}</h2>
+        {% set next = url_for('admin.admin_role', role_id=role.id) %}
+        {% with show='user' %}{% include 'admin/_grants.html' %}{% endwith %}
+
+        <h3>{{ _('Add a grant') }}</h3>
+        <form method="post" action="{{ url_for('admin.admin_role_grant', role_id=role.id) }}" id="add-grant">
+            {{ grant_form.hidden_tag() }}
+            <input type="hidden" name="next" value="{{ next }}">
+            {{ render_field(grant_form.user) }}
+            {% if role.built_in %}<input type="hidden" name="grant-scope" value="0">{% else %}{{ render_field(grant_form.scope) }}{% endif %}
+            {{ render_field(grant_form.expires) }}
+            {{ render_field(grant_form.submit) }}
+        </form>
+    </div>
+</div>
+<hr />
+<div class="row">
+    <div class="col">
+        {% include 'admin/_nav.html' %}
+    </div>
+</div>
+<hr />
+{% endblock %}

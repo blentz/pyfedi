@@ -283,6 +283,8 @@ scan. The backfill `UPDATE`s touch only rows that are actually NULL.
 | 24 | `c9f3a5b7d2e4` vote_federated_like | Adds the nullable `federated_like` to `post_vote` and `post_reply_vote`. (`097ff04f`, `e9c160e9`) | No |
 | 25 | `d4a8e2c6f1b9` server_view_member | Creates `server_view_member` (user, instance), the joins of microblog server views. (`2e12b601`) | No |
 | 26 | `3d52b8a19cf5` ipv6_canonical_hosts | Rewrites IPv6 hosts in `domain`, `banned_instances` and `allowed_instances` to one canonical spelling (`[0:0::1]` becomes `::1`). `domain` rows that name the same address are merged into the oldest or already-canonical row: flags are OR-ed, `post_count` is summed, a posting warning is kept, and every foreign key to `domain.id` (found from the catalogue: `post`, `post_reply`, `scheduled_post`, `domain_block`) is repointed before the duplicates are deleted. A user's block of a merged row is dropped when that user already blocks the survivor. A repeated `banned_instances` or `allowed_instances` row is deleted. Hosts without a `:` are untouched. (`bf837e71`) | Yes, IPv6 host rows only. Deletes duplicates. Not reversible |
+| 27 | `b4e8d2a6f1c9` role_grants | Replaces `user_role` with `role_grant` (user, role, optional domain, granted by, granted at, optional expiry), adds `role.built_in`, `role.listed_publicly`, `role.description` and `mod_log.site_domain_id`, deletes the roles "Anonymous user" and "Authenticated user", which conferred nothing, and marks the role named Admin as the built-in one. (`b0056476`) | Yes. The downgrade drops domain grants |
+| 28 | `c5f9e3b7a2d1` split_permissions | Moves every role onto the finer permission catalogue so that each keeps what it could do: each old permission's rows become the permissions split from it, and the role named Staff gains what its name used to give it. Removes `change user roles`. (`ec35df1e`) | Yes, `role_permission` rows. The downgrade does not restore `change user roles` |
 
 Downgrades remove defaults, constraints, columns and the new tables, but do
 not restore the NULLs, invented counters, rankings, cross-post links or
@@ -663,6 +665,35 @@ limits on input that could cost seconds of CPU or crash a request:
   (`a917b0f4`). LISTGROUP of a group not yet selected sends one status line
   (`a65b9389`). Malformed commands get an NNTP error reply instead of
   closing the connection (section 4).
+
+**Roles and permissions (RBAC; in progress, not yet pushed).** An instance
+admin now builds roles in the admin area (`/admin/roles`, replacing
+`/admin/permissions`) and grants them instance-wide or on one domain, with an
+optional expiry. Admin is the only built-in role. Staff is an ordinary role
+that the upgrade keeps: what it could do before, it can still do, and an admin
+may now edit, rename or delete it. Changes take effect on the holder's next
+request.
+
+- Each role is created, edited, duplicated and deleted from `/admin/roles`.
+  A role holding a permission that is instance-only (the role editor marks
+  them) cannot be granted on a domain. A role with grants is deleted only once
+  its grants are revoked, which the delete page offers.
+- The user edit page's single Role drop-down is replaced by a Roles panel of
+  grants, and the add-user form takes a list of roles to grant. Only an admin
+  sees either, and only an admin may grant roles.
+- Every grant, revocation, expiry change and role change is in the modlog,
+  for admins only, whatever the public modlog setting.
+- Profiles, the user preview and the About page name the roles an admin has
+  marked "listed publicly" (Staff is), by their own names.
+- Two settings are relabelled; their stored values are unchanged. The referral
+  setting "Admins + Staff" reads "Admins and holders of 'generate referral
+  codes'", and a domain's registration mode "Staff only" reads "User
+  administrators only".
+- Only an admin may act on an admin: unbanning or deleting an admin is now
+  refused to everyone else, as banning one already was.
+
+The work follows `docs/superpowers/specs/2026-11-03-rbac-design.md`; its
+Status section records what is done.
 
 ### 2.4 API contract changes (for client developers)
 

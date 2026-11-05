@@ -1,0 +1,37 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% set active_child = 'admin_permissions' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col-lg-9">
+        <h1>{{ _('Delete the role %(name)s?', name=role.name) }}</h1>
+        {% if grants -%}
+        <p>{{ ngettext('It has %(num)d grant, which deleting it revokes:', 'It has %(num)d grants, which deleting it revokes:', grants|length) }}</p>
+        <ul id="grants">
+            {% for row in grants -%}
+            <li>{{ row.user.user_name if row.user else '' }}, {{ row.scope }}{% if row.grant.expires_at %}, {{ _('until %(when)s', when=row.grant.expires_at.strftime('%Y-%m-%d')) }}{% endif %}</li>
+            {% endfor -%}
+        </ul>
+        {% else -%}
+        <p>{{ _('Nobody holds it.') }}</p>
+        {% endif -%}
+        <form method="post">
+            {{ form.hidden_tag() }}
+            {% if grants -%}
+            <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" name="revoke_all" value="1" id="revoke_all">
+                <label class="form-check-label" for="revoke_all">{{ ngettext('Revoke %(num)d grant', 'Revoke all %(num)d grants', grants|length) }}</label>
+            </div>
+            {% endif -%}
+            <button type="submit" class="btn btn-danger">{{ _('Delete role') }}</button>
+            <a class="btn btn-secondary" href="{{ url_for('admin.admin_role', role_id=role.id) }}">{{ _('Cancel') }}</a>
+        </form>
+    </div>
+</div>
+{% endblock %}

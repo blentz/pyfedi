@@ -1,0 +1,56 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% set active_child = 'admin_permissions' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h1>{{ _('Roles') }}</h1>
+            <a class="btn btn-primary" href="{{ url_for('admin.admin_role_new') }}">{{ _('New role') }}</a>
+        </div>
+        <table class="table table-striped" id="roles">
+            <tr>
+                <th>{{ _('Name') }}</th>
+                <th>{{ _('Description') }}</th>
+                <th class="text-center">{{ _('Permissions') }}</th>
+                <th class="text-center">{{ _('Can be granted on a domain') }}</th>
+                <th class="text-center">{{ _('Listed publicly') }}</th>
+                <th class="text-center">{{ _('Holders') }}</th>
+                <th></th>
+            </tr>
+            {% for row in rows -%}
+            <tr>
+                <td><a href="{{ url_for('admin.admin_role', role_id=row.role.id) }}">{{ row.role.name }}</a>
+                    {% if row.role.built_in %}<span class="badge text-bg-secondary">{{ _('Built-in') }}</span>{% endif %}</td>
+                <td>{{ row.role.description or '' }}</td>
+                <td class="text-center">{% if row.role.built_in %}{{ _('All') }}{% else %}{{ row.permission_count }}{% endif %}</td>
+                <td class="text-center">{{ _('Yes') if row.scopable else _('No') }}</td>
+                <td class="text-center">{{ _('Yes') if row.role.listed_publicly else _('No') }}</td>
+                <td class="text-center">{{ row.holders }}</td>
+                <td class="text-end">
+                    <a href="{{ url_for('admin.admin_role', role_id=row.role.id) }}">{{ _('View') }}</a>
+                    {% if not row.role.built_in -%}
+                    | <a href="{{ url_for('admin.admin_role_edit', role_id=row.role.id) }}">{{ _('Edit') }}</a>
+                    | <a href="{{ url_for('admin.admin_role_new', **{'from': row.role.id}) }}">{{ _('Duplicate') }}</a>
+                    | <a href="{{ url_for('admin.admin_role_delete', role_id=row.role.id) }}">{{ _('Delete') }}</a>
+                    {%- endif %}
+                </td>
+            </tr>
+            {% endfor -%}
+        </table>
+    </div>
+</div>
+<hr />
+<div class="row">
+    <div class="col">
+        {% include 'admin/_nav.html' %}
+    </div>
+</div>
+<hr />
+{% endblock %}

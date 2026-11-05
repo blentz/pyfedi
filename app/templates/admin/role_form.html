@@ -1,0 +1,61 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% from 'bootstrap5/form.html' import render_field %}
+{% set active_child = 'admin_permissions' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col-lg-9">
+        <h1>{{ title }}</h1>
+        <form method="post" id="role-form">
+            {{ form.hidden_tag() }}
+            {% if confirm -%}
+            <div class="alert alert-warning" id="confirm">
+                {{ ngettext('This changes access for %(num)d user.', 'This changes access for %(num)d users.', confirm) }}
+                <input type="hidden" name="confirmed" value="1">
+                <button type="submit" class="btn btn-warning">{{ _('Save anyway') }}</button>
+                <a class="btn btn-secondary" href="{{ url_for('admin.admin_role', role_id=role.id) }}">{{ _('Cancel') }}</a>
+            </div>
+            {% endif -%}
+            {{ render_field(form.name) }}
+            {{ render_field(form.description) }}
+            {{ render_field(form.listed_publicly) }}
+
+            <h2>{{ _('Permissions') }}</h2>
+            <p class="small">{{ _('Instance-only permissions cannot be held on one domain: a role with any of them can only be granted instance-wide.') }}</p>
+            {% for group, permissions in groups -%}
+            <fieldset class="mb-3 role-permission-group">
+                <legend class="h5">{{ group|capitalize }}</legend>
+                {% for permission in permissions -%}
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="permissions" value="{{ permission.name }}"
+                           id="perm-{{ loop.index }}-{{ group|replace(' ', '-') }}"{{ ' checked' if permission.name in chosen }}>
+                    <label class="form-check-label" for="perm-{{ loop.index }}-{{ group|replace(' ', '-') }}">
+                        <strong>{{ permission.name }}</strong>
+                        {% if permission.name in instance_only %}<span class="badge text-bg-warning">{{ _('instance-only') }}</span>
+                        {% else %}<span class="badge text-bg-info">{{ _('scopable') }}</span>{% endif %}
+                        <span class="small text-muted">{{ permission.guards }}</span>
+                    </label>
+                </div>
+                {% endfor -%}
+            </fieldset>
+            {% endfor -%}
+            {{ render_field(form.submit) }}
+            {% if role %}<a class="btn btn-secondary" href="{{ url_for('admin.admin_role', role_id=role.id) }}">{{ _('Cancel') }}</a>
+            {% else %}<a class="btn btn-secondary" href="{{ url_for('admin.admin_roles') }}">{{ _('Cancel') }}</a>{% endif %}
+        </form>
+    </div>
+</div>
+<hr />
+<div class="row">
+    <div class="col">
+        {% include 'admin/_nav.html' %}
+    </div>
+</div>
+<hr />
+{% endblock %}

@@ -41,7 +41,7 @@
         <a href="{{ url_for('admin.newsletter') }}">{{ _('Newsletter') }}</a> |
     {% endif %}
     {% if current_user.is_admin() %}
-        <a href="{{ url_for('admin.admin_permissions') }}">{{ _('Permissions') }}</a> |
+        <a href="{{ url_for('admin.admin_roles') }}">{{ _('Roles') }}</a> |
     {% endif %}
     {% if user_access('manage blocklists', current_user.id) %}
         <a href="{{ url_for('admin.admin_blocked_images') }}">{{ _('Blocked images') }}</a> |

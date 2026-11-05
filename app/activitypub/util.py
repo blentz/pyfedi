@@ -6412,8 +6412,10 @@ def lemmy_site_data(domain: DomainInfo):
         }
         data['custom_emojis'].append(emoji_data)
 
-    # Admins (plus staff) whose accounts are on this domain: another domain's would name that domain
-    for admin in Site.admins() + Site.staff():
+    # Admins, and the holders of roles listed publicly, whose accounts are on this domain: another domain's would name
+    # that domain. Once each, admin first: someone may be both.
+    admins = Site.admins()
+    for admin in admins + [user for user in Site.listed_role_holders() if user not in admins]:
         home = owner_domain(admin)
         if home is None or home.domain != domain.domain:
             continue

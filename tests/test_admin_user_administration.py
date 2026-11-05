@@ -28,9 +28,10 @@ import pytest
 from sqlalchemy import text
 
 from app import cache, db
-from app.models import Role, RolePermission, User, role_grant
+from app.models import Role, RolePermission, SiteDomain, User, role_grant
+from app.storefront import clear_domain_cache
 from app.utils import user_access
-from tests.factories import make_instance, make_user
+from tests.factories import grant_permissions, make_instance, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -116,7 +117,7 @@ def _add_payload(token, **overrides):
     data = {'user_name': 'newbie', 'email': 'newbie@example.com',
             'password': 'password123', 'password2': 'password123',
             'about': '', 'matrix_user_id': '', 'ignore_bots': '0',
-            'hide_nsfw': '1', 'hide_nsfl': '1', 'role': '0',
+            'hide_nsfw': '1', 'hide_nsfl': '1', 'grant_scope': '0',
             'submit': 'Save', 'csrf_token': token,
             'profile_file': (io.BytesIO(b''), ''),
             'banner_file': (io.BytesIO(b''), '')}
@@ -136,7 +137,7 @@ def _add(client, token, **overrides):
 
 
 def _edit_payload(token, **overrides):
-    data = {'admin_note': '', 'hide_nsfw': '1', 'hide_nsfl': '1', 'role': '0',
+    data = {'admin_note': '', 'hide_nsfw': '1', 'hide_nsfl': '1',
             'submit': 'Save', 'csrf_token': token}
     data.update(overrides)
     return data
@@ -179,10 +180,9 @@ def test_the_user_pages_need_administer_all_users(app, db_session, method, path)
     assert '/permission_denied' in response.headers['Location']
 
 
-def test_the_role_selector_needs_change_user_roles(app, db_session):
-    """The role change inside `admin_user_edit` is gated SEPARATELY from the
-    page. An admin who may edit users but not change roles must be able to
-    save everything else and change nothing about the target's role."""
+def test_an_editor_who_is_not_admin_saves_the_form_and_changes_no_role(app, db_session):
+    """The page is 'administer all users', and grants are Admin's alone (RB5): the form carries no role at all
+    since RBAC step 7, so a stray `role` field changes nothing while the rest is saved."""
     instance = _instance()
     make_user(instance, 'founder', local=True)
     admin = make_user(instance, 'editor', local=True)
@@ -261,7 +261,7 @@ def test_adding_a_user_stores_the_rest_of_the_form(users_admin):
     _add(client, token, user_name='newbie', email='newbie@example.com',
          about='# hello', matrix_user_id='@n:matrix.org', bot='y',
          newsletter='y', ignore_bots='2', hide_nsfw='3', hide_nsfl='0',
-         role=str(roles['Staff'].id))
+         grants=str(roles['Staff'].id))
 
     created = User.query.filter_by(user_name='newbie').one()
     assert created.title == 'newbie'
@@ -416,18 +416,19 @@ def test_a_refused_edit_keeps_what_the_admin_typed(users_admin):
         PROBE u2 banned redisplayed as: False
 
     Here it destroys moderation input rather than a settings field, which is
-    why it is a P and not another registration.
+    why it is a P and not another registration. The form has no role since RBAC step 7, so an out-of-range choice
+    of another select stands in for the refused one.
     """
     client, token, roles, admin = users_admin
     target = _target()
     target.admin_note = 'the stored note'
     db.session.commit()
 
-    _response, render = _edit(client, token, target.id, role='99',
+    _response, render = _edit(client, token, target.id, hide_nsfw='99',
                               admin_note='what the admin just typed', banned='y')
 
     form = render.call_args.kwargs['form']
-    assert 'role' in form.errors
+    assert 'hide_nsfw' in form.errors
     assert form.admin_note.data == 'what the admin just typed'
     assert form.banned.data is True
     # And nothing was saved, which is the point of refusing.
@@ -466,20 +467,67 @@ def test_the_edit_form_is_prefilled_on_a_get(users_admin):
     assert (form.hide_nsfw.data, form.hide_nsfl.data) == (3, 0)
     assert form.can_send_pm.data is False
     assert form.admin_note.data == 'stored note'
-    assert form.role.data == roles['Staff'].id
+    assert [row['role'].name for row in render.call_args.kwargs['grants']] == ['Staff']
 
 
-def test_a_user_with_no_role_leaves_the_selector_at_its_default(users_admin):
-    """`if user.roles and user.roles.count() > 0`. `User.roles` is an
-    AppenderQuery, so `.count()` and not `len()` -- and a user with none must
-    not raise on `roles[0]`."""
+def test_a_user_with_no_grants_has_an_empty_roles_panel(users_admin):
     client, token, roles, admin = users_admin
     target = _target()
 
-    with patch('app.admin.routes.render_template', return_value='rendered') as render:
-        client.get(f'/admin/user/{target.id}/edit')
+    body = client.get(f'/admin/user/{target.id}/edit').get_data(as_text=True)
 
-    assert render.call_args.kwargs['form'].role.data == 0   # 0 is the form's "no role"
+    assert 'id="roles"' in body and 'No grants.' in body
+
+
+def test_the_roles_panel_is_not_shown_to_an_editor_who_is_not_admin(app, db_session):
+    """RB5: grants are Admin's alone, so an editor sees the form and no panel."""
+    instance = _instance()
+    make_user(instance, 'founder', local=True)
+    editor = make_user(instance, 'editor', local=True)
+    editor.verified = True
+    db.session.commit()
+    grant_permissions(editor, 'administer all users')
+    client = app.test_client()
+    login(client, editor)
+
+    body = client.get(f'/admin/user/{_target().id}/edit').get_data(as_text=True)
+
+    assert 'id="add_local_user_form"' in body and 'id="roles"' not in body
+
+
+def test_an_editor_who_is_not_admin_cannot_add_a_user_with_a_grant(app, db_session):
+    instance = _instance()
+    make_user(instance, 'founder', local=True)
+    editor = make_user(instance, 'editor', local=True)
+    editor.verified = True
+    db.session.commit()
+    grant_permissions(editor, 'administer all users')
+    roles = _roles()
+    client = app.test_client()
+    login(client, editor)
+
+    response, _render, _finalize = _add(client, csrf(app, client), grants=str(roles['Staff'].id))
+
+    assert response.status_code == 403
+    assert User.query.filter_by(user_name='newbie').first() is None
+
+
+def test_a_grant_refused_on_a_domain_makes_no_account(users_admin):
+    """RB7, checked before the account is made, so nothing is left half done."""
+    client, token, roles, admin = users_admin
+    domain = SiteDomain(domain='x.add.example', scheme='https', federates=True)
+    db.session.add(domain)
+    db.session.commit()
+    clear_domain_cache()
+    try:
+        response, render, _finalize = _add(client, token, grants=str(roles['Admin'].id), grant_scope=str(domain.id),
+                                           site_domain=str(domain.id))
+    finally:
+        clear_domain_cache()
+
+    form = render.call_args.kwargs['form']
+    assert 'Admin is granted instance-wide only.' in form.grants.errors, form.errors
+    assert User.query.filter_by(user_name='newbie').first() is None
 
 
 def test_editing_a_remote_user_warns_that_it_will_be_overwritten(users_admin):
@@ -515,7 +563,7 @@ def test_an_edit_saves_every_field(users_admin):
     _edit(client, token, target.id, bot='y', bot_override='y',
           suppress_crossposts='y', banned='y', ban_posts='y', ban_comments='y',
           can_send_pm='y', hide_nsfw='2', hide_nsfl='3',
-          admin_note='a note', role=str(roles['Staff'].id))
+          admin_note='a note')
 
     db.session.expire_all()
     target = db.session.get(User, target.id)
@@ -525,7 +573,6 @@ def test_an_edit_saves_every_field(users_admin):
     assert target.can_send_pm is True
     assert (target.hide_nsfw, target.hide_nsfl) == (2, 3)
     assert target.admin_note == 'a note'
-    assert [role.name for role in target.roles] == ['Staff']
 
 
 def test_marking_a_user_verified_finalizes_their_account(users_admin):
@@ -606,26 +653,26 @@ def test_removing_an_image_that_is_not_there_does_nothing(users_admin, field):
 # --------------------------------------------------------------------------
 
 
-def test_a_role_change_invalidates_the_permission_cache(users_admin):
-    """D946's pin, inverted.
+def test_a_revoke_from_the_roles_panel_invalidates_the_permission_cache(users_admin):
+    """D946's pin, inverted, on the panel that now changes grants.
 
-    `user_access` is `@cache.memoize(timeout=50)` and this route rewrote
+    `user_access` is `@cache.memoize(timeout=50)` and the old role selector rewrote
     `user_role` while invalidating nothing, so an administrator stripped of
     their role went on passing every permission check for up to fifty seconds
-    after the change was saved. The page knew: it flashed "Permissions are
-    cached for 50 seconds so new admin roles won't take effect immediately."
+    after the change was saved.
 
     Fact 378 -- `CACHE_TYPE` is `NullCache` here, so the staleness itself
-    cannot be observed and the assertion is on the call, as in slice E.
+    cannot be observed and the assertion is on the call.
     """
     client, token, roles, admin = users_admin
     target = _target()
     db.session.execute(role_grant.insert().values(user_id=target.id,
                                                  role_id=roles['Admin'].id))
     db.session.commit()
+    grant_id = db.session.execute(text('SELECT id FROM role_grant WHERE user_id = :u'), {'u': target.id}).scalar()
 
-    with patch('app.admin.routes.permissions_changed') as changed:
-        _edit(client, token, target.id, role='0')
+    with patch('app.roles.permissions_changed') as changed:
+        client.post(f'/admin/grants/{grant_id}/revoke', data={'csrf_token': token})
 
     # RB10: one bump of the target's permission version retires every cached answer about them
     assert [call.args for call in changed.call_args_list] == [(target.id,)]
@@ -635,30 +682,32 @@ def test_a_demotion_actually_removes_the_role(users_admin):
     """The behaviour the invalidation exists to expose, asserted through
     `user_access` itself so the row says something under a NullCache."""
     client, token, roles, admin = users_admin
-    db.session.add(RolePermission(role_id=roles['Admin'].id,
-                                  permission='ban users'))
-    db.session.commit()
     target = _target()
     db.session.execute(role_grant.insert().values(user_id=target.id,
                                                  role_id=roles['Admin'].id))
     db.session.commit()
     assert user_access('ban users', target.id) is True
+    grant_id = db.session.execute(text('SELECT id FROM role_grant WHERE user_id = :u'), {'u': target.id}).scalar()
 
-    _edit(client, token, target.id, role='0')
+    client.post(f'/admin/grants/{grant_id}/revoke', data={'csrf_token': token})
 
     assert user_access('ban users', target.id) is False
 
 
-def test_a_role_change_refreshes_the_cached_admin_ids(users_admin):
-    """`g.admin_ids` and the `admin_ids` setting are recomputed from the
-    `user_role` table, and user 1 is in the union unconditionally -- the
-    instance owner is an admin whether or not they hold the role."""
+def test_an_admin_grant_refreshes_the_cached_admin_ids(users_admin):
+    """`g.admin_ids` comes from the `admin_ids` setting. A grant of Admin empties it, and the next request reads it
+    afresh from `role_grant`, with user 1 in the union unconditionally."""
     from app.utils import get_setting
 
     client, token, roles, admin = users_admin
     target = _target()
+    client.get('/')   # the setting as it was
+    assert target.id not in get_setting('admin_ids', [])
 
-    _edit(client, token, target.id, role=str(roles['Admin'].id))
+    client.post(f'/admin/user/{target.id}/grants',
+                data={'csrf_token': token, 'grant-role': roles['Admin'].id, 'grant-scope': '0'})
+    assert get_setting('admin_ids', None) is None
+    client.get('/')
 
     admin_ids = get_setting('admin_ids', None)
     assert 1 in admin_ids
@@ -667,7 +716,7 @@ def test_a_role_change_refreshes_the_cached_admin_ids(users_admin):
 
 def test_a_banned_user_is_not_counted_as_an_admin(users_admin):
     """The `u.deleted = false AND u.banned = false` half of that query: an
-    admin who is banned in the same request must not remain in `admin_ids`."""
+    admin who is banned must not remain in `admin_ids` after the next request."""
     from app.utils import get_setting
 
     client, token, roles, admin = users_admin
@@ -676,7 +725,8 @@ def test_a_banned_user_is_not_counted_as_an_admin(users_admin):
                                                  role_id=roles['Admin'].id))
     db.session.commit()
 
-    _edit(client, token, target.id, role=str(roles['Admin'].id), banned='y')
+    _edit(client, token, target.id, banned='y')
+    client.get('/')
 
     assert target.id not in get_setting('admin_ids', [])
 
