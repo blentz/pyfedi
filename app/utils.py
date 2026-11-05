@@ -48,7 +48,7 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 from furl import furl
 from flask import current_app, json, redirect, url_for, request, make_response, Response, g, flash, abort
-from flask_babel import _, lazy_gettext as _l
+from flask_babel import _, force_locale, lazy_gettext as _l
 from flask_login import current_user, logout_user
 from flask_wtf.csrf import validate_csrf
 from sqlalchemy import text, or_, and_, desc, asc, event, select, func, update, inspect, not_
@@ -5574,6 +5574,10 @@ def actor_profile_contains_blocked_words(user: User) -> bool:
     return False
 
 
+MODERATION_NOTICE_ACTIONS = frozenset({'delete_post', 'restore_post', 'lock_post', 'unlock_post', 'delete_post_reply',
+                                       'restore_post_reply', 'lock_post_reply', 'unlock_post_reply'})
+
+
 def add_to_modlog(action: str, actor: User, target_user: User = None, reason: str = '',
                   community: Community = None, post: Post = None, reply: PostReply = None,
                   link: str = '', link_text: str = '', site_domain_id: int | None = None):
@@ -5600,6 +5604,49 @@ def add_to_modlog(action: str, actor: User, target_user: User = None, reason: st
                           community_id=community_id, post_id=post_id, reply_id=reply_id,
                           reason=reason, link=link, link_text=link_text, public=public,
                           site_domain_id=site_domain_id))
+    db.session.commit()
+    if action in MODERATION_NOTICE_ACTIONS:
+        _tell_author(action, action_type, actor, target_user, community, post, reply, reason)
+
+
+def _moderation_notice_title(action: str, action_type: str, community: Community, post: Post) -> str:
+    """The notice's title, in the current locale. The community comes first: the title is cut to fit, from its end."""
+    names = dict(who=_('An admin') if action_type == 'admin' else _('A moderator'),
+                 community=shorten_string(community.title, 40), title=post.title)
+    return shorten_string({
+        'delete_post': _('%(who)s removed your post in %(community)s: %(title)s', **names),
+        'restore_post': _('%(who)s restored your post in %(community)s: %(title)s', **names),
+        'lock_post': _('%(who)s turned comments off for your post in %(community)s: %(title)s', **names),
+        'unlock_post': _('%(who)s turned comments back on for your post in %(community)s: %(title)s', **names),
+        'delete_post_reply': _('%(who)s removed your comment in %(community)s, on: %(title)s', **names),
+        'restore_post_reply': _('%(who)s restored your comment in %(community)s, on: %(title)s', **names),
+        'lock_post_reply': _('%(who)s turned replies off under your comment in %(community)s, on: %(title)s', **names),
+        'unlock_post_reply': _('%(who)s turned replies back on under your comment in %(community)s, on: %(title)s',
+                               **names),
+    }[action], 150)
+
+
+def _tell_author(action: str, action_type: str, actor: User, author: User | None, community: Community | None,
+                 post: Post | None, reply: PostReply | None, reason: str) -> None:
+    """Tell a local author that a moderator or admin acted on their content (spec 2026-11-03-rbac-design.md, follow-up
+    3). The notice names no one, so it has no author_id, and nothing in it says who acted. A remote author is told by
+    their own server, from the activity sent there."""
+    post = post or (reply.post if reply else None)
+    if post is None or author is None or author.id == actor.id or not author.is_local():
+        return
+    community = community or post.community
+    if post.deleted:   # the post page is a 404 for its author
+        url = f'/c/{community.link()}'
+    else:
+        url = f'/post/{post.id}' + (f'#comment_{reply.id}' if reply else '')
+    targets = {'gen': '0', 'post_id': post.id, 'community_id': community.id, 'reason': reason}
+    if reply:
+        targets['comment_id'] = reply.id
+    with force_locale(get_recipient_language(author.id)):
+        db.session.add(Notification(title=_moderation_notice_title(action, action_type, community, post), url=url,
+                                    user_id=author.id, author_id=None, notif_type=NOTIF_MODERATION, subtype=action,
+                                    targets=targets))
+    author.unread_notifications += 1
     db.session.commit()
 
 
@@ -6729,6 +6776,8 @@ def notif_id_to_string(notif_id) -> str:
     if notif_id == NOTIF_UNBAN:
         return _('Admin')
     if notif_id == NOTIF_NEW_MOD:
+        return _('Admin')
+    if notif_id == NOTIF_MODERATION:
         return _('Admin')
     if notif_id == NOTIF_ANSWER:
         return _('Answer')

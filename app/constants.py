@@ -93,6 +93,7 @@ NOTIF_REMINDER = 11  # A reminder that the user set before
 NOTIF_ANSWER = 12  # An answer was accepted as the preferred one
 NOTIF_FOLLOW = 13  # I have a new follower
 NOTIF_FOLLOW_REQUEST = 14  # I have a new followe request
+NOTIF_MODERATION = 15  # a moderator or admin acted on my post or comment
 
 # --- mod/admin level ---
 NOTIF_REPORT = 20  # a user, post, comment, or community have been reported
@@ -104,6 +105,9 @@ NOTIF_NEW_POST = 42         # a new post needs approval
 
 # --model/db default--
 NOTIF_DEFAULT = 999  # default entry
+
+# What removing a post leaves in place: a report is still to be dealt with, and a notice says it was removed
+NOTIFS_KEPT_WHEN_POST_GOES = (NOTIF_REPORT, NOTIF_REPORT_ESCALATION, NOTIF_MODERATION)
 
 DOWNVOTE_ACCEPT_NONE = -1
 DOWNVOTE_ACCEPT_ALL = 0

@@ -446,3 +446,18 @@ build steps are done, not before:
    its entries are often private.
 4. The catalogue could split the moderation actions ("remove", "turn comments off", "turn reactions off") and offer no
    permission to edit someone else's content, so the principle holds for custom roles too.
+
+Ruled by the owner, 2026-11-05:
+
+- **Telling authors (3).** A local author is told when a moderator or admin removes or restores their post or comment,
+  or turns its comments off or on: the content, the community, the reason, and "a moderator" or "an admin". The
+  actor is not named.
+- **Post labels (2).** Moderators and holders of `moderate all communities` keep flair, NSFW, NSFL and AI labels on
+  someone else's post. A change tells a local author and writes a modlog entry. Title and body were already the
+  author's alone.
+- **Community text (2).** A community's wiki pages, title, description and rules are for its own moderators. Instance
+  roles lose them, the built-in Admin included, and keep administrative settings and removal. For an abandoned
+  community, an admin appoints a moderator first.
+- **Catalogue (4).** `remove and restore content` and `turn comments off` split out of `moderate all communities`.
+  Existing holders get both by migration, with their domain limits. No reactions permission until such a feature
+  exists, which would be a separate decision.

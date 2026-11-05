@@ -1,7 +1,7 @@
 from app import celery, db
 from app.activitypub.serializers import peertube_video, uses_peertube_video
 from app.activitypub.signature import default_context, send_post_request
-from app.constants import NOTIF_REPORT, NOTIF_REPORT_ESCALATION
+from app.constants import NOTIFS_KEPT_WHEN_POST_GOES
 from app.federation_urls import activity_id
 from app.local_only import federated_mentions
 from app.models import Community, Instance, Post, PostReply, User, UserFollower, File, Notification, ChatMessage
@@ -314,8 +314,7 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     if is_post:
         notifs = session.query(Notification).filter(Notification.targets.op("->>")("post_id").cast(Integer) == object.id)
         for notif in notifs:
-            # dont delete report notifs
-            if notif.notif_type == NOTIF_REPORT or notif.notif_type == NOTIF_REPORT_ESCALATION:
+            if notif.notif_type in NOTIFS_KEPT_WHEN_POST_GOES:
                 continue
             session.delete(notif)
         session.commit()

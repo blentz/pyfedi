@@ -1271,7 +1271,7 @@ class UserNotificationsRequest(DefaultSchema):
 
 
 class UserNotificationItemView(DefaultSchema):
-    author = fields.Nested(Person, required=True, metadata={"description": "returned for all notif types"})
+    author = fields.Nested(Person, required=True, metadata={"description": "returned for all notif types; for notif_type 15 it is the recipient, because the moderator or admin who acted is not named"})
     notif_body = fields.String(required=True, metadata={"description": "returned for all notif types"})
     notif_id = fields.Integer(required=True, metadata={"description": "returned for all notif types"})
     notif_subtype = fields.String(required=True, metadata={"description": "returned for all notif types"})
@@ -1279,10 +1279,11 @@ class UserNotificationItemView(DefaultSchema):
     status = fields.String(validate=validate.OneOf(["Unread", "Read"]), required=True, metadata={"description": "returned for all notif types"})
     comment = fields.Nested(Comment, metadata={"description": "returned for notif_types: 3, 4, 6 (comment_mention subtype)"})
     comment_view = fields.Nested(CommentView, metadata={"description": "returned for notif_types: 3, 4, 6 (comment_mention subtype)"})
-    comment_id = fields.Integer(metadata={"description": "returned for notif_types: 3, 4, 6 (comment_mention subtype)"})
+    comment_id = fields.Integer(metadata={"description": "returned for notif_types: 3, 4, 6 (comment_mention subtype), 15 (when it is about a comment)"})
     community = fields.Nested(Community, metadata={"description": "returned for notif_type 1"})
     post = fields.Nested(PostView, metadata={"description": "returned for notif_types: 0, 1, 2, 3, 4, 5, 6 (post_mention subtype)"})
-    post_id = fields.Integer(metadata={"description": "returned for notif_types: 0, 1, 2, 3, 4, 5, 6 (post_mention subtype)"})
+    post_id = fields.Integer(metadata={"description": "returned for notif_types: 0, 1, 2, 3, 4, 5, 6 (post_mention subtype), 15"})
+    reason = fields.String(metadata={"description": "returned for notif_type 15: what the moderator or admin gave as the reason"})
 
 class UserNotificationsCounts(DefaultSchema):
     unread = fields.Integer(required=True)

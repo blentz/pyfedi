@@ -724,7 +724,8 @@ def get_user_notifications(auth, data):
         NOTIF_POST,
         NOTIF_REPLY,
         NOTIF_FEED,
-        NOTIF_MENTION
+        NOTIF_MENTION,
+        NOTIF_MODERATION
     ]
 
     # new
@@ -793,6 +794,17 @@ def _process_notification_item(item):
         notification_json['post_id'] = post.id
         notification_json['notif_body'] = post.body if post.body else ''
         notification_json['status'] = 'Read' if item.read else 'Unread'
+        return notification_json
+    elif item.notif_type == NOTIF_MODERATION:
+        # The moderator is not named (spec 2026-11-03-rbac-design.md, follow-up 3): the required `author` is the
+        # content's, the recipient
+        notification_json = {'notif_id': item.id, 'notif_type': NOTIF_MODERATION, 'notif_subtype': item.subtype,
+                             'author': user_view(user=item.user_id, variant=1, user_id=item.user_id),
+                             'notif_body': item.title, 'reason': item.targets.get('reason') or '',
+                             'post_id': item.targets['post_id'],
+                             'status': 'Read' if item.read else 'Unread'}
+        if 'comment_id' in item.targets:
+            notification_json['comment_id'] = item.targets['comment_id']
         return notification_json
     # for the NOTIF_COMMUNITY
     elif item.notif_type == NOTIF_COMMUNITY:

@@ -3726,8 +3726,7 @@ def delete_post_or_comment(deletor, to_delete, store_ap_json, request_json, reas
             # remove any notifications about the post
             notifs = db.session.query(Notification).filter(Notification.targets.op("->>")("post_id").cast(Integer) == to_delete.id)
             for notif in notifs:
-                # dont delete report notifs
-                if notif.notif_type == NOTIF_REPORT or notif.notif_type == NOTIF_REPORT_ESCALATION:
+                if notif.notif_type in NOTIFS_KEPT_WHEN_POST_GOES:
                     continue
                 db.session.delete(notif)
             db.session.commit()
