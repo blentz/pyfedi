@@ -886,13 +886,13 @@ def test_a_site_admin_who_is_not_a_moderator_may_remove_a_post(db_session):
     assert s.post.deleted is True
 
 
-def test_an_administer_all_communities_holder_may_remove_and_restore(db_session):
+def test_a_holder_of_remove_and_restore_content_may_remove_and_restore(db_session):
     """D421, fixed. `post_delete` admitted this permission and this gate did
     not, so the web removal was a 500. Both now ask `can_mod_post`, which
     treats the permission as an admin (owner ruling 2026-09-30). `s.voter` is
     not id 1, for which `user_access` is True unconditionally."""
     s = seed_post_context(community_name='moderation')
-    grant_permission(s.voter, 'moderate all communities')
+    grant_permission(s.voter, 'remove and restore content')
 
     mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
     db.session.refresh(s.post)

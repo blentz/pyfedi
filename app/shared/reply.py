@@ -492,7 +492,7 @@ def mod_remove_reply(reply_id, reason, src, auth):
         user = current_user
 
     reply = db.session.query(PostReply).filter_by(id=reply_id, deleted=False).one()
-    if not can_moderate(reply.community, user):
+    if not can_moderate(reply.community, user, 'remove and restore content'):
         raise Exception('Does not have permission')
 
     reply.deleted = True
@@ -531,7 +531,7 @@ def mod_restore_reply(reply_id, reason, src, auth):
         user = current_user
 
     reply = db.session.query(PostReply).filter_by(id=reply_id, deleted=True).one()
-    if not can_moderate(reply.community, user):
+    if not can_moderate(reply.community, user, 'remove and restore content'):
         raise Exception('Does not have permission')
 
     reply.deleted = False
@@ -577,7 +577,7 @@ def lock_post_reply(post_reply_id, locked, src, auth=None):
         replies_enabled = True
         modlog_type = 'unlock_post_reply'
 
-    if can_moderate(post_reply.community, user):
+    if can_moderate(post_reply.community, user, 'turn comments off'):
         post_reply.replies_enabled = replies_enabled
         db.session.execute(text('update post_reply set replies_enabled = :replies_enabled where path @> ARRAY[:parent_id]'),
                            {'parent_id': post_reply.id, 'replies_enabled': replies_enabled})

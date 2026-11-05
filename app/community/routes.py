@@ -2554,7 +2554,7 @@ def community_wiki_list(actor):
                 CommunityWikiPage.title).all()
             return render_template('community/community_wiki_list.html', title=_('Community Wiki'), community=community,
                                    pages=pages, low_bandwidth=low_bandwidth, current='wiki',
-                                   may_remove=can_moderate(community, current_user),
+                                   may_remove=can_moderate(community, current_user, 'remove and restore content'),
                                    )
         else:
             abort(401)
@@ -2825,7 +2825,7 @@ def community_wiki_delete(actor, page_id):
     if community is not None:
         page: CommunityWikiPage = db.session.get(CommunityWikiPage, page_id) or abort(404)
         if page.community_id == community.id and (page.can_edit(current_user, community) or
-                                                  can_moderate(community, current_user)):
+                                                  can_moderate(community, current_user, 'remove and restore content')):
             db.session.delete(page)
             db.session.commit()
             flash(_('Page deleted'))

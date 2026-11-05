@@ -24,7 +24,7 @@ from app.post.util import post_replies, get_comment_branch, tags_to_string, flai
 # The module, not the name: app.topic.routes reaches this file through
 # app.activitypub before get_all_child_topic_ids is defined (import cycle: topic.routes)
 import app.topic.routes as topic_routes
-from app.utils import post_labels, record_label_change, can_moderate, authorise_api_user, blocked_users, blocked_communities, blocked_or_banned_instances, \
+from app.utils import post_labels, record_label_change, can_moderate_at_all, authorise_api_user, blocked_users, blocked_communities, blocked_or_banned_instances, \
     recently_upvoted_posts, \
     site_language_id, filtered_out_communities, joined_or_modding_communities, \
     user_filters_home, user_filters_posts, in_sorted_list, instance_sticky_posts, instance_sticky_post_ids, \
@@ -54,7 +54,7 @@ def a_moderatable_post(post_id, auth):
     post's community may act on a followers-only post they cannot view."""
     post = a_post(post_id)
     user = authorise_api_user(auth, return_type='model') if auth else None
-    if user is not None and can_moderate(post.community, user):
+    if user is not None and can_moderate_at_all(post.community, user):
         return post
     return a_visible_post(post_id, auth)
 

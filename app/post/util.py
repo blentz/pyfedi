@@ -16,7 +16,7 @@ from app.models import PostReply, Post, Community, User, Language, utcnow, UserF
 from app.activitypub.serializers.microblog import link_hashtags, body_hashtags
 from app.storefront import is_hosted_uri
 from app.visibility import mark_restricted, OPEN_VISIBILITIES, RestrictedReply, can_view
-from app.utils import blocked_or_banned_instances, blocked_users, is_video_hosting_site, get_request, \
+from app.utils import may_see_removed, blocked_or_banned_instances, blocked_users, is_video_hosting_site, get_request, \
     silenced_instances, html_to_text, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, is_local_microblogs, community_membership_private, \
     user_in_restricted_country
 from app.local_only import content_local_only, hidden_here, without_local_only
@@ -454,7 +454,7 @@ def deleted_post_state(post: Post, viewer: User | None = None) -> str:
         return 'author'
     who = current_user if viewer is None else viewer
     if who.is_authenticated and (post.community.is_moderator(viewer) or
-                                 user_access('moderate all communities', who.get_id(), on=post)
+                                 may_see_removed(post, who.get_id())
                                  or who.id == post.user_id):
         return 'staff'
     return 'gone'

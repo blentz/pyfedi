@@ -447,7 +447,7 @@ build steps are done, not before:
 4. The catalogue could split the moderation actions ("remove", "turn comments off", "turn reactions off") and offer no
    permission to edit someone else's content, so the principle holds for custom roles too.
 
-Ruled by the owner, 2026-11-05:
+Ruled by the owner, 2026-11-05, and built:
 
 - **Telling authors (3).** A local author is told when a moderator or admin removes or restores their post or comment,
   or turns its comments off or on: the content, the community, the reason, and "a moderator" or "an admin". The
@@ -461,3 +461,5 @@ Ruled by the owner, 2026-11-05:
 - **Catalogue (4).** `remove and restore content` and `turn comments off` split out of `moderate all communities`.
   Existing holders get both by migration, with their domain limits. No reactions permission until such a feature
   exists, which would be a separate decision.
+  A holder of `remove and restore content` may also remove a comment on the web, where the effect had been
+  `administer all communities` alone, because the API already allowed it through `moderate all communities`.

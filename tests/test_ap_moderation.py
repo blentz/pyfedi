@@ -29,7 +29,7 @@ import pytest
 
 from app import db
 from app.activitypub import util as ap_util
-from app.constants import NOTIF_REPORT, NOTIF_USER, POST_STATUS_PUBLISHED
+from app.constants import NOTIF_MODERATION, NOTIF_REPORT, NOTIF_USER, POST_STATUS_PUBLISHED
 from app.models import (CommunityBan, CommunityMember, File, InstanceBan, InstanceRole, ModLog,
                         Notification, Post, PostReply, User)
 from tests.factories import (make_community, make_community_ban, make_community_member,
@@ -528,7 +528,8 @@ def test_deleting_a_post_removes_its_notifications_but_keeps_report_notifs(
     ap_util.delete_post_or_comment(moderator, post, False,
                                    {'id': 'https://peer.example/activities/delete/1'}, '')
 
-    surviving = db.session.query(Notification).all()
+    # The author's notice of the removal is not about the post's activity: tests/test_moderation_notices.py
+    surviving = Notification.query.filter(Notification.notif_type != NOTIF_MODERATION).all()
     assert len(surviving) == 1
     assert surviving[0].notif_type == NOTIF_REPORT
 

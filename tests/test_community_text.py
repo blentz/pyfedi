@@ -59,7 +59,8 @@ def instance_role(request, s):
     if request.param == 'admin':
         make_admin(s.voter)
     else:
-        for permission in ('moderate all communities', 'administer all communities', 'administer communities pages'):
+        for permission in ('moderate all communities', 'remove and restore content', 'administer all communities',
+                           'administer communities pages'):
             grant_permission(s.voter, permission)
     return s.voter
 

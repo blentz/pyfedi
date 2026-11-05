@@ -7,7 +7,7 @@
             </a>
         </li>
     {% endif -%}
-    {% if post.user_id == current_user.id or post.community.is_moderator() or post.community.is_owner() or user_access('moderate all communities', current_user.get_id(), on=post) -%}
+    {% if post.user_id == current_user.id or post.community.is_moderator() or post.community.is_owner() or user_access('remove and restore content', current_user.get_id(), on=post) -%}
         {% if post.deleted -%}
             <li>
                 <a href="#" data-url="{{ url_for('post.post_restore', post_id=post.id) }}" style="white-space: normal" class="dropdown-item no-underline confirm_first send_post" rel="nofollow noindex">
@@ -89,6 +89,8 @@
                 </li>
             {% endif -%}
         {% endif -%}
+    {% endif -%}
+    {% if post.community.is_moderator() or post.community.is_owner() or user_access('turn comments off', current_user.get_id(), on=post) -%}
         {% if post.comments_enabled -%}
             <li>
                 <a href="#" data-url="{{ url_for('post.post_lock', post_id=post.id, mode='yes') }}" style="white-space: normal" class="send_post dropdown-item no-underline" rel="nofollow noindex">
@@ -104,6 +106,8 @@
                 </a>
             </li>
         {% endif -%}
+    {% endif -%}
+    {% if post.community.is_moderator() or post.community.is_owner() or user_access('moderate all communities', current_user.get_id(), on=post) -%}
             {% if can_detect_ai %}
                 <li>
                     <a href="#" hx-post="{{ url_for('post.post_check_ai', post_id=post.id) }}"

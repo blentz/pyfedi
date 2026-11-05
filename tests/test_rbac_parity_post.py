@@ -45,7 +45,8 @@ POST = [
         field_enabled(lambda w: f'/post/{PID(w)}/comment/{RID(w)}/edit', 'distinguished'),
         setup=lambda ctx: author_is_caller(ctx, 'reply')),
     Row('post.reply_delete.form', 'DDAAA', page(lambda w: f'/post/{PID(w)}/comment/{RID(w)}/delete')),
-    Row('post.reply_delete.done', 'DDDAA',
+    # 'DDDAA' until `remove and restore content`: the web then agrees with the API, which already let Staff remove one
+    Row('post.reply_delete.done', 'DDAAA',
         post_effect(lambda w: f'/post/{PID(w)}/comment/{RID(w)}/delete',
                     lambda w, r: db.session.get(PostReply, w.reply.id).deleted, data={'reason': 'parity'})),
     Row('post.reply_purge', 'DDAAA',

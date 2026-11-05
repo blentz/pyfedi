@@ -368,12 +368,12 @@ def test_an_author_may_not_undo_a_moderators_removal(app, env):
     assert post.deleted is True
 
 
-def test_an_administer_all_communities_holder_may_remove_a_post(app, env):
+def test_a_holder_of_remove_and_restore_content_may_remove_a_post(app, env):
     """D421, fixed. The route admitted the permission and `mod_remove_post`
     did not, so the removal was a 500. Both now ask `can_mod_post`, and the
     permission removes a post as an admin would (owner ruling 2026-09-30)."""
     anon, community, post, mod, author, outsider = env
-    grant_permission(outsider, 'moderate all communities')
+    grant_permission(outsider, 'remove and restore content')
     client = as_user(app, outsider)
     token = csrf(app, client)
 

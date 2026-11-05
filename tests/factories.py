@@ -448,7 +448,8 @@ def grant_permission(user: User, permission: str) -> Role:
 
 # What a role holding the legacy 'administer all communities' holds after RBAC step 4's migration
 # (migrations/versions/c5f9e3b7a2d1_split_permissions.py): every permission split from it.
-COMMUNITY_ADMINISTRATION = ('moderate all communities', 'manage topics', 'manage blocklists', 'view vote analytics',
+COMMUNITY_ADMINISTRATION = ('moderate all communities', 'remove and restore content', 'turn comments off',
+                            'manage topics', 'manage blocklists', 'view vote analytics',
                             'manage media', 'manage remote instances', 'administer communities pages')
 
 

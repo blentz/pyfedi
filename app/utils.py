@@ -3095,10 +3095,25 @@ def user_access(permission: str, user_id: int, on=None, anywhere: bool = False) 
     return permissions.user_access(permission, user_id, on=on, anywhere=anywhere)
 
 
-def can_moderate(community, user) -> bool:
-    # D422/D521/D642/D963: the one moderation gate -- a moderator (owners included), an admin, staff, or a holder of
-    # 'moderate all communities'. Deleting or restoring a whole community is narrower: owner and admins (D615).
-    return community.is_moderator(user) or user_access('moderate all communities', user.id, on=community)
+def can_moderate(community, user, permission: str = 'moderate all communities') -> bool:
+    # D422/D521/D642/D963: the one moderation gate -- a moderator (owners included), or a holder of `permission`, which
+    # an action split out of 'moderate all communities' names. Deleting or restoring a whole community is narrower:
+    # owner and admins (D615).
+    return community.is_moderator(user) or user_access(permission, user.id, on=community)
+
+
+def can_moderate_at_all(community, user) -> bool:
+    """Whether `user` may take any of the moderation actions here, so may reach content they could not otherwise view
+    in order to act on it (D22)."""
+    return community.is_moderator(user) or user_access('moderate all communities', user.id, on=community) or \
+        user_access('remove and restore content', user.id, on=community) or \
+        user_access('turn comments off', user.id, on=community)
+
+
+def may_see_removed(obj, user_id) -> bool:
+    """Whether an instance role lets `user_id` open removed content: those who restore it have to find it."""
+    return user_access('moderate all communities', user_id, on=obj) or \
+        user_access('remove and restore content', user_id, on=obj)
 
 
 def role_access(permission: str, role_id: int) -> bool:

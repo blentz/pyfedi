@@ -63,7 +63,7 @@ from app.shared.media import episode_form_wanted, episode_of, media_of
 from app.shared.tasks import task_selector
 import app.variants as variants
 from app.storefront import current_storefront, storefront_url
-from app.utils import etag_stamp, max_album_images, post_labels, record_label_change
+from app.utils import can_moderate_at_all, etag_stamp, max_album_images, may_see_removed, post_labels, record_label_change
 from app.utils import clean_ap_url, can_moderate, is_local_microblogs, render_template, markdown_to_html, validation_required, \
     shorten_string, markdown_to_text, ap_datetime, return_304, \
     request_etag_matches, ip_address, instance_banned, \
@@ -141,7 +141,7 @@ def refuse_invisible_unless_moderating(obj):
     they cannot view, so a report can be actioned. What the route then shows them must stay neutral."""
     if hidden_here(obj):   # no exception for a moderator or an admin (owner ruling, follow-up F6)
         abort(404)
-    if current_user.is_authenticated and can_moderate(obj.community, current_user):
+    if current_user.is_authenticated and can_moderate_at_all(obj.community, current_user):
         return
     refuse_invisible(obj)
 
@@ -451,7 +451,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
                                    user_flair=user_flair, lazy_load_replies=lazy_load_replies,
                                    THREAD_CUTOFF_DEPTH=constants.THREAD_CUTOFF_DEPTH,
                                    description=description, og_image=og_image, sort=sort,
-                                   show_deleted=user_access('moderate all communities', current_user.get_id(), on=post),
+                                   show_deleted=may_see_removed(post, current_user.get_id()),
                                    autoplay=autoplay, archive_link=archive_link,
                                    noindex=not post.author.indexable, preconnect=post.url if post.url else None,
                                    recently_upvoted=recently_upvoted, recently_downvoted=recently_downvoted,
@@ -566,7 +566,7 @@ def post_lazy_replies(post_id, nonce):
                            can_downvote_here=can_downvote(user, community),
                            communities_banned_from_list=communities_banned_from_list,
                            user_notes=user_notes(current_user.get_id()) if current_user.is_authenticated else {},
-                           show_deleted=user_access('moderate all communities', current_user.get_id(), on=post),
+                           show_deleted=may_see_removed(post, current_user.get_id()),
                            low_bandwidth=request.cookies.get('low_bandwidth', '0') == '1',
                            user_flair=user_flair if current_user.is_authenticated else {},
                            user_pronouns=user_pronouns_on_post(post),
@@ -583,8 +583,7 @@ def post_embed(post_id):
         community: Community = post.community
 
         if community.banned or post.deleted:
-            if current_user.is_anonymous or not (
-                    user_access('moderate all communities', current_user.get_id(), on=post)):
+            if current_user.is_anonymous or not may_see_removed(post, current_user.get_id()):
                 abort(404)
             else:
                 if post.deleted_by == post.user_id:
@@ -878,7 +877,7 @@ def continue_discussion(post_id, comment_id):
     refuse_local_only_comment(comment)
 
     if post.community.banned or post.deleted or comment.deleted:
-        if not user_access('moderate all communities', current_user.get_id(), on=post):
+        if not may_see_removed(post, current_user.get_id()):
             abort(404)
         else:
             if comment.deleted:
@@ -1022,7 +1021,7 @@ def continue_discussion_ajax(post_id, comment_id, nonce):
                                can_downvote_here=can_downvote(current_user, post.community) if current_user.is_authenticated else True,
                                communities_banned_from_list=communities_banned_from_list,
                                user_notes=user_notes(current_user.get_id()) if current_user.is_authenticated else {},
-                               show_deleted=user_access('moderate all communities', current_user.get_id(), on=post),
+                               show_deleted=may_see_removed(post, current_user.get_id()),
                                low_bandwidth=request.cookies.get('low_bandwidth', '0') == '1',
                                user_flair=user_flair if current_user.is_authenticated else {},
                                user_pronouns=user_pronouns_on_post(post),
@@ -1502,7 +1501,7 @@ def post_delete(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     refuse_invisible_unless_moderating(post)
     community = post.community
-    if post.user_id == current_user.id or shared_post.can_mod_post(post, current_user):
+    if post.user_id == current_user.id or shared_post.can_mod_post(post, current_user, 'remove and restore content'):
         if post.community.id in communities_banned_from(current_user.id) or user_ip_banned():
             abort(403)
         form = DeleteConfirmationForm()
@@ -1544,10 +1543,10 @@ def post_delete(post_id: int):
 def post_restore(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     refuse_invisible_unless_moderating(post)
-    if post.user_id == current_user.id or shared_post.can_mod_post(post, current_user):
+    if post.user_id == current_user.id or shared_post.can_mod_post(post, current_user, 'remove and restore content'):
         if post.deleted_by == post.user_id:
             shared_post.restore_post(post.id, SRC_WEB, None)
-        elif shared_post.can_mod_post(post, current_user):
+        elif shared_post.can_mod_post(post, current_user, 'remove and restore content'):
             shared_post.mod_restore_post(post.id, '', SRC_WEB, None)
         else:
             abort(403)  # D421: an author may not undo a moderator's removal
@@ -2563,11 +2562,11 @@ def post_reply_delete(post_id: int, comment_id: int):
 
     form = ConfirmationMultiDeleteForm()
 
-    if not (community.is_moderator() or community.is_owner() or user_access('moderate all communities', current_user.get_id(), on=community)):
+    if not (community.is_moderator() or community.is_owner() or user_access('remove and restore content', current_user.get_id(), on=community)):
         form.also_delete_replies.label = Label(field_id="also_delete_replies",
                                                text=_("Delete all my comments in this chain"))
 
-    if post_reply.user_id == current_user.id or community.is_moderator() or community.is_owner() or user_access('moderate all communities', current_user.get_id(), on=community):
+    if post_reply.user_id == current_user.id or community.is_moderator() or community.is_owner() or user_access('remove and restore content', current_user.get_id(), on=community):
         if form.validate_on_submit():
             if form.also_delete_replies.data:
                 num_deleted = 0
@@ -2582,7 +2581,7 @@ def post_reply_delete(post_id: int, comment_id: int):
                         if reply.user_id == current_user.id:
                             # User is deleting their own reply
                             delete_reply(reply.id, SRC_WEB, None)
-                        elif post.community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=post):
+                        elif post.community.is_moderator() or user_access('remove and restore content', current_user.get_id(), on=post):
                             # Moderator or admin is deleting the reply
                             if form.reason.data:
                                 reason = 'Deleted by mod: ' + form.reason.data
@@ -2596,7 +2595,7 @@ def post_reply_delete(post_id: int, comment_id: int):
                     # User is deleting their own reply
                     delete_reply(post_reply.id, SRC_WEB, None)
                     num_deleted = 1
-                elif community.is_moderator() or user_access('administer all communities', current_user.get_id(), on=community):
+                elif community.is_moderator() or user_access('remove and restore content', current_user.get_id(), on=community):
                     # Moderator or admin is deleting the reply
                     if form.reason.data:
                         reason = 'Deleted by mod: ' + form.reason.data
@@ -2632,10 +2631,10 @@ def post_reply_restore(post_id: int, comment_id: int):
     if post_reply.post_id != post.id:
         abort(404)
 
-    if post_reply.user_id == current_user.id or shared_post.can_mod_post(post, current_user):
+    if post_reply.user_id == current_user.id or shared_post.can_mod_post(post, current_user, 'remove and restore content'):
         if post_reply.deleted_by == post_reply.user_id:
             was_mod_deletion = False
-        elif shared_post.can_mod_post(post, current_user):
+        elif shared_post.can_mod_post(post, current_user, 'remove and restore content'):
             was_mod_deletion = True
         else:
             abort(403)  # D421: an author may not undo a moderator's removal
@@ -2728,7 +2727,7 @@ def post_reply_purge(post_id: int, comment_id: int):
 
     if not post_reply.deleted:
         abort(404)
-    if post_reply.deleted_by == current_user.id or post.community.is_moderator() or user_access('moderate all communities', current_user.get_id(), on=post):
+    if post_reply.deleted_by == current_user.id or post.community.is_moderator() or user_access('remove and restore content', current_user.get_id(), on=post):
         if not post_reply.has_replies():
             with app_pkg.redis_client.lock(f"lock:post_reply:{post_reply.id}", timeout=10, blocking_timeout=6):
                 post_reply.delete_dependencies()

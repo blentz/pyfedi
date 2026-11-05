@@ -35,7 +35,8 @@ def test_the_catalogue_names_each_permission_once_and_says_what_it_guards():
 def test_the_catalogue_flags_scopable_and_instance_only_as_the_spec_does():
     assert SCOPABLE_PERMISSIONS == {
         'edit domain branding', 'approve registrations', 'administer all users', 'ban users', 'manage users',
-        'view user details', 'create local communities', 'moderate all communities', 'administer all communities',
+        'view user details', 'create local communities', 'moderate all communities', 'remove and restore content',
+        'turn comments off', 'administer all communities',
         'administer communities pages', 'view modlog', 'shown as admin'}
     assert INSTANCE_ONLY_PERMISSIONS == {
         'change instance settings', 'manage domains', 'masquerade', 'send newsletter', 'manage remote instances',
@@ -82,13 +83,16 @@ def _migrate(old_shape):
     """Downgrade to the eight legacy permissions, let `old_shape()` write rows in them, and upgrade again."""
     migration = load_migration('c5f9e3b7a2d1_split_permissions.py')
     later = load_migration('d6a1f4c8e2b3_permission_scope.py')
+    latest = load_migration('e4c8a1d7f3b6_split_moderation_permissions.py')
     db.session.commit()
     with Operations.context(MigrationContext.configure(db.session.connection())):
+        latest.downgrade()
         later.downgrade()
         migration.downgrade()
         ids = old_shape()
         migration.upgrade()
         later.upgrade()
+        latest.upgrade()
     return ids
 
 
@@ -117,8 +121,9 @@ def test_each_role_gains_what_its_legacy_permissions_were_split_into(people):
     try:
         ids = _migrate(old_shape)
         assert _held(ids['communities']) == {
-            'moderate all communities', 'manage topics', 'manage blocklists', 'view vote analytics', 'manage media',
-            'manage remote instances', 'administer communities pages'}   # not the narrowed one (note 4)
+            'moderate all communities', 'remove and restore content', 'turn comments off', 'manage topics',
+            'manage blocklists', 'view vote analytics', 'manage media', 'manage remote instances',
+            'administer communities pages'}   # not the narrowed one (note 4)
         assert _held(ids['settings']) == {
             'change instance settings', 'manage domains', 'masquerade', 'send newsletter', 'manage remote instances',
             'edit domain branding'}

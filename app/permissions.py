@@ -65,8 +65,11 @@ CATALOGUE = (
     Permission('add remote communities', 'communities', False, True,
                'Add remote communities when ordinary users may not'),
     Permission('moderate all communities', 'communities', True, True,
-               "Everything a community's moderators may do, in every community: bans, moderators, flair, approvals, "
-               'removing and restoring content, seeing deleted content'),
+               "What a community's moderators may do, in every community, other than the two below: bans, moderators, "
+               'flair, approvals, seeing deleted content'),
+    Permission('remove and restore content', 'communities', True, True,
+               'Remove and restore posts and comments, and see what has been removed'),
+    Permission('turn comments off', 'communities', True, True, 'Turn comments off and on for a post or a comment'),
     Permission('administer all communities', 'communities', True, False,
                "What only admins may do in a community: delete or restore it, edit its settings and RSS feeds, kick "
                'users, purge posts'),

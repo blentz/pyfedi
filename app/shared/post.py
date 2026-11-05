@@ -1368,7 +1368,7 @@ def lock_post(post_id: int, locked, src, auth=None):
         comments_enabled = True
         modlog_type = 'unlock_post'
 
-    if can_mod_post(post, user):
+    if can_mod_post(post, user, 'turn comments off'):
         post.comments_enabled = comments_enabled
         db.session.commit()
         add_to_modlog(modlog_type, actor=user, target_user=post.author, reason='',
@@ -1514,9 +1514,9 @@ def hide_post(post_id: int, hidden: bool, src: int, auth=None):
     return user.id, post
 
 
-def can_mod_post(post, user) -> bool:
+def can_mod_post(post, user, permission: str = 'moderate all communities') -> bool:
     # D421: the one gate for moderating someone else's post, asked by the post routes and below
-    return can_moderate(post.community, user)
+    return can_moderate(post.community, user, permission)
 
 
 # mod deletes
@@ -1529,7 +1529,7 @@ def mod_remove_post(post_id: int, reason, src, auth):
     with app_pkg.redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
         post = db.session.get(Post, post_id) or abort(404)
 
-        if not can_mod_post(post, user):
+        if not can_mod_post(post, user, 'remove and restore content'):
             raise Exception('Does not have permission')
 
         if post.url:
@@ -1571,7 +1571,7 @@ def mod_restore_post(post_id: int, reason, src, auth):
 
     with app_pkg.redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
         post = db.session.get(Post, post_id) or abort(404)
-        if not can_mod_post(post, user):
+        if not can_mod_post(post, user, 'remove and restore content'):
             raise Exception('Does not have permission')
 
         if post.url:

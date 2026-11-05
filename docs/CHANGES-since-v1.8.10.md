@@ -286,6 +286,7 @@ scan. The backfill `UPDATE`s touch only rows that are actually NULL.
 | 27 | `b4e8d2a6f1c9` role_grants | Replaces `user_role` with `role_grant` (user, role, optional domain, granted by, granted at, optional expiry), adds `role.built_in`, `role.listed_publicly`, `role.description` and `mod_log.site_domain_id`, deletes the roles "Anonymous user" and "Authenticated user", which conferred nothing, and marks the role named Admin as the built-in one. (`b0056476`) | Yes. The downgrade drops domain grants |
 | 28 | `c5f9e3b7a2d1` split_permissions | Moves every role onto the finer permission catalogue so that each keeps what it could do: each old permission's rows become the permissions split from it, and the role named Staff gains what its name used to give it. Removes `change user roles`. (`ec35df1e`) | Yes, `role_permission` rows. The downgrade does not restore `change user roles` |
 | 29 | `d6a1f4c8e2b3` permission_scope | Adds `role_permission.all_domains` and `role_permission_domain`, and drops `role_grant.site_domain_id`: a role granted on a domain becomes its own role limited to that domain. The role named Staff gains `administer all users` and its scopable permissions are limited to the default domain. `site_domain.registration` values `staff` and `admin` become `closed`. | Yes. The downgrade restores Staff's reach and drops other limited permissions rather than widen them |
+| 30 | `e4c8a1d7f3b6` split_moderation_permissions | Gives every role holding `moderate all communities` the new `remove and restore content` and `turn comments off`, at the same domains, so nobody loses anything. The downgrade drops both. |
 
 Downgrades remove defaults, constraints, columns and the new tables, but do
 not restore the NULLs, invented counters, rankings, cross-post links or
@@ -673,6 +674,13 @@ notification when a moderator or admin removes or restores their post or comment
 turns its comments off or on, or changes the labels on their post (flair, NSFW,
 NSFL, AI). It gives the content, the community, the reason and "a moderator" or "an
 admin", and names no one. A label change is also a new modlog entry.
+
+**Two moderation actions are permissions of their own (not yet pushed).** "Remove and
+restore content" and "Turn comments off" are split out of "moderate all communities",
+so a custom role can hold just one of them. Holders keep both on upgrade. A role with
+"moderate all communities" alone can no longer remove content or turn comments off.
+A holder of the first can now also remove a comment on the web, which the API already
+allowed.
 
 **A community's text is its moderators' (not yet pushed).** Its wiki pages, title,
 description and rules can now be changed only by its own moderators. Instance roles,

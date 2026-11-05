@@ -17,7 +17,7 @@ from app.local_only import found_here, hidden_here, prime_reporters, without_hid
     without_local_only_actors
 from app.api.alpha.utils.found import a_community, a_post, a_reply
 from app.visibility import can_view, listable_clause, visible_to_clause
-from app.utils import authorise_api_user, blocked_users, blocked_or_banned_instances, site_language_id, \
+from app.utils import can_moderate_at_all, authorise_api_user, blocked_users, blocked_or_banned_instances, site_language_id, \
     communities_banned_from, in_sorted_list, moderating_communities_ids, joined_communities, user_access, reachable_community_ids, \
     can_moderate
 
@@ -503,7 +503,7 @@ def a_moderatable_reply(reply_id, auth):
     reply's community may act on a followers-only reply they cannot view."""
     reply = a_reply(reply_id)
     user = authorise_api_user(auth, return_type='model') if auth else None
-    if user is not None and can_moderate(reply.community, user):
+    if user is not None and can_moderate_at_all(reply.community, user):
         return reply
     return a_visible_reply(reply_id, auth)
 
