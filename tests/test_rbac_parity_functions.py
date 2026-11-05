@@ -42,7 +42,8 @@ FUNCTIONS = [
         setup=recent_accounts),
     Row('target.user.can_send_pm_to.new_sender_writes_to', '-DAAA', call(lambda w, u: w.owner.can_send_pm_to(u)),
         setup=recent_owner),
-    Row('fn.wiki.can_edit.mods_only', '-DDDD', call(lambda w, u: w.wiki.can_edit(u, w.community))),
+    # fn.wiki.can_edit.mods_only: its moderators' alone now, a row nobody passes (follow-up 2), so it is pinned in
+    # tests/test_community_text.py.
     Row('fn.can_moderate', '-DAAA', call(lambda w, u: can_moderate(w.community, u))),
     Row('fn.can_create_post_reply.banned_from_community', '-DDAA',
         call(lambda w, u: can_create_post_reply(u, w.community)),

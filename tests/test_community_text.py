@@ -94,6 +94,17 @@ def test_an_instance_role_may_not_add_a_wiki_page(app, s, instance_role):
     assert CommunityWikiPage.query.filter_by(slug='new').first() is None
 
 
+def test_a_moderator_may_add_a_wiki_page(app, s):
+    make_community_member(s.voter, s.community, is_moderator=True)
+    client = logged_in(app, s.voter)
+
+    client.post('/community/textroom/moderate/wiki/add',
+                data={'title': 'New', 'slug': 'new', 'body': 'x', 'who_can_edit': '0',
+                      'csrf_token': csrf(app, client)})
+
+    assert CommunityWikiPage.query.filter_by(slug='new').first() is not None
+
+
 def test_an_instance_role_may_still_delete_a_wiki_page(app, s, instance_role):
     """Removal stays."""
     client = logged_in(app, instance_role)

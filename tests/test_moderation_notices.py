@@ -201,6 +201,20 @@ def test_the_api_lists_it_with_the_reason_and_the_recipient_as_author(app, s):
     assert item['post_id'] == s.post.id
     assert item['author']['id'] == s.author.id
     assert 'themoderator' not in str(item)
+    assert 'comment_id' not in item
+
+
+def test_the_api_names_the_comment_a_notice_is_about(app, s):
+    from flask import g
+
+    g.site = s.site
+    g.admin_ids = []
+    reply = make_post_reply(s.post, s.author, body='a comment')
+    mod_remove_reply(reply.id, 'rude', SRC_API, bearer(s.voter))
+
+    item, = get_user_notifications(bearer(s.author), {'status': 'All'})['items']
+
+    assert item['comment_id'] == reply.id and item['reason'] == 'rude'
 
 
 # --------------------------------------------------------------------------

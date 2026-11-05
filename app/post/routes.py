@@ -2595,8 +2595,8 @@ def post_reply_delete(post_id: int, comment_id: int):
                     # User is deleting their own reply
                     delete_reply(post_reply.id, SRC_WEB, None)
                     num_deleted = 1
-                elif community.is_moderator() or user_access('remove and restore content', current_user.get_id(), on=community):
-                    # Moderator or admin is deleting the reply
+                else:
+                    # Moderator or admin is deleting the reply: the check above let nobody else this far
                     if form.reason.data:
                         reason = 'Deleted by mod: ' + form.reason.data
                     else:
