@@ -276,3 +276,17 @@ def test_only_an_admin_changes_roles_or_grants(people):
                     lambda: revoke_grant(people.holder, grant)):
         with pytest.raises(RoleError, match='Only an admin'):
             attempt()
+
+
+def test_an_instance_only_permission_may_be_added_to_a_role_granted_only_instance_wide(people):
+    """RB7 refuses an edit only while the role has a domain grant."""
+    role = create_role(people.admin, 'Helpers', '', False, ['ban users'])
+    grant_role(people.admin, people.holder, role)
+    update_role(people.admin, role, 'Helpers', '', False, ['ban users', 'masquerade'])
+    assert permissions_of(role) == ['ban users', 'masquerade']
+
+
+def test_a_grant_on_a_domain_that_does_not_exist_is_refused(people):
+    role = create_role(people.admin, 'Helpers', '', False, ['ban users'])
+    with pytest.raises(RoleError, match='no such domain'):
+        grant_role(people.admin, people.holder, role, site_domain_id=987654)

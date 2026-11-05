@@ -2629,7 +2629,7 @@ def admin_users_add():
         if grants and not current_user.is_admin():
             abort(403)   # RB5: only an admin grants roles
         scope = form.grant_scope.data or None
-        refusals = [refusal for refusal in (scope_refusal(role, scope) for role in grants if role) if refusal]
+        refusals = [refusal for refusal in (scope_refusal(role, scope) for role in grants) if refusal]
         if refusals:   # before the account exists, so a refused grant leaves nothing half made
             form.grants.errors = list(form.grants.errors) + refusals
             return render_template('admin/add_user.html', title=_('Add user'), form=form, user=user,
@@ -2684,9 +2684,8 @@ def admin_users_add():
         db.session.add(user)
         db.session.commit()
         finalize_user_setup(user)
-        for role in grants:
-            if role is not None:
-                grant_role(current_user, user, role, site_domain_id=scope)
+        for role in grants:   # each one of the form's choices, so a role that exists
+            grant_role(current_user, user, role, site_domain_id=scope)
 
         flash(_('User added'))
         return redirect(url_for('admin.admin_users', local_remote='local'))

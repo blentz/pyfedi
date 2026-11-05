@@ -503,6 +503,9 @@ def test_an_editor_who_is_not_admin_cannot_add_a_user_with_a_grant(app, db_sessi
     db.session.commit()
     grant_permissions(editor, 'administer all users')
     roles = _roles()
+    from app.models import Site
+    db.session.get(Site, 1).registration_mode = 'Open'   # else the domain is 'admin' and refused before the grants
+    db.session.commit()
     client = app.test_client()
     login(client, editor)
 

@@ -327,3 +327,59 @@ def test_an_expired_grant_on_the_page_reads_as_its_date(env):
     db.session.commit()
     assert (date.today() + timedelta(days=2)).isoformat() in page(env, f'/admin/roles/{role.id}') or \
         (utcnow() + timedelta(days=2)).date().isoformat() in page(env, f'/admin/roles/{role.id}')
+
+
+# --------------------------------------------------------------------------
+# Forms that cannot be read, and refusals the pages pass on
+# --------------------------------------------------------------------------
+
+def flashed_after(env, path):
+    with env.client.session_transaction() as session:
+        return [message for _, message in session.get('_flashes', [])]
+
+
+def test_a_create_form_with_no_name_is_shown_again(env):
+    response = post(env, '/admin/roles/new', name='', permissions=['ban users'])
+    assert response.status_code == 200 and 'id="role-form"' in response.get_data(as_text=True)
+    assert Role.query.count() == 1
+
+
+def test_an_edit_form_with_no_name_is_shown_again(env):
+    role = a_role('Helpers', 'ban users')
+    response = post(env, f'/admin/roles/{role.id}/edit', name='', permissions=[])
+    assert response.status_code == 200 and role.name == 'Helpers'
+
+
+def test_a_grant_form_that_cannot_be_read_is_reported(env):
+    role = a_role('Helpers')
+    post(env, f'/admin/roles/{role.id}/grants', **{'grant-user': 'holder', 'grant-scope': '987654'})
+    assert any('could not be read' in message for message in flashed_after(env, ''))
+    assert RoleGrant.query.filter_by(role_id=role.id).count() == 0
+
+
+def test_a_user_grant_with_no_role_is_reported(env):
+    post(env, f'/admin/user/{env.holder.id}/grants', **{'grant-role': '987654', 'grant-scope': 0})
+    assert 'Choose a role to grant.' in flashed_after(env, '')
+
+
+def test_an_expiry_in_the_past_or_unreadable_is_reported(env):
+    role = a_role('Helpers')
+    grant_role(env.holder, role)
+    grant = RoleGrant.query.filter_by(role_id=role.id).one()
+    post(env, f'/admin/grants/{grant.id}/expiry', **{f'grant{grant.id}-expires': '2001-01-01'})
+    assert 'An expiry must be in the future.' in flashed_after(env, '')
+    post(env, f'/admin/grants/{grant.id}/expiry', **{f'grant{grant.id}-expires': 'not a date'})
+    assert 'The expiry could not be read.' in flashed_after(env, '')
+    assert RoleGrant.query.filter_by(role_id=role.id).one().expires_at is None
+
+
+def test_a_revoke_without_its_csrf_token_changes_nothing(env):
+    role = a_role('Helpers')
+    grant_role(env.holder, role)
+    grant = RoleGrant.query.filter_by(role_id=role.id).one()
+    env.app.config['WTF_CSRF_ENABLED'] = True
+    try:
+        env.client.post(f'/admin/grants/{grant.id}/revoke', data={})
+    finally:
+        env.app.config['WTF_CSRF_ENABLED'] = False
+    assert db.session.get(RoleGrant, grant.id) is not None
