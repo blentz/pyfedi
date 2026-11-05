@@ -106,15 +106,22 @@
                     <td><span title="{{ _('Reputation') }}">{% if user.reputation %}R {{ user.reputation | round | int }}{% endif %}</span></td>
                     <td><span title="{{ _('Created') }}: {{ user.created }}">{{ localize_datetime(user.created, locale) }}</span></td>
                     <td><span title="{{ _('Last Seen') }}: {{ user.last_seen }}">{{ localize_datetime(user.last_seen, locale) }}</span></td>
-                    <td><a href="{{ url_for('admin.admin_user_edit', user_id=user.id) }}">{{ _('Edit') }}</a>,
-                        <a href="#" data-url="{{ url_for('admin.admin_user_delete', user_id=user.id) }}" class="confirm_first send_post">{{ _('Delete') }}</a>,
-                        <br />
-                        {% if user.banned %}
-                            <a href="#" data-url="{{ url_for('user.unban_profile', actor=user.link(), redirect="/admin/users") }}" class="confirm_first send_post">{{ _('Unban') }}</a>
-                        {% else %}
+                    {# Only what its route would allow: a holder limited to some domains may not act on someone with a role (RB6) #}
+                    <td>{% if may_act_on_user(current_user, user, 'administer all users') -%}
+                            <a href="{{ url_for('admin.admin_user_edit', user_id=user.id) }}">{{ _('Edit') }}</a>,
+                            <a href="#" data-url="{{ url_for('admin.admin_user_delete', user_id=user.id) }}" class="confirm_first send_post">{{ _('Delete') }}</a>,
+                            <br />
+                        {% endif -%}
+                        {% if user.banned -%}
+                            {% if may_act_on_user(current_user, user, 'ban users') -%}
+                                <a href="#" data-url="{{ url_for('user.unban_profile', actor=user.link(), redirect="/admin/users") }}" class="confirm_first send_post">{{ _('Unban') }}</a>,
+                            {% endif -%}
+                        {% elif not user.is_ban_exempt() and may_ban(current_user, user) -%}
                             <a href="{{ url_for('user.ban_profile', actor=user.link()) }}" class="">{{ _('Ban') }}</a>,
-                        {% endif %}
-                        <a href="{{ url_for('admin.admin_media', user_id=user.id) }}">{{ _('Media') }}</a>
+                        {% endif -%}
+                        {% if user_access('manage media', current_user.get_id()) -%}
+                            <a href="{{ url_for('admin.admin_media', user_id=user.id) }}">{{ _('Media') }}</a>
+                        {% endif -%}
                     </td>
                 </tr>
             {% endfor %}

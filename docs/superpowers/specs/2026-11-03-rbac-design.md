@@ -1,7 +1,11 @@
 # Custom roles with domain scope (RBAC) — design
 
-Date: 2026-11-03. Status: being built on blentz.
+Date: 2026-11-03. Status: built on blentz, with the follow-ups below; gates green; ready to deploy (2026-11-05).
 
+- Follow-ups 1 to 4 are done. Migration e4c8a1d7f3b6 and the new screens were checked on a copy of production's roles,
+  domains and accounts, in a real browser with real CSRF and a real Redis cache. That found a removal notice linking
+  to the wrong page, a remove-only holder shown `[deleted]` for the author, an add link the wiki refused, and read-only
+  text with no explanation, all fixed. New strings stay untranslated here: the catalogs come from upstream's Weblate.
 - Step 1 (the parity table) is done: tests/rbac_parity.py and tests/test_rbac_parity_*.py, 171 rows. The defect it
   found is fixed at 296d8a174; O5 came out of it.
 - Step 3 (the check) is done: app/permissions.py (`user_access(perm, user, on=, anywhere=)`, `home_domain_id`,

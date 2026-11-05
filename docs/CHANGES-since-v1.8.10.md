@@ -669,26 +669,26 @@ limits on input that could cost seconds of CPU or crash a request:
   (`a65b9389`). Malformed commands get an NNTP error reply instead of
   closing the connection (section 4).
 
-**Moderation is visible to the author (not yet pushed).** A local author gets a
+**Moderation is visible to the author.** A local author gets a
 notification when a moderator or admin removes or restores their post or comment,
 turns its comments off or on, or changes the labels on their post (flair, NSFW,
 NSFL, AI). It gives the content, the community, the reason and "a moderator" or "an
 admin", and names no one. A label change is also a new modlog entry.
 
-**Two moderation actions are permissions of their own (not yet pushed).** "Remove and
+**Two moderation actions are permissions of their own.** "Remove and
 restore content" and "Turn comments off" are split out of "moderate all communities",
 so a custom role can hold just one of them. Holders keep both on upgrade. A role with
 "moderate all communities" alone can no longer remove content or turn comments off.
 A holder of the first can now also remove a comment on the web, which the API already
 allowed.
 
-**A community's text is its moderators' (not yet pushed).** Its wiki pages, title,
+**A community's text is its moderators'.** Its wiki pages, title,
 description and rules can now be changed only by its own moderators. Instance roles,
 Admin included, keep its other settings and may delete a wiki page. For an abandoned
 community, an admin appoints a moderator first. The API refuses such a change with
 `community_text_is_for_moderators`.
 
-**Roles and permissions (RBAC; not yet pushed).** An instance
+**Roles and permissions (RBAC).** An instance
 admin now builds named roles in the admin area (`/admin/roles`, replacing
 `/admin/permissions`). Each permission in a role reaches all domains or selected
 domains; a grant says who holds the role, with an optional expiry. Admin is the
@@ -742,7 +742,7 @@ section records what is done.
 ### 2.4 API contract changes (for client developers)
 
 - **`notif_type` 15, a moderation notice.** `GET /api/alpha/user/notifications`
-  now returns it (not yet pushed). `notif_subtype` is the modlog action, such as
+  now returns it. `notif_subtype` is the modlog action, such as
   `delete_post`; `notif_body` is the notice; `reason`, `post_id` and sometimes
   `comment_id` come with it. `author` is the recipient, because the moderator is
   not named. A client that lists unknown types should show `notif_body`.

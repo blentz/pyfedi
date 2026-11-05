@@ -472,3 +472,76 @@ def test_user_administration_does_not_open_other_peoples_conversations(seeded):
     from app.permissions import STAFF_PERMISSIONS, user_access
     assert 'read private messages' not in STAFF_PERMISSIONS
     assert user_access('read private messages', seeded.holder.id) is False
+
+
+# --------------------------------------------------------------------------
+# /admin/users offers only what would be allowed: each link's route refuses the rest
+# --------------------------------------------------------------------------
+
+def _a_role(name):
+    role = Role(name=name)
+    db.session.add(role)
+    db.session.commit()
+    db.session.add(RolePermission(role_id=role.id, permission='view modlog'))   # a role with none is no privilege
+    db.session.commit()
+    return role
+
+
+def user_links(world, user):
+    """Which of a row's links /admin/users offers for `user`."""
+    page = world.client.get('/admin/users?local_remote=local').get_data(as_text=True)
+    return {'edit': f'/admin/user/{user.id}/edit' in page, 'delete': f'/admin/user/{user.id}/delete' in page,
+            'ban': f'/u/{user.link()}/ban' in page, 'media': f'/admin/media?user_id={user.id}' in page}
+
+
+def test_a_limited_holder_is_offered_what_they_may_do_to_a_plain_account(world):
+    holder(world, 'plainholder', 'administer all users', 'ban users', domain=world.x)
+
+    assert user_links(world, world.on_x[0]) == {'edit': True, 'delete': True, 'ban': True, 'media': False}
+
+
+def test_a_limited_holder_is_offered_nothing_for_someone_with_a_role(world):
+    """RB6: a role holder on the holder's own domain is listed, and every one of these would be refused."""
+    target = world.on_x[0]
+    grant_role(target, Role.query.filter_by(name='role-otherrole').first() or _a_role('role-otherrole'))
+    holder(world, 'rowholder', 'administer all users', 'ban users', domain=world.x)
+
+    assert user_links(world, target) == {'edit': False, 'delete': False, 'ban': False, 'media': False}
+
+
+def test_holding_only_administer_all_users_offers_no_ban(world):
+    holder(world, 'noban', 'administer all users', domain=world.x)
+
+    links = user_links(world, world.on_x[0])
+
+    assert links['edit'] and links['delete'] and not links['ban']
+
+
+@pytest.mark.parametrize('permissions, offered', [(('administer all users',), False),
+                                                   (('administer all users', 'ban users'), True)],
+                         ids=['without ban users', 'with ban users'])
+def test_an_unban_is_offered_only_to_who_may_ban(world, permissions, offered):
+    target = world.on_x[0]
+    target.banned = True
+    db.session.commit()
+    holder(world, 'unbanholder', *permissions, domain=world.x)
+
+    page = world.client.get('/admin/users?local_remote=local').get_data(as_text=True)
+
+    assert (f'/u/{target.link()}/unban' in page) is offered
+
+
+def test_media_is_offered_to_who_holds_manage_media(world):
+    holder(world, 'mediaholder', 'administer all users', 'manage media')
+
+    assert user_links(world, world.on_x[0])['media'] is True
+
+
+def test_an_admin_is_offered_everything_but_a_ban_on_the_founder(world):
+    admin = make_user(world.local, 'theadmin', local=True)
+    admin.verified = True
+    grant_role(admin, admin_role())
+    login(world.client, admin)
+
+    assert user_links(world, world.on_x[0]) == {'edit': True, 'delete': True, 'ban': True, 'media': True}
+    assert user_links(world, world.founder)['ban'] is False   # D583: nobody bans user 1
