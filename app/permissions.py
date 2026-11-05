@@ -259,6 +259,19 @@ def recipient_ids(permission: str, on=None) -> list[int]:
     return sorted(held | set(request_admins or ()))
 
 
+def shown_as_admin_ids(domain_id: int | None) -> list[int]:
+    """The active holders of `shown as admin` on this domain, by id (RB12). Admins hold it only implicitly, so they are
+    not among them: which admins a domain names is the caller's to say (O1)."""
+    return list(db.session.execute(text(
+        'SELECT DISTINCT u.id FROM "user" u JOIN role_grant rg ON rg.user_id = u.id '
+        "JOIN role_permission rp ON rp.role_id = rg.role_id AND rp.permission = 'shown as admin' "
+        'WHERE u.deleted = false AND u.banned = false '
+        "AND (rg.expires_at IS NULL OR rg.expires_at > timezone('utc', now())) "
+        'AND (rp.all_domains OR EXISTS (SELECT 1 FROM role_permission_domain d WHERE d.role_id = rp.role_id '
+        '     AND d.permission = rp.permission AND d.site_domain_id = :domain_id)) ORDER BY u.id'),
+        {'domain_id': domain_id}).scalars())
+
+
 def holds_any_grant(user_id: int) -> bool:
     """Whether a user holds an unexpired grant, on any scope, of a role that confers something -- the built-in Admin,
     or a role with at least one permission -- or is user 1. A role with no permissions makes nobody privileged."""

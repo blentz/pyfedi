@@ -41,7 +41,7 @@ from app.email import mail_name, send_email
 from app.federation_urls import activity_id
 from app.error_counts import KEEP_DAYS
 from app.onion_media import DEFAULT_CACHE_BYTES, evict
-from app.roles import seed_default_roles
+from app.roles import remove_expired_grants, seed_default_roles
 from app.models import CronJobLog, Settings, BannedInstances, Role, User, Domain, ActivityPubLog, utcnow, \
     utcnow, Site, Instance, File, Notification, Post, CommunityMember, NotificationSubscription, PostReply, Language, \
     Community, SendQueue, _store_files_in_s3, PostVote, Poll, \
@@ -1002,6 +1002,7 @@ def register(app):
             try:
                 try:  # avoid parallel runs of this task using Redis lock
                     with app_pkg.redis_client.lock("lock:send-queue", timeout=300, blocking_timeout=1):
+                        remove_expired_grants()   # RB11; the checks already ignore them
                         # Check size of redis memory. Abort if > 200 MB used
                         try:
                             if app_pkg.redis_client and current_app.config['REDIS_MEMORY_LIMIT'] != -1 and \

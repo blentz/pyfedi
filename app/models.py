@@ -5872,12 +5872,13 @@ class ModLog(db.Model):
         'grant_role': _l('Granted role'),
         'change_grant_expiry': _l('Changed role expiry'),
         'revoke_role': _l('Revoked role'),
+        'grant_expired': _l('Role expired'),
     }
 
     # Actions recorded for admins only, whatever the public_modlog setting (D942). Role changes are among them: a
     # grant of a role that is not listed publicly is not public either.
     admin_only_actions = {'masquerade', 'create_role', 'edit_role', 'delete_role', 'grant_role', 'change_grant_expiry',
-                          'revoke_role'}
+                          'revoke_role', 'grant_expired'}
 
     def action_to_str(self):
         if self.action in self.action_map:
@@ -5887,7 +5888,7 @@ class ModLog(db.Model):
 
     def get_correct_link(self):
         user_action_list = ["add_mod", "remove_mod", "delete_user", "undelete_user", "ban_user", "unban_user",
-                            "masquerade", "grant_role", "change_grant_expiry", "revoke_role"]
+                            "masquerade", "grant_role", "change_grant_expiry", "revoke_role", "grant_expired"]
 
         if self.action in user_action_list and not self.link.startswith("u/"):
             return "u/" + self.link

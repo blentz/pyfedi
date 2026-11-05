@@ -47,7 +47,7 @@ from app.local_only import hidden_here, hidden_here_sql, shown_here, without_loc
 from app.local_names import local_named, split_local_name
 from app.visibility import listable_clause, modlog_domain_clause, modlog_local_only_clause, modlog_open_clause, \
     visible_to_clause
-from app.federation_urls import domain_site_name, federating_storefront, instance_actor_public_key, instance_actor_url
+from app.federation_urls import admins_shown_on, domain_site_name, federating_storefront, instance_actor_public_key, instance_actor_url
 from app.storefront import ON_DOMAIN_PARAM, current_instance_id, current_storefront, default_domain, domain_authority, \
     domain_base_url, hidden_instance_ids, hosted_instance_ids, on_domain, on_domain_sql, storefront_host, storefront_cache_key, \
     storefront_link, storefront_url
@@ -786,7 +786,7 @@ def about_page():
     posts_amount = local_posts(instance_id=current_instance_id())
 
     # a logged-out visitor is shown no local-only account (owner ruling 2026-10-21)
-    admins = [user for user in Site.admins() if not hidden_here(user)]
+    admins = [user for user in admins_shown_on(current_storefront()) if not hidden_here(user)]   # RB12, O1
     staff = [user for user in Site.listed_role_holders() if not hidden_here(user)]
     domains_amount = db.session.execute(text('SELECT COUNT(*) as c FROM "domain" WHERE "banned" IS false')).scalar()
     community_amount = local_communities(instance_id=current_instance_id())

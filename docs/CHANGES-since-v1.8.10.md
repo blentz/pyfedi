@@ -667,7 +667,7 @@ limits on input that could cost seconds of CPU or crash a request:
   (`a65b9389`). Malformed commands get an NNTP error reply instead of
   closing the connection (section 4).
 
-**Roles and permissions (RBAC; in progress, not yet pushed).** An instance
+**Roles and permissions (RBAC; not yet pushed).** An instance
 admin now builds named roles in the admin area (`/admin/roles`, replacing
 `/admin/permissions`). Each permission in a role reaches all domains or selected
 domains; a grant says who holds the role, with an optional expiry. Admin is the
@@ -689,6 +689,12 @@ wants the old reach sets those permissions to "All domains" on the role.
   and only an admin may grant roles.
 - Every grant, revocation, expiry change and role change is in the modlog, for
   admins only, whatever the public modlog setting.
+- A grant past its expiry stops working at once, and `flask send-queue` removes
+  it with a modlog entry.
+- The permission "shown as admin" makes its holder appear as an admin of a domain
+  on that domain's host, in the API's site `admins` and `is_admin`, and on its
+  About page. It gives no power by itself. A sister domain's About page now names
+  only the admins homed on it, as its API already did.
 - Profiles, the user preview and the About page name the roles an admin has
   marked "listed publicly" (Staff is), by their own names.
 - A domain's registration setting is now "Anyone" or "Closed" and only governs

@@ -96,11 +96,8 @@ def test_the_permission_vocabulary_matches_the_codebase():
         f'now checked, so take them off NOT_YET_CHECKED: {sorted(NOT_YET_CHECKED - unused)}')
 
 
-# RBAC step 4 put the whole catalogue on the page and step 5 converted the call sites that check it. What is left is
-# checked by a later step.
-NOT_YET_CHECKED = {
-    'shown as admin',   # step 10 (RB12)
-}
+# Every permission in the catalogue is checked somewhere now (RBAC step 10). A new one that is not goes here with why.
+NOT_YET_CHECKED = set()
 
 
 def test_the_vocabulary_has_no_duplicates():

@@ -15,10 +15,12 @@ from datetime import datetime
 
 from sqlalchemy import func
 
-from app import db
-from app.models import Role, RoleGrant, RolePermission, RolePermissionDomain, SiteDomain, User, utcnow
+from app import cache, db
+from app.api.alpha.views import user_view
+from app.models import ModLog, Role, RoleGrant, RolePermission, RolePermissionDomain, SiteDomain, User, utcnow
 from app.permission_cache import permissions_changed
-from app.permissions import BY_NAME, INSTANCE_ONLY_PERMISSIONS, STAFF_PERMISSIONS, STAFF_SCOPABLE_PERMISSIONS
+from app.permissions import BY_NAME, INSTANCE_ONLY_PERMISSIONS, STAFF_PERMISSIONS, STAFF_SCOPABLE_PERMISSIONS, \
+    home_domain_id
 from app.storefront import domain_rows
 from app.utils import add_to_modlog, set_setting
 
@@ -140,6 +142,11 @@ def _admins_changed(role: Role) -> None:
         set_setting('admin_ids', None)
 
 
+def _shown_changed() -> None:
+    """user_view is cached for ten minutes, with its `is_admin` in it: emptied, so the next request sees the change (RB15)."""
+    cache.delete_memoized(user_view)
+
+
 def _log(action: str, actor: User, *, role_name: str, role: Role | None = None, target: User | None = None,
          reason: str = '') -> None:
     if target is not None:
@@ -178,6 +185,7 @@ def update_role(actor: User, role: Role, name: str, description: str, listed_pub
     _write_permissions(role, scopes)
     db.session.commit()
     permissions_changed(*holder_ids(role))
+    _shown_changed()
     _log('edit_role', actor, role_name=role.name, role=role, reason=describe_scopes(scopes))
     return role
 
@@ -200,6 +208,7 @@ def delete_role(actor: User, role: Role, revoke: bool) -> None:
     db.session.delete(role)
     db.session.commit()
     permissions_changed(*holders)
+    _shown_changed()
     for user in revoked:
         _log('revoke_role', actor, role_name=name, target=user, reason=f'{name} (role deleted)')
     _log('delete_role', actor, role_name=name)
@@ -221,6 +230,7 @@ def grant_role(actor: User, user: User, role: Role, expires_at: datetime | None 
     db.session.commit()
     permissions_changed(user.id)
     _admins_changed(role)
+    _shown_changed()
     _log('grant_role', actor, role_name=role.name, target=user,
          reason=role.name + (f', until {expires_at:%Y-%m-%d %H:%M} UTC' if expires_at else ''))
     return grant
@@ -233,6 +243,7 @@ def change_expiry(actor: User, grant: RoleGrant, expires_at: datetime | None) ->
     permissions_changed(grant.user_id)
     role, user = db.session.get(Role, grant.role_id), db.session.get(User, grant.user_id)
     _admins_changed(role)
+    _shown_changed()
     _log('change_grant_expiry', actor, role_name=role.name, target=user,
          reason=f'{role.name}: ' + (f'until {expires_at:%Y-%m-%d %H:%M} UTC' if expires_at else 'no expiry'))
     return grant
@@ -248,4 +259,28 @@ def revoke_grant(actor: User, grant: RoleGrant) -> None:
     db.session.commit()
     permissions_changed(user.id)
     _admins_changed(role)
+    _shown_changed()
     _log('revoke_role', actor, role_name=role.name, target=user, reason=role.name)
+
+
+def remove_expired_grants() -> int:
+    """RB11: delete the grants past their expiry, each with a modlog entry; `flask send-queue` runs this. The checks
+    already ignore them. No admin did it, so the entry names none. Answers how many went."""
+    expired = RoleGrant.query.filter(RoleGrant.expires_at <= utcnow()).order_by(RoleGrant.id).all()
+    if not expired:
+        return 0
+    holders, built_in = set(), False
+    for grant in expired:
+        role, user = db.session.get(Role, grant.role_id), db.session.get(User, grant.user_id)
+        db.session.add(ModLog(type='admin', action='grant_expired', target_user_id=user.id, reason=role.name,
+                              link=f'u/{user.link()}', link_text=user.display_name(), public=False,
+                              site_domain_id=home_domain_id(user)))
+        holders.add(user.id)
+        built_in = built_in or role.built_in
+        db.session.delete(grant)
+    db.session.commit()
+    permissions_changed(*holders)
+    _shown_changed()
+    if built_in:
+        set_setting('admin_ids', None)
+    return len(expired)

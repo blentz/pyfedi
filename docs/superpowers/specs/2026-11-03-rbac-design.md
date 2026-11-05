@@ -6,6 +6,13 @@ Date: 2026-11-03. Status: being built on blentz.
   found is fixed at 296d8a174; O5 came out of it.
 - Step 3 (the check) is done: app/permissions.py (`user_access(perm, user, on=, anywhere=)`, `home_domain_id`,
   `may_act_on_user`), app/permission_cache.py (the per-user version). No call site names an object yet (step 5).
+- Step 10 is done, and with it the build. Expired grants are removed by `remove_expired_grants` (app/roles.py), with a
+  modlog entry naming no actor. The project has no Celery beat, so RB11's task runs from cron through `flask send-queue`,
+  every few minutes. `shown as admin` (RB12) goes through `admins_shown_on(domain)` for the API's site `admins`, /about,
+  and the domain's admin list in activitypub/util.py, and `user_view`'s `is_admin`. /about now follows O1 on a sister
+  domain: it names only the admins homed there, where it used to name every admin not hidden. Nodeinfo publishes no admin
+  list, so it has nothing to change. A role or grant change empties the cached `user_view`s, which held `is_admin` for
+  ten minutes. tests/test_rbac_acceptance.py builds "domain admin" through the pages and is RB3 and RB15's test.
 - **Ruled 2026-11-05, reworking steps 2, 7, 8 and 9** (migration d6a1f4c8e2b3): scope moved from the grant onto each
   permission in a role (RB1, RB7), Staff seeds limited to the first domain with `administer all users` (RB2), and the
   permission alone decides who adds accounts (RB13). Text below written before that ruling yields to the Rulings table.
@@ -116,7 +123,7 @@ reach anything that isn't already one of today's 8 permission strings.
 | RB8 | There is one `/admin` area. The menu shows only what the user's grants allow. Every list and form is filtered in its query to the user's domains, with a domain picker when the user holds more than one. |
 | RB9 | Every grant, revoke and role edit writes a ModLog entry. Every action taken under a scoped grant records the `site_domain_id` it was taken under. The admin modlog can be filtered by domain. |
 | RB10 | Revocation takes effect immediately. Any change to grants or roles clears that user's permission caches (`user_access`, `is_admin`, `is_staff`, `admin_ids`) on every worker. |
-| RB11 | Grants have an optional `expires_at`. An expired grant is ignored at check time. A Celery beat task deletes expired grants and writes a ModLog entry for each one. |
+| RB11 | Grants have an optional `expires_at`. An expired grant is ignored at check time. A scheduled task (`flask send-queue`, from cron) deletes expired grants and writes a ModLog entry for each one. |
 | RB12 | A scopable permission, `shown as admin`, makes its holder appear as an admin of domain X on X's host: admin=true in the API (session/user views), and listed among X's admins (API site `admins`, `/about` admin list, nodeinfo). An admin ticks it to give a custom role this behaviour. Instance admins on sister domains keep today's behaviour (O1, ruled): a sister domain lists only the admins homed on it. |
 | RB13 | **(Ruled again 2026-11-05.)** A holder of `approve registrations` on X approves X's applications and is notified of them. Holding `administer all users` on X alone decides who may add accounts on X. A domain's `registration` setting only says whether the public may sign up: `'anyone'` or `'closed'` (`'staff'` and `'admin'` merged into `'closed'`). |
 | RB14 | No custom role is seeded or shipped, including a "Domain admin". Every non-built-in role is created by an instance admin in the UI. |

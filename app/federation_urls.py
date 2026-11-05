@@ -19,6 +19,7 @@ from app import db
 from app.branding import own_value
 from app.local_names import local_named, named_by_actor
 from app.local_only import hidden_here
+from app.permissions import shown_as_admin_ids
 from app.storefront import DomainInfo, current_storefront, default_domain, domain_authority, domain_base_url, \
     federating_base, hosted_instance_ids, is_hosted_uri
 # Defined in app.storefront, which app.models can import (this module imports app.models); named here too, as the
@@ -28,6 +29,16 @@ from app.storefront import domain_of_url, federating_domain_of_url, is_federatin
 # (import cycle: models, utils)
 import app.models as models
 import app.utils as utils
+
+
+def admins_shown_on(domain: DomainInfo) -> list:
+    """Who `domain` names as its admins (RB12, O1): on a sister domain the admins homed on it, as another domain's would
+    name that domain; on the default domain every admin. Then the holders of `shown as admin` on it, each account once."""
+    admins = [admin for admin in models.Site.admins() if domain.is_default or
+              (home := owner_domain(admin)) is not None and home.domain == domain.domain]
+    known = {admin.id for admin in admins}
+    extra = [user_id for user_id in shown_as_admin_ids(domain.id) if user_id not in known]
+    return admins + (models.User.query.filter(models.User.id.in_(extra)).order_by(models.User.id).all() if extra else [])
 
 
 def owner_domain(obj) -> DomainInfo | None:

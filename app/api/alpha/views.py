@@ -28,7 +28,7 @@ import app.shared.community as shared_community
 # The module, not the names: app.shared.post reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.post)
 import app.shared.post as shared_post
-from app.federation_urls import domain_site_name, owner_domain
+from app.federation_urls import admins_shown_on, domain_site_name
 from app.storefront import DomainInfo, current_storefront, default_domain, domain_base_url, hosted_instance_ids, registration_mode_on, storefront_link, storefront_memo_name, storefront_url
 from app.local_names import hidden_note_text
 from app.local_only import hidden_here, hidden_here_clause, hidden_here_sql, hides_nothing, reporter_hidden_here, \
@@ -547,7 +547,7 @@ def user_view(user: User | int, variant, stub=False, user_id=None, flair_communi
                                           {'type': NOTIF_USER, 'entity_id': user.id, 'user_id': user_id}).scalar()
         activity_alert = True if user_sub else False
         v2 = {'person': user_view(user=user, variant=1, flair_community_id=flair_community_id, user_id=user_id), 'activity_alert': activity_alert, 'counts': counts,
-              'is_admin': user.is_admin()}
+              'is_admin': user.is_admin() or user_access('shown as admin', user.id, on=described_domain())}
         return v2
 
     # Variant 3 - models/user/get_person_details.dart - /user?person_id api endpoint
@@ -1553,10 +1553,7 @@ def site_view(user) -> dict:
         "admins": [],
         "site": site
     }
-    for admin in Site.admins():
-        home = owner_domain(admin)
-        if not storefront.is_default and (home is None or home.domain != storefront.domain):
-            continue   # a sister domain names only its own admins: another domain's would name that domain
+    for admin in admins_shown_on(storefront):   # a sister domain's own, and the holders of `shown as admin` there (RB12)
         if not hidden_here(admin, user is not None):   # no local-only account to a logged-out caller, nor off its domain
             v1['admins'].append(user_view(user=admin, variant=2))
     if user:

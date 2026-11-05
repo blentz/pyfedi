@@ -70,6 +70,7 @@ import app.activitypub.serializers.microblog as microblog_serializer   # the mod
 import app.activitypub.serializers.peertube as peertube_serializer   # likewise
 import app.activitypub.serializers.podcast as podcast_serializer   # likewise
 import urllib.parse
+from app.permissions import shown_as_admin_ids
 from app.utils import recipients_for
 from app.utils import captcha_enabled, feed_open_to, random_chars, site_language_id, is_hex_color, save_image_without_metadata, \
     refuse_over_remote_thumbnail_cap
@@ -6416,9 +6417,13 @@ def lemmy_site_data(domain: DomainInfo):
     # Admins, and the holders of roles listed publicly, whose accounts are on this domain: another domain's would name
     # that domain. Once each, admin first: someone may be both.
     admins = Site.admins()
-    for admin in admins + [user for user in Site.listed_role_holders() if user not in admins]:
+    shown = shown_as_admin_ids(domain.id)   # whoever is shown as an admin of this domain is named here, wherever homed
+    others = User.query.filter(User.id.in_(shown)).order_by(User.id).all() if shown else []
+    seen = {user.id for user in admins}
+    for admin in admins + [user for user in Site.listed_role_holders() + others
+                           if user.id not in seen and not seen.add(user.id)]:
         home = owner_domain(admin)
-        if home is None or home.domain != domain.domain:
+        if admin.id not in shown and (home is None or home.domain != domain.domain):
             continue
         person = {
             "id": admin.id,
