@@ -697,6 +697,11 @@ request.
   referrals and domains, the report counts and the modlog show that domain's
   rows, with a domain picker for anyone who may see more than one. The modlog
   can be filtered by domain.
+- A holder of "administer all users" on a domain may add accounts there while
+  its registration mode is closed to the public. A domain mode of "Admins only"
+  and a Closed site no longer limit adding accounts to admins: holders of
+  "administer all users" may too. The domain mode is relabelled "Closed: user
+  administrators only".
 - Notifications follow permissions. Registration applications go to holders
   of "approve registrations", held posts to "administer communities pages",
   reports on content to "moderate all communities" and reports on accounts to

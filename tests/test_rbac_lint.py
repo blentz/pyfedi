@@ -255,7 +255,8 @@ def test_the_template_scan_reads_nested_parentheses():
 
 def held_anywhere_routes_that_neither_filter_nor_name_an_object():
     """Each function under `@permission_held_anywhere(...)` must call `scope_for` (a list, filtered to the holder's
-    domains), or ask `user_access(..., on=...)` / `may_act_on_user` (one object, on its home domain). Otherwise a
+    domains), `creatable_domains` (the add-user form, RB13), or ask `user_access(..., on=...)` / `may_act_on_user` (one
+    object, on its home domain). Otherwise a
     holder on domain X would see, or act on, everything."""
     found = []
     for path in python_files():
@@ -266,7 +267,7 @@ def held_anywhere_routes_that_neither_filter_nor_name_an_object():
                        for d in node.decorator_list):
                 continue
             calls = [n for n in ast.walk(node) if isinstance(n, ast.Call)]
-            if not any(call_name(c) in ('scope_for', 'may_act_on_user') or
+            if not any(call_name(c) in ('scope_for', 'may_act_on_user', 'creatable_domains') or
                        (call_name(c) == 'user_access' and any(k.arg == 'on' for k in c.keywords)) for c in calls):
                 found.append(f'{rel(path)}:{node.name}')
     return found

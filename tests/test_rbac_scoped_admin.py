@@ -339,3 +339,92 @@ def test_a_local_only_domain_is_offered_by_the_picker_on_its_own_storefront_alon
             assert (closed.id, closed.domain) not in domain_choices(None)
     finally:
         clear_domain_cache()
+
+
+# --------------------------------------------------------------------------
+# RB13: creating accounts on a domain
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def modes(app, db_session):
+    """Domains in each mode, and what the add-user form needs. The default domain's own mode is the site's."""
+    local = make_instance('test.piefed.local', software='piefed')
+    founder = make_user(local, 'founder', local=True)
+    assert founder.id == 1
+    rows = {mode: SiteDomain(domain=f'{mode}.modes.example', scheme='https', federates=True, registration=mode)
+            for mode in ('anyone', 'staff', 'admin')}
+    db.session.add_all(rows.values())
+    db.session.commit()
+    clear_domain_cache()
+    yield type('Modes', (), dict(app=app, client=app.test_client(), local=local, founder=founder, rows=rows))
+    clear_domain_cache()
+
+
+def add_user(world, domain, name='newbie'):
+    data = {'user_name': name, 'email': f'{name}@example.com', 'password': 'password123',
+            'password2': 'password123', 'ignore_bots': '0', 'hide_nsfw': '1', 'hide_nsfl': '1', 'grant_scope': '0',
+            'site_domain': str(domain.id), 'submit': 'Save', 'csrf_token': csrf(world)}
+    with patch('app.admin.routes.finalize_user_setup'):
+        return world.client.post('/admin/users/add', data=data, content_type='multipart/form-data')
+
+
+def grant_on(world, name, *domains):
+    """A holder of `administer all users` on each of `domains`, signed in."""
+    user = holder(world, name, 'administer all users', domain=domains[0])
+    role = Role.query.filter_by(name=f'role-{name}').one()
+    for domain in domains[1:]:
+        db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id, site_domain_id=domain.id))
+    db.session.commit()
+    return user
+
+
+@pytest.mark.parametrize('mode,allowed', [('staff', True), ('admin', True), ('anyone', False)])
+def test_a_holder_on_a_domain_creates_its_accounts_only_in_a_closed_mode(modes, mode, allowed):
+    """RB13. Under 'anyone' the public signs up there, and a scoped holder is offered nothing."""
+    from app.models import User
+    grant_on(modes, 'scoped', modes.rows[mode])
+    add_user(modes, modes.rows[mode])
+    created = User.query.filter_by(user_name='newbie').first()
+    assert (created is not None) is allowed
+    if allowed:
+        assert created.site_domain_id == modes.rows[mode].id
+
+
+def test_a_holder_on_one_domain_cannot_create_an_account_on_another(modes):
+    from app.models import User
+    grant_on(modes, 'scoped', modes.rows['staff'])
+    add_user(modes, modes.rows['admin'])
+    assert User.query.filter_by(user_name='newbie').first() is None
+
+
+def test_the_form_offers_a_scoped_holder_only_the_domains_they_may_create_on(modes):
+    grant_on(modes, 'scoped', modes.rows['staff'], modes.rows['anyone'])
+    with patch('app.admin.routes.render_template', return_value='rendered') as render:
+        modes.client.get('/admin/users/add')
+    assert [c.label for c in render.call_args.kwargs['form'].site_domain.choices] == ['staff.modes.example']
+
+
+def test_a_holder_with_nowhere_to_create_is_refused_the_form_and_not_offered_the_button(modes):
+    grant_on(modes, 'scoped', modes.rows['anyone'])
+    response = modes.client.get('/admin/users/add')
+    assert response.status_code == 302 and 'permission_denied' in response.headers['Location']
+    assert 'Add local user' not in body(modes, '/admin/users?local_remote=local')
+
+
+def test_a_holder_who_may_create_is_offered_the_button(modes):
+    grant_on(modes, 'scoped', modes.rows['staff'])
+    assert 'Add local user' in body(modes, '/admin/users?local_remote=local')
+
+
+@pytest.mark.parametrize('mode', ['anyone', 'staff', 'admin'])
+def test_an_instance_wide_holder_creates_accounts_on_any_domain(modes, mode):
+    from app.models import User
+    holder(modes, 'wide', 'administer all users')
+    add_user(modes, modes.rows[mode])
+    assert User.query.filter_by(user_name='newbie').first() is not None
+
+
+def test_nobody_without_the_permission_opens_the_form(modes):
+    holder(modes, 'other', 'ban users', domain=modes.rows['staff'])
+    response = modes.client.get('/admin/users/add')
+    assert response.status_code == 302 and 'permission_denied' in response.headers['Location']

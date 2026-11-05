@@ -50,9 +50,9 @@ from app.community.routes import do_subscribe
 from app.constants import REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_REVIEWING
 from app.email import send_registration_approved_email
 from app.admin.roles_routes import user_grants_panel
-from app.admin.scope import scope_for
+from app.admin.scope import creatable_domains, may_create_account_on, scope_for
 from app.roles import grant_role, scope_refusal
-from app.permissions import holds_any_grant, may_act_on_user
+from app.permissions import domains_for, holds_any_grant, may_act_on_user
 from app.federation_urls import object_base
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
     CommunityMember, \
@@ -2347,6 +2347,7 @@ def admin_users():
     return render_template('admin/users.html', title=_('Users'), next_url=next_url, prev_url=prev_url, users=users,
                            local_remote=local_remote, search=search, sort_by=sort_by, last_seen=last_seen,
                            user_notes=user_notes(current_user.get_id()), verified=verified,
+                           can_add_user=bool(creatable_domains()),
                            roles_with=roles_with('administer all users'))
 
 
@@ -2650,13 +2651,17 @@ def admin_user_resend_email(user_id):
 
 @bp.route('/users/add', methods=['GET', 'POST'])
 @login_required
-@permission_required('administer all users')
+@permission_held_anywhere('administer all users')
 def admin_users_add():
+    creatable = creatable_domains()   # RB13
+    if not creatable:
+        return redirect(url_for('auth.permission_denied'))
     form = AddUserForm()
+    if domains_for('administer all users', current_user.get_id()) is not None:   # a scoped holder: their domains alone
+        form.site_domain.choices = select_choices([(row.id, row.domain) for row in creatable])
     user = User()
     if form.validate_on_submit():
-        # Staff reach this form for 'staff' domains; an 'admin' domain's accounts are made by an admin alone
-        if live_registration(domain_by_id(form.site_domain.data), g.site) == 'admin' and not current_user.is_admin():
+        if not may_create_account_on(domain_by_id(form.site_domain.data)):
             abort(403)
         grants = [db.session.get(Role, role_id) for role_id in form.grants.data or []]
         if grants and not current_user.is_admin():

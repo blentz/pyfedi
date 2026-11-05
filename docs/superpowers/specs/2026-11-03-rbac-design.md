@@ -6,6 +6,13 @@ Date: 2026-11-03. Status: being built on blentz.
   found is fixed at 296d8a174; O5 came out of it.
 - Step 3 (the check) is done: app/permissions.py (`user_access(perm, user, on=, anywhere=)`, `home_domain_id`,
   `may_act_on_user`), app/permission_cache.py (the per-user version). No call site names an object yet (step 5).
+- Step 9 is done. RB13's account creation is `app/admin/scope.py`'s `may_create_account_on`: an instance-wide holder of
+  `administer all users` on any domain, whatever its mode, and a holder on a domain while its live mode is `'staff'` or
+  `'admin'`. The form offers a scoped holder only those domains, and /admin/users hides "Add local user" from anyone
+  with none. As RB13 says, `'admin'` opened to holders, so it now behaves as `'staff'` does and its label became
+  "Closed: user administrators only"; this also applies to the default domain when the site is Closed. The catalogue
+  credited this to `approve registrations`, against RB13 and Settings that named Staff; RB13 won and the row is
+  corrected. The approval half of RB13 went in with step 8.
 - Step 8 is done. `domains_for(permission, user)` (app/permissions.py) is None for an instance-wide holder and
   otherwise the domains held on; `app/admin/scope.py`'s `scope_for` turns it into a list filter plus the domain
   picker (kept in the session so paging keeps it). Routes a scoped holder may open carry
@@ -225,7 +232,7 @@ it, which keeps today's behaviour (RB2). "DA" says whether the acceptance test's
 | Permission | Guards | Today | Staff | DA |
 |---|---|---|---|---|
 | `edit domain branding` *(split from settings)* | /admin/domains/<id>/branding: name, description, logos, registration mode (RB3) | `change instance settings` | no | yes |
-| `approve registrations` | /admin/approve_registrations*, registration notifications (`auth/util.py` recipients), creating accounts on a 'staff'/'admin'-registration domain (`admin_users_add`, RB13) | perm; is_admin | yes | yes |
+| `approve registrations` | /admin/approve_registrations*, registration notifications (`auth/util.py` recipients) | perm; is_admin | yes | yes |
 | `administer all users` | /admin/users, /user/<id>/edit, /resend_email, /users/add, /user/<id>/delete, /admin/referrals, /admin/reports (filtered by domain) | perm | no | yes |
 | `ban users` | instance ban and unban (`ban_profile`, `unban_profile`, `shared/user.py ban_user`, API ban/unban), via `may_act_on_user` | perm (or `manage users`) | yes | yes |
 | `manage users` | delete or purge a profile (`delete_profile`), the profile admin panel (`show_profile.html` 421/428, `base.html` 275) | perm | yes | yes |

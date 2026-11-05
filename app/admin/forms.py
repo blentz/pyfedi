@@ -623,7 +623,7 @@ class SiteDomainForm(FlaskForm):
                              description=_l('Fixed once the domain has accounts or communities.'))
     registration = SelectField(_l('Who may register'),
                                choices=select_choices([('anyone', _l('Anyone')), ('staff', _l('User administrators only')),
-                                        ('admin', _l('Admins only'))]), default='anyone',
+                                        ('admin', _l('Closed: user administrators only'))]), default='anyone',
                                description=_l('Registration per domain takes effect in a later release.'))
     submit = SubmitField(_l('Add domain'))
 

@@ -126,11 +126,10 @@ def _add_user(app, who, domain_id):
                                content_type='multipart/form-data')
 
 
-def test_adding_a_user_to_an_admin_row_needs_an_admin(app, onion):
+def test_adding_a_user_to_an_admin_row_allows_a_holder_of_the_permission(app, onion):
+    """RB13: 'admin' opens to holders of `administer all users` as 'staff' does; it was an admin's alone."""
     row, staff, admin = _staff_and_admin('admin')
-    assert _add_user(app, staff, row.id).status_code == 403
-    assert User.query.filter_by(user_name='newbie').count() == 0
-    _add_user(app, admin, row.id)
+    _add_user(app, staff, row.id)
     assert User.query.filter_by(user_name='newbie').one().site_domain_id == row.id
 
 
@@ -141,10 +140,10 @@ def test_adding_a_user_to_a_staff_row_allows_staff(app, onion):
 
 
 @pytest.mark.parametrize('row, mode, staff_may', [('admin', 'Open', True), ('admin', 'RequireApplication', True),
-                                                  ('anyone', 'Closed', False)])
-def test_adding_a_default_domain_user_follows_the_site_mode_not_its_row(app, onion, row, mode, staff_may):
-    """F7: the default domain's own `registration` column is dead data; Site.registration_mode is its live rule,
-    and a Closed site's accounts are made by an admin alone, as its register page says."""
+                                                  ('anyone', 'Closed', True)])
+def test_adding_a_default_domain_user_is_open_to_an_instance_wide_holder_in_every_mode(app, onion, row, mode, staff_may):
+    """F7: the default domain's own `registration` column is dead data. RB13: an instance-wide holder of `administer
+    all users` adds accounts whatever the mode, a Closed site's included."""
     _, staff, admin = _staff_and_admin('anyone')
     _mode(mode)
     _default_row(row)
