@@ -68,7 +68,10 @@ USER = [
 
 FEED = [
     Row('feed.new.instance_feed', '-DDAA', field_enabled('/feed/new', 'is_instance_feed')),
-    Row('feed.edit', 'DDDAA', page(lambda w: f'/feed/{w.feed.id}/edit')),
+    # A public feed: a private one is its owner's alone, admins included (O5), so nobody in the table may edit it. That
+    # is pinned in tests/test_feed_lifecycle_routes.py.
+    Row('feed.edit.public', 'DDDAA', page(lambda w: f'/feed/{w.feed.id}/edit'),
+        setup=lambda ctx: (setattr(ctx.world.feed, 'public', True), db.session.commit())),
     Row('feed.copy.instance_feed', '-DDAA', field_enabled(lambda w: f'/feed/{w.feed.id}/copy', 'is_instance_feed'),
         setup=lambda ctx: (setattr(ctx.world.feed, 'public', True), db.session.commit())),
 ]

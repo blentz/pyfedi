@@ -273,6 +273,23 @@ def test_edit_feed_lets_an_admin_through(app, db_session):
     assert db.session.get(Feed, s.feed.id).title == 'Admin edit'
 
 
+def test_edit_feed_keeps_a_private_feed_from_an_admin(app, db_session):
+    """O5: the owner's alone, admins included, whichever path reached edit_feed."""
+    s = _seed()
+    _make_admin(s.stranger)
+    s.feed.public = False
+    db.session.commit()
+    original_title = s.feed.title
+
+    with _site_ctx(app, s.stranger):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
+            with pytest.raises(Exception, match='incorrect_login'):
+                edit_feed(_form(title='Admin edit', public=False), s.feed, SRC_WEB)
+
+    db.session.rollback()
+    assert db.session.get(Feed, s.feed.id).title == original_title
+
+
 def test_edit_feed_from_scratch_still_checks_ownership(app, db_session):
     """D694, fixed: `from_scratch=True` skipped the ownership check, so a
     caller passing it could edit any feed (latent: no caller passes it). The

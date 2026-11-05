@@ -174,8 +174,7 @@ def feed_edit(feed_id: int):
         return show_ban_message()
     # load the feed
     feed_to_edit: Feed = db.session.get(Feed, feed_id) or abort(404)
-    # make sure the user owns this feed, or is an admin (D697: as the API allows)
-    if feed_to_edit.user_id != current_user.id and not user_access('manage instance feeds', current_user.get_id()):
+    if not shared_feed.may_edit_feed(feed_to_edit, current_user.id):
         abort(404)
     edit_feed_form = EditFeedForm()
     edit_feed_form.parent_feed_id.choices = select_choices(feeds_for_form(feed_id, feed_to_edit.user_id, feed_to_edit.home_domain()))

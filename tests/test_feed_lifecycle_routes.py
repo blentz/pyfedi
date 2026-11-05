@@ -661,13 +661,12 @@ def _admin(user):
     assert user.is_admin()
 
 
-def test_an_admin_may_edit_someone_elses_feed_on_the_web(app, db_session):
-    """D697, fixed (owner ruling): admins may edit any feed on the web, as the
-    API already allowed. The private feed keeps its OWNER's name suffix -- it
-    is built from the feed's owner, not from whoever is editing."""
+def test_an_admin_may_edit_someone_elses_public_feed_on_the_web(app, db_session):
+    """D697 (owner ruling): admins may edit a public feed on the web, as in the API. Making it private here gives it
+    its OWNER's name suffix, built from the feed's owner, not from whoever is editing."""
     instance, owner, stranger = _seed()
     _admin(stranger)
-    feed = _feed(owner, name='lifecyclefeed/feedowner', public=False)
+    feed = _feed(owner, name='lifecyclefeed', public=True)
 
     with app.test_client() as client:
         login(client, stranger)
@@ -677,12 +676,31 @@ def test_an_admin_may_edit_someone_elses_feed_on_the_web(app, db_session):
                 patch('app.shared.feed.existing_communities', return_value=[]):
             response = client.post(f'/feed/{feed.id}/edit',
                                    data=_edit_payload(app, client, title='Admin edit',
-                                                      url='lifecyclefeed/feedowner', public=None))
+                                                      url='lifecyclefeed', public=None))
 
     assert response.status_code == 302
     edited = db.session.get(Feed, feed.id)
     assert edited.title == 'Admin edit'
     assert edited.name == 'lifecyclefeed/feedowner'
+
+
+@pytest.mark.parametrize('method', ['GET', 'POST'])
+def test_an_admin_may_not_edit_someone_elses_private_feed_on_the_web(app, db_session, method):
+    """O5 (owner ruling 2026-11-03, spec 2026-11-03-rbac-design.md): a private feed is its owner's alone, admins
+    included, on the web as in the API."""
+    instance, owner, stranger = _seed()
+    _admin(stranger)
+    feed = _feed(owner, name='lifecyclefeed/feedowner', public=False)
+
+    with app.test_client() as client:
+        login(client, stranger)
+        data = _edit_payload(app, client, title='Admin edit', url='lifecyclefeed/feedowner', public=None) \
+            if method == 'POST' else None
+        response = client.open(f'/feed/{feed.id}/edit', method=method, data=data)
+
+    assert response.status_code == 404
+    db.session.expire_all()
+    assert db.session.get(Feed, feed.id).title == 'lifecyclefeed/feedowner'
 
 
 def test_editing_a_feed_that_is_not_there_is_a_404(app, db_session):

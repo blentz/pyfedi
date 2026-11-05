@@ -437,8 +437,8 @@ From O5's wider principle: admin actions are visible to content creators, admins
 administrative action is by default limited to removal or turning comments and reactions off. To take up once the
 build steps are done, not before:
 
-1. The web feed editor (`app/feed/routes.py` `feed_edit`) still lets an admin edit anyone's feed, private ones
-   included, so the web and the API now disagree.
+1. Done: the web feed editor (`app/feed/routes.py` `feed_edit`) let an admin edit anyone's feed, private ones
+   included. Both paths now ask `app.shared.feed.may_edit_feed`.
 2. Admins edit others' content elsewhere: community wiki pages (`CommunityWikiPage.can_edit`), a community's
    description and settings (`/admin/community/<id>/edit`), and a post's flair, NSFW and AI labels (staff,
    moderators).

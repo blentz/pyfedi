@@ -17,7 +17,6 @@ from app.utils import authorise_api_user, blocked_communities, blocked_or_banned
     feed_membership, feed_readable_by, subscribed_feeds
 
 
-from app.permissions import user_access
 def get_feed_list(auth, data, user_id=None) -> dict:
 
     mine_only = data['mine_only'] if 'mine_only' in data else False
@@ -238,9 +237,7 @@ def put_feed(auth, data):
     # edit_feed's own refusal, made before the parent is checked: checked first, the parent's answer told a stranger
     # which feed ids are the owner's
     user = authorise_api_user(auth, return_type='model')
-    # An admin may edit someone else's public feed (D697); a private one is its owner's alone, admins included (O5,
-    # spec 2026-11-03-rbac-design.md)
-    if not (feed.user_id == user.id or (user_access('manage instance feeds', user.id) and feed.public)):
+    if not shared_feed.may_edit_feed(feed, user.id):
         # one the caller may not read is as one nobody holds (review I2); a feed it can see is just not its to edit
         raise Exception('incorrect_login' if feed_readable_by(feed, user.id) else 'not_found')
 

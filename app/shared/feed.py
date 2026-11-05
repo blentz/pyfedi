@@ -403,6 +403,12 @@ def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_fi
     return feed
 
 
+def may_edit_feed(feed: Feed, user_id: int) -> bool:
+    """A feed is its owner's to edit. An admin may edit someone else's public one (D697); a private one is its owner's
+    alone, admins included (O5, spec 2026-11-03-rbac-design.md)."""
+    return feed.user_id == user_id or (feed.public and user_access('manage instance feeds', user_id))
+
+
 def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_banner_file=None, from_scratch=False):
     if src == SRC_API:
         url = input['url']
@@ -456,7 +462,7 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
     # in the same session persisted the rejected edit. app/api/alpha/utils/
     # feed.py:202's put_feed has no ownership check of its own, so this is the
     # only gate on the API path. It runs for from_scratch too (D694).
-    if not (feed.user_id == user.id or user_access('manage instance feeds', user.id)):
+    if not may_edit_feed(feed, user.id):
         raise Exception('incorrect_login')
 
     # Resolve the parent here too, before any field is assigned to the live feed: a refusal raises without rolling
