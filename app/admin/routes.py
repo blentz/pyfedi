@@ -23,6 +23,7 @@ from furl import furl
 from wtforms import Label
 
 from app import db, celery, cache
+from app.cms import cms_nav_links_changed
 from app.branding import ends_inside_markup, offsite_references
 from app.discovery import sync as discovery_sync
 from app.visibility import visible_to_clause
@@ -3212,9 +3213,12 @@ def admin_cms_page_add():
     form = CmsPageForm()
     if form.validate_on_submit():
         page = CmsPage(url=form.url.data, title=form.title.data, body=canonicalise_text(form.body.data),
-                       body_html=markdown_to_html(form.body.data), last_edited_by=current_user.display_name())
+                       body_html=markdown_to_html(form.body.data), last_edited_by=current_user.display_name(),
+                       in_header=form.in_header.data, in_footer=form.in_footer.data,
+                       show_sidebar=form.show_sidebar.data)
         db.session.add(page)
         db.session.commit()
+        cms_nav_links_changed()
         flash(_('Page saved.'))
         return redirect(url_for('admin.admin_cms_pages'))
 
@@ -3236,7 +3240,11 @@ def admin_cms_page_edit(page_id):
         page.body_html = markdown_to_html(form.body.data, a_target="")
         page.last_edited_by = current_user.display_name()
         page.edited_at = utcnow()
+        page.in_header = form.in_header.data
+        page.in_footer = form.in_footer.data
+        page.show_sidebar = form.show_sidebar.data
         db.session.commit()
+        cms_nav_links_changed()
         flash(_('Page saved.'))
         return redirect(url_for('admin.admin_cms_pages'))
 
@@ -3251,6 +3259,7 @@ def admin_cms_page_delete(page_id):
     page = db.session.get(CmsPage, page_id) or abort(404)
     db.session.delete(page)
     db.session.commit()
+    cms_nav_links_changed()
     flash(_('Page deleted.'))
     return redirect(url_for('admin.admin_cms_pages'))
 

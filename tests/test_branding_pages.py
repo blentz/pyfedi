@@ -19,7 +19,7 @@ from flask_wtf.csrf import generate_csrf
 from jinja2 import ChoiceLoader, DictLoader
 
 from app import cache, db
-from app.models import DomainBranding, Instance, Language, Site
+from app.models import CmsPage, DomainBranding, Instance, Language, Site
 from app.storefront import clear_domain_cache
 from app.utils import current_theme
 from tests.conftest import forget_login
@@ -74,6 +74,7 @@ def branded(app, two_domains, monkeypatch):
     community.description_html = '<p>About <em>art</em></p>'
     community.created_at = CREATED
     community.last_active = CREATED
+    db.session.add(CmsPage(url='/donate', title='Donate', body='x', body_html='<p>x</p>', in_header=True, in_footer=True))
     db.session.commit()
     clear_domain_cache()
     cache.clear()

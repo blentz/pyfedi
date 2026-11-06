@@ -6,11 +6,32 @@
 
 {% block app_content %}
 <div class="row">
+    {% if page.show_sidebar -%}
+    <main class="col-12 col-lg-8 position-relative main_pane">
+        <h1>{{ page.title }}</h1>
+        {{ page.body_html | safe }}
+    </main>
+
+    <aside id="side_pane" class="col-12 col-lg-4 side_pane" role="complementary">
+        <div class="card">
+            <div class="card-header">
+                 <h2>{{ _('About %(site_name)s', site_name=branding.name) }}</h2>
+            </div>
+            <div class="card-body">
+                <p><strong>{{ branding.description|safe }}</strong></p>
+                {% if branding.sidebar_html -%}
+                    <p>{{ branding.sidebar_html|safe }}</p>
+                {% endif -%}
+            </div>
+        </div>
+    </aside>
+    {% else -%}
     <main class="row position-relative main_pane">
         <div class="col-12 col-lg-8">
         <h1>{{ page.title }}</h1>
         {{ page.body_html | safe }}
         </div>
     </main>
+    {% endif -%}
 </div>
 {% endblock %}

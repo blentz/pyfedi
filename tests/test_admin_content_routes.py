@@ -159,6 +159,45 @@ class TestTheCmsPages:
         db.session.commit()
         return page
 
+    def test_a_new_page_is_linked_from_where_it_was_asked_to_be(self, env, editor):
+        token = csrf(env.app, env.client)
+        with patch('app.cms.cache.delete_memoized') as forget:
+            env.client.post('/admin/pages/add', data={
+                'url': '/rules', 'title': 'The rules', 'body': 'be kind', 'in_footer': 'y', 'show_sidebar': 'y',
+                'csrf_token': token})
+        page = CmsPage.query.filter_by(url='/rules').one()
+        assert (page.in_header, page.in_footer, page.show_sidebar) == (False, True, True)
+        assert forget.called
+
+    def test_an_edit_opts_a_page_in_and_out_of_its_links(self, env, editor, page):
+        page.in_footer = True
+        db.session.commit()
+        token = csrf(env.app, env.client)
+        with patch('app.cms.cache.delete_memoized') as forget:
+            env.client.post(f'/admin/pages/{page.id}/edit', data={
+                'url': page.url, 'title': page.title, 'body': 'hello', 'in_header': 'y', 'show_sidebar': 'y',
+                'csrf_token': token})
+        db.session.refresh(page)
+        assert (page.in_header, page.in_footer, page.show_sidebar) == (True, False, True)
+        assert forget.called
+        assert b'Header' in env.client.get('/admin/pages').data
+
+    def test_the_editor_offers_both_links(self, env, editor, page):
+        body = env.client.get(f'/admin/pages/{page.id}/edit').data
+        assert all(b'name="%s"' % field in body for field in (b'in_header', b'in_footer', b'show_sidebar'))
+
+    def test_deleting_a_page_forgets_its_links(self, env, editor, page):
+        token = csrf(env.app, env.client)
+        with patch('app.cms.cache.delete_memoized') as forget:
+            env.client.post(f'/admin/pages/{page.id}/delete', data={'csrf_token': token})
+        assert forget.called
+
+    def test_a_page_cannot_be_addressed_on_another_site(self, env, editor):
+        token = csrf(env.app, env.client)
+        for url in ('//elsewhere.example', '/\\elsewhere.example'):
+            env.client.post('/admin/pages/add', data={'url': url, 'title': 'x', 'body': 'x', 'csrf_token': token})
+            assert CmsPage.query.filter_by(url=url).first() is None
+
     def test_the_list_shows_what_is_there(self, env, editor, page):
         response = env.client.get('/admin/pages')
         assert b'About us' in response.data

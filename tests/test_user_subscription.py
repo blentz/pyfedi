@@ -97,38 +97,30 @@ def checkout_completed(**session):
 
 
 class TestChoosingAPlan:
-    """`/donate` is the one page here anonymous visitors may see."""
+    """`/donations`: `/donate` itself is a CMS page, tests/test_cms_donate_page.py."""
 
-    def test_a_stranger_is_shown_the_donation_page(self, env):
-        response = env.client.get('/donate')
-        assert response.status_code == 200
-
-    def test_a_stranger_is_invited_to_log_in_when_stripe_is_set_up(
-            self, env, stripe_configured):
-        response = env.client.get('/donate')
-        assert response.status_code == 200
-        assert b'Log in to donate' in response.data
+    def test_a_stranger_is_sent_to_log_in(self, env, stripe_configured):
+        response = env.client.get('/donations')
+        assert response.status_code == 302
+        assert '/auth/login' in response.headers['Location']
 
     def test_a_member_is_offered_the_plans(self, env, stripe_configured):
         sign_in(env.client, env.donor)
-        response = env.client.get('/donate')
+        response = env.client.get('/donations')
         assert response.status_code == 200
         assert b'A small amount' in response.data
         assert b'A larger amount' in response.data
 
-    def test_a_member_is_shown_the_plain_page_when_stripe_is_not_set_up(
-            self, env):
+    def test_there_is_nothing_here_when_stripe_is_not_set_up(self, env):
         sign_in(env.client, env.donor)
-        response = env.client.get('/donate')
-        assert response.status_code == 200
-        assert b'A small amount' not in response.data
+        assert env.client.get('/donations').status_code == 404
 
     def test_somebody_already_donating_is_told_a_choice_replaces_it(
             self, env, stripe_configured):
         env.donor.stripe_subscription_id = 'sub_existing'
         db.session.commit()
         sign_in(env.client, env.donor)
-        response = env.client.get('/donate')
+        response = env.client.get('/donations')
         assert b'replace your current donation plan' in response.data
 
 
@@ -226,7 +218,7 @@ class TestTheBillingPortal:
         sign_in(env.client, env.donor)
         response = env.client.get('/stripe_redirect/billing')
         assert response.status_code == 302
-        assert '/donate' in response.headers['Location']
+        assert '/donations' in response.headers['Location']
         assert len(http_mock.calls) == 0   # no route is registered: a request
                                            # to Stripe here would fail unmocked
 
@@ -252,7 +244,7 @@ class TestTheBillingPortal:
             400, json={'error': {'message': 'No such customer'}}))
         response = env.client.get('/stripe_redirect/billing')
         assert response.status_code == 302
-        assert '/donate' in response.headers['Location']
+        assert '/donations' in response.headers['Location']
 
     def test_an_answer_that_is_not_json_is_not_a_crash(
             self, env, stripe_configured, http_mock):
@@ -265,7 +257,7 @@ class TestTheBillingPortal:
             502, text='<html>Bad Gateway</html>'))
         response = env.client.get('/stripe_redirect/billing')
         assert response.status_code == 302
-        assert '/donate' in response.headers['Location']
+        assert '/donations' in response.headers['Location']
 
     def test_an_answer_that_is_json_but_not_an_object(
             self, env, stripe_configured, http_mock):
@@ -276,7 +268,7 @@ class TestTheBillingPortal:
             return_value=httpx.Response(200, json=['not', 'an', 'object']))
         response = env.client.get('/stripe_redirect/billing')
         assert response.status_code == 302
-        assert '/donate' in response.headers['Location']
+        assert '/donations' in response.headers['Location']
 
 
 class TestWhoMaySpeakToTheWebhook:

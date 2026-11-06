@@ -567,6 +567,9 @@ class CmsPageForm(FlaskForm):
     title = StringField(_l('Page title'), validators=[DataRequired(), Length(max=255)])
     body = TextAreaField(_l('Content (Markdown)'), validators=[DataRequired()], 
                         render_kw={'rows': 15, 'placeholder': _l('Write your content in Markdown format...')})
+    in_header = BooleanField(_l('Link to this page in the header'))
+    in_footer = BooleanField(_l('Link to this page in the footer'))
+    show_sidebar = BooleanField(_l('Show the site sidebar on this page'))
     submit = SubmitField(_l('Save'))
 
     def __init__(self, original_page=None, *args, **kwargs):
@@ -576,7 +579,10 @@ class CmsPageForm(FlaskForm):
     def validate_url(self, url):
         if not url.data.startswith('/'):
             url.data = '/' + url.data
-        
+        # Browsers read both of these as another site's address, and the page's link would go there.
+        if url.data.startswith('//') or '\\' in url.data:
+            raise ValidationError(_l('A page URL must be a path on this site.'))
+
         # Check if another page already uses this URL (excluding the current page if editing)
         existing_page = CmsPage.query.filter_by(url=url.data).first()
         if existing_page and (not self.original_page or existing_page.id != self.original_page.id):

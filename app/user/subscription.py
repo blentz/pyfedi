@@ -1,40 +1,44 @@
 import httpx
-from flask import redirect, url_for, flash, request, current_app
+from flask import abort, redirect, url_for, flash, request, current_app
 from flask_login import logout_user, current_user
 from flask_babel import _, lazy_gettext as _l
 
 from app import db
 from app.pinned_http import pinned_transport
-from app.models import User, CmsPage
-from app.onion import clearnet_only, is_onion_request
+from app.cms import stripe_plans_available
+from app.models import User
+from app.onion import clearnet_only
 from app.user import bp
 from app.utils import render_template, login_required
 
 
-@bp.route('/donate')
+@bp.route('/donations')
 def choose_plan():
-    cms_page = CmsPage.query.filter(CmsPage.url == '/donate').first()
-    if current_user.is_authenticated:
-        # inspired by https://stripe.com/docs/payments/checkout/subscriptions/starting
-        if current_user.stripe_subscription_id is not None:
-            flash(_('Thank you for supporting %(instance_name)s! Any choice you make below will replace your current donation plan.', instance_name=current_app.config['SERVER_NAME']))
+    """The plans, and the way to stop paying. Not /donate: that is a CMS page an admin may delete, and a donor must
+    still be able to cancel. The seeded /donate page links here on every site, so with no plans to offer this says so,
+    before asking anybody to log in for nothing, and on the page itself: a logged-out visitor has no session cookie, so
+    a flash would not survive a redirect."""
+    if not stripe_plans_available():
+        return render_template('generic_message.html', title=_('Donation plans'),
+                               message=_('Donation plans are not available on this site.')), 404
+    return plans()
 
-        if current_app.config['STRIPE_SECRET_KEY'] and not is_onion_request():
-            return render_template('user/choose_plan.html', title=_('Choose a donation plan'),
-                                   instance_name=current_app.config['SERVER_NAME'], monthly_small=current_app.config['STRIPE_MONTHLY_SMALL'],
-                                   monthly_big=current_app.config['STRIPE_MONTHLY_BIG'], monthly_small_text=current_app.config['STRIPE_MONTHLY_SMALL_TEXT'],
-                                   monthly_big_text=current_app.config['STRIPE_MONTHLY_BIG_TEXT']
-                                   )
-        else:
-            return render_template('donate.html', title=_('Donate'), cms_page=cms_page)
-    else:
-        if current_app.config['STRIPE_SECRET_KEY'] and not is_onion_request():
-            flash(_('Log in to donate to %(instance_name)s or donate to the PieFed project using the button below.', instance_name=current_app.config['SERVER_NAME']))
-        return render_template('donate.html', title=_('Donate'), cms_page=cms_page)
+
+@login_required
+def plans():
+    # inspired by https://stripe.com/docs/payments/checkout/subscriptions/starting
+    if current_user.stripe_subscription_id is not None:
+        flash(_('Thank you for supporting %(instance_name)s! Any choice you make below will replace your current donation plan.', instance_name=current_app.config['SERVER_NAME']))
+
+    return render_template('user/choose_plan.html', title=_('Choose a donation plan'),
+                           instance_name=current_app.config['SERVER_NAME'], monthly_small=current_app.config['STRIPE_MONTHLY_SMALL'],
+                           monthly_big=current_app.config['STRIPE_MONTHLY_BIG'], monthly_small_text=current_app.config['STRIPE_MONTHLY_SMALL_TEXT'],
+                           monthly_big_text=current_app.config['STRIPE_MONTHLY_BIG_TEXT']
+                           )
 
 
 @bp.route('/stripe_redirect/<plan>', methods=['GET'])
-@clearnet_only('user.choose_plan')
+@clearnet_only('main.index')
 @login_required
 def stripe_redirect(plan):
     import stripe  # lazy: stripe is slow to import (0.7s) and only billing uses it

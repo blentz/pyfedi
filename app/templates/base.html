@@ -209,7 +209,9 @@
                                     <div class="dropdown-menu communities_menu" hx-get="{{ url_for('main.explore_menu') }}" hx-trigger="intersect once" hx-target="this" hx-swap="innerHTML"></div>
                                 </li>
                             {% endif -%}
-                            <li class="nav-item"><a class="nav-link" href="/donate">{{ _('Donate') }}</a></li>
+                            {% for link in cms_nav_links().header -%}
+                                <li class="nav-item"><a class="nav-link" href="{{ link.url }}">{{ link.title }}</a></li>
+                            {%- endfor %}
                         {% else %}
                             <li class="nav-item dropdown{% if active_parent == 'communities' %} active{% endif %} communities_menu_parent">
                                 <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="/communities"  aria-haspopup="true" aria-expanded="false">{{ _('Communities') }}</a>
@@ -251,9 +253,9 @@
                                         <a class="dropdown-item{% if active_child == 'hidden_posts' %} active{% endif %}" href="/hidden_posts">{{ _('Hidden posts') }}</a>
                                     </li>
                                     {% if current_user.is_authenticated -%}
-                                        {% if current_user.stripe_subscription_id -%}
+                                        {% if stripe_plans_available() -%}
                                             <li>
-                                                <a class="dropdown-item{% if active_child == 'donate' %} active{% endif %}" href="/donate">{{ _('Manage donations') }}</a>
+                                                <a class="dropdown-item{% if active_child == 'donate' %} active{% endif %}" href="/donations">{{ _('Manage donations') if current_user.stripe_subscription_id else _('Donation plans') }}</a>
                                             </li>
                                         {% endif -%}
                                         {% if current_user.hide_read_posts -%}
@@ -282,7 +284,9 @@
                                     </ul>
                                 </li>
                             {% endif %}
-                            <li class="nav-item"><a class="nav-link" href="/donate">{{ _('Donate') }}</a></li>
+                            {% for link in cms_nav_links().header -%}
+                                <li class="nav-item"><a class="nav-link" href="{{ link.url }}">{{ link.title }}</a></li>
+                            {%- endfor %}
                             <li class="nav-item right d-none d-md-inline-block">
                                 <a class="nav-link" href="/notifications" title="{{ ngettext('%(num)d unread notification', '%(num)d unread notifications', unread_shown(current_user)) if unread_shown(current_user) else _('Notifications') }}" aria-label="{{ ngettext('%(num)d unread notification', '%(num)d unread notifications', unread_shown(current_user)) if unread_shown(current_user) else _('Notifications') }}">
                                     {% if unread_shown(current_user) %}
@@ -328,7 +332,7 @@
             <p class="text-center mt-4"><button class="btn btn-primary" style="display: none;" id="btn_add_home_screen">{{ _('Install PieFed app') }}</button></p>
             <div class="text-center">
                 <p>
-                    <a href="/about">{{ _("About") }}</a> | <a href="/donate">{{ _("Donate") }}</a> |
+                    <a href="/about">{{ _("About") }}</a> |{% for link in cms_nav_links().footer %} <a href="{{ link.url }}">{{ link.title }}</a> |{% endfor %}
                     <a href="/instances">{{ _("Instances") }}</a> | <a href="/domains">{{ _("Domains") }}</a> |
                     <a href="/modlog">{{ _("Modlog") }}</a>
                 </p>

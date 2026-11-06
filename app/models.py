@@ -6499,6 +6499,9 @@ class CmsPage(db.Model):
     last_edited_by = db.Column(db.String(50))
     created_at = db.Column(db.DateTime, default=utcnow)
     edited_at = db.Column(db.DateTime, default=utcnow)
+    in_header = db.Column(db.Boolean, default=False, nullable=False, server_default=db.false())
+    in_footer = db.Column(db.Boolean, default=False, nullable=False, server_default=db.false())
+    show_sidebar = db.Column(db.Boolean, default=False, nullable=False, server_default=db.false())
 
 
 class InstanceChooser(db.Model):

@@ -33,6 +33,17 @@
                 <p class="small field_hint">{{ _('Content is written in Markdown format and will be converted to HTML when saved.') }}</p>
             </div>
 
+            <div class="mb-3">
+                {{ render_field(form.in_header) }}
+                {{ render_field(form.in_footer) }}
+                <p class="small field_hint">{{ _('The link uses the page title and goes to the page URL.') }}</p>
+            </div>
+
+            <div class="mb-3">
+                {{ render_field(form.show_sidebar) }}
+                <p class="small field_hint">{{ _('Has no effect on /about, which has a layout of its own.') }}</p>
+            </div>
+
             {% if page %}
             <div class="mb-3">
                 <label class="form-label">{{ _('Preview') }}</label>

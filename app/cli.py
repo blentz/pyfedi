@@ -41,8 +41,9 @@ from app.email import mail_name, send_email
 from app.federation_urls import activity_id
 from app.error_counts import KEEP_DAYS
 from app.onion_media import DEFAULT_CACHE_BYTES, evict
+from app.cms import DONATE_BODY, DONATE_BODY_HTML, DONATE_TITLE, DONATE_URL
 from app.roles import remove_expired_grants, seed_default_roles
-from app.models import CronJobLog, Settings, BannedInstances, Role, User, Domain, ActivityPubLog, utcnow, \
+from app.models import CmsPage, CronJobLog, Settings, BannedInstances, Role, User, Domain, ActivityPubLog, utcnow, \
     utcnow, Site, Instance, File, Notification, Post, CommunityMember, NotificationSubscription, PostReply, Language, \
     Community, SendQueue, _store_files_in_s3, PostVote, Poll, \
     ActivityBatch, Reminder, RssFeed, RssFeedItem, Feed, media_of, ErrorCount, SiteDomain
@@ -192,6 +193,8 @@ def register(app):
                                       federates=True, registration='anyone', is_default=True))
             db.session.flush()
             clear_domain_cache()
+            db.session.add(CmsPage(url=DONATE_URL, title=DONATE_TITLE, body=DONATE_BODY, body_html=DONATE_BODY_HTML,
+                                   last_edited_by='PieFed', in_header=True, in_footer=True, show_sidebar=True))
             db.session.add(Settings(name='allow_nsfw', value=json.dumps(False)))
             db.session.add(Settings(name='allow_nsfl', value=json.dumps(False)))
             db.session.add(Settings(name='allow_dislike', value=json.dumps(True)))

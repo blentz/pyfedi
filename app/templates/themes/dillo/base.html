@@ -155,6 +155,9 @@
                         {% endif %}
                     {% endif %}
 
+                    {% for link in cms_nav_links().header -%}
+                        <p><a href="{{ link.url }}">{{ link.title }}</a></p>
+                    {% endfor -%}
                 {% endblock %}
             </td>
             <!-- main content -->
@@ -185,7 +188,12 @@
             <td> </td>
             <td align="middle">
                 <footer class="footer mt-auto" role="contentinfo">
-                    <p class="text-center"><a href="/donate">{{ _('Donate') }}</a></p>
+                    {% for link in cms_nav_links().footer -%}
+                        <p class="text-center"><a href="{{ link.url }}">{{ link.title }}</a></p>
+                    {% endfor -%}
+                    {% if current_user.is_authenticated and stripe_plans_available() -%}
+                        <p class="text-center"><a href="/donations">{{ _('Manage donations') if current_user.stripe_subscription_id else _('Donation plans') }}</a></p>
+                    {% endif -%}
                     <p class="text-center"><a href="/about">{{ _('About') }}</a></p>
                     <p class="text-center"><a href="/keyboard_shortcuts">{{ _('Keyboard shortcuts') }}</a></p>
                     <p class="text-center"><a href="https://codeberg.org/rimu/pyfedi">{{ _('PieFed v%(version)s is free and open source', version=VERSION) }}</a>.<br />{{ _('Please <a href="https://codeberg.org/rimu/pyfedi/issues">report bugs</a> or <a href="https://join.piefed.social/get-involved/">get involved</a>.') }}</p>

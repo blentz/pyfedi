@@ -120,14 +120,12 @@ def test_the_onion_connect_page_offers_no_providers(app, configured):
     assert render.call_args.kwargs['oauth_providers'] == {'google': False, 'mastodon': False, 'discord': False}
 
 
-def test_the_onion_donate_page_offers_no_plans(app, configured):
-    body = visit(app, configured, '/donate', onion=True).get_data(as_text=True)
-    assert 'A small amount' not in body
-    assert 'stripe_redirect' not in body
+def test_the_onion_has_no_plans_page(app, configured):
+    assert visit(app, configured, '/donations', onion=True).status_code == 404
 
 
-def test_the_clearnet_donate_page_offers_the_plans(app, configured):
-    assert 'A small amount' in visit(app, configured, '/donate', onion=False).get_data(as_text=True)
+def test_the_clearnet_plans_page_offers_the_plans(app, configured):
+    assert 'A small amount' in visit(app, configured, '/donations', onion=False).get_data(as_text=True)
 
 
 @pytest.mark.parametrize('plan', ['monthly_small', 'monthly_big', 'billing'])
@@ -138,7 +136,7 @@ def test_the_onion_refuses_a_checkout(app, configured, plan):
     with patch.dict(sys.modules, {'stripe': stripe}), patch('app.user.subscription.httpx.Client') as client:
         response = visit(app, configured, f'/stripe_redirect/{plan}', onion=True)
     assert response.status_code == 302
-    assert response.headers['Location'].endswith('/donate')
+    assert response.headers['Location'].endswith('/home')
     assert not stripe.checkout.Session.create.called and not client.called
 
 

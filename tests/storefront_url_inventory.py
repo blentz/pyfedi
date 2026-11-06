@@ -160,7 +160,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'show_people': 1,
     },
     'app/user/subscription.py': {
-        'choose_plan': 3,
+        'plans': 2,
     },
     'app/visibility.py': {
         '_mentions': 1,
