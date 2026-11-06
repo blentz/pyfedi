@@ -14,6 +14,7 @@ from app.payments.adapters import adapter_for
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.core import active_subscriptions_of, apply_event, cancel_subscription
 from app.payments.offers import LINK, offers_here
+from app.storefront import current_storefront, paid_registration
 from app.utils import login_required, login_required_if_private_instance, render_template
 
 HISTORY_ROWS = 100
@@ -109,7 +110,8 @@ def cancel(subscription_id):
     except ProviderError:
         flash(_('The payment provider is unavailable at the moment. Please try again later.'), 'error')
         return redirect(url_for('payments.donations'))
-    flash(_('Your regular donation has been cancelled.'))
+    flash(_('Your subscription will run until %(date)s.', date=subscription.ends_at.strftime('%Y-%m-%d')) if subscription.ends_at
+          else _('Your regular donation has been cancelled.'))
     return redirect(url_for('payments.donations'))
 
 
@@ -129,11 +131,11 @@ def billing():
 
 
 @bp.route('/donations/return/<result>')
-@login_required_if_private_instance
 def result(result):
     if result not in ('success', 'failure'):
         abort(404)
-    return render_template('user/stripe_result.html', result=result)
+    joining = current_user.is_anonymous and paid_registration(current_storefront())
+    return render_template('user/stripe_result.html', result=result, joining=joining)
 
 
 @bp.route('/stripe_result/<result>')

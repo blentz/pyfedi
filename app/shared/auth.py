@@ -3,6 +3,7 @@ from flask_smorest import abort
 from app import db, cache
 from app.auth.util import find_user, get_country
 from app.ldap_utils import sync_user_to_ldap
+from app.storefront import paid_registration
 from app.models import IpBan, utcnow, dummy_password_hash, verify_password_hash
 from app.onion import apply_audit, is_onion_request, stamp_activity
 from app.onion_account import audit_country, audit_ip, is_onion_account
@@ -35,6 +36,9 @@ def api_log_user_in(input):
         log_login_failure()
         raise Exception('incorrect_login')
 
+    if user.registration_pending_since is not None:   # an account that hasn't paid its first fee can't log in (M10)
+        raise Exception('incorrect_login')
+
     if not user.is_ban_exempt() and (user.banned or user_ip_banned() or user_cookie_banned()):
         # Detect if a banned user tried to log in from a new IP address
         if user.banned and not user_ip_banned() and not is_onion_request() and not is_onion_account(user):
@@ -53,7 +57,8 @@ def api_log_user_in(input):
     db.session.commit()
 
     try:
-        sync_user_to_ldap(user.user_name, user.email, password.strip())
+        if not paid_registration(user.home_domain()):   # the directory is no way round a domain's fee (plan S11)
+            sync_user_to_ldap(user.user_name, user.email, password.strip())
     except Exception:
         ...
 

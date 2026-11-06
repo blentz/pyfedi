@@ -49,6 +49,7 @@
                             {% if not row.is_default %}
                             <a href="{{ url_for('admin.admin_domain_branding', domain_id=row.id) }}">{{ _('Branding') }}</a>
                             {%- if can_manage %} |
+                            <a href="{{ url_for('admin.admin_domain_settings', domain_id=row.id) }}">{{ _('Settings') }}</a> |
                             <a href="#" data-url="{{ url_for('admin.admin_domains_delete', domain_id=row.id) }}" class="confirm_first send_post">{{ _('Delete') }}</a>
                             {%- endif %}
                             {% endif %}

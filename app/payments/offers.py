@@ -15,7 +15,7 @@ from app.storefront import current_storefront
 LINK = 'link'
 
 
-def _offers_on(domain_id: int | None, onion: bool) -> list[Offer]:
+def offers_on(domain_id: int | None, onion: bool) -> list[Offer]:
     """The active offers on a domain whose provider is usable. An offer with no domains is on all of them (M2)."""
     offers = Offer.query.filter_by(active=True).order_by(Offer.offer_group, Offer.position, Offer.id).all()
     limited = {}
@@ -31,12 +31,12 @@ def _offers_on(domain_id: int | None, onion: bool) -> list[Offer]:
 
 
 def offers_here() -> list[Offer]:
-    return _offers_on(current_storefront().id, is_onion_request())
+    return offers_on(current_storefront().id, is_onion_request())
 
 
 @cache.memoize(timeout=3600)
 def _any_offer_on(domain_id: int | None, onion: bool) -> bool:
-    return bool(_offers_on(domain_id, onion))
+    return bool(offers_on(domain_id, onion))
 
 
 def offers_changed() -> None:

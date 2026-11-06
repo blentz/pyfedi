@@ -17,13 +17,14 @@ from app.auth.oauth_util import (
     refuse_new_oauth_account,
     refuse_banned_visitor,
 )
-from app.storefront import current_storefront, public_registration_open
+from app.storefront import current_storefront, paid_registration, public_registration_open
 from app.referral import normalise_code, referral_mode_on
 from app.auth.util import (
     handle_abandoned_open_instance,
     notify_admins_of_registration,
     process_login,
     process_registration_form,
+    register_on_paid_domain,
     redirect_next_page,
     render_login_form,
     render_registration_form,
@@ -78,6 +79,8 @@ def register():
     handle_abandoned_open_instance()
 
     form = RegistrationForm()
+    if paid_registration(current_storefront()):
+        return register_on_paid_domain(form)
     referral = referral_mode_on(g.site)
     if referral and request.method == 'GET' and normalise_code(request.args.get('ref')):
         # A referral link: the code fills the answer, and is kept for an OAuth signup started from this page (RC5)
@@ -131,7 +134,8 @@ def resend_email():
     form = ResendEmailForm()
     if form.validate_on_submit():
         form.email.data = form.email.data.strip()
-        user = User.query.filter(func.lower(User.email) == func.lower(form.email.data)).filter_by(ap_id=None, deleted=False).first()
+        user = User.query.filter(func.lower(User.email) == func.lower(form.email.data)).filter_by(
+            ap_id=None, deleted=False, registration_pending_since=None).first()
 
         if user is None:
             # D1129. This said "No user found with that email address." while
@@ -207,7 +211,8 @@ def verify_email(token):
     # response`. It never was: Flask's default converter does not match an
     # empty path segment, so `/verify_email/` is a 404 and `token` is never
     # the empty string here.
-    user = User.query.filter_by(verification_token=token).first()
+    # An account that hasn't paid has been sent no link, and nothing a link does should happen to it (plan S13)
+    user = User.query.filter_by(verification_token=token, registration_pending_since=None).first()
     if user is not None:
         if user.banned:
             flash(_('You have been banned.'), 'error')

@@ -6,14 +6,18 @@ make one row. A provider is told to cancel only after that transaction commits.
 """
 from datetime import timedelta
 
+from flask import current_app
 from sqlalchemy.dialects.postgresql import insert
 
 from app import db
 from app.constants import DONOR_WHILE_SUBSCRIBED
+from app.email import send_verification_email
 from app.models import MemberSubscription, Offer, Payment, PaymentEvent, User, utcnow
 from app.payments.adapters import adapter_for
 from app.payments.events import CustomerKnown, Paid, Refunded, SubscriptionEnded, SubscriptionStarted
 from app.payments.tasks import cancel_at_provider
+from app.storefront import domain_by_id, paid_registration
+from app.utils import finalize_user_setup, get_setting
 
 LEGACY_GROUP = 'legacy'   # the group of a subscription with no offer: one migrated from the environment
 _MAX_ID = 2**31 - 1
@@ -45,7 +49,7 @@ def apply_event(provider_kind: str, event_id: str, events: list) -> bool:
         if applied is None:
             db.session.rollback()
             return False
-        to_cancel, touched = [], set()
+        to_cancel, touched, joined = [], set(), []
         mismatched = False
         for event in events:
             if isinstance(event, Paid):
@@ -53,7 +57,7 @@ def apply_event(provider_kind: str, event_id: str, events: list) -> bool:
             elif isinstance(event, Refunded):
                 _refunded(provider_kind, event, touched)
             elif isinstance(event, SubscriptionStarted):
-                to_cancel += _started(provider_kind, event, mismatched, touched)
+                to_cancel += _started(provider_kind, event, mismatched, touched, joined)
             elif isinstance(event, SubscriptionEnded):
                 _ended(provider_kind, event, touched)
             elif isinstance(event, CustomerKnown):
@@ -61,12 +65,15 @@ def apply_event(provider_kind: str, event_id: str, events: list) -> bool:
         db.session.flush()
         for user in touched:
             refresh_donor(user)
+            refresh_access(user)
         db.session.commit()
     except Exception:
         db.session.rollback()
         raise
     for kind, reference in to_cancel:
         cancel_at_provider(kind, reference)
+    for user in joined:
+        _welcome(user)
     return True
 
 
@@ -96,12 +103,14 @@ def _refunded(kind: str, event: Refunded, touched: set) -> None:
         touched.add(user)
 
 
-def _started(kind: str, event: SubscriptionStarted, mismatched: bool, touched: set) -> list:
+def _started(kind: str, event: SubscriptionStarted, mismatched: bool, touched: set, joined: list) -> list:
     """Record a subscription and end the others in its group (M7). What the provider must now cancel, as (kind, ref).
-    One whose first payment did not match its offer is kept for the admin to see, and neither grants nor replaces."""
+    One whose first payment did not match its offer is kept for the admin to see, and neither grants nor replaces. One
+    for an account that is gone would go on charging nobody's card for nothing (plan S17); its payment stays on the
+    ledger, for the admin to refund. A subscription is what a pending account was waiting for (M10)."""
     user, offer = _row(User, event.user_id), _row(Offer, event.offer_id)
     if user is None:
-        return []
+        return [(kind, event.reference)]
     db.session.execute(insert(MemberSubscription).values(user_id=user.id, offer_id=offer.id if offer else None,
                                                          provider_kind=kind, provider_reference=event.reference,
                                                          status='mismatch' if mismatched else 'active',
@@ -110,6 +119,9 @@ def _started(kind: str, event: SubscriptionStarted, mismatched: bool, touched: s
     touched.add(user)
     if mismatched:
         return []
+    if user.registration_pending_since is not None:
+        user.registration_pending_since = None
+        joined.append(user)
     replaced = []
     group = _group_of(offer)
     for other in MemberSubscription.query.filter(MemberSubscription.user_id == user.id,
@@ -128,6 +140,7 @@ def _ended(kind: str, event: SubscriptionEnded, touched: set) -> None:
         return
     subscription.status = 'ended'
     subscription.ended_at = utcnow()
+    subscription.ends_at = None
     touched.add(db.session.get(User, subscription.user_id))   # the column is a required foreign key
 
 
@@ -137,14 +150,63 @@ def _customer_known(event: CustomerKnown) -> None:
         user.stripe_customer_id = event.customer
 
 
+def _welcome(user: User) -> None:
+    """The fee is paid. Mail failing leaves an account that can ask for it again at /auth/resend_email: the webhook
+    has been applied, and a retry would do nothing."""
+    if not get_setting('email_verification', True):
+        finalize_user_setup(user)
+        return
+    try:
+        send_verification_email(user)
+    except Exception as error:
+        current_app.logger.warning(f'paid registration: no verification mail for account {user.id}: {type(error).__name__}')
+
+
 def cancel_subscription(subscription: MemberSubscription) -> None:
-    """The member cancelling. The provider first: if it refuses, nothing here has changed and they are still paying."""
-    adapter_for(subscription.provider_kind).cancel(subscription.provider_reference)
-    subscription.status = 'ended'
-    subscription.ended_at = utcnow()
-    db.session.flush()
-    refresh_donor(db.session.get(User, subscription.user_id))
+    """The member cancelling. The provider first: if it refuses, nothing here has changed and they are still paying. On
+    a paid domain the plan runs out, rather than taking away what they have paid for (plan S22)."""
+    user = db.session.get(User, subscription.user_id)
+    adapter = adapter_for(subscription.provider_kind)
+    if _pays_for_access(user, subscription):
+        subscription.ends_at = adapter.cancel_at_period_end(subscription.provider_reference)
+    else:
+        adapter.cancel(subscription.provider_reference)
+        subscription.status = 'ended'
+        subscription.ended_at = utcnow()
+        db.session.flush()
+        refresh_donor(user)
+        refresh_access(user)
     db.session.commit()
+
+
+def _registration_group(user: User) -> str | None:
+    """The offer group that pays for this account's domain, if its domain charges."""
+    domain = domain_by_id(user.site_domain_id)
+    if not paid_registration(domain):
+        return None
+    offer = db.session.get(Offer, domain.registration_offer_id)
+    return offer.offer_group if offer else None
+
+
+def _pays_for_access(user: User, subscription: MemberSubscription) -> bool:
+    group = _registration_group(user)
+    return group is not None and _group_of(_row(Offer, subscription.offer_id)) == group
+
+
+def refresh_access(user: User) -> None:
+    """User.access_lapsed_at, from what the member holds in the group that pays for their domain (M12, plan S19). A plan
+    change in the group never lapses, and somebody who has held no plan there never does: an account an admin made, or
+    one from before the domain charged, has nothing to lapse from."""
+    group = _registration_group(user)
+    if group is None:
+        user.access_lapsed_at = None
+        return
+    held = [row for row in MemberSubscription.query.filter_by(user_id=user.id)
+            if _group_of(_row(Offer, row.offer_id)) == group]
+    if any(row.status == 'active' for row in held):
+        user.access_lapsed_at = None
+    elif any(row.status == 'ended' for row in held) and user.access_lapsed_at is None:
+        user.access_lapsed_at = utcnow()
 
 
 def end_subscriptions_of(user: User) -> None:

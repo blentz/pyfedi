@@ -34,11 +34,12 @@ from app.activitypub.signature import post_request, default_context, RsaKeys
 from app.activitypub.util import extract_domain_and_actor, cross_origin_delete_delay, LD_SIGNED_LOG_PREFIX, \
     hosted_inbox_hosts
 from app.admin.constants import ReportTypes
+from app.payments.offers import offers_on
 from app.admin.forms import FederationForm, SiteMiscForm, SiteProfileForm, EditCommunityForm, EditUserForm, \
     EditTopicForm, SendNewsletterForm, AddUserForm, PreLoadCommunitiesForm, ImportExportBannedListsForm, \
     EditInstanceForm, RemoteInstanceScanForm, MoveCommunityForm, EditBlockedImageForm, AddBlockedImageForm, \
     CmsPageForm, CreateOfflineInstanceForm, InstanceChooserForm, CloseInstanceForm, EmojiForm, TopicImportForm, \
-    EmojiFilterForm, ContactInstanceForm, MastodonDirectoryScanForm, SiteDomainForm, DomainBrandingForm
+    EmojiFilterForm, ContactInstanceForm, MastodonDirectoryScanForm, SiteDomainForm, DomainBrandingForm, DomainSettingsForm
 from flask_wtf import FlaskForm
 from app.admin.util import ban_list_entries, unsubscribe_from_everything_then_delete, unsubscribe_from_community, send_newsletter, \
     topics_for_form, move_community_images_to_here, switch_to_unsilenced, switch_to_silenced, serialize_topic_tree, \
@@ -549,6 +550,50 @@ def admin_domains_delete(domain_id):
         remove_superseded_logos(logos)
         flash(_('Domain deleted.'))
     return redirect(url_for('admin.admin_domains'))
+
+
+@bp.route('/domains/<int:domain_id>/settings', methods=['GET', 'POST'])
+@login_required
+@permission_required('manage domains')
+def admin_domain_settings(domain_id):
+    """Who may join a sister domain and who may read it. The first domain's are the site settings' (plan S4, S24)."""
+    row = db.session.get(SiteDomain, domain_id) or abort(404)
+    if row.is_default:
+        abort(404)
+    form = DomainSettingsForm(obj=row)
+    usable = [offer for offer in offers_on(row.id, False) if offer.kind == 'subscription']
+    form.registration_offer_id.choices = [(0, _('None'))] + [(offer.id, offer.title) for offer in usable]
+    if row.registration_offer_id is None and not form.is_submitted():
+        form.registration_offer_id.data = 0
+    if form.validate_on_submit():
+        refusal = domain_settings_refusal(row, form, {offer.id for offer in usable},
+                                          user_access('manage monetization', current_user.get_id()))
+        if refusal is not None:
+            flash(refusal, 'error')
+        else:
+            row.registration = form.registration.data
+            row.registration_offer_id = form.registration_offer_id.data or None
+            row.lapse_grace_days = form.lapse_grace_days.data
+            row.login_required = form.login_required.data
+            db.session.commit()
+            clear_domain_cache()
+            flash(_('Domain settings saved.'))
+            return redirect(url_for('admin.admin_domains'))
+    return render_template('admin/domain_settings.html', title=_('Domain settings'), form=form, row=row)
+
+
+def domain_settings_refusal(row: SiteDomain, form: DomainSettingsForm, usable_offers: set, may_choose_offer: bool) -> str | None:
+    """Why a domain can't be set to what `form` says, or None (plan S5, S6, S8, S24)."""
+    if form.login_required.data and not row.login_required and row.federates:
+        return _('A domain that federates cannot require login: what it has federated has already left this server.')
+    if form.registration_offer_id.data != (row.registration_offer_id or 0) and not may_choose_offer:
+        return _('Choosing what registration pays for needs the manage monetization permission.')
+    if form.registration.data == 'paid':
+        if row.is_onion:
+            return _('An onion domain cannot charge at registration yet: no payment provider can be reached from it.')
+        if form.registration_offer_id.data not in usable_offers:
+            return _('A paid domain needs a subscription that is on offer on that domain.')
+    return None
 
 
 @bp.route('/domains/<int:domain_id>/branding', methods=['GET', 'POST'])

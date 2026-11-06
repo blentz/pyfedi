@@ -3469,7 +3469,8 @@ def aged_account_required(func):
 
 def login_required_here() -> bool:
     """Whether this storefront requires login to browse (M11). What app.login_gate and each decorator below ask."""
-    return g.site.private_instance is not False   # no value at all has always counted as private
+    storefront = current_storefront()
+    return g.site.private_instance is not False if storefront.is_default else storefront.login_required
 
 
 def login_redirect():
@@ -3561,7 +3562,7 @@ def rss_token_user():
             User.ap_id == None,  # noqa: E711 -- a local account
             User.banned == False,  # noqa: E712
             User.deleted == False).first())  # noqa: E712
-    return kept[1]
+    return None if kept[1] is not None and kept[1].access_has_lapsed() else kept[1]
 
 
 def as_rss_reader(func):
@@ -5743,6 +5744,8 @@ def authorise_api_user(auth, return_type=None, id_match=None) -> User | dict | i
             raise Exception('incorrect_login')
         if user.ap_id is not None or not user.verified or user.banned is True or user.deleted is True:
             raise Exception('incorrect_login')
+        if user.access_has_lapsed():   # M12: renewing is the web page's
+            raise Exception('access_lapsed')
         if user.password_updated_at:
             issued_at_time = decoded['iat']
             password_updated_time = int(user.password_updated_at.timestamp())

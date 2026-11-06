@@ -1465,6 +1465,11 @@ owner ruled; those rulings are the limits listed in 2.3. Typical fixes:
   Patreon, Ko-fi or anywhere else, and logged-out visitors can make one-off donations. See
   `INSTALL.md`. Spec
   `docs/superpowers/specs/2026-11-05-monetization-infrastructure-design.md`.
+- **Private and paid domains.** "Require login to browse" is now per domain, and refuses everything
+  not on a short list, so a private site no longer answers logged-out API calls. **An integration
+  that reads a private instance's API without logging in must now log in.** A domain can charge a
+  first subscription fee at registration, and restrict a member whose subscription has lapsed. See
+  `INSTALL.md`.
 - **The Donate page is a CMS page.** `/donate` is seeded and edited at `/admin/pages`, and any
   CMS page can opt in to a header link, a footer link and the sidebar. Spec
   `docs/superpowers/specs/2026-11-05-cms-donate-page-design.md`.

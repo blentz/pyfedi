@@ -13,6 +13,9 @@
                     <div class="card-body p-6" id="registration_form">
                         {% if registration_open and site.registration_mode != 'Closed' %}
                             <h1 class="card-title text-center">{{ _('Create new account') }}</h1>
+                            {% if paid_offer -%}
+                            <p class="text-center">{{ _('Joining costs %(price)s, for %(plan)s. You will pay on the next page, and your account starts once the payment is confirmed.', price=paid_price, plan=paid_offer.title) }}</p>
+                            {% endif -%}
                             {% if google_oauth -%}
                             <p align="center">
                                 <a href="/auth/google_login" class="btn btn-outline-primary">{{ _('Log in with Google') }}

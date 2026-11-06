@@ -20,10 +20,14 @@
                                 <h3 class="card-title">{{ titles.get(subscription.offer_id) or _('Regular donation') }}</h3>
                             </div>
                             <div class="card-body">
+                                {% if subscription.ends_at -%}
+                                <p>{{ _('Cancelled. It runs until %(date)s.', date=subscription.ends_at.strftime('%Y-%m-%d')) }}</p>
+                                {% else -%}
                                 <form method="post" action="{{ url_for('payments.cancel', subscription_id=subscription.id) }}">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button type="submit" class="btn btn-primary">{{ _('Cancel regular donation') }}</button>
                                 </form>
+                                {% endif -%}
                             </div>
                         </div>
                     </div>

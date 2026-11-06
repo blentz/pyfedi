@@ -66,7 +66,7 @@ def test_an_older_shorter_domain_rows_entry_is_never_read(db_session, real_cache
     with caplog.at_level(logging.ERROR):
         rows = domain_rows()
     assert 'Exception possibly due to cache backend' not in caplog.text
-    assert rows and all(len(row) == 8 for row in rows)
+    assert rows and all(len(row) == 11 for row in rows)
 
 
 @pytest.mark.parametrize('fn, args', [

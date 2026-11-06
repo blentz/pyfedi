@@ -1,8 +1,9 @@
 # Monetization infrastructure — design
 
-Date: 2026-11-05. Status: approved by the owner 2026-11-05. Phase 1 is built (plan
-`docs/superpowers/plans/2026-11-05-monetization-phase-1.md`), and so is phase 2 (plan
-`docs/superpowers/plans/2026-11-06-monetization-phase-2.md`). Live Stripe calls are unverified: the owner ruled out a
+Date: 2026-11-05. Status: approved by the owner 2026-11-05. Phases 1, 2 and 3 are built: phase 1 (plan
+`docs/superpowers/plans/2026-11-05-monetization-phase-1.md`), phase 2 (plan
+`docs/superpowers/plans/2026-11-06-monetization-phase-2.md`) and phase 3 (plan
+`docs/superpowers/plans/2026-11-06-monetization-phase-3.md`). Live Stripe calls are unverified: the owner ruled out a
 test-mode run.
 
 ## Summary
@@ -118,8 +119,8 @@ Each phase ships on its own, with the full gates.
 
 ## Open questions
 
-- Which retention period and grace period should be the defaults? They are admin-set either way (M6, M12).
-- How long may a pending paid account wait before removal? It has to allow for slow crypto confirmation (M10).
-- Does an existing domain with accounts and `federates=True` have any way to become private? C9 and the existing lock on
-  changing `federates` suggest not. If so, a private domain must start out as one.
-- What should the phase 3 renewal page look like for a member who can't log in normally (M12)?
+- Which retention period should be the default? It is admin-set either way, and starts blank (M6).
+
+Phase 3 answered the rest (plan decisions S6, S16, S19, S20): grace defaults to 7 days, and a pending account lasts 48 hours. A
+federating domain can't become private, so a private domain must start out as one. A lapsed member logs in as usual and renews at
+`/donations`.

@@ -37,7 +37,7 @@ The owner can overrule any of them.
 | S4 | The default domain keeps `Site.private_instance` as its setting. Every other domain gets `SiteDomain.login_required`. Migration copies the site flag to every other domain. | Same rule as `registration`, where the default row reads the Site row. Nothing opens up on deploy. |
 | S5 | C9 applies when the setting is turned on: only a `federates=False` domain can turn it on. A domain already on (S4), or the default domain, keeps working while federating. | C9 would otherwise shut existing private instances. |
 | S6 | An existing federating domain can't become private. It must start as a local-only domain. | Answers the spec's open question: C9 and the `federates` lock together already say this, because federated content has already left the server. |
-| S7 | On a domain that doesn't federate, a request asking for ActivityPub JSON gets no exception from the gate. | `is_activitypub_request()` is a header anyone can send. |
+| S7 | An ActivityPub Accept header opens nothing outside the federation endpoints, and on a domain that doesn't federate those answer 404. | `is_activitypub_request()` is a header anyone can send. |
 
 ### Paid registration (M10)
 
@@ -51,7 +51,7 @@ The owner can overrule any of them.
 | S13 | No email is sent until payment. The webhook then sends the verification email, or finishes setup if verification is off. `/resend_email` and `/verify_email` do nothing for a pending account. | An unpaid signup can't be used to send mail to a stranger. |
 | S14 | A pending account that logs in with the right password goes straight to a new checkout, with no session. | Someone who closes the Stripe tab can come back, with no token to design. A wrong password gets the same answer as for any account. |
 | S15 | A paid domain's fee is the offer's subscription, charged from the first day, so no trial. | M10: registration collects the first fee. |
-| S16 | Unpaid accounts are removed after 48 hours by the daily task, hard deleted. Stripe checkout sessions expire at 24 hours. | Answers the spec's open question. It holds a name for at most about three days, and leaves room for BTCPay's slow confirmations later. Nothing else references an account that never logged in. |
+| S16 | Unpaid accounts are removed after 48 hours by the daily task, hard deleted. Stripe checkout sessions expire at 23 hours, as Stripe allows 24 at most by its own clock. | Answers the spec's open question. It holds a name for at most about three days, and leaves room for BTCPay's slow confirmations later. Nothing else references an account that never logged in. |
 | S17 | A payment arriving for an account that no longer exists: the provider is told to cancel the subscription, and the ledger row stays for the admin to refund. | A late payment must not keep charging somebody with no account. Should be rare because of S16. |
 | S18 | The offer named by a paid domain can't be deleted or deactivated. If its provider goes away, the register page says registration is unavailable. | Otherwise registration quietly opens or breaks. |
 
@@ -60,7 +60,7 @@ The owner can overrule any of them.
 | # | Decision | Why |
 |---|---|---|
 | S19 | A new column, `User.access_lapsed_at`, is set when a member's last active subscription in the registration offer's group ends, and cleared when one starts. The default grace is 7 days, per domain, in `SiteDomain.lapse_grace_days`. | Answers the spec's open question. A plan change within the group doesn't count as a lapse (M7). Admin-made accounts and members who joined before the domain became paid never get a value, so they're never locked out. |
-| S20 | Past grace, a lapsed member may use: `/donations` and checkout, cancel, billing, the return page, logout, settings export, delete account. All else redirects to `/donations`. The API answers 403, and an RSS token stops working. | M12 says renew or export. Delete is added because a member leaving must be able to leave. Nothing is deleted by this. |
+| S20 | Past grace, a lapsed member may use: `/donations` and checkout, cancel, billing, the return page, logout, settings export, delete account. All else redirects to `/donations`. The API answers 403 (a token on a domain that doesn't require login: 400 `access_lapsed`, as every API refusal there is), and an RSS token stops working. | M12 says renew or export. Delete is added because a member leaving must be able to leave. Nothing is deleted by this. |
 | S21 | Admins are never lapsed. | They'd otherwise lock themselves out of the admin pages that fix it. |
 | S22 | **A member cancelling on a paid domain cancels at the end of the paid period**, and the page shows the date. Elsewhere, cancelling stays immediate as now. | Immediate cancellation would take away time they paid for. This adds an `at_period_end` argument to the adapter. Mocks only, like all Stripe calls here. |
 | S23 | "Export their data" means the existing settings export. | It's the only export the site has. A full export of posts and comments is a feature of its own, for the owner to ask for. |
@@ -104,5 +104,5 @@ The owner can overrule any of them.
 ## Deploy notes
 
 - Migration only. The S4 copy means nothing opens on deploy.
-- **S1 changes what an existing private instance answers:** logged-out API clients and the undecorated pages stop working
+- **The leak fix (commits before this plan's Task 1) changes what an existing private instance answers:** logged-out API clients and the undecorated pages stop working
   on it. That's the leak being closed, but any logged-out integration that relied on it will need to log in.

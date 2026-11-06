@@ -49,6 +49,9 @@ class DomainInfo(NamedTuple):
     is_onion: bool
     id: int | None   # the site_domain row; None only for the synthesised default
     instance_id: int   # the domain's instance row; DEFAULT_INSTANCE_ID for the default (spec 2026-10-19 §3.1)
+    login_required: bool = False   # not the default domain's, which is Site.private_instance
+    registration_offer_id: int | None = None
+    lapse_grace_days: int = 7
 
 
 # Made by `flask init-db` as the local instance, row 1 is the default domain's. Each other domain has a row of its own.
@@ -64,6 +67,13 @@ def public_registration_open(storefront: DomainInfo) -> bool:
     then `Site.registration_mode` applies as well. A 'closed' domain's accounts are made by the admin
     add-user form alone."""
     return storefront.is_default or storefront.registration == 'anyone'
+
+
+def paid_registration(storefront: DomainInfo) -> bool:
+    """Whether signing up on `storefront` costs a first fee (M10). Only `/register` knows this: to every other way of
+    making an account a paid domain is simply closed, by `public_registration_open` (plan S9). The default domain's own
+    `registration` column is ignored, as it is there."""
+    return not storefront.is_default and storefront.registration == 'paid'
 
 
 def registration_mode_on(storefront: DomainInfo, site) -> str:
@@ -129,7 +139,7 @@ def domain_rows() -> tuple[DomainInfo, ...]:
     if not rows:
         return (_synthesised_default(),)
     return tuple(DomainInfo(r.domain, r.scheme, r.federates, r.registration, r.is_default, r.is_onion, r.id,
-                            r.instance_id) for r in rows)
+                            r.instance_id, r.login_required, r.registration_offer_id, r.lapse_grace_days) for r in rows)
 
 
 def clear_domain_cache() -> None:

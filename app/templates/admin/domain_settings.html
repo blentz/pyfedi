@@ -1,0 +1,18 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% from 'bootstrap5/form.html' import render_form %}
+{% set active_child = 'admin_domains' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col-12 col-md-8">
+        <h2>{{ _('Settings for %(domain)s', domain=row.domain) }}</h2>
+        {{ render_form(form) }}
+    </div>
+</div>
+{% endblock %}

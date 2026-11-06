@@ -2249,6 +2249,8 @@ class User(UserMixin, db.Model):
     stripe_customer_id = db.Column(db.String(50))
     stripe_subscription_id = db.Column(db.String(50))
     donor_until = db.Column(db.DateTime)   # app/payments/core.py keeps this; DONOR_WHILE_SUBSCRIBED while subscribed
+    registration_pending_since = db.Column(db.DateTime)   # a paid domain's signup that hasn't paid: can't log in (M10)
+    access_lapsed_at = db.Column(db.DateTime)   # when what paid for a paid domain ran out; grace counts from here (M12)
     searchable = db.Column(db.Boolean, default=True)        # whether their profile is visible in profile list
     indexable = db.Column(db.Boolean, default=True)         # whether posts appear in search results
     bot = db.Column(db.Boolean, default=False, index=True)
@@ -2497,6 +2499,20 @@ class User(UserMixin, db.Model):
 
     def is_local(self):
         return self.ap_id is None or is_local_url(self.ap_profile_id)
+
+    @property
+    def is_active(self):
+        """flask_login refuses to log in an account that isn't: one that hasn't paid its first fee yet (M10)."""
+        return self.registration_pending_since is None
+
+    def access_has_lapsed(self) -> bool:
+        """Whether this member of a paid domain is past their grace period, so may only renew or leave (M12). Admins never
+        are: they'd lock themselves out of the pages that put it right."""
+        if self.access_lapsed_at is None:
+            return False
+        home = storefront.domain_by_id(self.site_domain_id)
+        return storefront.paid_registration(home) and utcnow() > self.access_lapsed_at + timedelta(days=home.lapse_grace_days) \
+            and not self.is_admin()
 
     def waiting_for_approval(self):
         application = UserRegistration.query.filter_by(user_id=self.id, status=0).first()
@@ -6036,7 +6052,7 @@ class SiteDomain(db.Model):
     """One row per domain the site answers on (a storefront). Exactly one row is the default."""
     __tablename__ = 'site_domain'
     __table_args__ = (
-        CheckConstraint("registration IN ('anyone','closed')", name='ck_site_domain_registration'),
+        CheckConstraint("registration IN ('anyone','closed','paid')", name='ck_site_domain_registration'),
         Index('ix_site_domain_one_default', 'is_default', unique=True, postgresql_where=text('is_default')),
         db.UniqueConstraint('instance_id', name='uq_site_domain_instance_id'),
     )
@@ -6044,7 +6060,10 @@ class SiteDomain(db.Model):
     domain = db.Column(db.String(255), unique=True, nullable=False)  # lower-case host name, no scheme or port
     scheme = db.Column(db.String(5), nullable=False, default='https')  # https or http
     federates = db.Column(db.Boolean, nullable=False, default=True, server_default='true')
-    registration = db.Column(db.String(10), nullable=False, default='anyone', server_default='anyone')  # anyone, closed: whether the public may sign up
+    registration = db.Column(db.String(10), nullable=False, default='anyone', server_default='anyone')  # anyone, closed, paid: whether the public may sign up, and whether it costs
+    registration_offer_id = db.Column(db.Integer, db.ForeignKey('offer.id', name='fk_site_domain_registration_offer'))   # paid: what the first fee is for
+    login_required = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())   # the default domain's is Site.private_instance
+    lapse_grace_days = db.Column(db.Integer, nullable=False, default=7, server_default='7')   # paid: how long access outlasts a member's subscription
     is_default = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     is_onion = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     # Its own instance row (spec 2026-10-19 §3.1): row 1 for the default. Set on insert, below.
@@ -6566,6 +6585,7 @@ class MemberSubscription(db.Model):
     current_period_end = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=utcnow)
     ended_at = db.Column(db.DateTime)
+    ends_at = db.Column(db.DateTime)   # cancelled, and paid up until then (plan phase 3, S22)
 
 
 class PaymentEvent(db.Model):

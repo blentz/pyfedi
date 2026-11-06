@@ -668,7 +668,7 @@ class SiteDomainForm(FlaskForm):
                              description=_l('Fixed once the domain has accounts or communities.'))
     registration = SelectField(_l('Who may register'),
                                choices=select_choices([('anyone', _l('Anyone')), ('closed', _l('Closed'))]), default='anyone',
-                               description=_l('Registration per domain takes effect in a later release.'))
+                               description=_l('A paid domain is set up on its settings page, once it is added.'))
     submit = SubmitField(_l('Add domain'))
 
     def validate_federates(self, field):
@@ -692,3 +692,18 @@ class SiteDomainForm(FlaskForm):
         except InstanceInUse:
             raise ValidationError(_l('That domain is already a server this site federates with.'))
         field.data = domain
+
+
+class DomainSettingsForm(FlaskForm):
+    """Who may join a sister domain, and who may read it. The route refuses what these may not be set to (plan S25)."""
+    registration = SelectField(_l('Who may register'), render_kw={'class': 'form-select'},
+                               choices=select_choices([('anyone', _l('Anyone')), ('closed', _l('Closed')),
+                                                       ('paid', _l('Anyone who pays a first subscription fee'))]))
+    registration_offer_id = SelectField(_l('Subscription that registration pays for'), coerce=int, choices=[],
+                                        validators=[Optional()], render_kw={'class': 'form-select'})
+    lapse_grace_days = IntegerField(_l('Days of access after a subscription ends'), default=7,
+                                    validators=[DataRequired(), NumberRange(min=1, max=3650)],
+                                    description=_l('After this a member of a paid domain can only renew, export their settings or delete their account. Nothing is deleted.'))
+    login_required = BooleanField(_l('Require login to browse'),
+                                  description=_l('Only a domain that does not federate can turn this on: what has federated has left this server.'))
+    submit = SubmitField(_l('Save'))

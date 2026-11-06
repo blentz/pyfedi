@@ -871,6 +871,29 @@ If your .env still has the old `STRIPE_*` and `WEBHOOK_SIGNING_SECRET` variables
 plans and your existing donors have carried over. Use **Import from the environment** on the Payments page to move them into the
 database, then add the new webhook events in the Stripe dashboard. Those variables stop being read in a later release.
 
+### Private and paid domains
+
+Each domain other than the first has its own **Settings** page at **Admin > Domains**. The first domain's "require login to browse"
+is still the private instance setting in the site's settings.
+
+**Require login to browse:** logged-out visitors can reach only the login and registration pages, `/about`, `/privacy` and CMS pages.
+That includes API calls, which need a token. Only a domain that doesn't federate can turn this on, so a private domain has to be
+added with **Federates** off: what has federated has already left this server.
+
+**Paid registration** needs a subscription offer on that domain, so a provider must be connected first, which today means Stripe. It
+can't be used on the first domain or on an onion domain.
+
+- Someone signing up goes to the provider's page. Their account can't log in until the provider's webhook confirms the payment, and
+  no email is sent before then. Coming back from the provider's page confirms nothing.
+- An unpaid account is removed after 48 hours, and its name is free again. Until then, logging in with its password leads back to
+  payment.
+- OAuth, LDAP, referral codes, application questions and API registration don't apply on a paid domain. Setting the site's
+  registration mode to Closed still closes it.
+- A member who cancels keeps access until the end of the period they paid for.
+- When a subscription ends, access continues for the domain's grace period, 7 days unless you change it. After that the member can
+  only renew, export their settings, delete their account or log out, and any API token or RSS token stops working. Nothing is
+  deleted, and renewing restores access at once. Admins, and accounts that never held a plan there, are never affected.
+
 ---
 
 <div id="testing"></div>

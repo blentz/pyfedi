@@ -10,7 +10,7 @@ from flask_wtf import FlaskForm
 from app import db
 from app.admin import bp
 from app.admin.forms import LinkOfferForm, OfferForm, PaymentSettingsForm, StripeCredentialsForm
-from app.models import MemberSubscription, Offer, OfferDomain, Payment, PaymentProvider, User
+from app.models import MemberSubscription, Offer, OfferDomain, Payment, PaymentProvider, SiteDomain, User
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import ProviderError
 from app.payments.adapters.stripe_adapter import REQUIRED_EVENTS
@@ -162,8 +162,15 @@ def _domain_choices() -> list[tuple[int, str]]:
     return [(row.id, row.domain) for row in domain_rows() if row.id is not None]
 
 
+def _names_a_paid_domain(offer: Offer) -> bool:
+    return SiteDomain.query.filter_by(registration_offer_id=offer.id).first() is not None
+
+
 def _save_offer(form: OfferForm, offer: Offer) -> bool:
-    """False, with the reason on the form, if Stripe's price can't be used."""
+    """False, with the reason on the form, if Stripe's price can't be used or a paid domain depends on this offer."""
+    if not form.active.data and _names_a_paid_domain(offer):
+        form.active.errors.append(_('A paid domain charges this at registration. Change the domain first.'))
+        return False
     if offer.provider_price_id != form.price_id.data or offer.amount_minor is None:
         try:
             _apply_price(offer, adapter_for('stripe').describe_price(form.price_id.data))
@@ -269,7 +276,9 @@ def _edit_link(link: Offer):
 @permission_required('manage monetization')
 def admin_payments_offer_delete(offer_id):
     offer = db.session.get(Offer, offer_id) or abort(404)
-    if Payment.query.filter_by(offer_id=offer.id).first() or MemberSubscription.query.filter_by(offer_id=offer.id).first():
+    if _names_a_paid_domain(offer):
+        flash(_('A paid domain charges this at registration. Change the domain first.'), 'error')
+    elif Payment.query.filter_by(offer_id=offer.id).first() or MemberSubscription.query.filter_by(offer_id=offer.id).first():
         flash(_('An offer somebody has paid for cannot be deleted. Stop offering it instead.'), 'error')
     else:
         db.session.delete(offer)

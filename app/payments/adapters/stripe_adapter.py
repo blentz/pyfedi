@@ -5,14 +5,16 @@ passes `api_key=` and never sets `stripe.api_key`, which is shared by every thre
 the kind of failure and never carries Stripe's message, which can echo part of a key.
 """
 import hashlib
+from datetime import datetime, timedelta, timezone
 
 from flask import current_app
 
-from app.models import Offer, Payment, PaymentProvider, User
+from app.models import Offer, Payment, PaymentProvider, User, utcnow
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.credentials import CredentialsUnavailable, unseal
 from app.payments.events import CustomerKnown, Paid, Refunded, SubscriptionEnded, SubscriptionStarted
 
+CHECKOUT_HOURS_FOR_PENDING_ACCOUNT = 23   # Stripe allows 24 at most, counted by its own clock
 PAID = ('paid', 'no_payment_required')
 
 
@@ -146,6 +148,9 @@ class StripeAdapter:
                   'customer': customer, 'customer_email': user.email if user and not customer else None}
         if user:
             params['client_reference_id'] = str(user.id)
+        if user and user.registration_pending_since is not None:
+            # Shorter than an unpaid account lasts, so nobody can pay for one already removed (plan S16)
+            params['expires_at'] = int((utcnow() + timedelta(hours=CHECKOUT_HOURS_FOR_PENDING_ACCOUNT)).replace(tzinfo=timezone.utc).timestamp())
         if offer.kind == 'subscription':
             params['subscription_data'] = {'metadata': {'offer_id': str(offer.id)}}
         session = self._call(lambda stripe: stripe.checkout.Session.create, api_key=key, **params)
@@ -181,6 +186,12 @@ class StripeAdapter:
                                payment={'type': 'payment_intent', 'payment_intent': intent}, limit=1, api_key=self._key())
             invoice = found.data[0].invoice if found.data else None
         return [Refunded(reference) for reference in (invoice, intent) if reference]
+
+    def cancel_at_period_end(self, reference: str) -> datetime:
+        """Stop renewing, and say when it ends. Stripe then sends the same event an immediate cancel does, on that day."""
+        key = self._key()
+        subscription = self._call(lambda stripe: stripe.Subscription.modify, reference, cancel_at_period_end=True, api_key=key)
+        return datetime.fromtimestamp(subscription.cancel_at, timezone.utc).replace(tzinfo=None)
 
     def cancel(self, reference: str) -> None:
         stripe = _stripe()

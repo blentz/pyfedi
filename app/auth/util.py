@@ -23,7 +23,7 @@ from app.constants import NOTIF_REGISTRATION
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
 from app.local_names import local_named
-from app.storefront import (DomainInfo, current_storefront, default_domain, domain_base_url, domain_for_host, home_storefront,
+from app.storefront import (DomainInfo, paid_registration, current_storefront, default_domain, domain_base_url, domain_for_host, home_storefront,
                             instance_id_of, public_registration_open)
 from app.permission_cache import permissions_changed
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role, dummy_password_hash, \
@@ -32,7 +32,9 @@ from app.onion import apply_audit, is_onion_request, stamp_activity
 from app.log_scrub import log_ldap_sync_failure
 from app.referral import REFERRAL_MODE, record_referral, referral_mode_on, referrer_for
 from app.onion_account import audit_country, audit_ip, is_onion_account
-from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message, prepare_onion_proof
+from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message, onion_proof_refused, prepare_onion_proof
+from app.payments.offers import money
+from app.payments.registration import registration_checkout, registration_offer
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, captcha_enabled, \
     finalize_user_setup, get_request, get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
@@ -222,7 +224,21 @@ def handle_abandoned_open_instance():
             cache.delete_memoized(get_site_as_dict)
 
 
-def process_registration_form(form):
+def register_on_paid_domain(form):
+    """/register where it costs a first fee (M10). The site's mode closes it and nothing else: payment is the gate, so no
+    referral code or application question applies, and money isn't taken for an application an admin may refuse (plan S10).
+    Nor does it reach OAuth, LDAP or a directory's password (C10, S11)."""
+    offer = registration_offer()
+    if g.site.registration_mode != 'Closed' and offer is not None:
+        del form.question
+        if not g.site.tos_url or not g.site.tos_url.strip():
+            del form.terms
+        if request.method == 'POST' and not onion_proof_refused(form) and form.validate_on_submit():
+            return process_registration_form(form, paid=True)
+    return render_registration_form(form, paid_offer=offer)
+
+
+def process_registration_form(form, paid=False):
     # One reserved-name list, shared with the OAuth signup path -- see
     # app/utils.py's RESERVED_USER_NAMES and D1139.
     disallowed_usernames = RESERVED_USER_NAMES
@@ -243,6 +259,12 @@ def process_registration_form(form):
     if is_country_blocked(country):
         return render_template("generic_message.html", title=_("Application declined"),
                                message=_("Sorry, we are not accepting registrations from your country."))
+
+    if paid:
+        if user_ip_banned() or user_cookie_banned():   # an account that could never log in shouldn't be charged for
+            return render_template("generic_message.html", title=_("Application declined"),
+                                   message=_("Sorry, we are not accepting registrations from you."))
+        return register_new_user(form, ip, country, paid=True)
 
     referrer = None
     if referral_mode_on(g.site):
@@ -306,12 +328,15 @@ def is_country_blocked(country):
     )
 
 
-def register_new_user(form, ip, country, referrer=None):
+def register_new_user(form, ip, country, referrer=None, paid=False):
     verification_token = random_token(16)
     form.user_name.data = form.user_name.data.strip()
     normalize_username(form)
 
-    user = create_new_user(form, ip, country, verification_token, referrer)
+    user = create_new_user(form, ip, country, verification_token, referrer, pending=paid)
+
+    if paid:
+        return registration_checkout(user)
 
     if requires_email_verification(user):
         send_email_verification(user)
@@ -341,14 +366,15 @@ def normalize_username(form):
         )
 
 
-def create_new_user(form, ip, country, verification_token, referrer=None):
+def create_new_user(form, ip, country, verification_token, referrer=None, pending=False):
     storefront = current_storefront()
     user = User(
         user_name=form.user_name.data,
         title=form.user_name.data,
         email=form.real_email.data,
         verification_token=verification_token,
-        verified=not get_setting("email_verification", True),
+        verified=not pending and not get_setting("email_verification", True),
+        registration_pending_since=utcnow() if pending else None,
         instance_id=instance_id_of(storefront),
         site_domain_id=storefront.id,
         banned=user_ip_banned() or user_cookie_banned(),
@@ -533,20 +559,23 @@ def oauth_client_id(provider):
     return '' if is_onion_request() else current_app.config[f"{provider.upper()}_OAUTH_CLIENT_ID"]
 
 
-def render_registration_form(form):
-    registration_open = public_registration_open(current_storefront()) or referral_mode_on(g.site)
-    if g.site.registration_mode in ("RequireApplication", REFERRAL_MODE) and g.site.application_question:
+def render_registration_form(form, paid_offer=None):
+    paid = paid_registration(current_storefront())
+    registration_open = paid_offer is not None if paid \
+        else public_registration_open(current_storefront()) or referral_mode_on(g.site)
+    if 'question' in form and g.site.registration_mode in ("RequireApplication", REFERRAL_MODE) and g.site.application_question:
         form.question.label = Label("question", markdown_to_html(g.site.application_question))
-    if g.site.tos_url is None or not g.site.tos_url.strip():
+    if 'terms' in form and (g.site.tos_url is None or not g.site.tos_url.strip()):
         del form.terms
 
     return render_template("auth/register.html", title=_("Register"), form=form, site=g.site,
-                           registration_open=registration_open,
+                           registration_open=registration_open, paid_offer=paid_offer,
+                           paid_price=money(paid_offer.amount_minor, paid_offer.currency) if paid_offer else None,
                            onion_proof=prepare_onion_proof(form, 'register'),
                            instance_chooser_enabled=get_setting('enable_instance_chooser', False),
                            #google_oauth=current_app.config["GOOGLE_OAUTH_CLIENT_ID"],
-                           mastodon_oauth=oauth_client_id("mastodon"),
-                           discord_oauth=oauth_client_id("discord"))
+                           mastodon_oauth='' if paid else oauth_client_id("mastodon"),
+                           discord_oauth='' if paid else oauth_client_id("discord"))
 
 
 def redirect_next_page():
@@ -600,6 +629,9 @@ def process_login(form: LoginForm):
             return redirect(url_for("auth.login"))
 
     onion_login_succeeded(username, user)
+
+    if user.registration_pending_since is not None:   # not logging in: back to the fee, to finish joining (plan S14)
+        return registration_checkout(user)
 
     if requires_email_verification(user):
         return redirect(url_for("auth.check_email"))
@@ -784,6 +816,8 @@ def update_user_session(user, form, ip, country):
 
 
 def sync_user_with_ldap(user, password):
+    if paid_registration(user.home_domain()):   # the directory is no way round a domain's fee (plan S11)
+        return
     try:
         sync_user_to_ldap(user.user_name, user.email, password.strip())
     except Exception as e:

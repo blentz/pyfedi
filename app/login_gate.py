@@ -6,7 +6,8 @@ open from one that had been forgotten. A new route is private until somebody lis
 
 An ActivityPub Accept header opens nothing outside the federation endpoints: anybody can send that header.
 """
-from flask import abort, current_app, jsonify, request
+from flask import abort, current_app, flash, jsonify, redirect, request, url_for
+from flask_babel import _
 from flask_login import current_user
 
 from app.storefront import current_storefront
@@ -45,6 +46,27 @@ FEDERATION = frozenset({'main.instance_actor', 'main.instance_actor_outbox', 'ma
 AP_DOCUMENTS = frozenset({'main.index', 'main.list_feeds'})   # pages that answer ActivityPub with a document for other servers
 
 
+# What a member whose subscription has lapsed may still do: renew, take their settings, leave (M12, plan S20)
+LAPSED_OPEN = frozenset({
+    'static', 'bootstrap.static', 'auth.logout', 'user.user_settings_import_export', 'user.delete_account',
+    'payments.donations', 'payments.checkout', 'payments.cancel', 'payments.billing', 'payments.result',
+    'payments.result_before_this_release', 'payments.payment_webhook', 'payments.stripe_webhook',
+})
+
+
+def refuse_lapsed() -> object | None:
+    """before_request, after the one that sets up the site. A token or an RSS reader is refused where each is looked up."""
+    if request.endpoint is None or request.endpoint in LAPSED_OPEN or not current_user.is_authenticated \
+            or not current_user.access_has_lapsed():
+        return None
+    if request.path.startswith('/api/'):
+        return jsonify(error='access_lapsed'), 403
+    if request.headers.get('HX-Request'):
+        return '', 403
+    flash(_('Your subscription has ended. Renew it to carry on using this site.'), 'warning')
+    return redirect(url_for('payments.donations'))
+
+
 def _federation_endpoint() -> bool:
     return request.endpoint in FEDERATION or request.endpoint.split('.')[0] == FEDERATION_BLUEPRINT \
         or (request.endpoint in AP_DOCUMENTS and is_activitypub_request())
@@ -55,12 +77,13 @@ def _has_own_gate() -> bool:
     return getattr(current_app.view_functions[request.endpoint], 'has_own_login_gate', False)
 
 
-def _api_caller_logged_in() -> bool:
+def _refuse_api_caller() -> object | None:
     try:
         authorise_api_user(request.headers.get('Authorization'))
-    except Exception:   # the one exception authorise_api_user raises for every way a token can be wrong
-        return False
-    return True
+    except Exception as refusal:   # the one exception authorise_api_user raises for every way a token can be wrong
+        return (jsonify(error='access_lapsed'), 403) if str(refusal) == 'access_lapsed' \
+            else (jsonify(error='incorrect_login'), 401)
+    return None
 
 
 def refuse_logged_out() -> object | None:
@@ -78,7 +101,7 @@ def refuse_logged_out() -> object | None:
             return None
         abort(404)   # this domain has nothing to say to another server, and says so as it would for any unknown name
     if request.path.startswith('/api/'):
-        return None if _api_caller_logged_in() else (jsonify(error='incorrect_login'), 401)
+        return _refuse_api_caller()
     if request.headers.get('HX-Request'):   # htmx swaps a page into a menu on a redirect, and nothing on a 401
         return '', 401
     return login_redirect()
