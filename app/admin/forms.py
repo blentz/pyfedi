@@ -589,6 +589,36 @@ class CmsPageForm(FlaskForm):
             raise ValidationError(_l('A page with this URL already exists.'))
 
 
+class StripeCredentialsForm(FlaskForm):
+    # Password fields never render their value, which M1 requires: a stored credential can be replaced, never read
+    secret_key = PasswordField(_l('Stripe secret key'), validators=[Optional(), Length(max=255)],
+                               render_kw={'autocomplete': 'off'})
+    webhook_secret = PasswordField(_l('Stripe webhook signing secret'), validators=[Optional(), Length(max=255)],
+                                   render_kw={'autocomplete': 'off'})
+    enabled = BooleanField(_l('Stripe is enabled'), default=True)
+    save_stripe = SubmitField(_l('Save'))
+
+
+class PaymentSettingsForm(FlaskForm):
+    retention_days = IntegerField(_l('Remove the account link from settled payments after this many days'),
+                                  validators=[Optional(), NumberRange(min=1, max=36500)])
+    save_settings = SubmitField(_l('Save'))
+
+
+class OfferForm(FlaskForm):
+    title = StringField(_l('Title'), validators=[DataRequired(), Length(max=255)])
+    price_id = StringField(_l('Stripe price ID'), validators=[DataRequired(), Length(max=255)],
+                           render_kw={'placeholder': 'price_...'})
+    offer_group = StringField(_l('Group'), validators=[DataRequired(), Length(max=50)], default='plans')
+    grants_donor = BooleanField(_l('Grants the Donor label'), default=True)
+    donor_days = IntegerField(_l('For one-off payments: how many days the label lasts (blank for good)'),
+                              validators=[Optional(), NumberRange(min=1, max=36500)])
+    position = IntegerField(_l('Position'), validators=[Optional(), NumberRange(min=0, max=100000)], default=0)
+    active = BooleanField(_l('Offered to members'), default=True)
+    domains = SelectMultipleField(_l('Domains (none means all)'), choices=[], coerce=int, validators=[Optional()])
+    save = SubmitField(_l('Save'))
+
+
 class EmojiForm(FlaskForm):
     token = StringField(_l('Token or character'), validators=[DataRequired(), Length(max=20)],
                         render_kw={'placeholder': _l('e.g., :happy: or a single character like 👍')})

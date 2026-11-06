@@ -104,6 +104,9 @@ _HANDLERS = {
 }
 
 
+REQUIRED_EVENTS = tuple(_HANDLERS)
+
+
 class StripeAdapter:
     kind = 'stripe'
 

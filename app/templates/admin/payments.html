@@ -3,6 +3,7 @@
 {% else -%}
     {% extends "base.html" -%}
 {% endif -%}
+{% from 'bootstrap5/form.html' import render_field %}
 {% set active_child = 'admin_payments' %}
 
 {% block app_content %}
@@ -11,6 +12,76 @@
 <div class="row">
     <div class="col-md-8">
         <h2>{{ title }}</h2>
+        <p><a href="{{ url_for('admin.admin_payments_ledger') }}">{{ _('Payment ledger') }}</a></p>
+
+        {% if not key_set -%}
+            <div class="alert alert-warning" role="alert">
+                {{ _('PAYMENT_SECRETS_KEY is not set, or is not valid, so credentials cannot be stored and stored ones cannot be used. Run "flask generate-payment-key", put the result in the environment, restart, and back the key up apart from the database.') }}
+            </div>
+        {% endif -%}
+
+        <h3>{{ _('Stripe') }}</h3>
+        <p>
+            {% if source == 'stored' -%}
+                {{ _('Stripe credentials are stored, encrypted. They cannot be shown. Blank fields keep what is stored.') }}
+            {% elif source == 'environment' -%}
+                {{ _('Stripe is using credentials from the environment. Import them here so they can be managed on this page.') }}
+            {% else -%}
+                {{ _('Stripe is not connected.') }}
+            {% endif -%}
+        </p>
+        {% if source == 'environment' -%}
+            <form method="post" action="{{ url_for('admin.admin_payments_stripe_import') }}" class="mb-3">
+                {{ import_form.hidden_tag() }}
+                <button type="submit" class="btn btn-primary">{{ _('Import from the environment') }}</button>
+            </form>
+        {% endif -%}
+        <form method="post" action="{{ url_for('admin.admin_payments_stripe') }}" class="mb-3" autocomplete="off">
+            {{ stripe_form.hidden_tag() }}
+            {{ render_field(stripe_form.secret_key) }}
+            {{ render_field(stripe_form.webhook_secret) }}
+            {{ render_field(stripe_form.enabled) }}
+            {{ render_field(stripe_form.save_stripe) }}
+        </form>
+        <p>{{ _('In the Stripe dashboard, send a webhook to:') }} <code>{{ webhook_url }}</code></p>
+        <p>{{ _('Send these events. Until all of them are sent, renewals and refunds will not appear in the ledger:') }}</p>
+        <ul>
+            {% for event in required_events -%}
+                <li><code>{{ event }}</code></li>
+            {% endfor -%}
+        </ul>
+
+        <h3 class="mt-4">{{ _('Offers') }}</h3>
+        <p><a href="{{ url_for('admin.admin_payments_offer_add') }}" class="btn btn-primary">{{ _('Add offer') }}</a></p>
+        {% if currency -%}
+            <p class="small field_hint">{{ _('This site takes payments in %(currency)s.', currency=currency.upper()) }}</p>
+        {% endif -%}
+        {% if offers -%}
+            <table class="table">
+                <thead>
+                    <tr><th>{{ _('Title') }}</th><th>{{ _('Group') }}</th><th>{{ _('Amount') }}</th><th>{{ _('Offered') }}</th><th></th></tr>
+                </thead>
+                <tbody>
+                    {% for offer in offers -%}
+                        <tr>
+                            <td>{{ offer.title }}</td>
+                            <td>{{ offer.offer_group }}</td>
+                            <td>{% if offer.amount_minor is not none %}{{ money(offer.amount_minor, offer.currency) }}{% if offer.interval %} / {{ offer.interval }}{% endif %}{% else %}{{ _('Not read from Stripe yet') }}{% endif %}</td>
+                            <td>{{ _('Yes') if offer.active else _('No') }}</td>
+                            <td><a href="{{ url_for('admin.admin_payments_offer_edit', offer_id=offer.id) }}">{{ _('Edit') }}</a></td>
+                        </tr>
+                    {% endfor -%}
+                </tbody>
+            </table>
+        {% endif -%}
+
+        <h3 class="mt-4">{{ _('Ledger settings') }}</h3>
+        <form method="post" action="{{ url_for('admin.admin_payments_settings') }}">
+            {{ settings_form.hidden_tag() }}
+            {{ render_field(settings_form.retention_days) }}
+            <p class="small field_hint">{{ _('Blank keeps the link to the account. Check what records you must keep where you operate.') }}</p>
+            {{ render_field(settings_form.save_settings) }}
+        </form>
     </div>
 </div>
 {% endblock %}

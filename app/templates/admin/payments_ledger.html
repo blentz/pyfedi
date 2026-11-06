@@ -1,0 +1,56 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% set active_child = 'admin_payments' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col-12">
+        <h2>{{ title }}</h2>
+        {% if not retention -%}
+            <div class="alert alert-info" role="alert">
+                {{ _('No retention period is set, so settled payments stay linked to their accounts.') }}
+                <a href="{{ url_for('admin.admin_payments') }}">{{ _('Set one') }}</a>
+            </div>
+        {% endif -%}
+        <form method="get" class="mb-3">
+            <select name="status" class="form-select d-inline-block w-auto">
+                <option value="">{{ _('Any status') }}</option>
+                {% for value in statuses -%}
+                    <option value="{{ value }}"{% if value == status %} selected{% endif %}>{{ value }}</option>
+                {% endfor -%}
+            </select>
+            <select name="offer_id" class="form-select d-inline-block w-auto">
+                <option value="">{{ _('Any offer') }}</option>
+                {% for row in offers -%}
+                    <option value="{{ row.id }}"{% if offer and row.id == offer.id %} selected{% endif %}>{{ row.title }}</option>
+                {% endfor -%}
+            </select>
+            <button type="submit" class="btn btn-primary">{{ _('Filter') }}</button>
+        </form>
+        <table class="table">
+            <thead>
+                <tr><th>{{ _('Date') }}</th><th>{{ _('Account') }}</th><th>{{ _('Offer') }}</th><th>{{ _('Amount') }}</th><th>{{ _('Status') }}</th><th>{{ _('Reference') }}</th></tr>
+            </thead>
+            <tbody>
+                {% for payment in payments.items -%}
+                    <tr>
+                        <td>{{ localize_datetime(payment.created_at, locale) }}</td>
+                        <td>{% if payment.user_id in users %}<a href="/u/{{ users[payment.user_id].link() }}">{{ users[payment.user_id].user_name }}</a>{% else %}&mdash;{% endif %}</td>
+                        <td>{{ titles.get(payment.offer_id) or '—' }}</td>
+                        <td>{{ money(payment.amount_minor, payment.currency) }}</td>
+                        <td>{{ payment.status }}</td>
+                        <td><code>{{ payment.provider_reference }}</code></td>
+                    </tr>
+                {% endfor -%}
+            </tbody>
+        </table>
+        {% if prev_url %}<a href="{{ prev_url }}" class="btn btn-primary">{{ _('Previous') }}</a>{% endif %}
+        {% if next_url %}<a href="{{ next_url }}" class="btn btn-primary">{{ _('Next') }}</a>{% endif %}
+    </div>
+</div>
+{% endblock %}
