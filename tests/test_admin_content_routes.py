@@ -29,7 +29,7 @@ from tests.factories import (grant_permission, make_community,
                              make_community_member, make_file, make_post,
                              make_user)
 
-PERMISSIONS = ('edit cms pages', 'change instance settings',
+PERMISSIONS = ('edit cms pages', 'manage monetization', 'change instance settings',
                'manage blocklists', 'manage media', 'administer all users')
 
 
@@ -103,6 +103,7 @@ def assert_refused(response):
 # --------------------------------------------------------------------------
 
 GATES = [
+    ('/admin/payments', 'manage monetization'),
     ('/admin/pages', 'edit cms pages'),
     ('/admin/pages/add', 'edit cms pages'),
     ('/admin/emoji', 'change instance settings'),

@@ -41,6 +41,7 @@ def test_the_catalogue_flags_scopable_and_instance_only_as_the_spec_does():
     assert INSTANCE_ONLY_PERMISSIONS == {
         'change instance settings', 'manage domains', 'masquerade', 'send newsletter', 'manage remote instances',
         'manage topics', 'manage blocklists', 'view vote analytics', 'manage media', 'edit cms pages',
+        'manage monetization',
         'read private messages', 'add remote communities', 'manage instance feeds', 'feature instance-wide',
         'exempt from upload limits', 'exempt from account limits', 'generate referral codes'}
 

@@ -38,6 +38,9 @@
             {% if user_access('view vote analytics', current_user.id) %}
                 <a class="nav-link{% if active_child == 'admin_votes' %} active{% endif %}" id="votes-tab" type="button" role="tab" href="/admin/votes" style="view-transition-name: votes">{{ _('Votes') }}</a>
             {% endif -%}
+            {% if user_access('manage monetization', current_user.id) %}
+                <a class="nav-link{% if active_child == 'admin_payments' %} active{% endif %}" id="payments-tab" type="button" role="tab" href="/admin/payments">{{ _('Payments') }}</a>
+            {% endif %}
             {% if user_access('edit cms pages', current_user.id) %}
                 <a class="nav-link{% if active_child == 'admin_cms_pages' %} active{% endif %}" id="cms-pages-tab" type="button" role="tab" href="/admin/pages" style="view-transition-name: cms-pages">{{ _('Pages') }}</a>
             {% endif %}

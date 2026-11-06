@@ -1,0 +1,16 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% set active_child = 'admin_payments' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col-md-8">
+        <h2>{{ title }}</h2>
+    </div>
+</div>
+{% endblock %}

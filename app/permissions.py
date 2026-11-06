@@ -44,6 +44,7 @@ CATALOGUE = (
     Permission('masquerade', 'site', False, False, 'Log in as another user'),
     Permission('send newsletter', 'site', False, False, 'Write and send the newsletter'),
     Permission('edit cms pages', 'site', False, False, 'Create, edit and delete the CMS pages'),
+    Permission('manage monetization', 'site', False, False, 'Payment providers, offers and the payment ledger'),
     # domains
     Permission('manage domains', 'domains', False, False, 'Add and delete domains, and whether each federates'),
     Permission('edit domain branding', 'domains', True, False,
