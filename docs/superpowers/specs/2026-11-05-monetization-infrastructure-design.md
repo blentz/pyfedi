@@ -1,9 +1,10 @@
 # Monetization infrastructure — design
 
-Date: 2026-11-05. Status: approved by the owner 2026-11-05. Phases 1, 2 and 3 are built: phase 1 (plan
+Date: 2026-11-05. Status: approved by the owner 2026-11-05. Phases 1 to 4 are built: phase 1 (plan
 `docs/superpowers/plans/2026-11-05-monetization-phase-1.md`), phase 2 (plan
-`docs/superpowers/plans/2026-11-06-monetization-phase-2.md`) and phase 3 (plan
-`docs/superpowers/plans/2026-11-06-monetization-phase-3.md`). Live Stripe calls are unverified: the owner ruled out a
+`docs/superpowers/plans/2026-11-06-monetization-phase-2.md`) phase 3 (plan
+`docs/superpowers/plans/2026-11-06-monetization-phase-3.md`) and phase 4 (plan
+`docs/superpowers/plans/2026-11-06-monetization-phase-4.md`). Live Stripe calls are unverified: the owner ruled out a
 test-mode run.
 
 ## Summary

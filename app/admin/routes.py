@@ -561,7 +561,7 @@ def admin_domain_settings(domain_id):
     if row.is_default:
         abort(404)
     form = DomainSettingsForm(obj=row)
-    usable = [offer for offer in offers_on(row.id, False) if offer.kind == 'subscription']
+    usable = [offer for offer in offers_on(row.id, row.is_onion) if offer.kind == 'subscription']
     form.registration_offer_id.choices = [(0, _('None'))] + [(offer.id, offer.title) for offer in usable]
     if row.registration_offer_id is None and not form.is_submitted():
         form.registration_offer_id.data = 0
@@ -588,11 +588,9 @@ def domain_settings_refusal(row: SiteDomain, form: DomainSettingsForm, usable_of
         return _('A domain that federates cannot require login: what it has federated has already left this server.')
     if form.registration_offer_id.data != (row.registration_offer_id or 0) and not may_choose_offer:
         return _('Choosing what registration pays for needs the manage monetization permission.')
-    if form.registration.data == 'paid':
-        if row.is_onion:
-            return _('An onion domain cannot charge at registration yet: no payment provider can be reached from it.')
-        if form.registration_offer_id.data not in usable_offers:
-            return _('A paid domain needs a subscription that is on offer on that domain.')
+    if form.registration.data == 'paid' and form.registration_offer_id.data not in usable_offers:
+        return _('A paid domain needs a subscription that is on offer on that domain. On an onion domain that means one from '
+                 'BTCPay Server with an .onion address of its own.')
     return None
 
 

@@ -871,6 +871,23 @@ If your .env still has the old `STRIPE_*` and `WEBHOOK_SIGNING_SECRET` variables
 plans and your existing donors have carried over. Use **Import from the environment** on the Payments page to move them into the
 database, then add the new webhook events in the Stripe dashboard. Those variables stop being read in a later release.
 
+### Accepting crypto through BTCPay Server
+
+You run your own [BTCPay Server](https://btcpayserver.org) and connect it at **Admin > Payments**. `PAYMENT_SECRETS_KEY` must be set
+first, as for Stripe.
+
+1. In BTCPay Server, create a store and an API key with the permissions the Payments page lists.
+2. On the Payments page, enter the server's address, the store ID and the API key.
+3. In BTCPay Server, add a webhook to the address the Payments page shows, sending the events it lists, and enter its secret here.
+4. Add an offer. You set its amount here, in this site's one currency, and BTCPay works out the crypto price on each invoice.
+
+Nothing renews by itself. A subscription here is a period paid for in advance: 30 days for a month, 365 for a year. The member
+pays again to extend it, and any time left carries over. There's no reminder yet, so they need to watch the date on `/donations`.
+A payment counts once BTCPay marks the invoice settled, which depends on your store's confirmation setting. Refunds are made in
+BTCPay Server, and only an invoice marked invalid there shows as refunded in the ledger.
+
+BTCPay is offered on an onion domain only if you enter its `.onion` address too.
+
 ### Private and paid domains
 
 Each domain other than the first has its own **Settings** page at **Admin > Domains**. The first domain's "require login to browse"
@@ -880,8 +897,8 @@ is still the private instance setting in the site's settings.
 That includes API calls, which need a token. Only a domain that doesn't federate can turn this on, so a private domain has to be
 added with **Federates** off: what has federated has already left this server.
 
-**Paid registration** needs a subscription offer on that domain, so a provider must be connected first, which today means Stripe. It
-can't be used on the first domain or on an onion domain.
+**Paid registration** needs a subscription offer on that domain, so a provider must be connected first: Stripe or BTCPay Server. It
+can't be used on the first domain. On an onion domain it needs BTCPay Server with an `.onion` address.
 
 - Someone signing up goes to the provider's page. Their account can't log in until the provider's webhook confirms the payment, and
   no email is sent before then. Coming back from the provider's page confirms nothing.

@@ -104,6 +104,7 @@ REQUIRED_EVENTS = (*_HANDLERS, REFUND_EVENT)
 
 class StripeAdapter:
     kind = 'stripe'
+    prepaid = False
 
     def _config(self) -> dict | None:
         row = PaymentProvider.query.filter_by(kind=self.kind).first()
@@ -124,6 +125,9 @@ class StripeAdapter:
     def available(self) -> bool:
         config = self._config()
         return bool(config and config.get('secret_key'))
+
+    def on_onion(self) -> bool:
+        return False   # C11
 
     def _key(self) -> str:
         config = self._config()

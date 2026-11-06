@@ -605,7 +605,7 @@ class TestDomainSettings:
         body = self.save(env, onion, registration='paid', registration_offer_id=str(env.offer.id))
 
         db.session.refresh(onion)
-        assert onion.registration == 'anyone' and 'onion' in body
+        assert onion.registration == 'anyone' and 'Not a valid choice' in body   # Stripe isn't on offer there
 
     def test_a_federating_domain_cannot_turn_login_on(self, env, admin):
         federating = SiteDomain(domain='fed.example', scheme='https', federates=True)

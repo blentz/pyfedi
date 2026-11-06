@@ -1,5 +1,5 @@
-"""What this storefront offers. On the onion that is link-outs alone (C11): a link tells a provider nothing about the
-onion, where a checkout's return address would."""
+"""What this storefront offers. On the onion that is link-outs, and a provider that has an onion address of its own
+(C11): a link tells a provider nothing about the onion, where a checkout's return address would."""
 from babel.numbers import format_currency, get_currency_precision
 from flask import current_app
 from flask_babel import get_locale
@@ -25,7 +25,7 @@ def offers_on(domain_id: int | None, onion: bool) -> list[Offer]:
     for offer in offers:
         if offer.provider_kind not in usable:
             adapter = adapter_for(offer.provider_kind)
-            usable[offer.provider_kind] = not onion and adapter is not None and adapter.available()
+            usable[offer.provider_kind] = adapter is not None and adapter.available() and (not onion or adapter.on_onion())
     return [offer for offer in offers
             if usable[offer.provider_kind] and (offer.id not in limited or domain_id in limited[offer.id])]
 

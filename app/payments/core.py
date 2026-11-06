@@ -4,7 +4,7 @@ A provider's event is applied in one transaction with a record that it was appli
 A row's reference is unique per provider, so two events about one payment, such as a checkout and its first invoice,
 make one row. A provider is told to cancel only after that transaction commits.
 """
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from flask import current_app
 from sqlalchemy.dialects.postgresql import insert
@@ -21,6 +21,7 @@ from app.utils import finalize_user_setup, get_setting
 
 LEGACY_GROUP = 'legacy'   # the group of a subscription with no offer: one migrated from the environment
 _MAX_ID = 2**31 - 1
+PERIOD_DAYS = {'month': 30, 'year': 365}   # what one payment buys, where nothing recurs
 
 
 def _row(model, row_id):
@@ -114,6 +115,7 @@ def _started(kind: str, event: SubscriptionStarted, mismatched: bool, touched: s
     db.session.execute(insert(MemberSubscription).values(user_id=user.id, offer_id=offer.id if offer else None,
                                                          provider_kind=kind, provider_reference=event.reference,
                                                          status='mismatch' if mismatched else 'active',
+                                                         current_period_end=_prepaid_until(kind, user, offer),
                                                          created_at=utcnow())
                        .on_conflict_do_nothing())
     touched.add(user)
@@ -132,6 +134,31 @@ def _started(kind: str, event: SubscriptionStarted, mismatched: bool, touched: s
             other.ended_at = utcnow()
             replaced.append((other.provider_kind, other.provider_reference))
     return replaced
+
+
+def _prepaid_until(kind: str, user: User, offer: Offer | None) -> datetime | None:
+    """When a period paid for in advance runs out, or None for what recurs. Time left on anything in the group carries
+    over: renewing early, or moving to another plan, costs nobody what they've paid for (M4, M7)."""
+    if not adapter_for(kind).prepaid or offer is None:
+        return None
+    left = [row.current_period_end for row in active_subscriptions_of(user)
+            if row.current_period_end is not None and _group_of(_row(Offer, row.offer_id)) == offer.offer_group]
+    return max([utcnow(), *left]) + timedelta(days=PERIOD_DAYS[offer.interval])
+
+
+def end_expired_prepaid() -> int:
+    """What the daily task does. The same as a provider saying a subscription has ended."""
+    expired = MemberSubscription.query.filter(MemberSubscription.status == 'active',
+                                              MemberSubscription.current_period_end < utcnow()).all()
+    for subscription in expired:
+        subscription.status = 'ended'
+        subscription.ended_at = utcnow()
+    db.session.flush()
+    for user in {db.session.get(User, subscription.user_id) for subscription in expired}:
+        refresh_donor(user)
+        refresh_access(user)
+    db.session.commit()
+    return len(expired)
 
 
 def _ended(kind: str, event: SubscriptionEnded, touched: set) -> None:

@@ -174,7 +174,7 @@ def test_the_onion_refuses_every_payment_action(app, configured, path):
     target = path.format(offer=Offer.query.first().id, sub=subscription.id)
     with patch.dict(sys.modules, {'stripe': stripe}):
         response = onion_post(app, configured, target)
-    assert response.status_code in (302, 303)
+    assert response.status_code in (302, 303, 404)   # checkout: 404, as Stripe is no offer there
     assert not stripe.checkout.Session.create.called
     assert not stripe.Subscription.cancel.called and not stripe.billing_portal.Session.create.called
     assert subscription.status == 'active'

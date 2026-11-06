@@ -1,8 +1,9 @@
 """The integrated providers, by kind."""
 from app.payments.adapters.base import Adapter
+from app.payments.adapters.btcpay_adapter import BtcpayAdapter
 from app.payments.adapters.stripe_adapter import StripeAdapter
 
-_ADAPTERS: dict[str, Adapter] = {StripeAdapter.kind: StripeAdapter()}
+_ADAPTERS: dict[str, Adapter] = {StripeAdapter.kind: StripeAdapter(), BtcpayAdapter.kind: BtcpayAdapter()}
 
 
 def adapter_for(kind: str) -> Adapter | None:

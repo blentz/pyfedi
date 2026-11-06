@@ -51,10 +51,27 @@
             {% endfor -%}
         </ul>
 
+        <h3 class="mt-4">{{ _('BTCPay Server') }}</h3>
+        <p>{{ _('Your own server takes crypto payments. The API key and webhook secret are stored encrypted and cannot be shown. Blank fields keep what is stored.') if btcpay_connected else _('BTCPay Server is not connected.') }}</p>
+        <form method="post" action="{{ url_for('admin.admin_payments_btcpay') }}" class="mb-3" autocomplete="off">
+            {{ btcpay_form.hidden_tag() }}
+            {{ render_field(btcpay_form.url) }}
+            {{ render_field(btcpay_form.onion_url) }}
+            {{ render_field(btcpay_form.store_id) }}
+            {{ render_field(btcpay_form.api_key) }}
+            {{ render_field(btcpay_form.webhook_secret) }}
+            {{ render_field(btcpay_form.enabled) }}
+            {{ render_field(btcpay_form.save_btcpay) }}
+        </form>
+        <p>{{ _('The API key needs these permissions:') }} {% for permission in btcpay_permissions %}<code>{{ permission }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</p>
+        <p>{{ _('In BTCPay Server, send a webhook to:') }} <code>{{ btcpay_webhook_url }}</code></p>
+        <p>{{ _('Send these events:') }} {% for event in btcpay_events %}<code>{{ event }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</p>
+
         <h3 class="mt-4">{{ _('Offers') }}</h3>
         <p>
             <a href="{{ url_for('admin.admin_payments_link_add') }}" class="btn btn-primary">{{ _('Add link') }}</a>
             <a href="{{ url_for('admin.admin_payments_offer_add') }}" class="btn btn-primary">{{ _('Add Stripe offer') }}</a>
+            <a href="{{ url_for('admin.admin_payments_btcpay_offer_add') }}" class="btn btn-primary">{{ _('Add BTCPay offer') }}</a>
         </p>
         {% if currency -%}
             <p class="small field_hint">{{ _('This site takes payments in %(currency)s.', currency=currency.upper()) }}</p>

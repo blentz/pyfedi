@@ -43,7 +43,7 @@ from app.error_counts import KEEP_DAYS
 from app.onion_media import DEFAULT_CACHE_BYTES, evict
 from app.payments.credentials import generate_key
 from app.payments.registration import remove_unpaid_registrations
-from app.payments.retention import pseudonymise_settled
+from app.payments.retention import end_expired_subscriptions, pseudonymise_settled
 from app.cms import DONATE_BODY, DONATE_BODY_HTML, DONATE_TITLE, DONATE_URL
 from app.roles import remove_expired_grants, seed_default_roles
 from app.models import CmsPage, CronJobLog, Settings, BannedInstances, Role, User, Domain, ActivityPubLog, utcnow, \
@@ -900,6 +900,7 @@ def register(app):
                 cleanup_old_voting_data()
                 pseudonymise_settled()
                 remove_unpaid_registrations()
+                end_expired_subscriptions()
                 unban_expired_users()
                 sync_defederation_subscriptions()
                 check_instance_health()
@@ -927,6 +928,7 @@ def register(app):
                 cleanup_old_voting_data.delay()
                 pseudonymise_settled.delay()
                 remove_unpaid_registrations.delay()
+                end_expired_subscriptions.delay()
                 unban_expired_users.delay()
                 sync_defederation_subscriptions.delay()
                 check_instance_health.delay()
@@ -975,6 +977,7 @@ def register(app):
         cleanup_old_voting_data()
         pseudonymise_settled()
         remove_unpaid_registrations()
+        end_expired_subscriptions()
         print(f'10 {datetime.now()}')
         unban_expired_users()
         print(f'11 {datetime.now()}')

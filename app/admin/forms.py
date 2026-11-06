@@ -7,7 +7,7 @@ from flask_wtf.file import FileAllowed
 from slugify import slugify
 from sqlalchemy import func
 from wtforms import StringField, PasswordField, SubmitField, EmailField, BooleanField, TextAreaField, \
-    SelectField, FileField, IntegerField, RadioField, DateField
+    SelectField, FileField, IntegerField, RadioField, DateField, DecimalField
 from wtforms.fields.choices import SelectMultipleField
 from wtforms.validators import ValidationError, DataRequired, EqualTo, InputRequired, Length, \
     NumberRange, Optional
@@ -707,3 +707,53 @@ class DomainSettingsForm(FlaskForm):
     login_required = BooleanField(_l('Require login to browse'),
                                   description=_l('Only a domain that does not federate can turn this on: what has federated has left this server.'))
     submit = SubmitField(_l('Save'))
+
+
+def _web_address(value: str, onion: bool = False) -> str:
+    """A bare http or https address, without a trailing slash. Raises ValidationError."""
+    parts = urlsplit(value.strip())
+    if parts.scheme not in ('http', 'https') or not parts.hostname or parts.path.strip('/') or parts.query or parts.fragment:
+        raise ValidationError(_l('This must be the address of the server alone, such as https://pay.example.com.'))
+    if onion and not parts.hostname.endswith('.onion'):
+        raise ValidationError(_l('This must be an .onion address.'))
+    return value.strip().rstrip('/')
+
+
+class BtcpayCredentialsForm(FlaskForm):
+    url = StringField(_l('BTCPay Server address'), validators=[Optional(), Length(max=255)],
+                      render_kw={'placeholder': 'https://pay.example.com'})
+    onion_url = StringField(_l('Its .onion address'), validators=[Optional(), Length(max=255)],
+                            description=_l('Without one, BTCPay is not offered on onion domains.'))
+    store_id = StringField(_l('Store ID'), validators=[Optional(), Length(max=255)])
+    api_key = PasswordField(_l('API key'), validators=[Optional(), Length(max=255)], render_kw={'autocomplete': 'off'})
+    webhook_secret = PasswordField(_l('Webhook secret'), validators=[Optional(), Length(max=255)],
+                                   render_kw={'autocomplete': 'off'})
+    enabled = BooleanField(_l('BTCPay is enabled'), default=True)
+    save_btcpay = SubmitField(_l('Save'))
+
+    def validate_url(self, field):
+        if field.data:
+            field.data = _web_address(field.data)
+
+    def validate_onion_url(self, field):
+        if field.data:
+            field.data = _web_address(field.data, onion=True)
+
+
+class BtcpayOfferForm(FlaskForm):
+    title = StringField(_l('Title'), validators=[DataRequired(), Length(max=255)])
+    amount = DecimalField(_l('Amount'), places=None, validators=[DataRequired(), NumberRange(min=0.01, max=1000000)])
+    currency = StringField(_l('Currency'), validators=[DataRequired(), Length(min=3, max=3)], render_kw={'placeholder': 'USD'})
+    interval = SelectField(_l('What one payment buys'), render_kw={'class': 'form-select'},
+                           choices=select_choices([('', _l('Nothing recurring: a one-off donation')), ('month', _l('A month')),
+                                                   ('year', _l('A year'))]),
+                           description=_l('It does not renew by itself: the member pays again.'))
+    offer_group = StringField(_l('Group'), validators=[DataRequired(), Length(max=50)], default='plans')
+    grants_donor = BooleanField(_l('Grants the Donor label'), default=True)
+    donor_days = IntegerField(_l('For one-off payments: how many days the label lasts (blank for good)'),
+                              validators=[Optional(), NumberRange(min=1, max=36500)])
+    position = IntegerField(_l('Position'), validators=[Optional(), NumberRange(min=0, max=100000)], default=0)
+    active = BooleanField(_l('Offered to members'), default=True)
+    domains = SelectMultipleField(_l('Domains (none means all)'), choices=[], coerce=int, validators=[Optional()])
+    save = SubmitField(_l('Save'))
+

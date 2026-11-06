@@ -1,0 +1,65 @@
+# A real BTCPay Server on Bitcoin regtest, for checking app/payments/adapters/btcpay_adapter.py against the real API.
+# Nothing here touches real money. Nothing publishes a port but BTCPay's, and all data is thrown away with the stack.
+#
+#   CONTAINER_CONNECTION=remote-gpu podman-compose -f compose.btcpay-regtest.yaml up -d
+#   podman exec pyfedi_bitcoind_1 sh -c 'c="bitcoin-cli -regtest -rpcuser=regtest -rpcpassword=regtest -rpcport=43782"; \
+#       $c createwallet miner; $c generatetoaddress 110 $($c getnewaddress)'
+#
+# tests/test_payments_btcpay_regtest.py then needs a new stack: this server allows its admin's password only at first.
+services:
+  btcpay-db:
+    image: docker.io/library/postgres:17.11
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+    tmpfs:
+      - /var/lib/postgresql/data
+    networks: [pf_btcpay]
+
+  bitcoind:
+    image: docker.io/btcpayserver/bitcoin:32.1
+    environment:
+      BITCOIN_NETWORK: regtest
+      BITCOIN_EXTRA_ARGS: |
+        rpcuser=regtest
+        rpcpassword=regtest
+        rpcport=43782
+        rpcbind=0.0.0.0:43782
+        rpcallowip=0.0.0.0/0
+        port=39388
+        whitelist=0.0.0.0/0
+        fallbackfee=0.0002
+    networks: [pf_btcpay]
+
+  nbxplorer:
+    image: docker.io/nicolasdorier/nbxplorer:2.6.23
+    environment:
+      NBXPLORER_NETWORK: regtest
+      NBXPLORER_CHAINS: btc
+      NBXPLORER_BIND: 0.0.0.0:32838
+      NBXPLORER_NOAUTH: "1"
+      NBXPLORER_BTCRPCURL: http://bitcoind:43782/
+      NBXPLORER_BTCRPCUSER: regtest
+      NBXPLORER_BTCRPCPASSWORD: regtest
+      NBXPLORER_BTCNODEENDPOINT: bitcoind:39388
+      NBXPLORER_POSTGRES: User ID=postgres;Host=btcpay-db;Port=5432;Database=nbxplorer
+    depends_on: [btcpay-db, bitcoind]
+    networks: [pf_btcpay]
+
+  btcpayserver:
+    image: docker.io/btcpayserver/btcpayserver:2.4.7
+    environment:
+      BTCPAY_NETWORK: regtest
+      BTCPAY_CHAINS: btc
+      BTCPAY_BIND: 0.0.0.0:49392
+      BTCPAY_POSTGRES: User ID=postgres;Host=btcpay-db;Port=5432;Database=btcpay
+      BTCPAY_EXPLORERPOSTGRES: User ID=postgres;Host=btcpay-db;Port=5432;Database=nbxplorer
+      BTCPAY_BTCEXPLORERURL: http://nbxplorer:32838/
+      BTCPAY_DISABLE-REGISTRATION: "false"
+    ports:
+      - 127.0.0.1:49392:49392
+    depends_on: [nbxplorer]
+    networks: [pf_btcpay]
+
+networks:
+  pf_btcpay:
+    name: pf_btcpay

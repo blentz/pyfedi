@@ -3,16 +3,20 @@
 A credential goes in through a form and never comes back out: password fields render no value, a blank field keeps what
 is stored, and a refusal from the provider leaves the old credentials in place.
 """
+from babel.numbers import list_currencies
 from flask import abort, current_app, flash, redirect, request, url_for
 from flask_babel import _
 from flask_wtf import FlaskForm
 
 from app import db
 from app.admin import bp
-from app.admin.forms import LinkOfferForm, OfferForm, PaymentSettingsForm, StripeCredentialsForm
+from app.admin.forms import BtcpayCredentialsForm, BtcpayOfferForm, LinkOfferForm, OfferForm, PaymentSettingsForm, \
+    StripeCredentialsForm
 from app.models import MemberSubscription, Offer, OfferDomain, Payment, PaymentProvider, SiteDomain, User
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import ProviderError
+from app.payments.adapters.btcpay_adapter import REQUIRED_EVENTS as BTCPAY_EVENTS, REQUIRED_PERMISSIONS as BTCPAY_PERMISSIONS, \
+    from_minor, to_minor
 from app.payments.adapters.stripe_adapter import REQUIRED_EVENTS
 from app.payments.credentials import CredentialsUnavailable, credentials_available, seal, unseal
 from app.payments.offers import LINK, offers_changed
@@ -43,8 +47,24 @@ def _stripe_source() -> str:
     return 'environment' if current_app.config.get('STRIPE_SECRET_KEY') else 'none'
 
 
-def _page(stripe_form=None, settings_form=None):
+def _stored_btcpay() -> dict:
+    row = PaymentProvider.query.filter_by(kind='btcpay').first()
+    if row is None or not row.credentials:
+        return {}
+    try:
+        return unseal(row.credentials)
+    except CredentialsUnavailable:
+        return {}
+
+
+def _btcpay_form() -> BtcpayCredentialsForm:
+    row = PaymentProvider.query.filter_by(kind='btcpay').first()
+    return BtcpayCredentialsForm(enabled=row.enabled if row else True, **(row.settings or {} if row else {}))
+
+
+def _page(stripe_form=None, settings_form=None, btcpay_form=None):
     row = PaymentProvider.query.filter_by(kind='stripe').first()
+    btcpay = PaymentProvider.query.filter_by(kind='btcpay').first()
     stripe_form = stripe_form or StripeCredentialsForm(enabled=row.enabled if row else True)
     settings_form = settings_form or PaymentSettingsForm(retention_days=get_setting(RETENTION_SETTING))
     return render_template('admin/payments.html', title=_('Payments'), roles_with=roles_with('manage monetization'),
@@ -53,7 +73,10 @@ def _page(stripe_form=None, settings_form=None):
                                                                                     Offer.id).all(),
                            import_form=FlaskForm(), currency=get_setting(CURRENCY_SETTING),
                            webhook_url=url_for('payments.payment_webhook', kind='stripe', _external=True),
-                           required_events=REQUIRED_EVENTS, retention=get_setting(RETENTION_SETTING))
+                           required_events=REQUIRED_EVENTS, retention=get_setting(RETENTION_SETTING),
+                           btcpay_form=btcpay_form or _btcpay_form(), btcpay_connected=bool(btcpay and btcpay.credentials),
+                           btcpay_webhook_url=url_for('payments.payment_webhook', kind='btcpay', _external=True),
+                           btcpay_events=BTCPAY_EVENTS, btcpay_permissions=BTCPAY_PERMISSIONS)
 
 
 @bp.route('/payments', methods=['GET'])
@@ -90,6 +113,37 @@ def admin_payments_stripe():
     db.session.commit()
     offers_changed()
     flash(_('Stripe settings saved.'))
+    return redirect(url_for('admin.admin_payments'))
+
+
+@bp.route('/payments/btcpay', methods=['POST'])
+@login_required
+@permission_required('manage monetization')
+def admin_payments_btcpay():
+    form = BtcpayCredentialsForm()
+    if not form.validate_on_submit():
+        return _page(btcpay_form=form)
+    if not credentials_available():
+        flash(_('Credentials cannot be stored until PAYMENT_SECRETS_KEY is set.'), 'error')
+        return redirect(url_for('admin.admin_payments'))
+    row = PaymentProvider.query.filter_by(kind='btcpay').first() or PaymentProvider(kind='btcpay')
+    settings = {'url': form.url.data or '', 'onion_url': form.onion_url.data or '', 'store_id': form.store_id.data or ''}
+    secrets = {**_stored_btcpay(), **{name: field.data for name, field in (('api_key', form.api_key),
+                                                                           ('webhook_secret', form.webhook_secret)) if field.data}}
+    if form.enabled.data:
+        try:
+            adapter_for('btcpay').check_credentials({**settings, **secrets})
+        except (ProviderError, KeyError):
+            flash(_('BTCPay Server refused those details, or could not be reached. Nothing was changed.'), 'error')
+            return redirect(url_for('admin.admin_payments'))
+    row.settings = settings
+    if secrets:
+        row.credentials = seal(secrets)
+    row.enabled = form.enabled.data
+    db.session.add(row)
+    db.session.commit()
+    offers_changed()
+    flash(_('BTCPay settings saved.'))
     return redirect(url_for('admin.admin_payments'))
 
 
@@ -212,6 +266,64 @@ def _save_domains(offer: Offer, form) -> None:
     offers_changed()
 
 
+def _save_btcpay_offer(form: BtcpayOfferForm, offer: Offer) -> bool:
+    """False, with the reason on the form. BTCPay prices an invoice in this site's one currency (C3)."""
+    code = form.currency.data.strip().upper()
+    if code not in list_currencies():
+        form.currency.errors.append(_('That is not a currency.'))
+        return False
+    currency = get_setting(CURRENCY_SETTING)
+    if currency and currency != code.lower():
+        form.currency.errors.append(_('That is a different currency from the rest of this site.'))
+        return False
+    if not form.active.data and _names_a_paid_domain(offer):
+        form.active.errors.append(_('A paid domain charges this at registration. Change the domain first.'))
+        return False
+    if not currency:
+        set_setting(CURRENCY_SETTING, code.lower())
+    offer.provider_kind = 'btcpay'
+    offer.title = form.title.data
+    offer.amount_minor = to_minor(str(form.amount.data), code)
+    offer.currency = code.lower()
+    offer.interval = form.interval.data or None
+    offer.kind = 'subscription' if form.interval.data else 'donation'
+    offer.offer_group = form.offer_group.data
+    offer.grants_donor = form.grants_donor.data
+    offer.donor_days = None if offer.kind == 'subscription' else form.donor_days.data
+    offer.position = form.position.data or 0
+    offer.active = form.active.data
+    _save_domains(offer, form)
+    return True
+
+
+@bp.route('/payments/btcpay/offers/add', methods=['GET', 'POST'])
+@login_required
+@permission_required('manage monetization')
+def admin_payments_btcpay_offer_add():
+    form = BtcpayOfferForm(currency=(get_setting(CURRENCY_SETTING) or '').upper())
+    form.domains.choices = _domain_choices()
+    if form.validate_on_submit() and _save_btcpay_offer(form, Offer()):
+        flash(_('Offer saved.'))
+        return redirect(url_for('admin.admin_payments'))
+    return render_template('admin/payments_btcpay_offer.html', title=_('Add BTCPay offer'), form=form,
+                           roles_with=roles_with('manage monetization'))
+
+
+def _edit_btcpay_offer(offer: Offer):
+    form = BtcpayOfferForm(obj=offer)
+    form.domains.choices = _domain_choices()
+    if request.method == 'GET':
+        form.amount.data = from_minor(offer.amount_minor, offer.currency)
+        form.currency.data = offer.currency.upper()
+        form.interval.data = offer.interval or ''
+        form.domains.data = [row.site_domain_id for row in OfferDomain.query.filter_by(offer_id=offer.id)]
+    if form.validate_on_submit() and _save_btcpay_offer(form, offer):
+        flash(_('Offer saved.'))
+        return redirect(url_for('admin.admin_payments'))
+    return render_template('admin/payments_btcpay_offer.html', title=_('Edit offer'), form=form, offer=offer,
+                           delete_form=FlaskForm(), roles_with=roles_with('manage monetization'))
+
+
 @bp.route('/payments/links/add', methods=['GET', 'POST'])
 @login_required
 @permission_required('manage monetization')
@@ -246,6 +358,8 @@ def admin_payments_offer_edit(offer_id):
     offer = db.session.get(Offer, offer_id) or abort(404)
     if offer.kind == LINK:
         return _edit_link(offer)
+    if offer.provider_kind == 'btcpay':
+        return _edit_btcpay_offer(offer)
     form = OfferForm(obj=offer)
     form.domains.choices = _domain_choices()
     if request.method == 'GET':

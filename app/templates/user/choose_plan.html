@@ -20,7 +20,9 @@
                                 <h3 class="card-title">{{ titles.get(subscription.offer_id) or _('Regular donation') }}</h3>
                             </div>
                             <div class="card-body">
-                                {% if subscription.ends_at -%}
+                                {% if subscription.current_period_end -%}
+                                <p>{{ _('Paid until %(date)s. It does not renew by itself: pay again below before then.', date=subscription.current_period_end.strftime('%Y-%m-%d')) }}</p>
+                                {% elif subscription.ends_at -%}
                                 <p>{{ _('Cancelled. It runs until %(date)s.', date=subscription.ends_at.strftime('%Y-%m-%d')) }}</p>
                                 {% else -%}
                                 <form method="post" action="{{ url_for('payments.cancel', subscription_id=subscription.id) }}">
@@ -80,7 +82,7 @@
                                 {% else -%}
                                     <form method="post" action="{{ url_for('payments.checkout', offer_id=offer.id) }}">
                                         {% if current_user.is_authenticated %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endif %}
-                                        <button type="submit" class="btn btn-primary">{{ _('Subscribe') if paid_domain else _('Donate regularly') if offer.kind == 'subscription' else _('Donate once') }}</button>
+                                        <button type="submit" class="btn btn-primary">{{ _('Pay for one %(period)s', period=offer.interval) if offer.id in prepaid and offer.kind == 'subscription' else _('Subscribe') if paid_domain else _('Donate regularly') if offer.kind == 'subscription' else _('Donate once') }}</button>
                                     </form>
                                 {% endif -%}
                             </div>

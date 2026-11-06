@@ -48,12 +48,16 @@ def donations():
     still be able to cancel. The seeded /donate page links here on every site, so with nothing to offer this says so on
     the page itself: a logged-out visitor has no session cookie, so a flash would not survive a redirect."""
     offers = offers_here()
-    member = current_user.is_authenticated and not is_onion_request()   # nothing here can act on them on the onion
-    subscriptions = active_subscriptions_of(current_user) if member else []
+    onion = is_onion_request()
+    member = current_user.is_authenticated and not onion   # the card and the history stay off the onion
+    # A prepaid period has nothing to cancel or manage, so it can be shown there. The rest couldn't be acted on.
+    subscriptions = [row for row in active_subscriptions_of(current_user) if not onion or row.current_period_end] \
+        if current_user.is_authenticated else []
     if not offers and not subscriptions:
         return render_template('generic_message.html', title=_('Donation plans'),
                                message=_('Donation plans are not available on this site.')), 404
-    held = {subscription.offer_id for subscription in subscriptions}
+    prepaid = {offer.id for offer in offers if offer.provider_kind != LINK and adapter_for(offer.provider_kind).prepaid}
+    held = {subscription.offer_id for subscription in subscriptions} - prepaid   # one prepaid is renewed by paying again
     links = [offer for offer in offers if offer.kind == LINK]
     groups = {}
     for offer in offers:
@@ -65,12 +69,11 @@ def donations():
     paid_domain = paid_registration(current_storefront())   # a fee to belong here is no donation, whatever else is on offer
     return render_template('user/choose_plan.html', title=_('Your membership') if paid_domain else _('Choose a donation plan'),
                            groups=groups, links=links, subscriptions=subscriptions, payments=payments, titles=titles,
-                           member=member, paid_domain=paid_domain)
+                           member=member, paid_domain=paid_domain, prepaid=prepaid)
 
 
 @bp.route('/donations/checkout/<int:offer_id>', methods=['POST'])
 @login_required_if_private_instance
-@clearnet_only('main.index')
 @limiter.limit('20 per 10 minutes')
 def checkout(offer_id):
     """A one-off needs no account (M8). A guest has no session to bind a CSRF token to, and a forged request acts for
@@ -105,7 +108,7 @@ def _start_checkout(offer, user):
 def cancel(subscription_id):
     subscription = MemberSubscription.query.filter_by(id=subscription_id, user_id=current_user.id,
                                                       status='active').first()
-    if subscription is None:
+    if subscription is None or adapter_for(subscription.provider_kind).prepaid:   # that just runs out
         abort(404)
     try:
         cancel_subscription(subscription)
