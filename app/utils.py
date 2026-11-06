@@ -3469,7 +3469,7 @@ def aged_account_required(func):
 
 def login_required_here() -> bool:
     """Whether this storefront requires login to browse (M11). What app.login_gate and each decorator below ask."""
-    return bool(g.site.private_instance)
+    return g.site.private_instance is not False   # no value at all has always counted as private
 
 
 def login_redirect():

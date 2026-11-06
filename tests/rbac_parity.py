@@ -131,6 +131,7 @@ def build_world():
     activity = make_activitypub_log('https://peer.example/activities/1')
     file = make_file()
     registration = make_user_registration(target)
+    db.session.get(Site, 1).private_instance = True   # these ask who gets a page, not whether strangers may browse
     db.session.add(SiteDomain(domain=SHOP, scheme='https', federates=False))
     db.session.commit()
     clear_domain_cache()
