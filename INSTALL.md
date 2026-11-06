@@ -882,7 +882,8 @@ first, as for Stripe.
 4. Add an offer. You set its amount here, in this site's one currency, and BTCPay works out the crypto price on each invoice.
 
 Nothing renews by itself. A subscription here is a period paid for in advance: 30 days for a month, 365 for a year. The member
-pays again to extend it, and any time left carries over. There's no reminder yet, so they need to watch the date on `/donations`.
+pays again to extend it, and any time left carries over. They get one email 7 days before it runs out, and the date is on
+`/donations`.
 A payment counts once BTCPay marks the invoice settled, which depends on your store's confirmation setting. Refunds are made in
 BTCPay Server, and only an invoice marked invalid there shows as refunded in the ledger.
 

@@ -10,7 +10,7 @@ from sqlalchemy import exists, func, or_
 
 from app import celery
 from app.models import MemberSubscription, Offer, Payment, utcnow
-from app.payments.core import end_expired_prepaid
+from app.payments.core import end_expired_prepaid, remind_expiring_prepaid
 from app.utils import get_setting, get_task_session, patch_db_session
 
 
@@ -46,10 +46,11 @@ def pseudonymise_settled() -> int:
 
 @celery.task
 def end_expired_subscriptions() -> int:
-    """Daily. A period paid for in advance runs out with nobody to say so (M4)."""
+    """Daily. A period paid for in advance runs out with nobody to say so (M4), so members are told first."""
     session = get_task_session()
     try:
         with patch_db_session(session):
+            remind_expiring_prepaid()
             return end_expired_prepaid()
     except Exception:
         session.rollback()

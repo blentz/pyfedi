@@ -10,7 +10,7 @@
         <h1 class="mb-4">{{ _('Your membership of %(instance_name)s', instance_name=branding.name) if paid_domain else _('Donate to %(instance_name)s', instance_name=branding.name) }}</h1>
 
         {% if subscriptions -%}
-            <h2>{{ _('Your subscriptions') if paid_domain else _('Your regular donations') }}</h2>
+            <h2>{{ _('Your subscriptions') if paid_domain or subscriptions|selectattr('current_period_end')|list else _('Your regular donations') }}</h2>
             <p class="text-muted">{{ _('Thank you for your support. A plan chosen below replaces any other in its group.') }}</p>
             <div class="row mb-4">
                 {% for subscription in subscriptions -%}

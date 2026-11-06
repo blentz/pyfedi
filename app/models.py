@@ -6586,6 +6586,7 @@ class MemberSubscription(db.Model):
     created_at = db.Column(db.DateTime, default=utcnow)
     ended_at = db.Column(db.DateTime)
     ends_at = db.Column(db.DateTime)   # cancelled, and paid up until then (plan phase 3, S22)
+    reminded_at = db.Column(db.DateTime)   # told their prepaid period is about to run out, which is once per period
 
 
 class PaymentEvent(db.Model):

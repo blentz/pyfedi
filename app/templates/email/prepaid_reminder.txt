@@ -1,0 +1,6 @@
+{{ _('Hello %(name)s,', name=user.display_name()) }}
+
+{{ _('Your subscription %(plan)s has been paid up until %(date)s. It does not renew by itself.', plan=plan, date=ends.strftime('%Y-%m-%d')) }}
+
+{{ _('To carry on, pay for another period before then. Any time you have left carries over:') }}
+{{ url_for('payments.donations', _external=True) }}

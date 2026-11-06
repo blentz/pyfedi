@@ -11,7 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app import db
 from app.constants import DONOR_WHILE_SUBSCRIBED
-from app.email import send_verification_email
+from app.email import send_prepaid_reminder, send_verification_email
 from app.models import MemberSubscription, Offer, Payment, PaymentEvent, User, utcnow
 from app.payments.adapters import adapter_for
 from app.payments.events import CustomerKnown, Paid, Refunded, SubscriptionEnded, SubscriptionStarted
@@ -22,6 +22,7 @@ from app.utils import finalize_user_setup, get_setting
 LEGACY_GROUP = 'legacy'   # the group of a subscription with no offer: one migrated from the environment
 _MAX_ID = 2**31 - 1
 PERIOD_DAYS = {'month': 30, 'year': 365}   # what one payment buys, where nothing recurs
+REMINDER_DAYS = 7
 
 
 def _row(model, row_id):
@@ -144,6 +145,29 @@ def _prepaid_until(kind: str, user: User, offer: Offer | None) -> datetime | Non
     left = [row.current_period_end for row in active_subscriptions_of(user)
             if row.current_period_end is not None and _group_of(_row(Offer, row.offer_id)) == offer.offer_group]
     return max([utcnow(), *left]) + timedelta(days=PERIOD_DAYS[offer.interval])
+
+
+def remind_expiring_prepaid() -> int:
+    """What the daily task does first. Nothing renews by itself, so a member is told once, while there's time. A mail that
+    fails is tried again the next day."""
+    now, sent = utcnow(), 0
+    due = MemberSubscription.query.filter(MemberSubscription.status == 'active', MemberSubscription.reminded_at.is_(None),
+                                          MemberSubscription.current_period_end > now,
+                                          MemberSubscription.current_period_end < now + timedelta(days=REMINDER_DAYS)).all()
+    for subscription in due:
+        user = db.session.get(User, subscription.user_id)
+        if user.deleted or not user.email:
+            continue
+        offer = _row(Offer, subscription.offer_id)
+        try:
+            send_prepaid_reminder(user, offer.title if offer else '', subscription.current_period_end)
+        except Exception as error:
+            current_app.logger.warning(f'prepaid reminder failed for account {user.id}: {type(error).__name__}')
+            continue
+        subscription.reminded_at = now
+        sent += 1
+    db.session.commit()
+    return sent
 
 
 def end_expired_prepaid() -> int:

@@ -53,6 +53,18 @@ def send_verification_email(user):
                html_body=html_body)
 
 
+def send_prepaid_reminder(user, plan: str, ends) -> None:
+    """A period paid for in advance is about to run out, and doesn't renew by itself (spec M4)."""
+    with home_storefront(user):
+        text_body = render_template('email/prepaid_reminder.txt', user=user, plan=plan, ends=ends)
+        html_body = render_template('email/prepaid_reminder.html', user=user, plan=plan, ends=ends)
+    send_email(_('Your subscription runs out on %(date)s', date=ends.strftime('%Y-%m-%d')),
+               sender=f'{mail_name(user)} <{current_app.config["MAIL_FROM"]}>',
+               recipients=[user.email],
+               text_body=text_body,
+               html_body=html_body)
+
+
 def send_registration_approved_email(user):
     subject = _('Your application has been approved - welcome to PieFed')
     body = get_setting('registration_approved_email', '')

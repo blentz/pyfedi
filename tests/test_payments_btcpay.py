@@ -17,7 +17,8 @@ from app.constants import DONOR_WHILE_SUBSCRIBED
 from app.models import MemberSubscription, Offer, Payment, PaymentProvider, Site, SiteDomain, utcnow
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.adapters.btcpay_adapter import BtcpayAdapter, from_minor, to_minor
-from app.payments.core import apply_event, end_expired_prepaid
+from app.email import send_prepaid_reminder
+from app.payments.core import apply_event, end_expired_prepaid, remind_expiring_prepaid
 from app.payments.credentials import seal
 from app.payments.offers import offers_changed, offers_on
 from app.payments.retention import end_expired_subscriptions
@@ -369,6 +370,94 @@ class TestPrepaidPeriods:
         assert row.status == 'ended' and Payment.query.filter_by(provider_reference='inv1').one().status == 'refunded'
 
 
+class TestReminders:
+    def due(self, env, days=5):
+        row = pay(env, 'inv1')
+        row.current_period_end = utcnow() + timedelta(days=days)
+        db.session.commit()
+        return row
+
+    def test_a_period_about_to_run_out_is_mentioned_once(self, env):
+        row = self.due(env)
+        with patch('app.payments.core.send_prepaid_reminder') as mail:
+            assert remind_expiring_prepaid() == 1
+            assert remind_expiring_prepaid() == 0
+
+        mail.assert_called_once_with(env.member, 'Prepaid', row.current_period_end)
+        assert row.reminded_at is not None
+
+    def test_one_with_longer_to_go_isnt(self, env):
+        self.due(env, days=8)
+        with patch('app.payments.core.send_prepaid_reminder') as mail:
+            remind_expiring_prepaid()
+
+        mail.assert_not_called()
+
+    def test_one_already_over_isnt(self, env):
+        self.due(env, days=-1)
+        with patch('app.payments.core.send_prepaid_reminder') as mail:
+            remind_expiring_prepaid()
+
+        mail.assert_not_called()
+
+    def test_what_recurs_isnt(self, env):
+        db.session.add(MemberSubscription(user_id=env.member.id, offer_id=env.plan.id, provider_kind='stripe',
+                                          provider_reference='sub_s', status='active'))
+        db.session.commit()
+        with patch('app.payments.core.send_prepaid_reminder') as mail:
+            remind_expiring_prepaid()
+
+        mail.assert_not_called()
+
+    def test_renewing_earns_a_new_reminder(self, env):
+        self.due(env)
+        with patch('app.payments.core.send_prepaid_reminder'):
+            remind_expiring_prepaid()
+
+        assert pay(env, 'inv2').reminded_at is None
+
+    def test_a_failed_mail_is_tried_again(self, env):
+        row = self.due(env)
+        with patch('app.payments.core.send_prepaid_reminder', side_effect=OSError('down')):
+            assert remind_expiring_prepaid() == 0
+
+        assert row.reminded_at is None
+
+    def test_nobody_to_mail(self, env):
+        self.due(env)
+        env.member.email = ''
+        db.session.commit()
+        with patch('app.payments.core.send_prepaid_reminder') as mail:
+            remind_expiring_prepaid()
+
+        mail.assert_not_called()
+
+    def test_a_plan_since_removed_still_gets_one(self, env):
+        row = self.due(env)
+        row.offer_id = None
+        db.session.commit()
+        with patch('app.payments.core.send_prepaid_reminder') as mail:
+            remind_expiring_prepaid()
+
+        assert mail.call_args.args[1] == ''
+
+    def test_the_mail_says_when_and_where(self, env):
+        row = self.due(env)
+        with patch('app.email.send_email') as send:   # no request: the daily task has none
+            send_prepaid_reminder(env.member, 'Prepaid', row.current_period_end)
+
+        date = row.current_period_end.strftime('%Y-%m-%d')
+        assert date in send.call_args.args[0]
+        assert date in send.call_args.kwargs['text_body'] and '/donations' in send.call_args.kwargs['html_body']
+
+    def test_the_daily_task_sends_them(self, env):
+        self.due(env)
+        with patch('app.payments.core.send_prepaid_reminder') as mail:
+            end_expired_subscriptions()
+
+        mail.assert_called_once()
+
+
 class TestThePage:
     def test_a_held_period_shows_its_date_and_can_be_renewed(self, env):
         connect()
@@ -378,6 +467,7 @@ class TestThePage:
 
         assert row.current_period_end.strftime('%Y-%m-%d') in body
         assert 'Pay for one month' in body and 'Cancel regular donation' not in body
+        assert 'Your subscriptions' in body and 'Your regular donations' not in body
 
     def test_on_the_onion_a_period_shows_and_a_card_doesnt(self, env):
         connect(onion='http://pay.onion')

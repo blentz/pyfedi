@@ -22,10 +22,10 @@ The owner can overrule any of them.
 
 | # | Decision | Why |
 |---|---|---|
-| T1 | A month is 30 days and a year 365. | One payment buys a fixed length, which is simple to state and to check. |
+| T1 | A month is 30 days and a year 365 (owner confirmed 2026-11-06). | One payment buys a fixed length, which is simple to state and to check. |
 | T2 | Time left carries over on renewing or on moving to another plan in the group. | Nobody should lose what they paid for by paying early. |
 | T3 | Each payment makes a new subscription row, replacing the last in its group. | Reuses M7's rule, and each row names the invoice that paid for it. |
-| T4 | **No reminder before a period runs out.** The date is on `/donations`, and a paid domain's grace period follows. | A reminder is a feature of its own, for the owner to ask for. |
+| T4 | One email goes out 7 days before a period runs out (owner ruling 2026-11-06). A mail that fails is tried again the next day. | Nothing renews by itself, and a member on a paid domain would otherwise lapse with no warning. |
 | T5 | Only a settled invoice grants anything. An invoice marked invalid later is recorded as refunded and ends its subscription. | BTCPay has no refund event of its own, as refunds are made by hand there. |
 | T6 | An expired period is noticed by the daily task. | Same as other housekeeping, so access can run up to a day over. |
 | T7 | The API key needs only permission to create and view invoices. | The least that works. |
