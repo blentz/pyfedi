@@ -55,13 +55,16 @@ def donations():
 
 @login_required
 def _member_page(offers):
+    subscriptions = active_subscriptions_of(current_user)
+    held = {subscription.offer_id for subscription in subscriptions}
     groups = {}
     for offer in offers:
-        groups.setdefault(offer.offer_group, []).append(offer)
+        if offer.id not in held:   # choosing it again would only start a second one and cancel the first
+            groups.setdefault(offer.offer_group, []).append(offer)
     payments = Payment.query.filter_by(user_id=current_user.id).order_by(Payment.created_at.desc()).limit(HISTORY_ROWS).all()
     titles = {offer.id: offer.title for offer in Offer.query.all()}
     return render_template('user/choose_plan.html', title=_('Choose a donation plan'), groups=groups,
-                           subscriptions=active_subscriptions_of(current_user), payments=payments, titles=titles)
+                           subscriptions=subscriptions, payments=payments, titles=titles)
 
 
 @bp.route('/donations/checkout/<int:offer_id>', methods=['POST'])

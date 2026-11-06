@@ -97,6 +97,16 @@ class TestThePage:
         assert response.status_code == 200
         assert b'Cancel regular donation' in response.data and b'A small amount' in response.data
 
+    def test_a_plan_you_are_on_is_not_offered_again(self, env):
+        subscribe(env.member, offer=env.offer)
+        db.session.add(Offer(provider_kind='stripe', kind='subscription', title='A larger amount', offer_group='tiers',
+                             provider_price_id='price_big', amount_minor=1000, currency='usd', interval='month'))
+        db.session.commit()
+        login(env.client, env.member)
+        body = env.client.get('/donations').data
+        assert b'A larger amount' in body
+        assert f'/donations/checkout/{env.offer.id}"'.encode() not in body
+
     def test_a_migrated_subscription_has_a_plain_name(self, env):
         subscribe(env.member)
         login(env.client, env.member)

@@ -12,7 +12,7 @@
     <div class="col-12">
         <h2>{{ title }}</h2>
         {% if not retention -%}
-            <div class="alert alert-info" role="alert">
+            <div class="alert alert-warning" role="alert">
                 {{ _('No retention period is set, so settled payments stay linked to their accounts.') }}
                 <a href="{{ url_for('admin.admin_payments') }}">{{ _('Set one') }}</a>
             </div>

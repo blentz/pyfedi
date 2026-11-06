@@ -14,7 +14,7 @@
             <p class="text-muted">{{ _('Thank you for your support. A plan chosen below replaces any other in its group.') }}</p>
             <div class="row mb-4">
                 {% for subscription in subscriptions -%}
-                    <div class="col col-4-md">
+                    <div class="col-12 col-md-6 mb-3">
                         <div class="card">
                             <div class="card-header">
                                 <h3 class="card-title">{{ titles.get(subscription.offer_id) or _('Regular donation') }}</h3>
@@ -43,7 +43,7 @@
         {% for group, offers in groups.items() -%}
             <div class="row mb-3">
                 {% for offer in offers -%}
-                    <div class="col col-4-md">
+                    <div class="col-12 col-md-6 mb-3">
                         <div class="card">
                             <div class="card-header">
                                 <h3 class="card-title">{{ offer.title }}</h3>
