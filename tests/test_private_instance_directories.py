@@ -231,6 +231,8 @@ def test_no_get_route_outside_the_known_list_is_ungated():
         ('user', 'fediverse_redirect'), ('user', 'lookup'), ('community', 'lookup'),
         ('feed', 'lookup'), ('community', 'community_changed'),
         ('community', 'get_sidebar'),
+        # coming back from a provider, with no session yet on a private paid domain; it says nothing but thanks or sorry
+        ('payments', 'result'),
         # ActivityPub and auth blueprints answer machines and anonymous visitors by design
     }
     SKIP_BLUEPRINTS = {'activitypub', 'auth', 'api', 'admin'}

@@ -505,7 +505,9 @@ def test_a_browser_request_is_answered_as_before(app, sites, owned):
     """HTML is unaffected: the shop's storefront answers a first-domain post's page as C2 left it (a login first), not 404."""
     post_id = owned['first'].post.id
     db.session.get(Site, 1).private_instance = True
+    SiteDomain.query.update({SiteDomain.login_required: True})   # each domain's own
     db.session.commit()
+    clear_domain_cache()
     response = fetch(app, f'/post/{post_id}', SHOP, headers={})
     assert (response.status_code, response.headers['Location']) == (302, f'/auth/login?next=/post/{post_id}')
     assert fetch(app, f'/post/{post_id}', FIRST, headers={}).status_code == 302   # as for anyone logged out

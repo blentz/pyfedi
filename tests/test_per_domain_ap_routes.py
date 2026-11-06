@@ -125,7 +125,9 @@ def test_a_hosted_handle_with_no_account_is_404_and_fetches_nothing(app, twins, 
 
 def test_an_uppercase_handle_resolves(app, twins, no_http):
     db.session.get(Site, 1).private_instance = True
+    SiteDomain.query.update({SiteDomain.login_required: True})   # each domain's own
     db.session.commit()
+    clear_domain_cache()
     ap = get(app, f'/u/BOB@{FIRST.upper()}', headers=AP)
     assert ap.status_code == 200 and json.loads(ap.data)['id'] == twins[0].public_url()
     html = get(app, f'/u/BOB@{FIRST}', host=ONION, headers={})   # found: a profile page wants a login
@@ -138,7 +140,9 @@ def test_a_bare_name_means_the_storefronts_domain(app, two_domains):
     two_domains.local_user('solo', first)
     two_domains.local_user('duo', onion)
     db.session.get(Site, 1).private_instance = True
+    SiteDomain.query.update({SiteDomain.login_required: True})   # each domain's own
     db.session.commit()
+    clear_domain_cache()
     assert get(app, '/u/solo', host=ONION, headers={}).status_code == 404
     assert get(app, '/u/duo', host=ONION, headers={}).status_code == 302
     assert get(app, '/u/duo', headers={}).status_code == 404

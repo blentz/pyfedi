@@ -15,6 +15,7 @@ import pytest
 from redis.exceptions import RedisError
 
 from app import create_app
+from app.storefront import default_domain
 from app.auth.util import sync_user_with_ldap
 from app.log_scrub import ONION_EXCEPTION_MESSAGE, OnionScrubFilter, drop_onion_event
 from app.onion_store import read_other_store
@@ -155,7 +156,7 @@ def test_an_unavailable_onion_store_line_names_no_user_ip_or_path(app, caplog):
 
 
 def test_ldap_sync_failure_on_the_onion_names_no_user(app, onion, caplog):
-    user = SimpleNamespace(user_name=SECRET, email='x@example.com')
+    user = SimpleNamespace(user_name=SECRET, email='x@example.com', home_domain=default_domain)
     with patch('app.auth.util.sync_user_to_ldap', side_effect=RuntimeError(f'bind failed for {SECRET}')), \
             onion_context(app):
         sync_user_with_ldap(user, 'pw')

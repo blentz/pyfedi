@@ -1,9 +1,14 @@
 """A domain that charges at registration and requires login, beside a public one on the same site (spec M10-M12, phase 3)."""
+import importlib.util
 from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from sqlalchemy import text
 from flask import current_app, g, session as flask_session
 from flask_wtf.csrf import generate_csrf
 
@@ -11,7 +16,7 @@ from app import db
 from app.models import MemberSubscription, Offer, Payment, Site, SiteDomain, User, utcnow
 from app.payments.core import apply_event, cancel_subscription
 from app.payments.events import Paid, SubscriptionEnded, SubscriptionStarted
-from app.payments.registration import remove_unpaid_registrations
+from app.payments.registration import registration_offer, remove_unpaid_registrations
 from app.storefront import clear_domain_cache
 from tests.factories import grant_permission, make_user
 
@@ -626,6 +631,92 @@ class TestDomainSettings:
             'csrf_token': token})
         db.session.refresh(env.offer)
         assert env.offer.active is True
+
+
+class TestWhatsLeftOver:
+    def test_no_offer_is_asked_for_on_a_domain_that_doesnt_charge(self, env):
+        with env.app.test_request_context('/', base_url=PUBLIC):
+            from app.storefront import resolve_storefront
+            resolve_storefront()
+            assert registration_offer() is None
+
+    def test_a_pending_account_logging_in_after_the_offer_went_is_told_so(self, env, stripe_session):
+        register(env)
+        env.offer.active = False
+        db.session.commit()
+
+        response = env.client.post('/auth/login', base_url=PAID, data={
+            'user_name': 'joiner', 'password': 'a-good-password', 'low_bandwidth_mode': '', 'submit': 'Log in'})
+
+        assert response.status_code == 503
+
+    def test_a_failing_removal_leaves_everything(self, env, stripe_session):
+        register(env)
+        joiner().registration_pending_since = utcnow() - timedelta(hours=49)
+        db.session.commit()
+        with patch('app.payments.registration.cancel_at_provider'), \
+                patch('sqlalchemy.orm.Session.delete', side_effect=RuntimeError('no')), pytest.raises(RuntimeError):
+            remove_unpaid_registrations()
+
+        db.session.expire_all()
+        assert joiner() is not None
+
+    def test_the_terms_box_stays_when_there_are_terms(self, env, stripe_session):
+        env.site.tos_url = 'https://example.com/terms'
+        db.session.commit()
+
+        with patch('app.auth.util.render_template', return_value='the form again'):
+            assert register(env).get_data(as_text=True) == 'the form again'   # the box wasn't ticked
+        assert joiner() is None
+
+    def test_an_api_login_writes_nothing_to_a_directory(self, env, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')
+        member = a_member(env)
+        member.set_password('a-good-password')
+        db.session.commit()
+        with patch('app.shared.auth.sync_user_to_ldap') as write:
+            response = env.client.post('/api/alpha/user/login', base_url=PAID,
+                                       json={'username': member.user_name, 'password': 'a-good-password'})
+
+        assert response.status_code == 200
+        write.assert_not_called()
+
+
+class TestTheMigration:
+    @pytest.mark.parametrize('private', [True, False], ids=['private', 'public'])
+    def test_each_other_domain_takes_the_sites_setting(self, env, private):
+        env.paid.registration, env.paid.registration_offer_id = 'closed', None
+        env.site.private_instance = private
+        db.session.commit()
+        connection = db.session.connection()
+        migration = _migration()
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.downgrade()
+            migration.upgrade()
+            rows = dict(connection.execute(text('SELECT domain, login_required FROM site_domain')).fetchall())
+        db.session.rollback()
+
+        assert rows['public.example'] is private and rows['paid.example'] is private
+        assert rows[current_app.config['SERVER_NAME']] is False   # the default domain's stays the site's
+
+    def test_the_downgrade_closes_a_paid_domain_and_removes_the_unpaid(self, env, stripe_session):
+        register(env)
+        connection = db.session.connection()
+        with Operations.context(MigrationContext.configure(connection)):
+            _migration().downgrade()
+            registration = connection.execute(text("SELECT registration FROM site_domain WHERE domain = 'paid.example'")).scalar()
+            found = connection.execute(text('SELECT count(*) FROM "user" WHERE user_name = \'joiner\'')).scalar()
+        db.session.rollback()
+
+        assert (registration, found) == ('closed', 0)
+
+
+def _migration():
+    path = next(Path(__file__).parent.parent.glob('migrations/versions/*_paid_private_domains.py'))
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
 
 
 class TestCheckoutExpiry:

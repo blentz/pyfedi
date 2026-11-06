@@ -563,9 +563,9 @@ def render_registration_form(form, paid_offer=None):
     paid = paid_registration(current_storefront())
     registration_open = paid_offer is not None if paid \
         else public_registration_open(current_storefront()) or referral_mode_on(g.site)
-    if 'question' in form and g.site.registration_mode in ("RequireApplication", REFERRAL_MODE) and g.site.application_question:
+    if not paid and g.site.registration_mode in ("RequireApplication", REFERRAL_MODE) and g.site.application_question:
         form.question.label = Label("question", markdown_to_html(g.site.application_question))
-    if 'terms' in form and (g.site.tos_url is None or not g.site.tos_url.strip()):
+    if not paid and (g.site.tos_url is None or not g.site.tos_url.strip()):
         del form.terms
 
     return render_template("auth/register.html", title=_("Register"), form=form, site=g.site,

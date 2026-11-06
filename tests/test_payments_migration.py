@@ -15,8 +15,8 @@ from tests.factories import make_instance, make_user
 TABLES = ('payment_provider', 'offer', 'offer_domain', 'payment', 'member_subscription', 'payment_event')
 
 
-def load():
-    path = next(Path(__file__).parent.parent.glob('migrations/versions/*_payments.py'))
+def load(name='payments'):
+    path = next(Path(__file__).parent.parent.glob(f'migrations/versions/*_{name}.py'))
     spec = importlib.util.spec_from_file_location(path.stem, path)
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
@@ -37,6 +37,7 @@ def conn(app, db_session, monkeypatch):
     db.session.commit()
     connection = db.session.connection()
     with Operations.context(MigrationContext.configure(connection)):
+        load('paid_private_domains').downgrade()   # its foreign key names the table this one drops
         load().downgrade()
         yield connection
     db.session.rollback()
