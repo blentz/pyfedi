@@ -43,6 +43,7 @@ def stripe_webhook():
 
 @bp.route('/donations')
 @login_required_if_private_instance
+@limiter.limit('100 per 10 minutes')   # which makes it session first on the onion: checkout is a POST, and can't be sent round
 def donations():
     """The offers, and the way to stop paying. Not /donate: that is a CMS page an admin may delete, and a donor must
     still be able to cancel. The seeded /donate page links here on every site, so with nothing to offer this says so on

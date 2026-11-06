@@ -379,6 +379,21 @@ class TestThePage:
         assert row.current_period_end.strftime('%Y-%m-%d') in body
         assert 'Pay for one month' in body and 'Cancel regular donation' not in body
 
+    def test_on_the_onion_a_period_shows_and_a_card_doesnt(self, env):
+        connect(onion='http://pay.onion')
+        row = pay(env, 'inv1')
+        recurring = MemberSubscription(user_id=env.member.id, offer_id=env.gift.id, provider_kind='stripe',
+                                       provider_reference='sub_x', status='active')
+        db.session.add(recurring)
+        db.session.commit()
+        login(env.client, env.member)
+        with patch('app.payments.routes.is_onion_request', return_value=True), \
+                patch('app.payments.offers.is_onion_request', return_value=True):
+            body = env.client.get('/donations').get_data(as_text=True)
+
+        assert row.current_period_end.strftime('%Y-%m-%d') in body
+        assert 'Cancel regular donation' not in body and 'Your payments' not in body
+
     def test_a_stranger_can_give_once(self, env):
         connect()
         body = env.client.get('/donations').get_data(as_text=True)
@@ -445,6 +460,35 @@ class TestAdmin:
             env.client.post('/admin/payments/btcpay', data=self.form(admin))
 
         assert PaymentProvider.query.filter_by(kind='btcpay').first() is None
+
+    @respx.mock
+    def test_blank_secrets_keep_what_is_stored(self, env, admin):
+        connect()
+        route = respx.get(f'https://new.example/api/v1/stores/{STORE}/invoices').mock(return_value=httpx.Response(200, json=[]))
+        env.client.post('/admin/payments/btcpay', data=self.form(admin, api_key='', webhook_secret='', url='https://new.example/'))
+
+        row = PaymentProvider.query.filter_by(kind='btcpay').one()
+        assert route.called and row.settings['url'] == 'https://new.example' and BtcpayAdapter().available()
+
+    @respx.mock
+    def test_secrets_that_cant_be_opened_must_be_entered_again(self, env, admin):
+        db.session.add(PaymentProvider(kind='btcpay', credentials='garbage', settings={'url': URL, 'store_id': STORE}))
+        db.session.commit()
+        env.client.post('/admin/payments/btcpay', data=self.form(admin, api_key='', webhook_secret=''))
+
+        assert PaymentProvider.query.filter_by(kind='btcpay').one().credentials == 'garbage'   # no key to ask with
+
+    def test_saving_with_nothing_entered_stores_no_secret(self, env, admin):
+        env.client.post('/admin/payments/btcpay', data=self.form(admin, url='', store_id='', api_key='', webhook_secret='', enabled=''))
+
+        row = PaymentProvider.query.filter_by(kind='btcpay').one()
+        assert row.credentials is None and row.enabled is False
+
+    def test_a_second_offer_keeps_the_sites_currency(self, env, admin):
+        set_setting('payment_currency', 'usd')
+        env.client.post('/admin/payments/btcpay/offers/add', data=self.offer(admin))
+
+        assert Offer.query.filter_by(title='New').one().currency == 'usd'
 
     def offer(self, token, **values):
         return {'title': 'New', 'amount': '12.50', 'currency': 'usd', 'interval': 'year', 'offer_group': 'plans', 'position': '0',
