@@ -732,12 +732,10 @@ class BtcpayCredentialsForm(FlaskForm):
     save_btcpay = SubmitField(_l('Save'))
 
     def validate_url(self, field):
-        if field.data:
-            field.data = _web_address(field.data)
+        field.data = _web_address(field.data)
 
     def validate_onion_url(self, field):
-        if field.data:
-            field.data = _web_address(field.data, onion=True)
+        field.data = _web_address(field.data, onion=True)
 
 
 class BtcpayOfferForm(FlaskForm):
