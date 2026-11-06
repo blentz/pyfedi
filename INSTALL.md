@@ -846,17 +846,20 @@ The piefed-notifs service also significantly improves the efficiency of federati
 
 ## Accepting donations through Stripe
 
-In env.sample there are all the environment variables you need to add to your .env for Stripe to work.
+Stripe is connected on a running site, at **Admin > Payments**. Whoever does this needs the `manage monetization` permission.
 
-STRIPE_SECRET_KEY and STRIPE_PUBLISHABLE_KEY can be found on the Stripe dashboard.
+1. Run `flask generate-payment-key` and put the result in your .env as `PAYMENT_SECRETS_KEY`, then restart. It encrypts provider
+   credentials in the database. Back it up apart from your database backups. Losing it means entering the credentials again: no
+   payment data is lost. To rotate it, put the new key first, comma separated: `new,old`.
+2. On the Payments page, enter your Stripe secret key and webhook signing secret. They can be replaced but never shown again.
+3. In the Stripe dashboard, set up a webhook to the address shown on that page, sending the events listed there.
+4. On the same page, add an offer for each Stripe price you want to offer. Its amount, currency and interval are read from Stripe.
 
-STRIPE_MONTHLY_SMALL and STRIPE_MONTHLY_BIG are the Price IDs of two **monthly recurring** products. Find the price ID by editing
-a product you've made and then clicking on the 3 dot button to the right of the price.
+Members find the offers at `/donations`, which is also where they cancel. Stripe is never offered on an onion domain.
 
-Change STRIPE_MONTHLY_SMALL_TEXT and STRIPE_MONTHLY_BIG_TEXT to be the amounts of your product prices.
-
-To get a WEBHOOK_SIGNING_SECRET you need to set up a webhook to send data to https://yourinstance/stripe_webhook, sending the
-checkout.session.completed and customer.subscription.deleted events.
+If your .env still has the old `STRIPE_*` and `WEBHOOK_SIGNING_SECRET` variables, your site keeps working from them, and your two
+plans and your existing donors have carried over. Use **Import from the environment** on the Payments page to move them into the
+database, then add the new webhook events in the Stripe dashboard. Those variables stop being read in a later release.
 
 ---
 

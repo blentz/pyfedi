@@ -320,9 +320,9 @@ class TestTheRest:
 
     def test_good_credentials_pass(self, adapter):
         with patch('stripe.Price.list') as listing:
-            adapter.validate_credentials({'secret_key': 'sk_test_new'})
+            adapter.check_credentials({'secret_key': 'sk_test_new'})
         listing.assert_called_once_with(limit=1, api_key='sk_test_new')
 
     def test_bad_credentials_fail(self, adapter):
         with patch('stripe.Price.list', side_effect=stripe.AuthenticationError('bad')), pytest.raises(ProviderError):
-            adapter.validate_credentials({})
+            adapter.check_credentials({})

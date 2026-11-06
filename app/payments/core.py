@@ -128,9 +128,7 @@ def _ended(kind: str, event: SubscriptionEnded, touched: set) -> None:
         return
     subscription.status = 'ended'
     subscription.ended_at = utcnow()
-    user = db.session.get(User, subscription.user_id)
-    if user:
-        touched.add(user)
+    touched.add(db.session.get(User, subscription.user_id))   # the column is a required foreign key
 
 
 def _customer_known(event: CustomerKnown) -> None:

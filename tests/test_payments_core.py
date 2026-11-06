@@ -111,6 +111,10 @@ class TestTheLedger:
         assert apply('evt_1', paid(member, offer)) is True
 
 
+def test_an_event_core_does_not_know_is_ignored(app, db_session):
+    assert apply('evt_1', object()) is True
+
+
 class TestRefunds:
     def test_a_refund_marks_its_payment(self, member):
         apply('evt_1', paid(member, an_offer()))

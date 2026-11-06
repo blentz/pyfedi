@@ -271,6 +271,12 @@ class TestOffers:
             response = post(env, '/admin/payments/offers/add', **OFFER)
         assert b'different currency' in response.data and Offer.query.count() == 0
 
+    def test_a_second_price_in_the_sites_currency_is_fine(self, env, admin):
+        set_setting('payment_currency', 'usd')
+        with patch('stripe.Price.retrieve', return_value=price()):
+            post(env, '/admin/payments/offers/add', **OFFER)
+        assert Offer.query.count() == 1
+
     def test_an_edit_changes_what_it_says(self, env, admin):
         offer = an_offer()
         with patch('stripe.Price.retrieve') as retrieve:

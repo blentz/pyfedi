@@ -1,9 +1,10 @@
 """Past retention, a settled payment keeps its amounts and loses its account (M6, plan P4)."""
 from datetime import timedelta
+from unittest.mock import MagicMock
 
 import pytest
 
-from app import db
+from app import cli, db
 from app.models import MemberSubscription, Offer, Payment, utcnow
 from app.payments.retention import pseudonymise_settled
 from app.utils import set_setting
@@ -108,3 +109,25 @@ def test_a_failure_rolls_back_and_is_raised(member, monkeypatch):
     monkeypatch.setattr('app.payments.retention.get_setting', lambda name: (_ for _ in ()).throw(RuntimeError()))
     with pytest.raises(RuntimeError):
         pseudonymise_settled()
+
+
+@pytest.mark.parametrize('command', ['daily-maintenance', 'daily-maintenance-celery'])
+def test_daily_maintenance_runs_it(app, db_session, monkeypatch, command):
+    """In debug mode: test_relays_expiry.py has both commands' other arms, and each runs every step."""
+    calls = []
+    for name in ('cleanup_old_notifications', 'cleanup_old_read_posts', 'cleanup_send_queue', 'process_expired_bans',
+                 'remove_old_community_content', 'remove_old_bot_content', 'expire_relayed_posts',
+                 'update_hashtag_counts', 'update_community_stats', 'cleanup_old_voting_data', 'unban_expired_users',
+                 'sync_defederation_subscriptions', 'recalculate_user_attitudes', 'calculate_community_activity_stats',
+                 'cleanup_old_activitypub_logs', 'clean_up_tmp', 'delete_old_soft_deleted_content', 'archive_old_posts',
+                 'archive_old_users', 'pwn_bots', 'log_cron_task_to_db', 'check_instance_health',
+                 'monitor_healthy_instances'):
+        monkeypatch.setattr(cli, name, MagicMock())
+    monkeypatch.setattr(cli, 'pseudonymise_settled', lambda: calls.append(1))
+    monkeypatch.setattr(cli.plugins, 'fire_hook', lambda *a, **k: None)
+    monkeypatch.setattr(cli, 'get_setting', lambda *a, **k: False)
+    monkeypatch.setitem(app.config, 'DEBUG', True)
+    cli.register(app)
+    result = app.test_cli_runner().invoke(args=[command])
+    assert result.exception is None, result.output
+    assert calls == [1]

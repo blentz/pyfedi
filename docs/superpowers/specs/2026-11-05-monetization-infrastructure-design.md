@@ -98,8 +98,9 @@ a provider's payload.
 - M11's checks replace the site-wide flag: `private_instance` has 86 uses across 16 files, with 55 route decorators.
   They should collapse into one per-storefront predicate, with a test that walks the URL map, as `app/hidden_routes.py`
   does for onion content.
-- Pseudonymisation (M6) runs in a scheduled task. Rows tied to an active subscription, credit balance or open dispute
-  keep their link until they settle.
+- Pseudonymisation (M6) runs in a scheduled task. Rows tied to an active subscription, a running Donor label, a credit
+  balance or an open dispute keep their link until they settle. A label granted for good holds its row for good, so an
+  admin who wants those to lapse gives the offer a length.
 
 ## Phases
 

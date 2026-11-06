@@ -98,10 +98,7 @@ def test_switching_plan_cancels_the_old_one_at_stripe(env, app):
     cancel.assert_called_once_with('stripe', 'sub_1')
 
 
-def test_a_failure_answers_500_so_stripe_tries_again(env, app):
-    app.config['PROPAGATE_EXCEPTIONS'] = False
-    try:
-        with patch('app.payments.routes.apply_event', side_effect=RuntimeError):
-            assert signed_post(env.client, completed(env)).status_code == 500
-    finally:
-        app.config['PROPAGATE_EXCEPTIONS'] = None
+def test_a_failure_answers_500_so_stripe_tries_again(env, app, monkeypatch):
+    monkeypatch.setitem(app.config, 'PROPAGATE_EXCEPTIONS', False)
+    with patch('app.payments.routes.apply_event', side_effect=RuntimeError):
+        assert signed_post(env.client, completed(env)).status_code == 500

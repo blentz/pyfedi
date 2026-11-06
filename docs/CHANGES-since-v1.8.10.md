@@ -1036,6 +1036,16 @@ Since the register closed:
 
 ---
 
+### Payments
+
+- Stripe keeps working from the environment until imported, and existing plans and donors
+  carry over. Add `PAYMENT_SECRETS_KEY`, then use Import on Admin > Payments.
+- Add `invoice.paid`, `charge.refunded` and `checkout.session.async_payment_succeeded` to
+  the Stripe webhook, or renewals and refunds won't appear in the ledger.
+- `/plan_unsubscribe` and `/stripe_redirect/<plan>` are gone, replaced by POST routes under
+  `/donations`. `/stripe_webhook` still answers.
+- Deleting an account now cancels its subscriptions at the provider.
+
 ## 3. Security fixes
 
 These are the fixes with a security impact, grouped by kind. Twelve carry the
@@ -1447,6 +1457,15 @@ owner ruled; those rulings are the limits listed in 2.3. Typical fixes:
 ---
 
 ## 5. New features
+
+- **Payments.** Admins connect Stripe, define offers and read a payment ledger at
+  Admin > Payments, with the `manage monetization` permission. Credentials are encrypted in
+  the database under `PAYMENT_SECRETS_KEY`. Members pay and cancel at `/donations`, and a
+  member can hold several subscriptions, one per group. See `INSTALL.md`. Spec
+  `docs/superpowers/specs/2026-11-05-monetization-infrastructure-design.md`.
+- **The Donate page is a CMS page.** `/donate` is seeded and edited at `/admin/pages`, and any
+  CMS page can opt in to a header link, a footer link and the sidebar. Spec
+  `docs/superpowers/specs/2026-11-05-cms-donate-page-design.md`.
 
 There are 146 `feat` commits. The first twelve came during the coverage
 campaign:

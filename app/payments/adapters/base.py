@@ -1,4 +1,5 @@
 """What every integrated provider implements (spec, Adapter contract)."""
+from collections.abc import Callable
 from typing import Protocol
 
 
@@ -12,11 +13,10 @@ class ProviderError(Exception):
 
 class Adapter(Protocol):
     kind: str
-
-    def available(self) -> bool: ...
-    def checkout(self, offer, user, success_url: str, cancel_url: str) -> str: ...
-    def parse_webhook(self, body: bytes, headers) -> tuple[str, list]: ...
-    def cancel(self, reference: str) -> None: ...
-    def billing_portal_url(self, customer: str, return_url: str) -> str: ...
-    def describe_price(self, price_id: str) -> dict: ...
-    def validate_credentials(self, values: dict) -> None: ...
+    available: Callable[[], bool]
+    checkout: Callable[..., str]   # (offer, user, success_url, cancel_url) -> where to send the member
+    parse_webhook: Callable[..., tuple[str, list]]   # (body, headers) -> (event id, neutral events), or InvalidWebhook
+    cancel: Callable[[str], None]   # (reference); already gone counts as done
+    billing_portal_url: Callable[[str, str], str]   # (customer, return_url)
+    describe_price: Callable[[str], dict]   # (price id) -> {'amount_minor', 'currency', 'interval'}
+    check_credentials: Callable[[dict], None]   # raises ProviderError if the provider refuses them

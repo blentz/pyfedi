@@ -195,5 +195,5 @@ class StripeAdapter:
         return {'amount_minor': price.unit_amount, 'currency': price.currency.lower(),
                 'interval': recurring.interval if recurring else None}
 
-    def validate_credentials(self, values: dict) -> None:
+    def check_credentials(self, values: dict) -> None:
         self._call(lambda stripe: stripe.Price.list, limit=1, api_key=values.get('secret_key') or '')

@@ -80,7 +80,7 @@ def admin_payments_stripe():
     if entered:
         values = {**values, **entered}
         try:
-            adapter_for('stripe').validate_credentials(values)
+            adapter_for('stripe').check_credentials(values)
         except ProviderError:
             flash(_('Stripe refused that secret key. Nothing was changed.'), 'error')
             return redirect(url_for('admin.admin_payments'))
@@ -98,8 +98,6 @@ def admin_payments_stripe():
 @permission_required('manage monetization')
 def admin_payments_stripe_import():
     """Bring a site's Stripe setup in from its environment (C5). Running it again changes nothing already there."""
-    if not FlaskForm().validate_on_submit():
-        abort(400)
     if not credentials_available():
         flash(_('Credentials cannot be stored until PAYMENT_SECRETS_KEY is set.'), 'error')
         return redirect(url_for('admin.admin_payments'))

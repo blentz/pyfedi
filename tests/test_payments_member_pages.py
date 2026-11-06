@@ -60,6 +60,14 @@ class TestThePage:
         assert response.status_code == 200
         assert b'A small amount' in response.data and b'$5.00' in response.data and b'month' in response.data
 
+    def test_every_offer_is_listed_in_its_group(self, env):
+        db.session.add(Offer(provider_kind='stripe', kind='subscription', title='A larger amount', offer_group='tiers',
+                             provider_price_id='price_big', amount_minor=1000, currency='usd', interval='month'))
+        db.session.commit()
+        login(env.client, env.member)
+        body = env.client.get('/donations').data
+        assert b'A small amount' in body and b'A larger amount' in body
+
     def test_a_stranger_is_sent_to_log_in(self, env):
         response = env.client.get('/donations')
         assert response.status_code == 302 and '/auth/login' in response.headers['Location']
