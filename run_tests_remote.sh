@@ -5,9 +5,11 @@
 #   PYTEST_WORKERS=7 ./run_tests_remote.sh --cov=app --cov-branch --cov-report=json:coverage.json
 #
 # REMOTE_PODMAN names a connection from `podman system connection list`. Its user must have this checkout's path free,
-# since compose.test.yaml's bind mount is resolved on that machine: the copy there is replaced on every run. Only what git
-# tracks or would track goes across (never an ignored file holding a real secret), plus .env.test, and .git for the tests
-# that ask git. coverage.json comes back if the run wrote one.
+# since compose.test.yaml's bind mount is resolved on that machine: the copy there is replaced on every run, and removed
+# after it. Only what git tracks or would track goes across, never an ignored file that may hold a real secret, plus
+# .env.test. This .git stays here, with its config, stashes and history: the copy gets an index of its own, for the tests
+# that ask git which files there are. So a test or gate that reads commits runs here, not there. coverage.json comes back
+# if the run wrote one.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -38,8 +40,8 @@ remote "rm -rf '$PWD' && mkdir -p '$PWD'"
 { git ls-files -co --exclude-standard -z | while IFS= read -r -d '' file; do
       [ -e "$file" ] && printf '%s\0' "$file"
   done
-  printf '%s\0' .env.test .git
-} | tar --null -T - -czf - | remote "tar -xzf - -C '$PWD'"
+  printf '%s\0' .env.test
+} | tar --null -T - -czf - | remote "tar -xzf - -C '$PWD' && cd '$PWD' && git init -q && git add -A"
 
 status=0
 CONTAINER_CONNECTION="$REMOTE_PODMAN" ./run_tests.sh "$@" || status=$?
@@ -47,4 +49,5 @@ CONTAINER_CONNECTION="$REMOTE_PODMAN" ./run_tests.sh "$@" || status=$?
 if remote "test -f '$PWD/coverage.json'"; then
     remote "cat '$PWD/coverage.json'" > coverage.json
 fi
+remote "rm -rf '$PWD'"
 exit "$status"
