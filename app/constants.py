@@ -1,3 +1,5 @@
+from datetime import datetime
+
 VERSION = '1.8.10'
 
 POST_TYPE_LINK = 1
@@ -215,3 +217,7 @@ AUTOMATED_REPORTER = 'automated'
 # by default, so ten would not fit in one form post.
 MAX_ALBUM_IMAGES_DEFAULT = 4
 MAX_ALBUM_IMAGES_CEILING = 9
+
+# What User.donor_until holds while a label-granting subscription is active: the label then needs no renewal event, which
+# a site's Stripe webhook may not be sending (plan docs/superpowers/plans/2026-11-05-monetization-phase-1.md, P1).
+DONOR_WHILE_SUBSCRIBED = datetime(9999, 12, 31)

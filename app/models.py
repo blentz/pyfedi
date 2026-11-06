@@ -2248,6 +2248,7 @@ class User(UserMixin, db.Model):
     site_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id'))  # the hosted domain it belongs to; NULL for remote rows
     stripe_customer_id = db.Column(db.String(50))
     stripe_subscription_id = db.Column(db.String(50))
+    donor_until = db.Column(db.DateTime)   # app/payments/core.py keeps this; DONOR_WHILE_SUBSCRIBED while subscribed
     searchable = db.Column(db.Boolean, default=True)        # whether their profile is visible in profile list
     indexable = db.Column(db.Boolean, default=True)         # whether posts appear in search results
     bot = db.Column(db.Boolean, default=False, index=True)
@@ -2490,6 +2491,9 @@ class User(UserMixin, db.Model):
     def home_domain(self):
         """The hosted domain this user belongs to (the default domain when it has none)."""
         return storefront.domain_by_id(self.site_domain_id)
+
+    def is_donor(self) -> bool:
+        return self.donor_until is not None and self.donor_until > utcnow()
 
     def is_local(self):
         return self.ap_id is None or is_local_url(self.ap_profile_id)
@@ -6502,6 +6506,75 @@ class CmsPage(db.Model):
     in_header = db.Column(db.Boolean, default=False, nullable=False, server_default=db.false())
     in_footer = db.Column(db.Boolean, default=False, nullable=False, server_default=db.false())
     show_sidebar = db.Column(db.Boolean, default=False, nullable=False, server_default=db.false())
+
+
+class PaymentProvider(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    kind = db.Column(db.String(20), nullable=False, unique=True)
+    enabled = db.Column(db.Boolean, nullable=False, default=True, server_default=db.true())
+    credentials = db.Column(db.Text)   # sealed by app/payments/credentials.py
+    settings = db.Column(db.JSON)      # nothing secret
+
+
+class Offer(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    provider_kind = db.Column(db.String(20), nullable=False)
+    kind = db.Column(db.String(20), nullable=False)   # donation, subscription
+    title = db.Column(db.String(255), nullable=False)
+    offer_group = db.Column(db.String(50), nullable=False)   # a new subscription replaces others in its group (M7)
+    provider_price_id = db.Column(db.String(255))
+    amount_minor = db.Column(db.BigInteger)   # NULL only for a plan migrated from the environment, until it is imported
+    currency = db.Column(db.String(3))
+    interval = db.Column(db.String(10))
+    grants_donor = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    donor_days = db.Column(db.Integer)   # how long a one-off payment grants the label; NULL means for good
+    position = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    active = db.Column(db.Boolean, nullable=False, default=True, server_default=db.true())
+    created_at = db.Column(db.DateTime, default=utcnow)
+
+
+class OfferDomain(db.Model):
+    """Which domains an offer is on. No rows means all of them (M2)."""
+    offer_id = db.Column(db.Integer, db.ForeignKey('offer.id', ondelete='CASCADE'), primary_key=True)
+    site_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id', ondelete='CASCADE'), primary_key=True)
+
+
+class Payment(db.Model):
+    """The ledger (M6): no names, emails or IP addresses. Only app/payments/core.py writes it."""
+    __table_args__ = (db.UniqueConstraint('provider_kind', 'provider_reference', name='uq_payment_provider_reference'),)
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='SET NULL'), index=True)
+    offer_id = db.Column(db.Integer, db.ForeignKey('offer.id'), index=True)
+    provider_kind = db.Column(db.String(20), nullable=False)
+    provider_reference = db.Column(db.String(255), nullable=False)
+    amount_minor = db.Column(db.BigInteger, nullable=False)
+    currency = db.Column(db.String(3), nullable=False)
+    status = db.Column(db.String(20), nullable=False)   # paid, refunded, mismatch
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow, index=True)
+    settled_at = db.Column(db.DateTime)
+
+
+class MemberSubscription(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False, index=True)
+    offer_id = db.Column(db.Integer, db.ForeignKey('offer.id'), index=True)   # NULL: migrated, and in group 'legacy'
+    provider_kind = db.Column(db.String(20), nullable=False)
+    provider_reference = db.Column(db.String(255), nullable=False, unique=True)
+    status = db.Column(db.String(20), nullable=False)   # active, ended
+    current_period_end = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=utcnow)
+    ended_at = db.Column(db.DateTime)
+
+
+class PaymentEvent(db.Model):
+    """Which provider events have been applied, so a repeated webhook does nothing."""
+    __table_args__ = (db.UniqueConstraint('provider_kind', 'event_id', name='uq_payment_event'),)
+
+    id = db.Column(db.Integer, primary_key=True)
+    provider_kind = db.Column(db.String(20), nullable=False)
+    event_id = db.Column(db.String(255), nullable=False)
+    received_at = db.Column(db.DateTime, default=utcnow)
 
 
 class InstanceChooser(db.Model):
