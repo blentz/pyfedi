@@ -10,10 +10,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import stripe
 from flask import current_app, g
 
 from app import db
-from app.models import MemberSubscription, Offer, Payment, PaymentProvider, Site
+from app.models import MemberSubscription, Offer, Payment, PaymentEvent, PaymentProvider, Site
 from tests.factories import make_user
 
 SECRET = 'whsec_test'
@@ -96,6 +97,24 @@ def test_switching_plan_cancels_the_old_one_at_stripe(env, app):
     with patch('app.payments.tasks.cancel_at_provider_task.delay') as cancel:
         signed_post(env.client, completed(env, 'evt_2', subscription='sub_2', invoice='in_2'))
     cancel.assert_called_once_with('stripe', 'sub_1')
+
+
+def test_a_refund_of_a_subscription_payment_marks_its_invoice(env):
+    """The whole way through, as the current Stripe API sends it: the charge names no invoice."""
+    signed_post(env.client, completed(env))
+    found = SimpleNamespace(data=[SimpleNamespace(invoice='in_1')])
+    refund = {'id': 'evt_2', 'type': 'charge.refunded', 'data': {'object': {'refunded': True, 'payment_intent': 'pi_1'}}}
+    with patch('stripe.InvoicePayment.list', return_value=found):
+        assert signed_post(env.client, refund).status_code == 200
+    assert Payment.query.one().status == 'refunded'
+
+
+def test_stripe_being_down_during_a_refund_asks_it_to_send_again(env):
+    signed_post(env.client, completed(env))
+    refund = {'id': 'evt_2', 'type': 'charge.refunded', 'data': {'object': {'refunded': True, 'payment_intent': 'pi_1'}}}
+    with patch('stripe.InvoicePayment.list', side_effect=stripe.APIConnectionError('down')):
+        assert signed_post(env.client, refund).status_code == 503
+    assert Payment.query.one().status == 'paid' and PaymentEvent.query.count() == 1
 
 
 def test_a_failure_answers_500_so_stripe_tries_again(env, app, monkeypatch):

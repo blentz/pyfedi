@@ -12,7 +12,7 @@ from cryptography.fernet import Fernet
 from flask import current_app
 
 from app import db
-from app.models import Offer, PaymentProvider
+from app.models import Offer, Payment, PaymentProvider
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.credentials import seal
@@ -261,6 +261,38 @@ class TestOtherEvents:
     def test_a_whole_refund_names_both_references(self, adapter):
         charge = {'refunded': True, 'invoice': 'in_1', 'payment_intent': 'pi_1'}
         assert parse(adapter, 'charge.refunded', charge)[1] == [Refunded('in_1'), Refunded('pi_1')]
+
+    def test_the_current_api_names_no_invoice_so_stripe_is_asked(self, adapter):
+        """A subscription's payment is recorded by invoice, and a charge no longer says which."""
+        found = SimpleNamespace(data=[SimpleNamespace(invoice='in_1')])
+        with patch('stripe.InvoicePayment.list', return_value=found) as listing:
+            events = parse(adapter, 'charge.refunded', {'refunded': True, 'payment_intent': 'pi_1'})[1]
+        assert events == [Refunded('in_1'), Refunded('pi_1')]
+        listing.assert_called_once_with(payment={'type': 'payment_intent', 'payment_intent': 'pi_1'}, limit=1, api_key=KEY)
+
+    def test_a_one_off_is_known_by_its_intent_and_stripe_is_not_asked(self, adapter):
+        db.session.add(Payment(provider_kind='stripe', provider_reference='pi_1', amount_minor=500, currency='usd',
+                               status='paid'))
+        db.session.commit()
+        with patch('stripe.InvoicePayment.list') as listing:
+            events = parse(adapter, 'charge.refunded', {'refunded': True, 'payment_intent': 'pi_1'})[1]
+        assert events == [Refunded('pi_1')] and not listing.called
+
+    @pytest.mark.parametrize('found', [[], [SimpleNamespace(invoice=None)]], ids=['no_invoice_payment', 'no_invoice'])
+    def test_a_payment_with_no_invoice_is_known_by_its_intent(self, adapter, found):
+        with patch('stripe.InvoicePayment.list', return_value=SimpleNamespace(data=found)):
+            events = parse(adapter, 'charge.refunded', {'refunded': True, 'payment_intent': 'pi_1'})[1]
+        assert events == [Refunded('pi_1')]
+
+    def test_stripe_being_down_is_a_failure_to_retry(self, adapter):
+        with patch('stripe.InvoicePayment.list', side_effect=stripe.APIConnectionError('down')), \
+                pytest.raises(ProviderError):
+            parse(adapter, 'charge.refunded', {'refunded': True, 'payment_intent': 'pi_1'})
+
+    def test_a_refund_naming_no_intent_asks_nothing(self, adapter):
+        with patch('stripe.InvoicePayment.list') as listing:
+            assert parse(adapter, 'charge.refunded', {'refunded': True})[1] == []
+        assert not listing.called
 
     def test_part_of_a_refund_changes_nothing(self, adapter):
         assert parse(adapter, 'charge.refunded', {'refunded': False, 'payment_intent': 'pi_1'})[1] == []

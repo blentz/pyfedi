@@ -27,6 +27,8 @@ def payment_webhook(kind):
         event_id, events = adapter.parse_webhook(request.get_data(), request.headers)
     except InvalidWebhook:
         return 'invalid webhook', 400
+    except ProviderError:
+        return 'try again', 503   # reading the event needed the provider: a provider's webhook is retried
     apply_event(kind, event_id, events)
     return 'ok'
 

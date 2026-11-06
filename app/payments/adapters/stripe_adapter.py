@@ -8,7 +8,7 @@ import hashlib
 
 from flask import current_app
 
-from app.models import Offer, PaymentProvider, User
+from app.models import Offer, Payment, PaymentProvider, User
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.credentials import CredentialsUnavailable, unseal
 from app.payments.events import CustomerKnown, Paid, Refunded, SubscriptionEnded, SubscriptionStarted
@@ -83,13 +83,6 @@ def _invoice_events(invoice: dict) -> list:
     return [Paid(reference, amount, currency, user.id if user else None, _offer_id_for_price(_invoice_price_id(invoice)))]
 
 
-def _refund_events(charge: dict) -> list:
-    """A whole refund only: part of one leaves the payment standing. A payment is known by its invoice or its intent."""
-    if charge.get('refunded') is not True:
-        return []
-    return [Refunded(reference) for reference in (_text(charge, 'invoice'), _text(charge, 'payment_intent')) if reference]
-
-
 def _subscription_ended_events(subscription: dict) -> list:
     reference = _text(subscription, 'id')
     return [SubscriptionEnded(reference)] if reference else []
@@ -100,11 +93,11 @@ _HANDLERS = {
     'checkout.session.async_payment_succeeded': _session_events,
     'invoice.paid': _invoice_events,
     'customer.subscription.deleted': _subscription_ended_events,
-    'charge.refunded': _refund_events,
 }
 
 
-REQUIRED_EVENTS = tuple(_HANDLERS)
+REFUND_EVENT = 'charge.refunded'
+REQUIRED_EVENTS = (*_HANDLERS, REFUND_EVENT)
 
 
 class StripeAdapter:
@@ -169,8 +162,23 @@ class StripeAdapter:
             raise InvalidWebhook('not from Stripe') from None
         event = event.to_dict()   # stripe >= 13: a StripeObject is no dict (no .get)
         event_id = _text(event, 'id') or hashlib.sha256(body).hexdigest()
-        handler = _HANDLERS.get(event.get('type')) if isinstance(event.get('type'), str) else None
+        handler = {**_HANDLERS, REFUND_EVENT: self._refund_events}.get(event.get('type')) \
+            if isinstance(event.get('type'), str) else None
         return event_id, handler(_mapping(_mapping(event, 'data'), 'object')) if handler else []
+
+    def _refund_events(self, charge: dict) -> list:
+        """A whole refund only: part of one leaves the payment standing. A one-off is recorded by its payment intent and
+        a subscription's payment by its invoice, which the current API no longer names on a charge, so Stripe is asked.
+        A ProviderError here sends the webhook back to Stripe to try again."""
+        if charge.get('refunded') is not True:
+            return []
+        intent = _text(charge, 'payment_intent')
+        invoice = _text(charge, 'invoice')
+        if not invoice and intent and not Payment.query.filter_by(provider_kind=self.kind, provider_reference=intent).first():
+            found = self._call(lambda stripe: stripe.InvoicePayment.list,
+                               payment={'type': 'payment_intent', 'payment_intent': intent}, limit=1, api_key=self._key())
+            invoice = found.data[0].invoice if found.data else None
+        return [Refunded(reference) for reference in (invoice, intent) if reference]
 
     def cancel(self, reference: str) -> None:
         stripe = _stripe()
