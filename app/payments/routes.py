@@ -62,8 +62,10 @@ def donations():
     payments = Payment.query.filter_by(user_id=current_user.id).order_by(Payment.created_at.desc()).limit(HISTORY_ROWS).all() \
         if member else []
     titles = {offer.id: offer.title for offer in Offer.query.all()}
-    return render_template('user/choose_plan.html', title=_('Choose a donation plan'), groups=groups, links=links,
-                           subscriptions=subscriptions, payments=payments, titles=titles, member=member)
+    paid_domain = paid_registration(current_storefront())   # a fee to belong here is no donation, whatever else is on offer
+    return render_template('user/choose_plan.html', title=_('Your membership') if paid_domain else _('Choose a donation plan'),
+                           groups=groups, links=links, subscriptions=subscriptions, payments=payments, titles=titles,
+                           member=member, paid_domain=paid_domain)
 
 
 @bp.route('/donations/checkout/<int:offer_id>', methods=['POST'])

@@ -7,10 +7,10 @@
 {% block app_content %}
 <div class="row">
     <main class="col-12 col-lg-8 position-relative main_pane">
-        <h1 class="mb-4">{{ _('Donate to %(instance_name)s', instance_name=branding.name) }}</h1>
+        <h1 class="mb-4">{{ _('Your membership of %(instance_name)s', instance_name=branding.name) if paid_domain else _('Donate to %(instance_name)s', instance_name=branding.name) }}</h1>
 
         {% if subscriptions -%}
-            <h2>{{ _('Your regular donations') }}</h2>
+            <h2>{{ _('Your subscriptions') if paid_domain else _('Your regular donations') }}</h2>
             <p class="text-muted">{{ _('Thank you for your support. A plan chosen below replaces any other in its group.') }}</p>
             <div class="row mb-4">
                 {% for subscription in subscriptions -%}
@@ -25,7 +25,7 @@
                                 {% else -%}
                                 <form method="post" action="{{ url_for('payments.cancel', subscription_id=subscription.id) }}">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <button type="submit" class="btn btn-primary">{{ _('Cancel regular donation') }}</button>
+                                    <button type="submit" class="btn btn-primary">{{ _('Cancel subscription') if paid_domain else _('Cancel regular donation') }}</button>
                                 </form>
                                 {% endif -%}
                             </div>
@@ -34,14 +34,16 @@
                 {% endfor -%}
             </div>
             {% if member and current_user.stripe_customer_id -%}
-                <p class="text-muted">{{ _('When your credit card expires you will need to add a new one to continue your donations.') }}</p>
+                <p class="text-muted">{{ _('When your credit card expires you will need to add a new one to keep your subscription.') if paid_domain else _('When your credit card expires you will need to add a new one to continue your donations.') }}</p>
                 <form method="post" action="{{ url_for('payments.billing') }}" class="mb-4">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn btn-primary">{{ _('Update credit card details') }}</button>
                 </form>
             {% endif -%}
         {% else -%}
+            {% if not paid_domain -%}
             <p>{{ _('By supporting %(instance_name)s financially you will be helping to build a better internet for everyone.', instance_name=branding.name) }}</p>
+            {% endif -%}
         {% endif -%}
 
         {% if links -%}
@@ -78,7 +80,7 @@
                                 {% else -%}
                                     <form method="post" action="{{ url_for('payments.checkout', offer_id=offer.id) }}">
                                         {% if current_user.is_authenticated %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endif %}
-                                        <button type="submit" class="btn btn-primary">{{ _('Donate regularly') if offer.kind == 'subscription' else _('Donate once') }}</button>
+                                        <button type="submit" class="btn btn-primary">{{ _('Subscribe') if paid_domain else _('Donate regularly') if offer.kind == 'subscription' else _('Donate once') }}</button>
                                     </form>
                                 {% endif -%}
                             </div>

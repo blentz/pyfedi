@@ -112,7 +112,7 @@ class TestRegistering:
         monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)
         body = env.client.get('/auth/register', base_url=PAID).get_data(as_text=True)
 
-        assert 'Membership' in body and '$5.00' in body
+        assert 'Membership' in body and '$5.00' in body and 'or use a username' not in body
 
     def test_a_signup_makes_a_pending_account_and_goes_to_the_provider(self, env, stripe_session):
         with patch('app.auth.util.send_email_verification') as mail:
@@ -517,6 +517,22 @@ class TestCancelling:
         body = env.client.get('/donations', base_url=PAID).get_data(as_text=True)
 
         assert row.ends_at.strftime('%Y-%m-%d') in body and 'Cancel regular donation' not in body
+
+    def test_a_fee_to_belong_here_is_not_called_a_donation(self, env):
+        login(env.client, a_member(env))
+
+        body = env.client.get('/donations', base_url=PAID).get_data(as_text=True)
+
+        assert 'Subscribe' in body and 'Your membership of' in body
+        assert 'Donate regularly' not in body and 'By supporting' not in body
+
+    def test_elsewhere_it_still_is(self, env):
+        elsewhere = make_user(env.baseline.instance_local, 'elsewhere', local=True)
+        elsewhere.site_domain_id = env.public.id
+        db.session.commit()
+        login(env.client, elsewhere, base=PUBLIC)
+
+        assert 'Donate regularly' in env.client.get('/donations', base_url=PUBLIC).get_data(as_text=True)
 
     def test_the_period_ending_lapses_them(self, env, cancelled):
         member = a_member(env)

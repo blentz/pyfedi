@@ -37,7 +37,9 @@
 
                             </p>
                             {% endif -%}
+                            {% if not paid_offer -%}
                             <p align="center">{{ _('or use a username and password:') }}</p>
+                            {% endif -%}
                             <form method="post">
                                 {{ form.csrf_token() }}
                                 {{ render_field(form.user_name) }}
