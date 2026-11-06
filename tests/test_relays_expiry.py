@@ -282,7 +282,7 @@ class TestDailyMaintenance:
         # Every other step is stubbed: this test is about the call, not the maintenance.
         for name in ('cleanup_old_notifications', 'cleanup_old_read_posts', 'cleanup_send_queue',
                      'process_expired_bans', 'remove_old_community_content', 'remove_old_bot_content',
-                     'update_hashtag_counts', 'update_community_stats', 'cleanup_old_voting_data',
+                     'update_hashtag_counts', 'update_community_stats', 'cleanup_old_voting_data', 'pseudonymise_settled',
                      'unban_expired_users', 'sync_defederation_subscriptions', 'recalculate_user_attitudes',
                      'calculate_community_activity_stats', 'cleanup_old_activitypub_logs', 'clean_up_tmp',
                      'delete_old_soft_deleted_content', 'archive_old_posts', 'archive_old_users', 'pwn_bots',
@@ -303,7 +303,7 @@ class TestDailyMaintenance:
         monkeypatch.setattr(cli, 'expire_relayed_posts', type('T', (), {'delay': staticmethod(lambda: queued.append(1))}))
         for name in ('cleanup_old_notifications', 'cleanup_old_read_posts', 'cleanup_send_queue',
                      'process_expired_bans', 'remove_old_community_content', 'update_hashtag_counts',
-                     'delete_old_soft_deleted_content', 'update_community_stats', 'cleanup_old_voting_data',
+                     'delete_old_soft_deleted_content', 'update_community_stats', 'cleanup_old_voting_data', 'pseudonymise_settled',
                      'unban_expired_users', 'sync_defederation_subscriptions', 'check_instance_health',
                      'monitor_healthy_instances', 'recalculate_user_attitudes', 'calculate_community_activity_stats',
                      'cleanup_old_activitypub_logs', 'archive_old_posts', 'archive_old_users', 'clean_up_tmp'):
