@@ -222,6 +222,8 @@ def test_the_test_email_is_from_the_callers_home_domain(app, shop_rows, monkeypa
     shop, shop_user, _ = shop_rows
     brand(shop, **SHOP_OWN)
     monkeypatch.setitem(current_app.config, 'DEBUG', True)
+    db.session.get(Site, 1).private_instance = False   # the logged-out half of this needs to reach the page
+    db.session.commit()
     client = app.test_client()
     if logged_in:
         with client.session_transaction(base_url=SHOP_BASE) as session:

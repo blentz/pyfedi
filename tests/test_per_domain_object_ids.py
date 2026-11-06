@@ -30,7 +30,7 @@ from app.activitypub.serializers.microblog import link_hashtags, microblog_note
 from app.activitypub.util import comment_model_to_json, post_to_page
 from app.constants import COMMUNITY_KIND_MICROBLOGS, COMMUNITY_KIND_VIDEO_CHANNEL, POST_TYPE_VIDEO
 from app.federation_urls import activity_id, hosted_domain_names, object_base, owned_elsewhere
-from app.models import ActivityPubLog, ChatMessage, CommunityFlair, CommunityMember, Conversation, Feed, File, Instance, \
+from app.models import Site, ActivityPubLog, ChatMessage, CommunityFlair, CommunityMember, Conversation, Feed, File, Instance, \
     Post, PostVote, Site, SiteDomain, Tag, federation_base
 from app.quotes import resolve_quotes
 from app.shared.media import with_media
@@ -504,6 +504,8 @@ def test_an_activity_is_looked_up_on_the_domain_asked(app, sites):
 def test_a_browser_request_is_answered_as_before(app, sites, owned):
     """HTML is unaffected: the shop's storefront answers a first-domain post's page as C2 left it (a login first), not 404."""
     post_id = owned['first'].post.id
+    db.session.get(Site, 1).private_instance = True
+    db.session.commit()
     response = fetch(app, f'/post/{post_id}', SHOP, headers={})
     assert (response.status_code, response.headers['Location']) == (302, f'/auth/login?next=/post/{post_id}')
     assert fetch(app, f'/post/{post_id}', FIRST, headers={}).status_code == 302   # as for anyone logged out

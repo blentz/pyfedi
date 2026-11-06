@@ -6,7 +6,7 @@ open from one that had been forgotten. A new route is private until somebody lis
 
 An ActivityPub Accept header opens nothing outside the federation endpoints: anybody can send that header.
 """
-from flask import current_app, jsonify, request
+from flask import abort, current_app, jsonify, request
 from flask_login import current_user
 
 from app.storefront import current_storefront
@@ -37,13 +37,17 @@ OPEN = frozenset({
 # Open where the storefront federates, as other servers read them with no account. Each view that also serves a browser
 # has its own check for that. A domain that doesn't federate has nothing to say to another server.
 FEDERATION_BLUEPRINT = 'activitypub'
+# The federation endpoints a browser also opens: each hands a browser to a page with its own check, which also knows a
+# name nobody holds. Anything else on a domain that doesn't federate gets a 404.
+FEDERATION_PAGES = frozenset({'activitypub.post_ap', 'activitypub.post_ap2', 'activitypub.post_nice', 'activitypub.comment_ap',
+                              'activitypub.community_profile', 'activitypub.user_profile', 'activitypub.feed_profile'})
 FEDERATION = frozenset({'main.instance_actor', 'main.instance_actor_outbox', 'main.site_outbox', 'main.jpeg_rendition'})
-INDEX = 'main.index'   # the home page, which answers ActivityPub with the instance actor
+AP_DOCUMENTS = frozenset({'main.index', 'main.list_feeds'})   # pages that answer ActivityPub with a document for other servers
 
 
 def _federation_endpoint() -> bool:
     return request.endpoint in FEDERATION or request.endpoint.split('.')[0] == FEDERATION_BLUEPRINT \
-        or (request.endpoint == INDEX and is_activitypub_request())
+        or (request.endpoint in AP_DOCUMENTS and is_activitypub_request())
 
 
 def _has_own_gate() -> bool:
@@ -64,10 +68,15 @@ def refuse_logged_out() -> object | None:
     CMS page, which an admin wrote to be read."""
     if request.endpoint is None or request.endpoint in OPEN:
         return None
-    if current_storefront().federates and _federation_endpoint():
+    federation = _federation_endpoint()
+    if current_storefront().federates and federation:
         return None
     if not login_required_here() or current_user.is_authenticated or _has_own_gate():
         return None
+    if federation:
+        if request.endpoint in FEDERATION_PAGES and not is_activitypub_request():
+            return None
+        abort(404)   # this domain has nothing to say to another server, and says so as it would for any unknown name
     if request.path.startswith('/api/'):
         return None if _api_caller_logged_in() else (jsonify(error='incorrect_login'), 401)
     if request.headers.get('HX-Request'):   # htmx swaps a page into a menu on a redirect, and nothing on a 401

@@ -260,6 +260,8 @@ class TestThePlans:
         assert b'patreon.com' not in response.data
 
     def test_a_stranger_is_sent_to_log_in(self, env, stripe_configured):
+        db.session.get(Site, 1).private_instance = True
+        db.session.commit()
         response = env.client.get('/donations')
         assert response.status_code == 302 and '/auth/login' in response.headers['Location']
 

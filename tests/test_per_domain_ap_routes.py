@@ -9,7 +9,7 @@ import pytest
 
 from app import cache, db
 from app.activitypub.actor import find_actor_by_url
-from app.models import CommunityMember, SiteDomain
+from app.models import CommunityMember, Site, SiteDomain
 from app.storefront import clear_domain_cache, domain_for_host
 from tests.test_onion_guard_limits import PROXY
 from tests.two_domains import FIRST, ONION, default_request, no_http, onion_request, routed_get, two_domains  # noqa: F401
@@ -124,6 +124,8 @@ def test_a_hosted_handle_with_no_account_is_404_and_fetches_nothing(app, twins, 
 
 
 def test_an_uppercase_handle_resolves(app, twins, no_http):
+    db.session.get(Site, 1).private_instance = True
+    db.session.commit()
     ap = get(app, f'/u/BOB@{FIRST.upper()}', headers=AP)
     assert ap.status_code == 200 and json.loads(ap.data)['id'] == twins[0].public_url()
     html = get(app, f'/u/BOB@{FIRST}', host=ONION, headers={})   # found: a profile page wants a login
@@ -135,6 +137,8 @@ def test_a_bare_name_means_the_storefronts_domain(app, two_domains):
     first, onion = two_domains.domains
     two_domains.local_user('solo', first)
     two_domains.local_user('duo', onion)
+    db.session.get(Site, 1).private_instance = True
+    db.session.commit()
     assert get(app, '/u/solo', host=ONION, headers={}).status_code == 404
     assert get(app, '/u/duo', host=ONION, headers={}).status_code == 302
     assert get(app, '/u/duo', headers={}).status_code == 404

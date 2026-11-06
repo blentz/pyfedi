@@ -424,7 +424,7 @@ def make_site() -> Site:
     post-creation path must call this first.
     """
     private_key, public_key = a_keypair()   # get_site_as_dict fills a keyless row, at ~96ms a pair
-    site = Site(name='Test Site', blocked_phrases='', private_key=private_key, public_key=public_key)
+    site = Site(name='Test Site', blocked_phrases='', private_key=private_key, public_key=public_key, private_instance=False)
     db.session.add(site)
     db.session.commit()
     return site

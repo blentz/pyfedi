@@ -45,6 +45,7 @@ from sqlalchemy.exc import DataError, IntegrityError, SQLAlchemyError
 from sqlalchemy.orm.exc import NoResultFound
 from werkzeug.exceptions import BadRequest, UnprocessableEntity
 
+from tests.factories import make_site
 from app.api.alpha import shared_error_handler
 
 
@@ -269,6 +270,10 @@ class TestAJsonBodyTooDeepToDecode:
     a logged traceback and a Sentry event, for a request anyone can send before any
     login check, since arguments are parsed before the view body runs."""
 
+    @pytest.fixture(autouse=True)
+    def a_public_site(self, db_session):
+        make_site()   # with no row at all a private one is made, and the login gate answers before any of this
+
     def test_it_is_refused_as_invalid_json(self, app, db_session):
         client = app.test_client()
 
@@ -295,6 +300,10 @@ class TestAQueryStringThatIsNotUtf8:
     argument parser -- so a raw byte such as 0xD1 in the URL raised UnicodeDecodeError,
     and this handler answered it as an internal error: a 500, a logged traceback and a
     Sentry event, before any login check. Percent-encoded bytes were always fine."""
+
+    @pytest.fixture(autouse=True)
+    def a_public_site(self, db_session):
+        make_site()   # with no row at all a private one is made, and the login gate answers before any of this
 
     def test_it_is_refused_with_a_400(self, app, db_session):
         client = app.test_client()
