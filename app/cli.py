@@ -41,6 +41,7 @@ from app.email import mail_name, send_email
 from app.federation_urls import activity_id
 from app.error_counts import KEEP_DAYS
 from app.onion_media import DEFAULT_CACHE_BYTES, evict
+from app.payments.credentials import generate_key
 from app.cms import DONATE_BODY, DONATE_BODY_HTML, DONATE_TITLE, DONATE_URL
 from app.roles import remove_expired_grants, seed_default_roles
 from app.models import CmsPage, CronJobLog, Settings, BannedInstances, Role, User, Domain, ActivityPubLog, utcnow, \
@@ -145,6 +146,11 @@ def register(app):
         u.public_key = public_key
         db.session.commit()
         print('Admin keys have been reset')
+
+    @app.cli.command("generate-payment-key")
+    def generate_payment_key():
+        """Print a new PAYMENT_SECRETS_KEY. It is stored nowhere: put it in the environment, and back it up."""
+        print(generate_key())
 
     @app.cli.command("init-db")
     @click.option("--interactive", default='yes', help="Create admin user during setup.")

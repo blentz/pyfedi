@@ -151,6 +151,7 @@ class Config(object):
     LOG_ACTIVITYPUB_TO_DB = os.environ.get('LOG_ACTIVITYPUB_TO_DB') or False
     LOG_ACTIVITYPUB_TO_FILE = os.environ.get('LOG_ACTIVITYPUB_TO_FILE') or False
 
+    PAYMENT_SECRETS_KEY = os.environ.get('PAYMENT_SECRETS_KEY') or ''
     STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY') or ''
     STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY') or ''
     STRIPE_MONTHLY_SMALL = os.environ.get('STRIPE_MONTHLY_SMALL') or ''
