@@ -59,7 +59,7 @@ from app.utils import render_template, ensure_rss_token, get_setting, request_et
     menu_topics, blocked_communities, \
     permission_required, debug_mode_only, ip_address, menu_instance_feeds, menu_my_feeds, menu_subscribed_feeds, \
     feed_tree_public, gibberish, get_deduped_post_ids, paginate_post_ids, post_ids_to_models, html_to_text, \
-    get_redis_connection, subscribed_feeds, joined_or_modding_communities, login_required_if_private_instance, \
+    get_redis_connection, subscribed_feeds, joined_or_modding_communities, login_required_here, login_required_if_private_instance, \
     retrieve_image_hash, possible_communities, post_destination_sections, remove_tracking_from_link, reported_posts, \
     moderating_communities_ids, user_notes, login_required, safe_order_by, filtered_out_communities, \
     num_topics, referrer, block_honey_pot, user_pronouns, get_instance_stickies, \
@@ -1557,7 +1557,7 @@ def index_rss(feed_type=None):
     # R219: on a private instance a member's RSS token opens the feed; anyone else still gets 404. as_rss_reader has
     # made the token's account (rss_token_user) the current user, or the anonymous one: never the session's
     user = current_user if current_user.is_authenticated else None
-    if g.site.private_instance and user is None:
+    if login_required_here() and user is None:
         abort(404)
 
     # If nothing has changed since their last visit, return HTTP 304

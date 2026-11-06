@@ -440,6 +440,7 @@ def limited_app():
     def onion_probe():
         with limiter.limit('2/minute'):
             return 'ok'
+    onion_probe.has_own_login_gate = True   # the site row here says private, and this asks only about the limit
 
     limiter.enabled = False
     yield limited

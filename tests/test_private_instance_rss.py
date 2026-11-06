@@ -406,5 +406,5 @@ def test_index_rss_still_checks_inline_and_says_why():
     head = source[source.index("def index_rss("):]
     head = head[:head.index('current_etag')]
 
-    assert 'if g.site.private_instance and user is None:' in head
+    assert 'if login_required_here() and user is None:' in head
     assert "#@cache.cached(timeout=600, query_string=True)" in source

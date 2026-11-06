@@ -95,7 +95,7 @@ logger = logging.getLogger(__name__)
 # Flask's render_template function, with support for themes added
 def render_template(template_name: str, skip_protocol_replacement: bool = False, **context) -> Response:
     # R219: on a private instance a page's RSS link carries the member's token, which is what opens the feed
-    if isinstance(context.get('rss_feed'), str) and g.site.private_instance and current_user.is_authenticated:
+    if isinstance(context.get('rss_feed'), str) and login_required_here() and current_user.is_authenticated:
         context['rss_feed'] += f"?token={ensure_rss_token(current_user)}"
     theme = current_theme()
     if theme != '' and os.path.exists(f'app/templates/themes/{theme}/{template_name}'):
@@ -3467,6 +3467,24 @@ def aged_account_required(func):
     return decorated_view
 
 
+def login_required_here() -> bool:
+    """Whether this storefront requires login to browse (M11). What app.login_gate and each decorator below ask."""
+    return bool(g.site.private_instance)
+
+
+def login_redirect():
+    """To the login page, and back again afterwards. A page asked for is where to come back to; the referrer was the
+    page before it, and on the login page itself that nested the login URL in its own `next`. A POST came from the page
+    the visitor was on. From request.args, not request.full_path: the args are where a query that is not UTF-8 becomes
+    a 400."""
+    if request.method in ('GET', 'HEAD'):
+        query = urlencode(list(request.args.items(multi=True)))
+        next_url = f'{request.path}?{query}' if query else request.path
+    else:
+        next_url = referrer()
+    return redirect(url_for('auth.login', next=next_url))
+
+
 def login_required_if_private_instance(func):
     @wraps(func)
     def decorated_view(*args, **kwargs):
@@ -3474,18 +3492,9 @@ def login_required_if_private_instance(func):
             return func(*args, **kwargs)
         if current_app.config['CONTENT_WARNING'] and request.cookies.get('warned') is None:
             return redirect(url_for('main.content_warning', next=request.path))
-        if (g.site.private_instance and current_user.is_authenticated) or is_activitypub_request() or g.site.private_instance is False:
+        if current_user.is_authenticated or not login_required_here():
             return func(*args, **kwargs)
-        else:
-            # A page asked for is where to come back to; the referrer was the page before it, and on the login page
-            # itself that nested the login URL in its own `next`. A POST came from the page the visitor was on.
-            # From request.args, not request.full_path: the args are where a query that is not UTF-8 becomes a 400.
-            if request.method in ('GET', 'HEAD'):
-                query = urlencode(list(request.args.items(multi=True)))
-                next_url = f'{request.path}?{query}' if query else request.path
-            else:
-                next_url = referrer()
-            return redirect(url_for('auth.login', next=next_url))
+        return login_redirect()
 
     return decorated_view
 
@@ -3516,10 +3525,11 @@ def refuse_if_private_instance(func):
 
     @wraps(func)
     def decorated_view(*args, **kwargs):
-        if g.site.private_instance and rss_token_user() is None:  # R219: a member's RSS token opens the feed
+        if login_required_here() and rss_token_user() is None:  # R219: a member's RSS token opens the feed
             abort(404)
         return func(*args, **kwargs)
 
+    decorated_view.has_own_login_gate = True   # app.login_gate leaves a feed to this
     return decorated_view
 
 

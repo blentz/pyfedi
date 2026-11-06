@@ -8,6 +8,7 @@ from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.cms import cms_nav_links
+from app.login_gate import refuse_logged_out
 from app.payments.offers import donations_menu_shown, money
 from app.permissions import holds_any_grant, may_act_on_user, may_ban
 from app.referral import referrals_available
@@ -271,6 +272,8 @@ def register_request_hooks(app):
                     request.headers.get('Referer') is not None and \
                     not is_local_link(request.headers.get('Referer')):   # a Referer from off this site
                 session['Referer'] = request.headers.get('Referer')
+
+    app.before_request(refuse_logged_out)   # after the hook above, which sets g.site (spec M11)
 
     @app.after_request
     def after_request(response):
