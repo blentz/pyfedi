@@ -13,6 +13,7 @@ from markupsafe import Markup
 from sqlalchemy import desc, or_, text, asc
 
 from app import db, cache, celery
+from app.payments.core import end_subscriptions_of
 from app.branding import current_branding
 from app.activitypub.signature import default_context, send_post_request
 from app.activitypub.util import find_actor_or_create, extract_domain_and_actor, follow_answer_inbox
@@ -1282,6 +1283,7 @@ def delete_profile(actor):
             was_privileged = holds_any_grant(user.id)
             was_instance_admin = user.is_instance_admin()
 
+            end_subscriptions_of(user)
             user.banned = True
             user.deleted = True
             user.deleted_by = current_user.id
@@ -1370,6 +1372,7 @@ def delete_account():
         return redirect(url_for('main.index'))
 
     if form.validate_on_submit():
+        end_subscriptions_of(current_user)
         current_user.delete_dependencies()
         current_user.banned = True
         current_user.email = f'deleted_{current_user.id}@deleted.com'

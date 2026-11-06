@@ -10,6 +10,7 @@ from flask_login import current_user
 from sqlalchemy import text, desc
 
 from app import db, celery
+from app.payments.core import end_subscriptions_of
 from app.activitypub.signature import default_context, send_post_request
 from app.community.routes import do_subscribe
 from app.community.util import search_for_community
@@ -67,6 +68,7 @@ def unsubscribe_from_everything_then_delete_task(user_id):
                             if instance.inbox and instance.online() and instance.id not in hosted:  # nothing goes to a domain of our own
                                 send_post_request(instance.inbox, payload, user.private_key, f"{user.public_url()}#main-key")
 
+                    end_subscriptions_of(user)
                     user.delete_dependencies()
                     db.session.execute(text('UPDATE "user" SET deleted = true, banned = true WHERE id = :user_id'), {'user_id': user.id})
                     session.commit()

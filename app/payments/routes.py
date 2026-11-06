@@ -11,8 +11,8 @@ from app.onion import clearnet_only, is_onion_request
 from app.payments import bp
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import InvalidWebhook, ProviderError
-from app.payments.core import apply_event, cancel_subscription
-from app.payments.offers import active_subscriptions, offers_here
+from app.payments.core import active_subscriptions_of, apply_event, cancel_subscription
+from app.payments.offers import offers_here
 from app.utils import login_required, render_template
 
 HISTORY_ROWS = 100
@@ -44,7 +44,7 @@ def donations():
     before asking anybody to log in for nothing, and on the page itself: a logged-out visitor has no session cookie, so
     a flash would not survive a redirect."""
     offers = offers_here()
-    held = not is_onion_request() and current_user.is_authenticated and active_subscriptions(current_user)
+    held = not is_onion_request() and current_user.is_authenticated and active_subscriptions_of(current_user)
     if not offers and not held:
         return render_template('generic_message.html', title=_('Donation plans'),
                                message=_('Donation plans are not available on this site.')), 404
@@ -59,7 +59,7 @@ def _member_page(offers):
     payments = Payment.query.filter_by(user_id=current_user.id).order_by(Payment.created_at.desc()).limit(HISTORY_ROWS).all()
     titles = {offer.id: offer.title for offer in Offer.query.all()}
     return render_template('user/choose_plan.html', title=_('Choose a donation plan'), groups=groups,
-                           subscriptions=active_subscriptions(current_user), payments=payments, titles=titles)
+                           subscriptions=active_subscriptions_of(current_user), payments=payments, titles=titles)
 
 
 @bp.route('/donations/checkout/<int:offer_id>', methods=['POST'])

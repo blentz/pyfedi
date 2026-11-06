@@ -5,7 +5,7 @@ from flask_babel import get_locale
 from flask_login import current_user
 
 from app import cache, db
-from app.models import MemberSubscription, Offer, OfferDomain
+from app.models import Offer, OfferDomain
 from app.onion import is_onion_request
 from app.payments.adapters import adapter_for
 from app.storefront import current_storefront
@@ -42,10 +42,6 @@ def offers_changed() -> None:
 def offers_available() -> bool:
     """Every signed-in page's menu asks this, so it is cached and cleared by whatever changes the answer."""
     return not is_onion_request() and _any_offer_on(current_storefront().id)
-
-
-def active_subscriptions(user) -> list[MemberSubscription]:
-    return MemberSubscription.query.filter_by(user_id=user.id, status='active').order_by(MemberSubscription.id).all()
 
 
 def donations_menu_shown() -> bool:

@@ -6,6 +6,7 @@ from flask_login import current_user
 from sqlalchemy import text, desc, or_, func, exists
 
 from app import celery, db
+from app.payments.core import end_subscriptions_of
 from app.activitypub.signature import signed_get_request, send_post_request
 from app.activitypub.util import actor_json_to_model, canonical_handle, find_actor_or_create, is_user_actor, \
     webfinger_self_link_allowed
@@ -60,6 +61,7 @@ def purge_user_then_delete_task(user_id, flush):
             with patch_db_session(session):
                 user = session.get(User, user_id)
                 if user:
+                    end_subscriptions_of(user)
                     # posts
                     for post in user.posts:
                         task_selector('delete_post', user_id=user.id, post_id=post.id)

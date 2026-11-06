@@ -149,6 +149,24 @@ def cancel_subscription(subscription: MemberSubscription) -> None:
     db.session.commit()
 
 
+def end_subscriptions_of(user: User) -> None:
+    """The account is being deleted: stop charging it, and let its ledger rows keep their amounts without it (M6). The
+    provider is told after the commit, with retries, and a provider that is down does not hold up the deletion."""
+    subscriptions = active_subscriptions_of(user)
+    for subscription in subscriptions:
+        subscription.status = 'ended'
+        subscription.ended_at = utcnow()
+    Payment.query.filter_by(user_id=user.id).update({Payment.user_id: None})
+    user.donor_until = None
+    db.session.commit()
+    for subscription in subscriptions:
+        cancel_at_provider(subscription.provider_kind, subscription.provider_reference)
+
+
+def active_subscriptions_of(user: User) -> list[MemberSubscription]:
+    return MemberSubscription.query.filter_by(user_id=user.id, status='active').order_by(MemberSubscription.id).all()
+
+
 def refresh_donor(user: User) -> None:
     """User.donor_until from what the member holds (M9, plan P1)."""
     subscriptions = db.session.execute(
