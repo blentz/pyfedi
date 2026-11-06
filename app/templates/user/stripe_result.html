@@ -9,7 +9,7 @@
     <main class="col-12 col-lg-8 position-relative main_pane">
         <h1>{{ _('Payment result') }} - {{ result }}</h1>
         {% if result == 'success' %}
-            <p>{{ _('Thank you for your donation!') }}</p>
+            <p>{{ _('Thank you for your donation! It will appear on your donations page as soon as the payment is confirmed.') }}</p>
         {% else %}
             <p>{{ _('Something went wrong during the payment process. No changes have been made to your account.') }}</p>
         {% endif %}

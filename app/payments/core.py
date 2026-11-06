@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 from app import db
 from app.constants import DONOR_WHILE_SUBSCRIBED
 from app.models import MemberSubscription, Offer, Payment, PaymentEvent, User, utcnow
+from app.payments.adapters import adapter_for
 from app.payments.events import CustomerKnown, Paid, Refunded, SubscriptionEnded, SubscriptionStarted
 from app.payments.tasks import cancel_at_provider
 
@@ -136,6 +137,16 @@ def _customer_known(event: CustomerKnown) -> None:
     user = _row(User, event.user_id)
     if user:
         user.stripe_customer_id = event.customer
+
+
+def cancel_subscription(subscription: MemberSubscription) -> None:
+    """The member cancelling. The provider first: if it refuses, nothing here has changed and they are still paying."""
+    adapter_for(subscription.provider_kind).cancel(subscription.provider_reference)
+    subscription.status = 'ended'
+    subscription.ended_at = utcnow()
+    db.session.flush()
+    refresh_donor(db.session.get(User, subscription.user_id))
+    db.session.commit()
 
 
 def refresh_donor(user: User) -> None:

@@ -159,9 +159,6 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'fediverse_redirect': 4,
         'show_people': 1,
     },
-    'app/user/subscription.py': {
-        'plans': 2,
-    },
     'app/visibility.py': {
         '_mentions': 1,
     },

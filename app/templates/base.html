@@ -253,9 +253,9 @@
                                         <a class="dropdown-item{% if active_child == 'hidden_posts' %} active{% endif %}" href="/hidden_posts">{{ _('Hidden posts') }}</a>
                                     </li>
                                     {% if current_user.is_authenticated -%}
-                                        {% if stripe_plans_available() -%}
+                                        {% if donations_menu_shown() -%}
                                             <li>
-                                                <a class="dropdown-item{% if active_child == 'donate' %} active{% endif %}" href="/donations">{{ _('Manage donations') if current_user.stripe_subscription_id else _('Donation plans') }}</a>
+                                                <a class="dropdown-item{% if active_child == 'donate' %} active{% endif %}" href="{{ url_for('payments.donations') }}">{{ _('Manage donations') if current_user.is_donor() else _('Donation plans') }}</a>
                                             </li>
                                         {% endif -%}
                                         {% if current_user.hide_read_posts -%}

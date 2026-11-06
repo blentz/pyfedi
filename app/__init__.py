@@ -427,6 +427,9 @@ def create_app(config_class=Config):
     from app.post import bp as post_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(post_bp)
 
+    from app.payments import bp as payments_bp  # cycle: blueprint modules import db and the other globals from here
+    app.register_blueprint(payments_bp)
+
     from app.user import bp as user_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(user_bp)
 

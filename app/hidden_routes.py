@@ -109,11 +109,11 @@ NON_OBJECT_ARGUMENTS = {
     # secrets and one-time values: a token, a nonce, a signature
     'token': None, 'nonce': None, 'sig': None, 'key': None, 'uuid': None,
     # rows that are not an account, community, feed, post or reply
+    'offer_id': None, 'subscription_id': None, 'kind': ('/payments/webhook/',),
     'tag': None, 'tag_id': None, 'topic_id': None, 'topic_path': None, 'topic_name': None, 'flair_id': None,
     'emoji_id': None, 'filter_id': None, 'rss_feed_id': None,   # an RssFeed: its community_id is gated
     'image_id': None, 'file_id': None, 'passkey_id': None, 'entry_id': None, 'category_id': None,
-    'activity_id': None, 'page_id': None, 'revision_id': None, 'slug': None, 'plan': None, 'subscription': None,
-    'account_id': None,   # a Stripe customer, compared with the reader's own
+    'activity_id': None, 'page_id': None, 'revision_id': None, 'slug': None,
     'domain_id': None,   # a link domain (/d/) or, for an admin, a hosted domain's settings
     'role_id': ('/admin/',), 'grant_id': ('/admin/',),   # a role and a grant (RBAC), Admin's pages alone
     # the reader's own rows, which show a hidden target as text with a note (app/local_names.py)

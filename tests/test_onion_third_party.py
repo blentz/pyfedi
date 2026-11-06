@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app import db
-from app.models import Site, SiteDomain
+from app.models import MemberSubscription, Offer, Site, SiteDomain
 from app.storefront import clear_domain_cache
 from tests.factories import make_instance, make_user
 
@@ -17,9 +17,7 @@ PROXY = '10.89.0.2'
 ONION_HEADERS = {'X-PieFed-Via': 'onion', 'X-Forwarded-For': '10.89.0.7'}
 PROVIDERS = ['google', 'mastodon', 'discord']
 OAUTH_CONFIG = {'GOOGLE_OAUTH_CLIENT_ID': 'g', 'MASTODON_OAUTH_CLIENT_ID': 'm', 'DISCORD_OAUTH_CLIENT_ID': 'd'}
-STRIPE_CONFIG = {'STRIPE_SECRET_KEY': 'sk_test', 'STRIPE_PUBLISHABLE_KEY': 'pk_test',
-                 'STRIPE_MONTHLY_SMALL': 'price_small', 'STRIPE_MONTHLY_BIG': 'price_big',
-                 'STRIPE_MONTHLY_SMALL_TEXT': 'A small amount', 'STRIPE_MONTHLY_BIG_TEXT': 'A larger amount'}
+STRIPE_CONFIG = {'STRIPE_SECRET_KEY': 'sk_test'}
 
 
 @pytest.fixture
@@ -38,6 +36,8 @@ def configured(app, db_session, monkeypatch):
         monkeypatch.setitem(app.config, key, value)
     user = make_user(make_instance('test.piefed.local', software='piefed'), 'donor', local=True)
     user.email = 'donor@example.com'
+    db.session.add(Offer(provider_kind='stripe', kind='subscription', title='A small amount', offer_group='tiers',
+                         provider_price_id='price_small'))
     user.verified = True
     db.session.commit()
     yield user
@@ -128,16 +128,37 @@ def test_the_clearnet_plans_page_offers_the_plans(app, configured):
     assert 'A small amount' in visit(app, configured, '/donations', onion=False).get_data(as_text=True)
 
 
-@pytest.mark.parametrize('plan', ['monthly_small', 'monthly_big', 'billing'])
-def test_the_onion_refuses_a_checkout(app, configured, plan):
+def onion_post(app, user, path):
+    client = app.test_client()
+    with client.session_transaction(base_url='http://abc.onion') as session:
+        session['_user_id'] = str(user.id)
+        session['_fresh'] = True
+    return client.post(path, base_url='http://abc.onion', headers=ONION_HEADERS, environ_base={'REMOTE_ADDR': PROXY})
+
+
+def test_the_onion_shows_no_plans_page_even_to_a_subscriber(app, configured):
+    db.session.add(MemberSubscription(user_id=configured.id, provider_kind='stripe', provider_reference='sub_1',
+                                      status='active'))
+    db.session.commit()
+    assert visit(app, configured, '/donations', onion=True).status_code == 404
+
+
+@pytest.mark.parametrize('path', ['/donations/checkout/{offer}', '/donations/subscriptions/{sub}/cancel',
+                                  '/donations/billing'], ids=['checkout', 'cancel', 'billing'])
+def test_the_onion_refuses_every_payment_action(app, configured, path):
     configured.stripe_customer_id = 'cus_test'   # so the billing portal would be reached without the refusal
+    subscription = MemberSubscription(user_id=configured.id, provider_kind='stripe', provider_reference='sub_1',
+                                      status='active')
+    db.session.add(subscription)
     db.session.commit()
     stripe = MagicMock()
-    with patch.dict(sys.modules, {'stripe': stripe}), patch('app.user.subscription.httpx.Client') as client:
-        response = visit(app, configured, f'/stripe_redirect/{plan}', onion=True)
-    assert response.status_code == 302
-    assert response.headers['Location'].endswith('/home')
-    assert not stripe.checkout.Session.create.called and not client.called
+    target = path.format(offer=Offer.query.first().id, sub=subscription.id)
+    with patch.dict(sys.modules, {'stripe': stripe}):
+        response = onion_post(app, configured, target)
+    assert response.status_code in (302, 303)
+    assert not stripe.checkout.Session.create.called
+    assert not stripe.Subscription.cancel.called and not stripe.billing_portal.Session.create.called
+    assert subscription.status == 'active'
 
 
 def test_the_onion_settings_nav_has_no_connect_oauth_link(app, configured):

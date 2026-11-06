@@ -191,8 +191,8 @@
                     {% for link in cms_nav_links().footer -%}
                         <p class="text-center"><a href="{{ link.url }}">{{ link.title }}</a></p>
                     {% endfor -%}
-                    {% if current_user.is_authenticated and stripe_plans_available() -%}
-                        <p class="text-center"><a href="/donations">{{ _('Manage donations') if current_user.stripe_subscription_id else _('Donation plans') }}</a></p>
+                    {% if current_user.is_authenticated and donations_menu_shown() -%}
+                        <p class="text-center"><a href="{{ url_for('payments.donations') }}">{{ _('Manage donations') if current_user.is_donor() else _('Donation plans') }}</a></p>
                     {% endif -%}
                     <p class="text-center"><a href="/about">{{ _('About') }}</a></p>
                     <p class="text-center"><a href="/keyboard_shortcuts">{{ _('Keyboard shortcuts') }}</a></p>

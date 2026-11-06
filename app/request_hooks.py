@@ -7,7 +7,8 @@ from flask_login import current_user
 from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.cms import cms_nav_links, stripe_plans_available
+from app.cms import cms_nav_links
+from app.payments.offers import donations_menu_shown, money
 from app.permissions import holds_any_grant, may_act_on_user, may_ban
 from app.referral import referrals_available
 from app.branding import DERIVED_FIELDS, Branding, current_branding
@@ -146,7 +147,8 @@ def register_request_hooks(app):
     app.jinja_env.globals['role_access'] = role_access
     app.jinja_env.globals['referrals_available'] = referrals_available
     app.jinja_env.globals['cms_nav_links'] = cms_nav_links
-    app.jinja_env.globals['stripe_plans_available'] = stripe_plans_available
+    app.jinja_env.globals['donations_menu_shown'] = donations_menu_shown
+    app.jinja_env.globals['money'] = money
     app.jinja_env.globals['ap_datetime'] = ap_datetime
     app.jinja_env.globals['can_upvote'] = can_upvote
     app.jinja_env.globals['can_downvote'] = can_downvote

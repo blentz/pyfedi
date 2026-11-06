@@ -15,8 +15,9 @@ from flask import current_app, g
 from sqlalchemy import text
 
 from app import cli, db
-from app.cms import DONATE_BODY, DONATE_BODY_HTML, DONATE_TITLE, DONATE_URL, cms_nav_links, stripe_plans_available
-from app.models import CmsPage, Site
+from app.constants import DONOR_WHILE_SUBSCRIBED
+from app.cms import DONATE_BODY, DONATE_BODY_HTML, DONATE_TITLE, DONATE_URL, cms_nav_links
+from app.models import CmsPage, MemberSubscription, Offer, Site
 from app.utils import markdown_to_html
 from tests.factories import make_user
 
@@ -31,8 +32,9 @@ def env(app, api_baseline):
 @pytest.fixture
 def stripe_configured(monkeypatch):
     monkeypatch.setitem(current_app.config, 'STRIPE_SECRET_KEY', 'sk_test')
-    monkeypatch.setitem(current_app.config, 'STRIPE_MONTHLY_SMALL', 'price_small')
-    monkeypatch.setitem(current_app.config, 'STRIPE_MONTHLY_SMALL_TEXT', 'A small amount')
+    db.session.add(Offer(provider_kind='stripe', kind='subscription', title='A small amount', offer_group='tiers',
+                         provider_price_id='price_small'))
+    db.session.commit()
 
 
 def sign_in(client, user):
@@ -46,6 +48,13 @@ def a_page(url='/donate', title='Donate', **flags):
     db.session.add(page)
     db.session.commit()
     return page
+
+
+def donate(member):
+    db.session.add(MemberSubscription(user_id=member.id, provider_kind='stripe', provider_reference='sub_1',
+                                      status='active'))
+    member.donor_until = DONOR_WHILE_SUBSCRIBED
+    db.session.commit()
 
 
 def header_of(body):
@@ -263,8 +272,7 @@ class TestThePlans:
         assert b'not available on this site' in response.data
 
     def test_a_donor_can_still_cancel_with_the_cms_page_deleted(self, env, stripe_configured):
-        env.member.stripe_subscription_id = 'sub_1'
-        db.session.commit()
+        donate(env.member)
         sign_in(env.client, env.member)
         response = env.client.get('/donations')
         assert b'Cancel regular donation' in response.data
@@ -272,18 +280,12 @@ class TestThePlans:
     @pytest.mark.parametrize('subscribed, label', [(False, b'Donation plans'), (True, b'Manage donations')],
                              ids=['member', 'donor'])
     def test_the_account_menu_leads_there(self, env, stripe_configured, subscribed, label):
-        env.member.stripe_subscription_id = 'sub_1' if subscribed else None
-        db.session.commit()
+        if subscribed:
+            donate(env.member)
         sign_in(env.client, env.member)
         body = env.client.get('/keyboard_shortcuts').data
         assert label in body and b'href="/donations"' in body
 
-    def test_the_account_menu_does_not_lead_there_without_stripe(self, env):
-        env.member.stripe_subscription_id = 'sub_1'
-        db.session.commit()
+    def test_the_account_menu_does_not_lead_there_without_offers(self, env):
         sign_in(env.client, env.member)
         assert b'href="/donations"' not in env.client.get('/keyboard_shortcuts').data
-
-    def test_stripe_is_not_offered_on_the_onion(self, env, stripe_configured):
-        with patch('app.cms.is_onion_request', return_value=True):
-            assert stripe_plans_available() is False
