@@ -112,10 +112,8 @@ class PaypalAdapter:
 
     def _request(self, method: str, config: dict, path: str, **kwargs) -> dict:
         response = self._send(method, config, path, **kwargs)
-        if response.status_code not in (200, 201, 202, 204):
+        if response.status_code not in (200, 201):
             raise ProviderError(f'PayPal refused: {response.status_code}')
-        if response.status_code == 204:
-            return {}
         try:
             answer = response.json()
         except ValueError:
