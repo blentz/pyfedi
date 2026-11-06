@@ -136,6 +136,13 @@ class TestCheckout:
         assert create.call_args.kwargs['customer'] == 'cus_1'
         assert create.call_args.kwargs['customer_email'] is None
 
+    def test_a_guest_names_nobody(self, adapter, offer):
+        offer.kind = 'donation'
+        with patch('stripe.checkout.Session.create', return_value=SimpleNamespace(url='u')) as create:
+            adapter.checkout(offer, None, 'o', 'c')
+        params = create.call_args.kwargs
+        assert 'client_reference_id' not in params and params['customer'] is None and params['customer_email'] is None
+
     def test_a_refusal_carries_no_stripe_text(self, adapter, member, offer):
         refusal = stripe.AuthenticationError('Invalid API Key provided: sk_test_env')
         with patch('stripe.checkout.Session.create', side_effect=refusal), pytest.raises(ProviderError) as caught:

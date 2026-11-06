@@ -6519,10 +6519,11 @@ class PaymentProvider(db.Model):
 class Offer(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     provider_kind = db.Column(db.String(20), nullable=False)
-    kind = db.Column(db.String(20), nullable=False)   # donation, subscription
+    kind = db.Column(db.String(20), nullable=False)   # donation, subscription, link
     title = db.Column(db.String(255), nullable=False)
     offer_group = db.Column(db.String(50), nullable=False)   # a new subscription replaces others in its group (M7)
     provider_price_id = db.Column(db.String(255))
+    url = db.Column(db.String(1024))   # a link-out's address (kind 'link'), which is all a link-out has
     amount_minor = db.Column(db.BigInteger)   # NULL only for a plan migrated from the environment, until it is imported
     currency = db.Column(db.String(3))
     interval = db.Column(db.String(10))

@@ -1461,7 +1461,9 @@ owner ruled; those rulings are the limits listed in 2.3. Typical fixes:
 - **Payments.** Admins connect Stripe, define offers and read a payment ledger at
   Admin > Payments, with the `manage monetization` permission. Credentials are encrypted in
   the database under `PAYMENT_SECRETS_KEY`. Members pay and cancel at `/donations`, and a
-  member can hold several subscriptions, one per group. See `INSTALL.md`. Spec
+  member can hold several subscriptions, one per group. Admins can also add links to
+  Patreon, Ko-fi or anywhere else, and logged-out visitors can make one-off donations. See
+  `INSTALL.md`. Spec
   `docs/superpowers/specs/2026-11-05-monetization-infrastructure-design.md`.
 - **The Donate page is a CMS page.** `/donate` is seeded and edited at `/admin/pages`, and any
   CMS page can opt in to a header link, a footer link and the sidebar. Spec

@@ -87,3 +87,27 @@ def test_subscribers_carry_over_with_the_label(conn):
 
 def test_the_sentinel_is_the_apps(conn):
     assert datetime.fromisoformat(load().WHILE_SUBSCRIBED) == DONOR_WHILE_SUBSCRIBED
+
+
+def load_links():
+    path = next(Path(__file__).parent.parent.glob('migrations/versions/*_payment_link_offers.py'))
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def test_the_url_column_comes_and_goes_and_takes_link_outs_with_it(app, db_session):
+    connection = db.session.connection()
+    connection.execute(text("INSERT INTO offer (provider_kind, kind, title, offer_group, url) "
+                            "VALUES ('link', 'link', 'A', 'links', 'https://a.example/'), "
+                            "('stripe', 'donation', 'B', 'plans', NULL)"))
+    try:
+        with Operations.context(MigrationContext.configure(connection)):
+            load_links().downgrade()
+            assert 'url' not in {column['name'] for column in inspect(connection).get_columns('offer')}
+            assert [row[0] for row in connection.execute(text('SELECT title FROM offer'))] == ['B']
+            load_links().upgrade()
+            assert 'url' in {column['name'] for column in inspect(connection).get_columns('offer')}
+    finally:
+        db.session.rollback()

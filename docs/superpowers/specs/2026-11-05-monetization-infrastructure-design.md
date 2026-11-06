@@ -1,7 +1,9 @@
 # Monetization infrastructure — design
 
-Date: 2026-11-05. Status: approved by the owner 2026-11-05. Nothing is built. Phase 1 plan:
-`docs/superpowers/plans/2026-11-05-monetization-phase-1.md`.
+Date: 2026-11-05. Status: approved by the owner 2026-11-05. Phase 1 is built (plan
+`docs/superpowers/plans/2026-11-05-monetization-phase-1.md`), and so is phase 2 (plan
+`docs/superpowers/plans/2026-11-06-monetization-phase-2.md`). Live Stripe calls are unverified: the owner ruled out a
+test-mode run.
 
 ## Summary
 

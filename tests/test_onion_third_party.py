@@ -128,6 +128,25 @@ def test_the_clearnet_plans_page_offers_the_plans(app, configured):
     assert 'A small amount' in visit(app, configured, '/donations', onion=False).get_data(as_text=True)
 
 
+def test_the_onion_shows_a_link_and_no_stripe_offer(app, configured):
+    db.session.add(Offer(provider_kind='link', kind='link', title='Our Ko-fi', offer_group='links',
+                         url='https://ko-fi.example/us'))
+    db.session.commit()
+    body = visit(app, configured, '/donations', onion=True).get_data(as_text=True)
+    assert 'Our Ko-fi' in body and 'A small amount' not in body and '/donations/checkout/' not in body
+
+
+def test_the_onion_shows_no_subscriptions_or_card_button_with_a_link_on_offer(app, configured):
+    configured.stripe_customer_id = 'cus_test'
+    db.session.add(MemberSubscription(user_id=configured.id, provider_kind='stripe', provider_reference='sub_1',
+                                      status='active'))
+    db.session.add(Offer(provider_kind='link', kind='link', title='Our Ko-fi', offer_group='links',
+                         url='https://ko-fi.example/us'))
+    db.session.commit()
+    body = visit(app, configured, '/donations', onion=True).get_data(as_text=True)
+    assert 'Our Ko-fi' in body and 'Cancel regular donation' not in body and 'Update credit card' not in body
+
+
 def onion_post(app, user, path):
     client = app.test_client()
     with client.session_transaction(base_url='http://abc.onion') as session:

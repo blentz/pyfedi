@@ -1,5 +1,7 @@
 import re
 
+from urllib.parse import urlsplit
+
 from flask_wtf import FlaskForm
 from flask_wtf.file import FileAllowed
 from slugify import slugify
@@ -617,6 +619,22 @@ class OfferForm(FlaskForm):
     active = BooleanField(_l('Offered to members'), default=True)
     domains = SelectMultipleField(_l('Domains (none means all)'), choices=[], coerce=int, validators=[Optional()])
     save = SubmitField(_l('Save'))
+
+
+class LinkOfferForm(FlaskForm):
+    title = StringField(_l('Title'), validators=[DataRequired(), Length(max=255)])
+    url = StringField(_l('Address'), validators=[DataRequired(), Length(max=1024)],
+                      render_kw={'placeholder': 'https://...'})
+    position = IntegerField(_l('Position'), validators=[Optional(), NumberRange(min=0, max=100000)], default=0)
+    active = BooleanField(_l('Show this link'), default=True)
+    domains = SelectMultipleField(_l('Domains (none means all)'), choices=[], coerce=int, validators=[Optional()])
+    save = SubmitField(_l('Save'))
+
+    def validate_url(self, field):
+        parts = urlsplit(field.data.strip())
+        if parts.scheme not in ('http', 'https') or not parts.hostname:
+            raise ValidationError(_l('This must be a web address starting with https:// or http://.'))
+        field.data = field.data.strip()
 
 
 class EmojiForm(FlaskForm):

@@ -225,9 +225,6 @@ def test_no_get_route_outside_the_known_list_is_ungated():
         ('main', 'communities_menu'), ('main', 'explore_menu'), ('main', 'topics_menu'),
         ('main', 'feeds_menu'),
         # unsubscribe links arrive by email and carry their own token
-        # says there is nothing to offer before asking anybody to log in, then requires the login: a private site's
-        # visitor learns only that it takes no donations
-        ('payments', 'donations'),
         ('user', 'user_newsletter_unsubscribe'),
         ('user', 'user_email_notifs_unsubscribe'),
         # redirects and lookups that resolve an actor to a url, no content rendered

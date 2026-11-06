@@ -52,21 +52,24 @@
         </ul>
 
         <h3 class="mt-4">{{ _('Offers') }}</h3>
-        <p><a href="{{ url_for('admin.admin_payments_offer_add') }}" class="btn btn-primary">{{ _('Add offer') }}</a></p>
+        <p>
+            <a href="{{ url_for('admin.admin_payments_link_add') }}" class="btn btn-primary">{{ _('Add link') }}</a>
+            <a href="{{ url_for('admin.admin_payments_offer_add') }}" class="btn btn-primary">{{ _('Add Stripe offer') }}</a>
+        </p>
         {% if currency -%}
             <p class="small field_hint">{{ _('This site takes payments in %(currency)s.', currency=currency.upper()) }}</p>
         {% endif -%}
         {% if offers -%}
             <table class="table">
                 <thead>
-                    <tr><th>{{ _('Title') }}</th><th>{{ _('Group') }}</th><th>{{ _('Amount') }}</th><th>{{ _('Offered') }}</th><th></th></tr>
+                    <tr><th>{{ _('Title') }}</th><th>{{ _('Group') }}</th><th>{{ _('Amount or address') }}</th><th>{{ _('Offered') }}</th><th></th></tr>
                 </thead>
                 <tbody>
                     {% for offer in offers -%}
                         <tr>
                             <td>{{ offer.title }}</td>
                             <td>{{ offer.offer_group }}</td>
-                            <td>{% if offer.amount_minor is not none %}{{ money(offer.amount_minor, offer.currency) }}{% if offer.interval %} / {{ offer.interval }}{% endif %}{% else %}{{ _('Not read from Stripe yet') }}{% endif %}</td>
+                            <td>{% if offer.kind == 'link' %}<a href="{{ offer.url }}" rel="noopener noreferrer nofollow">{{ offer.url }}</a>{% elif offer.amount_minor is not none %}{{ money(offer.amount_minor, offer.currency) }}{% if offer.interval %} / {{ offer.interval }}{% endif %}{% else %}{{ _('Not read from Stripe yet') }}{% endif %}</td>
                             <td>{{ _('Yes') if offer.active else _('No') }}</td>
                             <td><a href="{{ url_for('admin.admin_payments_offer_edit', offer_id=offer.id) }}">{{ _('Edit') }}</a></td>
                         </tr>

@@ -29,7 +29,7 @@
                     </div>
                 {% endfor -%}
             </div>
-            {% if current_user.stripe_customer_id -%}
+            {% if member and current_user.stripe_customer_id -%}
                 <p class="text-muted">{{ _('When your credit card expires you will need to add a new one to continue your donations.') }}</p>
                 <form method="post" action="{{ url_for('payments.billing') }}" class="mb-4">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -38,6 +38,23 @@
             {% endif -%}
         {% else -%}
             <p>{{ _('By supporting %(instance_name)s financially you will be helping to build a better internet for everyone.', instance_name=branding.name) }}</p>
+        {% endif -%}
+
+        {% if links -%}
+            <div class="row mb-3">
+                {% for link in links -%}
+                    <div class="col-12 col-md-6 mb-3">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3 class="card-title">{{ link.title }}</h3>
+                            </div>
+                            <div class="card-body">
+                                <a class="btn btn-primary" href="{{ link.url }}" rel="noopener noreferrer nofollow">{{ _('Go to this page') }}</a>
+                            </div>
+                        </div>
+                    </div>
+                {% endfor -%}
+            </div>
         {% endif -%}
 
         {% for group, offers in groups.items() -%}
@@ -52,10 +69,14 @@
                                 {% if offer.amount_minor is not none -%}
                                     <p>{{ money(offer.amount_minor, offer.currency) }}{% if offer.interval %} / {{ offer.interval }}{% endif %}</p>
                                 {% endif -%}
-                                <form method="post" action="{{ url_for('payments.checkout', offer_id=offer.id) }}">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <button type="submit" class="btn btn-primary">{{ _('Donate regularly') if offer.kind == 'subscription' else _('Donate once') }}</button>
-                                </form>
+                                {% if current_user.is_anonymous and offer.kind == 'subscription' -%}
+                                    <a class="btn btn-primary" href="{{ url_for('auth.login', next=url_for('payments.donations')) }}">{{ _('Log in to subscribe') }}</a>
+                                {% else -%}
+                                    <form method="post" action="{{ url_for('payments.checkout', offer_id=offer.id) }}">
+                                        {% if current_user.is_authenticated %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endif %}
+                                        <button type="submit" class="btn btn-primary">{{ _('Donate regularly') if offer.kind == 'subscription' else _('Donate once') }}</button>
+                                    </form>
+                                {% endif -%}
                             </div>
                         </div>
                     </div>

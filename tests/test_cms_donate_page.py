@@ -264,7 +264,9 @@ class TestThePlans:
         assert response.status_code == 302 and '/auth/login' in response.headers['Location']
 
     @pytest.mark.parametrize('signed_in', [False, True], ids=['stranger', 'member'])
-    def test_without_stripe_it_says_so_and_asks_nobody_to_log_in(self, env, signed_in):
+    def test_with_no_offers_it_says_so_and_asks_nobody_to_log_in(self, env, signed_in):
+        db.session.get(Site, 1).private_instance = False
+        db.session.commit()
         if signed_in:
             sign_in(env.client, env.member)
         response = env.client.get('/donations')

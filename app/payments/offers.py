@@ -1,4 +1,5 @@
-"""What this storefront offers. Phase 1's only provider is Stripe, so nothing is offered on the onion (C11)."""
+"""What this storefront offers. On the onion that is link-outs alone (C11): a link tells a provider nothing about the
+onion, where a checkout's return address would."""
 from babel.numbers import format_currency, get_currency_precision
 from flask import current_app
 from flask_babel import get_locale
@@ -11,28 +12,31 @@ from app.payments.adapters import adapter_for
 from app.storefront import current_storefront
 
 
-def _offers_on(domain_id: int | None) -> list[Offer]:
+LINK = 'link'
+
+
+def _offers_on(domain_id: int | None, onion: bool) -> list[Offer]:
     """The active offers on a domain whose provider is usable. An offer with no domains is on all of them (M2)."""
     offers = Offer.query.filter_by(active=True).order_by(Offer.offer_group, Offer.position, Offer.id).all()
     limited = {}
     for offer_id, site_domain_id in db.session.execute(db.select(OfferDomain.offer_id, OfferDomain.site_domain_id)):
         limited.setdefault(offer_id, set()).add(site_domain_id)
-    usable = {}
+    usable = {LINK: True}
     for offer in offers:
         if offer.provider_kind not in usable:
             adapter = adapter_for(offer.provider_kind)
-            usable[offer.provider_kind] = adapter is not None and adapter.available()
+            usable[offer.provider_kind] = not onion and adapter is not None and adapter.available()
     return [offer for offer in offers
             if usable[offer.provider_kind] and (offer.id not in limited or domain_id in limited[offer.id])]
 
 
 def offers_here() -> list[Offer]:
-    return [] if is_onion_request() else _offers_on(current_storefront().id)
+    return _offers_on(current_storefront().id, is_onion_request())
 
 
 @cache.memoize(timeout=3600)
-def _any_offer_on(domain_id: int | None) -> bool:
-    return bool(_offers_on(domain_id))
+def _any_offer_on(domain_id: int | None, onion: bool) -> bool:
+    return bool(_offers_on(domain_id, onion))
 
 
 def offers_changed() -> None:
@@ -41,15 +45,13 @@ def offers_changed() -> None:
 
 def offers_available() -> bool:
     """Every signed-in page's menu asks this, so it is cached and cleared by whatever changes the answer."""
-    return not is_onion_request() and _any_offer_on(current_storefront().id)
+    return _any_offer_on(current_storefront().id, is_onion_request())
 
 
 def donations_menu_shown() -> bool:
     """Whether a signed-in member's menu leads to /donations: somebody holding a subscription must still reach it to
     cancel, with every offer gone."""
-    if is_onion_request():
-        return False
-    return offers_available() or current_user.donor_until is not None
+    return offers_available() or (not is_onion_request() and current_user.donor_until is not None)
 
 
 def money(amount_minor: int, currency: str) -> str:

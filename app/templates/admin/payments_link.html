@@ -1,0 +1,33 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% from 'bootstrap5/form.html' import render_field %}
+{% set active_child = 'admin_payments' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col-md-8">
+        <h2>{{ title }}</h2>
+        <form method="post">
+            {{ form.hidden_tag() }}
+            {{ render_field(form.title) }}
+            {{ render_field(form.url) }}
+            <p class="small field_hint">{{ _('Where the button leads: your Patreon, Ko-fi, Liberapay or any other page. No money passes through this site.') }}</p>
+            {{ render_field(form.position) }}
+            {{ render_field(form.domains) }}
+            {{ render_field(form.active) }}
+            {{ render_field(form.save) }}
+        </form>
+        {% if offer -%}
+            <form method="post" action="{{ url_for('admin.admin_payments_offer_delete', offer_id=offer.id) }}" class="mt-3">
+                {{ delete_form.hidden_tag() }}
+                <button type="submit" class="btn btn-secondary">{{ _('Delete') }}</button>
+            </form>
+        {% endif -%}
+    </div>
+</div>
+{% endblock %}

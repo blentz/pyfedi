@@ -405,3 +405,59 @@ class TestTheLedger:
         assert b'No retention period is set' in env.client.get('/admin/payments/ledger').data
         set_setting('payment_retention_days', 400)
         assert b'No retention period is set' not in env.client.get('/admin/payments/ledger').data
+
+
+class TestLinks:
+    LINK = {'title': 'Our Ko-fi', 'url': 'https://ko-fi.example/us', 'position': '1', 'active': 'y'}
+
+    def test_a_link_needs_no_provider_and_no_key(self, env, admin):
+        assert post(env, '/admin/payments/links/add', **self.LINK).status_code == 302
+        link = Offer.query.one()
+        assert (link.provider_kind, link.kind, link.title, link.url, link.position, link.active) == (
+            'link', 'link', 'Our Ko-fi', 'https://ko-fi.example/us', 1, True)
+        assert link.amount_minor is None and link.grants_donor is False
+
+    def test_it_is_listed_with_its_address(self, env, admin):
+        post(env, '/admin/payments/links/add', **self.LINK)
+        body = env.client.get('/admin/payments').get_data(as_text=True)
+        assert 'Our Ko-fi' in body and 'https://ko-fi.example/us' in body and '/admin/payments/offers/' in body
+
+    @pytest.mark.parametrize('url', ['javascript:alert(1)', 'data:text/html,x', 'ko-fi.example', 'https://', 'ftp://x.example'],
+                             ids=['javascript', 'data', 'no_scheme', 'no_host', 'ftp'])
+    def test_only_a_web_address_is_accepted(self, env, admin, url):
+        response = post(env, '/admin/payments/links/add', **{**self.LINK, 'url': url})
+        assert response.status_code == 200 and Offer.query.count() == 0
+
+    def test_editing_a_link_uses_the_link_form_and_asks_stripe_nothing(self, env, admin):
+        link = Offer(provider_kind='link', kind='link', title='Old', offer_group='links', url='https://old.example/')
+        db.session.add(link)
+        db.session.commit()
+        token = csrf(env)   # one per test: the shared app context caches it
+        body = env.client.get(f'/admin/payments/offers/{link.id}/edit').get_data(as_text=True)
+        assert 'value="https://old.example/"' in body and 'price_id' not in body
+        with patch('stripe.Price.retrieve') as retrieve:
+            env.client.post(f'/admin/payments/offers/{link.id}/edit', data={'csrf_token': token, **self.LINK})
+        assert (link.title, link.url) == ('Our Ko-fi', 'https://ko-fi.example/us') and not retrieve.called
+
+    def test_a_link_can_be_limited_to_a_domain(self, env, admin):
+        domain = SiteDomain(domain='sister.example', scheme='https', registration='anyone')
+        db.session.add(domain)
+        db.session.commit()
+        clear_domain_cache()
+        env.client.post('/admin/payments/links/add', data={'csrf_token': csrf(env), **self.LINK, 'domains': [str(domain.id)]})
+        clear_domain_cache()
+        assert OfferDomain.query.one().site_domain_id == domain.id
+
+    def test_an_invalid_edit_stays_on_the_form(self, env, admin):
+        link = Offer(provider_kind='link', kind='link', title='Old', offer_group='links', url='https://old.example/')
+        db.session.add(link)
+        db.session.commit()
+        response = post(env, f'/admin/payments/offers/{link.id}/edit', **{**self.LINK, 'url': 'nonsense'})
+        assert response.status_code == 200 and link.url == 'https://old.example/'
+
+    def test_a_link_can_be_deleted(self, env, admin):
+        link = Offer(provider_kind='link', kind='link', title='Old', offer_group='links', url='https://old.example/')
+        db.session.add(link)
+        db.session.commit()
+        post(env, f'/admin/payments/offers/{link.id}/delete')
+        assert Offer.query.count() == 0

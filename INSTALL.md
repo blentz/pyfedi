@@ -13,7 +13,7 @@
 * [Keeping your local instance up to date](#keeping-your-local-instance-up-to=date)
 * [Running PieFed in production](#running-piefed-in-production)
 * [Push notifications](#push-notifications)
-* [Accepting donations through Stripe](#stripe)
+* [Accepting donations](#stripe)
 * [Testing and debugging](#testing)
 * [Pre-requisites for Mac OS](#pre-requisites-for-mac-os)
 * [Notes for Windows (WSL2)](#notes-for-windows-wsl2)        
@@ -844,7 +844,17 @@ The piefed-notifs service also significantly improves the efficiency of federati
 
 <div id="stripe"></div>
 
-## Accepting donations through Stripe
+## Accepting donations
+
+Admins with the `manage monetization` permission manage donations at **Admin > Payments**. What they add appears at `/donations`.
+
+The simplest way is **Add link**: a button leading to your Patreon, Ko-fi, Liberapay or any other page. No money passes through
+your site, and it needs no setup. Links also appear on onion domains unless you limit them to chosen domains.
+
+Stripe takes payments on your site's behalf, as described below. Logged-out visitors can make one-off donations, but need an
+account to subscribe. On a private instance, `/donations` asks them to log in first.
+
+### Accepting donations through Stripe
 
 Stripe is connected on a running site, at **Admin > Payments**. Whoever does this needs the `manage monetization` permission.
 

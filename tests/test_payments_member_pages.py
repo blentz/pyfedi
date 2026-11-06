@@ -10,6 +10,8 @@ from flask_wtf.csrf import generate_csrf
 from app import db
 from app.constants import DONOR_WHILE_SUBSCRIBED
 from app.models import MemberSubscription, Offer, OfferDomain, Payment, Site, SiteDomain
+from app.payments.core import apply_event
+from app.payments.events import Paid
 from app.payments.offers import money
 from app.storefront import clear_domain_cache
 from tests.factories import make_user
@@ -53,6 +55,110 @@ def subscribe(member, reference='sub_1', offer=None):
     return row
 
 
+def a_link(title='Our Ko-fi', url='https://ko-fi.example/us', **values):
+    link = Offer(provider_kind='link', kind='link', title=title, offer_group='links', url=url, **values)
+    db.session.add(link)
+    db.session.commit()
+    return link
+
+
+def public_site():
+    db.session.get(Site, 1).private_instance = False
+    db.session.commit()
+
+
+class TestLinks:
+    def test_a_link_is_shown_with_no_stripe_at_all(self, env, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'STRIPE_SECRET_KEY', '')
+        a_link()
+        login(env.client, env.member)
+        body = env.client.get('/donations').get_data(as_text=True)
+        assert 'Our Ko-fi' in body and 'href="https://ko-fi.example/us"' in body
+
+    def test_a_link_tells_the_other_site_nothing_about_this_one(self, env):
+        a_link()
+        login(env.client, env.member)
+        assert 'rel="noopener noreferrer nofollow"' in env.client.get('/donations').get_data(as_text=True)
+
+    def test_a_link_nobody_is_offered_is_not_shown(self, env):
+        a_link(active=False)
+        login(env.client, env.member)
+        assert b'Our Ko-fi' not in env.client.get('/donations').data
+
+    def test_a_link_leads_the_menu_there(self, env, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'STRIPE_SECRET_KEY', '')
+        a_link()
+        login(env.client, env.member)
+        assert b'href="/donations"' in env.client.get('/keyboard_shortcuts').data
+
+
+class TestStrangers:
+    def test_a_private_site_asks_them_to_log_in(self, env):
+        db.session.get(Site, 1).private_instance = True
+        db.session.commit()
+        response = env.client.get('/donations')
+        assert response.status_code == 302 and '/auth/login' in response.headers['Location']
+
+    def test_a_public_site_shows_them_the_page(self, env):
+        public_site()
+        a_link()
+        body = env.client.get('/donations').get_data(as_text=True)
+        assert 'Our Ko-fi' in body and 'Your payments' not in body
+
+    def test_a_subscription_asks_them_to_log_in_first(self, env):
+        public_site()
+        body = env.client.get('/donations').get_data(as_text=True)
+        assert 'Log in to subscribe' in body and f'/donations/checkout/{env.offer.id}' not in body
+
+    def test_a_one_off_can_be_given_with_no_account_and_no_token(self, env):
+        public_site()
+        env.offer.kind = 'donation'
+        env.offer.interval = None
+        db.session.commit()
+        assert f'/donations/checkout/{env.offer.id}'.encode() in env.client.get('/donations').data
+        with patch('stripe.checkout.Session.create', return_value=SimpleNamespace(url='https://stripe.test/c')) as create:
+            response = env.client.post(f'/donations/checkout/{env.offer.id}')
+        assert response.status_code == 302 and response.headers['Location'] == 'https://stripe.test/c'
+        params = create.call_args.kwargs
+        assert 'client_reference_id' not in params
+        assert params['customer'] is None and params['customer_email'] is None
+        assert params['mode'] == 'payment' and params['metadata'] == {'offer_id': str(env.offer.id)}
+
+    def test_a_refusal_is_explained_on_the_page(self, env):
+        public_site()
+        env.offer.kind = 'donation'
+        db.session.commit()
+        with patch('stripe.checkout.Session.create', side_effect=stripe.APIConnectionError('down')):
+            response = env.client.post(f'/donations/checkout/{env.offer.id}')
+        assert response.status_code == 503 and b'unavailable at the moment' in response.data
+
+    def test_a_subscription_cannot_be_checked_out_without_an_account(self, env):
+        public_site()
+        with patch('stripe.checkout.Session.create') as create:
+            response = env.client.post(f'/donations/checkout/{env.offer.id}')
+        assert response.status_code == 302 and '/auth/login' in response.headers['Location']
+        assert not create.called
+
+    def test_a_private_site_takes_nothing_from_them(self, env):
+        db.session.get(Site, 1).private_instance = True
+        env.offer.kind = 'donation'
+        db.session.commit()
+        with patch('stripe.checkout.Session.create') as create:
+            response = env.client.post(f'/donations/checkout/{env.offer.id}')
+        assert response.status_code == 302 and not create.called
+
+    def test_coming_back_needs_no_account(self, env):
+        public_site()
+        response = env.client.get('/donations/return/success')
+        assert response.status_code == 200 and b'Thank you' in response.data
+        assert b'donations page' not in response.data
+
+    def test_a_guests_donation_is_recorded_with_no_account(self, env):
+        apply_event('stripe', 'evt_1', [Paid('pi_1', 500, 'usd', None, env.offer.id)])
+        row = Payment.query.one()
+        assert row.user_id is None and row.offer_id == env.offer.id
+
+
 class TestThePage:
     def test_a_member_is_offered_the_plans_with_the_amount(self, env):
         login(env.client, env.member)
@@ -67,10 +173,6 @@ class TestThePage:
         login(env.client, env.member)
         body = env.client.get('/donations').data
         assert b'A small amount' in body and b'A larger amount' in body
-
-    def test_a_stranger_is_sent_to_log_in(self, env):
-        response = env.client.get('/donations')
-        assert response.status_code == 302 and '/auth/login' in response.headers['Location']
 
     def test_an_inactive_offer_is_not_offered(self, env):
         env.offer.active = False
@@ -174,7 +276,7 @@ class TestCheckout:
         login(env.client, env.member)
         with patch('stripe.checkout.Session.create', side_effect=stripe.APIConnectionError('down')):
             response = post(env, f'/donations/checkout/{env.offer.id}')
-        assert response.status_code == 302 and response.headers['Location'].endswith('/donations')
+        assert response.status_code == 503 and b'unavailable at the moment' in response.data
 
     def test_an_unknown_offer_is_not_found(self, env):
         login(env.client, env.member)
@@ -190,9 +292,10 @@ class TestCheckout:
         login(env.client, env.member)
         assert env.client.get(f'/donations/checkout/{env.offer.id}').status_code == 405
 
-    def test_a_stranger_is_sent_to_log_in(self, env):
-        response = post(env, f'/donations/checkout/{env.offer.id}')
-        assert response.status_code == 302 and '/auth/login' in response.headers['Location']
+    def test_a_link_is_not_checked_out(self, env):
+        link = a_link()
+        login(env.client, env.member)
+        assert post(env, f'/donations/checkout/{link.id}').status_code == 404
 
     def test_coming_back_grants_nothing(self, env):
         login(env.client, env.member)

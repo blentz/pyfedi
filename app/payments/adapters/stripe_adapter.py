@@ -138,12 +138,14 @@ class StripeAdapter:
 
     def checkout(self, offer, user, success_url: str, cancel_url: str) -> str:
         key = self._key()
-        customer = user.stripe_customer_id or None
-        params = {'client_reference_id': str(user.id), 'line_items': [{'price': offer.provider_price_id, 'quantity': 1}],
+        customer = user.stripe_customer_id or None if user else None
+        params = {'line_items': [{'price': offer.provider_price_id, 'quantity': 1}],
                   'mode': 'subscription' if offer.kind == 'subscription' else 'payment',
                   'metadata': {'offer_id': str(offer.id)}, 'success_url': success_url, 'cancel_url': cancel_url,
-                  # Stripe takes one or the other
-                  'customer': customer, 'customer_email': None if customer else user.email}
+                  # Stripe takes one or the other, and asks a guest for an email itself
+                  'customer': customer, 'customer_email': user.email if user and not customer else None}
+        if user:
+            params['client_reference_id'] = str(user.id)
         if offer.kind == 'subscription':
             params['subscription_data'] = {'metadata': {'offer_id': str(offer.id)}}
         session = self._call(lambda stripe: stripe.checkout.Session.create, api_key=key, **params)

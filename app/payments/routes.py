@@ -6,14 +6,15 @@ from flask import abort, flash, redirect, request, url_for
 from flask_babel import _
 from flask_login import current_user
 
+from app import limiter
 from app.models import MemberSubscription, Offer, Payment
 from app.onion import clearnet_only, is_onion_request
 from app.payments import bp
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.core import active_subscriptions_of, apply_event, cancel_subscription
-from app.payments.offers import offers_here
-from app.utils import login_required, render_template
+from app.payments.offers import LINK, offers_here
+from app.utils import login_required, login_required_if_private_instance, render_template
 
 HISTORY_ROWS = 100
 
@@ -40,47 +41,58 @@ def stripe_webhook():
 
 
 @bp.route('/donations')
+@login_required_if_private_instance
 def donations():
     """The offers, and the way to stop paying. Not /donate: that is a CMS page an admin may delete, and a donor must
-    still be able to cancel. The seeded /donate page links here on every site, so with nothing to offer this says so,
-    before asking anybody to log in for nothing, and on the page itself: a logged-out visitor has no session cookie, so
-    a flash would not survive a redirect."""
+    still be able to cancel. The seeded /donate page links here on every site, so with nothing to offer this says so on
+    the page itself: a logged-out visitor has no session cookie, so a flash would not survive a redirect."""
     offers = offers_here()
-    held = not is_onion_request() and current_user.is_authenticated and active_subscriptions_of(current_user)
-    if not offers and not held:
+    member = current_user.is_authenticated and not is_onion_request()   # nothing here can act on them on the onion
+    subscriptions = active_subscriptions_of(current_user) if member else []
+    if not offers and not subscriptions:
         return render_template('generic_message.html', title=_('Donation plans'),
                                message=_('Donation plans are not available on this site.')), 404
-    return _member_page(offers)
-
-
-@login_required
-def _member_page(offers):
-    subscriptions = active_subscriptions_of(current_user)
     held = {subscription.offer_id for subscription in subscriptions}
+    links = [offer for offer in offers if offer.kind == LINK]
     groups = {}
     for offer in offers:
-        if offer.id not in held:   # choosing it again would only start a second one and cancel the first
+        if offer.kind != LINK and offer.id not in held:   # choosing one held would start a second and cancel the first
             groups.setdefault(offer.offer_group, []).append(offer)
-    payments = Payment.query.filter_by(user_id=current_user.id).order_by(Payment.created_at.desc()).limit(HISTORY_ROWS).all()
+    payments = Payment.query.filter_by(user_id=current_user.id).order_by(Payment.created_at.desc()).limit(HISTORY_ROWS).all() \
+        if member else []
     titles = {offer.id: offer.title for offer in Offer.query.all()}
-    return render_template('user/choose_plan.html', title=_('Choose a donation plan'), groups=groups,
-                           subscriptions=subscriptions, payments=payments, titles=titles)
+    return render_template('user/choose_plan.html', title=_('Choose a donation plan'), groups=groups, links=links,
+                           subscriptions=subscriptions, payments=payments, titles=titles, member=member)
 
 
 @bp.route('/donations/checkout/<int:offer_id>', methods=['POST'])
+@login_required_if_private_instance
 @clearnet_only('main.index')
-@login_required
+@limiter.limit('20 per 10 minutes')
 def checkout(offer_id):
-    offer = next((offer for offer in offers_here() if offer.id == offer_id), None)
+    """A one-off needs no account (M8). A guest has no session to bind a CSRF token to, and a forged request acts for
+    nobody and only makes an unpaid session at the provider, so the limit above is what guards this for them."""
+    offer = next((offer for offer in offers_here() if offer.id == offer_id and offer.kind != LINK), None)
     if offer is None:
         abort(404)
+    if current_user.is_anonymous and offer.kind == 'donation':
+        return _start_checkout(offer, None)
+    return _member_checkout(offer)
+
+
+@login_required
+def _member_checkout(offer):
+    return _start_checkout(offer, current_user)
+
+
+def _start_checkout(offer, user):
     try:
-        url = adapter_for(offer.provider_kind).checkout(offer, current_user,
+        url = adapter_for(offer.provider_kind).checkout(offer, user,
                                                         url_for('payments.result', result='success', _external=True),
                                                         url_for('payments.result', result='failure', _external=True))
     except ProviderError:
-        flash(_('The payment provider is unavailable at the moment. Please try again later.'), 'error')
-        return redirect(url_for('payments.donations'))
+        return render_template('generic_message.html', title=_('Donation plans'),
+                               message=_('The payment provider is unavailable at the moment. Please try again later.')), 503
     return redirect(url)
 
 
@@ -117,7 +129,7 @@ def billing():
 
 
 @bp.route('/donations/return/<result>')
-@login_required
+@login_required_if_private_instance
 def result(result):
     if result not in ('success', 'failure'):
         abort(404)

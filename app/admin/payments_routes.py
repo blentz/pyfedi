@@ -9,13 +9,13 @@ from flask_wtf import FlaskForm
 
 from app import db
 from app.admin import bp
-from app.admin.forms import OfferForm, PaymentSettingsForm, StripeCredentialsForm
+from app.admin.forms import LinkOfferForm, OfferForm, PaymentSettingsForm, StripeCredentialsForm
 from app.models import MemberSubscription, Offer, OfferDomain, Payment, PaymentProvider, User
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import ProviderError
 from app.payments.adapters.stripe_adapter import REQUIRED_EVENTS
 from app.payments.credentials import CredentialsUnavailable, credentials_available, seal, unseal
-from app.payments.offers import offers_changed
+from app.payments.offers import LINK, offers_changed
 from app.storefront import domain_rows
 from app.utils import get_setting, login_required, permission_required, render_template, roles_with, set_setting
 
@@ -181,6 +181,21 @@ def _save_offer(form: OfferForm, offer: Offer) -> bool:
     offer.donor_days = None if offer.kind == 'subscription' else form.donor_days.data
     offer.position = form.position.data or 0
     offer.active = form.active.data
+    _save_domains(offer, form)
+    return True
+
+
+def _save_link(form: LinkOfferForm, link: Offer) -> None:
+    link.provider_kind = link.kind = LINK
+    link.offer_group = 'links'
+    link.title = form.title.data
+    link.url = form.url.data
+    link.position = form.position.data or 0
+    link.active = form.active.data
+    _save_domains(link, form)
+
+
+def _save_domains(offer: Offer, form) -> None:
     db.session.add(offer)
     db.session.flush()
     OfferDomain.query.filter_by(offer_id=offer.id).delete()
@@ -188,7 +203,20 @@ def _save_offer(form: OfferForm, offer: Offer) -> bool:
         db.session.add(OfferDomain(offer_id=offer.id, site_domain_id=site_domain_id))
     db.session.commit()
     offers_changed()
-    return True
+
+
+@bp.route('/payments/links/add', methods=['GET', 'POST'])
+@login_required
+@permission_required('manage monetization')
+def admin_payments_link_add():
+    form = LinkOfferForm()
+    form.domains.choices = _domain_choices()
+    if form.validate_on_submit():
+        _save_link(form, Offer())
+        flash(_('Link saved.'))
+        return redirect(url_for('admin.admin_payments'))
+    return render_template('admin/payments_link.html', title=_('Add link'), form=form,
+                           roles_with=roles_with('manage monetization'))
 
 
 @bp.route('/payments/offers/add', methods=['GET', 'POST'])
@@ -209,6 +237,8 @@ def admin_payments_offer_add():
 @permission_required('manage monetization')
 def admin_payments_offer_edit(offer_id):
     offer = db.session.get(Offer, offer_id) or abort(404)
+    if offer.kind == LINK:
+        return _edit_link(offer)
     form = OfferForm(obj=offer)
     form.domains.choices = _domain_choices()
     if request.method == 'GET':
@@ -218,6 +248,19 @@ def admin_payments_offer_edit(offer_id):
         flash(_('Offer saved.'))
         return redirect(url_for('admin.admin_payments'))
     return render_template('admin/payments_offer.html', title=_('Edit offer'), form=form, offer=offer,
+                           delete_form=FlaskForm(), roles_with=roles_with('manage monetization'))
+
+
+def _edit_link(link: Offer):
+    form = LinkOfferForm(obj=link)
+    form.domains.choices = _domain_choices()
+    if request.method == 'GET':
+        form.domains.data = [row.site_domain_id for row in OfferDomain.query.filter_by(offer_id=link.id)]
+    if form.validate_on_submit():
+        _save_link(form, link)
+        flash(_('Link saved.'))
+        return redirect(url_for('admin.admin_payments'))
+    return render_template('admin/payments_link.html', title=_('Edit link'), form=form, offer=link,
                            delete_form=FlaskForm(), roles_with=roles_with('manage monetization'))
 
 
