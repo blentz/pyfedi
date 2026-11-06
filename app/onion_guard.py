@@ -70,6 +70,8 @@ ONION_SESSION_EXEMPT: frozenset[str] = frozenset({
     # App registration: apps keep no cookies, and both refuse on the onion anyway (API registration ruling AR3).
     'User.post_alpha_user_register',
     'User.get_alpha_user_get_captcha',
+    # Refuses on the onion: no checkout is offered there until a provider can be reached without naming its host (C11).
+    'payments.checkout',
 })
 
 COOKIE_CHECK = 'cookie_check=1'
