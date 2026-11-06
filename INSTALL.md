@@ -889,6 +889,21 @@ BTCPay Server, and only an invoice marked invalid there shows as refunded in the
 
 BTCPay is offered on an onion domain only if you enter its `.onion` address too.
 
+### Accepting payments through PayPal
+
+1. In the PayPal developer dashboard, create an app, and enter its client ID and secret at **Admin > Payments**. Tick the sandbox box
+   to try it with test money first. `PAYMENT_SECRETS_KEY` must be set.
+2. In that app, add a webhook to the address the Payments page shows, sending the events it lists, and enter its webhook ID.
+3. Add an offer: a PayPal plan ID for a subscription, or an amount for a one-off donation. A plan with a trial, a setup fee or added
+   tax can't be used, as its payments wouldn't match its price.
+
+Members cancel at `/donations`. On a paid domain they keep access until their next billing date. A subscription PayPal suspends
+after failed payments counts as ended, and the member subscribes again. Only a whole refund shows as refunded in the ledger. PayPal
+is never offered on an onion domain.
+
+**This has not been run against PayPal, even its sandbox.** Run a sandbox payment, a renewal and a refund, and check they appear in the
+ledger, before taking real payments.
+
 ### Private and paid domains
 
 Each domain other than the first has its own **Settings** page at **Admin > Domains**. The first domain's "require login to browse"
@@ -898,7 +913,7 @@ is still the private instance setting in the site's settings.
 That includes API calls, which need a token. Only a domain that doesn't federate can turn this on, so a private domain has to be
 added with **Federates** off: what has federated has already left this server.
 
-**Paid registration** needs a subscription offer on that domain, so a provider must be connected first: Stripe or BTCPay Server. It
+**Paid registration** needs a subscription offer on that domain, so a provider must be connected first: Stripe, BTCPay Server or PayPal. It
 can't be used on the first domain. On an onion domain it needs BTCPay Server with an `.onion` address.
 
 - Someone signing up goes to the provider's page. Their account can't log in until the provider's webhook confirms the payment, and

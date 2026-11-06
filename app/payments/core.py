@@ -7,6 +7,7 @@ make one row. A provider is told to cancel only after that transaction commits.
 from datetime import datetime, timedelta
 
 from flask import current_app
+from sqlalchemy import or_
 from sqlalchemy.dialects.postgresql import insert
 
 from app import db
@@ -172,8 +173,9 @@ def remind_expiring_prepaid() -> int:
 
 def end_expired_prepaid() -> int:
     """What the daily task does. The same as a provider saying a subscription has ended."""
+    now = utcnow()
     expired = MemberSubscription.query.filter(MemberSubscription.status == 'active',
-                                              MemberSubscription.current_period_end < utcnow()).all()
+                                              or_(MemberSubscription.current_period_end < now, MemberSubscription.ends_at < now)).all()
     for subscription in expired:
         subscription.status = 'ended'
         subscription.ended_at = utcnow()
@@ -189,6 +191,8 @@ def _ended(kind: str, event: SubscriptionEnded, touched: set) -> None:
     subscription = MemberSubscription.query.filter_by(provider_kind=kind, provider_reference=event.reference).first()
     if subscription is None:
         return
+    if subscription.ends_at is not None and subscription.ends_at > utcnow():
+        return   # a provider that cancels at once. It has been paid for until then, and the daily task ends it
     subscription.status = 'ended'
     subscription.ended_at = utcnow()
     subscription.ends_at = None

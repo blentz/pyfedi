@@ -1468,6 +1468,8 @@ owner ruled; those rulings are the limits listed in 2.3. Typical fixes:
 - **BTCPay Server.** Admins connect their own server at Admin > Payments and take crypto for
   donations and prepaid periods, which members renew by paying again. It can be offered on an
   onion domain if it has an `.onion` address of its own. See `INSTALL.md`.
+- **PayPal.** Admins connect it at Admin > Payments, for subscriptions and one-off donations. It
+  hasn't been run against PayPal yet, so try the sandbox first. See `INSTALL.md`.
 - **Private and paid domains.** "Require login to browse" is now per domain, and refuses everything
   not on a short list, so a private site no longer answers logged-out API calls. **An integration
   that reads a private instance's API without logging in must now log in.** A domain can charge a

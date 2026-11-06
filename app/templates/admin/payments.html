@@ -67,11 +67,31 @@
         <p>{{ _('In BTCPay Server, send a webhook to:') }} <code>{{ btcpay_webhook_url }}</code></p>
         <p>{{ _('Send these events:') }} {% for event in btcpay_events %}<code>{{ event }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</p>
 
+        <h3 class="mt-4">{{ _('PayPal') }}</h3>
+        <p>{{ _('PayPal credentials are stored, encrypted. They cannot be shown. Blank fields keep what is stored.') if paypal_connected else _('PayPal is not connected.') }}</p>
+        <form method="post" action="{{ url_for('admin.admin_payments_paypal') }}" class="mb-3" autocomplete="off">
+            {{ paypal_form.hidden_tag() }}
+            {{ render_field(paypal_form.client_id) }}
+            {{ render_field(paypal_form.client_secret) }}
+            {{ render_field(paypal_form.webhook_id) }}
+            {{ render_field(paypal_form.sandbox) }}
+            {{ render_field(paypal_form.enabled) }}
+            {{ render_field(paypal_form.save_paypal) }}
+        </form>
+        <p>{{ _('In your PayPal app, send a webhook to:') }} <code>{{ paypal_webhook_url }}</code></p>
+        <p>{{ _('Send these events:') }}</p>
+        <ul>
+            {% for event in paypal_events -%}
+                <li><code>{{ event }}</code></li>
+            {% endfor -%}
+        </ul>
+
         <h3 class="mt-4">{{ _('Offers') }}</h3>
         <p>
             <a href="{{ url_for('admin.admin_payments_link_add') }}" class="btn btn-primary">{{ _('Add link') }}</a>
             <a href="{{ url_for('admin.admin_payments_offer_add') }}" class="btn btn-primary">{{ _('Add Stripe offer') }}</a>
             <a href="{{ url_for('admin.admin_payments_btcpay_offer_add') }}" class="btn btn-primary">{{ _('Add BTCPay offer') }}</a>
+            <a href="{{ url_for('admin.admin_payments_paypal_offer_add') }}" class="btn btn-primary">{{ _('Add PayPal offer') }}</a>
         </p>
         {% if currency -%}
             <p class="small field_hint">{{ _('This site takes payments in %(currency)s.', currency=currency.upper()) }}</p>

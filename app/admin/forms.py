@@ -755,3 +755,29 @@ class BtcpayOfferForm(FlaskForm):
     domains = SelectMultipleField(_l('Domains (none means all)'), choices=[], coerce=int, validators=[Optional()])
     save = SubmitField(_l('Save'))
 
+
+class PaypalCredentialsForm(FlaskForm):
+    client_id = PasswordField(_l('PayPal client ID'), validators=[Optional(), Length(max=255)], render_kw={'autocomplete': 'off'})
+    client_secret = PasswordField(_l('PayPal client secret'), validators=[Optional(), Length(max=255)], render_kw={'autocomplete': 'off'})
+    webhook_id = StringField(_l('Webhook ID'), validators=[Optional(), Length(max=255)])
+    sandbox = BooleanField(_l('Use the PayPal sandbox'), description=_l('Test money only. Turn this off to take real payments.'))
+    enabled = BooleanField(_l('PayPal is enabled'), default=True)
+    save_paypal = SubmitField(_l('Save'))
+
+
+class PaypalOfferForm(FlaskForm):
+    title = StringField(_l('Title'), validators=[DataRequired(), Length(max=255)])
+    plan_id = StringField(_l('PayPal plan ID, for a subscription'), validators=[Optional(), Length(max=255)],
+                          render_kw={'placeholder': 'P-...'},
+                          description=_l('Its price and period are read from PayPal. A plan with a trial, a setup fee or added tax cannot be used.'))
+    amount = DecimalField(_l('Or an amount, for a one-off donation'), places=None, validators=[Optional(), NumberRange(min=0.01, max=1000000)])
+    currency = StringField(_l('Its currency'), validators=[Optional(), Length(min=3, max=3)], render_kw={'placeholder': 'USD'})
+    offer_group = StringField(_l('Group'), validators=[DataRequired(), Length(max=50)], default='plans')
+    grants_donor = BooleanField(_l('Grants the Donor label'), default=True)
+    donor_days = IntegerField(_l('For one-off payments: how many days the label lasts (blank for good)'),
+                              validators=[Optional(), NumberRange(min=1, max=36500)])
+    position = IntegerField(_l('Position'), validators=[Optional(), NumberRange(min=0, max=100000)], default=0)
+    active = BooleanField(_l('Offered to members'), default=True)
+    domains = SelectMultipleField(_l('Domains (none means all)'), choices=[], coerce=int, validators=[Optional()])
+    save = SubmitField(_l('Save'))
+

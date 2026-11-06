@@ -11,13 +11,14 @@ from flask_wtf import FlaskForm
 from app import db
 from app.admin import bp
 from app.admin.forms import BtcpayCredentialsForm, BtcpayOfferForm, LinkOfferForm, OfferForm, PaymentSettingsForm, \
-    StripeCredentialsForm
+    PaypalCredentialsForm, PaypalOfferForm, StripeCredentialsForm
 from app.models import MemberSubscription, Offer, OfferDomain, Payment, PaymentProvider, SiteDomain, User
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import ProviderError
 from app.payments.adapters.btcpay_adapter import REQUIRED_EVENTS as BTCPAY_EVENTS, REQUIRED_PERMISSIONS as BTCPAY_PERMISSIONS, \
     from_minor, to_minor
 from app.payments.adapters.stripe_adapter import REQUIRED_EVENTS
+from app.payments.adapters.paypal_adapter import REQUIRED_EVENTS as PAYPAL_EVENTS
 from app.payments.credentials import CredentialsUnavailable, credentials_available, seal, unseal
 from app.payments.offers import LINK, offers_changed
 from app.storefront import domain_rows
@@ -47,8 +48,12 @@ def _stripe_source() -> str:
     return 'environment' if current_app.config.get('STRIPE_SECRET_KEY') else 'none'
 
 
-def _stored_btcpay() -> dict:
-    row = PaymentProvider.query.filter_by(kind='btcpay').first()
+def _stored_paypal() -> dict:
+    return _stored_btcpay('paypal')
+
+
+def _stored_btcpay(kind='btcpay') -> dict:
+    row = PaymentProvider.query.filter_by(kind=kind).first()
     if row is None or not row.credentials:
         return {}
     try:
@@ -62,7 +67,13 @@ def _btcpay_form() -> BtcpayCredentialsForm:
     return BtcpayCredentialsForm(enabled=row.enabled if row else True, **(row.settings or {} if row else {}))
 
 
-def _page(stripe_form=None, settings_form=None, btcpay_form=None):
+def _paypal_form() -> PaypalCredentialsForm:
+    row = PaymentProvider.query.filter_by(kind='paypal').first()
+    return PaypalCredentialsForm(enabled=row.enabled if row else True, **(row.settings or {} if row else {}))
+
+
+def _page(stripe_form=None, settings_form=None, btcpay_form=None, paypal_form=None):
+    paypal = PaymentProvider.query.filter_by(kind='paypal').first()
     row = PaymentProvider.query.filter_by(kind='stripe').first()
     btcpay = PaymentProvider.query.filter_by(kind='btcpay').first()
     stripe_form = stripe_form or StripeCredentialsForm(enabled=row.enabled if row else True)
@@ -76,7 +87,10 @@ def _page(stripe_form=None, settings_form=None, btcpay_form=None):
                            required_events=REQUIRED_EVENTS, retention=get_setting(RETENTION_SETTING),
                            btcpay_form=btcpay_form or _btcpay_form(), btcpay_connected=bool(btcpay and btcpay.credentials),
                            btcpay_webhook_url=url_for('payments.payment_webhook', kind='btcpay', _external=True),
-                           btcpay_events=BTCPAY_EVENTS, btcpay_permissions=BTCPAY_PERMISSIONS)
+                           btcpay_events=BTCPAY_EVENTS, btcpay_permissions=BTCPAY_PERMISSIONS,
+                           paypal_form=paypal_form or _paypal_form(), paypal_connected=bool(paypal and paypal.credentials),
+                           paypal_webhook_url=url_for('payments.payment_webhook', kind='paypal', _external=True),
+                           paypal_events=PAYPAL_EVENTS)
 
 
 @bp.route('/payments', methods=['GET'])
@@ -144,6 +158,37 @@ def admin_payments_btcpay():
     db.session.commit()
     offers_changed()
     flash(_('BTCPay settings saved.'))
+    return redirect(url_for('admin.admin_payments'))
+
+
+@bp.route('/payments/paypal', methods=['POST'])
+@login_required
+@permission_required('manage monetization')
+def admin_payments_paypal():
+    form = PaypalCredentialsForm()
+    if not form.validate_on_submit():
+        return _page(paypal_form=form)
+    if not credentials_available():
+        flash(_('Credentials cannot be stored until PAYMENT_SECRETS_KEY is set.'), 'error')
+        return redirect(url_for('admin.admin_payments'))
+    row = PaymentProvider.query.filter_by(kind='paypal').first() or PaymentProvider(kind='paypal')
+    settings = {'webhook_id': form.webhook_id.data or '', 'sandbox': form.sandbox.data}
+    secrets = {**_stored_paypal(), **{name: field.data for name, field in (('client_id', form.client_id),
+                                                                           ('client_secret', form.client_secret)) if field.data}}
+    if form.enabled.data:
+        try:
+            adapter_for('paypal').check_credentials({**settings, **secrets})
+        except ProviderError:
+            flash(_('PayPal refused those details, or could not be reached. Nothing was changed.'), 'error')
+            return redirect(url_for('admin.admin_payments'))
+    row.settings = settings
+    if secrets:
+        row.credentials = seal(secrets)
+    row.enabled = form.enabled.data
+    db.session.add(row)
+    db.session.commit()
+    offers_changed()
+    flash(_('PayPal settings saved.'))
     return redirect(url_for('admin.admin_payments'))
 
 
@@ -296,6 +341,75 @@ def _save_btcpay_offer(form: BtcpayOfferForm, offer: Offer) -> bool:
     return True
 
 
+def _save_paypal_offer(form: PaypalOfferForm, offer: Offer) -> bool:
+    """A plan's price is PayPal's, so it can't disagree with what it charges. Without one, this is a one-off at the
+    amount given. False, with the reason on the form."""
+    if not form.active.data and _names_a_paid_domain(offer):
+        form.active.errors.append(_('A paid domain charges this at registration. Change the domain first.'))
+        return False
+    if form.plan_id.data:
+        try:
+            _apply_price(offer, adapter_for('paypal').describe_price(form.plan_id.data))
+        except ProviderError:
+            form.plan_id.errors.append(_('PayPal could not find that plan, or it has a trial, a setup fee or added tax.'))
+            return False
+        except CurrencyRefused:
+            form.plan_id.errors.append(_('That plan is in a different currency from the rest of this site.'))
+            return False
+        offer.kind = 'subscription'
+    else:
+        code = (form.currency.data or '').strip().upper()
+        if form.amount.data is None or code not in list_currencies():
+            form.amount.errors.append(_('Give a plan, or an amount and a currency.'))
+            return False
+        currency = get_setting(CURRENCY_SETTING)
+        if currency and currency != code.lower():
+            form.currency.errors.append(_('That is a different currency from the rest of this site.'))
+            return False
+        if not currency:
+            set_setting(CURRENCY_SETTING, code.lower())
+        offer.amount_minor, offer.currency = to_minor(str(form.amount.data), code), code.lower()
+        offer.interval, offer.kind = None, 'donation'
+    offer.provider_kind = 'paypal'
+    offer.provider_price_id = form.plan_id.data or None
+    offer.title = form.title.data
+    offer.offer_group = form.offer_group.data
+    offer.grants_donor = form.grants_donor.data
+    offer.donor_days = None if offer.kind == 'subscription' else form.donor_days.data
+    offer.position = form.position.data or 0
+    offer.active = form.active.data
+    _save_domains(offer, form)
+    return True
+
+
+@bp.route('/payments/paypal/offers/add', methods=['GET', 'POST'])
+@login_required
+@permission_required('manage monetization')
+def admin_payments_paypal_offer_add():
+    form = PaypalOfferForm(currency=(get_setting(CURRENCY_SETTING) or '').upper())
+    form.domains.choices = _domain_choices()
+    if form.validate_on_submit() and _save_paypal_offer(form, Offer()):
+        flash(_('Offer saved.'))
+        return redirect(url_for('admin.admin_payments'))
+    return render_template('admin/payments_paypal_offer.html', title=_('Add PayPal offer'), form=form,
+                           roles_with=roles_with('manage monetization'))
+
+
+def _edit_paypal_offer(offer: Offer):
+    form = PaypalOfferForm(obj=offer)
+    form.domains.choices = _domain_choices()
+    if request.method == 'GET':
+        form.plan_id.data = offer.provider_price_id
+        form.amount.data = from_minor(offer.amount_minor, offer.currency)
+        form.currency.data = offer.currency.upper()
+        form.domains.data = [row.site_domain_id for row in OfferDomain.query.filter_by(offer_id=offer.id)]
+    if form.validate_on_submit() and _save_paypal_offer(form, offer):
+        flash(_('Offer saved.'))
+        return redirect(url_for('admin.admin_payments'))
+    return render_template('admin/payments_paypal_offer.html', title=_('Edit offer'), form=form, offer=offer,
+                           delete_form=FlaskForm(), roles_with=roles_with('manage monetization'))
+
+
 @bp.route('/payments/btcpay/offers/add', methods=['GET', 'POST'])
 @login_required
 @permission_required('manage monetization')
@@ -360,6 +474,8 @@ def admin_payments_offer_edit(offer_id):
         return _edit_link(offer)
     if offer.provider_kind == 'btcpay':
         return _edit_btcpay_offer(offer)
+    if offer.provider_kind == 'paypal':
+        return _edit_paypal_offer(offer)
     form = OfferForm(obj=offer)
     form.domains.choices = _domain_choices()
     if request.method == 'GET':
