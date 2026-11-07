@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 from flask import g
+from sqlalchemy import event
 
 from app import cli, db, media_cap
 from app.models import File, Site, jpeg_rendition_path, post_file, utcnow
@@ -343,13 +344,73 @@ def test_the_job_runs_expiry_then_the_cap_and_is_logged(app, api_baseline):
     log.assert_called_once_with('expire_old_media')
 
 
-def test_remove_orphan_files_sweeps_the_post_media(app, api_baseline):
+def test_remove_orphan_files_sweeps_the_user_media_then_the_post_media(app, api_baseline):
     g.site = db.session.get(Site, 1)
     cli.register(app)
-    with patch.object(cli, 'remove_post_orphans') as sweep, patch('app.cli.os.walk', return_value=[]):
+    calls = []
+    with patch.object(cli, 'remove_user_orphans', side_effect=lambda: calls.append('users')), \
+            patch.object(cli, 'remove_post_orphans', side_effect=lambda: calls.append('posts')), \
+            patch.object(cli, 'log_cron_task_to_db') as log:
         result = app.test_cli_runner().invoke(args=['remove_orphan_files'])
     assert result.exit_code == 0, result.output
-    sweep.assert_called_once_with()
+    assert calls == ['users', 'posts']
+    log.assert_called_once_with('remove_orphan_files')
+
+
+USERS = 'app/static/media/users/mediacap'
+
+
+def test_the_user_sweep_removes_a_file_no_record_names(world):
+    orphan = _aged(world['on_disk']('capuserorphan000.webp', USERS))
+    assert media_cap.remove_user_orphans(USERS) == 1
+    assert not os.path.exists(orphan)
+
+
+def test_the_user_sweep_keeps_files_a_record_names(world):
+    image = _aged(world['on_disk']('capuseravatar000.webp', USERS))
+    thumbnail = _aged(world['on_disk']('capuseravatar000_thumbnail.webp', USERS))
+    named_as_image = _aged(world['on_disk']('capuserthumbnailnamed.webp', USERS))
+    db.session.add(File(file_path=image, thumbnail_path=thumbnail))
+    db.session.add(File(file_path=named_as_image))
+    db.session.commit()
+    assert media_cap.remove_user_orphans(USERS) == 0
+    assert all(os.path.exists(path) for path in (image, thumbnail, named_as_image))
+
+
+def test_the_user_sweep_keeps_a_file_too_new_to_judge(world):
+    """Uploaded during the sweep, after the names were read."""
+    fresh = world['on_disk']('capuserfresh0000.webp', USERS)
+    assert media_cap.remove_user_orphans(USERS) == 0
+    assert os.path.exists(fresh)
+
+
+def test_the_user_sweep_reads_the_names_once(world):
+    """One query for the whole folder, not one per file: per file it took about an hour in production (2026-11-07)."""
+    for number in range(5):
+        _aged(world['on_disk'](f'capuserbulk{number:05}.webp', USERS))
+    statements = []
+
+    def count(*_args):
+        statements.append(1)
+
+    event.listen(db.engine, 'before_cursor_execute', count)
+    try:
+        assert media_cap.remove_user_orphans(USERS) == 5
+    finally:
+        event.remove(db.engine, 'before_cursor_execute', count)
+    assert len(statements) == 1
+
+
+def test_the_user_sweep_survives_a_file_vanishing_under_it(world):
+    _aged(world['on_disk']('capuservanish000.webp', USERS))
+    with patch('app.media_cap.os.unlink', side_effect=FileNotFoundError):
+        assert media_cap.remove_user_orphans(USERS) == 0
+
+
+def test_the_user_sweep_survives_a_file_vanishing_before_its_age_is_read(world):
+    _aged(world['on_disk']('capuserstatgone0.webp', USERS))
+    with patch('app.media_cap.os.path.getmtime', side_effect=FileNotFoundError):
+        assert media_cap.remove_user_orphans(USERS) == 0
 
 
 def _misc_client(app):

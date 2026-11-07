@@ -89,6 +89,32 @@ def evict_old_post_media():
         session.close()
 
 
+def remove_user_orphans(root: str = os.path.join(MEDIA_ROOT, 'users')) -> int:
+    """Remove files under `root` that no File names as its `file_path` or `thumbnail_path`, compared as written. The
+    names are read once: a query per file took about an hour for 151K files in production (2026-11-07). A file younger
+    than ORPHAN_MIN_AGE_SECONDS stays, as its File may be newer than the names read here."""
+    named = set()
+    for file_path, thumbnail_path in db.session.query(File.file_path, File.thumbnail_path).yield_per(10000):
+        named.update(value for value in (file_path, thumbnail_path) if value)
+
+    removed = 0
+    too_new = time.time() - ORPHAN_MIN_AGE_SECONDS
+    for directory, _dirs, names in os.walk(root):
+        for name in names:
+            path = os.path.join(directory, name)
+            if path in named:
+                continue
+            try:
+                if os.path.getmtime(path) > too_new:
+                    continue
+                os.unlink(path)
+                removed += 1
+            except FileNotFoundError:
+                continue
+    current_app.logger.info(f'orphan sweep: removed {removed} files under {root}')
+    return removed
+
+
 def remove_post_orphans() -> int:
     """Remove files in `media/posts` that no record names: what deleted posts left, as `delete_from_disk` keeps a file
     its row cannot prove we wrote. The set of known names only saves a query per file that is plainly in use; a file

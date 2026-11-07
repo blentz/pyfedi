@@ -52,7 +52,7 @@ from app.models import CmsPage, CronJobLog, Settings, BannedInstances, Role, Use
     ActivityBatch, Reminder, RssFeed, RssFeedItem, Feed, media_of, ErrorCount, SiteDomain
 from app.shared.tasks import task_selector
 from app.visibility import listable_clause, post_title_for
-from app.media_cap import evict_old_post_media, remove_post_orphans
+from app.media_cap import evict_old_post_media, remove_post_orphans, remove_user_orphans
 from app.shared.tasks.maintenance import add_remote_communities, remove_old_bot_content, pwn_bots
 from app.shared.post import feature_published_post, make_post
 from app.shared.tasks.media import requeue_stuck_media
@@ -1606,23 +1606,11 @@ def register(app):
                 if filesize > 0 and num_content > 0:
                     print(f'{user.id},"{user.ap_id}",{filesize},{num_content}')
 
-    def list_files(directory):
-        for root, dirs, files in os.walk(directory):
-            for file in files:
-                yield os.path.join(root, file)
-
     @app.cli.command("remove_orphan_files")
     def remove_orphan_files():
-        """ Any user-uploaded file that does not have a corresponding entry in the File table should be deleted """
+        """Delete media files no record names: under media/users (remove_user_orphans), then media/posts."""
         with app.app_context():
-            for file_path in list_files('app/static/media/users'):
-                if 'thumbnail' in file_path:
-                    f = File.query.filter(File.thumbnail_path == file_path).first()
-                else:
-                    f = File.query.filter(File.file_path == file_path).first()
-                if f is None:
-                    os.unlink(file_path)
-
+            remove_user_orphans()
             remove_post_orphans()
             log_cron_task_to_db("remove_orphan_files")
 
