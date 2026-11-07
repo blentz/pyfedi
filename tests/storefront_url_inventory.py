@@ -84,6 +84,7 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
         'Community.local_url': 1,
         'Feed.local_url': 1,
         'File.delete_from_disk': 3,   # the CDN purge URLs of file_path, thumbnail_path and the converted JPEG
+        'File.evict_local_copies': 1,   # the CDN purge URL of a local copy, as delete_from_disk's
         'File.local_path_for_url': 2,
         'Post.generate_slug': 1,
         'Post.new': 1,

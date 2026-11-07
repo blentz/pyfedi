@@ -42,6 +42,7 @@ KNOWN_SCHEDULES = {
     'send_queue': timedelta(minutes=5),
     'evict_onion_media': timedelta(hours=1),
     'prune_error_counts': timedelta(hours=25),
+    'expire_old_media': timedelta(hours=2),
 }
 
 FALLBACK = timedelta(days=1)

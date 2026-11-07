@@ -52,6 +52,7 @@ from app.models import CmsPage, CronJobLog, Settings, BannedInstances, Role, Use
     ActivityBatch, Reminder, RssFeed, RssFeedItem, Feed, media_of, ErrorCount, SiteDomain
 from app.shared.tasks import task_selector
 from app.visibility import listable_clause, post_title_for
+from app.media_cap import evict_old_post_media, remove_post_orphans
 from app.shared.tasks.maintenance import add_remote_communities, remove_old_bot_content, pwn_bots
 from app.shared.post import feature_published_post, make_post
 from app.shared.tasks.media import requeue_stuck_media
@@ -1622,7 +1623,17 @@ def register(app):
                 if f is None:
                     os.unlink(file_path)
 
+            remove_post_orphans()
             log_cron_task_to_db("remove_orphan_files")
+
+    @app.cli.command("expire_old_media")
+    def expire_old_media():
+        """ Hourly: relayed posts past their retention, then local copies of remote images past the media cap. Each has
+        a time budget, and relayed posts arrive faster than one budget a day can expire them """
+        with app.app_context():
+            expire_relayed_posts()
+            evict_old_post_media()
+            log_cron_task_to_db("expire_old_media")
 
     @app.cli.command("evict_onion_media")
     def evict_onion_media():

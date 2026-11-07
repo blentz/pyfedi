@@ -1567,6 +1567,28 @@ class File(db.Model):
         elif purge_from_cache:
             flush_cdn_cache(purge_from_cache)
 
+    def evict_local_copies(self, cache_urls: list) -> None:
+        """Drop our copies of a peer's image, so pages load it from `source_url` (`app/media_cap.py`). A value that is
+        not a path inside `media/posts` is left as it is: a peer could set `file_path` until 397a91156, so the column
+        can name anyone's file. This record stops naming the file either way, and the file itself goes once no other
+        record names it (`named_by_any_other_record`, fail closed): the last record out removes it."""
+        posts_root = os.path.realpath(os.path.join(MEDIA_ROOT, 'posts')) + os.sep
+        for column in ('file_path', 'thumbnail_path'):
+            value = getattr(self, column)
+            written = self._in_the_media_folders(value)
+            if not written or not written.startswith(posts_root):
+                continue
+            setattr(self, column, None)
+            db.session.flush()
+            if not named_by_any_other_record(written, self.id):
+                with suppress(FileNotFoundError):
+                    os.unlink(written)
+            cache_urls.append(value.replace('app/', f"{current_app.config['SERVER_URL']}/"))
+            if column == 'thumbnail_path':
+                self.thumbnail_width = self.thumbnail_height = None
+        with suppress(FileNotFoundError):
+            os.unlink(jpeg_rendition_path(self.id))
+
     def filesize(self, total=True):
         size = 0
         if self.file_path and os.path.exists(self.file_path):
@@ -6659,6 +6681,8 @@ class CronJobLog(db.Model):
             return timedelta(minutes=5)
         elif self.name == 'evict_onion_media':
             return timedelta(hours=1)  # runs every 15 minutes
+        elif self.name == 'expire_old_media':
+            return timedelta(hours=2)  # runs hourly
         elif self.name == 'prune_error_counts':
             return timedelta(hours=25)  # runs daily
         # D1334. This used to fall off the end and answer None for any name not

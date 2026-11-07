@@ -755,6 +755,8 @@ def admin_misc():
         set_setting('max_album_images', int(form.max_album_images.data))
         if form.onion_pow_difficulty.data is not None:
             set_setting(POW_DIFFICULTY_SETTING, form.onion_pow_difficulty.data)
+        if form.remote_image_cache_days.data is not None:
+            site.remote_image_cache_days = form.remote_image_cache_days.data
         if form.onion_media_cache_mb.data is not None:
             set_setting('onion_media_cache_bytes', form.onion_media_cache_mb.data * 1048576)
         if form.onion_media_image_max_mb.data is not None:
@@ -811,6 +813,7 @@ def admin_misc():
         # than a missing line.
         form.captcha_enabled.data = captcha_enabled()
         form.onion_pow_difficulty.data = pow_difficulty()
+        form.remote_image_cache_days.data = site.remote_image_cache_days
         form.onion_media_cache_mb.data = get_setting('onion_media_cache_bytes', DEFAULT_CACHE_BYTES) // 1048576
         form.onion_media_image_max_mb.data = get_setting('onion_media_image_max_bytes', 20971520) // 1048576
         form.onion_media_av_max_mb.data = get_setting('onion_media_av_max_bytes', 524288000) // 1048576

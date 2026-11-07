@@ -156,6 +156,8 @@ class SiteMiscForm(FlaskForm):
     onion_pow_difficulty = IntegerField(_l('Onion login proof-of-work difficulty (bits; each one doubles the work)'),
                                         validators=[Optional(), NumberRange(min=0, max=MAX_POW_DIFFICULTY)])
     # Onion remote-media cache (app/onion_media.py), in MiB here and bytes in the settings. Optional like the above.
+    remote_image_cache_days = IntegerField(_l("Keep local copies of remote posts' images for this many days (0 = forever)"),
+                                           validators=[Optional(), NumberRange(min=0, max=36500)])
     onion_media_cache_mb = IntegerField(_l('Onion media cache size (MB)'),
                                         validators=[Optional(), NumberRange(min=1024, max=1048576)])
     onion_media_image_max_mb = IntegerField(_l('Onion media largest image (MB)'),
