@@ -49,9 +49,10 @@ diagnostics=".crash-diagnostics/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$diagnostics"
 crashes > "$diagnostics/kernel-before.log" || true
 
-status=0
-CONTAINER_CONNECTION="$REMOTE_PODMAN" TEST_DIAGNOSTICS_DIR="$diagnostics" ./run_tests.sh "$@" 2>&1 | tee "$diagnostics/pytest.log" || true
+set +e
+CONTAINER_CONNECTION="$REMOTE_PODMAN" TEST_DIAGNOSTICS_DIR="$diagnostics" ./run_tests.sh "$@" 2>&1 | tee "$diagnostics/pytest.log"
 status=${PIPESTATUS[0]}
+set -e
 crashes > "$diagnostics/kernel-after.log" || true
 new=$(comm -13 <(sort "$diagnostics/kernel-before.log") <(sort "$diagnostics/kernel-after.log") | tee "$diagnostics/kernel-new.log")
 if [ -n "$new" ] || grep -qE 'Fatal Python error|worker .* crashed|server closed the connection unexpectedly' "$diagnostics/pytest.log"; then
