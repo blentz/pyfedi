@@ -60,6 +60,10 @@ fi
 # The stack must not outlive the run. EXIT fires on success, failure and
 # Ctrl-C alike; `down` also stops a pytest still running inside test-runner.
 teardown() {
+    # The containers' logs go with them. Postgres's says which query a crashed backend was running.
+    if [ -n "${TEST_DIAGNOSTICS_DIR:-}" ]; then
+        $COMPOSE logs test-db > "$TEST_DIAGNOSTICS_DIR/postgres.log" 2>&1 || true
+    fi
     $COMPOSE down >/dev/null 2>&1 || echo "run_tests.sh: could not remove the test stack; run ./run_tests.sh --down" >&2
 }
 trap teardown EXIT

@@ -43,8 +43,24 @@ remote "rm -rf '$PWD' && mkdir -p '$PWD'"
   printf '%s\0' .env.test
 } | tar --null -T - -czf - | remote "tar -xzf - -C '$PWD' && cd '$PWD' && git init -q && git add -A"
 
+# What a crash leaves behind, kept here: Postgres's log, the kernel's crash lines since the run began, and pytest's output.
+crashes() { remote "dmesg 2>/dev/null | grep -iE 'segfault|general protection|traps:|oom' || true"; }
+diagnostics=".crash-diagnostics/$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$diagnostics"
+crashes > "$diagnostics/kernel-before.log" || true
+
 status=0
-CONTAINER_CONNECTION="$REMOTE_PODMAN" ./run_tests.sh "$@" || status=$?
+CONTAINER_CONNECTION="$REMOTE_PODMAN" TEST_DIAGNOSTICS_DIR="$diagnostics" ./run_tests.sh "$@" 2>&1 | tee "$diagnostics/pytest.log" || true
+status=${PIPESTATUS[0]}
+crashes > "$diagnostics/kernel-after.log" || true
+new=$(comm -13 <(sort "$diagnostics/kernel-before.log") <(sort "$diagnostics/kernel-after.log") | tee "$diagnostics/kernel-new.log")
+if [ -n "$new" ] || grep -qE 'Fatal Python error|worker .* crashed|server closed the connection unexpectedly' "$diagnostics/pytest.log"; then
+    echo "run_tests_remote.sh: A CRASH during this run. Diagnostics are in $diagnostics. A clean rerun does not explain it." >&2
+    [ -n "$new" ] && echo "$new" >&2
+    [ "$status" -ne 0 ] || status=70
+elif [ "$status" -eq 0 ]; then
+    rm -rf "$diagnostics"
+fi
 
 if remote "test -f '$PWD/coverage.json'"; then
     remote "cat '$PWD/coverage.json'" > coverage.json
