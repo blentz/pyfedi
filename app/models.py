@@ -6708,6 +6708,59 @@ class RevokedToken(db.Model):
     revoked_at = db.Column(db.DateTime, default=utcnow)
 
 
+class OAuthApp(db.Model):
+    """A client app registered with POST /api/v1/apps (plan W0.2). Its secret is shown once and kept as a SHA-256
+    digest; its redirect URIs are matched exactly."""
+    __tablename__ = 'oauth_app'
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.String(64), unique=True, nullable=False)
+    client_secret_hash = db.Column(db.String(64), nullable=False)
+    name = db.Column(db.String(255), nullable=False)
+    website = db.Column(db.String(1024))
+    redirect_uris = db.Column(db.Text, nullable=False)   # one per line
+    scope = db.Column(db.String(1024), nullable=False, default='read')
+    created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+
+    def redirect_uri_list(self) -> list[str]:
+        return [uri for uri in self.redirect_uris.split('\n') if uri]
+
+    def check_client_secret(self, client_secret: str) -> bool:
+        if not client_secret:
+            return False
+        return secrets.compare_digest(sha256(client_secret.encode()).hexdigest(), self.client_secret_hash)
+
+
+class OAuthCode(db.Model):
+    """An authorization code, single use and short lived; kept as a SHA-256 digest."""
+    __tablename__ = 'oauth_code'
+    id = db.Column(db.Integer, primary_key=True)
+    code_hash = db.Column(db.String(64), unique=True, nullable=False)
+    app_id = db.Column(db.Integer, db.ForeignKey('oauth_app.id', ondelete='CASCADE'), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False, index=True)
+    redirect_uri = db.Column(db.Text, nullable=False)
+    scope = db.Column(db.String(1024), nullable=False)
+    code_challenge = db.Column(db.String(128))
+    code_challenge_method = db.Column(db.String(10))
+    created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+
+
+class OAuthToken(db.Model):
+    """An access token, with its refresh token when it has one, kept as SHA-256 digests. It never expires; it ends
+    when revoked (ruling M6). An app's own token (client credentials) has no user."""
+    __tablename__ = 'oauth_token'
+    id = db.Column(db.Integer, primary_key=True)
+    app_id = db.Column(db.Integer, db.ForeignKey('oauth_app.id', ondelete='CASCADE'), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), index=True)
+    access_token_hash = db.Column(db.String(64), unique=True, nullable=False)
+    refresh_token_hash = db.Column(db.String(64), unique=True)
+    scope = db.Column(db.String(1024), nullable=False)
+    created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+    last_used_at = db.Column(db.DateTime)
+    revoked_at = db.Column(db.DateTime)
+
+    app = db.relationship('OAuthApp', lazy='joined')
+
+
 class BotChallenge(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     uuid = db.Column(db.String(50), index=True)
