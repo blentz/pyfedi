@@ -33,6 +33,7 @@ OPEN = frozenset({
     'Site.get_alpha_site', 'Site.get_alpha_site_version', 'Site.get_alpha_site_instance_chooser',
     'Site.get_alpha_site_instance_chooser_search', 'User.post_alpha_user_login', 'User.post_alpha_user_register',
     'User.get_alpha_user_get_captcha', 'User.post_alpha_user_verify_credentials',
+    'oauth_server.register_app',   # an OAuth app registers before it sends anyone to log in (plan W0.2)
 })
 
 # Open where the storefront federates, as other servers read them with no account. Each view that also serves a browser

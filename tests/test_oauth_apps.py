@@ -3,6 +3,8 @@ docs/superpowers/specs/2026-11-07-mastodon-client-api-design.md §3.1)."""
 import pytest
 
 from app.models import OAuthApp
+from app.oauth_server import tokens
+from tests.test_login_gate import private  # noqa: F401  the private-instance fixture
 
 TUSKY = 'oauth2redirect://com.keylesspalace.tusky/'
 OOB = 'urn:ietf:wg:oauth:2.0:oob'
@@ -115,3 +117,16 @@ def test_a_website_must_be_an_http_url(client, website):
     response = client.post('/api/v1/apps', data={'client_name': 'A', 'redirect_uris': OOB, 'website': website})
     assert response.status_code == 422
     assert OAuthApp.query.count() == 0
+
+
+def test_an_app_registers_on_a_private_instance_before_anybody_signs_in(app, private):
+    """An app registers before it can send anyone to log in, as with Mastodon's own private servers."""
+    response = app.test_client().post('/api/v1/apps', data={'client_name': 'Tusky', 'redirect_uris': TUSKY})
+    assert response.status_code == 200, response.get_data(as_text=True)
+
+
+def test_authorizing_on_a_private_instance_still_starts_at_the_login_page(app, private):
+    registered, _secret = tokens.register_app('Tusky', [TUSKY], 'read', None)
+    response = app.test_client().get('/oauth/authorize', query_string={
+        'response_type': 'code', 'client_id': registered.client_id, 'redirect_uri': TUSKY})
+    assert response.status_code == 302 and '/auth/login' in response.headers['Location']
