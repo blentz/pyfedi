@@ -213,6 +213,7 @@ def test_anywhere_is_asked_only_by_menus():
 UNSCOPED_ON_PURPOSE = {
     'community/routes.py': {'administer all communities': 1},   # fixup_from_remote: a remote community
     'instance/routes.py': {'administer all users': 1},          # a remote instance's people
+    'reads/users.py': {'administer all users': 1},              # the person list: the web directory's own check, above
     # a conversation, and so its reports: reporting one, and listing and resolving them
     'api/alpha/utils/private_message.py': {'administer all users': 5},
 }

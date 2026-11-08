@@ -112,7 +112,7 @@ def get_user_list(auth, data):
 
     user_id = authorise_api_user(auth) if auth else None
 
-    users = reads_users.person_listing(user_id is not None, reads_users.People(scope=type, search=query, sort=sort))
+    users = reads_users.person_listing(user_id, reads_users.People(scope=type, search=query, sort=sort))
     users = users.paginate(page=page, per_page=limit, error_out=False)
 
     user_list = []
@@ -1168,5 +1168,6 @@ def get_user_captcha():
     if not captcha_enabled():
         return {'ok': None}
     captcha = create_captcha()
-    strip = lambda data_uri: data_uri.split(',', 1)[1].replace('\n', '')
+    def strip(data_uri):
+        return data_uri.split(',', 1)[1].replace('\n', '')
     return {'ok': {'png': strip(captcha['image']), 'wav': strip(captcha['audio']), 'uuid': captcha['uuid']}}

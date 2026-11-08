@@ -83,9 +83,12 @@ class People:
     sort: str = 'Hot'
 
 
-def person_listing(signed_in: bool, people: People):
-    """The query listing `people` for a viewer who is signed in, or not, ordered: without the accounts hidden here
-    (spec §3.4). The viewer's blocks are not applied."""
+def person_listing(viewer_id: int | None, people: People):
+    """The query listing `people` for the viewer `viewer_id` (None: nobody signed in), ordered: without the accounts
+    hidden here (spec §3.4), nor, but to an admin ('administer all users'), the accounts that opted out of the profile
+    list (`searchable`), as the web people directory has it (app/instance/routes.py:159-165; no exception for the
+    viewer's own account there either). The viewer's blocks are not applied."""
+    signed_in = viewer_id is not None
     if people.scope == 'Local':
         users = User.query.filter(User.instance_id == current_instance_id(), User.verified.is_(True),
                                   User.banned.is_(False), User.deleted.is_(False)).filter(
@@ -93,6 +96,8 @@ def person_listing(signed_in: bool, people: People):
     else:
         users = User.query.filter(User.deleted == False)
     users = without_local_only_actors(users, User, visible=signed_in)
+    if not user_access('administer all users', viewer_id):
+        users = users.filter(User.searchable == True)
 
     if people.search:
         if '@' in people.search:

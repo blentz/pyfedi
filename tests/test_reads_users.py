@@ -39,7 +39,8 @@ def onion_person(app, site, two_domains):  # noqa: F811 -- two_domains is the fi
 
 
 def listed(people: People, signed_in: bool = True) -> list[str]:
-    return [user.user_name for user in person_listing(signed_in, people)]
+    """`people` as api_baseline's user3 (id 3, a signed-in reader who is no admin) is shown it, or nobody."""
+    return [user.user_name for user in person_listing(3 if signed_in else None, people)]
 
 
 class TestById:

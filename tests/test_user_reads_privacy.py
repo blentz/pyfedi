@@ -9,7 +9,7 @@ from flask import g
 from app import db
 from app.api.alpha.utils.community import get_community
 from app.api.alpha.utils.post import get_post
-from app.api.alpha.utils.user import get_user
+from app.api.alpha.utils.user import get_user, get_user_list
 from app.models import Site
 import app.reads.users as reads_users
 from tests.factories import make_community, make_community_member, make_post, make_user
@@ -125,3 +125,35 @@ def test_moderates_leaves_out_a_private_community_to_a_member_banned_from_it(wor
     member.is_banned = True
     db.session.commit()
     assert moderated(world, 'reader') == ['openmods']
+
+
+# --- searchable: the web people directory (app/instance/routes.py:159-165) lists an account that opted out of the
+# profile list to an admin ('administer all users') only ---
+
+@pytest.fixture
+def unlisted(world):
+    mod = world[3]
+    mod.searchable = False
+    db.session.commit()
+    return mod
+
+
+def people(world, who, data):
+    return [u['person']['user_name'] for u in get_user_list(viewer(world, who), data)['users']]
+
+
+@pytest.mark.parametrize('who', ['anonymous', 'reader', 'self'])
+@pytest.mark.parametrize('data', [{'q': 'quietmod'}, {'limit': 50}], ids=['search', 'list'])
+def test_the_person_list_leaves_out_an_account_that_opted_out(world, unlisted, who, data):
+    assert 'quietmod' not in people(world, who, data)
+
+
+@pytest.mark.parametrize('data', [{'q': 'quietmod'}, {'limit': 50}], ids=['search', 'list'])
+def test_the_person_list_shows_an_admin_an_account_that_opted_out(world, unlisted, data):
+    assert 'quietmod' in people(world, 'admin', data)
+
+
+@pytest.mark.parametrize('who', ['anonymous', 'reader'])
+def test_an_account_that_opted_out_is_still_found_by_id_and_name(world, unlisted, who):
+    assert get_user(viewer(world, who), {'person_id': unlisted.id})['person_view']['person']['user_name'] == 'quietmod'
+    assert get_user(viewer(world, who), {'username': 'quietmod'})['person_view']['person']['id'] == unlisted.id
