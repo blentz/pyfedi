@@ -1,7 +1,7 @@
 # API completeness: as much of the fediverse's client apps as PieFed can serve
 
 Date: 2026-11-07
-Status: decisions D1-D5 ruled 2026-11-07 (§6); next is W0.1, the shared read layer. Nothing is built.
+Status: decisions D1-D5 ruled 2026-11-07 (§6). W0.1, W0.2 and W1.1 are built (2026-11-08); next is W1.2, reading.
 
 Owner goal (2026-11-07): "support as much of the fediverse as we possibly can". This answers M1 of
 `docs/superpowers/specs/2026-11-07-mastodon-client-api-design.md`: every client API family worth its cost, not
@@ -260,6 +260,21 @@ floors and changed-line gates.
     - **No software gating:** no nodeinfo read, the version string never parsed; only `api_versions.mastodon >= 5`
       unlocks the blur filter action and `configuration.translation.enabled` the translate menu.
   - W1.1 Login: OAuth (W0.2), `/api/v2/instance` and a full v1, `verify_credentials`, accounts.
+    **Done 2026-11-08** (branch feat/mastodon-login), in `app/mastodon/`:
+    1. 86b522f64 `GET /api/v1/accounts/verify_credentials` (read:accounts; with `source`), `/accounts/:id` and
+       `/accounts/lookup` (no token needed on a public instance; a person's on a private one). Tusky's required
+       fields always set; `acct` bare for the requested domain; RFC 3339 times; absolute media URLs.
+    2. 87be17ec6 `/api/v2/instance` and a complete `/api/v1/instance`: version `4.0.0 (compatible; PieFed …)`, 5000
+       characters, 4 attachments, MAX_CONTENT_LENGTH as the media limit, per-domain branding, no streaming URL.
+    3. b4168c713 + 4219faf69 `PATCH /api/v1/accounts/update_credentials` (form, multipart or JSON; numbered or listed
+       `fields_attributes`; images saved first, nothing changed on a 422) and `GET /api/v1/apps/verify_credentials`.
+       03e097a96 a field key must be the whole numbered name. bd140a636 CORS allows PATCH.
+    4. Harness: 745c15e25 + 3fa89aee8 Phanpy and Elk (web) and Tusky and Mastodon (Android) are driven, not probed,
+       through PieFed's login and consent; view and post expected unsupported until W1.2/W1.3. Two consecutive cold
+       runs, 21/21 apps as the matrix says. On the emulator Chrome trusts only its own roots plus user CAs, so the
+       harness root is a user CA too; the system WebView refuses a system CA's certificate for a reserved name
+       (`ERR_CERT_NON_UNIQUE_NAME`), so Tusky logs in with "Login with Browser" and its WebView login goes untested.
+    Moshidon, PixelDroid, Fedilab and Pixelfed stay probes (their logins pass as probes).
   - W1.2 Reading: timelines, statuses and context, notifications, search, markers, custom emojis.
   - W1.3 Writing: statuses, media v2, favourite, boost, bookmark, follow; Pleroma/glitch emoji reactions.
   - W1.4 Pixelfed extras after a spike (`/api/v1.1`, `/api/pixelfed`), per M7.
