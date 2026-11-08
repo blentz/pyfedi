@@ -20,7 +20,8 @@ from app.activitypub.util import find_actor_or_create, extract_domain_and_actor,
 # The module, not the name: app.auth.util reaches this file through
 # app.activitypub.util before random_token is defined (import cycle: auth.util)
 import app.auth.util as auth_util
-from app.community.util import save_icon_file, save_banner_file, retrieve_mods_and_backfill, search_for_community
+from app.community.util import retrieve_mods_and_backfill, search_for_community
+from app.user.profile_images import replace_avatar, replace_cover
 from app.constants import *
 from app.email import send_verification_email
 from app.federation_urls import activity_id, domain_site_name, owner_base
@@ -444,36 +445,11 @@ def edit_profile(actor):
         # answers None, which the `if` below already handles.
         profile_file = request.files.get('profile_file')
         if profile_file and profile_file.filename != '':
-            # remove old avatar after adding the new one succeeds
-            old_avatar = current_user.avatar_id
-
-            # add new avatar
-            file = save_icon_file(profile_file, 'users')
-            if file:
-                current_user.avatar = file
-                if old_avatar:
-                    old_file = db.session.get(File, old_avatar)
-                    db.session.delete(old_file)
-                db.session.commit()
-                if old_avatar:
-                    old_file.delete_from_disk()
+            replace_avatar(current_user, profile_file)   # the old one goes once the new one is in
 
         banner_file = request.files.get('banner_file')
         if banner_file and banner_file.filename != '':
-            # remove old cover
-            old_banner = current_user.cover_id
-
-            # add new cover
-            file = save_banner_file(banner_file, 'users')
-            if file:
-                current_user.cover = file
-                cache.delete_memoized(User.cover_image, current_user)
-                if old_banner:
-                    old_banner_file = db.session.get(File, old_banner)
-                    db.session.delete(old_banner_file)
-                db.session.commit()
-                if old_banner:
-                    old_banner_file.delete_from_disk()
+            replace_cover(current_user, banner_file)
 
         # Sync to LDAP
         try:

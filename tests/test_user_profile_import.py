@@ -362,7 +362,7 @@ def test_uploading_an_avatar_replaces_the_old_one(app, env):
     payload = profile_payload(token)
     payload['profile_file'] = (io.BytesIO(b'an image'), 'new.png')
 
-    with patch('app.user.routes.save_icon_file', return_value=new):
+    with patch('app.user.profile_images.save_icon_file', return_value=new):
         with patch('app.models.File.delete_from_disk') as deleted:
             client.post('/u/viewer/profile', data=payload,
                         content_type='multipart/form-data')
@@ -385,7 +385,7 @@ def test_a_rejected_avatar_leaves_the_old_one(app, env):
     payload = profile_payload(token)
     payload['profile_file'] = (io.BytesIO(b'not an image'), 'new.png')
 
-    with patch('app.user.routes.save_icon_file', return_value=None):
+    with patch('app.user.profile_images.save_icon_file', return_value=None):
         client.post('/u/viewer/profile', data=payload,
                     content_type='multipart/form-data')
 
@@ -403,7 +403,7 @@ def test_uploading_a_banner_replaces_the_old_one(app, env):
     payload = profile_payload(token)
     payload['banner_file'] = (io.BytesIO(b'an image'), 'banner.png')
 
-    with patch('app.user.routes.save_banner_file', return_value=new):
+    with patch('app.user.profile_images.save_banner_file', return_value=new):
         with patch('app.models.File.delete_from_disk'):
             client.post('/u/viewer/profile', data=payload,
                         content_type='multipart/form-data')
