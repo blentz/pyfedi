@@ -75,6 +75,7 @@ def _row_hidden(row) -> bool:
 # An id argument: the model it names, and whether that row is hidden here
 _IDS = {
     'user_id': (User, _row_hidden), 'to': (User, _row_hidden), 'new_owner': (User, _row_hidden),
+    'account_id': (User, _row_hidden),   # Mastodon's API (plan W1)
     'community_id': (Community, _row_hidden),
     'feed_id': (Feed, _row_hidden),   # with its home domain and its owner (per-domain feeds Task 7)
     'post_id': (Post, _row_hidden),

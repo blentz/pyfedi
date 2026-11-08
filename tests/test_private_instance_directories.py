@@ -205,7 +205,8 @@ def test_no_get_route_outside_the_known_list_is_ungated():
 
     GATES = {'login_required', 'permission_required', 'admin_required', 'staff_required',
              'login_required_if_private_instance', 'refuse_if_private_instance',
-             'jwt_required'}
+             'jwt_required',
+             'require_oauth'}   # an OAuth token (app/oauth_server/protect.py); optional=True still refuses on a private instance
     # Public by design. Each entry says why, so the exemption is an argument.
     PUBLIC = {
         # served to anyone, by definition: the instance's own public documents

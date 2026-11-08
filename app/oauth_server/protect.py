@@ -39,12 +39,17 @@ def _record_use(token: OAuthToken) -> None:
         db.session.commit()
 
 
-def require_oauth(scope: str | None = None, user_required: bool = True):
+def require_oauth(scope: str | None = None, user_required: bool = True, optional: bool = False):
     """The route needs a token covering `scope`, and one acting for a person unless `user_required` is False. Sets
-    g.oauth_token and g.oauth_user (None for an app's own token)."""
+    g.oauth_token and g.oauth_user (None for an app's own token, or for nobody). With `optional`, a request with no
+    Authorization header comes in as nobody, as Mastodon's public reads do, except on a private instance; a header
+    that does not check out is still refused."""
     def decorator(view):
         @wraps(view)
         def guarded(*args, **kwargs):
+            if optional and 'Authorization' not in request.headers and not login_required_here():
+                g.oauth_token, g.oauth_user = None, None
+                return view(*args, **kwargs)
             token = bearer_token()
             if token is None:
                 return _refuse(401, 'The access token is invalid')
