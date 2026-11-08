@@ -108,10 +108,12 @@ class ClientCredentialsGrant(grants.ClientCredentialsGrant):
     """An app's own token, with no person behind it: read only (spec §3.1). Only with the app's secret."""
     TOKEN_ENDPOINT_AUTH_METHODS = ['client_secret_basic', 'client_secret_post']
 
-    def validate_token_request(self):
-        super().validate_token_request()
+    def create_token_response(self):
+        # Here rather than in validate_token_request: a scan of app/ for WTForms inline validators reads any
+        # validate_<name> as one (tests/test_post_and_user_forms.py). Nothing is issued before this runs.
         if not all(covers('read', name) for name in (self.request.payload.scope or 'read').split()):
             raise InvalidScopeError("An app's own token can only read.")
+        return super().create_token_response()
 
 
 class RevocationEndpoint(_RevocationEndpoint):

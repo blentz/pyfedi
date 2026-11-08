@@ -31,6 +31,7 @@ def test_an_app_keeps_only_a_hash_of_its_secret(world):
     assert not registered.check_client_secret(secret + 'x')
     assert not registered.check_client_secret('')
     assert registered.redirect_uri_list() == ['oauth2redirect://com.keylesspalace.tusky/']
+    assert registered.get_client_id() == registered.client_id
     assert registered.scope == 'read write follow push'
 
 

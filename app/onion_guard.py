@@ -72,6 +72,8 @@ ONION_SESSION_EXEMPT: frozenset[str] = frozenset({
     # App registration: apps keep no cookies, and both refuse on the onion anyway (API registration ruling AR3).
     'User.post_alpha_user_register',
     'User.get_alpha_user_get_captcha',
+    # OAuth app registration, tokens and revocation: apps keep no cookies (plan W0.2)
+    'oauth_server.register_app', 'oauth_server.issue_token', 'oauth_server.revoke_token',
 })
 
 COOKIE_CHECK = 'cookie_check=1'

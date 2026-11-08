@@ -233,6 +233,8 @@ def test_no_get_route_outside_the_known_list_is_ungated():
         ('community', 'get_sidebar'),
         # coming back from a provider, with no session yet on a private paid domain; it says nothing but thanks or sorry
         ('payments', 'result'),
+        # RFC 8414: where an app finds the OAuth endpoints, before anyone signs in; no instance content
+        ('oauth_server', 'authorization_server_metadata'),
         # ActivityPub and auth blueprints answer machines and anonymous visitors by design
     }
     SKIP_BLUEPRINTS = {'activitypub', 'auth', 'api', 'admin'}
