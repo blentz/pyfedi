@@ -114,3 +114,25 @@ def claim(token: OAuthToken) -> bool:
                                  .values(revoked_at=utcnow())).rowcount == 1
     db.session.commit()
     return claimed
+
+
+def authorised_apps(user: User) -> list[dict]:
+    """The apps `user` has an unrevoked token for: each with every scope its tokens hold, when it was first allowed
+    and when last used, newest first."""
+    apps = {}
+    for token in OAuthToken.query.filter(OAuthToken.user_id == user.id, OAuthToken.revoked_at.is_(None)):
+        entry = apps.setdefault(token.app_id, {'app': token.app, 'scopes': set(), 'since': token.created_at,
+                                               'last_used': None})
+        entry['scopes'].update(token.scope.split())
+        entry['since'] = min(entry['since'], token.created_at)
+        if token.last_used_at and (entry['last_used'] is None or token.last_used_at > entry['last_used']):
+            entry['last_used'] = token.last_used_at
+    return sorted(apps.values(), key=lambda entry: entry['since'], reverse=True)
+
+
+def revoke_app_for(user: User, app_id: int) -> None:
+    """End every token `user` gave app `app_id`, and any code not yet exchanged."""
+    db.session.execute(update(OAuthToken).where(OAuthToken.user_id == user.id, OAuthToken.app_id == app_id,
+                                                OAuthToken.revoked_at.is_(None)).values(revoked_at=utcnow()))
+    OAuthCode.query.filter(OAuthCode.user_id == user.id, OAuthCode.app_id == app_id).delete()
+    db.session.commit()

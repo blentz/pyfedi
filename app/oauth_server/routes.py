@@ -2,7 +2,7 @@
 from urllib.parse import parse_qs, urlsplit
 
 from authlib.oauth2 import OAuth2Error
-from flask import jsonify, make_response, render_template, request, url_for
+from flask import jsonify, make_response, redirect, request, url_for
 from flask_babel import lazy_gettext as _l
 from flask_login import current_user
 
@@ -12,7 +12,7 @@ from app.oauth_scopes import SCOPES, parse_scope
 from app.oauth_server import bp, tokens
 from app.oauth_server.server import server
 from app.storefront import current_storefront, domain_base_url
-from app.utils import login_required
+from app.utils import login_required, render_template
 
 OOB = 'urn:ietf:wg:oauth:2.0:oob'
 _REFUSED_SCHEMES = frozenset(('javascript', 'data', 'vbscript', 'file', 'blob'))
@@ -121,7 +121,10 @@ def _framed_never(response):
 
 
 def _page(template, status=200, **context):
-    return _framed_never(make_response(render_template(template, **context), status))
+    """An OAuth page: in the site's theme, framed by nobody, kept by no cache (one may hold a code)."""
+    response = _framed_never(make_response(render_template(template, **context), status))
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 def _registered_redirect(uri: str | None) -> bool:
@@ -185,3 +188,18 @@ def authorization_server_metadata():
         'grant_types_supported': ['authorization_code', 'refresh_token', 'client_credentials'],
         'token_endpoint_auth_methods_supported': ['client_secret_basic', 'client_secret_post', 'none'],
     })
+
+
+@bp.route('/user/settings/apps')
+@login_required(csrf=True)
+def authorised_apps():
+    """The apps this person has allowed, and a button to take each one's access back."""
+    return render_template('user/oauth_apps.html', title=_l('Authorised apps'), user=current_user,
+                           apps=tokens.authorised_apps(current_user), scope_labels=SCOPE_LABELS)
+
+
+@bp.route('/user/settings/apps/<int:app_id>/revoke', methods=['POST'])
+@login_required(csrf=True)
+def revoke_app(app_id):
+    tokens.revoke_app_for(current_user, app_id)
+    return redirect(url_for('oauth_server.authorised_apps'))

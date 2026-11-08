@@ -1,0 +1,44 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+
+{% block app_content %}
+<div class="row">
+    <main class="col-12 col-lg-8 position-relative main_pane">
+        <nav class="mb-2" id="breadcrumb_nav" title="{{ _('Navigation') }}">
+          <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/">{{ _('Home') }}</a></li>
+            <li class="breadcrumb-item"><a href="/u/{{ user.link() }}">{{ user.display_name() }}</a></li>
+            <li class="breadcrumb-item active" aria-current="page">{{ _('Authorised apps') }}</li>
+          </ol>
+        </nav>
+        <h1>{{ _('Authorised apps') }}</h1>
+        {% include "user/_user_nav.html" %}
+
+        {% if apps %}
+            <table class="table table-striped" role="table">
+                <tr>
+                    <th>{{ _('App') }}</th>
+                    <th>{{ _('May') }}</th>
+                    <th>{{ _('Allowed') }}</th>
+                    <th>{{ _('Last used') }}</th>
+                    <th>{{ _('Revoke') }}</th>
+                </tr>
+                {% for entry in apps %}
+                <tr>
+                    <td><p>{{ entry.app.name }}{% if entry.app.website %}<br><a href="{{ entry.app.website }}" rel="nofollow noopener noreferrer" target="_blank" class="small">{{ entry.app.website }}</a>{% endif %}</p></td>
+                    <td><p>{% for name in entry.scopes | sort %}<span title="{{ scope_labels.get(name, name) }}"><code>{{ name }}</code></span>{{ ' ' if not loop.last }}{% endfor %}</p></td>
+                    <td class="nowrap"><p>{{ entry.since.strftime('%e %b %Y') }}</p></td>
+                    <td class="nowrap"><p>{{ entry.last_used.strftime('%e %b %Y') if entry.last_used else '' }}</p></td>
+                    <td class="nowrap text-center"><p><a href="#" data-url="{{ url_for('oauth_server.revoke_app', app_id=entry.app.id) }}" class="confirm_first send_post" title="{{ _('Revoke') }}"><span class="fe fe-delete"></span></a></p></td>
+                </tr>
+                {% endfor %}
+            </table>
+        {% else %}
+            <p>{{ _('No apps can use your account.') }}</p>
+        {% endif %}
+    </main>
+</div>
+{% endblock %}
