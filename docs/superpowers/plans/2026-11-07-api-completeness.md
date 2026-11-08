@@ -42,6 +42,25 @@ A survey of every other client API family (source-read, 2026-11-07) ranked what 
   `views.py`). Each new API must apply the same visibility rules, so the queries move into one module returning model
   rows, with alpha rebuilt on it first and its whole test suite as the proof nothing changed. Writes are already shared
   (`app/shared/`). This is the riskiest step and the one every later API leans on.
+  **W0.1 steps** (branch `feat/shared-read-layer`, each step its own commit, full suite + floors + changed-line gates
+  green after each):
+  1. `app/reads/viewer.py`: a `Viewer` built once per request from the user id (the user or none, blocked people,
+     communities, instances and domains, private-community memberships, read languages, the storefront). Every block
+     list `get_post_list`, `get_post_list2`, `get_reply_list`, `get_post_replies` and the user listings compute today
+     comes from it.
+  2. `app/reads/posts.py`: one query builder for post listings, `post_listing(viewer, listing)`, taking a `Listing`
+     (scope: All, Local, Popular, Subscribed, Moderating, ModeratorView, a community by id or name, a feed, a topic,
+     an author; sort; the viewer's toggles: liked, saved, NSFW, minimum score, search query and type, ignore stickies)
+     and returning the filtered, ordered SQLAlchemy query. `get_post_list` (with its raw-SQL fast path, whose criteria
+     the same module derives) and `get_post_list2` (keyset pages) both page and view it. Where the two copies disagree
+     today, the difference is listed in the commit and kept for the caller that has it, never silently unified.
+  3. `get_post` and `get_post_replies`/`get_reply_list` read a post and its replies through `app/reads` (visibility
+     of one post, a reply tree with the viewer's blocks).
+  4. User lookup and user listings (`get_user`, `get_user_details`, `get_user_list`).
+
+  Rules: code moves before it changes; the alpha tests are not edited (a test that must change means behaviour
+  changed, which W0.1 does not); `app/reads` returns model rows and queries, never alpha-shaped dicts; no inline
+  imports. New tests in `tests/test_reads_*.py` cover the layer directly, so a later API can rely on it.
 - **W0.2 One OAuth 2 authorization server** (Authlib, already a dependency): app registration, authorization code
   with PKCE, out-of-band codes, refresh, client credentials, revocation, a settings page listing authorised apps.
   Mastodon, Pixelfed and Mbin-style clients use it; PeerTube's password grant and Lemmy's JWT login sit beside it on the

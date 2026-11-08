@@ -24,19 +24,20 @@ from app.post.util import post_replies, get_comment_branch, tags_to_string, flai
 # The module, not the name: app.topic.routes reaches this file through
 # app.activitypub before get_all_child_topic_ids is defined (import cycle: topic.routes)
 import app.topic.routes as topic_routes
-from app.utils import post_labels, record_label_change, can_moderate_at_all, authorise_api_user, blocked_users, blocked_communities, blocked_or_banned_instances, \
+from app.utils import post_labels, record_label_change, can_moderate_at_all, authorise_api_user, \
     recently_upvoted_posts, \
     site_language_id, filtered_out_communities, joined_or_modding_communities, \
     user_filters_home, user_filters_posts, in_sorted_list, instance_sticky_posts, instance_sticky_post_ids, \
-    communities_banned_from_all_users, moderating_communities_ids_all_users, blocked_domains, SqlKeysetPagination, \
-    community_membership_private, paginate_post_ids, post_ids_to_models, user_access, moderating_communities_ids, reachable_community_ids, \
-    user_filters_languages, feed_readable_by
+    communities_banned_from_all_users, moderating_communities_ids_all_users, SqlKeysetPagination, \
+    paginate_post_ids, post_ids_to_models, user_access, moderating_communities_ids, reachable_community_ids, \
+    feed_readable_by
 from app.shared.tasks import task_selector
 from app.feed_domains import shown_feed_communities
 from app.local_only import hidden_here, hidden_here_sql, prime_reporters, without_hidden_here, without_hidden_reports, \
     without_local_only, without_local_only_actors
 from app.api.alpha.utils.found import a_community, a_feed, a_post, a_reply, a_report
 from app.visibility import can_view, listable_clause, listable_sql, visible_to_clause, visible_to_sql
+from app.reads.viewer import Restrictions
 
 
 def a_visible_post(post_id, auth):
@@ -142,20 +143,14 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
     else:
         search_by_community = False
 
-    if user_id and user_id != person_id:
-        blocked_person_ids = blocked_users(user_id)
-        blocked_community_ids = blocked_communities(user_id)
-        blocked_instance_ids = blocked_or_banned_instances(user_id)
-        blocked_domain_ids = blocked_domains(user_id)
-        private_community_ids = community_membership_private(user_id)
-        read_language_ids = user_filters_languages(user_id)
-    else:
-        blocked_person_ids = []
-        blocked_community_ids = []
-        blocked_instance_ids = []
-        blocked_domain_ids = []
-        private_community_ids = []
-        read_language_ids = []
+    # a reader of their own posts is exempt from their own blocks
+    restrictions = Restrictions(user_id) if user_id and user_id != person_id else Restrictions.none()
+    blocked_person_ids = restrictions.blocked_person_ids
+    blocked_community_ids = restrictions.blocked_community_ids
+    blocked_instance_ids = restrictions.blocked_instance_ids
+    blocked_domain_ids = restrictions.blocked_domain_ids
+    private_community_ids = restrictions.private_community_ids
+    read_language_ids = restrictions.read_language_ids
 
     content_filters = {}
     u_rp_ids = []
@@ -972,20 +967,14 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
     else:
         search_by_community = False
 
-    if user_id and user_id != person_id:
-        blocked_person_ids = blocked_users(user_id)
-        blocked_community_ids = blocked_communities(user_id)
-        blocked_instance_ids = blocked_or_banned_instances(user_id)
-        blocked_domain_ids = blocked_domains(user_id)
-        private_community_ids = community_membership_private(user_id)
-        read_language_ids = user_filters_languages(user_id)
-    else:
-        blocked_person_ids = []
-        blocked_community_ids = []
-        blocked_instance_ids = []
-        blocked_domain_ids = []
-        private_community_ids = []
-        read_language_ids = []
+    # a reader of their own posts is exempt from their own blocks
+    restrictions = Restrictions(user_id) if user_id and user_id != person_id else Restrictions.none()
+    blocked_person_ids = restrictions.blocked_person_ids
+    blocked_community_ids = restrictions.blocked_community_ids
+    blocked_instance_ids = restrictions.blocked_instance_ids
+    blocked_domain_ids = restrictions.blocked_domain_ids
+    private_community_ids = restrictions.private_community_ids
+    read_language_ids = restrictions.read_language_ids
 
     content_filters = {}
     u_rp_ids = []
