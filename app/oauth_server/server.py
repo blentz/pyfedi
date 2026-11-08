@@ -1,12 +1,54 @@
 """The OAuth 2 authorization server: Authlib's, over app.oauth_server.tokens (plan W0.2; spec
 docs/superpowers/specs/2026-11-07-mastodon-client-api-design.md §3.1, §5)."""
-from authlib.integrations.flask_oauth2 import AuthorizationServer
-from authlib.oauth2.rfc6749 import grants
+import time
+from functools import cached_property
+
+from authlib.integrations.flask_oauth2 import AuthorizationServer as FlaskAuthorizationServer
+from authlib.integrations.flask_oauth2.requests import FlaskOAuth2Payload, FlaskOAuth2Request
+from authlib.oauth2.rfc6749 import InvalidScopeError, grants
 from authlib.oauth2.rfc7636 import CodeChallenge
+from flask import request as flask_request
+from werkzeug.datastructures import MultiDict
 
 from app import db
 from app.models import OAuthApp, User
+from app.oauth_scopes import covers
 from app.oauth_server import tokens
+
+_SECRET_OR_PKCE = ['client_secret_basic', 'client_secret_post', 'none']
+
+
+def _fields(request) -> MultiDict:
+    """The request's fields: its form and query, or a JSON object's string values, which Mastodon also takes."""
+    body = request.get_json(silent=True) if request.is_json else None
+    if not isinstance(body, dict):
+        return request.values
+    fields = MultiDict(request.args)
+    for name, value in body.items():
+        if isinstance(value, str):
+            fields[name] = value
+    return fields
+
+
+class _Payload(FlaskOAuth2Payload):
+    @cached_property
+    def data(self):
+        return _fields(self._request)
+
+
+class _Request(FlaskOAuth2Request):
+    def __init__(self, request):
+        super().__init__(request)
+        self.payload = _Payload(request)
+
+    @property
+    def form(self):   # the refresh grant reads its token from here
+        return self.payload.data
+
+
+class AuthorizationServer(FlaskAuthorizationServer):
+    def create_oauth2_request(self, request):
+        return _Request(flask_request)
 
 
 class _S256Only(CodeChallenge):
@@ -16,7 +58,7 @@ class _S256Only(CodeChallenge):
 
 
 class AuthorizationCodeGrant(grants.AuthorizationCodeGrant):
-    TOKEN_ENDPOINT_AUTH_METHODS = ['client_secret_basic', 'client_secret_post', 'none']
+    TOKEN_ENDPOINT_AUTH_METHODS = _SECRET_OR_PKCE
 
     def save_authorization_code(self, code, request):
         payload = request.payload.data
@@ -33,20 +75,60 @@ class AuthorizationCodeGrant(grants.AuthorizationCodeGrant):
         db.session.commit()
 
     def authenticate_user(self, authorization_code):
-        return db.session.get(User, authorization_code.user_id)
+        user = db.session.get(User, authorization_code.user_id)
+        return user if tokens.usable_user(user) else None
+
+
+class RefreshTokenGrant(grants.RefreshTokenGrant):
+    """A new access and refresh token for the old refresh token, which ends with its access token."""
+    TOKEN_ENDPOINT_AUTH_METHODS = _SECRET_OR_PKCE
+    INCLUDE_NEW_REFRESH_TOKEN = True
+
+    def authenticate_refresh_token(self, refresh_token):
+        """Unknown, revoked, or its person can no longer sign in: all invalid_grant (RFC 6749 5.2)."""
+        credential = tokens.refresh_token_for(refresh_token)
+        return credential if credential is not None and tokens.usable_token(credential) else None
+
+    def authenticate_user(self, credential):
+        return db.session.get(User, credential.user_id)
+
+    def revoke_old_credential(self, credential):
+        tokens.revoke(credential)
+
+
+class ClientCredentialsGrant(grants.ClientCredentialsGrant):
+    """An app's own token, with no person behind it: read only (spec §3.1). Only with the app's secret."""
+    TOKEN_ENDPOINT_AUTH_METHODS = ['client_secret_basic', 'client_secret_post']
+
+    def validate_token_request(self):
+        super().validate_token_request()
+        if not all(covers('read', name) for name in (self.request.payload.scope or 'read').split()):
+            raise InvalidScopeError("An app's own token can only read.")
 
 
 def _query_client(client_id):
     return OAuthApp.query.filter_by(client_id=client_id).first() if client_id else None
 
 
+def _generate_token(grant_type, client, user=None, scope=None, expires_in=None, include_refresh_token=True):
+    """Mastodon's token: no expiry (ruling M6), its scope and when it was made."""
+    token = {'token_type': 'Bearer', 'access_token': tokens.new_secret(), 'scope': scope or 'read',
+             'created_at': int(time.time())}
+    if include_refresh_token and user is not None:
+        token['refresh_token'] = tokens.new_secret()
+    return token
+
+
 def _save_token(token, request):
-    raise NotImplementedError('the token endpoint is W0.2 step 4')
+    tokens.store_token(request.client, request.user, token['scope'], token['access_token'], token.get('refresh_token'))
 
 
 server = AuthorizationServer()
 server.register_grant(AuthorizationCodeGrant, [_S256Only(required=True)])
+server.register_grant(RefreshTokenGrant)
+server.register_grant(ClientCredentialsGrant)
 
 
 def init_app(app):
     server.init_app(app, query_client=_query_client, save_token=_save_token)
+    server.register_token_generator('default', _generate_token)

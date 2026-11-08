@@ -152,3 +152,10 @@ def authorize():
         return _page('oauth/oob.html', code=code, app=grant.client)
     scopes = [(name, SCOPE_LABELS.get(name, name)) for name in grant.request.scope.split()]
     return _page('oauth/authorize.html', app=grant.client, scopes=scopes, user=current_user)
+
+
+@bp.route('/oauth/token', methods=['POST'])
+@limiter.limit('60 per 5 minutes;1000 per day', methods=['POST'])
+def issue_token():
+    """A code, a refresh token or the app's own credentials, for an access token (Authlib answers the errors)."""
+    return server.create_token_response()

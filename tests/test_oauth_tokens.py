@@ -1,12 +1,13 @@
 """OAuth 2 apps, codes and tokens: stored hashed, found by their raw value, revocable (plan W0.2; spec
 docs/superpowers/specs/2026-11-07-mastodon-client-api-design.md §3.1, §5)."""
+from datetime import timedelta
 from hashlib import sha256
 
 import pytest
 from sqlalchemy import text
 
 from app import db
-from app.models import OAuthApp, OAuthCode, OAuthToken
+from app.models import OAuthApp, OAuthCode, OAuthToken, utcnow
 from app.oauth_scopes import covers, parse_scope
 from app.oauth_server import tokens
 from tests.factories import make_user
@@ -143,3 +144,57 @@ def test_nothing_is_found_for_an_empty_code_or_refresh_token(world):
     assert tokens.code_for(registered, '') is None
     assert tokens.refresh_token_for('') is None
     assert tokens.refresh_token_for(None) is None
+
+
+def test_a_token_answers_what_authlib_asks_of_it(world):
+    registered, _secret = tokens.register_app('A', ['https://a.example/cb'], 'read', None)
+    other, _other_secret = tokens.register_app('B', ['https://b.example/cb'], 'read', None)
+    access, _refresh = tokens.issue_token(registered, world['user'], 'read write')
+    token = tokens.token_for(access)
+    assert token.check_client(registered) and not token.check_client(other) and not token.check_client(None)
+    assert token.get_scope() == 'read write' and token.get_expires_in() == 0 and not token.is_expired()
+    assert token.get_user() == world['user'] and token.get_client() == registered and not token.is_revoked()
+    tokens.revoke(token)
+    assert token.is_revoked()
+    app_access, _none = tokens.issue_token(registered, None, 'read', with_refresh=False)
+    assert tokens.token_for(app_access).get_user() is None
+
+
+def test_an_apps_own_token_has_nobody_to_check(world):
+    registered, _secret = tokens.register_app('A', ['https://a.example/cb'], 'read', None)
+    access, _none = tokens.issue_token(registered, None, 'read', with_refresh=False)
+    assert tokens.usable_token(tokens.token_for(access))
+
+
+def test_a_token_made_before_a_password_change_stops_acting(world):
+    registered, _secret = tokens.register_app('A', ['https://a.example/cb'], 'read', None)
+    access, _refresh = tokens.issue_token(registered, world['user'], 'read')
+    token = tokens.token_for(access)
+    assert tokens.usable_token(token)
+    world['user'].password_updated_at = utcnow() + timedelta(seconds=5)
+    db.session.commit()
+    assert not tokens.usable_token(token)
+    world['user'].password_updated_at = None
+    db.session.commit()
+    assert tokens.usable_token(token)
+
+
+@pytest.mark.parametrize('change', ['remote', 'unverified', 'banned', 'deleted', 'lapsed', 'gone'])
+def test_a_token_stops_acting_for_a_person_who_can_no_longer_sign_in(world, change, monkeypatch):
+    registered, _secret = tokens.register_app('A', ['https://a.example/cb'], 'read', None)
+    access, _refresh = tokens.issue_token(registered, world['user'], 'read')
+    token = tokens.token_for(access)
+    user = world['user']
+    if change == 'remote':
+        user.ap_id = 'https://elsewhere.example/u/oauthuser'
+    elif change == 'unverified':
+        user.verified = False
+    elif change == 'lapsed':
+        monkeypatch.setattr(type(user), 'access_has_lapsed', lambda self: True)
+    elif change == 'gone':
+        assert not tokens.usable_user(None)
+        return
+    else:
+        setattr(user, change, True)
+    db.session.commit()
+    assert not tokens.usable_token(token)

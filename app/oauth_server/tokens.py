@@ -15,13 +15,30 @@ def digest(value: str) -> str:
     return sha256(value.encode()).hexdigest()
 
 
-def _secret() -> str:
+def new_secret() -> str:
     return secrets.token_urlsafe(32)
+
+
+def usable_user(user: User | None) -> bool:
+    """Whether a token may act for `user`: the checks the alpha API makes of its own tokens (authorise_api_user)."""
+    return user is not None and user.ap_id is None and user.verified and not user.banned and not user.deleted \
+        and not user.access_has_lapsed()
+
+
+def usable_token(token: OAuthToken) -> bool:
+    """Whether `token` still acts for its person: one who can sign in, and has not changed password since it was
+    made. An app's own token has nobody to check."""
+    if token.user_id is None:
+        return True
+    user = db.session.get(User, token.user_id)
+    if not usable_user(user):
+        return False
+    return not (user.password_updated_at and token.created_at < user.password_updated_at)
 
 
 def register_app(name: str, redirect_uris: list[str], scope: str, website: str | None) -> tuple[OAuthApp, str]:
     """A new app, with the secret it is given once."""
-    client_secret = _secret()
+    client_secret = new_secret()
     registered = OAuthApp(client_id=secrets.token_urlsafe(24), client_secret_hash=digest(client_secret), name=name,
                           website=website, redirect_uris='\n'.join(redirect_uris), scope=scope)
     db.session.add(registered)
@@ -31,7 +48,7 @@ def register_app(name: str, redirect_uris: list[str], scope: str, website: str |
 
 def issue_code(registered: OAuthApp, user: User, redirect_uri: str, scope: str, code_challenge: str | None,
                code_challenge_method: str | None) -> str:
-    raw = _secret()
+    raw = new_secret()
     store_code(raw, registered, user, redirect_uri, scope, code_challenge, code_challenge_method)
     return raw
 
@@ -55,12 +72,18 @@ def code_for(registered: OAuthApp, raw: str) -> OAuthCode | None:
 def issue_token(registered: OAuthApp, user: User | None, scope: str,
                 with_refresh: bool = True) -> tuple[str, str | None]:
     """A new access token, and its refresh token unless `with_refresh` is False."""
-    access = _secret()
-    refresh = _secret() if with_refresh else None
-    db.session.add(OAuthToken(app_id=registered.id, user_id=user.id if user else None, access_token_hash=digest(access),
-                              refresh_token_hash=digest(refresh) if refresh else None, scope=scope))
-    db.session.commit()
+    access = new_secret()
+    refresh = new_secret() if with_refresh else None
+    store_token(registered, user, scope, access, refresh)
     return access, refresh
+
+
+def store_token(registered: OAuthApp, user: User | None, scope: str, access: str, refresh: str | None) -> OAuthToken:
+    token = OAuthToken(app_id=registered.id, user_id=user.id if user else None, access_token_hash=digest(access),
+                       refresh_token_hash=digest(refresh) if refresh else None, scope=scope)
+    db.session.add(token)
+    db.session.commit()
+    return token
 
 
 def token_for(raw: str) -> OAuthToken | None:

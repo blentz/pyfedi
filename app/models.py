@@ -6792,6 +6792,28 @@ class OAuthToken(db.Model):
 
     app = db.relationship('OAuthApp', lazy='joined')
 
+    # What Authlib asks of a token (authlib.oauth2.rfc6749.TokenMixin)
+    def check_client(self, client) -> bool:
+        return client is not None and client.id == self.app_id
+
+    def get_scope(self) -> str:
+        return self.scope
+
+    def get_expires_in(self) -> int:
+        return 0   # never expires (ruling M6)
+
+    def is_expired(self) -> bool:
+        return False
+
+    def is_revoked(self) -> bool:
+        return self.revoked_at is not None
+
+    def get_user(self):
+        return db.session.get(User, self.user_id) if self.user_id else None
+
+    def get_client(self):
+        return self.app
+
 
 class BotChallenge(db.Model):
     id = db.Column(db.Integer, primary_key=True)
