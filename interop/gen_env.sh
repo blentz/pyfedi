@@ -2,7 +2,9 @@
 # Generate interop/.env.interop (gitignored) with fresh secrets. Idempotent.
 set -euo pipefail
 cd "$(dirname "$0")"
-hex() { openssl rand -hex "$1"; }
+# python3, not openssl: the remote podman host interop/run_remote.sh uses has no openssl
+hex() { python3 -c 'import secrets, sys; print(secrets.token_hex(int(sys.argv[1])))' "$1"; }
+b64() { python3 -c 'import base64, secrets, sys; print(base64.b64encode(secrets.token_bytes(int(sys.argv[1]))).decode())' "$1"; }
 if [ ! -f .env.interop ]; then
 cat > .env.interop <<EOT
 # PieFed
@@ -40,11 +42,11 @@ if ! grep -q '^CP_ANALYTICS_SALT=' .env.interop; then
 fi
 # Pixelfed joined the harness later: its own env file (Laravel APP_KEY), apart from .env.interop's Mastodon DB_HOST
 if [ ! -f .env.pixelfed ]; then
-    printf 'APP_KEY=base64:%s\n' "$(openssl rand -base64 32)" > .env.pixelfed
+    printf 'APP_KEY=base64:%s\n' "$(b64 32)" > .env.pixelfed
 fi
 # Loops joined the harness later: its own env file (Laravel APP_KEY), for Pixelfed's reason
 if [ ! -f .env.loops ]; then
-    printf 'APP_KEY=base64:%s\n' "$(openssl rand -base64 32)" > .env.loops
+    printf 'APP_KEY=base64:%s\n' "$(b64 32)" > .env.loops
 fi
 # Loops' dropped first Follow is re-sent after this many seconds (default 300): test_loops waits on it
 if ! grep -q '^LOOPS_FOLLOW_RESEND_SECONDS=' .env.interop; then
