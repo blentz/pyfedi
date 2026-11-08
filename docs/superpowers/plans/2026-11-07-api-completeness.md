@@ -192,6 +192,30 @@ A survey of every other client API family (source-read, 2026-11-07) ranked what 
   with PKCE, out-of-band codes, refresh, client credentials, revocation, a settings page listing authorised apps.
   Mastodon, Pixelfed and Mbin-style clients use it; PeerTube's password grant and Lemmy's JWT login sit beside it on the
   same token table. Tokens stored hashed, scoped, revocable; a banned or deleted user's die with them.
+  **DONE 2026-11-08** on branch `feat/oauth-server` (off `feat/shared-read-layer`), package `app/oauth_server`
+  (`app.oauth` is the sign-in client, so not that name), scopes in `app/oauth_scopes.py`:
+  1. bd9e70967 tables `oauth_app`, `oauth_code`, `oauth_token` (migration f6c2a8e4b1d7): SHA-256 digests only; codes
+     10 min, single use; tokens never expire (M6); cascade on app or user delete.
+  2. 6cca17644 + 5dbb6c758 `POST /api/v1/apps`, Mastodon's shape; 422 "Validation failed"; redirects exact, no
+     whitespace or control characters, no javascript/data/vbscript/file/blob, no fragment; website http(s) only.
+     7d030ec0a open on a private instance.
+  3. 78601c6b1 + fa6ff997f `/oauth/authorize`: web login (password or passkey) and back, consent page (CSRF,
+     frame-denied, no-store), errors shown here until the app and redirect check out, then sent back with `state`;
+     PKCE S256 only, required of an app without its secret; OOB shows the code.
+  4. cea733dcb + e8ec0c936 `POST /oauth/token`: authorization_code, refresh_token (rotating; the old token claimed
+     atomically first; the app's secret required), client_credentials (read only, secret required); no password
+     grant; form or JSON; Basic or body secret.
+  5. c15c7e140 `POST /oauth/revoke` (RFC 7009) and `/.well-known/oauth-authorization-server` (RFC 8414).
+  6. 1d4174492 + 517ddfd0c `require_oauth(scope, user_required=True)` in `app/oauth_server/protect.py`: Mastodon's
+     401/403/422; the person must still be able to sign in (the alpha API's checks: not remote, unverified, banned,
+     deleted, lapsed, nor a password change since); last use recorded hourly. The login gate reads no OAuth token: a
+     `require_oauth` route keeps its own gate and refuses an app's own token on a private instance (an earlier version
+     let a person's token through the gate to the alpha API, which read it as nobody: any scope could read).
+  7. 658e97695 `/user/settings/apps`, "Authorised apps" in the settings menu, with revoke.
+  2533291f3 the routes classified for the repo's sweeps (onion session-exempt, `app_id`, public metadata).
+  Choices the spec left open, for the owner: `push` is accepted and grants nothing yet (Tusky asks for it); admin
+  scopes are refused; tokens are not bound to the domain they were issued on (as alpha tokens); `require_oauth` has
+  no route yet (W1.1 adds them). Six findings from four automated security reviews, each fixed in its own commit (above).
 - **W0.3 Per-host identity.** Some apps choose their protocol from nodeinfo `software.name` (Jerboa needs `lemmy`,
   Fedilab maps `peertube`/`misskey`/`pleroma`), and PieFed's own clients need `piefed`. If D3 or D4 needs another
   name, it is served per host through the multi-domain storefront machinery, never on the main domain.
