@@ -2,15 +2,16 @@
 from urllib.parse import parse_qs, urlsplit
 
 from authlib.oauth2 import OAuth2Error
-from flask import jsonify, make_response, render_template, request
+from flask import jsonify, make_response, render_template, request, url_for
 from flask_babel import lazy_gettext as _l
 from flask_login import current_user
 
 from app import limiter
 from app.models import OAuthApp
-from app.oauth_scopes import parse_scope
+from app.oauth_scopes import SCOPES, parse_scope
 from app.oauth_server import bp, tokens
 from app.oauth_server.server import server
+from app.storefront import current_storefront, domain_base_url
 from app.utils import login_required
 
 OOB = 'urn:ietf:wg:oauth:2.0:oob'
@@ -159,3 +160,28 @@ def authorize():
 def issue_token():
     """A code, a refresh token or the app's own credentials, for an access token (Authlib answers the errors)."""
     return server.create_token_response()
+
+
+@bp.route('/oauth/revoke', methods=['POST'])
+@limiter.limit('60 per 5 minutes;1000 per day', methods=['POST'])
+def revoke_token():
+    return server.create_endpoint_response('revocation')
+
+
+@bp.route('/.well-known/oauth-authorization-server')
+def authorization_server_metadata():
+    """RFC 8414, as Mastodon 4.3+ publishes it, for the domain asked."""
+    base = domain_base_url(current_storefront())
+    return jsonify({
+        'issuer': base + '/',
+        'authorization_endpoint': base + url_for('oauth_server.authorize'),
+        'token_endpoint': base + url_for('oauth_server.issue_token'),
+        'revocation_endpoint': base + url_for('oauth_server.revoke_token'),
+        'app_registration_endpoint': base + url_for('oauth_server.register_app'),
+        'scopes_supported': sorted(SCOPES),
+        'response_types_supported': ['code'],
+        'response_modes_supported': ['query'],
+        'code_challenge_methods_supported': ['S256'],
+        'grant_types_supported': ['authorization_code', 'refresh_token', 'client_credentials'],
+        'token_endpoint_auth_methods_supported': ['client_secret_basic', 'client_secret_post', 'none'],
+    })

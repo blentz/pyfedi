@@ -6,6 +6,7 @@ from functools import cached_property
 from authlib.integrations.flask_oauth2 import AuthorizationServer as FlaskAuthorizationServer
 from authlib.integrations.flask_oauth2.requests import FlaskOAuth2Payload, FlaskOAuth2Request
 from authlib.oauth2.rfc6749 import InvalidGrantError, InvalidScopeError, grants
+from authlib.oauth2.rfc7009 import RevocationEndpoint as _RevocationEndpoint
 from authlib.oauth2.rfc7636 import CodeChallenge
 from flask import request as flask_request
 from werkzeug.datastructures import MultiDict
@@ -113,6 +114,19 @@ class ClientCredentialsGrant(grants.ClientCredentialsGrant):
             raise InvalidScopeError("An app's own token can only read.")
 
 
+class RevocationEndpoint(_RevocationEndpoint):
+    """Either token of a pair ends both (RFC 7009). One nobody knows is no error; another app's is refused."""
+    CLIENT_AUTH_METHODS = _SECRET_OR_PKCE
+
+    def query_token(self, token_string, token_type_hint):
+        if token_type_hint == 'refresh_token':
+            return tokens.refresh_token_for(token_string) or tokens.token_for(token_string)
+        return tokens.token_for(token_string) or tokens.refresh_token_for(token_string)
+
+    def revoke_token(self, token, request):
+        tokens.revoke(token)
+
+
 def _query_client(client_id):
     return OAuthApp.query.filter_by(client_id=client_id).first() if client_id else None
 
@@ -134,6 +148,7 @@ server = AuthorizationServer()
 server.register_grant(AuthorizationCodeGrant, [_S256Only(required=True)])
 server.register_grant(RefreshTokenGrant)
 server.register_grant(ClientCredentialsGrant)
+server.register_endpoint(RevocationEndpoint)
 
 
 def init_app(app):
