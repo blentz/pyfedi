@@ -18,13 +18,11 @@ _TABLES = (Post, PostReply)   # the bit above the row id: 0 a post, 1 a comment
 
 def _seconds(row) -> int:
     """Seconds since 2000 it was posted, held to what fits: a claimed time before 2000 or after 2068 sorts at an end."""
-    moment = row.posted_at or row.created_at
-    return min(max(int((moment - EPOCH).total_seconds()), 0), _MAX_SECONDS)
+    return min(max(int((posted(row) - EPOCH).total_seconds()), 0), _MAX_SECONDS)
 
 
 def status_id(row: Post | PostReply) -> str:
-    kind = 1 if isinstance(row, PostReply) else 0
-    return str(_seconds(row) << (_ROW_BITS + 1) | kind << _ROW_BITS | row.id)
+    return str(_seconds(row) << (_ROW_BITS + 1) | kind_of(row) << _ROW_BITS | row.id)
 
 
 def _parse(raw: str) -> int | None:
@@ -38,6 +36,27 @@ def moment(raw: str) -> datetime | None:
     """The second the status `raw` names was posted: a paging bound, whether or not the row is there."""
     value = _parse(raw)
     return EPOCH + timedelta(seconds=value >> (_ROW_BITS + 1)) if value is not None else None
+
+
+def kind_of(row) -> int:
+    """0 for a post, 1 for a comment: where a status of each table sorts among those posted the same instant."""
+    return 1 if isinstance(row, PostReply) else 0
+
+
+def posted(row) -> datetime:
+    return row.posted_at or row.created_at
+
+
+def bound(raw: str) -> tuple | None:
+    """Where the status `raw` names sorts, (posted, table, row id), for paging past it: exact when its row is here,
+    else to the second its id holds (an app may page from a status since deleted). None for no id at all."""
+    value = _parse(raw)
+    if value is None:
+        return None
+    row = find_status(raw)
+    if row is not None:
+        return posted(row), kind_of(row), row.id
+    return moment(raw), value >> _ROW_BITS & 1, value & _ROW_MASK
 
 
 def find_status(raw: str) -> Post | PostReply | None:
