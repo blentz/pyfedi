@@ -449,7 +449,8 @@ def scheduled_post_view(post: Post | int, variant: int, user_id: int | None = No
 
 # 'user' param can be anyone (including the logged in user), 'user_id' param belongs to the user making the request
 @cache.memoize(timeout=600, make_name=storefront_memo_name)
-def user_view(user: User | int, variant, stub=False, user_id=None, flair_community_id=None, usernotes=None) -> dict:
+def user_view(user: User | int, variant, stub=False, user_id=None, flair_community_id=None, usernotes=None,
+              counted=None) -> dict:
 
     if isinstance(user, int):
         user = db.session.get(User, user)
@@ -529,7 +530,11 @@ def user_view(user: User | int, variant, stub=False, user_id=None, flair_communi
 
     # Variant 2 - views/person_view.dart
     if variant == 2:
-        counts = {'person_id': user.id, 'post_count': user.post_count, 'comment_count': user.post_reply_count}
+        # what the viewer could list, but to the person and admins (`reads_users.listable_counts`); a list of people
+        # passes `counted`, its page's counts read in one statement
+        post_count, comment_count = counted if counted is not None else \
+            reads_users.listable_counts([user], user_id)[user.id]
+        counts = {'person_id': user.id, 'post_count': post_count, 'comment_count': comment_count}
         
         if user.num_following:
             counts["following_count"] = user.num_following

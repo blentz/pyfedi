@@ -10,9 +10,10 @@ from app import db
 from app.api.alpha.utils.community import get_community
 from app.api.alpha.utils.post import get_post
 from app.api.alpha.utils.user import get_user, get_user_list
-from app.models import Site
+from app.constants import VISIBILITY_FOLLOWERS
+from app.models import Site, UserFollower
 import app.reads.users as reads_users
-from tests.factories import make_community, make_community_member, make_post, make_user
+from tests.factories import make_community, make_community_member, make_post, make_post_reply, make_user
 
 
 def token(user):
@@ -157,3 +158,54 @@ def test_the_person_list_shows_an_admin_an_account_that_opted_out(world, unliste
 def test_an_account_that_opted_out_is_still_found_by_id_and_name(world, unlisted, who):
     assert get_user(viewer(world, who), {'person_id': unlisted.id})['person_view']['person']['user_name'] == 'quietmod'
     assert get_user(viewer(world, who), {'username': 'quietmod'})['person_view']['person']['id'] == unlisted.id
+
+
+# --- counts: a person's post and comment counts are what the viewer could list, but to the person and admins ---
+
+@pytest.fixture
+def activity(world, secret):
+    """`mod`'s posts and comments: one each that anyone may list (in `hush`, the fixture's post), and one each in a
+    private community (`secret`), followers-only and local-only. The stored counts are 4 and 4."""
+    _, hush, public, mod, post = world
+    make_post_reply(post, mod, body='open')
+    in_secret = make_post(secret, mod, 'https://test.piefed.local/post/secret1', title='in secret')
+    make_post_reply(in_secret, mod, body='secret')
+    followers = make_post(public, mod, 'https://test.piefed.local/post/followers1', title='followers only')
+    followers.visibility = VISIBILITY_FOLLOWERS
+    make_post_reply(post, mod, body='followers').visibility = VISIBILITY_FOLLOWERS
+    make_post(public, mod, 'https://test.piefed.local/post/local1', title='local only').local_only = True
+    make_post_reply(post, mod, body='local').local_only = True
+    mod.recalculate_post_stats()
+    db.session.commit()
+    return mod
+
+
+def counted(world, who):
+    counts = get_user(viewer(world, who), {'person_id': world[3].id})['person_view']['counts']
+    return counts['post_count'], counts['comment_count']
+
+
+@pytest.mark.parametrize('who, expected', [('anonymous', (1, 1)), ('reader', (2, 2)), ('self', (4, 4)),
+                                           ('admin', (4, 4))])
+def test_a_person_s_counts_are_what_the_viewer_could_list(world, activity, who, expected):
+    """Anonymous: the open post and comment only. A signed-in reader: local-only ones too (the posts and comments
+    listings show them a signed-in reader). The person and an admin: the stored counts."""
+    assert counted(world, who) == expected
+
+
+def test_a_member_counts_the_private_community_s_posts_and_comments(world, secret, activity):
+    make_community_member(world[0].user3, secret)
+    assert counted(world, 'reader') == (3, 3)
+
+
+def test_a_follower_counts_the_followers_only_posts_and_comments(world, activity):
+    db.session.add(UserFollower(local_user_id=world[0].user3.id, remote_user_id=activity.id, is_inward=False,
+                                is_accepted=True))
+    db.session.commit()
+    assert counted(world, 'reader') == (3, 3)
+
+
+@pytest.mark.parametrize('who, expected', [('anonymous', (1, 1)), ('admin', (4, 4))])
+def test_the_person_list_counts_the_same_way(world, activity, who, expected):
+    listed = get_user_list(viewer(world, who), {'q': 'quietmod'})['users']
+    assert [(u['counts']['post_count'], u['counts']['comment_count']) for u in listed] == [expected]

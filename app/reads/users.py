@@ -11,16 +11,18 @@ on. The person reads apply none of the viewer's blocks (`Restrictions`): a block
 """
 from dataclasses import dataclass
 
-from sqlalchemy import and_, asc, desc, exists, or_, select
+from sqlalchemy import and_, asc, desc, exists, func, not_, or_, select
 from sqlalchemy.orm.exc import NoResultFound
 
 from app import db
 from app.local_names import local_clause, local_named
-from app.local_only import hidden_here, one_here, without_local_only_actors
-from app.models import Community, CommunityMember, User
+from app.constants import POST_STATUS_REVIEWING
+from app.local_only import hidden_here, hidden_here_clause, hides_nothing, one_here, without_local_only_actors
+from app.models import Community, CommunityMember, Post, PostReply, User
 from app.permissions import user_access
 from app.reads.viewer import Restrictions
 from app.storefront import current_instance_id, current_storefront, domain_for_host, on_domain
+from app.visibility import visible_to_clause
 
 
 @dataclass(frozen=True)
@@ -150,3 +152,37 @@ def moderators_hidden(community_id: int, viewer_id: int | None) -> bool:
     return not db.session.scalar(select(exists().where(
         CommunityMember.community_id == community_id, CommunityMember.user_id == viewer_id,
         or_(CommunityMember.is_moderator == True, CommunityMember.is_owner == True))))
+
+
+def listable_counts(people, viewer_id: int | None) -> dict[int, tuple]:
+    """Each of `people`'s (post_count, comment_count) as the viewer `viewer_id` (None: nobody signed in) is told
+    them, by person id. The person and an admin over them (`sees_all_of`) get the stored counts; anyone else counts
+    only what they could list, with the post and reply listings' own privacy predicates: published (a post neither
+    deleted nor awaiting review, a comment not deleted, as the stored count has it), not in a private community they
+    are not a member of (app/reads/posts.py `_visible`, app/reads/replies.py `_without_unjoined_private`), visible to
+    them (`visible_to_clause`: followers-only to followers) and not hidden here (`hidden_here_clause`: local-only from
+    a logged-out viewer). The viewer's own preferences (blocks, languages, NSFW) are not counted out: a count is not a
+    listing. One statement for all of `people`, whatever their number (a person list's page among them)."""
+    counts = {person.id: (person.post_count, person.post_reply_count)
+              for person in people if sees_all_of(person, viewer_id)}
+    others = [person.id for person in people if person.id not in counts]
+    if not others:
+        return counts
+    signed_in = viewer_id is not None
+    member_of = Restrictions(viewer_id).private_community_ids
+
+    def listable(model, *published):
+        open_or_joined = Community.private == False
+        if member_of:
+            open_or_joined = or_(open_or_joined, Community.id.in_(member_of))
+        clauses = [model.user_id == User.id, *published, open_or_joined, visible_to_clause(model, viewer_id)]
+        if not hides_nothing(hidden := hidden_here_clause(model, signed_in)):
+            clauses.append(not_(hidden))
+        return select(func.count(model.id)).join(Community, Community.id == model.community_id).where(
+            *clauses).scalar_subquery()
+
+    rows = db.session.execute(select(User.id, listable(Post, Post.deleted == False,
+                                                       Post.status > POST_STATUS_REVIEWING),
+                                     listable(PostReply, PostReply.deleted == False)).where(User.id.in_(others)))
+    counts.update({row[0]: (row[1], row[2]) for row in rows})
+    return counts

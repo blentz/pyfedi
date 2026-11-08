@@ -115,9 +115,10 @@ def get_user_list(auth, data):
     users = reads_users.person_listing(user_id, reads_users.People(scope=type, search=query, sort=sort))
     users = users.paginate(page=page, per_page=limit, error_out=False)
 
+    counts = reads_users.listable_counts(users.items, user_id)   # the page's counts in one statement
     user_list = []
     for user in users:
-        user_list.append(user_view(user, variant=2, stub=True, user_id=user_id))
+        user_list.append(user_view(user, variant=2, stub=True, user_id=user_id, counted=counts[user.id]))
     list_json = {
         "users": user_list,
         'next_page': str(users.next_num) if users.next_num else None
