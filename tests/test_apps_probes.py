@@ -82,11 +82,11 @@ def client(app, site):
 
 
 @pytest.mark.parametrize('family, expected', [
-    ('mastodon', {'login': 'unsupported', 'view': 'unsupported', 'post': 'blocked'}),
+    ('mastodon', {'login': 'passed', 'view': 'unsupported', 'post': 'passed'}),   # app registration (plan W1.1)
     ('peertube', {'login': 'unsupported', 'view': 'unsupported', 'post': 'blocked'}),
     ('lemmy-v3', {'login': 'unsupported', 'view': 'unsupported', 'post': 'blocked'}),
 ], ids=['mastodon', 'peertube', 'lemmy-v3'])
-def test_this_tree_serves_none_of_the_probed_apis(client, family, expected):
+def test_this_tree_serves_what_the_probes_expect(client, family, expected):
     """What the live harness records, checked against the app itself: a probe of this tree's routes. A failure here
     means PieFed gained one of these APIs; update interop/apps/matrix.json with it."""
     class Wsgi(httpx.BaseTransport):
@@ -94,6 +94,9 @@ def test_this_tree_serves_none_of_the_probed_apis(client, family, expected):
             response = client.open(request.url.raw_path.decode(), method=request.method, data=request.content,
                                    headers=dict(request.headers))
             return httpx.Response(response.status_code, headers=dict(response.headers), content=response.data)
-    http = httpx.Client(transport=Wsgi(), base_url='http://localhost')
+    # This tree's own host: any other is answered 421 (Misdirected Request), which a probe reads as no API at all,
+    # so with localhost here this test passed whatever the tree served
+    http = httpx.Client(transport=Wsgi(), base_url=f"http://{client.application.config['SERVER_NAME']}")
     result = probes.run(family, http, 'nobody', 'nothing')
+    assert all(' answered 421' not in note for _, note in result.values()), result
     assert {step: outcome for step, (outcome, _) in result.items()} == expected
