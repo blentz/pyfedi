@@ -1,6 +1,8 @@
 """OAuth 2 apps, codes and tokens (plan W0.2; spec docs/superpowers/specs/2026-11-07-mastodon-client-api-design.md
 §3.1, §5). Every secret is random, shown once, and kept as a SHA-256 digest, so a copy of the database holds no
-usable credential; a raw value is found by its digest."""
+usable credential; a raw value is found by its digest. A code or token belongs to the domain (storefront) it was issued
+on and is found only there (owner ruling 2026-11-08): a login on one domain is no credential on another, and cannot be
+exchanged, refreshed, revoked or used to link the two."""
 import secrets
 from datetime import timedelta
 from hashlib import sha256
@@ -9,8 +11,14 @@ from sqlalchemy import update
 
 from app import db
 from app.models import OAuthApp, OAuthCode, OAuthToken, User, utcnow
+from app.storefront import current_storefront
 
 CODE_LIFETIME_SECONDS = 600
+
+
+def here() -> str:
+    """The domain this request came in on: the one a code or token is issued on, and found on."""
+    return current_storefront().domain
 
 
 def digest(value: str) -> str:
@@ -59,7 +67,7 @@ def store_code(raw: str, registered: OAuthApp, user: User, redirect_uri: str, sc
                code_challenge_method: str | None) -> None:
     db.session.add(OAuthCode(code_hash=digest(raw), app_id=registered.id, user_id=user.id, redirect_uri=redirect_uri,
                              scope=scope, code_challenge=code_challenge,
-                             code_challenge_method=code_challenge_method))
+                             code_challenge_method=code_challenge_method, domain=here()))
     db.session.commit()
 
 
@@ -68,6 +76,7 @@ def code_for(registered: OAuthApp, raw: str) -> OAuthCode | None:
     if not raw:
         return None
     return OAuthCode.query.filter(OAuthCode.code_hash == digest(raw), OAuthCode.app_id == registered.id,
+                                  OAuthCode.domain == here(),
                                   OAuthCode.created_at > utcnow() - timedelta(seconds=CODE_LIFETIME_SECONDS)).first()
 
 
@@ -82,24 +91,25 @@ def issue_token(registered: OAuthApp, user: User | None, scope: str,
 
 def store_token(registered: OAuthApp, user: User | None, scope: str, access: str, refresh: str | None) -> OAuthToken:
     token = OAuthToken(app_id=registered.id, user_id=user.id if user else None, access_token_hash=digest(access),
-                       refresh_token_hash=digest(refresh) if refresh else None, scope=scope)
+                       refresh_token_hash=digest(refresh) if refresh else None, scope=scope, domain=here())
     db.session.add(token)
     db.session.commit()
     return token
 
 
 def token_for(raw: str) -> OAuthToken | None:
-    """The unrevoked token whose access token is `raw`."""
+    """The unrevoked token whose access token is `raw`, issued on this domain."""
     if not raw:
         return None
-    return OAuthToken.query.filter(OAuthToken.access_token_hash == digest(raw), OAuthToken.revoked_at.is_(None)).first()
+    return OAuthToken.query.filter(OAuthToken.access_token_hash == digest(raw), OAuthToken.domain == here(),
+                                   OAuthToken.revoked_at.is_(None)).first()
 
 
 def refresh_token_for(raw: str) -> OAuthToken | None:
-    """The unrevoked token whose refresh token is `raw`."""
+    """The unrevoked token whose refresh token is `raw`, issued on this domain."""
     if not raw:
         return None
-    return OAuthToken.query.filter(OAuthToken.refresh_token_hash == digest(raw),
+    return OAuthToken.query.filter(OAuthToken.refresh_token_hash == digest(raw), OAuthToken.domain == here(),
                                    OAuthToken.revoked_at.is_(None)).first()
 
 

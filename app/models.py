@@ -6767,6 +6767,7 @@ class OAuthCode(db.Model):
     scope = db.Column(db.String(1024), nullable=False)
     code_challenge = db.Column(db.String(128))
     code_challenge_method = db.Column(db.String(10))
+    domain = db.Column(db.String(255), nullable=False)   # the storefront it was given on: exchanged only there
     created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
 
     def get_redirect_uri(self) -> str:
@@ -6778,7 +6779,8 @@ class OAuthCode(db.Model):
 
 class OAuthToken(db.Model):
     """An access token, with its refresh token when it has one, kept as SHA-256 digests. It never expires; it ends
-    when revoked (ruling M6). An app's own token (client credentials) has no user."""
+    when revoked (ruling M6). An app's own token (client credentials) has no user. It works only on the domain it was
+    issued on (owner ruling 2026-11-08)."""
     __tablename__ = 'oauth_token'
     id = db.Column(db.Integer, primary_key=True)
     app_id = db.Column(db.Integer, db.ForeignKey('oauth_app.id', ondelete='CASCADE'), nullable=False, index=True)
@@ -6786,6 +6788,7 @@ class OAuthToken(db.Model):
     access_token_hash = db.Column(db.String(64), unique=True, nullable=False)
     refresh_token_hash = db.Column(db.String(64), unique=True)
     scope = db.Column(db.String(1024), nullable=False)
+    domain = db.Column(db.String(255), nullable=False)   # the storefront it was issued on
     created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
     last_used_at = db.Column(db.DateTime)
     revoked_at = db.Column(db.DateTime)
