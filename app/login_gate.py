@@ -10,6 +10,7 @@ from flask import abort, current_app, flash, jsonify, redirect, request, url_for
 from flask_babel import _
 from flask_login import current_user
 
+from app.oauth_server.protect import bearer_token
 from app.storefront import current_storefront
 from app.utils import authorise_api_user, is_activitypub_request, login_redirect, login_required_here
 
@@ -81,6 +82,9 @@ def _has_own_gate() -> bool:
 
 
 def _refuse_api_caller() -> object | None:
+    oauth = bearer_token()
+    if oauth is not None and oauth.user_id is not None:   # a person's OAuth token; an app's own opens nothing (W0.2)
+        return None
     try:
         authorise_api_user(request.headers.get('Authorization'))
     except Exception as refusal:   # the one exception authorise_api_user raises for every way a token can be wrong
