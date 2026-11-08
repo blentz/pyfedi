@@ -7,7 +7,7 @@ from sqlalchemy.orm.exc import NoResultFound
 
 from app import db, cache
 from app.api.alpha.views import community_view, user_view, post_view, cached_modlist_for_community, flair_view, \
-    shown_modlist
+    shown_community_modlist
 from app.community.util import search_for_community
 from app.constants import *
 from app.local_only import found_here, hidden_here, without_local_only_actors
@@ -642,7 +642,7 @@ def post_community_mod(auth, data):
         shared_community.remove_mod_from_community(community_id, person_id, SRC_API, auth)
     cache.delete_memoized(cached_modlist_for_community)
     community_json = {   # without the moderators hidden here (follow-up F6)
-        'moderators': shown_modlist(cached_modlist_for_community(community_id), authorise_api_user(auth))
+        'moderators': shown_community_modlist(community_id, authorise_api_user(auth))
     }
     return community_json
 

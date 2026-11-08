@@ -11,13 +11,14 @@ on. The person reads apply none of the viewer's blocks (`Restrictions`): a block
 """
 from dataclasses import dataclass
 
-from sqlalchemy import asc, desc
+from sqlalchemy import asc, desc, exists, or_, select
 from sqlalchemy.orm.exc import NoResultFound
 
 from app import db
 from app.local_names import local_clause, local_named
 from app.local_only import hidden_here, one_here, without_local_only_actors
-from app.models import User
+from app.models import Community, CommunityMember, User
+from app.permissions import user_access
 from app.storefront import current_instance_id, current_storefront, domain_for_host, on_domain
 
 
@@ -105,3 +106,36 @@ def person_listing(signed_in: bool, people: People):
     if people.sort.startswith('Top'):
         return users.order_by(desc(User.post_count))
     return users.order_by(User.id)
+
+
+def sees_all_of(person: User, viewer_id: int | None) -> bool:
+    """Whether the viewer `viewer_id` (None: nobody signed in) is `person` or administers them ('administer all
+    users' on them), the two the web profile shows a person's hidden moderating to (app/user/utils.py:417-419)."""
+    return bool(viewer_id) and (viewer_id == person.id or user_access('administer all users', viewer_id, on=person))
+
+
+def moderates_hidden_from(person: User, viewer_id: int | None, community_ids) -> set[int]:
+    """Of `community_ids`, the communities `person` moderates, those the viewer may not be told they moderate: a
+    community whose moderators are private (`private_mods`), as the web profile leaves it out
+    (app/user/utils.py:417-419), unless the viewer is the person or administers them."""
+    if not community_ids or sees_all_of(person, viewer_id):
+        return set()
+    return set(db.session.scalars(select(Community.id).where(Community.id.in_(community_ids),
+                                                             Community.private_mods == True)))
+
+
+def moderators_hidden(community_id: int, viewer_id: int | None) -> bool:
+    """Whether the moderators of the community `community_id` are hidden from the viewer `viewer_id` (None: nobody
+    signed in): when they are private (`private_mods`) the web community page names none to anyone
+    (app/community/routes.py:522-523) and only its moderator page names them, to the community's owner and moderators
+    and an admin of communities (app/community/routes.py:1838, community_mod_list)."""
+    community = db.session.get(Community, community_id)
+    if community is None or not community.private_mods:
+        return False
+    if not viewer_id:
+        return True
+    if user_access('administer all communities', viewer_id, on=community):
+        return False
+    return not db.session.scalar(select(exists().where(
+        CommunityMember.community_id == community_id, CommunityMember.user_id == viewer_id,
+        or_(CommunityMember.is_moderator == True, CommunityMember.is_owner == True))))

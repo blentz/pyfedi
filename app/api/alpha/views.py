@@ -15,7 +15,7 @@ from app.activitypub.util import active_month, normalise_actor_string
 from app.constants import *
 import app.discovery.credits as discovery_credits   # the module, not names: app.discovery.credits imports this package indirectly
 from app.models import ChatMessage, Community, Language, Instance, Post, PostReply, User, utcnow, federation_base, \
-    AllowedInstances, BannedInstances, utcnow, Site, Feed, FeedItem, Topic, CommunityFlair, \
+    AllowedInstances, BannedInstances, Site, Feed, FeedItem, Topic, CommunityFlair, \
     UserNote, Poll, Event, PollChoice, Conversation, Report, File, post_file
 from app.post.util import tags_to_string, flair_to_string
 from app.utils import blocked_communities, blocked_or_banned_instances, blocked_users, communities_banned_from, \
@@ -38,6 +38,7 @@ from app.visibility import can_view, visible_to_sql
 
 
 from app.permissions import user_access
+import app.reads.users as reads_users   # the module, looked up when called, as app/api/alpha/utils/user.py does
 # 'stub' param: set to True to exclude optional fields
 
 
@@ -365,7 +366,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
 
     # Variant 3 - models/post/get_post_response.dart - /post api endpoint
     if variant == 3:
-        modlist = shown_modlist(cached_modlist_for_community(post.community_id), user_id)
+        modlist = shown_community_modlist(post.community_id, user_id)
         if communities_moderating is None:
             communities_moderating = moderating_communities_ids_all_users() if user_id else []
 
@@ -552,7 +553,7 @@ def user_view(user: User | int, variant, stub=False, user_id=None, flair_communi
 
     # Variant 3 - models/user/get_person_details.dart - /user?person_id api endpoint
     if variant == 3:
-        modlist = shown_modlist(cached_modlist_for_user(user), user_id)
+        modlist = shown_person_modlist(user, user_id)
 
         v3 = {'person_view': user_view(user=user, variant=2, user_id=user_id),
               'moderates': modlist,
@@ -763,7 +764,7 @@ def community_view(community: Community | int | str, variant, stub=False, user_i
 
     # Variant 3 - models/community/get_community_response.dart - /community api endpoint
     if variant == 3:
-        modlist = shown_modlist(cached_modlist_for_community(community.id), user_id)
+        modlist = shown_community_modlist(community.id, user_id)
 
         if community.private and community.id not in community_membership_private(user_id):
             raise Exception('Private community - membership required')
@@ -1692,6 +1693,24 @@ def shown_modlist(modlist: list, user_id) -> list:
     hidden_communities = set(db.session.scalars(
         select(Community.id).where(Community.id.in_([m['community']['id'] for m in modlist]), hidden_community)))
     return [m for m in modlist if m['moderator']['id'] not in hidden and m['community']['id'] not in hidden_communities]
+
+
+def shown_community_modlist(community_id: int, user_id) -> list:
+    """The moderators of `community_id` as `user_id` may see them: none when they are private to this viewer
+    (`reads_users.moderators_hidden`), else the cached list narrowed by `shown_modlist`. Asked after the cache, which
+    every caller shares."""
+    if reads_users.moderators_hidden(community_id, user_id):
+        return []
+    return shown_modlist(cached_modlist_for_community(community_id), user_id)
+
+
+def shown_person_modlist(person: User, user_id) -> list:
+    """The communities `person` moderates as `user_id` may see them: the cached list narrowed by `shown_modlist`, without
+    those `reads_users.moderates_hidden_from` hides from this viewer. Asked after the cache, which every caller
+    shares."""
+    modlist = shown_modlist(cached_modlist_for_user(person), user_id)
+    hidden = reads_users.moderates_hidden_from(person, user_id, [m['community']['id'] for m in modlist])
+    return [m for m in modlist if m['community']['id'] not in hidden]
 
 
 @cache.memoize(timeout=3000, make_name=storefront_memo_name)
