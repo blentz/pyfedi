@@ -149,7 +149,8 @@ services:
       - loops-s3-data:/srv/s3:ro   # s3.test serves the Loops bucket
     networks:
       interop:
-        aliases: [piefed.test, mastodon.test, peertube.test, castopod.test, pixelfed.test, loops.test, s3.test, relay.test]
+        aliases: [piefed.test, mastodon.test, peertube.test, castopod.test, pixelfed.test, loops.test, s3.test, relay.test,
+                  voyager.test, blorp.test, photon.test]
 
   piefed-db:
     image: docker.io/library/postgres:17.11@sha256:3cec7eb015ba8adb28139fa5c83b8489cdf0e666e53dfdf20f598ae0cc8739e3
@@ -422,6 +423,62 @@ services:
       - ./interop/trust_ca.sh:/trust_ca.sh:ro
       - ./interop:/app/interop   # read-write: the results land in interop/conformance/results
     profiles: [conformance]
+
+  # The client-app harness (interop/apps/README.md), run by `interop/run.sh apps` against the PieFed half of the stack.
+  # An Android 13 emulator under KVM, with the harness CA as a system CA; adb is served on android-emulator:5037.
+  android-emulator:
+    build: {context: ./interop/apps/android, dockerfile: Containerfile}
+    image: localhost/piefed-interop-android:latest
+    devices: [/dev/kvm]
+    volumes:
+      - caddy-data:/caddy-data:ro
+    networks: [interop]
+    healthcheck:
+      test: ["CMD", "test", "-e", "/tmp/ready"]
+      interval: 5s
+      retries: 120
+    depends_on: [caddy]
+    profiles: [apps]
+
+  # The PieFed-capable web apps, each the newest image its project publishes, pointed at piefed.test. Their browsers
+  # call piefed.test's API directly (CORS), so Caddy serves them on names of their own.
+  voyager-web:
+    image: ghcr.io/aeharding/voyager:latest
+    environment:
+      CUSTOM_LEMMY_SERVERS: piefed.test
+    networks: [interop]
+    profiles: [apps]
+
+  blorp-web:
+    image: ghcr.io/blorp-labs/blorp:latest
+    environment:
+      REACT_APP_DEFAULT_INSTANCE: https://piefed.test
+    networks: [interop]
+    profiles: [apps]
+
+  photon-web:
+    image: ghcr.io/xyphyn/photon:latest
+    environment:
+      PUBLIC_INSTANCE_URL: piefed.test
+      PUBLIC_INSTANCE_TYPE: piefedalpha
+    networks: [interop]
+    profiles: [apps]
+
+  apps-runner:
+    <<: *trust
+    environment:
+      ANDROID_ADB_SERVER_HOST: android-emulator   # adbutils' variables: the emulator container serves adb
+      ANDROID_ADB_SERVER_PORT: "5037"
+    build: {context: ./interop/apps, dockerfile: Containerfile}   # copies nothing in: the tree is mounted
+    image: localhost/piefed-interop-apps-runner:latest
+    entrypoint: ["/trust_ca.sh"]
+    working_dir: /app
+    volumes:
+      - caddy-data:/caddy-data:ro
+      - ./interop/trust_ca.sh:/trust_ca.sh:ro
+      - ./interop:/app/interop   # read-write: results land in interop/apps/results, the APK cache in interop/apps/.apks
+      - ./tests/fixtures/media:/app/tests/fixtures/media:ro   # the podcast episode the players subscribe to
+    profiles: [apps]
 
 volumes:
   caddy-data:

@@ -37,3 +37,16 @@ s3.test {
 relay.test {
 	reverse_proxy loops-relay:8080
 }
+
+# the client-app harness's web apps (interop/apps/README.md)
+voyager.test {
+	reverse_proxy voyager-web:5314
+}
+
+blorp.test {
+	reverse_proxy blorp-web:80
+}
+
+photon.test {
+	reverse_proxy photon-web:3000
+}

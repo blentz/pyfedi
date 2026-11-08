@@ -9,7 +9,9 @@ See `compose.interop.yaml`; spec 2026-10-14 section 8.1.
     interop/run.sh up                   start and seed the stack (users alice, bob and carol; tokens in interop/.tokens.json)
     interop/run.sh conformance [args]   up, then interop/conformance/run.sh in the conformance-runner container
     interop/run.sh test [args]          up, then pytest interop/ in the interop-runner container (args pass through)
+    interop/run.sh apps [args]          PieFed alone, then third-party client apps against it (interop/apps/README.md)
     interop/run.sh down                 remove the stack and its volumes
+    interop/run_remote.sh <command>     any of the above on the remote podman host (REMOTE_PODMAN, default remote-gpu)
 
 Seeded: PieFed `alice` / `interop-alice-pw`, the local `microblogs` community, the `video_channel` community `vc1`, and
 the media upload communities `vc_media` (`video_channel`) and `pod_media` (`podcast`), which alice moderates, with video

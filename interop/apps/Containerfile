@@ -1,0 +1,10 @@
+# The client-app harness runner (interop/apps/README.md): drives web apps in Chromium (Playwright) and Android apps on
+# the android-emulator service (uiautomator2 over adb), and checks what they did through PieFed's own API. Everything
+# here is the newest release when the image is built (owner policy: track the latest); the versions of the apps under
+# test are recorded per run in interop/apps/results/.
+FROM docker.io/library/python:3-slim
+
+RUN pip install --no-cache-dir --disable-pip-version-check pytest pytest-timeout httpx playwright uiautomator2 adbutils \
+    && playwright install --with-deps chromium
+
+WORKDIR /app

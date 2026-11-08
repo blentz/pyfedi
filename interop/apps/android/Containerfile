@@ -1,0 +1,37 @@
+# An Android emulator for the client-app harness (interop/apps/README.md): Google APIs on x86_64, run headless under
+# KVM. The newest platform Google publishes an image for (ANDROID_API), since the apps under test track it too: Voyager
+# refuses a WebView older than Blink 140, which Android 13's image (Chrome 109) is. Google APIs, not Google Play, because
+# only that image lets `adb root`, which boot.sh needs to make the harness CA (Caddy's internal root) a system CA: apps
+# ignore user CAs. The image has no arm translation, so an app needs an x86_64 or universal APK.
+#
+# The SDK's own pieces are the newest Google publishes when the image is built (owner policy: track the latest).
+FROM docker.io/library/debian:trixie-slim
+
+ARG ANDROID_API=37.0
+
+ENV ANDROID_HOME=/opt/android ANDROID_SDK_ROOT=/opt/android
+ENV PATH=/opt/android/cmdline-tools/latest/bin:/opt/android/platform-tools:/opt/android/emulator:$PATH
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl unzip openjdk-21-jre-headless openssl \
+        libpulse0 libgl1 libnss3 libxcomposite1 libxcursor1 libxdamage1 libxi6 libxtst6 libxrandr2 libasound2 \
+        libdbus-1-3 libx11-xcb1 libxkbfile1 libbz2-1.0 libdrm2 libgbm1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# the newest command-line tools named in Google's repository index
+RUN set -eu; \
+    zip=$(curl -fsS https://dl.google.com/android/repository/repository2-3.xml \
+          | grep -oE 'commandlinetools-linux-[0-9]+_latest\.zip' | sort -t- -k3 -n | tail -1); \
+    curl -fsSo /tmp/tools.zip "https://dl.google.com/android/repository/$zip"; \
+    mkdir -p /opt/android/cmdline-tools; unzip -q /tmp/tools.zip -d /opt/android/cmdline-tools; \
+    mv /opt/android/cmdline-tools/cmdline-tools /opt/android/cmdline-tools/latest; rm /tmp/tools.zip
+
+RUN yes | sdkmanager --licenses > /dev/null \
+    && sdkmanager --install platform-tools emulator "system-images;android-${ANDROID_API};google_apis;x86_64" > /dev/null \
+    && echo no | avdmanager create avd -n harness -k "system-images;android-${ANDROID_API};google_apis;x86_64" -d pixel_6 \
+    && printf 'hw.ramSize=4096\ndisk.dataPartition.size=8G\nhw.keyboard=yes\nhw.gpu.enabled=yes\nhw.gpu.mode=guest\n' \
+         >> /root/.android/avd/harness.avd/config.ini
+
+COPY boot.sh /boot.sh
+EXPOSE 5037
+ENTRYPOINT ["/boot.sh"]

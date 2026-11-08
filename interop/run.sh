@@ -3,6 +3,7 @@
 #   interop/run.sh up                   start and seed the stack
 #   interop/run.sh test [args]          up, then pytest interop/ in the runner (args pass through)
 #   interop/run.sh conformance [args]   up, then interop/conformance/run.sh in the conformance-runner (args pass through)
+#   interop/run.sh apps [args]          PieFed alone, then the client-app harness (interop/apps/README.md)
 #   interop/run.sh down                 remove the stack and its volumes
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -18,6 +19,31 @@ wait_http() {  # wait_http <service> <url>: up to 120s for a 2xx/3xx from inside
     echo "run.sh: $2 never answered" >&2; return 1
 }
 
+PIEFED_SERVICES="caddy piefed-db piefed-redis piefed-web piefed-celery piefed-celery-background"
+APPS_SERVICES="android-emulator voyager-web blorp-web photon-web"
+WEB_IMAGES="ghcr.io/aeharding/voyager:latest ghcr.io/blorp-labs/blorp:latest ghcr.io/xyphyn/photon:latest"
+
+# PieFed alone, built from this tree, initialised and seeded: what `clients` needs, and the first half of `up`
+up_piefed() {
+    interop/gen_env.sh
+    $COMPOSE build piefed-web
+    # shellcheck disable=SC2086
+    $COMPOSE up -d $PIEFED_SERVICES
+    # podman-compose's `up -d` keeps a running container whose image was just rebuilt: recreate PieFed's, or a re-run
+    # of `up` (and `test`) runs the old code
+    $COMPOSE up -d --force-recreate --no-deps piefed-web piefed-celery piefed-celery-background
+    wait_http piefed-web https://piefed.test/health
+    # init-db drops every table first, so run it only before it has seeded the languages (a re-run of `up` keeps the
+    # data). Not the instance table: the migrations `flask db upgrade` ran at start-up seed a row there. Not the site
+    # table either: the first request makes Site(id=1) (D911), and wait_http above is a request.
+    if [ "$($COMPOSE exec -T piefed-db psql -U piefed -tAc 'select count(*) from language' | tr -d '[:space:]')" = 0 ]; then
+        $COMPOSE exec -T piefed-web sh -c 'FLASK_APP=pyfedi.py flask init-db --interactive no'
+    fi
+    # piped into `python -` (an interactive `flask shell` chokes on the blank-line rules of a pasted script)
+    { printf 'from pyfedi import app\napp.app_context().push()\n'; cat interop/seed_piefed.py; } \
+        | $COMPOSE exec -T piefed-web python -
+}
+
 up() {
     interop/gen_env.sh
     if ! grep -q '^VAPID_PRIVATE_KEY=' interop/.env.interop; then
@@ -25,12 +51,8 @@ up() {
         podman run --rm --entrypoint '' --env-file interop/.env.interop ghcr.io/mastodon/mastodon:v4.5@sha256:c64a30678a0e6591d7dbcb0924b4aa98eb1fe54ced5b8fe558449d00915bdb42 \
             bundle exec rails mastodon:webpush:generate_vapid_key | grep '^VAPID_' >> interop/.env.interop
     fi
-    $COMPOSE build piefed-web
+    up_piefed
     $COMPOSE up -d
-    # podman-compose's `up -d` keeps a running container whose image was just rebuilt: recreate PieFed's, or a re-run
-    # of `up` (and `test`) runs the old code
-    $COMPOSE up -d --force-recreate --no-deps piefed-web piefed-celery piefed-celery-background
-    wait_http piefed-web https://piefed.test/health
     wait_http piefed-web https://mastodon.test/health   # piefed-web has curl; the Mastodon image may not
     wait_http piefed-web https://peertube.test/api/v1/ping
     # Castopod's boot migration loses the race with MariaDB and leaves no tables, so its login page answers 500 until
@@ -45,15 +67,6 @@ up() {
     done
     [ -n "$initialised" ] || { echo "run.sh: castopod init-database never succeeded" >&2; return 1; }
     wait_http piefed-web https://castopod.test/cp-auth/login
-    # init-db drops every table first, so run it only before it has seeded the languages (a re-run of `up` keeps the
-    # data). Not the instance table: the migrations `flask db upgrade` ran at start-up seed a row there. Not the site
-    # table either: the first request makes Site(id=1) (D911), and wait_http above is a request.
-    if [ "$($COMPOSE exec -T piefed-db psql -U piefed -tAc 'select count(*) from language' | tr -d '[:space:]')" = 0 ]; then
-        $COMPOSE exec -T piefed-web sh -c 'FLASK_APP=pyfedi.py flask init-db --interactive no'
-    fi
-    # piped into `python -` (an interactive `flask shell` chokes on the blank-line rules of a pasted script)
-    { printf 'from pyfedi import app\napp.app_context().push()\n'; cat interop/seed_piefed.py; } \
-        | $COMPOSE exec -T piefed-web python -
     token=$($COMPOSE exec -T mastodon-web bin/rails runner - < interop/seed_mastodon.rb | tail -n 1)
     peertube=$($COMPOSE exec -T piefed-web python - < interop/seed_peertube.py | tail -n 1)
     # Castopod's image migrates at boot, but races MariaDB; init-database is idempotent. The superadmin prompt reads
@@ -85,8 +98,37 @@ up() {
         "$token" "$pixelfed" "$loops" "$mia" > interop/.tokens.json
 }
 
+# The client-app harness (interop/apps/README.md): PieFed alone, the apps' seed, the emulator and the web apps, then the
+# app tests. The tests record what each app did; the verdict is interop.apps.matrix's, against interop/apps/matrix.json.
+apps() {
+    up_piefed
+    $COMPOSE --profile apps build android-emulator apps-runner
+    # shellcheck disable=SC2086
+    for image in $WEB_IMAGES; do podman pull -q "$image" > /dev/null; done   # the newest each project publishes
+    # recreated every run: a freshly pulled web image, and an emulator wiped of the last run's apps and logins
+    # shellcheck disable=SC2086
+    $COMPOSE --profile apps up -d --force-recreate --no-deps $APPS_SERVICES
+    for _ in $(seq 1 600); do
+        if $COMPOSE --profile apps exec -T android-emulator test -e /tmp/ready 2>/dev/null; then break; fi
+        sleep 1
+    done
+    $COMPOSE --profile apps exec -T android-emulator test -e /tmp/ready \
+        || { $COMPOSE --profile apps logs --tail 50 android-emulator >&2; echo "run.sh: the emulator never got ready" >&2; return 1; }
+    rm -rf interop/apps/results
+    mkdir -p interop/apps/results
+    # which build of each web app ran: its image has no version the app shows, so its digest and build date stand in
+    for image in $WEB_IMAGES; do
+        podman image inspect "$image" --format '{{index .RepoTags 0}} {{.Digest}} {{.Created}}'
+    done > interop/apps/results/images.txt
+    # the tests' own failures are harness errors and show in their output; the matrix decides the run
+    $COMPOSE --profile apps run --rm apps-runner python -m pytest -c interop/apps/pytest.ini interop/apps "$@" || true
+    # on the host, not in a container: podman-compose's `run` loses the exit status, and the checker is standard library
+    python3 -m interop.apps.matrix
+}
+
 case "${1:-}" in
     up)   up ;;
+    apps) shift; apps "$@" ;;
     test) shift; up; $COMPOSE --profile runner run --rm interop-runner \
               python -m pytest -c interop/pytest.ini interop "$@" ;;
     conformance) shift; up; $COMPOSE --profile conformance run --rm conformance-runner \
@@ -96,5 +138,5 @@ case "${1:-}" in
           # dropped), and the next `up` reuses it beside fresh ones: refuse to leave a mixed stack behind
           left=$(podman ps -a --filter name=pyfedi-interop_ --format '{{.Names}}')
           [ -z "$left" ] || { echo "run.sh: down left containers behind:" $left >&2; exit 1; } ;;
-    *)    echo "usage: interop/run.sh up|test|conformance|down" >&2; exit 2 ;;
+    *)    echo "usage: interop/run.sh up|test|apps|conformance|down" >&2; exit 2 ;;
 esac

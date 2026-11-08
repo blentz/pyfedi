@@ -42,3 +42,19 @@ def test_conformance_run_script_runs_from_its_own_directory():
     script = (ROOT / 'interop/conformance/run.sh').read_text()
     assert 'cd "$(dirname "$0")"' in script
     assert 'cd interop/conformance' not in script
+
+
+def test_the_client_app_harness_is_its_own_profile():
+    """interop/run.sh apps starts these; `up` and `test` never do (podman-compose leaves a profiled service out)."""
+    services = yaml.safe_load((ROOT / 'compose.interop.yaml').read_text())['services']
+    apps = {name for name, service in services.items() if service.get('profiles') == ['apps']}
+    assert apps == {'android-emulator', 'voyager-web', 'blorp-web', 'photon-web', 'apps-runner'}
+    assert services['android-emulator']['devices'] == ['/dev/kvm']
+    started = re.search(r'^APPS_SERVICES="([^"]*)"', (ROOT / 'interop/run.sh').read_text(), re.M).group(1).split()
+    assert set(started) == apps - {'apps-runner'}
+
+
+def test_the_interop_runner_leaves_the_app_harness_alone():
+    """interop/apps needs the apps-runner image (Playwright, uiautomator2); the interop runner has neither."""
+    ini = (ROOT / 'interop/pytest.ini').read_text()
+    assert 'apps' in re.search(r'^norecursedirs = (.*)$', ini, re.M).group(1).split()

@@ -1,0 +1,73 @@
+{
+  "_comment": "Third-party apps checked against PieFed by interop/run.sh apps (interop/apps/README.md). Each app runs login, view and post; a step with no expectation must pass. An expectation records a known non-pass and why: unsupported = PieFed lacks the API the app speaks (docs/superpowers/specs/2026-11-07-mastodon-client-api-design.md), blocked = an earlier step did not pass, inapplicable = the app has no such step. Driven apps say how (web: a URL served in the stack; apk: where the newest release comes from); probed apps name the protocol family whose first calls are sent (probes.py).",
+  "apps": {
+    "voyager-web": {"platform": "lemmy", "surface": "web", "web": "https://voyager.test", "image": "ghcr.io/aeharding/voyager:latest"},
+    "blorp-web": {"platform": "lemmy", "surface": "web", "web": "https://blorp.test", "image": "ghcr.io/blorp-labs/blorp:latest"},
+    "photon-web": {"platform": "lemmy", "surface": "web", "web": "https://photon.test", "image": "ghcr.io/xyphyn/photon:latest"},
+    "voyager-android": {"platform": "lemmy", "surface": "android", "package": "app.vger.voyager", "apk": {"fdroid": "app.vger.voyager"}},
+    "thunder-android": {"platform": "lemmy", "surface": "android", "package": "com.hjiangsu.thunder",
+                        "apk": {"github": "thunder-app/thunder", "asset": "x86_64\\.apk$", "prerelease": true}},
+    "summit-android": {"platform": "lemmy", "surface": "android", "package": "com.idunnololz.summit.fdroid", "apk": {"fdroid": "com.idunnololz.summit.fdroid"}},
+    "jerboa-android": {"platform": "lemmy", "surface": "android", "probe": "lemmy-v3", "expect": {
+      "login": {"outcome": "unsupported", "reason": "Jerboa speaks only Lemmy's /api/v3; PieFed serves its own /api/alpha"},
+      "view": {"outcome": "unsupported", "reason": "Jerboa reads posts from /api/v3/post/list, which PieFed does not serve"},
+      "post": {"outcome": "blocked", "reason": "posting needs the login Jerboa cannot do"}}},
+
+    "mastodon-android": {"platform": "mastodon", "surface": "android", "probe": "mastodon", "expect": {
+      "login": {"outcome": "unsupported", "reason": "PieFed has no Mastodon client API or OAuth app registration (POST /api/v1/apps)"},
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines (/api/v1/timelines/*)"},
+      "post": {"outcome": "blocked", "reason": "posting needs the login the app cannot do"}}},
+    "tusky-android": {"platform": "mastodon", "surface": "android", "probe": "mastodon", "expect": {
+      "login": {"outcome": "unsupported", "reason": "PieFed has no Mastodon client API or OAuth app registration (POST /api/v1/apps)"},
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines (/api/v1/timelines/*)"},
+      "post": {"outcome": "blocked", "reason": "posting needs the login the app cannot do"}}},
+    "moshidon-android": {"platform": "mastodon", "surface": "android", "probe": "mastodon", "expect": {
+      "login": {"outcome": "unsupported", "reason": "PieFed has no Mastodon client API or OAuth app registration (POST /api/v1/apps)"},
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines (/api/v1/timelines/*)"},
+      "post": {"outcome": "blocked", "reason": "posting needs the login the app cannot do"}}},
+    "phanpy-web": {"platform": "mastodon", "surface": "web", "probe": "mastodon", "expect": {
+      "login": {"outcome": "unsupported", "reason": "PieFed has no Mastodon client API or OAuth app registration (POST /api/v1/apps)"},
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines (/api/v1/timelines/*)"},
+      "post": {"outcome": "blocked", "reason": "posting needs the login the app cannot do"}}},
+    "elk-web": {"platform": "mastodon", "surface": "web", "probe": "mastodon", "expect": {
+      "login": {"outcome": "unsupported", "reason": "PieFed has no Mastodon client API or OAuth app registration (POST /api/v1/apps)"},
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines (/api/v1/timelines/*)"},
+      "post": {"outcome": "blocked", "reason": "posting needs the login the app cannot do"}}},
+
+    "pixelfed-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon", "expect": {
+      "login": {"outcome": "unsupported", "reason": "Pixelfed's app logs in through Mastodon-style OAuth (POST /api/v1/apps), which PieFed lacks"},
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon-compatible timelines"},
+      "post": {"outcome": "blocked", "reason": "posting needs the login the app cannot do"}}},
+    "pixeldroid-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon", "expect": {
+      "login": {"outcome": "unsupported", "reason": "PixelDroid logs in through Mastodon-style OAuth (POST /api/v1/apps), which PieFed lacks"},
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon-compatible timelines"},
+      "post": {"outcome": "blocked", "reason": "posting needs the login the app cannot do"}}},
+    "fedilab-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon", "expect": {
+      "login": {"outcome": "unsupported", "reason": "Fedilab logs in to Pixelfed (and Mastodon) through OAuth app registration, which PieFed lacks"},
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon-compatible timelines"},
+      "post": {"outcome": "blocked", "reason": "posting needs the login the app cannot do"}}},
+
+    "peertube-android": {"platform": "peertube", "surface": "android", "probe": "peertube", "expect": {
+      "login": {"outcome": "unsupported", "reason": "the PeerTube app logs in with /api/v1/oauth-clients/local and /api/v1/users/token, which PieFed lacks"},
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no PeerTube video API (/api/v1/videos)"},
+      "post": {"outcome": "blocked", "reason": "uploading needs the login the app cannot do"}}},
+    "newpipe-android": {"platform": "peertube", "surface": "android", "probe": "peertube", "expect": {
+      "login": {"outcome": "inapplicable", "reason": "NewPipe has no accounts: it only browses"},
+      "view": {"outcome": "unsupported", "reason": "NewPipe adds a PeerTube instance through PeerTube's REST API, which PieFed lacks"},
+      "post": {"outcome": "inapplicable", "reason": "NewPipe cannot upload"}}},
+    "tubelab-android": {"platform": "peertube", "surface": "android", "probe": "peertube", "expect": {
+      "login": {"outcome": "unsupported", "reason": "TubeLab logs in through PeerTube's OAuth client and token endpoints, which PieFed lacks"},
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no PeerTube video API (/api/v1/videos)"},
+      "post": {"outcome": "blocked", "reason": "uploading needs the login the app cannot do"}}},
+
+    "antennapod-android": {"platform": "castopod", "surface": "android", "package": "de.danoeh.antennapod", "apk": {"fdroid": "de.danoeh.antennapod"}, "expect": {
+      "login": {"outcome": "inapplicable", "reason": "podcast players subscribe to a public feed; there is no account"},
+      "post": {"outcome": "inapplicable", "reason": "podcast players do not publish"}}},
+    "pocketcasts-android": {"platform": "castopod", "surface": "android", "rss": true, "expect": {
+      "login": {"outcome": "inapplicable", "reason": "podcast players subscribe to a public feed; there is no account"},
+      "post": {"outcome": "inapplicable", "reason": "podcast players do not publish"}}},
+    "podcastaddict-android": {"platform": "castopod", "surface": "android", "rss": true, "expect": {
+      "login": {"outcome": "inapplicable", "reason": "podcast players subscribe to a public feed; there is no account"},
+      "post": {"outcome": "inapplicable", "reason": "podcast players do not publish"}}}
+  }
+}
