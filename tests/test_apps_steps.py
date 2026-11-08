@@ -44,3 +44,16 @@ def test_inapplicable_steps_are_not_run(results, tmp_path):
     app = {'expect': {'login': {'outcome': 'inapplicable', 'reason': 'no accounts'}}}
     steps.run('a', app, {'view': lambda: None, 'post': lambda: None}, results_dir=tmp_path)
     assert results('a') == {'login': 'inapplicable', 'view': 'passed', 'post': 'passed'}
+
+
+def test_an_unsupported_step_is_recorded_so_and_blocks_nothing(results, tmp_path):
+    """A driven app whose step needs an API PieFed lacks yet (the Mastodon apps' timelines, plan W1.2)."""
+    captured = []
+
+    def view():
+        raise steps.Unsupported('no timelines yet')
+    steps.run('a', {}, {'login': lambda: None, 'view': view, 'post': lambda: 'posted'}, on_failure=captured.append,
+              results_dir=tmp_path)
+    assert results('a') == {'login': 'passed', 'view': 'unsupported', 'post': 'passed'}
+    assert captured == []
+    assert json.loads((tmp_path / 'a.json').read_text())['steps']['view']['detail'] == 'no timelines yet'

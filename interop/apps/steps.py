@@ -7,6 +7,11 @@ from pathlib import Path
 from interop.apps.matrix import RESULTS, STEPS, expectation, inapplicable, record
 
 
+class Unsupported(Exception):
+    """Raised by a driver whose step needs an API PieFed does not serve yet: recorded `unsupported`, with the reason,
+    and blocking no later step."""
+
+
 def run(name: str, app: dict, drivers: dict[str, Callable[[], str | None]], version: str | None = None,
         on_failure: Callable[[str], None] | None = None, results_dir: Path = RESULTS) -> None:
     """`drivers[step]()` returns an optional detail on success. `on_failure(step)` captures evidence (a screenshot)."""
@@ -21,6 +26,9 @@ def run(name: str, app: dict, drivers: dict[str, Callable[[], str | None]], vers
             continue
         try:
             detail = drivers[step]() or ''
+        except Unsupported as missing:
+            record(name, step, 'unsupported', str(missing), version=version, results_dir=results_dir)
+            continue
         except Exception as error:   # any failure of the app's UI is this step's outcome, not the harness's
             if on_failure is not None:
                 try:
