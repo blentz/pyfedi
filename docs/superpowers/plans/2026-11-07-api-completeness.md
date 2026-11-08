@@ -1,7 +1,7 @@
 # API completeness: as much of the fediverse's client apps as PieFed can serve
 
 Date: 2026-11-07
-Status: plan for owner review. Decisions D1-D5 (§6) gate the workstreams; nothing is built.
+Status: decisions D1-D5 ruled 2026-11-07 (§6); next is W0.1, the shared read layer. Nothing is built.
 
 Owner goal (2026-11-07): "support as much of the fediverse as we possibly can". This answers M1 of
 `docs/superpowers/specs/2026-11-07-mastodon-client-api-design.md`: every client API family worth its cost, not
@@ -142,12 +142,26 @@ files beyond W0) → W1.3 → W2.2 → W3 (per D3) → W2.3 → W1.4 → W4.
 
 - **D1. Order.** Mastodon first (largest reach, shared OAuth), PeerTube read-only alongside from W1.2. Or PeerTube
   first (NewPipe needs no login: quickest visible win). Recommendation: Mastodon first.
+  **Ruled 2026-11-07: Mastodon first**, PeerTube read-only alongside Mastodon's reading phase (the order in §2.3).
 - **D2. The shared read layer (W0.1) before anything else**, accepting a refactor of `/api/alpha` with no visible
   change, or each new API querying on its own and copying the rules. Recommendation: the shared layer.
+  **Ruled 2026-11-07: the shared layer first** (W0.1), alpha rebuilt on it with its test suite unchanged.
 - **D3. Jerboa.** (a) Lemmy v3 subset plus an alias host whose nodeinfo says `lemmy`; (b) upstream PieFed support into
   Jerboa's API library and no shim; (c) leave Jerboa. Recommendation: (b), then (a) if upstream declines.
+  **Ruled 2026-11-07: a v3 shim, on the main host, answering Jerboa by name**: "we'll do a similar hard-coding for
+  their client that they're doing." Jerboa sends `User-Agent: Jerboa` on every request, nodeinfo included
+  (`jerboa/app/src/main/java/com/jerboa/api/Http.kt:62,79-81`). So nodeinfo answers `software.name: lemmy` with a 0.19.x
+  version (its library picks its API version from it) to that agent only, and `piefed` to everyone else. The nodeinfo
+  cache key gains the agent's class and the response sends `Vary: User-Agent`, so neither answer is served to the
+  other. W3 builds the `/api/v3` subset (renamed fields over the shared read layer); W0.3 becomes this per-client
+  identity rather than per-host.
 - **D4. The PeerTube app's version gate.** It refuses a `serverVersion` below 7.2.0 in `/api/v1/config`. Report a
   PeerTube-compatible version there (only in that endpoint, which only PeerTube clients read), or leave the official
   app out and serve NewPipe and Fedilab only. Recommendation: report it, documented as the API level served.
+  **Ruled 2026-11-07: report the PeerTube API level** PieFed implements in `/api/v1/config` `serverVersion`, to every
+  client (only PeerTube clients read it), documented as the API level served, not PieFed's version.
 - **D5. Spec rulings M2-M8** for the Mastodon mapping (timeline content, titles, where a status goes, votes, token
   lifetime, Pixelfed's own app, phase order).
+  **Ruled 2026-11-07**, recorded in the spec's §6: M2 home = people only, communities as lists; M3 bold title, body,
+  link, community mention; M4 a mentioned community, else microblogs; M5 favourite = upvote; M6 tokens never expire,
+  revocable; M7 spike Pixelfed's app after phases 1-3 and build what it needs; M8 one phase per branch.

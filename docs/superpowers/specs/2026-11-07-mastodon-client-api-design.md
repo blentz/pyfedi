@@ -1,7 +1,8 @@
 # Mastodon client API: Mastodon and Pixelfed apps on PieFed
 
 Date: 2026-11-07
-Status: draft for owner rulings (questions M1-M8, §6). Nothing here is built.
+Status: owner rulings M1-M8 given 2026-11-07 (§6); part of the API-completeness plan
+(`docs/superpowers/plans/2026-11-07-api-completeness.md`, workstream W1). Nothing here is built yet.
 
 The client-app harness (`interop/apps/README.md`, 2026-11-07) checked the top apps of five platforms against PieFed.
 The Lemmy apps that speak PieFed's own API all work: Voyager, Blorp and Photon on the web, and Voyager, Thunder and
@@ -115,23 +116,39 @@ reminder. Unit tests cover every route at 100% line and branch, as for the alpha
 - **M1. Scope.** Mastodon client API only (Mastodon and Pixelfed apps), or also PeerTube's REST API (the PeerTube app,
   TubeLab, NewPipe) and Lemmy's `/api/v3` (Jerboa)? Recommendation: Mastodon only. Lemmy users already have three
   working apps, two on Android. PeerTube's API is a second large surface for a smaller audience.
+  **Superseded 2026-11-07 by the owner's goal, "support as much of the fediverse as we possibly can"**: the
+  API-completeness plan takes PeerTube's API and a Lemmy v3 subset too, as their own workstreams.
 - **M2. What a Mastodon app's home timeline holds.** (a) posts and replies by people the user follows, plus posts in
   communities they joined, each as a status by its author; (b) people only, communities left to a "list" per community.
   Recommendation: (a), so the timeline matches PieFed's own home feed.
+  **Ruled 2026-11-07: (b) people only.** Home holds posts and replies by accounts the user follows; each community the
+  user joined is a Mastodon list (`/api/v1/lists`, `/api/v1/timelines/list/:id`), so communities stay reachable
+  without turning the person-centred home timeline into a forum feed.
 - **M3. How a titled community post shows as a status.** Mastodon has no titles. Recommendation: the title in bold as
   the first line, then the body, then the link, the community as a mention (`@apps@piefed.test`) so a reply stays in
   that community. This is how Mastodon renders Lemmy posts today, which its users know.
+  **Ruled 2026-11-07: as recommended** (bold title, body, link, the community as a mention).
 - **M4. Where a status written in a Mastodon app goes.** (a) the user's microblogs (the local `microblogs`
   community), as a title-less post; (b) a community when the status mentions one, else microblogs. Recommendation:
   (b), which is what a Mastodon user federating to Lemmy already does.
+  **Ruled 2026-11-07: (b)**: a status mentioning a community is a post there (title derived as for an inbound Mastodon
+  note), otherwise a title-less post in the user's microblogs.
 - **M5. Votes.** Favourite = upvote, unfavourite = remove the vote; downvotes have no Mastodon form and are not shown.
   Boost = PieFed's boost (Announce). Agree?
+  **Ruled 2026-11-07: agreed** (favourite = upvote, `favourites_count` = upvotes, downvotes not shown, boost = boost).
 - **M6. Tokens.** Never expiring unless revoked (as Mastodon, which apps assume), listed and revocable in settings.
   Or a lifetime (e.g. a year) that apps then hit as a sudden logout. Recommendation: never expiring, revocable.
+  **Ruled 2026-11-07: never expiring**, revoked by the user (settings lists authorised apps), a password change, a ban
+  or the account's deletion.
 - **M7. Pixelfed's own app.** Accept that it may need Pixelfed-only routes (phase 4 spike), or take PixelDroid and
   Fedilab as the Pixelfed apps and leave the official one `unsupported`?
+  **Ruled 2026-11-07: spike, then build what it needs**: after phases 1-3 the app runs in the harness, its
+  Pixelfed-only calls are listed and built, with per-client identity (as for Jerboa, plan D3) if it gates on the
+  software name.
 - **M8. Order.** Phase 1 (login) alone first, merged and harness-proved, then 2, then 3, each its own branch, as the
   native-federation steps were. Agree?
+  **Ruled 2026-11-07: one phase per branch**, each merged when the harness flips its rows in two consecutive cold runs
+  and the full gates pass.
 
 ## 7. Also found by the harness (not part of this API)
 
