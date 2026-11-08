@@ -214,7 +214,7 @@ A survey of every other client API family (source-read, 2026-11-07) ranked what 
   7. 658e97695 `/user/settings/apps`, "Authorised apps" in the settings menu, with revoke.
   2533291f3 the routes classified for the repo's sweeps (onion session-exempt, `app_id`, public metadata).
   Choices the spec left open, for the owner: `push` is accepted and grants nothing yet (Tusky asks for it); admin
-  scopes are refused; tokens are not bound to the domain they were issued on (as alpha tokens); `require_oauth` has
+  scopes are refused; tokens are not bound to the domain they were issued on (as alpha tokens) — **ruled 2026-11-08: bind them**, done in ec88a5321 (codes and tokens are exchanged, refreshed, revoked and used only on the domain they were issued on; migration a7d3e9b2c4f1 gives older rows the default domain); `require_oauth` has
   no route yet (W1.1 adds them). Six findings from four automated security reviews, each fixed in its own commit (above).
 - **W0.3 Per-host identity.** Some apps choose their protocol from nodeinfo `software.name` (Jerboa needs `lemmy`,
   Fedilab maps `peertube`/`misskey`/`pleroma`), and PieFed's own clients need `piefed`. If D3 or D4 needs another
@@ -275,6 +275,11 @@ floors and changed-line gates.
        harness root is a user CA too; the system WebView refuses a system CA's certificate for a reserved name
        (`ERR_CERT_NON_UNIQUE_NAME`), so Tusky logs in with "Login with Browser" and its WebView login goes untested.
     Moshidon, PixelDroid, Fedilab and Pixelfed stay probes (their logins pass as probes).
+    Gates: suite 31957 passed, floors 140 and changed-line (base 1f90b5426) green, after ec88a5321.
+    Open for the owner: `push` (Web Push subscriptions; accepted, grants nothing; Elk asks for it), admin scopes
+    (refused outright today, so an app asking for one cannot log in; or accept and grant nothing), and the
+    `4.0.0` version claim, which no harness validates and which apps (Phanpy) use to choose features: a survey of the
+    harness apps' version thresholds is proposed before W1.2.
   - W1.2 Reading: timelines, statuses and context, notifications, search, markers, custom emojis.
   - W1.3 Writing: statuses, media v2, favourite, boost, bookmark, follow; Pleroma/glitch emoji reactions.
   - W1.4 Pixelfed extras after a spike (`/api/v1.1`, `/api/pixelfed`), per M7.
