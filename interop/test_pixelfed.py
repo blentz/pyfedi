@@ -71,11 +71,13 @@ def pixelfed_media(status):
 # --- PieFed to Pixelfed ---
 
 def test_an_album_shows_in_the_pixelfed_home_feed_whole(piefed, pixelfed, erin_follows_alice):
-    """Every picture, in order, with its alt text; the WebP as the JPEG Pixelfed takes (R3, R5)."""
+    """Every picture, in order, with its alt text; the WebP as the JPEG Pixelfed takes (R3, R5). Since the gallery
+    ruling (spec 2026-11-01 G-5) `gallery` is every picture of the post and `url` is not used."""
     marker = uuid.uuid4().hex[:6]
     urls = [upload(piefed, (200, 0, 0)), upload(piefed, (0, 200, 0), 'WEBP'), upload(piefed, (0, 0, 200), 'PNG')]
-    post = piefed.post(f'Album {marker}', f'Album {marker}', piefed.microblogs_id(), url=urls[0], alt_text=f'red {marker}',
-                       gallery=[{'url': urls[1], 'alt_text': f'green {marker}'},
+    post = piefed.post(f'Album {marker}', f'Album {marker}', piefed.microblogs_id(),
+                       gallery=[{'url': urls[0], 'alt_text': f'red {marker}'},
+                                {'url': urls[1], 'alt_text': f'green {marker}'},
                                 {'url': urls[2], 'alt_text': f'blue {marker}'}])
 
     media = pixelfed_media(in_home(pixelfed, post['post']['ap_id']))
@@ -133,10 +135,13 @@ def test_a_pixelfed_album_arrives_whole(pixelfed, alice_follows_erin, db):
 
     post_id = stored(db, status['uri'])
 
-    alts = query(db, 'select f.alt_text from post p join file f on f.id = p.image_id where p.id = %s', post_id) + \
-        query(db, 'select f.alt_text from post_file pf join file f on f.id = pf.file_id '
-                  'where pf.post_id = %s and pf.weight >= 0 order by pf.weight', post_id)
+    # every picture is a gallery row, weights 0.. (spec 2026-11-01 G-1); post.image is the thumbnail, a copy of the first
+    # picture and never a gallery row (G-3)
+    alts = query(db, 'select f.alt_text from post_file pf join file f on f.id = pf.file_id '
+                     'where pf.post_id = %s and pf.weight >= 0 order by pf.weight', post_id)
     assert [alt for (alt,) in alts] == [f'alt0 {marker}', f'alt1 {marker}', f'alt2 {marker}']
+    thumbnail = query(db, 'select f.alt_text from post p join file f on f.id = p.image_id where p.id = %s', post_id)
+    assert thumbnail == [(f'alt0 {marker}',)]
 
 
 def test_a_sensitive_pixelfed_post_arrives_behind_its_warning(pixelfed, alice_follows_erin, db):
