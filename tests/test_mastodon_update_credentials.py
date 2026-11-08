@@ -168,3 +168,10 @@ def test_json_without_fields_keeps_the_old_ones(world):
     db.session.commit()
     assert _patch(world, json={'bot': True}).status_code == 200
     assert [field.label for field in _me(world).extra_fields] == ['Kept']
+
+
+def test_a_field_key_with_a_trailing_newline_is_no_field(world):
+    """`$` would match before the newline: the whole key must be the numbered form."""
+    response = _patch(world, data={'fields_attributes[0][name]\n': 'Sneaky', 'fields_attributes[0][value]\n': 'x'})
+    assert response.status_code == 200
+    assert list(_me(world).extra_fields) == []

@@ -66,7 +66,7 @@ MAX_DISPLAY_NAME = 255
 MAX_NOTE = 5000
 MAX_FIELDS = 4
 MAX_FIELD = 1024
-_NUMBERED_FIELD = re.compile(r'^fields_attributes\[(\d+)\]\[(name|value)\]$')
+_NUMBERED_FIELD = re.compile(r'fields_attributes\[(\d+)\]\[(name|value)\]')
 
 
 class _Invalid(ValueError):
@@ -111,7 +111,7 @@ def _profile_fields(fields) -> list[tuple[str, str]] | None:
     else:
         numbered = {}
         for key in fields:
-            match = _NUMBERED_FIELD.match(key)
+            match = _NUMBERED_FIELD.fullmatch(key)
             if match:
                 numbered.setdefault(int(match.group(1)), {})[match.group(2)] = fields[key]
         if not numbered:
