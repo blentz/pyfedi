@@ -11,7 +11,7 @@ on. The person reads apply none of the viewer's blocks (`Restrictions`): a block
 """
 from dataclasses import dataclass
 
-from sqlalchemy import asc, desc, exists, or_, select
+from sqlalchemy import and_, asc, desc, exists, or_, select
 from sqlalchemy.orm.exc import NoResultFound
 
 from app import db
@@ -19,6 +19,7 @@ from app.local_names import local_clause, local_named
 from app.local_only import hidden_here, one_here, without_local_only_actors
 from app.models import Community, CommunityMember, User
 from app.permissions import user_access
+from app.reads.viewer import Restrictions
 from app.storefront import current_instance_id, current_storefront, domain_for_host, on_domain
 
 
@@ -117,11 +118,16 @@ def sees_all_of(person: User, viewer_id: int | None) -> bool:
 def moderates_hidden_from(person: User, viewer_id: int | None, community_ids) -> set[int]:
     """Of `community_ids`, the communities `person` moderates, those the viewer may not be told they moderate: a
     community whose moderators are private (`private_mods`), as the web profile leaves it out
-    (app/user/utils.py:417-419), unless the viewer is the person or administers them."""
+    (app/user/utils.py:417-419), and a private community the viewer is not a member of (membership as the post and
+    reply listings ask it: `Restrictions.private_community_ids`, member and not banned), unless the viewer is the
+    person or administers them."""
     if not community_ids or sees_all_of(person, viewer_id):
         return set()
-    return set(db.session.scalars(select(Community.id).where(Community.id.in_(community_ids),
-                                                             Community.private_mods == True)))
+    unjoined_private = Community.private == True
+    if member_of := Restrictions(viewer_id).private_community_ids:
+        unjoined_private = and_(unjoined_private, Community.id.not_in(member_of))
+    return set(db.session.scalars(select(Community.id).where(
+        Community.id.in_(community_ids), or_(Community.private_mods == True, unjoined_private))))
 
 
 def moderators_hidden(community_id: int, viewer_id: int | None) -> bool:

@@ -91,3 +91,37 @@ def test_the_gates_on_their_own(world):
     mod = world[3]
     assert reads_users.moderators_hidden(987654, None) is False
     assert reads_users.moderates_hidden_from(mod, None, []) == set()
+
+
+# --- private communities in `moderates`: membership as app/reads asks it (Restrictions.private_community_ids) ---
+
+@pytest.fixture
+def secret(world):
+    """A private community `mod` moderates, beside `world`'s two."""
+    community = make_community('secretclub')
+    community.private = True
+    db.session.commit()
+    make_community_member(world[3], community, is_moderator=True)
+    return community
+
+
+@pytest.mark.parametrize('who', ['anonymous', 'reader'])
+def test_moderates_leaves_out_a_private_community_to_a_non_member(world, secret, who):
+    assert moderated(world, who) == ['openmods']
+
+
+@pytest.mark.parametrize('who', ['self', 'admin'])
+def test_moderates_names_a_private_community_to_the_person_and_admins(world, secret, who):
+    assert sorted(moderated(world, who)) == ['hushmods', 'openmods', 'secretclub']
+
+
+def test_moderates_names_a_private_community_to_its_member(world, secret):
+    make_community_member(world[0].user3, secret)
+    assert sorted(moderated(world, 'reader')) == ['openmods', 'secretclub']
+
+
+def test_moderates_leaves_out_a_private_community_to_a_member_banned_from_it(world, secret):
+    member = make_community_member(world[0].user3, secret)
+    member.is_banned = True
+    db.session.commit()
+    assert moderated(world, 'reader') == ['openmods']
