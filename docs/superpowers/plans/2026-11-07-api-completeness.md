@@ -61,6 +61,39 @@ A survey of every other client API family (source-read, 2026-11-07) ranked what 
   Rules: code moves before it changes; the alpha tests are not edited (a test that must change means behaviour
   changed, which W0.1 does not); `app/reads` returns model rows and queries, never alpha-shaped dicts; no inline
   imports. New tests in `tests/test_reads_*.py` cover the layer directly, so a later API can rely on it.
+
+  **Divergences kept in step 2, for the owner to rule on.** `get_post_list` (offset pages, raw-SQL fast path) and
+  `get_post_list2` (keyset pages) disagreed when they were merged into `app/reads/posts.py`. Each is a field of
+  `Spelling` there (`OFFSET_PAGES`, `KEYSET_PAGES`), so neither listing changed. Line numbers are of
+  `app/api/alpha/utils/post.py` at f14b669e6.
+  1. Read languages: `get_post_list` filters them only in its fast path's SQL (191-193), so a narrowed listing, a
+     search or a liked/saved list shows every language; `get_post_list2` filters its query (1167-1169).
+     (`languages_in_query`)
+  2. Hidden posts: `get_post_list` leaves out the posts the viewer hid, except in a search (514-535);
+     `get_post_list2` lists them. (`hides_hidden_posts`)
+  3. Polls and events: `get_post_list2` leaves them out (1301); `get_post_list` lists them.
+     (`hides_polls_and_events`)
+  4. Active: both order by `last_active`; `get_post_list2` lists only posts with a reply (1292-1294, 1398)
+     and `get_post_list` does not (646-650). (`active_needs_replies`)
+  5. New: `get_post_list` orders any sort starting `New` as New (639); `get_post_list2` only `New` (1288).
+     (`new_sorts_by_prefix`)
+  6. Tiebreaks: `get_post_list2` orders New, Active and the named Top sorts a second time with `post.id` last
+     (1339-1399), so its ORDER BY repeats the sort column (`score DESC, score DESC, id DESC`). Kept as it was,
+     because a keyset cursor carries a value for every ORDER BY column and a changed list would refuse cursors handed
+     out before. A `Top...` sort with no window of its own, and Old, get no tiebreak; `get_post_list` has none.
+     (`keyset_tiebreaks`)
+  7. Hide-read while searching: both skip `hide_read_posts` in a search (496, 1208), but `get_post_list2` applied it a
+     second time without that condition (1321), so it hides read posts in a search too.
+     (`hides_read_when_searching`)
+  8. The fast path's own rules, which `get_post_list` has only when it takes that path (front page, Local, Popular,
+     Subscribed, Moderating, a URL search) and `get_post_list2` never has: posts of a banned community are left out
+     (`c.banned = FALSE`, 669); a Local listing honours instance blocks (187-189; neither ORM query does); and it
+     reads at most 1000 posts (688), so its later pages are empty.
+  Same in both and unchanged: blocks, private communities, visibility, local-only, NSFW/NSFL, bots, reposters,
+  gen-AI, keyword filters, minimum score, stickies, Hot and Scaled with the domain boost. `get_post_list2` applied
+  liked, saved, read-posts and keyword filters twice (1310-1337); the second copies selected nothing new and are gone.
+  `get_post_list`'s raw-SQL criteria for listings that turn the fast path off (a narrowed listing, liked, saved) were
+  never run and are gone.
 - **W0.2 One OAuth 2 authorization server** (Authlib, already a dependency): app registration, authorization code
   with PKCE, out-of-band codes, refresh, client credentials, revocation, a settings page listing authorised apps.
   Mastodon, Pixelfed and Mbin-style clients use it; PeerTube's password grant and Lemmy's JWT login sit beside it on the
