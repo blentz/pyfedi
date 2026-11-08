@@ -11,6 +11,7 @@ from app.models import OAuthToken, User, utcnow
 from app.oauth_scopes import covers
 from app.oauth_server import tokens
 from app.storefront import act_in_this_request
+from app.utils import login_required_here
 
 LAST_USED_RESOLUTION = timedelta(hours=1)
 
@@ -49,6 +50,8 @@ def require_oauth(scope: str | None = None, user_required: bool = True):
                 return _refuse(401, 'The access token is invalid')
             if scope is not None and not covers(token.scope, scope):
                 return _refuse(403, 'This action is outside the authorized scopes')
+            if token.user_id is None and login_required_here():
+                return _refuse(401, 'The access token is invalid')   # spec §5: on a private instance, a person's only
             if user_required and token.user_id is None:
                 return _refuse(422, 'This method requires an authenticated user')
             user = db.session.get(User, token.user_id) if token.user_id else None
@@ -57,5 +60,8 @@ def require_oauth(scope: str | None = None, user_required: bool = True):
             _record_use(token)
             g.oauth_token, g.oauth_user = token, user
             return view(*args, **kwargs)
+        # The login gate (app.login_gate._has_own_gate) leaves the token to this check, scope and all: the gate
+        # lets no OAuth token past on its own, so one cannot reach a route that would read it as nobody
+        guarded.has_own_login_gate = True
         return guarded
     return decorator

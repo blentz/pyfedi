@@ -24,6 +24,7 @@ def world(app, api_baseline):
 def _call(world, view, token):
     headers = {'Authorization': f'Bearer {token}'} if token is not None else {}
     with world['flask'].test_request_context('/api/v1/test', headers=headers):
+        world['flask'].preprocess_request()   # the before_request hooks: the site and the storefront
         result = view()
         return result if isinstance(result, tuple) else (result, 200)
 
@@ -125,24 +126,32 @@ def _private_world(app):
     return registered, user
 
 
-def test_a_persons_token_gets_through_the_gate_of_a_private_instance(app, private):
+def test_an_oauth_route_keeps_its_own_login_gate():
+    """The login gate lets it check the token itself, scope included (app.login_gate._has_own_gate)."""
+    assert _reader.has_own_login_gate is True
+
+
+def test_on_a_private_instance_a_persons_token_gets_in(app, private):
     registered, user = _private_world(app)
     access, _refresh = tokens.issue_token(registered, user, 'read')
-    response = app.test_client().get('/api/alpha/post/list', headers={'Authorization': f'Bearer {access}'})
-    assert response.status_code != 401, response.get_data(as_text=True)
+    with app.test_request_context('/api/v1/test', headers={'Authorization': f'Bearer {access}'}):
+        app.preprocess_request()
+        assert isinstance(_app_reader(), dict)
 
 
-@pytest.mark.parametrize('which', ['app-token', 'revoked', 'banned'])
-def test_no_other_token_gets_through_the_gate_of_a_private_instance(app, private, which):
+def test_on_a_private_instance_an_apps_own_token_gets_nothing(app, private):
+    registered, _user = _private_world(app)
+    access, _none = tokens.issue_token(registered, None, 'read', with_refresh=False)
+    with app.test_request_context('/api/v1/test', headers={'Authorization': f'Bearer {access}'}):
+        app.preprocess_request()
+        response, status = _app_reader()
+    assert status == 401
+
+
+@pytest.mark.parametrize('scope', ['read', 'push'])
+def test_an_oauth_token_does_not_open_the_alpha_api_of_a_private_instance(app, private, scope):
+    """The alpha API does not take OAuth tokens: one would get in as nobody, whatever its scope."""
     registered, user = _private_world(app)
-    if which == 'app-token':
-        access, _none = tokens.issue_token(registered, None, 'read', with_refresh=False)
-    else:
-        access, _refresh = tokens.issue_token(registered, user, 'read')
-        if which == 'revoked':
-            tokens.revoke(tokens.token_for(access))
-        else:
-            user.banned = True
-            db.session.commit()
+    access, _refresh = tokens.issue_token(registered, user, scope)
     response = app.test_client().get('/api/alpha/post/list', headers={'Authorization': f'Bearer {access}'})
     assert response.status_code == 401
