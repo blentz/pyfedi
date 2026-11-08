@@ -7,6 +7,7 @@ from flask_babel import lazy_gettext as _l
 from flask_login import current_user
 
 from app import limiter
+from app.models import OAuthApp
 from app.oauth_scopes import parse_scope
 from app.oauth_server import bp, tokens
 from app.oauth_server.server import server
@@ -122,6 +123,15 @@ def _page(template, status=200, **context):
     return _framed_never(make_response(render_template(template, **context), status))
 
 
+def _registered_redirect(uri: str | None) -> bool:
+    """Whether an error may be sent to `uri`: one the app named in this request registered, and not OOB. Authlib
+    attaches only a checked redirect to an error; this does not rely on it."""
+    if not uri or uri == OOB:
+        return False
+    registered = OAuthApp.query.filter_by(client_id=request.args.get('client_id')).first()
+    return registered is not None and registered.check_redirect_uri(uri)
+
+
 @bp.route('/oauth/authorize', methods=['GET', 'POST'])
 @login_required(csrf=True)
 def authorize():
@@ -130,7 +140,7 @@ def authorize():
     try:
         grant = server.get_consent_grant(end_user=current_user)
     except OAuth2Error as error:
-        if error.redirect_uri and error.redirect_uri != OOB:
+        if _registered_redirect(error.redirect_uri):
             return server.handle_error_response(None, error)
         return _page('oauth/error.html', 400, error=error.description or error.error)
     if request.method == 'POST':

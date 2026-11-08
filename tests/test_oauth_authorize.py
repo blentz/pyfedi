@@ -5,9 +5,10 @@ from hashlib import sha256
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from authlib.oauth2.rfc6749 import InvalidScopeError
 
 from app.models import OAuthCode
-from app.oauth_server import tokens
+from app.oauth_server import routes, tokens
 from tests.factories import make_user
 from tests.test_admin_routes_entry import csrf, login
 
@@ -169,3 +170,23 @@ def test_an_oob_app_that_is_denied_is_told_here(world):
     assert response.status_code == 200
     assert OAuthCode.query.count() == 0
     assert 'denied' in response.get_data(as_text=True).lower()
+
+
+@pytest.mark.parametrize('overrides', [{'response_type': 'token', 'redirect_uri': 'https://evil.example/cb'},
+                                       {'scope': 'admin:read', 'redirect_uri': 'https://evil.example/cb'}],
+                         ids=['implicit-flow', 'bad-scope'])
+def test_an_error_never_goes_to_a_redirect_the_app_did_not_register(world, overrides):
+    response = _signed_in(world).get('/oauth/authorize', query_string=_query(world, **overrides))
+    assert response.status_code == 400
+    assert 'Location' not in response.headers
+
+
+def test_an_error_is_shown_here_if_the_redirect_it_names_is_not_the_apps(world, monkeypatch):
+    """Our own check, whatever Authlib attaches to an error."""
+    def refuse(**_kwargs):
+        raise InvalidScopeError(redirect_uri='https://evil.example/cb')
+
+    monkeypatch.setattr(routes.server, 'get_consent_grant', refuse)
+    response = _signed_in(world).get('/oauth/authorize', query_string=_query(world))
+    assert response.status_code == 400
+    assert 'Location' not in response.headers
