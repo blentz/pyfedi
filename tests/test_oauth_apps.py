@@ -95,3 +95,23 @@ def test_a_bad_json_registration_is_refused(client, body):
 def test_a_custom_scheme_redirect_is_accepted(client):
     response = client.post('/api/v1/apps', json={'client_name': 'A', 'redirect_uris': 'org.joinmastodon.android://cb'})
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize('uri', ['https://a.example/cb\njavascript:alert(1)', 'https://a.example/c b',
+                                 'https://a.example/cb\t', 'https://a.example/cb\x00', 'https://a.example/cb\x7f'],
+                         ids=['newline', 'space', 'tab', 'nul', 'del'])
+def test_a_redirect_with_whitespace_or_a_control_character_is_refused(client, uri):
+    """Stored one per line: a newline inside one would make a second, unchecked URI."""
+    response = client.post('/api/v1/apps', json={'client_name': 'A', 'redirect_uris': [uri]})
+    assert response.status_code == 422
+    assert OAuthApp.query.count() == 0
+
+
+@pytest.mark.parametrize('website', ['javascript:alert(1)', 'data:text/html,hi', 'tusky.app', 'https:///no-host',
+                                     'ftp://files.example/', 'http://[::1/'],
+                         ids=['javascript', 'data', 'no-scheme', 'no-host', 'ftp', 'unparseable'])
+def test_a_website_must_be_an_http_url(client, website):
+    """The consent page links to it."""
+    response = client.post('/api/v1/apps', data={'client_name': 'A', 'redirect_uris': OOB, 'website': website})
+    assert response.status_code == 422
+    assert OAuthApp.query.count() == 0

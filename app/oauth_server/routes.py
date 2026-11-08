@@ -27,6 +27,8 @@ def _redirect_uri(uri) -> str:
         return uri
     if len(uri) > 2000:
         raise _Invalid('Redirect URI is too long')
+    if any(character.isspace() or ord(character) < 0x20 or ord(character) == 0x7f for character in uri):
+        raise _Invalid('Redirect URI must not contain whitespace')   # stored one per line
     try:
         parts = urlsplit(uri)
     except ValueError:
@@ -39,6 +41,21 @@ def _redirect_uri(uri) -> str:
     if scheme in ('http', 'https') and not parts.hostname:
         raise _Invalid('Redirect URI must be an absolute URI')
     return uri
+
+
+def _website(value) -> str | None:
+    """An absolute http(s) URL with a host, or None: the consent page links to it."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or len(value) > 1024:
+        raise _Invalid('Website is invalid')
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        raise _Invalid('Website is invalid') from None
+    if parts.scheme.lower() not in ('http', 'https') or not parts.hostname:
+        raise _Invalid('Website is invalid')
+    return value
 
 
 def _redirect_uris(value) -> list[str]:
@@ -64,8 +81,7 @@ def register_app():
             raise _Invalid("Name can't be blank")
         if len(name) > 255:
             raise _Invalid('Name is too long')
-        if website is not None and (not isinstance(website, str) or len(website) > 1024):
-            raise _Invalid('Website is invalid')
+        website = _website(website)
         redirect_uris = _redirect_uris(fields.get('redirect_uris'))
         try:
             scope = tokens.parse_scope(fields.get('scopes'))
