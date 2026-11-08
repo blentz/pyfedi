@@ -4,7 +4,7 @@ from flask import current_app, abort
 from flask_smorest import abort as api_abort
 from flask_login import current_user
 from furl import furl
-from sqlalchemy import text, desc, func, asc, select
+from sqlalchemy import and_, text, desc, func, select
 from sqlalchemy.orm.exc import NoResultFound
 import jwt
 from datetime import datetime
@@ -13,14 +13,14 @@ from app import db, cache
 from app.activitypub.util import make_image_sizes, normalise_actor_string
 from app.api.alpha.utils.post import get_post_list
 from app.api.alpha.utils.reply import get_reply_list
+import app.reads.users as reads_users
 from app.api.alpha.views import user_view, reply_view, post_view, community_view
 # The module, not the name: app.auth.util reaches this file, through the activitypub and api blueprints, before
 # find_user is defined (import cycle: app.auth.util)
 import app.auth.util as auth_util
 from app.api.alpha.utils.found import a_community, a_person
 from app.hidden_routes import hidden_by_read_state, hidden_notifications, hidden_unread, notification_hidden
-from app.local_names import local_clause, local_named
-from app.local_only import one_here, without_hidden_here, without_hidden_messages, without_local_only_actors
+from app.local_only import without_hidden_here, without_hidden_messages
 from app.constants import *
 from app.federation_urls import owner_base
 from app.onion import stamp_activity
@@ -34,7 +34,7 @@ from app.utils import authorise_api_user, in_sorted_list, user_in_restricted_cou
 from app.utils import captcha_enabled, create_captcha, markdown_to_html, log_login_failure
 from app.onion import is_onion_request
 from app.visibility import visible_to_clause
-from app.storefront import canonicalise_text, current_instance_id, current_storefront, domain_for_host, link_on, on_domain, storefront_link
+from app.storefront import canonicalise_text, link_on, storefront_link
 
 
 from app.permissions import may_ban
@@ -44,19 +44,16 @@ def get_user(auth, data):
     if 'person_id' in data:
         person = int(data['person_id'])
     elif 'username' in data:
-        person = data['username']
-        if '@' not in person:   # a bare name is the storefront's account
-            found = User.query.filter(local_clause(User, person))
+        username = data['username']
+        if '@' not in username:   # a bare name is the storefront's account
+            name, ap_domain, remote_named = username, None, None
         else:
-            name, ap_domain = normalise_actor_string(person)   # both lowercased
+            name, ap_domain = normalise_actor_string(username)   # both lowercased
             if not name or not ap_domain:
                 raise Exception('invalid_request')
-            hosted = domain_for_host(ap_domain)
-            if hosted is not None:   # a hosted domain's own account
-                found = User.query.filter(local_named(User, name, hosted))
-            else:
-                found = User.query.filter(func.lower(User.user_name) == name, func.lower(User.ap_domain) == ap_domain)
-        person = one_here(found.filter(User.deleted == False), User)   # hidden here or nobody's: one answer (F6)
+            # the remote arm, which tests/test_local_name_lookups.py allows here; a hosted domain's name is its own
+            remote_named = and_(func.lower(User.user_name) == name, func.lower(User.ap_domain) == ap_domain)
+        person = reads_users.person_named(name, ap_domain, remote_named)   # hidden here or nobody's: one answer (F6)
         data['person_id'] = person.id
     include_content = data['include_content'] if 'include_content' in data else False
     saved_only = data['saved_only'] if 'saved_only' in data else False
@@ -81,6 +78,10 @@ def get_user(auth, data):
         post_list = {'posts': []}
         reply_list = {'comments': []}
 
+    if isinstance(person, int):
+        person = reads_users.person_by_id(person, user_id is not None)
+    else:
+        reads_users.refuse_hidden_person(person, user_id is not None)
     user_json = user_view(user=person, variant=3, user_id=user_id)
     user_json['posts'] = post_list['posts']
     user_json['comments'] = reply_list['comments']
@@ -111,29 +112,7 @@ def get_user_list(auth, data):
 
     user_id = authorise_api_user(auth) if auth else None
 
-    if type == 'Local':
-        users = User.query.filter(User.instance_id == current_instance_id(), User.verified.is_(True),
-                                  User.banned.is_(False), User.deleted.is_(False)).filter(
-            on_domain(current_storefront()))
-    else:
-        users = User.query.filter(User.deleted == False)
-    users = without_local_only_actors(users, User, visible=user_id is not None)   # spec §3.4
-
-    if query:
-        if '@' in query:
-            users = users.filter(User.ap_id.ilike(f"%{query}%"))
-        else:
-            users = users.filter(User.user_name.ilike(f"%{query}%"))
-
-    if sort == "New":
-        users = users.order_by(desc(User.created))
-    elif sort == "Old":
-        users = users.order_by(asc(User.created))
-    elif sort.startswith('Top'):
-        users = users.order_by(desc(User.post_count))
-    else:
-        users = users.order_by(User.id)
-
+    users = reads_users.person_listing(user_id is not None, reads_users.People(scope=type, search=query, sort=sort))
     users = users.paginate(page=page, per_page=limit, error_out=False)
 
     user_list = []

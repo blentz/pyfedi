@@ -137,6 +137,47 @@ A survey of every other client API family (source-read, 2026-11-07) ranked what 
   away (util.py 213, 283), so no score floor ever applied; the no-op is gone, the floor is the owner's to restore or
   drop. `get_reply_list`'s flat listing keeps its own rules (blocks without descendants, `max_depth` below that depth,
   reply.py 190, against at most it in a conversation, 291).
+  **Divergences kept in step 4, for the owner to rule on.** `get_user` (one person, by `person_id` or `username`) and
+  `get_user_list` (the person list and search) read through `app/reads/users.py` (`person_by_id`, `person_named`,
+  `refuse_hidden_person`, `person_listing`); `get_user_details` is the caller's own account (`authorise_api_user` and
+  its view) and has no read to move. Line numbers are of `app/api/alpha/utils/user.py` at b997abfae unless named.
+  1. Deleted people: a `username` lookup refuses a deleted person (59); a `person_id` lookup finds them (45, and
+     `user_view`'s `db.session.get`, views.py 453-461) and their profile shows them deleted. (`Lookup.finds_deleted`,
+     `BY_NAME`, `BY_ID`)
+  2. Blocks: neither the lookups nor the person list apply any of the viewer's blocks (people, instances, banned
+     instances: 41-90, 113-135), where the post and reply listings drop blocked people and instances
+     (`app/reads/posts.py` 192-207, `app/reads/replies.py` 66-73). A blocked person is found and listed.
+  3. Banned and unverified accounts: a Local listing leaves them out (114-117); an All listing (119) and both lookups
+     find them. (`People.scope`)
+  4. An address search (`q` with an `@`) matches `ap_id` only (124), which local accounts do not have, so it never
+     finds a local account, `name@this.domain` included.
+  5. Against the web's people directory (`app/instance/routes.py` 161-170), the API's list does not honour
+     `searchable` (an account that opted out of the profile list is listed and found by search; see the security
+     sweep below), and lists banned accounts (All), bots and silenced instances' accounts. Unchanged here.
+  Same in both and unchanged: an account hidden here is `Not found` by id and by name and is left out of the list
+  (`hidden_here`, signed in or not); a bare name is the storefront's account, a hosted domain's name its own.
+  tests/test_local_name_lookups.py allows the remote-name lookup (`func.lower(User.user_name) == name`) in alpha's
+  `get_user` only, so that condition is still built there and handed to `person_named`; a later API that looks up a
+  remote name needs its own ALLOWED entry, or the entry moved to `app/reads/users.py` (the owner's call: the test is
+  not edited in a refactor).
+  **Security sweep in step 4, reported, not fixed** (probe tests run against b997abfae's behaviour, all passing,
+  i.e. each leak present):
+  1. `private_mods`: a person's `moderates` (views.py `cached_modlist_for_user`/`shown_modlist`, 1681-1711) names a
+     community whose moderators are private, to anyone, signed in or not; the web profile hides it from all but admins
+     and the person (`app/user/utils.py` 417-419). The community's own mod list (`cached_modlist_for_community`,
+     views.py 1667-1678) ignores `private_mods` too (outside step 4). Likely a leak.
+  2. Private communities: `moderates` names a private community the viewer is not a member of (name, title, icon),
+     anonymous or not, while the community list leaves it out (`app/api/alpha/utils/community.py` 103-118). The web
+     profile names it too, so this may be by design.
+  3. `searchable`: `get_user_list` (search type Users) lists and finds an account with `searchable = False`
+     (User.searchable: "whether their profile is visible in profile list"); the web directory leaves it out.
+  4. Counts: `post_count`/`comment_count` (stored on the user row, `User.recalculate_post_stats`, models.py
+     2722-2730, and the increments) count posts and comments in private communities, followers-only and local-only
+     ones too, so a profile shows `post_count: 1, comment_count: 1` beside empty posts and comments to an anonymous
+     viewer. A count, not content; Top sorts the person list by it.
+  Checked and not leaking: a person's posts and comments with `include_content` leave out a private community's to a
+  non-member (probe; visibility and local-only go through `app/reads` as in steps 2 and 3), and local-only and
+  off-domain accounts are `Not found` by id and by name and left out of the list (tests/test_reads_users.py).
 - **W0.2 One OAuth 2 authorization server** (Authlib, already a dependency): app registration, authorization code
   with PKCE, out-of-band codes, refresh, client credentials, revocation, a settings page listing authorised apps.
   Mastodon, Pixelfed and Mbin-style clients use it; PeerTube's password grant and Lemmy's JWT login sit beside it on the
