@@ -95,20 +95,30 @@ def golden_site(app, two_domains):
 VERSION_MARK = b'"version":"{VERSION}"'
 
 
+# Mastodon's instance documents name the release inside their version (`4.0.0 (compatible; PieFed 1.8.10)`)
+COMPAT_MARK = b'PieFed {VERSION})'
+
+
 def release_mark(app) -> bytes:
     return f'"version":"{app.config["VERSION"]}"'.encode()
 
 
+def compat_mark(app) -> bytes:
+    return f'PieFed {app.config["VERSION"]})'.encode()
+
+
 def golden_copy(name: str) -> bytes:
     """The golden copy `name` as the running release serves it: a copy pins the document's structure and identity,
-    not the release, so the version field is a placeholder in it (VERSION_MARK)."""
-    return (GOLDEN / name).read_bytes().replace(VERSION_MARK, release_mark(current_app))
+    not the release, so the version field is a placeholder in it (VERSION_MARK, COMPAT_MARK)."""
+    return (GOLDEN / name).read_bytes().replace(VERSION_MARK, release_mark(current_app)) \
+        .replace(COMPAT_MARK, compat_mark(current_app))
 
 
 def capture(golden: Path, body: bytes) -> None:
     """A deliberate capture (see the module docstring): written with the release as the placeholder, then failed."""
     golden.parent.mkdir(parents=True, exist_ok=True)
-    golden.write_bytes(body.replace(release_mark(current_app), VERSION_MARK))
+    golden.write_bytes(body.replace(release_mark(current_app), VERSION_MARK).replace(compat_mark(current_app),
+                                                                                     COMPAT_MARK))
     pytest.fail(f'captured {golden}; review it and run again')
 
 

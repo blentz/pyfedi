@@ -163,9 +163,13 @@ def test_nodeinfo_counts_each_domains_own_accounts_and_content(app, path):
 
 @pytest.mark.usefixtures('shop_post')
 def test_the_shops_mastodon_instance_document_is_the_shops(app):
-    assert json.loads(shop_body(app, '/api/v1/instance')) == {
+    document = json.loads(shop_body(app, '/api/v1/instance'))
+    assert {key: document[key] for key in ('title', 'uri', 'stats', 'registrations', 'approval_required')} == {
         'title': SHOP, 'uri': SHOP, 'stats': {'user_count': 1, 'status_count': 1, 'domain_count': 1},
         'registrations': False, 'approval_required': False}
+    # The rest of Mastodon's (plan W1.1): nothing of the first domain's site
+    assert document['short_description'] == '' and document['description'] == '' and document['email'] == ''
+    assert document['thumbnail'].endswith('/static/images/piefed_logo_icon_t_512.png')
     assert json.loads(get(app, '/api/v1/instance', host=FIRST).data)['stats']['status_count'] == 0
 
 

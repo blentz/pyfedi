@@ -56,6 +56,7 @@ from app.relays import inbound as relay_inbound
 from app.local_only import community_local_only, federated_mentions, federating_clause, \
     refused_outbound, user_local_only
 from app.local_names import actor_handle, local_clause, split_local_name
+from app.mastodon import instance as mastodon_instance
 from app.federation_urls import activity_id, domain_site_name, federating_storefront, instance_actor_url, \
     is_federating_url, object_base, owned_elsewhere, owner_base, owner_domain
 from app.storefront import acting_for, current_storefront, domain_authority, domain_base_url, domain_for_host, federating_base, \
@@ -411,19 +412,15 @@ def nodeinfo21():
 @cache.cached(timeout=3600, key_prefix=storefront_cache_key)
 def api_v1_instance():
     domain = federating_storefront()
-    usage, registration = nodeinfo_usage(domain), registration_mode_on(domain, g.site)
-    retval = {
-        'title': domain_site_name(domain, g.site),
-        'uri': domain_authority(domain),
-        'stats': {
-            "user_count": usage['users']['total'],
-            "status_count": usage['localPosts'] + usage['localComments'],
-            "domain_count": 1
-        },
-        'registrations': open_registrations(domain, g.site),
-        'approval_required': registration == 'RequireApplication'
-    }
-    return jsonify(retval)
+    return jsonify(mastodon_instance.instance_v1(domain, nodeinfo_usage(domain)))
+
+
+@bp.route('/api/v2/instance')
+@cache.cached(timeout=3600, key_prefix=storefront_cache_key)
+def api_v2_instance():
+    """Mastodon's, which an app reads before anyone signs in (plan W1.1)."""
+    domain = federating_storefront()
+    return jsonify(mastodon_instance.instance_v2(domain, nodeinfo_usage(domain)))
 
 
 @bp.route('/api/v1/instance/domain_blocks')
