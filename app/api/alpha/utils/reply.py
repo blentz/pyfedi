@@ -1,30 +1,25 @@
-from datetime import timedelta
-
 from flask import g, current_app
-from sqlalchemy import desc, text, func, cast, Float, exists, and_, or_, any_
-from sqlalchemy.orm import aliased
+from sqlalchemy import text, or_
 
 from app import db
 from app.api.alpha.views import reply_view, reply_stub_view, reply_removal_ack_view, reply_report_view, post_view, community_view, user_view
 from app.constants import *
-from app.storefront import current_storefront, domain_base_url, domain_rows, on_domain
-from app.models import Notification, PostReply, Post, PostReplyVote, Report, Community, User, utcnow
+from app.models import Notification, PostReply, Post, PostReplyVote, Report, Community, User
 from app.shared.reply import vote_for_reply, bookmark_reply, remove_bookmark_reply, subscribe_reply, make_reply, \
     edit_reply, \
     delete_reply, restore_reply, report_reply, mod_remove_reply, mod_restore_reply, lock_post_reply, choose_answer, \
     unchoose_answer
-from app.local_only import found_here, hidden_here, prime_reporters, without_hidden_reports, without_local_only, \
-    without_local_only_actors
+from app.local_only import found_here, prime_reporters, without_hidden_reports, without_local_only_actors
 from app.api.alpha.utils.found import a_community, a_post, a_reply
-from app.visibility import can_view, listable_clause, visible_to_clause
-from app.utils import can_moderate_at_all, authorise_api_user, blocked_users, blocked_or_banned_instances, site_language_id, \
-    communities_banned_from, in_sorted_list, moderating_communities_ids, joined_communities, user_access, reachable_community_ids, \
+from app.visibility import can_view
+from app.utils import can_moderate_at_all, authorise_api_user, site_language_id, \
+    communities_banned_from, in_sorted_list, user_access, reachable_community_ids, \
     can_moderate
+import app.reads.replies as reads_replies
+from app.reads.viewer import Restrictions
 
 
 def get_reply_list(auth, data, user_details=None):
-    replies = None
-
     if auth:
         user_details = authorise_api_user(auth, return_type='dict')
 
@@ -35,58 +30,48 @@ def get_reply_list(auth, data, user_details=None):
 
     # user_id: the logged in user
     # person_id: the author of the posts being requested
-    query = data.get("q", None)
-
     page = int(data['page']) if 'page' in data else 1
     limit = int(data['limit']) if 'limit' in data else 10
     sort = data['sort'] if 'sort' in data else 'New'
-    type = data['type_'] if 'type_' in data else 'All'
 
     if limit > current_app.config["PAGE_LENGTH"]:
         limit = current_app.config["PAGE_LENGTH"]
 
+    def optional_int(name):
+        return int(data[name]) if name in data else None
+
+    liked_only = bool('liked_only' in data and data['liked_only'])
+    saved_only = bool('saved_only' in data and data['saved_only'])
+    person_id = optional_int('person_id')
+    community_id = optional_int('community_id')
+    listing = reads_replies.CommentListing(
+        type=data['type_'] if 'type_' in data else 'All', sort=sort, query=data.get("q", None),
+        liked_only=liked_only, saved_only=saved_only, person_id=person_id, community_id=community_id,
+        post_id=optional_int('post_id'), parent_id=optional_int('parent_id'),
+        max_depth=optional_int('max_depth'), depth_first=bool('depth_first' in data and data['depth_first']),
+        page=page, limit=limit)
+    # the viewer's blocks, but not on their own profile listing
+    restrictions = Restrictions(user_id) if user_id and (person_id is None or user_id != person_id) \
+        else Restrictions.none()
+    rows = reads_replies.comment_listing(
+        user_id, restrictions, listing,   # an anonymous liked or saved listing is refused there
+        liked_reply_ids=user_details['upvoted_reply_ids'] if liked_only and user_id else (),
+        saved_reply_ids=user_details['bookmarked_reply_ids'] if saved_only and user_id else ())
+
     # LIKED_ONLY
-    vote_effect = None
-    by_liked_only = False
-    if 'liked_only' in data and data['liked_only']:
-        if not user_id:
-            raise Exception('Login required for liked_only query')
-        replies = PostReply.query.filter(PostReply.id.in_(user_details['upvoted_reply_ids']), PostReply.user_id != user_id)
-        vote_effect = 1
-        by_liked_only = True
+    vote_effect = 1 if liked_only else None
+    by_liked_only = liked_only
 
     # SAVED_ONLY
-    is_reply_bookmarked = None
-    by_saved_only = False
-    if 'saved_only' in data and data['saved_only']:
-        if not user_id:
-            raise Exception('Login required for saved_only query')
-        if not replies:
-            replies = PostReply.query.filter(PostReply.id.in_(user_details['bookmarked_reply_ids']))
-        else:
-            replies = replies.filter(PostReply.id.in_(user_details['bookmarked_reply_ids']))
-        is_reply_bookmarked = True
-        by_saved_only = True
-    
-    # SEARCH
-    if query:
-        if not replies:
-            replies = PostReply.query.search(query, sort=sort == 'Relevance')
-        else:
-            replies = replies.search(query, sort=sort == 'Relevance')
-        replies = replies.filter(PostReply.indexable == True)
-        
+    is_reply_bookmarked = True if saved_only else None
+    by_saved_only = saved_only
+
     # PERSON_ID
     add_creator_in_view = True
     is_creator_blocked = None
     is_creator_admin = None
     by_person_id = False
-    if 'person_id' in data:
-        person_id = int(data['person_id'])
-        if not replies:
-            replies = PostReply.query.filter_by(user_id=person_id)
-        else:
-            replies = replies.filter_by(user_id=person_id)
+    if person_id is not None:
         add_creator_in_view = False
         is_creator_blocked = person_id in user_details['blocked_creator_ids'] if user_details else False
         is_creator_admin = person_id in g.admin_ids
@@ -98,12 +83,7 @@ def get_reply_list(auth, data, user_details=None):
     is_user_following_community = None
     is_user_moderator = None
     by_community_id = False
-    if 'community_id' in data:
-        community_id = int(data['community_id'])
-        if not replies:
-            replies = PostReply.query.filter_by(community_id=community_id)
-        else:
-            replies = replies.filter_by(community_id=community_id)
+    if community_id is not None:
         add_community_in_view = False
         is_user_banned_from_community = community_id in user_details['user_ban_community_ids'] if user_details else False
         is_user_following_community = community_id in user_details['followed_community_ids'] if user_details else False
@@ -113,284 +93,17 @@ def get_reply_list(auth, data, user_details=None):
     is_creator_banned_from_community = None
     is_creator_moderator = None
 
-    # ALL REPLIES (NO FILTER)
-    if not replies:
-        if 'post_id' not in data and 'parent_id' not in data:
-            replies = PostReply.query
-            if user_id is None and page * limit > 10000:
-                raise Exception('unknown') # deliberately vague response
-
-    # LISTING TYPE
-    # D1199. This block used to sit ABOVE the person_id, community_id and
-    # no-filter blocks, and it is guarded by `if replies:` -- which none of
-    # them had assigned yet. So `type_` was silently ignored for every query
-    # narrowed by a person, a community or nothing at all, and the
-    # `incorrect login` refusals below were skipped with it. Measured:
-    #
-    #     PROBE bq1 person_id + Local: remote included: True
-    #     PROBE bq2 community_id + Local: remote included: True
-    #     PROBE bq3 anonymous + Moderating: accepted
-    #
-    # It still does not apply to the threaded branch, where `replies` is
-    # assigned further down: a conversation is not a listing.
-    if replies:
-        if type == 'Local':
-            replies = replies.filter(or_(PostReply.ap_id == None, *[PostReply.ap_id.startswith(domain_base_url(row) + '/')
-                                                                     for row in domain_rows()]))
-            # a reply by any hosted domain's account is stored under the default domain's base URL (object ids on the
-            # author's own domain are not shipped), so it is local when it is on any hosted base; and its author
-            # belongs to this domain, wherever it was posted
-            replies = replies.filter(PostReply.user_id.in_(
-                db.session.query(User.id).filter(User.ap_id == None, on_domain(current_storefront()))))
-        elif type == 'Moderating' or type == 'ModeratorView':
-            if user_id:
-                replies = replies.filter(PostReply.community_id.in_(moderating_communities_ids(user_id=user_id)))
-            else:
-                raise Exception('incorrect login')
-        elif type == 'Subscribed':
-            if user_id:
-                comms = joined_communities(user_id=user_id)
-                comm_ids = [comm.id for comm in comms]
-                comm_ids.extend(moderating_communities_ids(user_id=user_id))
-                replies = replies.filter(PostReply.community_id.in_(comm_ids))
-            else:
-                raise Exception('incorrect login')
-
+    # a conversation, and a listing narrowed to one post, carry the post and community once rather than on each reply
     add_post_in_view = True
-    depth_first = False
-    next_page = None
-    if replies:
-        # if replies isn't None, then response is just a list of comments, not a threaded conversation
+    if rows.conversation or listing.post_id is not None:
+        add_community_in_view = False
+        add_post_in_view = False
 
-        # a listing omits a hidden reply outright (interop D7); only a threaded
-        # conversation keeps a stub, to hold the tree together (D18). The person,
-        # saved and liked listings are the profile surfaces: they show what the viewer
-        # may see and omit the rest, with no stub.
-        if by_person_id or by_saved_only or by_liked_only:
-            replies = replies.filter(visible_to_clause(PostReply, user_id))
-        else:
-            replies = replies.filter(listable_clause(PostReply))
-
-        # safe to just remove any replies by blocked users (won't cause gaps in threaded convo)
-        if user_id and (add_creator_in_view == True or user_id != data['person_id']):
-            blocked_person_ids = blocked_users(user_id)
-            if blocked_person_ids:
-                replies = replies.filter(PostReply.user_id.not_in(blocked_person_ids))
-            blocked_instance_ids = blocked_or_banned_instances(user_id)
-            if blocked_instance_ids:
-                replies = replies.filter(PostReply.instance_id.not_in(blocked_instance_ids))
-
-        # if 'post_id' is also in data, treat it as an additional filter to liked_only, saved_only, person_id, community_id
-        if 'post_id' in data:
-            replies = replies.filter_by(post_id=data['post_id'])
-            add_community_in_view = False
-            add_post_in_view = False
-
-        if 'max_depth' in data:
-            replies = replies.filter(PostReply.depth < int(data['max_depth']))
-    else:
-        # PARENT_ID or POST_ID - threaded conversation
-        parent_id = None # stays at None for a post_id query
-        max_depth = None
-
-        # max_depth for parent_id query
-        if 'parent_id' in data:
-            parent_id = int(data['parent_id'])
-            parent = found_here(PostReply, parent_id)   # hidden here or nobody's: one answer (follow-up F6, round 4)
-            if parent is None:
-                raise Exception('Comment with parent_id not found.')
-            parent_depth = parent.depth
-            if 'max_depth' in data:
-                relative_depth = int(data['max_depth'])
-                max_depth = parent_depth + relative_depth
-
-        # max_depth for post_id query
-        elif 'post_id' in data:
-            post_id = int(data['post_id'])
-            if 'max_depth' in data:
-                max_depth = int(data['max_depth'])
-
-        # blocked users aren't filtered out for a threaded convo to avoid creating gaps
-        # get_comment_branch() isn't used here for the same reason
-
-        if 'post_id' in data or 'parent_id' in data:
-            # some apps paginate through all replies to get them all in one session and build the tree client-side
-            # replies.paginate() can be used for those (it won't matter if the parent of a reply on page 1 is on page 2)
-
-            # others expect to be able to render each page as they get it, so each page needs the complete info (no missing parents)
-            # allowing for this means that the number of replies returned may exceed the limit for a page
-            # 'depth_first' can be sent by these apps (although they're likely better off using the /post/replies route)
-            # note: actually doing something like 'ORDER BY depth, posted_at' gives boring results (all depth=0 on page 1)
-            if 'depth_first' in data and data['depth_first']:
-                depth_first = True
-                if parent_id is not None:
-                    if parent_depth == 0:
-                        where_query = f' WHERE root_id = {parent_id}'
-                    else:
-                        where_query = f' WHERE path @> ARRAY[{parent_id}]'
-                else:
-                    where_query = f' WHERE post_id = {post_id}'
-
-                if max_depth is not None:
-                    # D1198. This was `' AND depth <= {max_depth}'` with no
-                    # f-prefix, so the braces themselves reached Postgres:
-                    # `psycopg2.errors.SyntaxError: syntax error at or near
-                    # "{"`, measured as PROBE bp1. Every depth-first comment
-                    # query carrying a max_depth failed, and the aborted
-                    # transaction took the next query in the request with it.
-                    #
-                    # The value is interpolated rather than bound because the
-                    # surrounding clauses are too, and all three come from
-                    # `int(...)` a few lines above -- see `parent_id`,
-                    # `post_id` and `max_depth`.
-                    depth_query = f' AND depth <= {max_depth}'
-                else:
-                    depth_query = ''
-
-                if sort == 'Hot':
-                    sort_query = ' ORDER BY ranking DESC, posted_at DESC'
-                elif sort == 'Top':
-                    sort_query = ' ORDER BY up_votes - down_votes DESC'
-                elif sort == 'Old':
-                    sort_query = ' ORDER BY posted_at'
-                else:
-                    sort_query = ' ORDER BY posted_at DESC'
-
-                query = 'SELECT path from "post_reply"' + where_query + depth_query + sort_query
-                reply_paths = db.session.execute(text(query)).scalars()
-                processed = {0}
-                page_array = [None, []] # not really an array, I know
-                page_index = 1
-                for reply_path in reply_paths:
-                    for element in reply_path:
-                        # element == 0 means new branch of comments, not dependent on this branch
-                        if element == 0 and len(page_array[page_index]) >= limit:
-                            page_index += 1
-                            page_array.append([])
-                        if element not in processed:
-                            page_array[page_index].append(element)
-                        processed.add(element)
-                replies = PostReply.query.filter(PostReply.id.in_(page_array[page]))
-                if page_index > page and len(page_array[page+1]) > 0:
-                    next_page = str(page + 1)
-            else:
-                # 'depth_first' == false, so it'll be more straight-forward to query and paginate
-                if parent_id is not None:
-                    # 'parent_id' query
-                    if parent_depth == 0:
-                        replies = PostReply.query.filter_by(root_id=parent_id)
-                    else:
-                        reply_ids = db.session.execute(text('SELECT id FROM "post_reply" WHERE path @> ARRAY[:id]'),
-                                                       {"id": parent_id}).scalars()
-                        replies = PostReply.query.filter(PostReply.id.in_(reply_ids))
-                else:
-                    # 'post_id' query
-                    replies = PostReply.query.filter_by(post_id=post_id)
-
-                if max_depth is not None:
-                    replies = replies.filter(PostReply.depth <= max_depth)
-
-            add_community_in_view = False
-            add_post_in_view = False
-
-        if user_id:
-            # filter out blocked users' comments and all their replies
-            blocked_person_ids = blocked_users(user_id)
-            if blocked_person_ids:
-                parent_alias = aliased(PostReply)
-                replies = replies.filter(
-                    ~or_(
-                        PostReply.user_id.in_(blocked_person_ids),
-                        exists().where(
-                            and_(
-                                parent_alias.id == any_(PostReply.path),
-                                parent_alias.user_id.in_(blocked_person_ids)
-                            )
-                        )
-                    )
-                )
-            # filter out blocked instances' comments and all their replies
-            blocked_instance_ids = blocked_or_banned_instances(user_id)
-            if blocked_instance_ids:
-                parent_alias = aliased(PostReply)
-                replies = replies.filter(
-                    ~or_(
-                        PostReply.instance_id.in_(blocked_instance_ids),
-                        exists().where(
-                            and_(
-                                parent_alias.id == any_(PostReply.path),
-                                parent_alias.instance_id.in_(blocked_instance_ids)
-                            )
-                        )
-                    )
-                )
-
-    if replies:
-        # A listing or a conversation alike: a local-only reply's own replies are local-only too, so leaving them out
-        # makes no gap in a thread (spec §3.4)
-        replies = without_local_only(replies, PostReply, visible=user_id is not None)
-        # sort == 'Relevance' handled above when query.search was executed
-        if sort == 'Hot' or sort == 'Scaled':
-            replies = replies.order_by(desc(PostReply.ranking)).order_by(desc(PostReply.posted_at))
-        elif sort == 'Active':
-            replies = replies.order_by(desc(PostReply.posted_at))
-        elif sort == 'Top' or sort == 'TopAll':
-            replies = replies.order_by(desc(PostReply.up_votes - PostReply.down_votes))
-        elif sort == 'TopHour':
-            replies = replies.filter(PostReply.posted_at > utcnow() - timedelta(hours=1)).order_by(
-                desc(PostReply.up_votes - PostReply.down_votes))
-        elif sort == 'TopSixHour':
-            replies = replies.filter(PostReply.posted_at > utcnow() - timedelta(hours=6)).order_by(
-                desc(PostReply.up_votes - PostReply.down_votes))
-        elif sort == 'TopTwelveHour':
-            replies = replies.filter(PostReply.posted_at > utcnow() - timedelta(hours=12)).order_by(
-                desc(PostReply.up_votes - PostReply.down_votes))
-        elif sort == 'TopDay':
-            replies = replies.filter(PostReply.posted_at > utcnow() - timedelta(days=1)).order_by(
-                desc(PostReply.up_votes - PostReply.down_votes))
-        elif sort == 'TopWeek':
-            replies = replies.filter(PostReply.posted_at > utcnow() - timedelta(days=7)).order_by(
-                desc(PostReply.up_votes - PostReply.down_votes))
-        elif sort == 'TopMonth':
-            replies = replies.filter(PostReply.posted_at > utcnow() - timedelta(days=28)).order_by(
-                desc(PostReply.up_votes - PostReply.down_votes))
-        elif sort == 'TopThreeMonths':
-            replies = replies.filter(PostReply.posted_at > utcnow() - timedelta(days=90)).order_by(
-                desc(PostReply.up_votes - PostReply.down_votes))
-        elif sort == 'TopSixMonths':
-            replies = replies.filter(PostReply.posted_at > utcnow() - timedelta(days=180)).order_by(
-                desc(PostReply.up_votes - PostReply.down_votes))
-        elif sort == 'TopNineMonths':
-            replies = replies.filter(PostReply.posted_at > utcnow() - timedelta(days=270)).order_by(
-                desc(PostReply.up_votes - PostReply.down_votes))
-        elif sort == 'TopYear':
-            replies = replies.filter(PostReply.posted_at > utcnow() - timedelta(days=365)).order_by(
-                desc(PostReply.up_votes - PostReply.down_votes))
-        elif sort == 'Old':
-            replies = replies.order_by(PostReply.posted_at)
-        elif sort == 'Relevance':
-            pass  # already done as part of the search query
-        elif sort == 'Controversial':
-            # Pulled from the reddit algorithm: https://github.com/reddit-archive/reddit/blob/753b17407e9a9dca09558526805922de24133d53/r2/r2/lib/db/_sorts.pyx#L60
-            replies = replies.order_by(desc(
-                func.coalesce(func.pow(
-                    func.coalesce(PostReply.up_votes, 0) * func.coalesce(PostReply.down_votes, 0),
-                    cast(func.least(func.coalesce(PostReply.up_votes, 0), func.coalesce(PostReply.down_votes, 0)), Float) /
-                    # D1200. The divisor was `coalesce(greatest(up, down), 1)`,
-                    # which guards NULL and not ZERO -- and a comment with no
-                    # votes at all has `greatest(0, 0)`, so the whole listing
-                    # was `psycopg2.errors.DivisionByZero: division by zero`.
-                    # `greatest(..., 1)` cannot be either.
-                    cast(func.greatest(func.coalesce(PostReply.up_votes, 0),
-                                       func.coalesce(PostReply.down_votes, 0), 1), Float)), 0)))
-        else:
-            replies = replies.order_by(desc(PostReply.posted_at))
-
-        if depth_first == False:
-            replies = replies.paginate(page=page, per_page=limit, error_out=False)
-            next_page = str(replies.next_num) if replies.next_num is not None else None
-    else:
-        replies = [] # shouldn't happen
+    replies = rows.replies
+    next_page = rows.next_page
+    if not rows.one_page:
+        replies = replies.paginate(page=page, per_page=limit, error_out=False)
+        next_page = str(replies.next_num) if replies.next_num is not None else None
 
     reply_list = []
     inner_creator_view = inner_community_view = inner_post_view = None

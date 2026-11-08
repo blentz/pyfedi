@@ -94,6 +94,45 @@ A survey of every other client API family (source-read, 2026-11-07) ranked what 
   liked, saved, read-posts and keyword filters twice (1310-1337); the second copies selected nothing new and are gone.
   `get_post_list`'s raw-SQL criteria for listings that turn the fast path off (a narrowed listing, liked, saved) were
   never run and are gone.
+  **Divergences kept in step 3, for the owner to rule on.** A post's replies are read three ways: `get_post_replies`
+  through `app.post.util.post_replies` (the whole thread, also the post page's) or `get_comment_branch` (one branch),
+  and `get_reply_list`'s conversation (a `post_id` or `parent_id` alone, a page at a time). They now share
+  `app/reads/replies.py`, each with its own named spelling (`WHOLE_THREAD`, `ONE_BRANCH`; `TREE_BLOCKS`,
+  `CONVERSATION_BLOCKS`, `LISTING_BLOCKS`; `_tree_order` beside `_listing_order`), so none changed. Line numbers are
+  at 0bcd671cd: `util.py` is `app/post/util.py`, `reply.py` and `post.py` are under `app/api/alpha/utils/`.
+  1. The post itself: `get_post_replies` refuses a post the viewer may not see, one hidden here and one nobody holds
+     (`post not found`, `a_visible_post`, post.py 570, 580) and a parent nobody holds (`comment not found`, 567);
+     `get_reply_list` checks the parent only (`Comment with parent_id not found.`, reply.py 199-201) and never looks
+     the post up, so a post the viewer may not see lists its replies (each one a stub where `can_view` refuses it).
+  2. Private communities: `get_post` refuses a non-member (`Private community - membership required`, views.py 382,
+     now `app.reads.post.refuse_unreadable_post`), but neither reply read does: `can_view` knows nothing of a private
+     community, so a non-member, signed in or not, reads a private community's replies through both. Probably a leak;
+     unchanged here. (And `get_post` answers `membership required` to an anonymous reader where the post listings'
+     gate, `refuse_private_community`, answers `authentication required`.)
+  3. Instance blocks: the tree keeps a reply with no instance (`instance_id IS NULL`, util.py 190, 262); both of
+     `get_reply_list`'s reads drop it (`NOT IN` is NULL there, reply.py 181, 313-325). (`spares_unknown_instance`)
+  4. Blocked people: the tree drops the reply and its replies fall out with it when the tree is built (util.py 193-195,
+     265-267); the conversation drops them in the query by their path (reply.py 298-311), as it pages rows before any
+     tree. The same rows reach a tree; a conversation's pages differ. (`takes_descendants`)
+  5. A viewer's settings: the tree drops bots' replies for a viewer who ignores bots or reposters (util.py 191-192,
+     263-264), replies under their `reply_hide_threshold` unless they moderate the post (204-206, 276-278) and replies
+     in languages they do not read (207-209, 279-281); the conversation applies none of these.
+  6. Hide threshold: the whole thread spares a reply that is not collapsible (util.py 206); one branch does not (278).
+     (`hide_threshold_spares_uncollapsible`)
+  7. Silenced instances: the whole thread drops their replies for an anonymous reader (util.py 211-212); one branch and
+     the conversation do not. (`silenced_instance_ids`, which post_replies asks)
+  8. Sorts: Hot is `ranking` alone in the tree (util.py 218) and `ranking, posted_at` in the conversation (reply.py
+     334); Top is `score` (220) against `up_votes - down_votes` (337-338); the tree knows hot, top, new and old and
+     orders nothing for any other sort, the conversation knows the Top windows, Controversial and Relevance too and
+     orders anything else (Active included) as New.
+  9. How much: the whole thread reads at most 2000 replies (util.py 226); one branch and the conversation read all.
+     (`limit`)
+  Same in all three and unchanged: a reply hidden here goes, and its replies with it; a reply the viewer may not see is
+  a stub, not a gap; `max_depth` is at most that depth (under the parent, relative to it). Not a divergence but a
+  finding: both tree reads had `comments.filter(PostReply.score > -20)` for an anonymous reader with its result thrown
+  away (util.py 213, 283), so no score floor ever applied; the no-op is gone, the floor is the owner's to restore or
+  drop. `get_reply_list`'s flat listing keeps its own rules (blocks without descendants, `max_depth` below that depth,
+  reply.py 190, against at most it in a conversation, 291).
 - **W0.2 One OAuth 2 authorization server** (Authlib, already a dependency): app registration, authorization code
   with PKCE, out-of-band codes, refresh, client credentials, revocation, a settings page listing authorised apps.
   Mastodon, Pixelfed and Mbin-style clients use it; PeerTube's password grant and Lemmy's JWT login sit beside it on the

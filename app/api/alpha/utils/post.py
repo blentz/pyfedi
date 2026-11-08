@@ -29,6 +29,7 @@ from app.visibility import can_view, visible_to_clause
 # The module, not the names: app.reads.posts reaches this file through app.feed.routes before they are defined
 # (import cycle: reads.posts)
 import app.reads.posts as reads_posts
+import app.reads.post as reads_post
 from app.reads.viewer import Restrictions
 
 
@@ -51,32 +52,6 @@ def a_moderatable_post(post_id, auth):
         return post
     return a_visible_post(post_id, auth)
 
-
-
-def _refuse_private_community(community_id, community_name, user_id, user):
-    """Refuse a post list of the private community `community_id` or `community_name` names to a caller who is not a
-    member. A community nobody holds, and one hidden here (`hidden_here`), list nothing and are not refused, so the
-    answer tells neither from the other (follow-up F6, m2)."""
-    if community_id:
-        community = db.session.get(Community, community_id)
-    else:
-        # parse community_name to get the community
-        if '@' not in community_name:
-            community_name_lookup = f"{community_name}@{domain_authority(current_storefront())}"   # the storefront's
-        else:
-            community_name_lookup = community_name
-        name, ap_domain = normalise_actor_string(community_name_lookup)
-        if not name or not ap_domain:
-            raise Exception('invalid_request')
-        community = Community.query.filter_by(name=name, ap_domain=ap_domain).first()
-
-    if community is None or not community.private or hidden_here(community, user_id is not None):
-        return
-    # community is private, check if user is a member
-    if not user_id:
-        raise Exception('Private community - authentication required')
-    if not community.is_member(user):
-        raise Exception('Private community - membership required')
 
 
 def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
@@ -130,7 +105,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
     person_id = int(data['person_id']) if 'person_id' in data else None
 
     if community_id or community_name:
-        _refuse_private_community(community_id, community_name, user_id, user if user_id else None)
+        reads_post.refuse_private_community(community_id, community_name, user_id, user if user_id else None)
 
     # a reader of their own posts is exempt from their own blocks
     restrictions = Restrictions(user_id) if user_id and user_id != person_id else Restrictions.none()
@@ -143,7 +118,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         if '@' not in community_name:
             community_name = f"{community_name}@{domain_authority(current_storefront())}"   # the storefront's
         name, ap_domain = normalise_actor_string(community_name)
-        # No guard here: _refuse_private_community refuses a malformed `community_name` before this is reached
+        # No guard here: refuse_private_community refuses a malformed `community_name` before this is reached
         # (when no community_id is named instead), and ('', '') simply matches nothing.
         named_community = and_(Community.name == name, Community.ap_domain == ap_domain)
     built = reads_posts.post_listing(user if user_id else None, restrictions, listing, reads_posts.OFFSET_PAGES, named_community)
@@ -429,7 +404,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
     person_id = int(data['person_id']) if 'person_id' in data else None
 
     if community_id or community_name:
-        _refuse_private_community(community_id, community_name, user_id, user if user_id else None)
+        reads_post.refuse_private_community(community_id, community_name, user_id, user if user_id else None)
 
     # a reader of their own posts is exempt from their own blocks
     restrictions = Restrictions(user_id) if user_id and user_id != person_id else Restrictions.none()
@@ -442,7 +417,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
         if '@' not in community_name:
             community_name = f"{community_name}@{domain_authority(current_storefront())}"   # the storefront's
         name, ap_domain = normalise_actor_string(community_name)
-        # No guard here: _refuse_private_community refuses a malformed `community_name` before this is reached
+        # No guard here: refuse_private_community refuses a malformed `community_name` before this is reached
         # (when no community_id is named instead), and ('', '') simply matches nothing.
         named_community = and_(Community.name == name, Community.ap_domain == ap_domain)
     built = reads_posts.post_listing(user if user_id else None, restrictions, listing, reads_posts.KEYSET_PAGES, named_community)
@@ -526,6 +501,7 @@ def get_post(auth, data):
     post = a_post(id)
 
     user_id = authorise_api_user(auth) if auth else None
+    reads_post.refuse_unreadable_post(post, user_id, Restrictions(user_id))
 
     post_json = post_view(post=post, variant=3, user_id=user_id)
     return post_json

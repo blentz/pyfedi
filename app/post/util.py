@@ -7,7 +7,7 @@ import orjson
 
 from flask import current_app
 from flask_login import current_user
-from sqlalchemy import desc, asc, text, or_, func
+from sqlalchemy import text, or_, func
 
 from app import db, cache
 from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_VIDEO, POST_TYPE_POLL, POST_TYPE_GALLERY, VISIBILITY_PUBLIC, POST_STATUS_PUBLISHED
@@ -16,10 +16,12 @@ from app.models import PostReply, Post, Community, User, Language, utcnow, UserF
 from app.activitypub.serializers.microblog import link_hashtags, body_hashtags
 from app.storefront import is_hosted_uri
 from app.visibility import mark_restricted, OPEN_VISIBILITIES, RestrictedReply, can_view
-from app.utils import may_see_removed, blocked_or_banned_instances, blocked_users, is_video_hosting_site, get_request, \
+from app.utils import may_see_removed, is_video_hosting_site, get_request, \
     silenced_instances, html_to_text, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, is_local_microblogs, community_membership_private, \
     user_in_restricted_country
-from app.local_only import content_local_only, hidden_here, without_local_only
+from app.local_only import content_local_only, hidden_here
+import app.reads.replies as reads_replies
+from app.reads.viewer import Restrictions
 
 
 from app.permissions import user_access
@@ -183,58 +185,13 @@ def post_replies(post: Post, sort_by: str, viewer: User, db_only=False) -> List[
             archived_replies = convert_archived_replies_to_tree(archived_data['replies'], post)
             return mark_restricted(archived_replies, viewer.id if viewer else None)
 
-    comments = db.session.query(PostReply).filter_by(post_id=post.id)
-    if viewer:
-        instance_ids = blocked_or_banned_instances(viewer.id)
-        if instance_ids:
-            comments = comments.filter(or_(PostReply.instance_id.not_in(instance_ids), PostReply.instance_id == None))
-        if viewer.ignore_bots == 1 or viewer.ignore_reposters == 1:
-            comments = comments.filter(PostReply.from_bot == False)
-        blocked_accounts = blocked_users(viewer.id)
-        if blocked_accounts:
-            comments = comments.filter(PostReply.user_id.not_in(blocked_accounts))
-        # `is_moderator(viewer)`, not `is_moderator()`. With no argument the
-        # method falls back to `current_user.get_id()` -- the WEB session --
-        # which is not who `viewer` is when the API calls this: every
-        # authenticated API reader was treated as a non-moderator and had the
-        # hide threshold applied regardless, and with no request context at
-        # all (a direct call, as the tests make) `current_user` is None and
-        # the line is an AttributeError. The web callers pass `current_user`
-        # as `viewer`, so naming it changes nothing for them.
-        if viewer.reply_hide_threshold and not (user_access('moderate all communities', viewer.id, on=post) or
-                                                post.community.is_moderator(viewer)):
-            comments = comments.filter(or_(PostReply.score > viewer.reply_hide_threshold, PostReply.collapsible == False))
-        if viewer.read_language_ids and len(viewer.read_language_ids) > 0:
-            comments = comments.filter(
-                or_(PostReply.language_id.in_(tuple(viewer.read_language_ids)), PostReply.language_id == None))
-    else:
-        if instance_ids := silenced_instances():
-            comments = comments.filter(or_(PostReply.instance_id.not_in(instance_ids), PostReply.instance_id == None))
-        comments.filter(PostReply.score > -20)
-    if viewer or not db_only:  # a reply hidden here, and so all its replies, is left out (spec §3.4, follow-up F6)
-        comments = without_local_only(comments, PostReply, viewer is not None)
-
-    if sort_by == 'hot':
-        comments = comments.order_by(desc(PostReply.ranking))
-    elif sort_by == 'top':
-        comments = comments.order_by(desc(PostReply.score))
-    elif sort_by == 'new':
-        comments = comments.order_by(desc(PostReply.posted_at))
-    elif sort_by == 'old':
-        comments = comments.order_by(asc(PostReply.posted_at))
-
-    comments = comments.limit(2000)  # paginating indented replies is too hard so just get the first 2000.
-
-    all_comments = comments.all()
-    comments_dict = {comment.id: {'comment': comment, 'replies': []} for comment in all_comments}
-
-    for comment in all_comments:
-        if comment.parent_id is not None:
-            parent_comment = comments_dict.get(comment.parent_id)
-            if parent_comment:
-                parent_comment['replies'].append(comments_dict[comment.id])
-
-    tree = [comment for comment in comments_dict.values() if comment['comment'].parent_id is None]
+    # The thread's rows are app.reads.replies' (one builder for every reader of a thread); `silenced_instances` is
+    # asked here, for an anonymous reader only, as it always was
+    silenced = silenced_instances() if viewer is None else ()
+    comments = reads_replies.thread_replies(post, viewer, Restrictions(viewer.id if viewer else None), sort_by,
+                                            reads_replies.WHOLE_THREAD, silenced,
+                                            leave_out_hidden_here=bool(viewer or not db_only))
+    tree = reads_replies.reply_tree(comments.all())
     if db_only:
         return tree  # archive_post reads every reply, unmarked, and decides what to store
     return mark_restricted(tree, viewer.id if viewer else None)
@@ -255,52 +212,9 @@ def get_comment_branch(post: Post, comment_id: int, sort_by: str, viewer: User) 
     if parent_comment is None:
         return []
 
-    comments = PostReply.query.filter(PostReply.post_id == post.id)
-    if viewer:
-        instance_ids = blocked_or_banned_instances(viewer.id)
-        if instance_ids:
-            comments = comments.filter(or_(PostReply.instance_id.not_in(instance_ids), PostReply.instance_id == None))
-        if viewer.ignore_bots == 1 or viewer.ignore_reposters == 1:
-            comments = comments.filter(PostReply.from_bot == False)
-        blocked_accounts = blocked_users(viewer.id)
-        if blocked_accounts:
-            comments = comments.filter(PostReply.user_id.not_in(blocked_accounts))
-        # `is_moderator(viewer)`, not `is_moderator()`. With no argument the
-        # method falls back to `current_user.get_id()` -- the WEB session --
-        # which is not who `viewer` is when the API calls this: every
-        # authenticated API reader was treated as a non-moderator and had the
-        # hide threshold applied regardless, and with no request context at
-        # all (a direct call, as the tests make) `current_user` is None and
-        # the line is an AttributeError. The web callers pass `current_user`
-        # as `viewer`, so naming it changes nothing for them.
-        if viewer.reply_hide_threshold and not (user_access('moderate all communities', viewer.id, on=post) or
-                                                post.community.is_moderator(viewer)):
-            comments = comments.filter(PostReply.score > viewer.reply_hide_threshold)
-        if viewer.read_language_ids and len(viewer.read_language_ids) > 0:
-            comments = comments.filter(
-                or_(PostReply.language_id.in_(tuple(viewer.read_language_ids)), PostReply.language_id == None))
-    else:
-        comments.filter(PostReply.score > -20)
-    comments = without_local_only(comments, PostReply, viewer is not None)   # as post_replies
-
-    if sort_by == 'hot':
-        comments = comments.order_by(desc(PostReply.ranking))
-    elif sort_by == 'top':
-        comments = comments.order_by(desc(PostReply.score))
-    elif sort_by == 'new':
-        comments = comments.order_by(desc(PostReply.posted_at))
-    elif sort_by == 'old':
-        comments = comments.order_by(asc(PostReply.posted_at))
-
-    comments_dict = {comment.id: {'comment': comment, 'replies': []} for comment in comments.all()}
-
-    for comment in comments:
-        if comment.parent_id is not None:
-            parent_comment = comments_dict.get(comment.parent_id)
-            if parent_comment:
-                parent_comment['replies'].append(comments_dict[comment.id])
-
-    tree = [comment for comment in comments_dict.values() if comment['comment'].id == comment_id]
+    comments = reads_replies.thread_replies(post, viewer, Restrictions(viewer.id if viewer else None), sort_by,
+                                            reads_replies.ONE_BRANCH)
+    tree = reads_replies.reply_branch(comments.all(), comment_id)
     return mark_restricted(tree, viewer.id if viewer else None)
 
 
