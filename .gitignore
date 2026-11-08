@@ -202,6 +202,7 @@ interop/.env.pixelfed
 interop/.env.loops
 interop/.loops_clip.mp4
 interop/.tokens.json
+interop/.loops-src/
 interop/apps/.apks/
 interop/apps/results/
 interop/conformance/results/

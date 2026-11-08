@@ -121,8 +121,8 @@ x-loops-env: &loops-env
   PHP_MEMORY_LIMIT: 512M
 
 x-loops: &loops
-  # v1.0.0-beta.15 (upstream commit 0d2a881e4, 2026-10-23), built from source: Loops publishes no public image. Build
-  # it with: podman build -t localhost/loops-server:v1.0.0-beta.15 <loops-server checkout at that tag>
+  # v1.0.0-beta.15 (upstream commit 0d2a881e4, 2026-10-23), built from source: Loops publishes no public image.
+  # interop/run.sh up builds it on a host that lacks it (ensure_loops_image).
   image: localhost/loops-server:v1.0.0-beta.15
   env_file: ./interop/.env.loops
   environment: *loops-env

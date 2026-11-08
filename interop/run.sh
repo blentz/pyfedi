@@ -44,8 +44,25 @@ up_piefed() {
         | $COMPOSE exec -T piefed-web python -
 }
 
+# Loops publishes no image: build the pinned release from source the first time a host needs it (compose.interop.yaml's
+# x-loops), checking the tag still names the commit the harness was verified against.
+LOOPS_IMAGE=localhost/loops-server:v1.0.0-beta.15
+LOOPS_TAG=v1.0.0-beta.15
+LOOPS_COMMIT=0d2a881e459327ff5d551850ec55664e29717982
+ensure_loops_image() {
+    podman image exists "$LOOPS_IMAGE" && return 0
+    src=interop/.loops-src
+    rm -rf "$src"
+    git clone -q --depth 1 --branch "$LOOPS_TAG" https://github.com/joinloops/loops-server.git "$src"
+    commit=$(git -C "$src" rev-parse HEAD)
+    [ "$commit" = "$LOOPS_COMMIT" ] || { echo "run.sh: loops-server $LOOPS_TAG is $commit, not $LOOPS_COMMIT" >&2; return 1; }
+    podman build -t "$LOOPS_IMAGE" "$src"
+    rm -rf "$src"
+}
+
 up() {
     interop/gen_env.sh
+    ensure_loops_image
     if ! grep -q '^VAPID_PRIVATE_KEY=' interop/.env.interop; then
         # plain podman run: podman-compose cannot clear the service entrypoint, and no CA exists yet at this point
         podman run --rm --entrypoint '' --env-file interop/.env.interop ghcr.io/mastodon/mastodon:v4.5@sha256:c64a30678a0e6591d7dbcb0924b4aa98eb1fe54ced5b8fe558449d00915bdb42 \
