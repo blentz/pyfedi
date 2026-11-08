@@ -5,7 +5,7 @@ from functools import cached_property
 
 from authlib.integrations.flask_oauth2 import AuthorizationServer as FlaskAuthorizationServer
 from authlib.integrations.flask_oauth2.requests import FlaskOAuth2Payload, FlaskOAuth2Request
-from authlib.oauth2.rfc6749 import InvalidScopeError, grants
+from authlib.oauth2.rfc6749 import InvalidGrantError, InvalidScopeError, grants
 from authlib.oauth2.rfc7636 import CodeChallenge
 from flask import request as flask_request
 from werkzeug.datastructures import MultiDict
@@ -80,9 +80,16 @@ class AuthorizationCodeGrant(grants.AuthorizationCodeGrant):
 
 
 class RefreshTokenGrant(grants.RefreshTokenGrant):
-    """A new access and refresh token for the old refresh token, which ends with its access token."""
-    TOKEN_ENDPOINT_AUTH_METHODS = _SECRET_OR_PKCE
+    """A new access and refresh token for the old refresh token, which ends with its access token. Only with the app's
+    secret, which every app here has: a stolen refresh token is no use alone."""
+    TOKEN_ENDPOINT_AUTH_METHODS = ['client_secret_basic', 'client_secret_post']
     INCLUDE_NEW_REFRESH_TOKEN = True
+
+    def create_token_response(self):
+        """The old token is claimed before the new pair is made, once checked: two refreshes at once get one pair."""
+        if not tokens.claim(self.request.refresh_token):
+            raise InvalidGrantError()
+        return super().create_token_response()
 
     def authenticate_refresh_token(self, refresh_token):
         """Unknown, revoked, or its person can no longer sign in: all invalid_grant (RFC 6749 5.2)."""
@@ -93,7 +100,7 @@ class RefreshTokenGrant(grants.RefreshTokenGrant):
         return db.session.get(User, credential.user_id)
 
     def revoke_old_credential(self, credential):
-        tokens.revoke(credential)
+        pass   # claimed in create_token_response, before the new pair
 
 
 class ClientCredentialsGrant(grants.ClientCredentialsGrant):

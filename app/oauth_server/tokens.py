@@ -5,6 +5,8 @@ import secrets
 from datetime import timedelta
 from hashlib import sha256
 
+from sqlalchemy import update
+
 from app import db
 from app.models import OAuthApp, OAuthCode, OAuthToken, User, utcnow
 
@@ -104,3 +106,11 @@ def refresh_token_for(raw: str) -> OAuthToken | None:
 def revoke(token: OAuthToken) -> None:
     token.revoked_at = utcnow()
     db.session.commit()
+
+
+def claim(token: OAuthToken) -> bool:
+    """End `token` if nothing has yet, in one statement: of two requests racing to refresh it, one gets True."""
+    claimed = db.session.execute(update(OAuthToken).where(OAuthToken.id == token.id, OAuthToken.revoked_at.is_(None))
+                                 .values(revoked_at=utcnow())).rowcount == 1
+    db.session.commit()
+    return claimed

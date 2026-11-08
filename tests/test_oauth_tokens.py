@@ -198,3 +198,12 @@ def test_a_token_stops_acting_for_a_person_who_can_no_longer_sign_in(world, chan
         setattr(user, change, True)
     db.session.commit()
     assert not tokens.usable_token(token)
+
+
+def test_a_token_is_claimed_once(world):
+    registered, _secret = tokens.register_app('A', ['https://a.example/cb'], 'read', None)
+    access, _refresh = tokens.issue_token(registered, world['user'], 'read')
+    token = tokens.token_for(access)
+    assert tokens.claim(token) is True
+    assert tokens.claim(token) is False
+    assert tokens.token_for(access) is None

@@ -7,7 +7,7 @@ import pytest
 
 from app import db
 from app.models import OAuthCode, OAuthToken
-from app.oauth_server import tokens
+from app.oauth_server import server, tokens
 from tests.factories import make_user
 from tests.test_login_gate import private  # noqa: F401  the private-instance fixture
 
@@ -209,3 +209,33 @@ def test_a_json_field_that_is_not_a_string_is_left_out(world):
         'grant_type': 'authorization_code', 'code': _code(world), 'redirect_uri': CALLBACK,
         'client_id': world['app'].client_id, 'client_secret': world['secret'], 'extra': 5})
     assert response.status_code == 200, response.get_data(as_text=True)
+
+
+def test_a_refresh_needs_the_apps_secret(world):
+    """Every app here has one; a stolen refresh token is no use without it."""
+    first = _exchange(world, _code(world)).get_json()
+    response = _refresh(world, first['refresh_token'], client_secret=None)
+    assert response.status_code in (400, 401) and response.get_json()['error'] == 'invalid_client'
+    assert tokens.token_for(first['access_token']) is not None
+
+
+def test_two_refreshes_at_once_give_one_new_pair(world, monkeypatch):
+    """The other request claims the old token after this one checked it: this one gets nothing."""
+    first = _exchange(world, _code(world)).get_json()
+    checked = server.RefreshTokenGrant.validate_token_request
+
+    def checked_then_lost_the_race(grant):
+        checked(grant)
+        tokens.claim(tokens.refresh_token_for(first['refresh_token']))
+
+    monkeypatch.setattr(server.RefreshTokenGrant, 'validate_token_request', checked_then_lost_the_race)
+    response = _refresh(world, first['refresh_token'])
+    assert response.status_code == 400 and response.get_json()['error'] == 'invalid_grant'
+    assert OAuthToken.query.count() == 1
+
+
+def test_a_refresh_refused_for_its_scope_keeps_the_old_token(world):
+    first = _exchange(world, _code(world, scope='read')).get_json()
+    response = _refresh(world, first['refresh_token'], scope='read write')
+    assert response.get_json()['error'] == 'invalid_scope'
+    assert tokens.token_for(first['access_token']) is not None
