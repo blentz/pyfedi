@@ -19,7 +19,8 @@ from sqlalchemy.orm import aliased
 
 from app import db
 from app.local_only import found_here, without_local_only
-from app.models import Post, PostReply, User, utcnow
+from app.models import Community, Post, PostReply, User, utcnow
+import app.reads.post as reads_post   # a module, looked up when called: app.reads.post's own imports lead back here
 from app.reads.viewer import Restrictions
 from app.storefront import current_storefront, domain_base_url, domain_rows, on_domain
 from app.permissions import user_access
@@ -204,6 +205,15 @@ def comment_listing(user_id: int | None, restrictions: Restrictions, listing: Co
     Refusals are the alpha API's texts: a liked or saved listing needs a viewer, so do Subscribed, Moderating and
     ModeratorView; an anonymous reader may not page past the 10,000th of every comment ('unknown', deliberately vague);
     a parent nobody holds, or hidden here, is 'Comment with parent_id not found.'."""
+    # A private community's comments are its members' (refuse_private_thread): asked for by its community, its post or
+    # a reply in it, the request is refused; a wider listing leaves them out (_without_unjoined_private)
+    if listing.community_id is not None:
+        reads_post.refuse_private_thread(db.session.get(Community, listing.community_id), user_id)
+    if listing.post_id is not None and (post := db.session.get(Post, listing.post_id)) is not None:
+        reads_post.refuse_private_thread(post.community, user_id)
+    if listing.parent_id is not None and (parent := db.session.get(PostReply, listing.parent_id)) is not None:
+        reads_post.refuse_private_thread(db.session.get(Community, parent.community_id), user_id)
+
     replies = None
     if listing.liked_only:
         if not user_id:
@@ -285,11 +295,23 @@ def _listing(replies, user_id, restrictions: Restrictions, listing: CommentListi
         replies = replies.filter(listable_clause(PostReply))
     # safe to just remove any replies by blocked users (won't cause gaps in threaded convo)
     replies = _without_blocked(replies, restrictions, LISTING_BLOCKS)
+    replies = _without_unjoined_private(replies, user_id)
     if listing.post_id is not None:   # a further narrowing of liked_only, saved_only, person_id or community_id
         replies = replies.filter_by(post_id=listing.post_id)
     if listing.max_depth is not None:
         replies = replies.filter(PostReply.depth < listing.max_depth)
     return replies
+
+
+def _without_unjoined_private(replies, user_id):
+    """Leave out the comments of every private community the viewer is not a member of (all of them for nobody signed
+    in). Membership is the viewer's own: their own profile listing, exempt from their blocks, still shows their comments
+    in the private communities they belong to."""
+    member_of = Restrictions(user_id).private_community_ids
+    unjoined = db.session.query(Community.id).filter(Community.private == True)
+    if member_of:
+        unjoined = unjoined.filter(Community.id.not_in(member_of))
+    return replies.filter(PostReply.community_id.not_in(unjoined))
 
 
 def _conversation(restrictions: Restrictions, listing: CommentListing):

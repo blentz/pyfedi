@@ -544,6 +544,7 @@ def get_post_replies(auth, data):
         if post_id is None:
             post_id = parent.post_id
         post = a_visible_post(post_id, auth)
+        reads_post.refuse_private_thread(post.community, user_id)   # a private community's comments are its members'
         replies = get_comment_branch(post, parent.id, sort.lower(), user)
     else:
         # Naming neither leaves post_id None, and `db.session.get(Post, None)`
@@ -554,6 +555,7 @@ def get_post_replies(auth, data):
         if post_id is None:
             raise Exception('post_id or parent_id required')
         post = a_visible_post(post_id, auth)
+        reads_post.refuse_private_thread(post.community, user_id)
         replies = post_replies(post, sort.lower(), user)
 
     is_user_banned_from_community = post.community_id in user_details['user_ban_community_ids'] if user_details else False

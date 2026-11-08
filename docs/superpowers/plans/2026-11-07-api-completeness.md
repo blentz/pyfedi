@@ -109,6 +109,10 @@ A survey of every other client API family (source-read, 2026-11-07) ranked what 
      community, so a non-member, signed in or not, reads a private community's replies through both. Probably a leak;
      unchanged here. (And `get_post` answers `membership required` to an anonymous reader where the post listings'
      gate, `refuse_private_community`, answers `authentication required`.)
+     **Confirmed and FIXED 2026-11-08** (owner: fix on this branch): `app.reads.post.refuse_private_thread` refuses a
+     private community's thread, branch or community comment list to non-members, with the listings' texts, and wider
+     comment listings leave its comments out (`app.reads.replies._without_unjoined_private`); tests in
+     `tests/test_private_community_replies.py`. The `get_post` text difference above remains.
   3. Instance blocks: the tree keeps a reply with no instance (`instance_id IS NULL`, util.py 190, 262); both of
      `get_reply_list`'s reads drop it (`NOT IN` is NULL there, reply.py 181, 313-325). (`spares_unknown_instance`)
   4. Blocked people: the tree drops the reply and its replies fall out with it when the tree is built (util.py 193-195,

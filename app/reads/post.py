@@ -27,6 +27,19 @@ def refuse_unreadable_post(post: Post, user_id: int | None, restrictions: Restri
         raise Exception('Private community - membership required')
 
 
+def refuse_private_thread(community: Community | None, user_id: int | None) -> None:
+    """Refuse a private community's comments (a thread, a branch of one, or a list of the community's comments) to
+    the viewer `user_id` (None: nobody signed in) unless they are a member, as its posts are refused: an anonymous
+    reader is asked to sign in, a signed-in non-member is told membership is required. Membership is the viewer's own,
+    whatever blocks a caller exempts them from. An open community, and none at all, refuse nothing."""
+    if community is None or not community.private:
+        return
+    if not user_id:
+        raise Exception('Private community - authentication required')
+    if community.id not in Restrictions(user_id).private_community_ids:
+        raise Exception('Private community - membership required')
+
+
 def refuse_private_community(community_id, community_name, user_id, user):
     """Refuse a post list of the private community `community_id` or `community_name` names to a caller who is not a
     member. A community nobody holds, and one hidden here (`hidden_here`), list nothing and are not refused, so the
