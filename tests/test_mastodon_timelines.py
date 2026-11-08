@@ -300,3 +300,17 @@ def test_the_paging_links_and_the_licence_share_one_link_header(world, monkeypat
     values = response.headers.getlist('Link')
     assert len(values) == 1
     assert 'rel="next"' in values[0] and 'rel="prev"' in values[0] and 'rel="license"' in values[0]
+
+
+def test_a_bound_naming_a_status_the_viewer_may_not_read_tells_nothing_of_it(world):
+    """Its id's own second is the bound, as for a deleted status: the page is the same whether or not the hidden
+    status exists, so paging cannot probe for it or for when it was posted."""
+    before, hidden, after = (_post(world, minutes=minute) for minute in range(3))
+    hidden.posted_at = START + timedelta(minutes=1, seconds=0.75)
+    hidden.visibility = VISIBILITY_FOLLOWERS
+    db.session.commit()
+    raw = ids.status_id(hidden)
+    shown = _ids(_get(world, '/api/v1/timelines/public', max_id=raw), (before, after))
+    db.session.delete(hidden)
+    db.session.commit()
+    assert _ids(_get(world, '/api/v1/timelines/public', max_id=raw), (before, after)) == shown == _sid(before)

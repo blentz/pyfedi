@@ -47,14 +47,15 @@ def posted(row) -> datetime:
     return row.posted_at or row.created_at
 
 
-def bound(raw: str) -> tuple | None:
-    """Where the status `raw` names sorts, (posted, table, row id), for paging past it: exact when its row is here,
-    else to the second its id holds (an app may page from a status since deleted). None for no id at all."""
+def bound(raw: str, may_read) -> tuple | None:
+    """Where the status `raw` names sorts, (posted, table, row id), for paging past it: exact when its row is one the
+    viewer may read (`may_read(row)`), else to the second its id holds, as for a status since deleted. A row the viewer
+    may not read never moves the bound, so a page cannot tell them it exists or when it was posted. None for no id."""
     value = _parse(raw)
     if value is None:
         return None
     row = find_status(raw)
-    if row is not None:
+    if row is not None and may_read(row):
         return posted(row), kind_of(row), row.id
     return moment(raw), value >> _ROW_BITS & 1, value & _ROW_MASK
 

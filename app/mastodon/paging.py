@@ -28,13 +28,14 @@ class Window:
     limit: int
 
 
-def window(args) -> Window:
-    """The page asked for by `args`; a bound that is no status id is no bound, a limit that is no number the default."""
+def window(args, may_read) -> Window:
+    """The page asked for by `args`; a bound that is no status id is no bound, a limit that is no number the default.
+    `may_read(row)` says whether the viewer may read a row a bound names (app.mastodon.ids.bound)."""
     try:
         limit = int(args.get('limit', DEFAULT_LIMIT))
     except ValueError:
         limit = DEFAULT_LIMIT
-    return Window(*(bound(args.get(name, '')) for name in _BOUNDS), limit=min(max(limit, 1), MAX_LIMIT))
+    return Window(*(bound(args.get(name, ''), may_read) for name in _BOUNDS), limit=min(max(limit, 1), MAX_LIMIT))
 
 
 @dataclass(frozen=True)
@@ -96,12 +97,16 @@ def page(sources: list[Source], win: Window) -> list:
     return rows if not ascending else rows[::-1]
 
 
-def link_header(rows: list) -> str | None:
-    """`Link` naming the next (older) and previous (newer) pages, keeping the request's other arguments."""
-    if not rows:
-        return None
+def links(newest: str, oldest: str) -> str:
+    """`Link` naming the next page (older than `oldest`) and the previous one (newer than `newest`), keeping the
+    request's other arguments."""
     kept = [(name, value) for name, value in request.args.items(multi=True) if name not in _BOUNDS]
     base = request.base_url
-    older = f'{base}?{urlencode(kept + [("max_id", status_id(rows[-1]))])}'
-    newer = f'{base}?{urlencode(kept + [("min_id", status_id(rows[0]))])}'
+    older = f'{base}?{urlencode(kept + [("max_id", oldest)])}'
+    newer = f'{base}?{urlencode(kept + [("min_id", newest)])}'
     return f'<{older}>; rel="next", <{newer}>; rel="prev"'
+
+
+def link_header(rows: list) -> str | None:
+    """`links` for a page of statuses, None for an empty one."""
+    return links(status_id(rows[0]), status_id(rows[-1])) if rows else None

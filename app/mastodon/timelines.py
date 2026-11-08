@@ -57,7 +57,8 @@ def _comments(listing: CommentListing):
 
 
 def _respond(sources: list[Source]):
-    rows = page(sources, window(request.args))
+    viewer_id = _viewer_id()
+    rows = page(sources, window(request.args, lambda row: readable(row, viewer_id)))
     response = jsonify(Page(g.oauth_user, rows).statuses(rows))
     if (link := link_header(rows)) is not None:
         response.headers['Link'] = link
