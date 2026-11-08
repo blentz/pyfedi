@@ -22,7 +22,7 @@ HASHTAG_RE = re.compile(r'(?<![^\W_])#(?=\w*[^\W\d_])([^\W_]\w*)')
 NOT_HASHTAG_PARENTS = ('a', 'code', 'pre')
 
 
-def _web_url(post):
+def web_url(post):
     """The post's url when it is http or https, else None: anything else (javascript:, data:) is never linked."""
     if not post.url:
         return None
@@ -33,7 +33,7 @@ def _web_url(post):
     return post.url if scheme in ('http', 'https') else None
 
 
-def _starts_with_title(text: str, title: str) -> bool:
+def starts_with_title(text: str, title: str) -> bool:
     """True when `text` starts with `title` as whole words: the next character is the end or not alphanumeric."""
     if not text.startswith(title):
         return False
@@ -90,9 +90,9 @@ def note_content(post) -> str:
     original = post.body_html or ''
     body = link_hashtags(original, object_base(post))[0]
     title = (post.title or '').strip()
-    if not title or _starts_with_title(html_to_text(original).strip(), title):
+    if not title or starts_with_title(html_to_text(original).strip(), title):
         return body
-    if post.type in (POST_TYPE_LINK, POST_TYPE_VIDEO) and _web_url(post):
+    if post.type in (POST_TYPE_LINK, POST_TYPE_VIDEO) and web_url(post):
         return f'<p><a href="{escape(post.url)}">{escape(title)}</a></p>{body}'
     return f'<p>{escape(title)}</p>{body}'
 
@@ -128,7 +128,7 @@ def note_attachments(post) -> list:
         return gallery_documents(post)
     if post.type == POST_TYPE_IMAGE and post.image is not None and post.image.source_url:
         return [_image_document(post.image, post)]
-    if post.type in (POST_TYPE_LINK, POST_TYPE_VIDEO) and _web_url(post):
+    if post.type in (POST_TYPE_LINK, POST_TYPE_VIDEO) and web_url(post):
         return [{'type': 'Link', 'href': post.url}]
     return []
 

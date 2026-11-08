@@ -29,10 +29,11 @@ def _fields(user: User) -> list[dict]:
     return [{'name': field.label, 'value': field.text, 'verified_at': None} for field in user.extra_fields]
 
 
-def account(user: User, viewer_id: int | None, with_source: bool = False) -> dict:
+def account(user: User, viewer_id: int | None, with_source: bool = False, counts: tuple | None = None) -> dict:
     """Mastodon's Account for `user`, as the viewer `viewer_id` (None: nobody signed in) is told it; with
-    `with_source`, the CredentialAccount the person gets of themselves."""
-    posts, comments = listable_counts([user], viewer_id)[user.id]
+    `with_source`, the CredentialAccount the person gets of themselves. `counts` is the (posts, comments) the viewer
+    could list of theirs, when a page of statuses has counted every author's at once (`listable_counts`)."""
+    posts, comments = counts if counts is not None else listable_counts([user], viewer_id)[user.id]
     avatar, header = absolute(user.avatar_image()), absolute(user.cover_image())
     entity = {
         'id': str(user.id), 'username': user.user_name, 'acct': acct(user), 'display_name': user.display_name(),

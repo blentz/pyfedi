@@ -3,7 +3,7 @@ only a Create of a Note whose attachment is a video/mp4 Document with a string u
 caption from `content` alone, and names the post by its `url` in Likes and replies."""
 from markupsafe import escape
 
-from app.activitypub.serializers.microblog import _starts_with_title, link_hashtags
+from app.activitypub.serializers.microblog import starts_with_title, link_hashtags
 from app.activitypub.serializers.peertube import PUBLIC, uses_peertube_video
 from app.federation_urls import object_base
 from app.models import media_of
@@ -26,7 +26,7 @@ def loops_content(post) -> str:
     original = post.body_html or ''
     body = link_hashtags(original, object_base(post))[0]
     title = (post.title or '').strip()
-    if not title or _starts_with_title(html_to_text(original).strip(), title):
+    if not title or starts_with_title(html_to_text(original).strip(), title):
         return body
     return f'<p>{escape(title)}</p>{body}'
 
