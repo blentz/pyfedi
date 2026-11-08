@@ -83,7 +83,7 @@ def test_options_request_short_circuits_before_the_route(app, db_session):
 
     assert response.status_code == 200
     assert response.headers['Access-Control-Allow-Origin'] == app.config.get('CORS_ALLOW_ORIGIN', '*')
-    assert response.headers['Access-Control-Allow-Methods'] == 'GET, POST, PUT, DELETE, OPTIONS'
+    assert response.headers['Access-Control-Allow-Methods'] == 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
     assert 'Allow' not in response.headers
     # An empty body proves before_request's own make_response('', 200) was returned
     # and index() -- which renders a full HTML page -- never ran.
@@ -235,7 +235,7 @@ def test_cors_headers_present_on_a_normal_response(app, db_session):
         response = client.get('/auth/please_wait')
 
     assert response.headers['Access-Control-Allow-Origin'] == app.config.get('CORS_ALLOW_ORIGIN', '*')
-    assert response.headers['Access-Control-Allow-Methods'] == 'GET, POST, PUT, DELETE, OPTIONS'
+    assert response.headers['Access-Control-Allow-Methods'] == 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
     assert response.headers['Access-Control-Allow-Headers'] == 'Content-Type, Authorization, Accept, User-Agent'
 
 

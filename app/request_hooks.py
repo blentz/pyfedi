@@ -233,7 +233,7 @@ def register_request_hooks(app):
         if request.method == 'OPTIONS':
             response = flask.make_response('', 200)
             response.headers['Access-Control-Allow-Origin'] = current_app.config.get('CORS_ALLOW_ORIGIN', '*')
-            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
             response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, User-Agent'
             #response.headers['Vary'] = 'Origin'
             return response
@@ -282,7 +282,7 @@ def register_request_hooks(app):
         adopt_host_storefront()
         # Add CORS headers to all responses
         response.headers['Access-Control-Allow-Origin'] = current_app.config.get('CORS_ALLOW_ORIGIN', '*')
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, User-Agent'
 
         secure_mode_cache_headers(response)   # S6 secure mode: a signed answer must not reach a shared cache
