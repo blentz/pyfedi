@@ -259,6 +259,25 @@ floors and changed-line gates.
       404**; any other v2 error, a decode error included, skips v1.
     - **No software gating:** no nodeinfo read, the version string never parsed; only `api_versions.mastodon >= 5`
       unlocks the blur filter action and `configuration.translation.enabled` the translate menu.
+    **Inventory 2026-11-08 (Phanpy, Elk, Mastodon Android; sources read, not run):**
+    - **Version:** no app parses `version` into a feature except Phanpy, and only for `@mastodon/*` features that also
+      need nodeinfo `software.name` = `mastodon` (PieFed says `piefed`, so they stay off whatever the version); its
+      basic features (lists, filters, bookmarks, edit, pinned) test only that `version` lacks "pixelfed". Elk checks
+      only for `+glitch`; Mastodon Android never parses it. So `4.0.0` changes nothing in these apps today.
+    - **`api_versions.mastodon`** is what gates: >= 2 switches Mastodon Android and Phanpy to grouped notifications
+      (`/api/v2/notifications`), >= 3 PKCE in Mastodon Android, >= 7 quotes. PieFed sends none (0): v1 notifications.
+    - **Paging:** every app follows `Link: rel="next"` (masto.js in Phanpy and Elk, HeaderPaginationRequest in
+      Mastodon Android): no Link header, no second page. Phanpy's tag timeline sets `max_id` itself; new-post checks
+      send `since_id`/`min_id`.
+    - **Fatal:** `verify_credentials` at login (all three). Tolerated: preferences, push, markers, filters, custom
+      emojis, nodeinfo; a timeline error empties that view only.
+    - **Required (Mastodon Android drops an invalid status from a timeline page; context and search fail whole):**
+      Status `id, uri, created_at, account, visibility, spoiler_text, media_attachments, mentions, tags, emojis`;
+      Account adds `display_name`; Mention `id, username, acct, url`; Tag `name, url`; Attachment `id, type, url`
+      (+`preview_url` for video); Card `url, title, description`; Poll `id, own_votes, options, emojis`; Notification
+      `id, type, created_at, account`; Marker all. Elk compares `reblog` and `in_reply_to_id` to `null` strictly: send
+      them as null, never omit. Phanpy needs `mentions` and `emojis` arrays. Elk reads
+      `configuration.urls.streaming` without a check: send `configuration.urls`.
   - W1.1 Login: OAuth (W0.2), `/api/v2/instance` and a full v1, `verify_credentials`, accounts.
     **Done 2026-11-08** (branch feat/mastodon-login), in `app/mastodon/`:
     1. 86b522f64 `GET /api/v1/accounts/verify_credentials` (read:accounts; with `source`), `/accounts/:id` and
