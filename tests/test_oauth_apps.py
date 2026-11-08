@@ -1,0 +1,97 @@
+"""POST /api/v1/apps: a client app registers itself, as on Mastodon (plan W0.2 step 2; spec
+docs/superpowers/specs/2026-11-07-mastodon-client-api-design.md §3.1)."""
+import pytest
+
+from app.models import OAuthApp
+
+TUSKY = 'oauth2redirect://com.keylesspalace.tusky/'
+OOB = 'urn:ietf:wg:oauth:2.0:oob'
+
+
+@pytest.fixture
+def client(app, api_baseline):
+    return app.test_client()
+
+
+def test_an_app_registers_with_a_form_as_tusky_does(client):
+    response = client.post('/api/v1/apps', data={'client_name': 'Tusky', 'redirect_uris': TUSKY,
+                                                 'scopes': 'read write follow push', 'website': 'https://tusky.app'})
+    assert response.status_code == 200, response.get_data(as_text=True)
+    body = response.get_json()
+    registered = OAuthApp.query.one()
+    assert body['client_id'] == registered.client_id
+    assert registered.check_client_secret(body['client_secret'])
+    assert body['id'] == str(registered.id)
+    assert body['name'] == 'Tusky' and body['website'] == 'https://tusky.app'
+    assert body['scopes'] == ['read', 'write', 'follow', 'push']
+    assert body['redirect_uri'] == TUSKY and body['redirect_uris'] == [TUSKY]
+    assert body['client_secret_expires_at'] == 0
+
+
+def test_an_app_registers_with_json_and_a_list_of_redirects(client):
+    response = client.post('/api/v1/apps', json={'client_name': 'Phanpy', 'scopes': 'read write',
+                                                 'redirect_uris': ['https://phanpy.social/', OOB]})
+    assert response.status_code == 200, response.get_data(as_text=True)
+    body = response.get_json()
+    assert body['redirect_uris'] == ['https://phanpy.social/', OOB]
+    assert body['redirect_uri'] == f'https://phanpy.social/\n{OOB}'
+    assert body['website'] is None
+
+
+def test_redirects_in_one_string_are_split_on_whitespace(client):
+    response = client.post('/api/v1/apps', data={'client_name': 'A', 'redirect_uris': f'https://a.example/cb\n{OOB}'})
+    assert response.get_json()['redirect_uris'] == ['https://a.example/cb', OOB]
+
+
+def test_no_scopes_means_read(client):
+    response = client.post('/api/v1/apps', data={'client_name': 'A', 'redirect_uris': OOB})
+    assert response.get_json()['scopes'] == ['read']
+    assert OAuthApp.query.one().scope == 'read'
+
+
+@pytest.mark.parametrize('fields', [
+    {'redirect_uris': OOB},
+    {'client_name': '   ', 'redirect_uris': OOB},
+    {'client_name': 'A'},
+    {'client_name': 'A', 'redirect_uris': ''},
+    {'client_name': 'A', 'redirect_uris': 'not-a-uri'},
+    {'client_name': 'A', 'redirect_uris': 'javascript:alert(1)'},
+    {'client_name': 'A', 'redirect_uris': 'data:text/html,hi'},
+    {'client_name': 'A', 'redirect_uris': 'https://a.example/cb#fragment'},
+    {'client_name': 'A', 'redirect_uris': 'https:///no-host'},
+    {'client_name': 'A', 'redirect_uris': OOB, 'scopes': 'admin:read'},
+    {'client_name': 'A' * 256, 'redirect_uris': OOB},
+    {'client_name': 'A', 'redirect_uris': OOB, 'website': 'https://' + 'a' * 1100 + '.example'},
+], ids=['no-name', 'blank-name', 'no-redirect', 'empty-redirect', 'relative', 'javascript', 'data', 'fragment',
+        'no-host', 'admin-scope', 'long-name', 'long-website'])
+def test_a_bad_registration_is_refused_as_mastodon_does(client, fields):
+    response = client.post('/api/v1/apps', data=fields)
+    assert response.status_code == 422
+    assert response.get_json()['error'].startswith('Validation failed')
+    assert OAuthApp.query.count() == 0
+
+
+def test_a_json_list_of_redirects_must_be_strings(client):
+    response = client.post('/api/v1/apps', json={'client_name': 'A', 'redirect_uris': [OOB, 5]})
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize('body', [
+    [{'client_name': 'A'}],
+    {'client_name': 5, 'redirect_uris': OOB},
+    {'client_name': 'A', 'redirect_uris': OOB, 'website': 5},
+    {'client_name': 'A', 'redirect_uris': {'uri': OOB}},
+    {'client_name': 'A', 'redirect_uris': 'https://a.example/' + 'a' * 2000},
+    {'client_name': 'A', 'redirect_uris': 'http://[::1/cb'},
+    {'client_name': 'A', 'redirect_uris': 'https://a.example/cb#'},
+], ids=['not-an-object', 'number-name', 'number-website', 'redirects-object', 'long-redirect', 'unparseable',
+        'empty-fragment'])
+def test_a_bad_json_registration_is_refused(client, body):
+    response = client.post('/api/v1/apps', json=body)
+    assert response.status_code == 422
+    assert OAuthApp.query.count() == 0
+
+
+def test_a_custom_scheme_redirect_is_accepted(client):
+    response = client.post('/api/v1/apps', json={'client_name': 'A', 'redirect_uris': 'org.joinmastodon.android://cb'})
+    assert response.status_code == 200

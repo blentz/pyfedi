@@ -430,6 +430,9 @@ def create_app(config_class=Config):
     from app.payments import bp as payments_bp  # cycle: blueprint modules import db and the other globals from here
     app.register_blueprint(payments_bp)
 
+    from app.oauth_server import bp as oauth_server_bp  # cycle: blueprint modules import db and the other globals from here
+    app.register_blueprint(oauth_server_bp)
+
     from app.user import bp as user_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(user_bp)
 
