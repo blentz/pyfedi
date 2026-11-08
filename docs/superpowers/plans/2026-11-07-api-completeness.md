@@ -153,28 +153,38 @@ A survey of every other client API family (source-read, 2026-11-07) ranked what 
      finds a local account, `name@this.domain` included.
   5. Against the web's people directory (`app/instance/routes.py` 161-170), the API's list does not honour
      `searchable` (an account that opted out of the profile list is listed and found by search; see the security
-     sweep below), and lists banned accounts (All), bots and silenced instances' accounts. Unchanged here.
+     sweep below: FIXED d68b68714), and lists banned accounts (All), bots and silenced instances' accounts. Those
+     three unchanged.
   Same in both and unchanged: an account hidden here is `Not found` by id and by name and is left out of the list
   (`hidden_here`, signed in or not); a bare name is the storefront's account, a hosted domain's name its own.
   tests/test_local_name_lookups.py allows the remote-name lookup (`func.lower(User.user_name) == name`) in alpha's
   `get_user` only, so that condition is still built there and handed to `person_named`; a later API that looks up a
   remote name needs its own ALLOWED entry, or the entry moved to `app/reads/users.py` (the owner's call: the test is
   not edited in a refactor).
-  **Security sweep in step 4, reported, not fixed** (probe tests run against b997abfae's behaviour, all passing,
-  i.e. each leak present):
+  **Security sweep in step 4** (probe tests run against b997abfae's behaviour, all passing, i.e. each leak present).
+  The owner ruled all four fixed, each its own commit, the API answering no more than the web shows; the gates are in
+  `app/reads/users.py`, tests in tests/test_user_reads_privacy.py:
   1. `private_mods`: a person's `moderates` (views.py `cached_modlist_for_user`/`shown_modlist`, 1681-1711) names a
      community whose moderators are private, to anyone, signed in or not; the web profile hides it from all but admins
      and the person (`app/user/utils.py` 417-419). The community's own mod list (`cached_modlist_for_community`,
-     views.py 1667-1678) ignores `private_mods` too (outside step 4). Likely a leak.
+     views.py 1667-1678) ignores `private_mods` too (outside step 4). Likely a leak. **FIXED 9b069476f**
+     (`moderates_hidden_from`; `moderators_hidden`: the community page names no private moderators,
+     `app/community/routes.py` 522-523, and only its moderator page names them, to its moderators and an admin of
+     communities, 1838; asked after the shared cache).
   2. Private communities: `moderates` names a private community the viewer is not a member of (name, title, icon),
      anonymous or not, while the community list leaves it out (`app/api/alpha/utils/community.py` 103-118). The web
-     profile names it too, so this may be by design.
+     profile names it too, so this may be by design. **FIXED e5b5a86f0** (owner ruling: by membership,
+     `Restrictions.private_community_ids`; the person and admins still see it; the web profile is unchanged).
   3. `searchable`: `get_user_list` (search type Users) lists and finds an account with `searchable = False`
      (User.searchable: "whether their profile is visible in profile list"); the web directory leaves it out.
+     **FIXED d68b68714** (`person_listing` takes the viewer id; listed to an instance-wide 'administer all users'
+     holder only, as `app/instance/routes.py` 159-165; lookups by id and name unchanged).
   4. Counts: `post_count`/`comment_count` (stored on the user row, `User.recalculate_post_stats`, models.py
      2722-2730, and the increments) count posts and comments in private communities, followers-only and local-only
      ones too, so a profile shows `post_count: 1, comment_count: 1` beside empty posts and comments to an anonymous
-     viewer. A count, not content; Top sorts the person list by it.
+     viewer. A count, not content; Top sorts the person list by it. **FIXED 69ce7d909** (`listable_counts`: stored
+     counts for the person and admins, else the listings' privacy predicates; one statement per person view, one per
+     person-list page. Still open: Top sorts by the stored count, and the web profile shows the stored counts).
   Checked and not leaking: a person's posts and comments with `include_content` leave out a private community's to a
   non-member (probe; visibility and local-only go through `app/reads` as in steps 2 and 3), and local-only and
   off-domain accounts are `Not found` by id and by name and left out of the list (tests/test_reads_users.py).
