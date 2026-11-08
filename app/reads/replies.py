@@ -176,6 +176,7 @@ class CommentListing:
     liked_only: bool = False
     saved_only: bool = False
     person_id: int | None = None
+    person_ids: tuple[int, ...] | None = None   # a set of authors: a Mastodon home timeline's (plan W1.2)
     community_id: int | None = None
     post_id: int | None = None
     parent_id: int | None = None
@@ -237,6 +238,9 @@ def comment_listing(user_id: int | None, restrictions: Restrictions, listing: Co
             replies = PostReply.query.filter_by(user_id=listing.person_id)
         else:
             replies = replies.filter_by(user_id=listing.person_id)
+    if listing.person_ids is not None:
+        authors = PostReply.user_id.in_(listing.person_ids)
+        replies = PostReply.query.filter(authors) if not replies else replies.filter(authors)
     if listing.community_id is not None:
         if not replies:
             replies = PostReply.query.filter_by(community_id=listing.community_id)
@@ -289,14 +293,14 @@ def _listing(replies, user_id, restrictions: Restrictions, listing: CommentListi
     # a listing omits a hidden reply outright (interop D7); only a threaded conversation keeps a stub, to hold the tree
     # together (D18). The person, saved and liked listings are the profile surfaces: they show what the viewer may see
     # and omit the rest, with no stub.
-    if listing.person_id is not None or listing.saved_only or listing.liked_only:
+    if listing.person_id is not None or listing.person_ids is not None or listing.saved_only or listing.liked_only:
         replies = replies.filter(visible_to_clause(PostReply, user_id))
     else:
         replies = replies.filter(listable_clause(PostReply))
     # safe to just remove any replies by blocked users (won't cause gaps in threaded convo)
     replies = _without_blocked(replies, restrictions, LISTING_BLOCKS)
     replies = _without_unjoined_private(replies, user_id)
-    if listing.post_id is not None:   # a further narrowing of liked_only, saved_only, person_id or community_id
+    if listing.post_id is not None:   # a further narrowing of liked_only, saved_only, person_id(s) or community_id
         replies = replies.filter_by(post_id=listing.post_id)
     if listing.max_depth is not None:
         replies = replies.filter(PostReply.depth < listing.max_depth)

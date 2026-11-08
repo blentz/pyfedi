@@ -35,8 +35,9 @@ from app.visibility import listable_clause, listable_sql, visible_to_clause, vis
 @dataclass(frozen=True)
 class Listing:
     """One request for a list of posts. `type` is the scope (All, Local, Popular, Subscribed, Moderating or
-    ModeratorView); an All listing narrows to one community (by id or by name), a feed, a topic or an author. `nsfw` is
-    '', 'Exclude', 'Only' or 'Include'; `query` searches the full text, or the url when `search_type` is 'Url'."""
+    ModeratorView); an All listing narrows to one community (by id or by name), a feed, a topic, an author or a set
+    of authors (`person_ids`: a Mastodon home timeline's, plan W1.2). `nsfw` is '', 'Exclude', 'Only' or 'Include';
+    `query` searches the full text, or the url when `search_type` is 'Url'."""
     type: str = 'All'
     sort: str = 'Hot'
     community_id: int | None = None
@@ -44,6 +45,7 @@ class Listing:
     feed_id: int | None = None
     topic_id: int | None = None
     person_id: int | None = None
+    person_ids: tuple[int, ...] | None = None
     liked_only: bool = False
     saved_only: bool = False
     ignore_sticky: bool = False
@@ -256,10 +258,11 @@ def _scope(b: _Builder, user_id, restrictions: Restrictions, listing: Listing, n
         b.narrowed()
         b.posts = in_communities(Community.id.in_(_topic_community_ids(listing.topic_id)))
         content_filters = user_filters_posts(user_id) if user_id else {}
-    elif listing.person_id:
-        b.narrowed()   # an author's posts, with no block on authors
+    elif listing.person_id or listing.person_ids is not None:
+        b.narrowed()   # an author's posts, or a set of authors', with no block on authors
         profile_listing = True
-        b.posts = Post.query.filter(*published, community, domain, instance, Post.user_id == listing.person_id). \
+        authors = Post.user_id == listing.person_id if listing.person_id else Post.user_id.in_(listing.person_ids)
+        b.posts = Post.query.filter(*published, community, domain, instance, authors). \
             join(Community, Community.id == Post.community_id).filter(community_instance)
     else:
         b.posts = in_communities(Community.show_all == True)
