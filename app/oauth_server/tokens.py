@@ -10,15 +10,6 @@ from app.models import OAuthApp, OAuthCode, OAuthToken, User, utcnow
 
 CODE_LIFETIME_SECONDS = 600
 
-# Mastodon's scopes, without admin (PieFed has no admin API for them). `push` is accepted for the apps that ask for
-# it at registration (Tusky asks for `read write follow push`) and grants nothing yet.
-_READ = ('accounts', 'blocks', 'bookmarks', 'favourites', 'filters', 'follows', 'lists', 'mutes', 'notifications',
-         'search', 'statuses')
-_WRITE = ('accounts', 'blocks', 'bookmarks', 'conversations', 'favourites', 'filters', 'follows', 'lists', 'media',
-          'mutes', 'notifications', 'reports', 'statuses')
-SCOPES = frozenset(('read', 'write', 'follow', 'push', 'profile')
-                   + tuple(f'read:{name}' for name in _READ) + tuple(f'write:{name}' for name in _WRITE))
-
 
 def digest(value: str) -> str:
     return sha256(value.encode()).hexdigest()
@@ -26,18 +17,6 @@ def digest(value: str) -> str:
 
 def _secret() -> str:
     return secrets.token_urlsafe(32)
-
-
-def parse_scope(scope: str | None) -> str:
-    """The space-separated scopes, normalised; none means `read`, as Mastodon's default. ValueError for one PieFed
-    does not know."""
-    names = (scope or '').split()
-    if not names:
-        return 'read'
-    unknown = [name for name in names if name not in SCOPES]
-    if unknown:
-        raise ValueError(f'unknown scope: {unknown[0]}')
-    return ' '.join(names)
 
 
 def register_app(name: str, redirect_uris: list[str], scope: str, website: str | None) -> tuple[OAuthApp, str]:
@@ -53,11 +32,16 @@ def register_app(name: str, redirect_uris: list[str], scope: str, website: str |
 def issue_code(registered: OAuthApp, user: User, redirect_uri: str, scope: str, code_challenge: str | None,
                code_challenge_method: str | None) -> str:
     raw = _secret()
+    store_code(raw, registered, user, redirect_uri, scope, code_challenge, code_challenge_method)
+    return raw
+
+
+def store_code(raw: str, registered: OAuthApp, user: User, redirect_uri: str, scope: str, code_challenge: str | None,
+               code_challenge_method: str | None) -> None:
     db.session.add(OAuthCode(code_hash=digest(raw), app_id=registered.id, user_id=user.id, redirect_uri=redirect_uri,
                              scope=scope, code_challenge=code_challenge,
                              code_challenge_method=code_challenge_method))
     db.session.commit()
-    return raw
 
 
 def code_for(registered: OAuthApp, raw: str) -> OAuthCode | None:

@@ -1,0 +1,24 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+
+{% block app_content %}
+    <div class="row">
+        <div class="col col-login mx-auto">
+            <div class="card mt-5">
+                <div class="card-body p-6">
+                    {% if code -%}
+                        <h1 class="card-title text-center">{{ _('Copy this code into %(app)s', app=app.name) }}</h1>
+                        <p class="text-center"><code class="user-select-all">{{ code }}</code></p>
+                        <p class="small">{{ _('It works once, for ten minutes.') }}</p>
+                    {% else -%}
+                        <h1 class="card-title text-center">{{ _('Access denied') }}</h1>
+                        <p>{{ _('%(app)s was not given access to your account.', app=app.name) }}</p>
+                    {% endif -%}
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock %}

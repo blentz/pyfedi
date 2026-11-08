@@ -1,10 +1,16 @@
 """The OAuth 2 endpoints client apps call (spec docs/superpowers/specs/2026-11-07-mastodon-client-api-design.md §3.1)."""
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
-from flask import jsonify, request
+from authlib.oauth2 import OAuth2Error
+from flask import jsonify, make_response, render_template, request
+from flask_babel import lazy_gettext as _l
+from flask_login import current_user
 
 from app import limiter
+from app.oauth_scopes import parse_scope
 from app.oauth_server import bp, tokens
+from app.oauth_server.server import server
+from app.utils import login_required
 
 OOB = 'urn:ietf:wg:oauth:2.0:oob'
 _REFUSED_SCHEMES = frozenset(('javascript', 'data', 'vbscript', 'file', 'blob'))
@@ -84,7 +90,7 @@ def register_app():
         website = _website(website)
         redirect_uris = _redirect_uris(fields.get('redirect_uris'))
         try:
-            scope = tokens.parse_scope(fields.get('scopes'))
+            scope = parse_scope(fields.get('scopes'))
         except ValueError:
             raise _Invalid('Scopes are invalid') from None
     except _Invalid as invalid:
@@ -93,3 +99,46 @@ def register_app():
     return jsonify({'id': str(registered.id), 'name': registered.name, 'website': registered.website,
                     'scopes': scope.split(), 'redirect_uri': '\n'.join(redirect_uris), 'redirect_uris': redirect_uris,
                     'client_id': registered.client_id, 'client_secret': client_secret, 'client_secret_expires_at': 0})
+
+
+SCOPE_LABELS = {
+    'read': _l('Read everything your account can see'),
+    'write': _l('Post, vote, and change your account and its settings'),
+    'follow': _l('Follow, block and mute people and communities'),
+    'push': _l('Receive notifications'),
+    'profile': _l('See your profile'),
+}
+
+
+def _framed_never(response):
+    response.headers['X-Frame-Options'] = 'DENY'
+    policy = response.headers.get('Content-Security-Policy')
+    response.headers['Content-Security-Policy'] = f"{policy}; frame-ancestors 'none'" if policy \
+        else "frame-ancestors 'none'"
+    return response
+
+
+def _page(template, status=200, **context):
+    return _framed_never(make_response(render_template(template, **context), status))
+
+
+@bp.route('/oauth/authorize', methods=['GET', 'POST'])
+@login_required(csrf=True)
+def authorize():
+    """The person, signed in, allows or denies the app what it asks for. Until the app and its redirect check out,
+    an error is shown here and nobody is sent anywhere."""
+    try:
+        grant = server.get_consent_grant(end_user=current_user)
+    except OAuth2Error as error:
+        if error.redirect_uri and error.redirect_uri != OOB:
+            return server.handle_error_response(None, error)
+        return _page('oauth/error.html', 400, error=error.description or error.error)
+    if request.method == 'POST':
+        allowed = 'approve' in request.form
+        response = server.create_authorization_response(grant_user=current_user if allowed else None, grant=grant)
+        if grant.redirect_uri != OOB:
+            return response
+        code = parse_qs(urlsplit(response.headers['Location']).query).get('code', [None])[0]
+        return _page('oauth/oob.html', code=code, app=grant.client)
+    scopes = [(name, SCOPE_LABELS.get(name, name)) for name in grant.request.scope.split()]
+    return _page('oauth/authorize.html', app=grant.client, scopes=scopes, user=current_user)

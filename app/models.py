@@ -41,6 +41,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from app import db, login, cache, celery, httpx_client, constants, app_bcrypt, shaped_memo_name
 from app.permission_cache import permission_version
 from app.permissions import recipient_ids, user_access
+from app.oauth_scopes import covers
 from app.constants import AUTOMATED_REPORTER, SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPTION_MODERATOR, SUBSCRIPTION_OWNER, \
     SUBSCRIPTION_BANNED, SUBSCRIPTION_PENDING, NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC, NOTIF_POST, NOTIF_REPLY, \
     NOTIF_FEED, NOTIF_DEFAULT, NOTIF_REPORT, NOTIF_MENTION, POST_STATUS_REVIEWING, \
@@ -6729,6 +6730,31 @@ class OAuthApp(db.Model):
             return False
         return secrets.compare_digest(sha256(client_secret.encode()).hexdigest(), self.client_secret_hash)
 
+    # What Authlib's authorization server asks of a client (authlib.oauth2.rfc6749.ClientMixin)
+    def get_client_id(self) -> str:
+        return self.client_id
+
+    def get_default_redirect_uri(self) -> str | None:
+        uris = self.redirect_uri_list()
+        return uris[0] if len(uris) == 1 else None
+
+    def get_allowed_scope(self, scope: str | None) -> str | None:
+        """The scopes asked for (`read` when none are), or None when this app did not register one of them."""
+        names = (scope or '').split() or ['read']
+        return ' '.join(names) if all(covers(self.scope, name) for name in names) else None
+
+    def check_redirect_uri(self, redirect_uri: str) -> bool:
+        return redirect_uri in self.redirect_uri_list()
+
+    def check_endpoint_auth_method(self, method: str, endpoint: str) -> bool:
+        return method in ('client_secret_basic', 'client_secret_post', 'none')
+
+    def check_response_type(self, response_type: str) -> bool:
+        return response_type == 'code'
+
+    def check_grant_type(self, grant_type: str) -> bool:
+        return grant_type in ('authorization_code', 'refresh_token', 'client_credentials')
+
 
 class OAuthCode(db.Model):
     """An authorization code, single use and short lived; kept as a SHA-256 digest."""
@@ -6742,6 +6768,12 @@ class OAuthCode(db.Model):
     code_challenge = db.Column(db.String(128))
     code_challenge_method = db.Column(db.String(10))
     created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+
+    def get_redirect_uri(self) -> str:
+        return self.redirect_uri
+
+    def get_scope(self) -> str:
+        return self.scope
 
 
 class OAuthToken(db.Model):

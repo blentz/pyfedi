@@ -1,0 +1,18 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+
+{% block app_content %}
+    <div class="row">
+        <div class="col col-login mx-auto">
+            <div class="card mt-5">
+                <div class="card-body p-6">
+                    <h1 class="card-title text-center">{{ _('This app cannot be authorised') }}</h1>
+                    <p>{{ error }}</p>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock %}

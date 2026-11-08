@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from app import db
 from app.models import OAuthApp, OAuthCode, OAuthToken
+from app.oauth_scopes import covers, parse_scope
 from app.oauth_server import tokens
 from tests.factories import make_user
 
@@ -41,18 +42,18 @@ def test_two_apps_get_different_ids_and_secrets(world):
 @pytest.mark.parametrize('scope', ['read', 'read write follow push', 'read:statuses write:media profile',
                                    'read  write'])
 def test_known_scopes_are_accepted(scope):
-    assert tokens.parse_scope(scope) == ' '.join(scope.split())
+    assert parse_scope(scope) == ' '.join(scope.split())
 
 
 def test_no_scope_means_read():
-    assert tokens.parse_scope('') == 'read'
-    assert tokens.parse_scope(None) == 'read'
+    assert parse_scope('') == 'read'
+    assert parse_scope(None) == 'read'
 
 
 @pytest.mark.parametrize('scope', ['admin:read', 'read:everything', 'delete', 'read,write'])
 def test_unknown_scopes_are_refused(scope):
     with pytest.raises(ValueError):
-        tokens.parse_scope(scope)
+        parse_scope(scope)
 
 
 def test_a_token_is_found_by_its_raw_value_only(world):
@@ -123,3 +124,22 @@ def test_deleting_a_user_deletes_their_codes_and_tokens(world):
     db.session.commit()
     assert db.session.execute(text('SELECT count(*) FROM oauth_token')).scalar() == 0
     assert db.session.execute(text('SELECT count(*) FROM oauth_code')).scalar() == 0
+
+
+@pytest.mark.parametrize('granted, scope, included', [
+    ('read', 'read', True), ('read', 'read:statuses', True), ('read', 'write', False),
+    ('read', 'write:statuses', False), ('read:statuses', 'read', False), ('read:statuses', 'read:accounts', False),
+    ('write', 'write:media', True), ('follow', 'write:follows', True), ('follow', 'read:mutes', True),
+    ('follow', 'write:statuses', False), ('push', 'read', False), ('read', 'readx:y', False),
+])
+def test_a_scope_includes_its_parts(granted, scope, included):
+    assert covers(granted, scope) is included
+
+
+def test_nothing_is_found_for_an_empty_code_or_refresh_token(world):
+    registered, _secret = tokens.register_app('A', ['https://a.example/cb'], 'read', None)
+    tokens.issue_code(registered, world['user'], 'https://a.example/cb', 'read', None, None)
+    tokens.issue_token(registered, world['user'], 'read')
+    assert tokens.code_for(registered, '') is None
+    assert tokens.refresh_token_for('') is None
+    assert tokens.refresh_token_for(None) is None

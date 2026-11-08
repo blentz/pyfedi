@@ -1,0 +1,32 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+
+{% block app_content %}
+    <div class="row">
+        <div class="col col-login mx-auto">
+            <div class="card mt-5">
+                <div class="card-body p-6">
+                    <h1 class="card-title text-center">{{ _('Allow %(app)s to use your account?', app=app.name) }}</h1>
+                    {% if app.website -%}
+                        <p class="text-center"><a href="{{ app.website }}" rel="nofollow noopener noreferrer" target="_blank">{{ app.website }}</a></p>
+                    {% endif -%}
+                    <p>{{ _('Signed in as %(name)s. %(app)s will be able to:', name=user.user_name, app=app.name) }}</p>
+                    <ul>
+                        {% for name, label in scopes -%}
+                            <li>{{ label }} <code>{{ name }}</code></li>
+                        {% endfor -%}
+                    </ul>
+                    <p class="small">{{ _('You can take this back at any time from your settings.') }}</p>
+                    <form method="post">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" name="approve" value="y" class="btn btn-primary">{{ _('Allow') }}</button>
+                        <button type="submit" name="deny" value="y" class="btn btn-outline-secondary">{{ _('Deny') }}</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock %}
