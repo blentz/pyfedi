@@ -48,7 +48,7 @@ def test_the_client_app_harness_is_its_own_profile():
     """interop/run.sh apps starts these; `up` and `test` never do (podman-compose leaves a profiled service out)."""
     services = yaml.safe_load((ROOT / 'compose.interop.yaml').read_text())['services']
     apps = {name for name, service in services.items() if service.get('profiles') == ['apps']}
-    assert apps == {'android-emulator', 'voyager-web', 'blorp-web', 'photon-web', 'apps-runner'}
+    assert apps == {'android-emulator', 'voyager-web', 'blorp-web', 'photon-web', 'phanpy-web', 'elk-web', 'apps-runner'}
     assert services['android-emulator']['devices'] == ['/dev/kvm']
     started = re.search(r'^APPS_SERVICES="([^"]*)"', (ROOT / 'interop/run.sh').read_text(), re.M).group(1).split()
     assert set(started) == apps - {'apps-runner'}
