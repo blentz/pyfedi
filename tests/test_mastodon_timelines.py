@@ -290,3 +290,13 @@ def test_on_a_private_instance_timelines_need_a_persons_token(app, private):
     assert client.get('/api/v1/timelines/public').status_code == 401
     assert client.get('/api/v1/timelines/public', headers={'Authorization': f'Bearer {access}'}).status_code == 200
 
+
+def test_the_paging_links_and_the_licence_share_one_link_header(world, monkeypatch):
+    """OkHttp's header('Link') answers only the last Link header (Mastodon Android, plan W1.0): the RSL licence link
+    added after the view joins the timeline's, so the next page is never lost behind it."""
+    monkeypatch.setitem(world['client'].application.config, 'ALLOW_AI_CRAWLERS', False)
+    _post(world)
+    response = _get(world, '/api/v1/timelines/public')
+    values = response.headers.getlist('Link')
+    assert len(values) == 1
+    assert 'rel="next"' in values[0] and 'rel="prev"' in values[0] and 'rel="license"' in values[0]

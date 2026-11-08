@@ -264,7 +264,9 @@ def test_rsl_link_header_and_manifest_on_storefront(app, world):
     client = on_onion(app)
     with patch.dict(current_app.config, {'ALLOW_AI_CRAWLERS': False}):
         response = client.get('/', headers={'Host': ONION})
-    assert f'<http://{ONION}/rsl.xml>; rel="license"; type="application/rsl+xml"' in response.headers.getlist('Link')
+    # one Link header, the page's preloads and the licence together (app/request_hooks.py)
+    assert response.headers.getlist('Link')[-1].endswith(
+        f'<http://{ONION}/rsl.xml>; rel="license"; type="application/rsl+xml"')
     manifest = client.get('/manifest.json', headers={'Host': ONION})
     assert manifest.get_json()['id'] == f'http://{ONION}'
 
