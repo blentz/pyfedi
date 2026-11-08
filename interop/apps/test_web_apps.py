@@ -6,6 +6,8 @@ name of its own. The browser trusts the harness CA by ignoring certificate error
 and the apps' TLS handling is not under test (their Android builds are, against a system CA). Selectors are the
 accessible names the apps give their controls, so a renamed button fails here with what the screen showed instead.
 """
+import re
+
 import pytest
 from playwright.sync_api import Page, expect, sync_playwright
 
@@ -30,7 +32,15 @@ def page(browser):
     # a phone-sized window: the apps are mobile-first, and their desktop layouts hide controls behind other menus
     context = browser.new_context(ignore_https_errors=True, viewport={'width': 412, 'height': 915})
     context.set_default_timeout(TIMEOUT)
-    yield context.new_page()
+    page = context.new_page()
+    # what went wrong underneath the screen, written beside a failed step's screenshot
+    page.trouble = []
+    page.on('console', lambda message: message.type == 'error' and page.trouble.append(f'console: {message.text}'))
+    page.on('requestfailed', lambda request: page.trouble.append(
+        f'failed: {request.method} {request.url} {request.failure}'))
+    page.on('response', lambda response: (response.status >= 400 or 'piefed.test' in response.url)
+            and page.trouble.append(f'{response.status}: {response.request.method} {response.url}'))
+    yield page
     context.close()
 
 
@@ -38,6 +48,8 @@ def _screenshot(page: Page, name: str):
     def capture(step):
         RESULTS.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=str(RESULTS / f'{name}-{step}.png'))
+        stored = page.evaluate('Object.keys(localStorage).map(k => k + "=" + localStorage.getItem(k).slice(0, 300))')
+        (RESULTS / f'{name}-{step}.log').write_text('\n'.join([f'at: {page.url}', *page.trouble, *stored]) + '\n')
     return capture
 
 
@@ -57,7 +69,7 @@ class Voyager:
         page.goto(self.base + '/', wait_until='networkidle')
         page.get_by_role('tab', name='piefed.test').click()
         page.get_by_role('button', name='Get Started').click()
-        page.get_by_role('button', name='Log In').click()
+        page.get_by_role('button', name='Log In', exact=True).click()
         page.get_by_role('searchbox', name='search text').first.fill('piefed.test')
         page.get_by_role('button', name='Next').click()
         page.get_by_role('button', name='I understand').click()   # "Piefed support is experimental"
@@ -155,7 +167,82 @@ class Photon:
         return f'commented {text!r} on the seeded post; PieFed has it'
 
 
-DRIVERS = {'voyager-web': Voyager, 'blorp-web': Blorp, 'photon-web': Photon}
+def piefed_consent(page: Page):
+    """PieFed's half of an OAuth login (plan W0.2): its login page, as alice, then the consent page's Allow."""
+    page.wait_for_url(lambda url: 'piefed.test/auth/login' in url or 'piefed.test/oauth/authorize' in url)
+    if '/auth/login' in page.url:
+        page.get_by_role('textbox', name='User name').fill(ALICE[0])
+        page.get_by_role('textbox', name='Password').fill(ALICE[1])
+        page.get_by_role('button', name='Log In', exact=True).click()
+        page.wait_for_url(lambda url: 'piefed.test/oauth/authorize' in url)
+    page.get_by_role('button', name='Allow').click()
+
+
+# Whether any localStorage value names the account, as a JSON string or the whole value, bare or with its domain:
+# Mastodon apps keep the signed-in account (and its token) there, which no layout change moves
+HOLDS_ACCOUNT = """(name) => {
+    const named = new RegExp('(^|")' + name + '(@piefed\\.test)?("|$)');
+    return Object.keys(localStorage).some(key => named.test(localStorage.getItem(key) || ''));
+}"""
+
+
+def holds_account(page: Page, name: str):
+    page.wait_for_function(HOLDS_ACCOUNT, arg=name, timeout=TIMEOUT)
+
+
+def no_timelines():
+    raise steps.Unsupported('PieFed serves no Mastodon timelines yet (plan W1.2)')
+
+
+def no_statuses():
+    raise steps.Unsupported('PieFed takes no Mastodon statuses yet (plan W1.3)')
+
+
+class Phanpy:
+    """Phanpy (cheeaun/phanpy): a static Mastodon app. Log in > instance > PieFed's login and consent in a popup >
+    back with a code, which the browser trades for a token at /oauth/token (with PKCE: PieFed's RFC 8414 metadata
+    offers S256)."""
+
+    def __init__(self, page: Page, base: str, world: dict):
+        self.page, self.base, self.world = page, base, world
+
+    def login(self):
+        page = self.page
+        page.goto(self.base + '/#/login', wait_until='networkidle')
+        page.get_by_role('textbox').first.fill('piefed.test')
+        # PieFed's pages open in a popup, which Phanpy watches for the code it comes back with
+        with page.expect_popup() as opened:
+            page.get_by_role('button', name='Continue with piefed.test').click()
+        piefed_consent(opened.value)
+        page.wait_for_url(lambda url: url.startswith(self.base) and '?code=' not in url)
+        holds_account(page, ALICE[0])
+        return 'logged in as alice through OAuth'
+
+    view, post = staticmethod(no_timelines), staticmethod(no_statuses)
+
+
+class Elk:
+    """Elk (elk-zone/elk): Nuxt, whose server registers the app and trades the code. Sign in > server (its default is
+    piefed.test, NUXT_PUBLIC_DEFAULT_SERVER) > PieFed's login and consent > back."""
+
+    def __init__(self, page: Page, base: str, world: dict):
+        self.page, self.base, self.world = page, base, world
+
+    def login(self):
+        page = self.page
+        page.goto(self.base + '/', wait_until='networkidle')
+        page.get_by_role('button', name=re.compile('sign in', re.I)).first.click()
+        page.get_by_role('textbox').first.fill('piefed.test')
+        page.keyboard.press('Enter')
+        piefed_consent(page)
+        page.wait_for_url(lambda url: url.startswith(self.base))
+        holds_account(page, ALICE[0])
+        return 'logged in as alice through OAuth'
+
+    view, post = staticmethod(no_timelines), staticmethod(no_statuses)
+
+
+DRIVERS = {'voyager-web': Voyager, 'blorp-web': Blorp, 'photon-web': Photon, 'phanpy-web': Phanpy, 'elk-web': Elk}
 
 
 @pytest.mark.parametrize('name', sorted(DRIVERS), ids=sorted(DRIVERS))

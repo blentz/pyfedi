@@ -86,6 +86,20 @@ if adb shell "[ -d /apex/com.android.conscrypt/cacerts ]"; then
     adb shell "nsenter --mount=/proc/$zygote/ns/mnt -- ls /apex/com.android.conscrypt/cacerts/$hash.0" > /dev/null \
         || { echo "boot: the harness CA is not in zygote's view of the conscrypt APEX" >&2; exit 1; }
 fi
+# Chrome (and so every app's custom-tab login) trusts its own root store plus the user's CAs, never the system's: the
+# harness root goes in the user store too (where Settings would put it). Chrome counts a user CA as private, so it also
+# takes that CA's certificate for a reserved name such as piefed.test, which it refuses from a public root
+# (ERR_CERT_NON_UNIQUE_NAME). The system WebView does count the system copy as public and refuses piefed.test: a
+# WebView login cannot pass here, and the apps that offer one log in through the browser instead (test_android_apps).
+# --disable-fre: Chrome's first-run screens, read from this file on a debuggable image (the one that lets `adb root`).
+adb shell "set -e
+    mkdir -p /data/misc/user/0/cacerts-added
+    cp /data/local/tmp/$hash.0 /data/misc/user/0/cacerts-added/$hash.0
+    chown -R system:system /data/misc/user/0/cacerts-added
+    chmod 644 /data/misc/user/0/cacerts-added/$hash.0
+    restorecon -R /data/misc/user/0/cacerts-added
+    echo '_ --disable-fre --no-first-run --no-default-browser-check' > /data/local/tmp/chrome-command-line
+    chmod 644 /data/local/tmp/chrome-command-line"
 echo "boot: $(adb shell dumpsys webviewupdate | grep -m1 'Current WebView package' | tr -d '\r')"
 echo "boot: ready (harness CA $hash.0)"
 touch /tmp/ready

@@ -170,7 +170,87 @@ class Thunder:
         return f'commented {text!r} on the seeded post; PieFed has it'
 
 
-DRIVERS = {'summit-android': Summit, 'voyager-android': VoyagerAndroid, 'thunder-android': Thunder}
+def piefed_consent(d, package):
+    """PieFed's half of an OAuth login (plan W0.2), in the browser the app opened: its login page as alice, the consent
+    page's Allow, and then the app itself back on screen, holding the code PieFed sent it, and signed in. The login
+    form's fields are found by order: they are the page's only inputs (its nav has no search box logged out)."""
+    d.wait_text('Log In', 'Allow', timeout=60, contains=False)   # PieFed's buttons, not an app's "Log in with…"
+    if not d.showing('Allow', exact=True):
+        d.type_into(d.ui(className='android.widget.EditText', instance=0), ALICE[0])
+        d.type_into(d.ui(className='android.widget.EditText', instance=1), ALICE[1])
+        d.hide_keyboard()
+        d.ui(className='android.widget.Button', text='Log In').click(timeout=30)   # not the "Log in" heading
+    d.tap('Allow', exact=True, timeout=60)
+    d.wait_foreground(package, timeout=60)
+    d.wait_text(*SIGNED_IN, timeout=60)
+
+
+def chrome_first_run(d):
+    """A fresh Chrome may ask about itself before it shows the custom tab (android/boot.sh turns most of it off)."""
+    for question in ('Use without an account', 'Accept & continue', 'No thanks'):
+        if d.showing(question, exact=True):
+            d.tap(question, exact=True)
+
+
+def no_timelines():
+    raise steps.Unsupported('PieFed serves no Mastodon timelines yet (plan W1.2)')
+
+
+def no_statuses():
+    raise steps.Unsupported('PieFed takes no Mastodon statuses yet (plan W1.3)')
+
+
+# what a Mastodon app shows once it holds a token (and only then): its home screen's tabs, or alice's handle
+SIGNED_IN = ('@alice', 'Notifications', 'Home')
+
+
+class Tusky:
+    """Tusky (tuskyapp/Tusky): native. Its login screen takes the server; its menu's Login with Browser opens PieFed's
+    pages in a Chrome custom tab (its default, its own WebView, cannot pass: android/boot.sh), and PieFed sends the code
+    back to oauth2redirect://, which Tusky catches."""
+
+    def __init__(self, device, package, world):
+        self.device, self.world, self.package = device, world, package
+        self.id = lambda name: f'{package}:id/{name}'
+
+    def login(self):
+        d = self.device
+        d.type_into(d.ui(resourceId=self.id('domainEditText')), 'piefed.test')
+        d.hide_keyboard()
+        d.ui(description='More options').click(timeout=30)
+        d.tap('Login with Browser')
+        chrome_first_run(d)
+        piefed_consent(d, self.package)
+        return 'logged in as alice through OAuth'
+
+    view, post = staticmethod(no_timelines), staticmethod(no_statuses)
+
+
+class MastodonAndroid:
+    """Mastodon's own app (mastodon/mastodon-android): Log in > the server, typed into its picker > Next; PieFed's pages
+    open in a Chrome custom tab, and PieFed sends the code back to mastodon-android-auth://."""
+
+    def __init__(self, device, package, world):
+        self.device, self.world, self.package = device, world, package
+
+    def login(self):
+        d = self.device
+        d.tap('Log in', exact=True, timeout=60)
+        # the picker looks the typed server up and lists it under the field: the listed row (a TextView, not the field
+        # showing the same text) chooses it, and Next goes on to its login
+        d.type_into(d.ui(className='android.widget.EditText', instance=0), 'piefed.test')
+        d.ui(className='android.widget.TextView', text='piefed.test').click(timeout=30)
+        d.hide_keyboard()
+        d.tap('Next', exact=True)
+        chrome_first_run(d)
+        piefed_consent(d, self.package)
+        return 'logged in as alice through OAuth'
+
+    view, post = staticmethod(no_timelines), staticmethod(no_statuses)
+
+
+DRIVERS = {'summit-android': Summit, 'voyager-android': VoyagerAndroid, 'thunder-android': Thunder,
+           'tusky-android': Tusky, 'mastodon-android': MastodonAndroid}
 
 
 @pytest.mark.parametrize('name', sorted(DRIVERS), ids=sorted(DRIVERS))

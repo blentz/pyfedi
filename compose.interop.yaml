@@ -150,7 +150,8 @@ services:
     networks:
       interop:
         aliases: &harness-names [piefed.test, mastodon.test, peertube.test, castopod.test, pixelfed.test, loops.test,
-                                 s3.test, relay.test, voyager.test, blorp.test, photon.test]
+                                 s3.test, relay.test, voyager.test, blorp.test, photon.test, phanpy.test,
+                                 elk.test]
       apps-offline:   # the emulator's only network: the harness names, and no way out (see android-emulator)
         aliases: *harness-names
 
@@ -465,6 +466,25 @@ services:
     environment:
       PUBLIC_INSTANCE_URL: piefed.test
       PUBLIC_INSTANCE_TYPE: piefedalpha
+    networks: [interop]
+    profiles: [apps]
+
+  # The Mastodon web apps (plan W1.1): Phanpy's static build (no image of its own: built from its newest release by
+  # run.sh) and Elk's image, whose server registers the app and trades the code itself, so it trusts the harness CA.
+  phanpy-web:
+    build: {context: ./interop/apps/phanpy, dockerfile: Containerfile}
+    image: localhost/piefed-interop-phanpy:latest
+    networks: [interop]
+    profiles: [apps]
+
+  elk-web:
+    image: ghcr.io/elk-zone/elk:latest
+    environment:
+      NUXT_PUBLIC_DEFAULT_SERVER: piefed.test
+      NUXT_DEPLOY_URL: https://elk.test
+      NODE_EXTRA_CA_CERTS: /caddy-data/harness-root.crt
+    volumes:
+      - caddy-data:/caddy-data:ro
     networks: [interop]
     profiles: [apps]
 

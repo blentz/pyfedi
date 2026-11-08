@@ -20,8 +20,8 @@ wait_http() {  # wait_http <service> <url>: up to 120s for a 2xx/3xx from inside
 }
 
 PIEFED_SERVICES="caddy piefed-db piefed-redis piefed-web piefed-celery piefed-celery-background"
-APPS_SERVICES="android-emulator voyager-web blorp-web photon-web"
-WEB_IMAGES="ghcr.io/aeharding/voyager:latest ghcr.io/blorp-labs/blorp:latest ghcr.io/xyphyn/photon:latest"
+APPS_SERVICES="android-emulator voyager-web blorp-web photon-web phanpy-web elk-web"
+WEB_IMAGES="ghcr.io/aeharding/voyager:latest ghcr.io/blorp-labs/blorp:latest ghcr.io/xyphyn/photon:latest ghcr.io/elk-zone/elk:latest"
 
 # PieFed alone, built from this tree, initialised and seeded: what `clients` needs, and the first half of `up`
 up_piefed() {
@@ -120,6 +120,10 @@ up() {
 apps() {
     up_piefed
     $COMPOSE --profile apps build android-emulator apps-runner
+    # Phanpy publishes no image: build its newest release's static files into one (interop/apps/phanpy)
+    phanpy_release=$(curl -fsS https://api.github.com/repos/cheeaun/phanpy/releases/latest \
+        | python3 -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])')
+    $COMPOSE --profile apps build --build-arg "PHANPY_RELEASE=$phanpy_release" phanpy-web
     # shellcheck disable=SC2086
     for image in $WEB_IMAGES; do podman pull -q "$image" > /dev/null; done   # the newest each project publishes
     # Caddy joins the emulator's offline network, which a stack started by `up` lacks until it is recreated (its CA
@@ -140,6 +144,7 @@ apps() {
     for image in $WEB_IMAGES; do
         podman image inspect "$image" --format '{{index .RepoTags 0}} {{.Digest}} {{.Created}}'
     done > interop/apps/results/images.txt
+    echo "phanpy $phanpy_release (the release's static build)" >> interop/apps/results/images.txt
     # the tests' own failures are harness errors and show in their output; the matrix decides the run
     $COMPOSE --profile apps run --rm apps-runner python -m pytest -c interop/apps/pytest.ini interop/apps "$@" || true
     # on the host, not in a container: podman-compose's `run` loses the exit status, and the checker is standard library

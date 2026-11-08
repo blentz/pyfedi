@@ -24,6 +24,7 @@ class Device:
         self.adb.install(str(apk), nolaunch=True, flags=['-r', '-g'])
 
     def launch(self, package: str) -> None:
+        self.adb.shell(['logcat', '-c'])   # a failure's log then starts at this app
         self.ui.app_start(package, wait=True, stop=True)
 
     def stop(self, package: str) -> None:
@@ -86,6 +87,15 @@ class Device:
                 if attempt == attempts - 1:
                     raise
 
+    def wait_foreground(self, package: str, timeout: float = 30.0) -> None:
+        """Until `package` is the app on screen: back from a browser it sent somewhere, say."""
+        deadline = time.monotonic() + timeout
+        while self.ui.app_current().get('package') != package:
+            if time.monotonic() > deadline:
+                raise AssertionError(f'android: {package} never came back to the screen in {timeout}s; on screen: '
+                                     f'{self.ui.app_current().get("package")}: {self.screen_text()[:400]}')
+            time.sleep(0.5)
+
     def type_focused(self, text: str) -> None:
         """Type into whatever has focus, through the keyboard: for a field the hierarchy does not show (Flutter leaves
         one under the keyboard out). `input text` takes %s for a space."""
@@ -131,5 +141,7 @@ class Device:
         return ' | '.join(parts)
 
     def screenshot(self, path: Path) -> None:
+        """The screen, and beside it the device log since the app launched: what went wrong underneath it."""
         path.parent.mkdir(parents=True, exist_ok=True)
         self.ui.screenshot(str(path))
+        path.with_suffix('.log').write_text(self.adb.shell(['logcat', '-d', '-v', 'time']))

@@ -50,3 +50,11 @@ blorp.test {
 photon.test {
 	reverse_proxy photon-web:3000
 }
+
+phanpy.test {
+	reverse_proxy phanpy-web:80
+}
+
+elk.test {
+	reverse_proxy elk-web:5314
+}

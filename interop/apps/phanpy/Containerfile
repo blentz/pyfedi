@@ -1,0 +1,11 @@
+# Phanpy (cheeaun/phanpy) publishes no image: its newest release's static build, served by nginx. run.sh passes the
+# release tag (GitHub's latest), so each run serves what the project last published.
+FROM docker.io/library/nginx:alpine
+ARG PHANPY_RELEASE
+ADD https://github.com/cheeaun/phanpy/releases/download/${PHANPY_RELEASE}/phanpy-dist.tar.gz /tmp/phanpy.tar.gz
+RUN mkdir /tmp/phanpy && tar -xzf /tmp/phanpy.tar.gz -C /tmp/phanpy && rm -rf /usr/share/nginx/html/* \
+    && src=/tmp/phanpy && if [ "$(ls /tmp/phanpy | wc -l)" = 1 ] && [ -d "/tmp/phanpy/$(ls /tmp/phanpy)" ]; then \
+        src="/tmp/phanpy/$(ls /tmp/phanpy)"; fi \
+    && cp -r "$src"/. /usr/share/nginx/html/ && rm -rf /tmp/phanpy /tmp/phanpy.tar.gz \
+    && test -f /usr/share/nginx/html/index.html \
+    && echo "$PHANPY_RELEASE" > /usr/share/nginx/html/phanpy-release.txt

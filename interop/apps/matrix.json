@@ -13,39 +13,27 @@
       "view": {"outcome": "unsupported", "reason": "Jerboa reads posts from /api/v3/post/list, which PieFed does not serve"},
       "post": {"outcome": "blocked", "reason": "posting needs the login Jerboa cannot do"}}},
 
-    "mastodon-android": {"platform": "mastodon", "surface": "android", "probe": "mastodon", "expect": {
-      "login": {"outcome": "unsupported", "reason": "PieFed has no Mastodon client API or OAuth app registration (POST /api/v1/apps)"},
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines (/api/v1/timelines/*)"},
-      "post": {"outcome": "blocked", "reason": "posting needs the login the app cannot do"}}},
-    "tusky-android": {"platform": "mastodon", "surface": "android", "probe": "mastodon", "expect": {
-      "login": {"outcome": "unsupported", "reason": "PieFed has no Mastodon client API or OAuth app registration (POST /api/v1/apps)"},
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines (/api/v1/timelines/*)"},
-      "post": {"outcome": "blocked", "reason": "posting needs the login the app cannot do"}}},
+    "mastodon-android": {"platform": "mastodon", "surface": "android", "package": "org.joinmastodon.android", "apk": {"fdroid": "org.joinmastodon.android"}, "expect": {
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines yet (/api/v1/timelines/*, plan W1.2)"},
+      "post": {"outcome": "unsupported", "reason": "PieFed takes no Mastodon statuses yet (POST /api/v1/statuses, plan W1.3)"}}},
+    "tusky-android": {"platform": "mastodon", "surface": "android", "package": "com.keylesspalace.tusky", "apk": {"fdroid": "com.keylesspalace.tusky"}, "expect": {
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines yet (/api/v1/timelines/*, plan W1.2)"},
+      "post": {"outcome": "unsupported", "reason": "PieFed takes no Mastodon statuses yet (POST /api/v1/statuses, plan W1.3)"}}},
     "moshidon-android": {"platform": "mastodon", "surface": "android", "probe": "mastodon", "expect": {
-      "login": {"outcome": "unsupported", "reason": "PieFed has no Mastodon client API or OAuth app registration (POST /api/v1/apps)"},
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines (/api/v1/timelines/*)"},
-      "post": {"outcome": "blocked", "reason": "posting needs the login the app cannot do"}}},
-    "phanpy-web": {"platform": "mastodon", "surface": "web", "probe": "mastodon", "expect": {
-      "login": {"outcome": "unsupported", "reason": "PieFed has no Mastodon client API or OAuth app registration (POST /api/v1/apps)"},
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines (/api/v1/timelines/*)"},
-      "post": {"outcome": "blocked", "reason": "posting needs the login the app cannot do"}}},
-    "elk-web": {"platform": "mastodon", "surface": "web", "probe": "mastodon", "expect": {
-      "login": {"outcome": "unsupported", "reason": "PieFed has no Mastodon client API or OAuth app registration (POST /api/v1/apps)"},
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines (/api/v1/timelines/*)"},
-      "post": {"outcome": "blocked", "reason": "posting needs the login the app cannot do"}}},
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines yet (/api/v1/timelines/*, plan W1.2)"}}},
+    "phanpy-web": {"platform": "mastodon", "surface": "web", "web": "https://phanpy.test", "image": "phanpy (newest release, built by run.sh)", "expect": {
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines yet (/api/v1/timelines/*, plan W1.2)"},
+      "post": {"outcome": "unsupported", "reason": "PieFed takes no Mastodon statuses yet (POST /api/v1/statuses, plan W1.3)"}}},
+    "elk-web": {"platform": "mastodon", "surface": "web", "web": "https://elk.test", "image": "ghcr.io/elk-zone/elk:latest", "expect": {
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines yet (/api/v1/timelines/*, plan W1.2)"},
+      "post": {"outcome": "unsupported", "reason": "PieFed takes no Mastodon statuses yet (POST /api/v1/statuses, plan W1.3)"}}},
 
     "pixelfed-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon", "expect": {
-      "login": {"outcome": "unsupported", "reason": "Pixelfed's app logs in through Mastodon-style OAuth (POST /api/v1/apps), which PieFed lacks"},
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon-compatible timelines"},
-      "post": {"outcome": "blocked", "reason": "posting needs the login the app cannot do"}}},
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon-compatible timelines"}}},
     "pixeldroid-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon", "expect": {
-      "login": {"outcome": "unsupported", "reason": "PixelDroid logs in through Mastodon-style OAuth (POST /api/v1/apps), which PieFed lacks"},
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon-compatible timelines"},
-      "post": {"outcome": "blocked", "reason": "posting needs the login the app cannot do"}}},
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon-compatible timelines"}}},
     "fedilab-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon", "expect": {
-      "login": {"outcome": "unsupported", "reason": "Fedilab logs in to Pixelfed (and Mastodon) through OAuth app registration, which PieFed lacks"},
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon-compatible timelines"},
-      "post": {"outcome": "blocked", "reason": "posting needs the login the app cannot do"}}},
+      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon-compatible timelines"}}},
 
     "peertube-android": {"platform": "peertube", "surface": "android", "probe": "peertube", "expect": {
       "login": {"outcome": "unsupported", "reason": "the PeerTube app logs in with /api/v1/oauth-clients/local and /api/v1/users/token, which PieFed lacks"},
