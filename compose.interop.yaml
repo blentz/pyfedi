@@ -149,8 +149,10 @@ services:
       - loops-s3-data:/srv/s3:ro   # s3.test serves the Loops bucket
     networks:
       interop:
-        aliases: [piefed.test, mastodon.test, peertube.test, castopod.test, pixelfed.test, loops.test, s3.test, relay.test,
-                  voyager.test, blorp.test, photon.test]
+        aliases: &harness-names [piefed.test, mastodon.test, peertube.test, castopod.test, pixelfed.test, loops.test,
+                                 s3.test, relay.test, voyager.test, blorp.test, photon.test]
+      apps-offline:   # the emulator's only network: the harness names, and no way out (see android-emulator)
+        aliases: *harness-names
 
   piefed-db:
     image: docker.io/library/postgres:17.11@sha256:3cec7eb015ba8adb28139fa5c83b8489cdf0e666e53dfdf20f598ae0cc8739e3
@@ -432,7 +434,9 @@ services:
     devices: [/dev/kvm]
     volumes:
       - caddy-data:/caddy-data:ro
-    networks: [interop]
+    # No internet: the apps open on their default instance's live feed (lemmy.world, lemmy.zip), which reflows under
+    # the harness's taps and differs every run. Offline they show an error there instead, and reach only the harness.
+    networks: [apps-offline]
     healthcheck:
       test: ["CMD", "test", "-e", "/tmp/ready"]
       interval: 5s
@@ -478,6 +482,7 @@ services:
       - ./interop/trust_ca.sh:/trust_ca.sh:ro
       - ./interop:/app/interop   # read-write: results land in interop/apps/results, the APK cache in interop/apps/.apks
       - ./tests/fixtures/media:/app/tests/fixtures/media:ro   # the podcast episode the players subscribe to
+    networks: [interop, apps-offline]   # the internet for the APKs, adb on the emulator's network
     profiles: [apps]
 
 volumes:
@@ -494,3 +499,8 @@ networks:
     ipam:
       config:
         - subnet: 10.90.0.0/16
+  apps-offline:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.91.0.0/16

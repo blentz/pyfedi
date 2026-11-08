@@ -18,7 +18,10 @@ done
 emulator -avd harness -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -gpu guest \
     -no-metrics -netdelay none -netspeed full &
 emulator=$!
-adb start-server
+# One adb server for the whole life of the container, listening on every interface: the runner connects to
+# android-emulator:5037, and this script's own adb commands use the same server. (Restarting it for the network once
+# the device was ready raced the old server's exit: "could not install *smartsocket* listener: Address already in use".)
+adb -a -P 5037 start-server
 adb wait-for-device
 i=0
 until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; do
@@ -86,8 +89,4 @@ fi
 echo "boot: $(adb shell dumpsys webviewupdate | grep -m1 'Current WebView package' | tr -d '\r')"
 echo "boot: ready (harness CA $hash.0)"
 touch /tmp/ready
-
-# hand adb to the network: the runner connects to android-emulator:5037
-adb kill-server
-adb -a -P 5037 nodaemon server &
 wait $emulator

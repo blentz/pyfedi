@@ -122,6 +122,9 @@ apps() {
     $COMPOSE --profile apps build android-emulator apps-runner
     # shellcheck disable=SC2086
     for image in $WEB_IMAGES; do podman pull -q "$image" > /dev/null; done   # the newest each project publishes
+    # Caddy joins the emulator's offline network, which a stack started by `up` lacks until it is recreated (its CA
+    # lives in the caddy-data volume, which stays)
+    $COMPOSE --profile apps up -d --force-recreate --no-deps caddy
     # recreated every run: a freshly pulled web image, and an emulator wiped of the last run's apps and logins
     # shellcheck disable=SC2086
     $COMPOSE --profile apps up -d --force-recreate --no-deps $APPS_SERVICES

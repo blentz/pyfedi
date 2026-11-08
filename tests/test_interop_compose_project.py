@@ -54,6 +54,19 @@ def test_the_client_app_harness_is_its_own_profile():
     assert set(started) == apps - {'apps-runner'}
 
 
+def test_the_emulator_reaches_the_harness_and_nothing_else():
+    """The apps open on their default instance's live feed, which reflows under the harness's taps: offline, the
+    emulator sees only the harness names, which Caddy answers there too."""
+    compose = yaml.safe_load((ROOT / 'compose.interop.yaml').read_text())
+    services, networks = compose['services'], compose['networks']
+    assert services['android-emulator']['networks'] == ['apps-offline']
+    assert networks['apps-offline']['internal'] is True
+    caddy = services['caddy']['networks']
+    assert caddy['apps-offline']['aliases'] == caddy['interop']['aliases']
+    assert 'piefed.test' in caddy['apps-offline']['aliases']
+    assert set(services['apps-runner']['networks']) == {'interop', 'apps-offline'}
+
+
 def test_the_interop_runner_leaves_the_app_harness_alone():
     """interop/apps needs the apps-runner image (Playwright, uiautomator2); the interop runner has neither."""
     ini = (ROOT / 'interop/pytest.ini').read_text()

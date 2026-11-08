@@ -56,12 +56,45 @@ class Device:
 
     def tap_tab(self, label: str, timeout: float = 30.0) -> None:
         """Tap the lowest element labelled `label`: a bottom tab bar's, when a page shows the same label higher up."""
-        self.wait_text(label, timeout=timeout)
-        pattern = f'(?is){re.escape(label)}'
-        found = [element for selector in (self.ui(textMatches=pattern), self.ui(descriptionMatches=pattern))
-                 for element in selector]
-        lowest = max(found, key=lambda element: element.info['bounds']['bottom'])
-        lowest.click()
+        pattern = f'(?is){re.escape(label)}(\\s.*)?'   # Flutter appends to a tab's label ("Search\nTab 2 of 5")
+        deadline = time.monotonic() + timeout
+        while True:
+            # read again each round: a WebView re-renders under us, and an element listed a moment ago can be gone
+            bounds = []
+            for selector in (self.ui(textMatches=pattern), self.ui(descriptionMatches=pattern)):
+                try:
+                    bounds += [element.info['bounds'] for element in selector]
+                except uiautomator2.UiObjectNotFoundError:
+                    pass
+            if bounds:
+                lowest = max(bounds, key=lambda b: b['bottom'])
+                self.ui.click((lowest['left'] + lowest['right']) // 2, (lowest['top'] + lowest['bottom']) // 2)
+                return
+            if time.monotonic() > deadline:
+                raise AssertionError(f'android: no tab {label!r} in {timeout}s; on screen: {self.screen_text()[:600]}')
+            time.sleep(0.5)
+
+    def tap_until(self, tap, *expected: str, attempts: int = 3, wait: float = 10.0):
+        """`tap()`, then wait for any of `expected`; tap again if it does not show. An app that has just started, or
+        whose keyboard is still animating, can swallow a tap: the second lands. Bounded, and the last failure says
+        what the screen showed."""
+        for attempt in range(attempts):
+            tap()
+            try:
+                return self.wait_text(*expected, timeout=wait)
+            except AssertionError:
+                if attempt == attempts - 1:
+                    raise
+
+    def type_focused(self, text: str) -> None:
+        """Type into whatever has focus, through the keyboard: for a field the hierarchy does not show (Flutter leaves
+        one under the keyboard out). `input text` takes %s for a space."""
+        self.adb.shell(['input', 'text', text.replace(' ', '%s')])
+
+    def next_field(self) -> None:
+        """Tab: focus moves to the next field, as Flutter's focus traversal does on a hardware keyboard."""
+        self.adb.shell(['input', 'keyevent', 'KEYCODE_TAB'])
+        time.sleep(0.5)
 
     def reveal(self, text: str, swipes: int = 4) -> None:
         """Scroll `text` into view by swiping up: Flutter leaves a control under the keyboard out of the hierarchy, and

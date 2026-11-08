@@ -1,6 +1,9 @@
 """The PieFed-capable Android apps, each the newest release (apks.py), installed clean on the emulator and driven as
 alice: log in, show the seeded post, comment on it. The comment carries a marker found afterwards through PieFed's API.
 
+Viewing is a search for the seeded post, as on a busy instance: a feed's first screen holds whatever else the
+stack carries (after `interop/run.sh test` it is full of Loops, Mastodon and Pixelfed posts).
+
 The emulator trusts the harness CA as a system CA (android/boot.sh) and resolves piefed.test through the stack's DNS,
 so the apps reach PieFed exactly as they would a public instance. Controls are found by resource id where the app has
 them (native apps) and by the text or content description they show otherwise.
@@ -15,6 +18,9 @@ from interop.apps.conftest import ALICE, SEED_TITLE, find_comment, marker
 from interop.apps.matrix import RESULTS, load_matrix
 
 MATRIX = load_matrix()
+# what the apps search for: a prefix of the seeded title, so that only a result, never the search field still holding
+# the query, shows the whole title the post step taps
+QUERY = SEED_TITLE[:20]
 
 
 class Summit:
@@ -39,15 +45,16 @@ class Summit:
 
     def view(self):
         d = self.device
-        d.ui(description='Home').click(timeout=15)
-        d.wait_text('All@piefed.test', timeout=30)
-        d.wait_text(SEED_TITLE, timeout=60)
-        return 'its All@piefed.test feed lists the seeded post'
+        d.tap_tab('Search')
+        d.type_into(d.ui(className='android.widget.EditText', instance=0), QUERY)
+        d.ui.press('enter')
+        d.wait_text(SEED_TITLE, timeout=60)   # in the Posts results
+        return 'its search finds the seeded post'
 
     def post(self):
         d, text = self.device, marker('summit-android')
         d.tap(SEED_TITLE)
-        d.ui(resourceId=self.id('pa_reply')).click(timeout=30)
+        d.tap_until(lambda: d.ui(resourceId=self.id('pa_reply')).click(timeout=30), 'Send comment')   # can be swallowed
         d.type_into(d.ui(resourceId=self.id('comment_edit_text')), text)
         d.ui(resourceId=self.id('send_comment')).click(timeout=15)
         find_comment(self.world['alice'], self.world['seed']['id'], text, timeout=60)
@@ -65,7 +72,7 @@ class VoyagerAndroid:
 
     def login(self):
         d = self.device
-        d.tap('lemmy.zip', timeout=60)
+        d.tap_tab('lemmy.zip', timeout=60)   # the account tab, not a feed post naming the server
         # the account tab shows a guest page with Get Started, or goes straight to the Welcome sheet
         d.wait_text('Get Started', 'Pick another server', timeout=30)
         if d.showing('Get Started', exact=True):
@@ -84,19 +91,24 @@ class VoyagerAndroid:
         d.type_into(password, ALICE[1])
         d.hide_keyboard()
         d.tap('Confirm', exact=True)
-        d.wait_text('alice@piefed.test', timeout=60)
+        # it lands on the profile or on the feed; either way the account tab is now named after piefed.test
+        # (a tap while it is still navigating there is swallowed)
+        d.tap_until(lambda: d.tap_tab('piefed.test', timeout=60), 'alice@piefed.test', wait=20)
         return 'logged in as alice@piefed.test'
 
     def view(self):
         d = self.device
-        d.tap_tab('Posts')
-        d.wait_text(SEED_TITLE, timeout=60)
-        return 'its piefed.test feed lists the seeded post'
+        d.tap_tab('Search')
+        d.type_into(d.ui(className='android.widget.EditText', instance=0), QUERY)
+        # submitting the search opens its posts results (src/routes/pages/search/SearchPage.tsx: router.push of the
+        # posts link), which a tap on the "Posts with" suggestion did not do reliably; a second submit is harmless
+        d.tap_until(lambda: d.ui.press('enter'), SEED_TITLE, wait=20)
+        return 'its search finds the seeded post'
 
     def post(self):
         d, text = self.device, marker('voyager-android')
         d.tap(SEED_TITLE)
-        d.tap('Reply')
+        d.tap_until(lambda: d.tap('Reply', exact=True), 'New Comment')   # can be swallowed
         editor = d.ui(className='android.widget.EditText', instance=0)
         editor.wait(timeout=30)
         editor.click()
@@ -109,34 +121,46 @@ class VoyagerAndroid:
 
 class Thunder:
     """Thunder (thunder-app/thunder): Flutter, whose semantics give uiautomator content descriptions and hint-only
-    fields. Account > Manage Accounts > Add Account: instance (it then says "PieFed support is currently in beta"),
-    username, password > Log in. Its sheet closes on back, so the keyboard is left up."""
+    fields. Offline, its "Unable to load" page's Account Settings > Add Account: instance (it then says "PieFed support is
+    currently in beta"), username, password > Log in. Its sheet closes on back, so the keyboard is left up."""
 
     def __init__(self, device, package, world):
         self.device, self.world = device, world
 
     def login(self):
         d = self.device
-        d.tap('Account', timeout=60)
-        d.tap('Manage Accounts')
-        d.tap('Add Account')
+        # Offline (the emulator reaches only the harness) it cannot load its default instance, lemmy.world, and every
+        # tab shows "Unable to load lemmy.world" with an Account Settings link: the way to its accounts sheet. A tap
+        # just after launch can be swallowed.
+        d.wait_text('Unable to load', timeout=60)
+        d.tap_until(lambda: d.tap('Account Settings', exact=True), 'Add Account')
+        d.tap('Add Account', exact=True)
         d.type_into(d.ui(className='android.widget.EditText', instance=0), 'piefed.test')
         d.wait_text('PieFed support', timeout=30)   # it recognised PieFed (nodeinfo)
-        d.type_into(d.ui(className='android.widget.EditText', instance=1), ALICE[0])
-        d.type_into(d.ui(className='android.widget.EditText', instance=2), ALICE[1])
+        # The beta notice pushes the form under the keyboard, out of Flutter's hierarchy, on a cold start: type by focus,
+        # Tab from field to field, rather than finding each field
+        d.next_field()
+        d.type_focused(ALICE[0])
+        d.next_field()
+        d.type_focused(ALICE[1])
         d.reveal('Log in')   # under the keyboard
         d.tap('Log in')
         d.wait_text('Subscriptions', timeout=60)   # the logged-in home feed
         return 'logged in as alice; its feed is her subscriptions'
 
     def view(self):
-        self.device.wait_text(SEED_TITLE, timeout=60)
-        return 'her subscriptions feed lists the seeded post'
+        d = self.device
+        d.tap_tab('Search')
+        d.type_into(d.ui(className='android.widget.EditText', instance=0), QUERY)
+        d.ui.press('enter')
+        d.tap('Posts', exact=True)   # it searches communities first
+        d.wait_text(SEED_TITLE, timeout=60)
+        return 'its search finds the seeded post'
 
     def post(self):
         d, text = self.device, marker('thunder-android')
         d.tap(SEED_TITLE)
-        d.ui(description='Reply').click(timeout=30)
+        d.tap_until(lambda: d.ui(description='Reply').click(timeout=30), 'Create Comment')   # can be swallowed
         editor = d.ui(className='android.widget.EditText', instance=0)
         editor.wait(timeout=30)
         d.type_into(editor, text)

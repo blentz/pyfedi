@@ -25,7 +25,7 @@ Results land in `interop/apps/results/` (gitignored): one JSON per app, `summary
 | Platform | App | How | Steps |
 |---|---|---|---|
 | Lemmy | Voyager, Blorp, Photon (web) | Chromium (Playwright) on the app's own image | log in as alice, open `c/apps` and see the seeded post, comment on it |
-| Lemmy | Voyager, Thunder, Summit (Android) | the newest APK on the emulator (uiautomator2) | the same |
+| Lemmy | Voyager, Thunder, Summit (Android) | the newest APK on the emulator (uiautomator2) | log in, find the seeded post with the app's search, comment on it |
 | Lemmy | Jerboa | protocol probe | the first calls it makes |
 | Mastodon | Mastodon, Tusky, Moshidon (Android); Phanpy, Elk (web) | protocol probe | |
 | Pixelfed | Pixelfed, PixelDroid, Fedilab (Android) | protocol probe | |
@@ -35,6 +35,13 @@ Results land in `interop/apps/results/` (gitignored): one JSON per app, `summary
 
 Every comment an app posts carries a marker unique to the app and the run, and is looked for afterwards through
 PieFed's own API: the app saying it posted is not enough.
+
+The stack is shared: after `interop/run.sh test` or `conformance` PieFed holds their Loops, Mastodon and Pixelfed
+posts too, and a feed's first screen shows those. So the Android apps find the seeded post by searching for it, as on
+a busy instance, rather than expecting it on a feed's first screen (the web apps open `c/apps` directly by URL).
+Taps that an app can swallow while it starts or while its keyboard animates are retried a bounded number of times
+(`Device.tap_until`), and tabs are tapped as the lowest element with that label (`Device.tap_tab`), never by a
+substring that a feed post could also contain.
 
 **Protocol probes** (`probes.py`) stand in for the apps whose client API PieFed does not serve. Driving those apps'
 UIs would only show an error screen, so a probe sends the request the app's login and timeline start with (Mastodon's
@@ -86,6 +93,12 @@ failure met while building the harness:
   Summit drew its first frame, and `swangle_indirect` hit a deliberate trap in gfxstream's GLES decoder when Thunder
   (Flutter) did. Rendering in the guest avoids gfxstream entirely.
 - **x86_64 APKs.** The image has no arm translation; `apks.py` prefers an x86_64 or universal APK.
+- **Offline.** The emulator's only network is `apps-offline` (`internal: true`), where Caddy answers the harness
+  names. The apps open on their default instance's live feed (lemmy.world, lemmy.zip), which reflowed under the
+  harness's taps and differed every run; offline they show an error there instead (Thunder's "Unable to load" page is
+  where its Account Settings link leads to the login). The runner, on both networks, fetches the APKs.
+- **One adb server**, listening on every interface from the start (`adb -a`): restarting it for the network once the
+  device was ready raced the old server's exit.
 
 ## Findings (first run, 2026-11-07)
 
