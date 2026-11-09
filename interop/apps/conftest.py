@@ -1,6 +1,7 @@
 """The client-app harness's PieFed world, made through PieFed's own API: dora's community `apps` with a post every app
 must show, which alice (the account every app logs in as) has joined. Idempotent, so a re-run reuses it."""
 import os
+from datetime import datetime
 import ssl
 import time
 
@@ -37,6 +38,13 @@ def world():
         seed = dora.post(SEED_TITLE, 'Seeded by interop/apps/conftest.py.', community['id'])['post']
     alice.http.post('/community/follow', json={'community_id': community['id'], 'follow': True}).raise_for_status()
     return {'alice': alice, 'dora': dora, 'community': community, 'seed': seed}
+
+
+def status_id(post: dict) -> str:
+    """The Mastodon status id PieFed gives a post from the alpha API (app/mastodon/ids.py): the second since 2000 it
+    was posted, above the table bit (0: a post) and its row id."""
+    published = datetime.fromisoformat(post['published'].rstrip('Z'))
+    return str(int((published - datetime(2000, 1, 1)).total_seconds()) << 32 | post['id'])
 
 
 def marker(app: str) -> str:

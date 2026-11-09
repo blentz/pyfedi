@@ -141,7 +141,9 @@ class Device:
         return ' | '.join(parts)
 
     def screenshot(self, path: Path) -> None:
-        """The screen, and beside it the device log since the app launched: what went wrong underneath it."""
+        """The screen, and beside it the device log since the app launched and the view hierarchy: what went wrong
+        underneath it, and what each control is called."""
         path.parent.mkdir(parents=True, exist_ok=True)
         self.ui.screenshot(str(path))
         path.with_suffix('.log').write_text(self.adb.shell(['logcat', '-d', '-v', 'time']))
+        path.with_suffix('.xml').write_text(self.ui.dump_hierarchy())   # every view, with its resource id

@@ -13,15 +13,11 @@
       "view": {"outcome": "unsupported", "reason": "Jerboa reads posts from /api/v3/post/list, which PieFed does not serve"},
       "post": {"outcome": "blocked", "reason": "posting needs the login Jerboa cannot do"}}},
 
-    "mastodon-android": {"platform": "mastodon", "surface": "android", "package": "org.joinmastodon.android", "apk": {"fdroid": "org.joinmastodon.android"}, "expect": {
-      "post": {"outcome": "unsupported", "reason": "PieFed takes no Mastodon statuses yet (POST /api/v1/statuses, plan W1.3)"}}},
-    "tusky-android": {"platform": "mastodon", "surface": "android", "package": "com.keylesspalace.tusky", "apk": {"fdroid": "com.keylesspalace.tusky"}, "expect": {
-      "post": {"outcome": "unsupported", "reason": "PieFed takes no Mastodon statuses yet (POST /api/v1/statuses, plan W1.3)"}}},
+    "mastodon-android": {"platform": "mastodon", "surface": "android", "package": "org.joinmastodon.android", "apk": {"fdroid": "org.joinmastodon.android"}},
+    "tusky-android": {"platform": "mastodon", "surface": "android", "package": "com.keylesspalace.tusky", "apk": {"fdroid": "com.keylesspalace.tusky"}},
     "moshidon-android": {"platform": "mastodon", "surface": "android", "probe": "mastodon"},
-    "phanpy-web": {"platform": "mastodon", "surface": "web", "web": "https://phanpy.test", "image": "phanpy (newest release, built by run.sh)", "expect": {
-      "post": {"outcome": "unsupported", "reason": "PieFed takes no Mastodon statuses yet (POST /api/v1/statuses, plan W1.3)"}}},
-    "elk-web": {"platform": "mastodon", "surface": "web", "web": "https://elk.test", "image": "ghcr.io/elk-zone/elk:latest", "expect": {
-      "post": {"outcome": "unsupported", "reason": "PieFed takes no Mastodon statuses yet (POST /api/v1/statuses, plan W1.3)"}}},
+    "phanpy-web": {"platform": "mastodon", "surface": "web", "web": "https://phanpy.test", "image": "phanpy (newest release, built by run.sh)"},
+    "elk-web": {"platform": "mastodon", "surface": "web", "web": "https://elk.test", "image": "ghcr.io/elk-zone/elk:latest"},
 
     "pixelfed-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon"},
     "pixeldroid-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon"},

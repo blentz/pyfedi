@@ -192,10 +192,6 @@ def chrome_first_run(d):
             d.tap(question, exact=True)
 
 
-def no_statuses():
-    raise steps.Unsupported('PieFed takes no Mastodon statuses yet (plan W1.3)')
-
-
 # what a Mastodon app shows once it holds a token (and only then): its home screen's tabs, or alice's handle
 SIGNED_IN = ('@alice', 'Notifications', 'Home')
 
@@ -228,7 +224,20 @@ class Tusky:
         d.wait_text(SEED_TITLE, timeout=60)   # in the Posts results
         return 'its search finds the seeded post'
 
-    post = staticmethod(no_statuses)
+    def post(self):
+        # from the search the view left open: the seeded post's thread, its reply, the marker
+        d, text = self.device, marker('tusky-android')
+        d.tap(SEED_TITLE)
+        # A thread item is one accessible view, its buttons folded into accessibility actions uiautomator cannot run:
+        # the seeded post's reply icon is at its item's bottom left (item_status_detailed's action row)
+        d.wait_text('Favorite', timeout=30)   # the thread, its seeded post detailed
+        first = d.ui(className='android.view.View', clickable=True, instance=0).info['bounds']
+        d.ui.click(first['left'] + 75, first['bottom'] - 60)
+        d.type_into(d.ui(resourceId=self.package + ':id/composeEditField'), text)
+        # its send button sits above the keyboard; back would close the composer (and ask to save a draft)
+        d.ui(resourceId=self.package + ':id/composeTootButton').click(timeout=30)
+        find_comment(self.world['alice'], self.world['seed']['id'], text, timeout=60)
+        return f'replied {text!r} to the seeded post; PieFed has it as a comment'
 
 
 class MastodonAndroid:
@@ -260,7 +269,18 @@ class MastodonAndroid:
         d.wait_text(SEED_TITLE, timeout=60)
         return 'its search finds the seeded post'
 
-    post = staticmethod(no_statuses)
+    def post(self):
+        d, text = self.device, marker('mastodon-android')
+        d.tap(SEED_TITLE)
+        d.tap('Reply to', timeout=30)   # the thread's reply bar ("Reply to dora"), which opens the composer
+        field = d.ui(className='android.widget.EditText', instance=0)
+        field.wait(timeout=30)
+        field.click()
+        d.ui.send_keys(' ' + text)   # after the @dora it holds already
+        d.hide_keyboard()
+        d.tap('Publish', exact=True)
+        find_comment(self.world['alice'], self.world['seed']['id'], text, timeout=60)
+        return f'replied {text!r} to the seeded post; PieFed has it as a comment'
 
 
 DRIVERS = {'summit-android': Summit, 'voyager-android': VoyagerAndroid, 'thunder-android': Thunder,

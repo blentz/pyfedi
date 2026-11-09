@@ -12,7 +12,7 @@ import pytest
 from playwright.sync_api import Page, expect, sync_playwright
 
 from interop.apps import steps
-from interop.apps.conftest import ALICE, SEED_TITLE, find_comment, marker
+from interop.apps.conftest import ALICE, SEED_TITLE, find_comment, marker, status_id
 from interop.apps.matrix import RESULTS, load_matrix
 
 MATRIX = load_matrix()
@@ -190,10 +190,6 @@ def holds_account(page: Page, name: str):
     page.wait_for_function(HOLDS_ACCOUNT, arg=name, timeout=TIMEOUT)
 
 
-def no_statuses():
-    raise steps.Unsupported('PieFed takes no Mastodon statuses yet (plan W1.3)')
-
-
 class Phanpy:
     """Phanpy (cheeaun/phanpy): a static Mastodon app. Log in > instance > PieFed's login and consent in a popup >
     back with a code, which the browser trades for a token at /oauth/token (with PKCE: PieFed's RFC 8414 metadata
@@ -221,7 +217,19 @@ class Phanpy:
         expect(self.page.get_by_text(SEED_TITLE).first).to_be_visible()
         return 'the c/apps list shows the seeded post'
 
-    post = staticmethod(no_statuses)
+    def post(self):
+        # from the list the view left open: the seeded post's thread, its reply, the marker
+        page, text = self.page, marker('phanpy-web')
+        # the seeded post's own page: in the list its item's link is covered by its content against a click, and a
+        # reply's item quotes the seeded post's title too
+        page.goto(f"{self.base}/#/piefed.test/s/{status_id(self.world['seed'])}", wait_until='networkidle')
+        # its own Reply, full size: a comment's is `small` and shows on hover only
+        page.locator('button.reply-button:not(.small)').first.click()
+        page.get_by_role('textbox').last.fill(text)
+        page.get_by_role('button', name='Reply').last.click()
+        find_comment(self.world['alice'], self.world['seed']['id'], text, timeout=60)
+        expect(page.get_by_text(text).first).to_be_visible()
+        return f'replied {text!r} to the seeded post; PieFed has it as a comment'
 
 
 class Elk:
@@ -251,7 +259,14 @@ class Elk:
         expect(page.get_by_text(SEED_TITLE).first).to_be_visible()
         return 'the c/apps list shows the seeded post'
 
-    post = staticmethod(no_statuses)
+    def post(self):
+        page, text = self.page, marker('elk-web')
+        page.get_by_text(SEED_TITLE).first.click()
+        page.get_by_role('button', name='Reply').first.click()
+        page.locator('.ProseMirror[contenteditable="true"]').last.fill(text)
+        page.get_by_role('button', name=re.compile('^(Reply|Publish)$')).last.click()
+        find_comment(self.world['alice'], self.world['seed']['id'], text, timeout=60)
+        return f'replied {text!r} to the seeded post; PieFed has it as a comment'
 
 
 DRIVERS = {'voyager-web': Voyager, 'blorp-web': Blorp, 'photon-web': Photon, 'phanpy-web': Phanpy, 'elk-web': Elk}
