@@ -193,3 +193,12 @@ def test_a_fault_is_logged_and_its_text_never_sent(world, monkeypatch):
     monkeypatch.setattr(compose.shared_post, 'make_post', fail)
     response = _send(world, json={'status': 'Breaks.'})
     assert response.status_code == 500 and response.get_json() == {'error': 'Something went wrong'}
+
+
+def test_a_duplicate_reply_is_refused_with_its_reason_not_a_fault(world):
+    """PostReply.new's own refusal (PostReplyValidationError) is a refusal, as the alpha API answers it."""
+    post = make_post(world['cooking'], world['other'], ap_id=f'https://test.piefed.local/post/c{next(_SERIAL)}')
+    body = {'status': 'Same words', 'in_reply_to_id': ids.status_id(post)}
+    assert _send(world, json=body).status_code == 200
+    again = _send(world, json=body)
+    assert again.status_code == 422 and again.get_json() == {'error': 'Duplicate reply'}

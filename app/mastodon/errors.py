@@ -1,11 +1,12 @@
 """How the Mastodon API answers a write that failed (plan W1.3), one rule for every route: a shared function's abort
-keeps its status; its deliberate refusal (a bare Exception carrying its reason, as the alpha API's handler reads it)
-is a 422 with that reason; anything else is a fault, logged here and answered 500 with no text, so an internal message
-never reaches an app."""
+keeps its status; its deliberate refusal (a bare Exception carrying its reason, or PostReply.new's
+PostReplyValidationError, as the alpha API's handler reads them) is a 422 with that reason; anything else is a fault,
+logged here and answered 500 with no text, so an internal message never reaches an app."""
 from flask import current_app, jsonify
 from werkzeug.exceptions import HTTPException
 
 from app import db
+from app.models import PostReplyValidationError
 
 
 def failure(error: Exception, refusals=()):
@@ -13,7 +14,8 @@ def failure(error: Exception, refusals=()):
     db.session.rollback()
     if isinstance(error, HTTPException):
         return jsonify({'error': error.description or error.name}), error.code
-    if type(error) is Exception or any(refused(error) for refused in refusals):
+    if type(error) is Exception or isinstance(error, PostReplyValidationError) or \
+            any(refused(error) for refused in refusals):
         return jsonify({'error': str(error) or 'Validation failed'}), 422
     current_app.logger.exception('mastodon write failed')
     return jsonify({'error': 'Something went wrong'}), 500
