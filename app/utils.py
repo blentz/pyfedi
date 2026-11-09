@@ -5699,7 +5699,24 @@ def record_label_change(post: Post, before: dict, actor: User) -> None:
                   community=post.community, post=post, link_text=shorten_string(post.title), link=f'post/{post.id}')
 
 
+class Authorised:
+    """A person a route has already authorised by other means than the alpha API's JWT (a Mastodon app's OAuth token,
+    app.oauth_server.protect.require_oauth): what such a route passes the shared functions as their `auth`, which
+    authorise_api_user takes in place of a bearer JWT. Only server code makes one, after its own check."""
+    __slots__ = ('user',)
+
+    def __init__(self, user: User):
+        self.user = user
+
+
 def authorise_api_user(auth, return_type=None, id_match=None) -> User | dict | int:
+    if isinstance(auth, Authorised):
+        user = auth.user
+        if user is None or user.ap_id is not None or not user.verified or user.banned is True or user.deleted is True:
+            raise Exception('incorrect_login')
+        if user.access_has_lapsed():
+            raise Exception('access_lapsed')
+        return _authorised_answer(user, return_type, id_match)
     if not auth:
         raise Exception('incorrect_login')
     if not auth.startswith('Bearer '):
@@ -5751,43 +5768,49 @@ def authorise_api_user(auth, return_type=None, id_match=None) -> User | dict | i
             password_updated_time = int(user.password_updated_at.timestamp())
             if issued_at_time < password_updated_time:
                 raise Exception('incorrect_login')
-        if id_match and user.id != id_match:
-            raise Exception('incorrect_login')
-        if has_request_context():   # the account acting in this request: its fetches name its domain (acting_domain)
-            act_in_this_request(user.home_domain())
-        if return_type and return_type == 'model':
-            return user
-        elif return_type and return_type == 'dict':
-            user_ban_community_ids = communities_banned_from(user_id)
-            followed_community_ids = list(db.session.execute(text(
-                'SELECT community_id FROM "community_member" WHERE user_id = :user_id'),
-                {'user_id': user_id}).scalars())
-            bookmarked_reply_ids = list(db.session.execute(text(
-                'SELECT post_reply_id FROM "post_reply_bookmark" WHERE user_id = :user_id'),
-                {'user_id': user_id}).scalars())
-            blocked_creator_ids = blocked_users(user_id)
-            upvoted_reply_ids = recently_upvoted_post_replies(user_id)
-            downvoted_reply_ids = recently_downvoted_post_replies(user_id)
-            subscribed_reply_ids = list(db.session.execute(text(
-                'SELECT entity_id FROM "notification_subscription" WHERE type = :type and user_id = :user_id'),
-                {'type': NOTIF_REPLY, 'user_id': user_id}).scalars())
-            moderated_community_ids = list(db.session.execute(text(
-                'SELECT community_id FROM "community_member" WHERE user_id = :user_id AND is_moderator = true'),
-                {'user_id': user_id}).scalars())
-            user_dict = {
-                'id': user.id,
-                'user_ban_community_ids': user_ban_community_ids,
-                'followed_community_ids': followed_community_ids,
-                'bookmarked_reply_ids': bookmarked_reply_ids,
-                'blocked_creator_ids': blocked_creator_ids,
-                'upvoted_reply_ids': upvoted_reply_ids,
-                'downvoted_reply_ids': downvoted_reply_ids,
-                'subscribed_reply_ids': subscribed_reply_ids,
-                'moderated_community_ids': moderated_community_ids
-            }
-            return user_dict
-        else:
-            return user.id
+        return _authorised_answer(user, return_type, id_match)
+
+
+def _authorised_answer(user: User, return_type, id_match) -> User | dict | int:
+    """What authorise_api_user answers for the account `user` it authorised: the model, a dict of what the alpha API
+    reads of it, or its id."""
+    if id_match and user.id != id_match:
+        raise Exception('incorrect_login')
+    if has_request_context():   # the account acting in this request: its fetches name its domain (acting_domain)
+        act_in_this_request(user.home_domain())
+    if return_type and return_type == 'model':
+        return user
+    elif return_type and return_type == 'dict':
+        user_ban_community_ids = communities_banned_from(user.id)
+        followed_community_ids = list(db.session.execute(text(
+            'SELECT community_id FROM "community_member" WHERE user_id = :user_id'),
+            {'user_id': user.id}).scalars())
+        bookmarked_reply_ids = list(db.session.execute(text(
+            'SELECT post_reply_id FROM "post_reply_bookmark" WHERE user_id = :user_id'),
+            {'user_id': user.id}).scalars())
+        blocked_creator_ids = blocked_users(user.id)
+        upvoted_reply_ids = recently_upvoted_post_replies(user.id)
+        downvoted_reply_ids = recently_downvoted_post_replies(user.id)
+        subscribed_reply_ids = list(db.session.execute(text(
+            'SELECT entity_id FROM "notification_subscription" WHERE type = :type and user_id = :user_id'),
+            {'type': NOTIF_REPLY, 'user_id': user.id}).scalars())
+        moderated_community_ids = list(db.session.execute(text(
+            'SELECT community_id FROM "community_member" WHERE user_id = :user_id AND is_moderator = true'),
+            {'user_id': user.id}).scalars())
+        user_dict = {
+            'id': user.id,
+            'user_ban_community_ids': user_ban_community_ids,
+            'followed_community_ids': followed_community_ids,
+            'bookmarked_reply_ids': bookmarked_reply_ids,
+            'blocked_creator_ids': blocked_creator_ids,
+            'upvoted_reply_ids': upvoted_reply_ids,
+            'downvoted_reply_ids': downvoted_reply_ids,
+            'subscribed_reply_ids': subscribed_reply_ids,
+            'moderated_community_ids': moderated_community_ids
+        }
+        return user_dict
+    else:
+        return user.id
 
 
 # Set up a new SQLAlchemy session specifically for Celery tasks
