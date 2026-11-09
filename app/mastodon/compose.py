@@ -14,9 +14,8 @@ an hour answers the status the first one made, as Mastodon's does (Tusky sends o
 in a comment's body as pictures."""
 import re
 
-from flask import current_app, g, jsonify, request
+from flask import g, jsonify, request
 from sqlalchemy import func
-from werkzeug.exceptions import HTTPException
 
 from app import cache, db
 from app.activitypub.util import find_microblogging_community
@@ -26,6 +25,7 @@ from app.local_names import local_named
 from app.local_only import hidden_here
 from app.mastodon import bp
 from app.mastodon import ids
+from app.mastodon.errors import failure
 from app.mastodon.ids import find_status
 from app.mastodon.instance import MAX_CHARACTERS, MAX_MEDIA_ATTACHMENTS   # what apps are told
 from app.mastodon.media import own_uploads
@@ -121,20 +121,14 @@ def _respond(row, status: int = 200):
 
 
 def _guarded(write):
-    """Runs `write`, answering a refusal as Mastodon does: 422 with its reason, a shared write's abort with its code."""
+    """Runs `write`, answering a refusal as Mastodon does (app.mastodon.errors)."""
     try:
         return write()
     except _Refused as refused:
-        return jsonify({'error': str(refused)}), refused.status
-    except HTTPException as refused:
-        return jsonify({'error': refused.description or refused.name}), refused.code
-    except Exception as failed:
         db.session.rollback()
-        if type(failed) is Exception:   # a shared function's refusal: a bare Exception carrying its reason
-            return jsonify({'error': str(failed) or 'Validation failed'}), 422
-        # anything else is a fault, as the alpha API's handler has it: logged here, its text never sent to the app
-        current_app.logger.exception('mastodon status write failed')
-        return jsonify({'error': 'Something went wrong'}), 500
+        return jsonify({'error': str(refused)}), refused.status
+    except Exception as error:
+        return failure(error)
 
 
 def _media(fields: dict) -> list:

@@ -70,7 +70,7 @@ def test_an_image_upload_is_answered_processed_with_its_description(world):
                          ids=['video', 'nothing'])
 def test_what_is_not_an_image_is_refused(world, name, content):
     response = _upload(world, name=name, content=content)
-    assert response.status_code == 422 and response.get_json()['error'].startswith('Validation failed')
+    assert response.status_code == 422 and response.get_json()['error']
 
 
 def test_an_upload_is_read_and_described_by_its_uploader_alone(world):

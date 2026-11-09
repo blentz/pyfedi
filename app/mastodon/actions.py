@@ -3,11 +3,11 @@ bookmark and unbookmark keep it. Each runs through the shared function the alpha
 app.shared.reply), as the person the app's token acts for (app.utils.Authorised), and answers the status as it now is.
 Mastodon's actions are idempotent where PieFed's toggle or refuse a repeat, so each acts only when something changes."""
 from flask import g, jsonify
-from werkzeug.exceptions import HTTPException
 
 from app import db
 from app.constants import SRC_API
 from app.mastodon import bp
+from app.mastodon.errors import failure
 from app.mastodon.ids import find_status
 from app.mastodon.statuses import Page
 from app.mastodon.timelines import readable
@@ -33,8 +33,8 @@ def _act(status_id: str, on_post, on_reply):
         return _not_found()
     try:
         (on_post if isinstance(row, Post) else on_reply)(row, Authorised(g.oauth_user))
-    except HTTPException as refused:   # the shared write's abort: 403 for a banned account, 429 over the vote quota
-        return jsonify({'error': refused.description or refused.name}), refused.code
+    except Exception as error:   # a shared write's abort (403 a banned account, 429 the vote quota) or refusal
+        return failure(error)
     return _answer(row)
 
 

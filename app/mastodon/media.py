@@ -3,12 +3,12 @@ the shared upload (app.shared.upload.process_upload, which records the uploader 
 processed (200); GET and PUT /api/v1/media/:id read it and set its description. Only the uploader reaches an upload.
 Images only, as the alpha API's uploads: PieFed takes video and audio with a post, from moderators of media communities
 (spec A13.6)."""
-from flask import current_app, g, jsonify, request
+from flask import g, jsonify, request
 from sqlalchemy import text
-from werkzeug.exceptions import HTTPException
 
 from app import db
 from app.mastodon import bp
+from app.mastodon.errors import failure
 from app.mastodon.statuses import attachment
 from app.models import ALT_TEXT_MAX, File
 from app.oauth_server.protect import require_oauth
@@ -41,14 +41,8 @@ def upload_media():
         return jsonify({'error': 'Validation failed: File is missing'}), 422
     try:
         url = process_upload(upload, user=g.oauth_user)
-    except HTTPException as refused:
-        return jsonify({'error': refused.description or refused.name}), refused.code
-    except Exception as failed:
-        db.session.rollback()
-        if type(failed) is Exception or is_refused_upload(failed):   # the shared upload's refusal, with its reason
-            return jsonify({'error': f'Validation failed: {failed}'}), 422
-        current_app.logger.exception('mastodon media upload failed')   # a fault: its text is never sent to the app
-        return jsonify({'error': 'Something went wrong'}), 500
+    except Exception as error:   # the shared upload refuses a type it does not take (is_refused_upload)
+        return failure(error, refusals=(is_refused_upload,))
     file = File.query.filter(File.source_url == url).order_by(File.id.desc()).first()
     file.alt_text = _description(request.form.get('description'))
     db.session.commit()
