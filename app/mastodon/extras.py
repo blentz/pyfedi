@@ -1,5 +1,7 @@
 """The small reads Mastodon apps make at startup and from their menus (plan W1.2; inventory in plan W1.0): lists (M2: a
-community the person joined), custom emojis, preferences, filters, followed tags and read markers. An app tolerates a
+community the person joined), custom emojis, preferences, filters, followed tags, read markers, and the trends and
+suggestions an Explore screen opens on (Mastodon Android's Posts tab is the trending statuses, and shows an error for a
+404). An app tolerates a
 failure of most of them, but a 404 still costs a logged error or an empty screen, and an answer costs nothing."""
 from flask import g, jsonify
 
@@ -82,3 +84,14 @@ def followed_tags():
 def markers():
     """No read positions are kept yet: an empty object, which every app takes as no marker."""
     return jsonify({})
+
+
+@bp.route('/api/v1/trends')
+@bp.route('/api/v1/trends/tags')
+@bp.route('/api/v1/trends/statuses')
+@bp.route('/api/v1/trends/links')
+@bp.route('/api/v2/suggestions')
+@require_oauth(user_required=False, optional=True)
+def trends():
+    """No trends are computed: an empty list, which an Explore screen shows as nothing trending."""
+    return jsonify([])

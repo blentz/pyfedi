@@ -64,3 +64,10 @@ def test_preferences_are_mastodons_defaults(world):
     preferences = _get(world, '/api/v1/preferences').get_json()
     assert preferences['posting:default:visibility'] == 'public'
     assert preferences['reading:expand:spoilers'] is False
+
+
+@pytest.mark.parametrize('path', ['/api/v1/trends', '/api/v1/trends/tags', '/api/v1/trends/statuses',
+                                  '/api/v1/trends/links', '/api/v2/suggestions'])
+def test_nothing_trends_and_nobody_is_suggested(world, path):
+    response = _get(world, path, token=False)
+    assert response.status_code == 200 and response.get_json() == []
