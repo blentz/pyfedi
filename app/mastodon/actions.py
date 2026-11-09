@@ -1,5 +1,5 @@
 """What a Mastodon app does to a status (plan W1.3; ruling M5): favourite is an upvote and unfavourite takes it back,
-bookmark and unbookmark keep it. Each runs through the shared function the alpha API and the web use (app.shared.post,
+bookmark and unbookmark keep it, reblog boosts a post and unreblog takes the boost back (a comment cannot be boosted). Each runs through the shared function the alpha API and the web use (app.shared.post,
 app.shared.reply), as the person the app's token acts for (app.utils.Authorised), and answers the status as it now is.
 Mastodon's actions are idempotent where PieFed's toggle or refuse a repeat, so each acts only when something changes."""
 from flask import g, jsonify
@@ -16,6 +16,10 @@ from app.oauth_server.protect import require_oauth
 from app.shared import post as shared_post
 from app.shared import reply as shared_reply
 from app.utils import Authorised
+
+
+def _no_boost(reply, auth):
+    raise Exception('A comment cannot be boosted')   # PieFed boosts posts alone (PostBoost)
 
 
 def _not_found():
@@ -109,3 +113,22 @@ def bookmark(status_id):
 @require_oauth('write:bookmarks')
 def unbookmark(status_id):
     return _act(status_id, _unbookmark_post, _unbookmark_reply)
+
+
+@bp.route('/api/v1/statuses/<status_id>/reblog', methods=['POST'])
+@require_oauth('write:statuses')
+def reblog(status_id):
+    """Answers the reblog as Mastodon does, a status holding the original in `reblog`; it is the original's own id,
+    since a boost is not a status of its own here."""
+    answer = _act(status_id, lambda post, auth: shared_post.boost_post(post.id, SRC_API, auth), _no_boost)
+    if isinstance(answer, tuple):   # a refusal: (response, status)
+        return answer
+    original = answer.get_json()
+    return jsonify({**original, 'account': Page(g.oauth_user, []).account(g.oauth_user), 'reblog': original,
+                    'content': '', 'media_attachments': [], 'mentions': [], 'tags': [], 'card': None})
+
+
+@bp.route('/api/v1/statuses/<status_id>/unreblog', methods=['POST'])
+@require_oauth('write:statuses')
+def unreblog(status_id):
+    return _act(status_id, lambda post, auth: shared_post.unboost_post(post.id, SRC_API, auth), _no_boost)

@@ -18,11 +18,12 @@ from sqlalchemy.orm.exc import NoResultFound
 
 from app import db, cache, plugins, limiter
 from app.activitypub.serializers.microblog import body_hashtags
-from app.activitypub.util import find_hashtag_or_create, make_image_sizes, notify_about_post, host_of
+from app.activitypub.util import find_hashtag_or_create, make_image_sizes, notify_about_post, host_of, \
+    record_boost, remove_boost
 from app.community.util import tags_from_string_old, end_poll_date, flair_from_form, flairs_from_string
 from app.constants import *
 from app.models import File, Notification, NotificationSubscription, Poll, PollChoice, Post, PostBookmark, PostVote, \
-    Report, Site, User, utcnow, Instance, Event, Community, CommunityFlair, votes_cast_today, post_file, \
+    PostBoost, Report, Site, User, utcnow, Instance, Event, Community, CommunityFlair, votes_cast_today, post_file, \
     ap_parse_datetime, PollChoiceVote, adjust_domain_post_count, served_path, _as_url
 from app.shared.media import MediaRefused, can_upload_media, media_kind_for, media_of, queue_probe, \
     store_uploaded_media, episode_form_wanted, with_episode
@@ -32,6 +33,7 @@ from app.onion import apply_audit, is_onion_request, stamp_activity
 from app.onion_account import audit_ip
 from app.storefront import is_upload_link, link_on, stored_link
 from app.shared.tasks import task_selector
+from app.shared.tasks.boosts import boostable, queue_boost
 from app.shared.upload import open_uploaded_image
 from app.visibility import is_open, post_title_for
 from app.utils import recipients_for
@@ -138,6 +140,34 @@ def bookmark_post(post_id: int, src, auth=None):
 
     if src == SRC_API:
         return user_id
+
+
+def boost_post(post_id: int, src, auth=None):
+    """`auth`'s person boosts the post: recorded (idempotently) and federated as an Announce from them (owner ruling
+    2026-11-08). A post that may not reach other servers is refused; a second boost changes nothing."""
+    user = authorise_api_user(auth, return_type='model') if src == SRC_API else current_user
+    post = db.session.get(Post, post_id)
+    if post is None:
+        raise NoResultFound
+    if user.banned or not boostable(post):
+        raise Exception('This post cannot be boosted')
+    if db.session.query(PostBoost.id).filter_by(user_id=user.id, post_id=post.id).first() is None:
+        record_boost(post, user)
+        queue_boost(user.id, post.id)
+    return user.id
+
+
+def unboost_post(post_id: int, src, auth=None):
+    """`auth`'s person takes back their boost of the post: removed, and an Undo of the Announce federated. Nothing to
+    take back changes nothing."""
+    user = authorise_api_user(auth, return_type='model') if src == SRC_API else current_user
+    post = db.session.get(Post, post_id)
+    if post is None:
+        raise NoResultFound
+    if db.session.query(PostBoost.id).filter_by(user_id=user.id, post_id=post.id).first() is not None:
+        remove_boost(post, user)
+        queue_boost(user.id, post.id, undo=True)
+    return user.id
 
 
 def remove_bookmark_post(post_id: int, src, auth=None):

@@ -7,8 +7,9 @@ import pytest
 from app import db
 from app.constants import VISIBILITY_FOLLOWERS
 from app.mastodon import ids
-from app.models import PostBookmark, PostReplyBookmark, PostReplyVote, PostVote
+from app.models import PostBookmark, PostBoost, PostReplyBookmark, PostReplyVote, PostVote
 from app.oauth_server import tokens
+from app.shared import post as shared_post
 from tests.factories import make_community, make_post, make_post_reply, make_user
 
 _SERIAL = count()
@@ -80,3 +81,24 @@ def test_a_refusal_from_the_shared_write_is_mastodons_json(world, monkeypatch):
     monkeypatch.setitem(world['client'].application.config, 'VOTE_QUOTA', 0)
     response = _do(world, world['post'], 'favourite')
     assert response.status_code == 429 and 'error' in response.get_json()
+
+
+def test_reblog_boosts_a_post_and_answers_mastodons_reblog_status(world, monkeypatch):
+    queued = []
+    monkeypatch.setattr(shared_post, 'queue_boost', lambda *args, **kwargs: queued.append((args, kwargs)))
+    response = _do(world, world['post'], 'reblog')
+    assert response.status_code == 200, response.get_data(as_text=True)
+    status = response.get_json()
+    assert status['reblog']['id'] == ids.status_id(world['post']) and status['reblog']['reblogged'] is True
+    assert status['account']['username'] == 'actor' and status['reblog']['reblogs_count'] == 1
+    assert _do(world, world['post'], 'reblog').status_code == 200   # twice is once
+    assert PostBoost.query.filter_by(user_id=world['me'].id).count() == 1
+    undone = _do(world, world['post'], 'unreblog')
+    assert undone.get_json()['reblogged'] is False and PostBoost.query.filter_by(user_id=world['me'].id).count() == 0
+    assert len(queued) == 2
+
+
+def test_a_comment_cannot_be_reblogged(world):
+    response = _do(world, world['reply'], 'reblog')
+    assert response.status_code == 422 and 'cannot be boosted' in response.get_json()['error']
+    assert _do(world, world['reply'], 'unreblog').status_code == 422
