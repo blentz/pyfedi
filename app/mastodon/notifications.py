@@ -54,19 +54,21 @@ def _subject(notification: Notification):
     return None
 
 
-def _shown(rows: list[Notification]) -> list[tuple]:
-    """(notification, author, subject) for each one the viewer may be told of."""
-    shown = []
+def shown(rows: list[Notification], viewer_id: int) -> list[tuple]:
+    """(notification, author, subject) for each one the viewer may be told of, on this request's domain: not hidden
+    here, its author there and not muted with their notifications, and what it is about still readable. The one
+    gate for the notifications list and Web Push (app.push_delivery), which asks it on each token's own domain."""
+    muted = set(shared_user.muted_ids(viewer_id, notifications_only=True))
+    told = []
     for notification, hidden in zip(rows, hidden_notifications(rows)):
         author = db.session.get(User, notification.author_id) if notification.author_id else None
-        if hidden or author is None or author.deleted:
+        if hidden or author is None or author.deleted or author.id in muted:
             continue
         subject = _subject(notification)
-        if notification.notif_type not in (NOTIF_FOLLOW, NOTIF_FOLLOW_REQUEST) and \
-                not readable(subject, g.oauth_user.id):
+        if notification.notif_type not in (NOTIF_FOLLOW, NOTIF_FOLLOW_REQUEST) and not readable(subject, viewer_id):
             continue
-        shown.append((notification, author, subject))
-    return shown
+        told.append((notification, author, subject))
+    return told
 
 
 def _entity(notification: Notification, author: User, subject, page: Page) -> dict:
@@ -95,10 +97,10 @@ def notifications():
     rows = query.order_by(order).limit(_limit()).all()
     if ascending:
         rows.reverse()
-    shown = _shown(rows)
-    page = Page(g.oauth_user, [subject for _n, _a, subject in shown if subject is not None])
-    page.authors.update({author.id: author for _n, author, _s in shown})
-    response = jsonify([_entity(notification, author, subject, page) for notification, author, subject in shown])
+    told = shown(rows, g.oauth_user.id)
+    page = Page(g.oauth_user, [subject for _n, _a, subject in told if subject is not None])
+    page.authors.update({author.id: author for _n, author, _s in told})
+    response = jsonify([_entity(notification, author, subject, page) for notification, author, subject in told])
     if rows:   # the rows read, not only those shown: a page of hidden ones still leads on
         response.headers['Link'] = links(str(rows[0].id), str(rows[-1].id))
     return response

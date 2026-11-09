@@ -5,22 +5,23 @@ Two listeners on every SQLAlchemy session: at a flush, the new notifications who
 query, so a site or a test with none pays only that); after the commit, a task for them. The task sends each to the
 subscriptions that want it: the token unrevoked, still usable and bound to a clearnet domain, the alert on, the policy
 met (all, followed: the person follows its author, follower: its author follows the person, none), and the
-notification not hidden on that domain. A push service that answers 404 or 410 has forgotten the subscription, so it is
+notifications list's own gate passed on the token's domain (hidden there, a muted or deleted author, a subject no
+longer readable: app.mastodon.notifications.shown). A push service that answers 404 or 410 has forgotten the subscription, so it is
 forgotten here too. Every message holds only what Mastodon's apps read: the notification's id and type, a title, a
 body and an icon (the token itself is never stored, so `access_token` is empty). Whether a notification is hidden is
 asked as the default domain asks it: a task serves no request, so it has no storefront of its own."""
 import json
 
-from flask import current_app
+from flask import current_app, g
 from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 from app import celery, db, webpush
-from app.hidden_routes import hidden_notifications
+import app.mastodon.notifications as notifications_gate   # the list's own gate, shared
 from app.mastodon.kinds import TYPES
 from app.models import Notification, OAuthToken, PushSubscription, User, UserFollower
 from app.oauth_server.tokens import usable_token
-from app.storefront import default_domain, domain_base_url, domain_for_host
+from app.storefront import domain_base_url, domain_for_host
 from app.utils import get_task_session, patch_db_session
 
 _PENDING = 'push_notification_ids'
@@ -98,33 +99,41 @@ def message(notification: Notification, base: str) -> bytes:
                        'icon': base + icon if icon.startswith('/') else icon}).encode()
 
 
+def _told_on(domain, notification: Notification) -> bool:
+    """Whether the notifications list would tell its person of `notification` on `domain` (the same gate,
+    app.mastodon.notifications.shown, asked in a request to that domain: what is hidden, readable and muted there)."""
+    with current_app.test_request_context(base_url=domain_base_url(domain)):
+        g.storefront = domain
+        return bool(notifications_gate.shown([notification], notification.user_id))
+
+
 def deliver(notification_ids: list[int]) -> None:
     session = get_task_session()
     try:
         with patch_db_session(session):
-            notifications = [row for row in (session.get(Notification, nid) for nid in notification_ids)
-                             if row is not None and row.notif_type in TYPES]
-            # hidden_notifications matches a notification's link against our routes, which needs a request: a task
-            # asks as a request to the default domain would (a task serves no storefront of its own)
-            with current_app.test_request_context(base_url=domain_base_url(default_domain())):
-                hidden = hidden_notifications(notifications) if notifications else []
-            for notification, is_hidden in zip(notifications, hidden):
-                if is_hidden:
+            for notification_id in notification_ids:
+                notification = session.get(Notification, notification_id)
+                if notification is None or notification.notif_type not in TYPES:
                     continue
-                for subscription in PushSubscription.query.filter_by(user_id=notification.user_id).all():
+                by_domain = {}   # each token's own domain decides what may be told there
+                for subscription in session.query(PushSubscription).filter_by(user_id=notification.user_id).all():
                     domain = _clearnet_domain(session.get(OAuthToken, subscription.token_id))
-                    if domain is None or not _wanted(subscription, notification):
+                    if domain is not None and _wanted(subscription, notification):
+                        by_domain.setdefault(domain.domain, (domain, []))[1].append(subscription)
+                for domain, subscriptions in by_domain.values():
+                    if not _told_on(domain, notification):
                         continue
-                    try:
-                        base = domain_base_url(domain)
-                        status = webpush.send(subscription.endpoint, subscription.p256dh, subscription.auth,
-                                              message(notification, base), base)
-                    except Exception:   # one push service down must not keep the rest from theirs
-                        current_app.logger.warning('web push to a subscription failed', exc_info=True)
-                        continue
-                    if status in (404, 410):
-                        session.delete(subscription)
-                        session.commit()
+                    base = domain_base_url(domain)
+                    for subscription in subscriptions:
+                        try:
+                            status = webpush.send(subscription.endpoint, subscription.p256dh, subscription.auth,
+                                                  message(notification, base), base)
+                        except Exception:   # one push service down must not keep the rest from theirs
+                            current_app.logger.warning('web push to a subscription failed', exc_info=True)
+                            continue
+                        if status in (404, 410):
+                            session.delete(subscription)
+                            session.commit()
     except Exception:
         session.rollback()
         raise

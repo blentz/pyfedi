@@ -5,13 +5,16 @@ from unittest.mock import patch
 
 import pytest
 
+import app.mastodon.notifications as gate
 import app.push_delivery as delivery
 from app import db
-from app.constants import NOTIF_BAN, NOTIF_FOLLOW, NOTIF_REPLY
-from app.models import Notification, PushSubscription, SiteDomain, utcnow
+from app.constants import NOTIF_BAN, NOTIF_FOLLOW, NOTIF_REPLY, SRC_API
+from app.models import Notification, OAuthToken, PushSubscription, SiteDomain, utcnow
 from app.oauth_server import tokens
-from app.storefront import clear_domain_cache, domain_for_host
-from tests.factories import make_follow, make_user
+from app.shared.user import mute_user
+from app.storefront import clear_domain_cache, current_storefront, domain_for_host
+from app.utils import Authorised
+from tests.factories import make_community, make_follow, make_post, make_post_reply, make_user
 from tests.test_webpush import AUTH, UA_PUBLIC
 from tests.two_domains import request_on
 
@@ -34,12 +37,15 @@ def world(app, api_baseline):
                                     policy='all')
     db.session.add(subscription)
     db.session.commit()
-    return {'me': me, 'other': other, 'app': registered, 'token': token, 'subscription': subscription, 'flask': app}
+    post = make_post(make_community('pushes'), me, ap_id='https://test.piefed.local/post/push1')
+    reply = make_post_reply(post, other)
+    return {'me': me, 'other': other, 'app': registered, 'token': token, 'subscription': subscription, 'flask': app,
+            'targets': {'post_id': post.id, 'comment_id': reply.id}}
 
 
 def _notification(world, kind=NOTIF_REPLY, user=None, author=None):
     row = Notification(title='Someone replied to you', url='/x', user_id=(user or world['me']).id,
-                       author_id=(author or world['other']).id, notif_type=kind, targets={})
+                       author_id=(author or world['other']).id, notif_type=kind, targets=world['targets'])
     db.session.add(row)
     db.session.commit()
     return row
@@ -118,9 +124,43 @@ def test_a_token_bound_to_an_onion_pushes_nothing(world):
     assert not _sent(world, _notification(world)).called
 
 
-def test_a_notification_hidden_here_is_not_sent(world):
-    with patch.object(delivery, 'hidden_notifications', side_effect=lambda rows: [True for _ in rows]):
+def test_a_notification_hidden_on_the_tokens_domain_is_not_sent(world):
+    with patch.object(gate, 'hidden_notifications', side_effect=lambda rows: [True for _ in rows]):
         assert not _sent(world, _notification(world)).called
+
+
+def test_hidden_is_asked_on_each_tokens_own_domain(world):
+    """A notification hidden on one domain still reaches a token issued on another where it is not."""
+    db.session.add(SiteDomain(domain='shop.example', scheme='https'))
+    db.session.commit()
+    clear_domain_cache()
+    with request_on(world['flask'], domain_for_host('shop.example')):
+        tokens.issue_token(world['app'], world['me'], 'read push')
+    shop_token = OAuthToken.query.filter_by(domain='shop.example').one()   # found only on its own domain
+    db.session.add(PushSubscription(token_id=shop_token.id,
+                                    user_id=world['me'].id, endpoint='https://push.example/shop', p256dh=UA_PUBLIC,
+                                    auth=AUTH, alerts={'mention': True}, policy='all'))
+    db.session.commit()
+
+    def hidden_on_shop(rows):
+        return [current_storefront().domain == 'shop.example' for _ in rows]
+    with patch.object(gate, 'hidden_notifications', side_effect=hidden_on_shop):
+        send = _sent(world, _notification(world))
+    assert [call.args[0] for call in send.call_args_list] == ['https://push.example/s']
+
+
+@pytest.mark.parametrize('what', ['muted', 'author-deleted', 'subject-unreadable'])
+def test_what_the_notifications_list_would_not_tell_is_not_pushed(world, what):
+    row = _notification(world)
+    if what == 'muted':
+        mute_user(world['other'].id, True, 0, SRC_API, Authorised(world['me']))
+    elif what == 'author-deleted':
+        world['other'].deleted = True
+        db.session.commit()
+    else:
+        row.targets = {'post_id': 2 ** 31 - 1, 'comment_id': 2 ** 31 - 1}
+        db.session.commit()
+    assert not _sent(world, row).called
 
 
 @pytest.mark.parametrize('status', [404, 410])
@@ -149,7 +189,7 @@ def test_nothing_or_nobody_is_nothing(world):
 
 
 def test_a_fault_reading_the_notifications_is_raised_for_the_task(world):
-    with patch.object(delivery, 'hidden_notifications', side_effect=RuntimeError('db')), \
+    with patch.object(gate, 'hidden_notifications', side_effect=RuntimeError('db')), \
             pytest.raises(RuntimeError):
         delivery.deliver([_notification(world).id])
 
@@ -162,12 +202,11 @@ def test_queue_push_is_always_a_task_whose_body_delivers(world):
     delivered.assert_called_once_with([3])
 
 
-def test_a_notification_with_no_author_has_an_empty_title(world):
+def test_a_notification_with_no_author_is_not_pushed_as_the_list_leaves_it_out(world):
     row = _notification(world)
     row.author_id = None
     db.session.commit()
-    body = json.loads(_sent(world, row).call_args.args[3])
-    assert body['title'] == '' and body['icon'] == ''
+    assert not _sent(world, row).called
 
 
 def test_an_authors_avatar_is_an_absolute_icon(world):
