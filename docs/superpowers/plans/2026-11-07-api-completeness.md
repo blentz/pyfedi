@@ -300,6 +300,27 @@ floors and changed-line gates.
     `4.0.0` version claim, which no harness validates and which apps (Phanpy) use to choose features: a survey of the
     harness apps' version thresholds is proposed before W1.2.
   - W1.2 Reading: timelines, statuses and context, notifications, search, markers, custom emojis.
+    **Built 2026-11-08** (branch feat/mastodon-reading off blentz 872aba94d), in `app/mastodon/`:
+    1. a2a3b65d8 + 5c531097e `ids.py`: a status id is a snowflake, the second since 2000 it was posted above one bit
+       for the table (post or comment) and the whole 31-bit row id: unique by construction, ordered by time, decoded
+       by primary key. (The first version kept 15 bits of the row under the millisecond, which a remote server's
+       chosen `published` could collide: security review.)
+    2. c186f7cdb `statuses.py`: Status per M3/M5 (bold title, body, link, community mention; favourites = upvotes);
+       every decoded field present, nulls null; a Page loads votes, bookmarks, boosts and author counts once.
+    3. 7dcd5c60b the read layer's post and comment listings take `person_ids` (home, M2).
+    4. ea932420d + c94f0dcf6 `paging.py`/`timelines.py`: public (local, remote, only_media), tag, home (people
+       followed and oneself, posts and comments), list/:id (a joined community), accounts/:id/statuses,
+       statuses/:id and /context; pages in (posted_at, table, row id) order on the posted_at index, merged across
+       tables, Link headers. A bound naming a row the viewer may not read uses its id's second, never the row
+       (security review: an existence/timestamp oracle).
+    5. 922eeebda the RSL licence joins a response's Link header (OkHttp reads only the last Link header).
+    6. c014f68f0 + 7b022c8dd notifications (v1: status, mention, follow, follow_request), v2 search, lists,
+       custom emojis, preferences, filters, followed tags, markers (empty), trends and suggestions (empty).
+    7. 52cd9b9f1 harness: Phanpy and Elk open the c/apps list, Tusky and Mastodon's app search for the seed; the
+       probed Mastodon/Pixelfed apps' view passes.
+    8. the probe counts Mastodon's 401 on the (private) harness instance as served; status_id/list_id classified.
+    Merged to local blentz 2026-11-08 at the owner's word, before its two cold harness runs and the full gates
+    finished; their results are recorded below when in.
   - W1.3 Writing: statuses, media v2, favourite, boost, bookmark, follow; Pleroma/glitch emoji reactions.
   - W1.4 Pixelfed extras after a spike (`/api/v1.1`, `/api/pixelfed`), per M7.
 - **W2 PeerTube `/api/v1`.**
