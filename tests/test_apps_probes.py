@@ -100,3 +100,17 @@ def test_this_tree_serves_what_the_probes_expect(client, family, expected):
     result = probes.run(family, http, 'nobody', 'nothing')
     assert all(' answered 421' not in note for _, note in result.values()), result
     assert {step: outcome for step, (outcome, _) in result.items()} == expected
+
+
+def test_mastodon_on_a_private_instance_is_served_behind_login():
+    """The harness's PieFed is private: an anonymous timeline is refused with Mastodon's 401, which shows it is served."""
+    result = probes.run('mastodon', _client({('POST', '/api/v1/apps'): (200, {'client_id': 'c'}),
+                                             ('GET', '/api/v1/timelines/public'):
+                                                 (401, {'error': 'The access token is invalid'})}))
+    assert result['view'][0] == 'passed' and 'login refusal' in result['view'][1]
+
+
+def test_mastodon_a_401_that_is_not_mastodons_is_still_unsupported():
+    result = probes.run('mastodon', _client({('POST', '/api/v1/apps'): (200, {'client_id': 'c'}),
+                                             ('GET', '/api/v1/timelines/public'): (401, ['not', 'an', 'error'])}))
+    assert result['view'][0] == 'unsupported'

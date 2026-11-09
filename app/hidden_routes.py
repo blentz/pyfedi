@@ -118,6 +118,9 @@ NON_OBJECT_ARGUMENTS = {
     'domain_id': None,   # a link domain (/d/) or, for an admin, a hosted domain's settings
     'role_id': ('/admin/',), 'grant_id': ('/admin/',),   # a role and a grant (RBAC), Admin's pages alone
     'app_id': ('/user/settings/apps/',),   # an OAuth app; revoking touches the signed-in person's own tokens alone
+    # Mastodon's API (plan W1.2): a status id is a snowflake naming a post or comment, a list id a joined community;
+    # their routes answer a hidden one as one nobody holds themselves (app.mastodon.timelines.readable, _joined)
+    'status_id': ('/api/v1/statuses/',), 'list_id': ('/api/v1/timelines/list/', '/api/v1/lists/'),
     # the reader's own rows, which show a hidden target as text with a note (app/local_names.py)
     'notification_id': None, 'report_id': None,
     # an activity: the result of one sent here, for its sender, and this storefront's own logged outbound ones, which

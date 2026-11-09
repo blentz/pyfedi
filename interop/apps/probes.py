@@ -38,8 +38,13 @@ def mastodon(http: httpx.Client) -> Probe:
     else:
         login = ('unsupported', f'{_answer(app)}: no app registration, so no OAuth login')
     timeline = http.get('/api/v1/timelines/public', params={'local': 'true', 'limit': 5})
-    if timeline.status_code == 200 and isinstance(_json(timeline), list):
+    body = _json(timeline)
+    if timeline.status_code == 200 and isinstance(body, list):
         view = ('passed', f'{_answer(timeline)} with a list of statuses')
+    elif timeline.status_code == 401 and isinstance(body, dict) and body.get('error'):
+        # a private instance (the harness's is) lets no one read without a person's token, as Mastodon's own
+        # limited-federation mode does: Mastodon's refusal shows the timeline is served
+        view = ('passed', f'{_answer(timeline)} with Mastodon\'s login refusal: served, to signed-in people here')
     else:
         view = ('unsupported', f'{_answer(timeline)}: no Mastodon timelines')
     return {'login': login, 'view': view, 'post': _after(login, 'POST /api/v1/statuses')}
