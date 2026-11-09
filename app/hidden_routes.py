@@ -122,6 +122,10 @@ NON_OBJECT_ARGUMENTS = {
     # their routes answer a hidden one as one nobody holds themselves (app.mastodon.timelines.readable, _joined)
     'status_id': ('/api/v1/statuses/',), 'list_id': ('/api/v1/timelines/list/', '/api/v1/lists/'),
     'media_id': ('/api/v1/media/',),   # the viewer's own upload: anyone else's is answered as one nobody holds
+    # PeerTube's API (plan W2.1): a video id names a post, a thread id a comment of it, a handle a person or a
+    # community; their routes answer a hidden one as one nobody holds (app.peertube.entities.find_video, actors)
+    'video_id': ('/api/v1/videos/', '/videos/watch/', '/w/'), 'thread_id': ('/api/v1/videos/',),
+    'handle': ('/api/v1/accounts/', '/api/v1/video-channels/'), 'playlist_id': ('/api/v1/video-playlists/',),
     # the reader's own rows, which show a hidden target as text with a note (app/local_names.py)
     'notification_id': None, 'report_id': None,
     # an activity: the result of one sent here, for its sender, and this storefront's own logged outbound ones, which

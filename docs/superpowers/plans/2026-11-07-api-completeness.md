@@ -370,6 +370,10 @@ floors and changed-line gates.
   - W2.1 Read-only, for NewPipe: `/api/v1/config`, `/videos` (sorts, local), `/videos/{id}` with `files[]`,
     `/videos/{id}/comment-threads`, `/accounts/{h}`, `/video-channels/{h}/videos`, `/search/*`. The hard part is the
     media shape: `files[]` per resolution (PieFed stores one file; no HLS).
+    Spec `docs/superpowers/specs/2026-11-09-peertube-read-api-design.md`. **Ruled 2026-11-09:** V1 videos are uploads
+    plus remote posts whose URL is a video file (remote files left out on onion; video-site links left out); V2 every
+    community is a channel, a person an account; V3 uploads are transcoded to 480p and 360p too. Phases: W2.1a the read
+    API with one file, W2.1b renditions.
   - W2.2 Login and account: `oauth-clients/local`, `users/token` (password and refresh grants, OTP header), `users/me`,
     subscriptions, history, notifications, comments; the official app's version gate (D4).
   - W2.3 Upload: `videos/upload-resumable` into the existing media pipeline.

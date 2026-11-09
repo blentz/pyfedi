@@ -436,6 +436,9 @@ def create_app(config_class=Config):
     from app.mastodon.api import bp as mastodon_bp  # cycle: blueprint modules import db and the other globals from here
     app.register_blueprint(mastodon_bp)
 
+    from app.peertube.api import bp as peertube_bp  # cycle: blueprint modules import db and the other globals from here
+    app.register_blueprint(peertube_bp)
+
     from app.user import bp as user_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(user_bp)
 
