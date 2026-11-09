@@ -4,4 +4,4 @@ from flask import Blueprint
 
 bp = Blueprint('mastodon', __name__)
 
-from app.mastodon import extras, notifications, routes, search, timelines  # noqa: E402,F401  cycle: the routes register themselves on bp
+from app.mastodon import actions, extras, notifications, routes, search, timelines  # noqa: E402,F401  cycle: the routes register themselves on bp
