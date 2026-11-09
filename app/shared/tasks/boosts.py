@@ -4,7 +4,8 @@ A boost is an Announce from the person's own actor, as Mastodon's is: to Public,
 author, delivered to every remote instance holding an accepted follower of theirs and to the author's inbox when the
 author is remote. Taking it back is an Undo of that Announce, whose id is the person's and the post's (activities/
 announce/boost-<post id>), so the Undo names it without a row of its own. Only an open post outside a private or
-local-only community is announced; refused_outbound refuses anything local-only on the way out as for every activity."""
+local-only community is announced, but an Undo goes whatever the post became since; refused_outbound refuses anything
+local-only on the way out as for every activity."""
 from flask import current_app
 
 from app import celery
@@ -48,7 +49,9 @@ def send_boost(user_id: int, post_id: int, undo: bool) -> None:
     try:
         with patch_db_session(session):
             user, post = session.get(User, user_id), session.get(Post, post_id)
-            if user is None or post is None or not boostable(post):
+            # The Announce needs a post that may leave; its Undo goes whatever the post became since (deleted, made
+            # followers-only, moved somewhere private), or peers would keep a boost taken back
+            if user is None or post is None or (not undo and not boostable(post)):
                 return
             announce = announce_of(user, post)
             body = {'@context': default_context(), **announce}

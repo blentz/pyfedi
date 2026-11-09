@@ -36,7 +36,7 @@ from app.shared.tasks import task_selector
 from app.shared.tasks.boosts import boostable, queue_boost
 from app.shared.upload import open_uploaded_image
 from app.visibility import is_open, post_title_for
-from app.utils import recipients_for
+from app.utils import recipients_for, user_banned_from_community
 from app.utils import build_gallery_thumbnail, render_template, authorise_api_user, shorten_string, gibberish, ensure_directory_exists, \
     max_album_images, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, fixup_url, domain_from_url, \
@@ -149,7 +149,9 @@ def boost_post(post_id: int, src, auth=None):
     post = db.session.get(Post, post_id)
     if post is None:
         raise NoResultFound
-    if user.banned or not boostable(post):
+    # the community's and the author's word as for a vote or a reply: banned from it, or blocked by its author, no
+    if user.banned or not boostable(post) or user_banned_from_community(user.id, post.community_id) or \
+            post.author.has_blocked_user(user.id):
         raise Exception('This post cannot be boosted')
     if db.session.query(PostBoost.id).filter_by(user_id=user.id, post_id=post.id).first() is None:
         record_boost(post, user)

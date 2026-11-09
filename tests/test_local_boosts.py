@@ -8,7 +8,7 @@ import pytest
 import app.shared.tasks.boosts as boosts
 from app import db
 from app.constants import SRC_API, VISIBILITY_FOLLOWERS
-from app.models import PostBoost, UserFollower
+from app.models import CommunityBan, PostBoost, UserBlock, UserFollower
 from app.shared import post as shared_post
 from app.utils import Authorised
 from tests.factories import make_community, make_instance, make_post, make_user
@@ -132,3 +132,32 @@ def test_a_failed_send_is_raised_for_the_task_to_retry(world):
     with patch.object(boosts, 'send_post_request', side_effect=ConnectionError('down')):
         with pytest.raises(ConnectionError):
             boosts.send_boost(world['booster'].id, world['post'].id, False)
+
+
+@pytest.mark.parametrize('what', ['followers-only', 'deleted', 'private-community'])
+def test_an_undo_goes_whatever_the_post_became(world, what):
+    """A retraction must reach the peers that hold the boost, even once the post may not be announced any more."""
+    post = world['post']
+    if what == 'followers-only':
+        post.visibility = VISIBILITY_FOLLOWERS
+    elif what == 'deleted':
+        post.deleted = True
+    else:
+        world['community'].private = True
+    db.session.commit()
+    sent = _sent(world, undo=True)
+    assert sent and all(body['type'] == 'Undo' for body in sent.values())
+
+
+@pytest.mark.parametrize('what', ['banned-from-community', 'blocked-by-author'])
+def test_a_person_the_community_or_author_refused_cannot_boost(world, what):
+    booster = world['booster']
+    if what == 'banned-from-community':
+        db.session.add(CommunityBan(community_id=world['community'].id, user_id=booster.id))
+    else:
+        db.session.add(UserBlock(blocker_id=world['author'].id, blocked_id=booster.id))
+    db.session.commit()
+    with patch.object(shared_post, 'queue_boost') as queued, pytest.raises(Exception, match='cannot be boosted'):
+        shared_post.boost_post(world['post'].id, SRC_API, Authorised(booster))
+    queued.assert_not_called()
+    assert PostBoost.query.filter_by(user_id=booster.id).count() == 0
