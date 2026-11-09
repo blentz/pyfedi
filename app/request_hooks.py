@@ -325,10 +325,13 @@ def register_request_hooks(app):
         else:
             if not current_app.config['ALLOW_AI_CRAWLERS']:
                 licence = f'<{storefront_url()}/rsl.xml>; rel="license"; type="application/rsl+xml"'
-                # one Link header: a client reading only one (OkHttp answers the last) would lose a view's own links,
-                # a Mastodon timeline's next page among them
-                links = response.headers.getlist('Link')   # every one the view added (a post page adds several)
-                response.headers['Link'] = ', '.join([*links, licence])
+                links = response.headers.getlist('Link')
+                if any('rel="next"' in link for link in links):
+                    # a page of an API's list: one Link header, as a client reading only one (OkHttp answers the last:
+                    # Mastodon Android) must still find the next page
+                    response.headers['Link'] = ', '.join([*links, licence])
+                else:
+                    response.headers.add('Link', licence)
             onion = current_storefront().is_onion   # every onion page has the policy, a registration page too
             if onion or 'auth/register' not in request.path:
                 if "api/alpha/swagger" not in request.path:
