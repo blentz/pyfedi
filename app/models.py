@@ -6770,6 +6770,23 @@ class OAuthApp(db.Model):
         return grant_type in ('authorization_code', 'refresh_token', 'client_credentials')
 
 
+class PushSubscription(db.Model):
+    """An app's Web Push subscription (owner ruling 2026-11-09; app.mastodon.push), one per token and gone with it:
+    where the push service waits (`endpoint`), the keys to encrypt for (`p256dh`, `auth`), which notifications it wants
+    (`alerts`, Mastodon's names) and from whom (`policy`: all, followed, follower or none). Clearnet only: none is made
+    on an onion, and a token bound to an onion is never sent to."""
+    __tablename__ = 'push_subscription'
+    id = db.Column(db.Integer, primary_key=True)
+    token_id = db.Column(db.Integer, db.ForeignKey('oauth_token.id', ondelete='CASCADE'), nullable=False, unique=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False, index=True)
+    endpoint = db.Column(db.String(2048), nullable=False)
+    p256dh = db.Column(db.String(128), nullable=False)
+    auth = db.Column(db.String(64), nullable=False)
+    alerts = db.Column(db.JSON, nullable=False, default=dict)
+    policy = db.Column(db.String(10), nullable=False, default='all', server_default='all')
+    created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+
+
 class OAuthCode(db.Model):
     """An authorization code, single use and short lived; kept as a SHA-256 digest."""
     __tablename__ = 'oauth_code'

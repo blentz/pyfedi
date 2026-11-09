@@ -3,7 +3,7 @@ An app reads one before anyone signs in, to size its composer and uploads. Built
 (nodeinfo's usage), so this module needs no route."""
 from flask import current_app, g
 
-from app import db
+from app import db, webpush
 from app.branding import own_value
 from app.federation_urls import domain_site_name
 from app.mastodon.entities import absolute
@@ -75,6 +75,11 @@ def instance_v1(domain, usage: dict) -> dict:
     }
 
 
+def _vapid(domain) -> dict:
+    """The key an app subscribes to Web Push with: on a clearnet domain only (push is clearnet-only, app.mastodon.push)."""
+    return {} if domain.is_onion else {'vapid': {'public_key': webpush.server_key()}}
+
+
 def instance_v2(domain, usage: dict) -> dict:
     """GET /api/v2/instance; Tusky needs its `domain` and `version`."""
     enabled, approval = _registration(domain)
@@ -83,7 +88,7 @@ def instance_v2(domain, usage: dict) -> dict:
         'source_url': SOURCE_URL, 'description': _own(domain, 'description'),
         'usage': {'users': {'active_month': usage['users']['activeMonth']}},
         'thumbnail': {'url': absolute(_own(domain, 'logo'), LOGO)}, 'languages': _languages(),
-        'configuration': {'urls': {}, **_configuration()},
+        'configuration': {'urls': {}, **_configuration(), **_vapid(domain)},
         'registrations': {'enabled': enabled, 'approval_required': approval, 'message': None},
         'contact': {'email': _contact(domain), 'account': None}, 'rules': [],
     }
