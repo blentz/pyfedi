@@ -158,16 +158,20 @@ The largest entry comes first, as PeerTube orders them.
      player reach the playing state.
    - NewPipe `view` flips.
 2. **W2.1b Renditions** (V3).
-   - After a video upload is probed `ready`, a background task writes H.264/AAC MP4 copies at 480p and 360p. It writes
-     only sizes below the source, so a 480p source gains a 360p copy and a 360p source gains none.
-   - The copies are recorded in the media record as `renditions[]` (height, width, bytes, path).
-   - **On disk:** they sit beside the source, and S3 moves them as it moves the source.
-   - **Removal:** they are removed wherever the source is (`media_local_path`, `Post.delete_dependencies`, the expiry
-     sweep).
-   - **Failure:** a failed rendition is logged and dropped. It never fails or delays the post, which publishes on the
-     source as now.
+   - After a video upload is probed `ready`, a background task (`make_renditions`) writes H.264/AAC MP4 copies at
+     480p and 360p, by the short side (a portrait video's width). It writes only sizes below the source's short side,
+     so a 480p source gains a 360p copy and a 360p source gains none.
+   - The copies are recorded in the media record as `renditions[]` (`side`, `width`, `height`, `bytes`). A copy's
+     name is derived from the source's, `<name>_<side>p.mp4`, never stored: a removal never trusts a recorded name.
+   - **On disk:** they sit beside the source. With S3, the task reads the source from the bucket into tmp and puts
+     the copies beside it there.
+   - **Removal:** `Post.delete_dependencies` removes them with the source, on disk and in the bucket. A post purged,
+     or whose upload stopped being ready, while it transcoded keeps nothing: the task removes its own copies. Local
+     uploads are never expired, so the expiry sweep has nothing to do with them.
+   - **Failure:** a failed copy is logged and dropped. It never fails or delays the post, which publishes on the
+     source as before. A transcode's time limit grows with the video (120 s plus 4 s per second, at most 4 h).
    - **Where they appear:** `files[]` lists them, and so does the federated PeerTube Video's `url[]` (spec 2026-10-14
-     §4.3). A peer's file Link list is otherwise unchanged.
+     §4.3). A published Video gets an Update once its copies are recorded, so peers that have it learn them.
    - Proved by tests of the pipeline and by NewPipe's resolution menu in the harness.
 
 ## 6. Owner rulings

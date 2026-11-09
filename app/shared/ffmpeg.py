@@ -1,4 +1,5 @@
-"""ffprobe and ffmpeg in a sandbox (spec §5.2, A13.3): local files only, 60 s, 1 GiB of address space."""
+"""ffprobe and ffmpeg in a sandbox (spec §5.2, A13.3): local files only, 60 s, 1 GiB of address space. A transcode
+(W2.1b) gets a time limit that grows with the video's length instead."""
 import json
 import os
 import resource
@@ -16,6 +17,11 @@ _INPUT_LIMITS = ['-protocol_whitelist', 'file',
 # 10). One frame needs no more.
 _DECODE_LIMITS = ['-threads', '1']
 _ENCODE_LIMITS = ['-threads', '1']
+# A rendition (W2.1b): two encoder threads at 480p or less stay well inside ADDRESS_SPACE_BYTES; the time it may take
+# is TRANSCODE_BASE_S plus TRANSCODE_PER_SECOND per second of video, at most TRANSCODE_MAX_S
+TRANSCODE_BASE_S, TRANSCODE_PER_SECOND, TRANSCODE_MAX_S = 120, 4, 4 * 60 * 60
+_TRANSCODE_ENCODE = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '26', '-profile:v', 'main', '-pix_fmt', 'yuv420p',
+                     '-c:a', 'aac', '-b:a', '128k', '-ac', '2', '-movflags', '+faststart', '-threads', '2', '-f', 'mp4']
 
 
 class MediaToolError(Exception):
@@ -26,15 +32,15 @@ def _limit_address_space():
     resource.setrlimit(resource.RLIMIT_AS, (ADDRESS_SPACE_BYTES, ADDRESS_SPACE_BYTES))
 
 
-def _run(cmd: list, private_paths: tuple = ()) -> bytes:
+def _run(cmd: list, private_paths: tuple = (), timeout_s: int = PROBE_TIMEOUT_S) -> bytes:
     try:
         # PATH and no secret: the tools parse untrusted bytes, and the app's environment holds its secrets. One malloc
         # arena: glibc's default of one per thread reserves 64 MiB of ADDRESS_SPACE_BYTES for each of ffmpeg's threads
-        done = subprocess.run(cmd, capture_output=True, timeout=PROBE_TIMEOUT_S, preexec_fn=_limit_address_space,
+        done = subprocess.run(cmd, capture_output=True, timeout=timeout_s, preexec_fn=_limit_address_space,
                               stdin=subprocess.DEVNULL, check=False,
                               env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'MALLOC_ARENA_MAX': '1'})
     except subprocess.TimeoutExpired:
-        raise MediaToolError(f'{cmd[0]} timed out after {PROBE_TIMEOUT_S} s')
+        raise MediaToolError(f'{cmd[0]} timed out after {timeout_s} s')
     except FileNotFoundError:
         raise MediaToolError(f'{cmd[0]} is not installed')
     if done.returncode != 0:
@@ -71,3 +77,16 @@ def extract_cover(path: str, out_path: str) -> None:
           *_ENCODE_LIMITS, '-an', '-map', '0:v:0',
           '-frames:v', '1', '-y', 'file:' + out_path], (path, out_path))
     _require_image(out_path)
+
+
+def transcode_timeout(duration_s: int) -> int:
+    return min(TRANSCODE_MAX_S, TRANSCODE_BASE_S + duration_s * TRANSCODE_PER_SECOND)
+
+
+def transcode(path: str, out_path: str, side: int, portrait: bool, timeout_s: int) -> None:
+    """An H.264/AAC MP4 of `path` whose short side is `side` (its width when `portrait`): the first video stream and,
+    if there is one, the first audio stream."""
+    scale = f'scale={side}:-2' if portrait else f'scale=-2:{side}'
+    _run(['ffmpeg', '-nostdin', '-v', 'error', *_INPUT_LIMITS, *_DECODE_LIMITS, '-i', 'file:' + path,
+          '-map', '0:v:0', '-map', '0:a:0?', '-vf', scale, *_TRANSCODE_ENCODE, '-y', 'file:' + out_path],
+         (path, out_path), timeout_s)

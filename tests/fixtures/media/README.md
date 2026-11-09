@@ -1,7 +1,9 @@
 # Media fixtures
 
-Tiny 1 s (64x64 for video) files for the sniff and probe tests. Every file is under 30 KB; no bitrate had to be lowered.
-They were made with the ffmpeg 7.1 in the test image (`docker build --target test`), from the repo root, with `ffmpeg -v error -y` in front of each command:
+Tiny 1 s (64x64 for video) files for the sniff and probe tests, and two larger videos for the rendition tests (W2.1b):
+720p, which gains 480p and 360p copies, and a 480x854 portrait one, which gains a 360p copy. Every file is under 30 KB;
+no bitrate had to be lowered. The rendition fixtures were made with ffmpeg 9.0.2, outside the test image.
+The others were made with the ffmpeg 7.1 in the test image (`docker build --target test`), from the repo root, with `ffmpeg -v error -y` in front of each command:
 
 ```bash
 ffmpeg -f lavfi -i testsrc=size=64x64:rate=10 -f lavfi -i sine=frequency=440 -t 1 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest tests/fixtures/media/video_h264.mp4
@@ -12,6 +14,8 @@ ffmpeg -i tests/fixtures/media/audio.mp3 -f lavfi -i color=red:size=64x64:durati
 ffmpeg -f lavfi -i sine=frequency=440 -t 1 -c:a aac tests/fixtures/media/audio.m4a
 ffmpeg -f lavfi -i sine=frequency=440 -t 1 -c:a libopus tests/fixtures/media/audio_opus.ogg
 printf 'this is not a video\n' > tests/fixtures/media/not_media.mp4
+ffmpeg -f lavfi -i testsrc=size=1280x720:rate=10 -f lavfi -i sine=frequency=440 -t 1 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest tests/fixtures/media/video_720p.mp4
+ffmpeg -f lavfi -i testsrc=size=480x854:rate=10 -t 1 -c:v libx264 -pix_fmt yuv420p tests/fixtures/media/video_portrait.mp4
 ```
 
 `audio_cover.mp3` differs from the plan's command. The plan's `-frames:v 1 -map 0 -map 1` cut the audio to 0.05 s,
@@ -29,3 +33,5 @@ so this one maps `0:a` and `1:v` and gives the colour source a `duration=1`.
 | `audio.m4a` | aac | mp4 (`M4A `) | accepted audio |
 | `audio_opus.ogg` | opus | ogg | accepted audio |
 | `not_media.mp4` | none | none | text bytes with a media name |
+| `video_720p.mp4` | h264 + aac, 1280x720 | mp4 | renditions at 480p and 360p; the harness's video |
+| `video_portrait.mp4` | h264, 480x854, no audio | mp4 | a portrait rendition, scaled by its width |

@@ -1,4 +1,5 @@
-"""probe_media (spec §5.2, A13): validate an uploaded file in a sandbox, thumbnail it, then publish its post."""
+"""probe_media (spec §5.2, A13): validate an uploaded file in a sandbox, thumbnail it, then publish its post. Then
+make_renditions (W2.1b): a ready video's smaller copies."""
 import json
 import math
 import os
@@ -17,13 +18,15 @@ from app.activitypub.util import make_image_sizes, notify_about_post
 from app.community.util import notify_admins_of_post_needing_approval
 from app.constants import (MEDIA_KIND_AUDIO, MEDIA_KIND_VIDEO, NOTIF_DEFAULT, POST_STATUS_PROCESSING,
                            POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING, POST_STATUS_SCHEDULED)
-from app.models import CommunityMember, File, Notification, Post, federation_base, s3_key_from_url, served_path, utcnow
-from app.shared.ffmpeg import MediaToolError, extract_cover, extract_frame, run_ffprobe
+from app.activitypub.serializers.peertube import uses_peertube_video
+from app.models import (RENDITION_SIDES, CommunityMember, File, Notification, Post, federation_base, rendition_name,
+                        s3_key_from_url, served_path, utcnow)
+from app.shared.ffmpeg import MediaToolError, extract_cover, extract_frame, run_ffprobe, transcode, transcode_timeout
 from app.shared.post import feature_published_post
 from app.shared.media import MEDIA_DIRECTORY, can_upload_media, media_local_path, media_of, queue_probe, with_media
 from app.shared.tasks import task_selector
 from app.shared.tasks.maintenance import delete_from_s3
-from app.utils import (can_create_post, ensure_directory_exists, get_recipient_language, get_task_session, gibberish,
+from app.utils import (can_create_post, download_from_s3, ensure_directory_exists, get_recipient_language, get_task_session, gibberish,
                        guess_mime_type, patch_db_session, save_image_without_metadata, shorten_string,
                        store_files_in_s3, to_srgb, upload_file_to_s3, user_banned_from_community)
 
@@ -209,6 +212,8 @@ def _probe(post_id, token: str) -> None:
         _drop_local_copy(post, path)
     if refusal is None and thumbnail is not None:   # before the announce, so an error federating it cannot skip them
         make_image_sizes(thumbnail.id, 512, 1200, 'posts', post.community.low_quality)
+    if refusal is None and wants_renditions(post):   # after the local copy went to the bucket: the post never waits
+        task_selector('make_renditions', post_id=post.id)
     if published:
         _announce_post(post)
 
@@ -455,3 +460,131 @@ def _sweep(post, now) -> None:
     elif _move_media_status(post.id, status, 'processing', bump=1, counter='requeues',
                             requeued_at=utcnow().isoformat()):
         queue_probe(post.id)
+
+
+# renditions (W2.1b, ruling V3)
+
+def rendition_sides(media: dict) -> list[int]:
+    """The rendition sizes a video of `media`'s dimensions gets: each of RENDITION_SIDES below its short side."""
+    short = min(media.get('width') or 0, media.get('height') or 0)
+    return [side for side in RENDITION_SIDES if side < short]
+
+
+def wants_renditions(post) -> bool:
+    """A ready local video upload with no renditions recorded yet, and room for one."""
+    media = media_of(post) if post is not None else None
+    return bool(media is not None and post.is_local() and media.get('status') == 'ready'
+                and str(media.get('mime', '')).startswith('video/') and 'renditions' not in media
+                and all(type(media.get(side)) is int for side in ('width', 'height')) and rendition_sides(media))
+
+
+@celery.task
+def make_renditions(send_async, post_id):
+    session = get_task_session()
+    try:
+        with patch_db_session(session):
+            _make_renditions(post_id)
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def _make_renditions(post_id) -> None:
+    """Each size `rendition_sides` names, transcoded beside the source (into the bucket, with S3), then recorded under
+    the post's row lock. A size that fails is logged and dropped; none of it touches the post's status or its file."""
+    post = db.session.get(Post, post_id)
+    if not wants_renditions(post):
+        return
+    media = media_of(post)
+    sides, portrait = rendition_sides(media), media['height'] > media['width']
+    timeout_s = transcode_timeout(media.get('duration_s') if type(media.get('duration_s')) is int else 0)
+    local, key = media_local_path(post), None
+    if local is None and store_files_in_s3():
+        key = s3_key_from_url(post.url)
+    db.session.commit()   # no transaction held open through the transcodes
+    source = _rendition_source(post_id, local, key)
+    if source is None:
+        return
+    made = []   # (side, width, height, bytes, where): a local path, or with S3 the object key
+    try:
+        for side in sides:
+            out = rendition_name(local, side) if key is None else f'{TMP_DIRECTORY}/{gibberish(15)}_{side}p.mp4'
+            try:
+                transcode(source, out, side, portrait, timeout_s)
+                width, height = _dimensions(out)
+                size, where = os.path.getsize(out), out
+                if key is not None:
+                    where = rendition_name(key, side)
+                    upload_file_to_s3(out, where, 'video/mp4')
+                    _remove(out)
+            except (MediaToolError, *_STORE_ERRORS) as error:
+                current_app.logger.warning(f'make_renditions: post {post_id}: no {side}p: {error!r}')
+                _remove(out)
+                continue
+            made.append((side, width, height, size, where))
+    finally:
+        if key is not None:
+            _remove(source)
+    _record_renditions(post_id, made, key is not None)
+
+
+def _rendition_source(post_id, local, key) -> str | None:
+    """The source file to transcode: the stored file, or with S3 a copy of the object in TMP_DIRECTORY."""
+    if key is None:
+        if local is None or not os.path.isfile(local):
+            current_app.logger.warning(f'make_renditions: post {post_id}: the source file is missing')
+            return None
+        return local
+    ensure_directory_exists(TMP_DIRECTORY)
+    copy = f'{TMP_DIRECTORY}/{gibberish(15)}{os.path.splitext(key)[1]}'
+    try:
+        download_from_s3(key, copy)
+    except _STORE_ERRORS as error:
+        current_app.logger.warning(f'make_renditions: post {post_id}: the source could not be read: {error!r}')
+        _remove(copy)
+        return None
+    return copy
+
+
+def _dimensions(path) -> tuple[int, int]:
+    video = next((stream for stream in run_ffprobe(path).get('streams', [])
+                  if isinstance(stream, dict) and stream.get('codec_type') == 'video'), {})
+    width, height = video.get('width'), video.get('height')
+    if not (type(width) is int and type(height) is int and width > 0 and height > 0):
+        raise MediaToolError('the rendition has no dimensions')
+    return width, height
+
+
+def _record_renditions(post_id, made, in_s3: bool) -> None:
+    """Record `made` in the media record, under the post's row lock. A post purged meanwhile, or whose upload is no
+    longer ready, keeps nothing: its renditions are removed here, since nothing will name them. One another run
+    recorded first keeps that run's record; the files are the same names, so they stay."""
+    locked = db.session.execute(select(Post.id).where(Post.id == post_id).with_for_update()).first()
+    post = db.session.get(Post, post_id) if locked is not None else None
+    if post is not None:
+        db.session.refresh(post)
+    media = media_of(post) if post is not None else None
+    if media is not None and 'renditions' in media:
+        db.session.commit()
+        return
+    if media is None or media.get('status') != 'ready':
+        db.session.commit()
+        _discard_renditions(post_id, made, in_s3)
+        return
+    with_media(post, renditions=[{'side': side, 'width': width, 'height': height, 'bytes': size}
+                                 for side, width, height, size, _ in made])
+    db.session.commit()
+    if made and post.status == POST_STATUS_PUBLISHED and uses_peertube_video(post):
+        task_selector('edit_post', post_id=post.id)   # peers that have the Video learn its new files
+
+
+def _discard_renditions(post_id, made, in_s3: bool) -> None:
+    current_app.logger.warning(f'make_renditions: post {post_id}: gone or no longer ready; its renditions go')
+    if in_s3:
+        if made:
+            delete_from_s3([where for *_, where in made])
+        return
+    for *_, where in made:
+        _remove(where)

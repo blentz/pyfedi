@@ -14,7 +14,7 @@ from app import db
 from app.constants import POST_TYPE_VIDEO
 from app.mastodon.entities import timestamp
 from app.mastodon.timelines import readable
-from app.models import Community, CommunityMember, Language, Post, User, media_of
+from app.models import Community, CommunityMember, Language, Post, User, media_of, rendition_name, renditions_of
 from app.storefront import current_storefront, domain_base_url, storefront_link
 
 API_LEVEL = '7.2.0'   # D4: the PeerTube API level served, which PeerTube's own app requires; not PieFed's version
@@ -205,21 +205,25 @@ def _images(post: Post) -> dict:
     return {key: value for key, value in found.items() if value}
 
 
+def _file(url: str, label_id: int, label: str, size: int, fps: dict) -> dict:
+    """One progressive file, from the domain asked: the stored URL names the uploader's domain, and JSON gets no link
+    rewrite, so an onion's viewer would otherwise be sent to the clearnet. `torrentUrl` is always there."""
+    url = storefront_link(url)
+    return {'fileUrl': url, 'fileDownloadUrl': url, 'torrentUrl': '', 'magnetUri': '',
+            'resolution': {'id': label_id, 'label': label}, 'size': size, **fps}
+
+
 def files(post: Post) -> list:
-    """The progressive files (§3.1): an upload's stored file, from the domain asked (its URL names the uploader's, and
-    JSON gets no link rewrite: an onion's viewer would be sent to the clearnet), or a remote file's URL. `torrentUrl`
-    is always there."""
-    url = storefront_link(post.url)
-    common = {'fileUrl': url, 'fileDownloadUrl': url, 'torrentUrl': '', 'magnetUri': ''}
-    media = media_of(post)
+    """The progressive files (§3.1): an upload's stored file then its renditions (W2.1b), or a remote file's URL."""
     if not _is_upload(post):
-        return [{**common, 'resolution': {'id': 0, 'label': 'Original'}, 'size': 0}]
+        return [_file(post.url, 0, 'Original', 0, {})]
+    media = media_of(post)
     height = media.get('height') if type(media.get('height')) is int else 0
-    entry = {**common, 'resolution': {'id': height, 'label': f'{height}p' if height else 'Original'},
-             'size': media.get('bytes') if type(media.get('bytes')) is int else 0}
-    if type(media.get('fps')) is int:
-        entry['fps'] = media['fps']
-    return [entry]
+    size = media.get('bytes') if type(media.get('bytes')) is int else 0
+    fps = {'fps': media['fps']} if type(media.get('fps')) is int else {}
+    return [_file(post.url, height, f'{height}p' if height else 'Original', size, fps)] + [
+        _file(rendition_name(post.url, copy['side']), copy['side'], f"{copy['side']}p", copy['bytes'], fps)
+        for copy in renditions_of(post)]
 
 
 def video(post: Post, whole: bool = False) -> dict:

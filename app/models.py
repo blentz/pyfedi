@@ -627,6 +627,29 @@ def media_of(post) -> dict | None:
     return media if isinstance(media, dict) else None
 
 
+# W2.1b (V3): the smaller copies of a video upload, by their short side, largest first
+RENDITION_SIDES = (480, 360)
+
+
+def rendition_name(source: str, side: int) -> str:
+    """The rendition at `side` of the upload at `source` (a path, a URL or an S3 key): beside it, `<name>_<side>p.mp4`.
+    Derived, never stored, so a removal never trusts a name from the record."""
+    return f'{os.path.splitext(source)[0]}_{side}p.mp4'
+
+
+def renditions_of(post) -> list[dict]:
+    """The renditions recorded for `post`'s upload, largest first: only well-formed entries, at most one per side."""
+    found = (media_of(post) or {}).get('renditions')
+    entries = [entry for entry in found if isinstance(entry, dict)] if isinstance(found, list) else []
+    by_side = {}
+    for entry in entries:
+        side = entry.get('side')
+        if side in RENDITION_SIDES and type(side) is int and all(
+                type(entry.get(key)) is int and entry[key] > 0 for key in ('width', 'height', 'bytes')):
+            by_side[side] = {'side': side, 'width': entry['width'], 'height': entry['height'], 'bytes': entry['bytes']}
+    return [by_side[side] for side in RENDITION_SIDES if side in by_side]
+
+
 def media_local_path(post) -> str | None:
     """The local file behind `post.url`, when it is media this server stored for this post, else None.
 
@@ -4083,8 +4106,9 @@ class Post(db.Model):
         owns_media = media_of(self) is not None and self.is_local()
         local_media = media_local_path(self)   # only the strict stored name is ever unlinked
         if local_media:
-            with suppress(FileNotFoundError):
-                os.unlink(local_media)
+            for path in [local_media] + [rendition_name(local_media, side) for side in RENDITION_SIDES]:
+                with suppress(FileNotFoundError):
+                    os.unlink(path)
         if (owns_media or self.type == POST_TYPE_VIDEO) and _store_files_in_s3() and self.url:
             # D1343. This passed `self.url` -- the whole `https://...` -- as an S3
             # KEY, so `delete_objects` was asked for an object that cannot exist
@@ -4097,10 +4121,12 @@ class Post(db.Model):
             s3_key = s3_key_from_url(self.url)
             if s3_key and (owns_media or not s3_object_is_referenced_elsewhere(self.url, post_id=self.id)):
                 from app.shared.tasks.maintenance import delete_from_s3  # cycle: app.shared.tasks.maintenance imports from this module
+                # an upload's renditions sit beside it in the bucket (W2.1b); a mirrored video has none of ours
+                keys = [s3_key] + ([rendition_name(s3_key, side) for side in RENDITION_SIDES] if owns_media else [])
                 if current_app.debug:
-                    delete_from_s3([s3_key])
+                    delete_from_s3(keys)
                 else:
-                    delete_from_s3.delay([s3_key])
+                    delete_from_s3.delay(keys)
 
         for reply in self.replies:
             if reply.image_id and reply.image:

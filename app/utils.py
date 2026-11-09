@@ -6715,6 +6715,22 @@ def read_from_s3(key: str) -> bytes:
         s3.close()
 
 
+def download_from_s3(key: str, local_path: str) -> None:
+    """The object at `key` in our bucket, written to `local_path`, through the client read_from_s3 uses: streamed,
+    never held in memory whole, so a video fits."""
+    s3 = boto3.session.Session().client(
+        service_name='s3',
+        region_name=current_app.config['S3_REGION'],
+        endpoint_url=current_app.config['S3_ENDPOINT'],
+        aws_access_key_id=current_app.config['S3_ACCESS_KEY'],
+        aws_secret_access_key=current_app.config['S3_ACCESS_SECRET'],
+    )
+    try:
+        s3.download_file(current_app.config['S3_BUCKET'], key, local_path)
+    finally:
+        s3.close()
+
+
 def move_file_to_s3(file_id, s3):
     if store_files_in_s3():
         file: File = db.session.get(File, file_id)

@@ -4,7 +4,7 @@ since one bad field rejects the whole object."""
 
 from app.constants import COMMUNITY_KIND_VIDEO_CHANNEL, POST_TYPE_VIDEO
 from app.federation_urls import object_base
-from app.models import media_of
+from app.models import media_of, rendition_name, renditions_of
 from app.utils import ap_datetime, guess_mime_type
 from app.visibility import is_open
 
@@ -54,6 +54,18 @@ def _file_link(post, media) -> dict:
     return link
 
 
+def _rendition_links(post, media) -> list:
+    """One Link per rendition (W2.1b), as PeerTube lists each resolution of a file."""
+    links = []
+    for copy in renditions_of(post):
+        link = {'type': 'Link', 'mediaType': 'video/mp4', 'href': rendition_name(post.url, copy['side']),
+                'height': copy['height'], 'width': copy['width'], 'size': copy['bytes']}
+        if _positive_int(media.get('fps')):
+            link['fps'] = media['fps']
+        links.append(link)
+    return links
+
+
 def _hashtags(post) -> list:
     return [tag for tag in post.tags_for_activitypub()
             if tag.get('type') == 'Hashtag' and TAG_MIN <= len(tag['name'].lstrip('#')) <= TAG_MAX]
@@ -75,7 +87,8 @@ def peertube_video(post) -> dict:
         'views': 0,
         'likes': f'{base}/likes',
         'dislikes': f'{base}/dislikes',
-        'url': [_file_link(post, media), {'type': 'Link', 'mediaType': 'text/html', 'href': post.public_url()}],
+        'url': [_file_link(post, media), *_rendition_links(post, media),
+                {'type': 'Link', 'mediaType': 'text/html', 'href': post.public_url()}],
         'icon': [{'type': 'Image', 'url': post.image.source_url, 'mediaType': guess_mime_type(post.image.source_url),
                   'width': media['thumbnail_width'], 'height': media['thumbnail_height']}],
         'attributedTo': [{'type': 'Person', 'id': post.author.public_url()},
