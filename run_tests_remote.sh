@@ -65,6 +65,33 @@ if [ -n "$new" ] || [ -n "$postgres_crash" ] || \
     [ -n "$new" ] && echo "$new" >&2
     [ -n "$postgres_crash" ] && echo "$postgres_crash" >&2
     [ "$status" -ne 0 ] || status=70
+    # The tests that failed or errored in it, rerun once, alone (owner, 2026-11-09: the remote host's crashes are its own
+    # to follow up; a crashed run's tests may be retried). The crash is still reported above and kept in $diagnostics;
+    # coverage is appended to the run's, so the gates read the whole suite.
+    mapfile -t failed < <(grep -E '^(FAILED|ERROR) tests/' "$diagnostics/pytest.log" | sed -E 's/^(FAILED|ERROR) //; s/ - .*$//' \
+                          | sort -u)
+    if [ "${#failed[@]}" -gt 0 ]; then
+        retry_args=()
+        for argument in "$@"; do
+            case "$argument" in tests|tests/|tests/*) ;; *) retry_args+=("$argument") ;; esac
+        done
+        for argument in "$@"; do
+            case "$argument" in --cov|--cov=*) retry_args+=(--cov-append); break ;; esac
+        done
+        echo "run_tests_remote.sh: rerunning the ${#failed[@]} test(s) that failed or errored in the crash, once, alone." >&2
+        set +e
+        CONTAINER_CONNECTION="$REMOTE_PODMAN" PYTEST_WORKERS=1 ./run_tests.sh "${retry_args[@]}" "${failed[@]}" 2>&1 \
+            | tee "$diagnostics/retry.log"
+        retry_status=${PIPESTATUS[0]}
+        set -e
+        if [ "$retry_status" -eq 0 ]; then
+            echo "run_tests_remote.sh: the rerun passed. The crash stays on record in $diagnostics." >&2
+            status=0
+        else
+            echo "run_tests_remote.sh: the rerun failed too: these are not the crash's alone (see $diagnostics/retry.log)." >&2
+            status=$retry_status
+        fi
+    fi
 elif [ "$status" -eq 0 ]; then
     rm -rf "$diagnostics"
 fi

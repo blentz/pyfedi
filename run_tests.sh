@@ -170,12 +170,29 @@ names_a_subset() {
 # silently starts a replacement, and a run whose workers kept dying reported
 # "5 failed, 7073 passed" -- 4,800 tests short -- followed by an INTERNALERROR
 # from its own scheduler. A short count is not a pass, and this makes it say so.
+#
+# A whole-suite parallel run has two phases. The tests marked `serial` (pytest.ini) do work the whole Postgres server
+# feels -- a concurrent index build waits on every transaction of the server and loads it hard -- and three full runs
+# lost a backend of ANOTHER worker about ten seconds after one (2026-11-08/09, .crash-diagnostics). So the parallel
+# phase leaves them out, and they run alone afterwards, their coverage appended to the first phase's (--cov-append),
+# so a --cov run still writes one report of the whole suite. The exit status is the worse of the two.
+status=0
 if [ "$WORKERS" -gt 1 ] && ! names_a_subset "$@"; then
-    set -- -n "$WORKERS" --dist loadgroup --max-worker-restart 0 "$@"
+    $COMPOSE exec -T test-runner pytest -n "$WORKERS" --dist loadgroup --max-worker-restart 0 -m 'not serial' "$@" \
+        || status=$?
+    serial_args=(-m serial)
+    for argument in "$@"; do
+        case "$argument" in --cov|--cov=*) serial_args+=(--cov-append); break ;; esac
+    done
+    echo "Running the serial tests alone..."
+    serial_status=0
+    $COMPOSE exec -T test-runner pytest "${serial_args[@]}" "$@" || serial_status=$?
+    [ "$serial_status" -eq 5 ] && serial_status=0   # none marked serial: nothing to run is not a failure
+    [ "$serial_status" -gt "$status" ] && status=$serial_status
+    exit "$status"
 fi
 
 # Not `exec`: the shell has to survive pytest so the EXIT trap removes the stack.
 # pytest's exit status is still the script's.
-status=0
 $COMPOSE exec -T test-runner pytest "$@" || status=$?
 exit "$status"

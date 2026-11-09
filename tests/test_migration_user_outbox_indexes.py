@@ -14,6 +14,10 @@ from sqlalchemy.exc import IntegrityError
 
 from app import db
 
+# A concurrent index build waits on every transaction of the server and loads it hard: run alone, after the parallel
+# phase (run_tests.sh). Three full runs lost a Postgres backend of another worker ~10 s after this test's build.
+pytestmark = pytest.mark.serial
+
 MIGRATION = Path(__file__).resolve().parent.parent / 'migrations' / 'versions' / 'f4b8d2a6c1e7_user_outbox_indexes.py'
 INDEXES = {'post': 'ix_post_user_posted', 'post_reply': 'ix_post_reply_user_posted'}
 
