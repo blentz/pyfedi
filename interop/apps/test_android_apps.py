@@ -277,7 +277,8 @@ class MastodonAndroid:
         field.wait(timeout=30)
         field.click()
         d.ui.send_keys(' ' + text)   # after the @dora it holds already
-        d.hide_keyboard()
+        # Publish is in the composer's top bar, above the keyboard: a back press for the keyboard could close the
+        # composer instead while it is still animating
         d.tap('Publish', exact=True)
         find_comment(self.world['alice'], self.world['seed']['id'], text, timeout=60)
         return f'replied {text!r} to the seeded post; PieFed has it as a comment'

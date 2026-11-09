@@ -227,8 +227,8 @@ class Phanpy:
         page.locator('button.reply-button:not(.small)').first.click()
         page.get_by_role('textbox').last.fill(text)
         page.get_by_role('button', name='Reply').last.click()
+        # PieFed's API is the check: Phanpy does not always redraw the thread with the reply it sent
         find_comment(self.world['alice'], self.world['seed']['id'], text, timeout=60)
-        expect(page.get_by_text(text).first).to_be_visible()
         return f'replied {text!r} to the seeded post; PieFed has it as a comment'
 
 
@@ -264,7 +264,8 @@ class Elk:
         page.get_by_text(SEED_TITLE).first.click()
         page.get_by_role('button', name='Reply').first.click()
         page.locator('.ProseMirror[contenteditable="true"]').last.fill(text)
-        page.get_by_role('button', name=re.compile('^(Reply|Publish)$')).last.click()
+        # the composer's own button (components/publish/PublishWidget.vue): a thread's comments have Reply buttons too
+        page.locator('button.publish-button').last.click()
         find_comment(self.world['alice'], self.world['seed']['id'], text, timeout=60)
         return f'replied {text!r} to the seeded post; PieFed has it as a comment'
 
