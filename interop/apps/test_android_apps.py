@@ -275,8 +275,9 @@ class MastodonAndroid:
         d.tap('Reply to', timeout=30)   # the thread's reply bar ("Reply to dora"), which opens the composer
         field = d.ui(className='android.widget.EditText', instance=0)
         field.wait(timeout=30)
-        field.click()
-        d.ui.send_keys(' ' + text)   # after the @dora it holds already
+        # set, not typed: typing after the @dora it holds lost its keys, and the bare mention it then posted was a
+        # duplicate the next time
+        d.type_into(field, text)
         # Publish is in the composer's top bar, above the keyboard: a back press for the keyboard could close the
         # composer instead while it is still animating
         d.tap('Publish', exact=True)
