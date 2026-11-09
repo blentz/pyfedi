@@ -11,13 +11,14 @@ import struct
 import time
 from urllib.parse import urlsplit
 
-import httpx
 import jwt
 from cryptography.hazmat.primitives import hashes, hmac, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
 
+import app as app_pkg   # its pinned outbound client (app/pinned_http.py)
+from app.pinned_http import fetch_deadline
 from app.storefront import domain_for_host
 from app.utils import get_setting, is_invalid_get_request_uri, set_setting
 
@@ -114,9 +115,11 @@ def send(endpoint: str, p256dh: str, auth: str, payload: bytes, subject: str) ->
     not sent to, answered 410 so the caller forgets it."""
     if not acceptable_endpoint(endpoint):
         return 410
-    response = httpx.post(endpoint, content=encrypt(payload, p256dh, auth), timeout=TIMEOUT_SECONDS,
-                          follow_redirects=False,
-                          headers={'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream',
-                                   'TTL': str(TTL_SECONDS), 'Urgency': 'normal',
-                                   'Authorization': vapid_header(endpoint, subject)})
+    # the pinned client (R162): it connects to the address the guard checked, so a name that answers differently the
+    # second time (DNS rebinding) reaches nothing the check refused; and the whole exchange is held to a deadline
+    with fetch_deadline(TIMEOUT_SECONDS):
+        response = app_pkg.httpx_client.post(
+            endpoint, content=encrypt(payload, p256dh, auth), timeout=TIMEOUT_SECONDS, follow_redirects=False,
+            headers={'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream',
+                     'TTL': str(TTL_SECONDS), 'Urgency': 'normal', 'Authorization': vapid_header(endpoint, subject)})
     return response.status_code
