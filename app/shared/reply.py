@@ -240,6 +240,8 @@ def make_reply(input, post, parent_id, src, auth=None):
     reply = PostReply.new(user, post, in_reply_to=parent_reply, body=piefed_markdown_to_lemmy_markdown(content, base),
                           body_html=markdown_to_html(content, link_base=base), notify_author=notify_author,
                           language_id=language_id, distinguished=distinguished, answer=answer)
+    if src == SRC_API and input.get('content_warning'):   # before it federates (Mastodon's spoiler_text, plan W1.3)
+        reply.content_warning = input['content_warning'].strip() or None
 
     user.language_id = language_id
     apply_audit(user, 'ip_address', audit_ip(user, ip_address()))
@@ -281,6 +283,8 @@ def edit_reply(input, reply, post, src, auth=None, in_line=False):
     reply.body = piefed_markdown_to_lemmy_markdown(content, object_base(reply))
     reply.body_html = markdown_to_html(content, link_base=object_base(reply))
     reply.notify_author = notify_author
+    if src == SRC_API and 'content_warning' in input:   # an API that has one (Mastodon's spoiler_text, plan W1.3)
+        reply.content_warning = (input['content_warning'] or '').strip() or None
     reply.community.last_active = utcnow()
     reply.edited_at = utcnow()
     reply.language_id = language_id

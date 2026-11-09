@@ -734,6 +734,8 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         post.sticky = False if src == SRC_API else input.sticky.data
     post.nsfw = nsfw or post.community.nsfw
     post.nsfl = False if src == SRC_API else input.nsfl.data
+    if src == SRC_API and 'content_warning' in input:   # an API that has one (Mastodon's spoiler_text, plan W1.3)
+        post.content_warning = (input['content_warning'] or '').strip() or None
     post.ai_generated = ai_generated
     post.notify_author = notify_author
     post.language_id = language_id
