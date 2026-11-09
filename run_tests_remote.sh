@@ -65,11 +65,29 @@ if [ -n "$new" ] || [ -n "$postgres_crash" ] || \
     [ -n "$new" ] && echo "$new" >&2
     [ -n "$postgres_crash" ] && echo "$postgres_crash" >&2
     [ "$status" -ne 0 ] || status=70
-    # The tests that failed or errored in it, rerun once, alone (owner, 2026-11-09: the remote host's crashes are its own
-    # to follow up; a crashed run's tests may be retried). The crash is still reported above and kept in $diagnostics;
-    # coverage is appended to the run's, so the gates read the whole suite.
-    mapfile -t failed < <(grep -E '^(FAILED|ERROR) tests/' "$diagnostics/pytest.log" | sed -E 's/^(FAILED|ERROR) //; s/ - .*$//' \
-                          | sort -u)
+    if grep -qE 'worker .* crashed and worker restarting disabled' "$diagnostics/pytest.log"; then
+        # A crashed worker stops the whole parallel phase (--max-worker-restart 0): the tests it never reached are not
+        # listed as failed, so the whole run goes again, once. A crash in that run too fails it.
+        echo "run_tests_remote.sh: a test worker crashed, which stopped the run: rerunning all of it once." >&2
+        set +e
+        CONTAINER_CONNECTION="$REMOTE_PODMAN" TEST_DIAGNOSTICS_DIR="$diagnostics" ./run_tests.sh "$@" 2>&1 \
+            | tee "$diagnostics/rerun.log"
+        status=${PIPESTATUS[0]}
+        set -e
+        if grep -qE 'Fatal Python error|worker .* crashed' "$diagnostics/rerun.log"; then
+            echo "run_tests_remote.sh: the rerun crashed too (see $diagnostics/rerun.log)." >&2
+            [ "$status" -ne 0 ] || status=70
+        elif [ "$status" -eq 0 ]; then
+            echo "run_tests_remote.sh: the rerun passed. The crash stays on record in $diagnostics." >&2
+        fi
+        failed=()
+    else
+        # The tests that failed or errored in it, rerun once, alone (owner, 2026-11-09: the remote host's crashes are
+        # its own to follow up; a crashed run's tests may be retried). The crash is still reported above and kept in
+        # $diagnostics; coverage is appended to the run's, so the gates read the whole suite.
+        mapfile -t failed < <(grep -E '^(FAILED|ERROR) tests/' "$diagnostics/pytest.log" \
+                              | sed -E 's/^(FAILED|ERROR) //; s/ - .*$//' | sort -u)
+    fi
     if [ "${#failed[@]}" -gt 0 ]; then
         retry_args=()
         for argument in "$@"; do

@@ -58,3 +58,15 @@ def test_a_crashed_run_reruns_its_failed_tests_once_alone():
     assert crash < retry
     assert "grep -E '^(FAILED|ERROR) tests/'" in script and 'retry_args+=(--cov-append)' in script
     assert 'The crash stays on record' in script   # retried, never hidden
+
+
+def test_a_crashed_worker_reruns_the_whole_run_never_only_what_it_listed():
+    """`--max-worker-restart 0`: one crashed worker stops the whole parallel phase, so the tests it never reached are
+    not listed as failed. Rerunning only the listed ones passed a run in which 105 of 32 000 tests ran (2026-11-09)."""
+    script = _script('run_tests_remote.sh')
+    worker = script.index('worker restarting disabled')
+    listed = script.index("grep -E '^(FAILED|ERROR) tests/'")
+    assert worker < listed   # checked first: the listed failures are not the run's
+    rerun = script[worker:listed]
+    assert './run_tests.sh "$@"' in rerun and 'rerun.log' in rerun
+    assert 'status=70' in rerun   # a crash in the rerun too fails the run
