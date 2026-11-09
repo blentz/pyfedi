@@ -138,6 +138,45 @@ def test_the_transcode_time_limit_grows_with_the_video_and_is_capped():
     assert ffmpeg.transcode_timeout(10 ** 9) == ffmpeg.TRANSCODE_MAX_S
 
 
+def test_one_run_shares_one_time_budget_whatever_duration_the_file_claims(env, monkeypatch, caplog):
+    """The duration is the uploader's container's claim: a run's sizes share TRANSCODE_MAX_S, and a size that would
+    start past it is skipped."""
+    clock, seen = [1000.0], []
+
+    def slow(path, out_path, side, portrait, timeout_s):
+        seen.append((side, timeout_s))
+        clock[0] += timeout_s   # used its whole limit, and failed
+        raise MediaToolError('ffmpeg timed out')
+    post = ready(env)
+    media_tasks.with_media(post, duration_s=10 ** 6)
+    db.session.commit()
+    monkeypatch.setattr(media_tasks, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(media_tasks, 'transcode', slow)
+    render(post)
+    assert seen == [(480, ffmpeg.TRANSCODE_MAX_S)]   # the 360p copy had no time left
+    assert 'no time left' in caplog.text
+
+
+def test_a_size_gets_only_what_is_left_of_the_runs_budget(env, monkeypatch):
+    clock, seen = [0.0], []
+
+    def partly(path, out_path, side, portrait, timeout_s):
+        seen.append((side, timeout_s))
+        clock[0] += ffmpeg.TRANSCODE_MAX_S - 100
+        raise MediaToolError('ffmpeg failed')
+    post = ready(env)
+    media_tasks.with_media(post, duration_s=10 ** 6)
+    db.session.commit()
+    monkeypatch.setattr(media_tasks, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(media_tasks, 'transcode', partly)
+    render(post)
+    assert seen == [(480, ffmpeg.TRANSCODE_MAX_S), (360, 100)]
+
+
+def test_a_rendition_never_has_more_than_60_frames_a_second():
+    assert ffmpeg._TRANSCODE_ENCODE[ffmpeg._TRANSCODE_ENCODE.index('-fpsmax') + 1] == '60'
+
+
 @pytest.mark.parametrize('case', ['missing', 'not ready', 'audio', 'remote', 'small', 'source gone'])
 def test_a_post_with_nothing_to_render_is_left_alone(env, case):
     if case == 'missing':
@@ -228,8 +267,10 @@ def test_with_s3_the_renditions_go_to_the_bucket_beside_the_source(env, s3):
     assert files_on_disk() == []   # the downloaded source and the copies are gone from disk
 
 
-def test_with_s3_purging_the_post_deletes_its_renditions_from_the_bucket(env, s3):
+@pytest.mark.parametrize('debug', [False, True], ids=['queued', 'inline'])   # debug deletes inline, else via the queue
+def test_with_s3_purging_the_post_deletes_its_renditions_from_the_bucket(env, s3, monkeypatch, debug):
     post = render(ready(env))
+    monkeypatch.setattr(env.app, 'debug', debug)
     key = post.url.removeprefix('https://cdn.probeland.test/')
     post.delete_dependencies()
     db.session.commit()

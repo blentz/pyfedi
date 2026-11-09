@@ -169,7 +169,9 @@ The largest entry comes first, as PeerTube orders them.
      or whose upload stopped being ready, while it transcoded keeps nothing: the task removes its own copies. Local
      uploads are never expired, so the expiry sweep has nothing to do with them.
    - **Failure:** a failed copy is logged and dropped. It never fails or delays the post, which publishes on the
-     source as before. A transcode's time limit grows with the video (120 s plus 4 s per second, at most 4 h).
+     source as before. A copy's time limit grows with the video (120 s plus 4 s per second), but all of one upload's
+     copies share one hour: the duration is the uploader's file's claim, so it can earn no more than that. A size that
+     would start past the hour is skipped. At most 60 frames a second are encoded.
    - **Where they appear:** `files[]` lists them, and so does the federated PeerTube Video's `url[]` (spec 2026-10-14
      §4.3). A published Video gets an Update once its copies are recorded, so peers that have it learn them.
    - Proved by tests of the pipeline and by NewPipe's resolution menu in the harness.

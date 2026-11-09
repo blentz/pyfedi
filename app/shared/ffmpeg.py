@@ -1,5 +1,5 @@
 """ffprobe and ffmpeg in a sandbox (spec §5.2, A13.3): local files only, 60 s, 1 GiB of address space. A transcode
-(W2.1b) gets a time limit that grows with the video's length instead."""
+(W2.1b) gets a time limit that grows with the video's length instead, within one budget per upload."""
 import json
 import os
 import resource
@@ -17,11 +17,14 @@ _INPUT_LIMITS = ['-protocol_whitelist', 'file',
 # 10). One frame needs no more.
 _DECODE_LIMITS = ['-threads', '1']
 _ENCODE_LIMITS = ['-threads', '1']
-# A rendition (W2.1b): two encoder threads at 480p or less stay well inside ADDRESS_SPACE_BYTES; the time it may take
-# is TRANSCODE_BASE_S plus TRANSCODE_PER_SECOND per second of video, at most TRANSCODE_MAX_S
-TRANSCODE_BASE_S, TRANSCODE_PER_SECOND, TRANSCODE_MAX_S = 120, 4, 4 * 60 * 60
+# A rendition (W2.1b): two encoder threads at 480p or less stay well inside ADDRESS_SPACE_BYTES. One may take
+# TRANSCODE_BASE_S plus TRANSCODE_PER_SECOND per second of video, and all of one upload's together TRANSCODE_MAX_S:
+# the duration is the uploader's container's claim, so it can only ever earn the cap. At most 60 frames a second are
+# encoded, whatever rate the file claims.
+TRANSCODE_BASE_S, TRANSCODE_PER_SECOND, TRANSCODE_MAX_S = 120, 4, 60 * 60
 _TRANSCODE_ENCODE = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '26', '-profile:v', 'main', '-pix_fmt', 'yuv420p',
-                     '-c:a', 'aac', '-b:a', '128k', '-ac', '2', '-movflags', '+faststart', '-threads', '2', '-f', 'mp4']
+                     '-c:a', 'aac', '-b:a', '128k', '-ac', '2', '-movflags', '+faststart', '-fpsmax', '60', '-threads', '2',
+                     '-f', 'mp4']
 
 
 class MediaToolError(Exception):

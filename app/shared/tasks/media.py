@@ -5,6 +5,7 @@ import math
 import os
 from contextlib import suppress
 from datetime import datetime, timedelta
+from time import monotonic
 
 from boto3.exceptions import Boto3Error
 from botocore.exceptions import BotoCoreError, ClientError
@@ -21,7 +22,8 @@ from app.constants import (MEDIA_KIND_AUDIO, MEDIA_KIND_VIDEO, NOTIF_DEFAULT, PO
 from app.activitypub.serializers.peertube import uses_peertube_video
 from app.models import (RENDITION_SIDES, CommunityMember, File, Notification, Post, federation_base, rendition_name,
                         s3_key_from_url, served_path, utcnow)
-from app.shared.ffmpeg import MediaToolError, extract_cover, extract_frame, run_ffprobe, transcode, transcode_timeout
+from app.shared.ffmpeg import (TRANSCODE_MAX_S, MediaToolError, extract_cover, extract_frame, run_ffprobe, transcode,
+                               transcode_timeout)
 from app.shared.post import feature_published_post
 from app.shared.media import MEDIA_DIRECTORY, can_upload_media, media_local_path, media_of, queue_probe, with_media
 from app.shared.tasks import task_selector
@@ -508,11 +510,16 @@ def _make_renditions(post_id) -> None:
     if source is None:
         return
     made = []   # (side, width, height, bytes, where): a local path, or with S3 the object key
+    deadline = monotonic() + TRANSCODE_MAX_S   # one budget for every size of this upload
     try:
         for side in sides:
+            left = int(deadline - monotonic())
+            if left <= 0:
+                current_app.logger.warning(f'make_renditions: post {post_id}: no time left for {side}p or smaller')
+                break
             out = rendition_name(local, side) if key is None else f'{TMP_DIRECTORY}/{gibberish(15)}_{side}p.mp4'
             try:
-                transcode(source, out, side, portrait, timeout_s)
+                transcode(source, out, side, portrait, min(timeout_s, left))
                 width, height = _dimensions(out)
                 size, where = os.path.getsize(out), out
                 if key is not None:
