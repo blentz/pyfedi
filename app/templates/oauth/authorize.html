@@ -15,8 +15,9 @@
                     {% endif -%}
                     <p>{{ _('Signed in as %(name)s. %(app)s will be able to:', name=user.user_name, app=app.name) }}</p>
                     <ul>
-                        {% for name, label in scopes -%}
-                            <li>{{ label }} <code>{{ name }}</code></li>
+                        {% for name, label, withheld in scopes -%}
+                            <li{% if withheld %} class="text-muted"{% endif %}>{{ label }} <code>{{ name }}</code>
+                                {%- if withheld %} &mdash; {{ _('not granted: only for people with the %(role)s role', role=admin_role or _('admin scopes')) }}{% endif %}</li>
                         {% endfor -%}
                     </ul>
                     <p class="small">{{ _('You can take this back at any time from your settings.') }}</p>

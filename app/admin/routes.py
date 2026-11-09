@@ -35,7 +35,7 @@ from app.activitypub.util import extract_domain_and_actor, cross_origin_delete_d
     hosted_inbox_hosts
 from app.admin.constants import ReportTypes
 from app.payments.offers import offers_on
-from app.admin.forms import FederationForm, SiteMiscForm, SiteProfileForm, EditCommunityForm, EditUserForm, \
+from app.admin.forms import ADMIN_SCOPE_ROLE_DEFAULT, FederationForm, SiteMiscForm, SiteProfileForm, EditCommunityForm, EditUserForm, \
     EditTopicForm, SendNewsletterForm, AddUserForm, PreLoadCommunitiesForm, ImportExportBannedListsForm, \
     EditInstanceForm, RemoteInstanceScanForm, MoveCommunityForm, EditBlockedImageForm, AddBlockedImageForm, \
     CmsPageForm, CreateOfflineInstanceForm, InstanceChooserForm, CloseInstanceForm, EmojiForm, TopicImportForm, \
@@ -54,6 +54,7 @@ from app.email import send_registration_approved_email
 from app.admin.roles_routes import user_grants_panel
 from app.admin.scope import creatable_domains, scope_for
 from app.roles import grant_role
+from app.oauth_server import admin_scopes
 from app.permissions import domains_for, holds_any_grant, may_act_on_user
 from app.federation_urls import object_base
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
@@ -685,6 +686,8 @@ def admin_misc():
         site = Site()
     form.default_theme.choices = select_choices(theme_list())
     form.language_id.choices = select_choices(languages_for_form(all_languages=True))
+    form.oauth_admin_role.choices = select_choices([(0, ADMIN_SCOPE_ROLE_DEFAULT)] +
+                                                   [(role.id, role.name) for role in Role.query.order_by(Role.name)])
     if close_form.close_submit.data and close_form.validate():
         app_pkg.redis_client.set('pause_federation', '666', ex=86400 * 365 * 10)
         site.registration_mode = 'Closed'
@@ -695,6 +698,8 @@ def admin_misc():
         db.session.commit()
         flash(_('Settings saved.'))
     elif form.validate_on_submit():
+        if form.oauth_admin_role.data:
+            set_setting(admin_scopes.SETTING, form.oauth_admin_role.data)
         site.enable_downvotes = form.enable_downvotes.data
         site.enable_gif_reply_rep_decrease = form.enable_gif_reply_rep_decrease.data
         site.enable_chan_image_filter = form.enable_chan_image_filter.data
@@ -834,6 +839,8 @@ def admin_misc():
         form.read_posts_cutoff.data = get_setting('read_posts_cutoff', 180)
         form.ban_posts.data = get_setting('ban_posts', False)
         form.max_album_images.data = max_album_images()
+        role = admin_scopes.admin_role()
+        form.oauth_admin_role.data = role.id if role is not None else None
     return render_template('admin/misc.html', title=_('Misc settings'), form=form, close_form=close_form,
                            roles_with=roles_with('change instance settings'))
 

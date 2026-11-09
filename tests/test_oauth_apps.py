@@ -61,7 +61,7 @@ def test_no_scopes_means_read(client):
     {'client_name': 'A', 'redirect_uris': 'data:text/html,hi'},
     {'client_name': 'A', 'redirect_uris': 'https://a.example/cb#fragment'},
     {'client_name': 'A', 'redirect_uris': 'https:///no-host'},
-    {'client_name': 'A', 'redirect_uris': OOB, 'scopes': 'admin:read'},
+    {'client_name': 'A', 'redirect_uris': OOB, 'scopes': 'admin:everything'},
     {'client_name': 'A' * 256, 'redirect_uris': OOB},
     {'client_name': 'A', 'redirect_uris': OOB, 'website': 'https://' + 'a' * 1100 + '.example'},
 ], ids=['no-name', 'blank-name', 'no-redirect', 'empty-redirect', 'relative', 'javascript', 'data', 'fragment',

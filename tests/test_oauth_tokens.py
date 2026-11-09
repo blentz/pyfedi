@@ -52,7 +52,7 @@ def test_no_scope_means_read():
     assert parse_scope(None) == 'read'
 
 
-@pytest.mark.parametrize('scope', ['admin:read', 'read:everything', 'delete', 'read,write'])
+@pytest.mark.parametrize('scope', ['admin:everything', 'read:everything', 'delete', 'read,write'])
 def test_unknown_scopes_are_refused(scope):
     with pytest.raises(ValueError):
         parse_scope(scope)

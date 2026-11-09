@@ -14,7 +14,7 @@ from werkzeug.datastructures import MultiDict
 from app import db
 from app.models import OAuthApp, User
 from app.oauth_scopes import covers
-from app.oauth_server import tokens
+from app.oauth_server import admin_scopes, tokens
 
 _SECRET_OR_PKCE = ['client_secret_basic', 'client_secret_post', 'none']
 
@@ -65,8 +65,10 @@ class AuthorizationCodeGrant(grants.AuthorizationCodeGrant):
         payload = request.payload.data
         # The redirect as asked for: blank when the app left it out, so its token request need not send one (RFC 6749
         # 4.1.3: required there only if it was in the authorization request)
-        tokens.store_code(code, request.client, request.user, request.payload.redirect_uri or '', request.scope,
-                          payload.get('code_challenge'), payload.get('code_challenge_method'))
+        # the admin scopes only for a person holding the role they map to (app.oauth_server.admin_scopes)
+        tokens.store_code(code, request.client, request.user, request.payload.redirect_uri or '',
+                          admin_scopes.granted(request.scope, request.user), payload.get('code_challenge'),
+                          payload.get('code_challenge_method'))
 
     def query_authorization_code(self, code, client):
         return tokens.code_for(client, code)

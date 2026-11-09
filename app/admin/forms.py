@@ -65,7 +65,16 @@ class DomainBrandingForm(FlaskForm):
     submit = SubmitField(_l('Save'))
 
 
+ADMIN_SCOPE_ROLE_DEFAULT = _l('The role named Staff (the default)')
+
+
 class SiteMiscForm(FlaskForm):
+    oauth_admin_role = SelectField(_l("Role for apps' admin scopes"), validators=[Optional()],
+                                   choices=select_choices([(0, ADMIN_SCOPE_ROLE_DEFAULT)]),
+                                   coerce=lambda value: int(value) if value not in (None, '') else None,
+                                   render_kw={'class': 'form-select'},
+                                   description=_l('A Mastodon app asking for admin scopes gets them only for people '
+                                                  'with this role, and no further than its permissions.'))
     enable_downvotes = BooleanField(_l('Enable downvotes'))
     enable_gif_reply_rep_decrease = BooleanField(_l('Ignore comments that are just a gif reaction'))
     enable_chan_image_filter = BooleanField(_l('Stop local 4chan screenshot posts and notify about remote ones'))

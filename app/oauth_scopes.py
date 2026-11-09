@@ -1,14 +1,19 @@
 """OAuth 2 scopes for client apps (plan W0.2): which exist, and which include which. No imports from the app, so
 app.models can use it."""
 
-# Mastodon's scopes, without admin (PieFed has no admin API for them). `push` is accepted for the apps that ask for
-# it at registration (Tusky asks for `read write follow push`) and grants nothing yet.
+# Mastodon's scopes. `push` lets an app subscribe to Web Push notifications (app.mastodon.push). The admin scopes
+# (owner ruling 2026-11-09) are granted only to a person holding the role an admin maps them to, and reach no further
+# than that role's permissions (app.oauth_server.admin_scopes).
 _READ = ('accounts', 'blocks', 'bookmarks', 'favourites', 'filters', 'follows', 'lists', 'mutes', 'notifications',
          'search', 'statuses')
 _WRITE = ('accounts', 'blocks', 'bookmarks', 'conversations', 'favourites', 'filters', 'follows', 'lists', 'media',
           'mutes', 'notifications', 'reports', 'statuses')
+_ADMIN = ('accounts', 'reports', 'domain_allows', 'domain_blocks', 'ip_blocks', 'email_domain_blocks',
+          'canonical_email_blocks')
+ADMIN_SCOPES = frozenset(('admin:read', 'admin:write') + tuple(f'admin:read:{name}' for name in _ADMIN)
+                         + tuple(f'admin:write:{name}' for name in _ADMIN))
 SCOPES = frozenset(('read', 'write', 'follow', 'push', 'profile')
-                   + tuple(f'read:{name}' for name in _READ) + tuple(f'write:{name}' for name in _WRITE))
+                   + tuple(f'read:{name}' for name in _READ) + tuple(f'write:{name}' for name in _WRITE)) | ADMIN_SCOPES
 
 
 def parse_scope(scope: str | None) -> str:
@@ -27,12 +32,17 @@ def parse_scope(scope: str | None) -> str:
 _FOLLOW = frozenset(('read:follows', 'write:follows', 'read:blocks', 'write:blocks', 'read:mutes', 'write:mutes'))
 
 
+def is_admin(scope: str) -> bool:
+    return scope in ADMIN_SCOPES
+
+
 def covers(granted: str, scope: str) -> bool:
-    """Whether the scopes `granted` include `scope`: itself, `read` or `write` for one of its parts, or `follow` for
-    the follow, block and mute parts."""
+    """Whether the scopes `granted` include `scope`: itself, a scope it is a part of (`read` for `read:accounts`,
+    `admin:read` for `admin:read:reports`), or `follow` for the follow, block and mute parts. `read` and `write` never
+    reach an admin scope, as Mastodon's do not."""
     names = set(granted.split())
     if scope in names:
         return True
-    if ':' in scope and scope.split(':')[0] in names:
+    if any(scope.startswith(name + ':') for name in names):
         return True
     return 'follow' in names and scope in _FOLLOW

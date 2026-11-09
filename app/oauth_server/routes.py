@@ -8,8 +8,8 @@ from flask_login import current_user
 
 from app import limiter
 from app.models import OAuthApp
-from app.oauth_scopes import SCOPES, parse_scope
-from app.oauth_server import bp, tokens
+from app.oauth_scopes import SCOPES, is_admin, parse_scope
+from app.oauth_server import admin_scopes, bp, tokens
 from app.oauth_server.server import server
 from app.storefront import current_storefront, domain_base_url
 from app.utils import login_required, render_template
@@ -109,6 +109,8 @@ SCOPE_LABELS = {
     'follow': _l('Follow, block and mute people and communities'),
     'push': _l('Receive notifications'),
     'profile': _l('See your profile'),
+    'admin:read': _l('Read moderation and admin data, as far as your role allows'),
+    'admin:write': _l('Moderate and administer, as far as your role allows'),
 }
 
 
@@ -154,8 +156,11 @@ def authorize():
             return response
         code = parse_qs(urlsplit(response.headers['Location']).query).get('code', [None])[0]
         return _page('oauth/oob.html', code=code, app=grant.client)
-    scopes = [(name, SCOPE_LABELS.get(name, name)) for name in grant.request.scope.split()]
-    return _page('oauth/authorize.html', app=grant.client, scopes=scopes, user=current_user)
+    withheld = not admin_scopes.may_hold(current_user)   # admin scopes asked by someone not holding their role
+    scopes = [(name, SCOPE_LABELS.get(name, name), withheld and is_admin(name)) for name in grant.request.scope.split()]
+    role = admin_scopes.admin_role()
+    return _page('oauth/authorize.html', app=grant.client, scopes=scopes, user=current_user,
+                 admin_role=role.name if role is not None else None)
 
 
 @bp.route('/oauth/token', methods=['POST'])
