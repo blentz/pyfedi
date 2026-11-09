@@ -9,21 +9,26 @@ Where a status goes (M4):
 Each runs through the shared create, edit and delete functions the alpha API and the web use, as the token's person
 (app.utils.Authorised). Mastodon's `spoiler_text` is the content warning, `sensitive` NSFW, `private` visibility
 followers-only (microblogs alone take it); `direct` has no PieFed form. A repeat with the same `Idempotency-Key` within
-an hour answers the status the first one made, as Mastodon's does (Tusky sends one with every status)."""
+an hour answers the status the first one made, as Mastodon's does (Tusky sends one with every status). `media_ids`
+(the person's own uploads, app.mastodon.media) make an image post (one) or a gallery (two to four), and go
+in a comment's body as pictures."""
 import re
 
-from flask import g, jsonify, request
+from flask import current_app, g, jsonify, request
 from sqlalchemy import func
 from werkzeug.exceptions import HTTPException
 
 from app import cache, db
 from app.activitypub.util import find_microblogging_community
-from app.constants import POST_TYPE_ARTICLE, SRC_API, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC
+from app.constants import POST_TYPE_ARTICLE, POST_TYPE_GALLERY, POST_TYPE_LINK, SRC_API, VISIBILITY_FOLLOWERS, \
+    VISIBILITY_PUBLIC
 from app.local_names import local_named
 from app.local_only import hidden_here
 from app.mastodon import bp
 from app.mastodon import ids
 from app.mastodon.ids import find_status
+from app.mastodon.instance import MAX_CHARACTERS, MAX_MEDIA_ATTACHMENTS   # what apps are told
+from app.mastodon.media import own_uploads
 from app.mastodon.statuses import Page
 from app.mastodon.timelines import readable
 from app.models import Community, Language, Post, PostReply
@@ -34,7 +39,6 @@ from app.storefront import domain_for_host
 from app.utils import Authorised, html_to_text, is_local_microblogs, markdown_to_html, microblog_content_to_title, \
     site_language_id
 
-MAX_CHARACTERS = 5000   # what /api/v2/instance tells apps (app.mastodon.instance)
 TITLE_MAX = 255
 IDEMPOTENCY_SECONDS = 3600
 # a mention of a community, as a Mastodon user writes one: @name@host, or Lemmy's !name@host
@@ -124,16 +128,42 @@ def _guarded(write):
         return jsonify({'error': str(refused)}), refused.status
     except HTTPException as refused:
         return jsonify({'error': refused.description or refused.name}), refused.code
-    except Exception as refused:   # the shared functions refuse with a bare Exception and its reason
+    except Exception as failed:
         db.session.rollback()
-        return jsonify({'error': str(refused) or 'Validation failed'}), 422
+        if type(failed) is Exception:   # a shared function's refusal: a bare Exception carrying its reason
+            return jsonify({'error': str(failed) or 'Validation failed'}), 422
+        # anything else is a fault, as the alpha API's handler has it: logged here, its text never sent to the app
+        current_app.logger.exception('mastodon status write failed')
+        return jsonify({'error': 'Something went wrong'}), 500
+
+
+def _media(fields: dict) -> list:
+    """The viewer's own uploads `media_ids` names, at most MAX_MEDIA_ATTACHMENTS; an id of anyone else's, or none at all, refused."""
+    raw = fields.get('media_ids') or []
+    if not isinstance(raw, list):
+        raise _Refused('Validation failed: media_ids is not a list')
+    if len(raw) > MAX_MEDIA_ATTACHMENTS:
+        raise _Refused(f'Validation failed: at most {MAX_MEDIA_ATTACHMENTS} attachments')
+    files = own_uploads(g.oauth_user.id, raw)
+    if len(files) != len(raw):
+        raise _Refused('Validation failed: an attachment is not yours or not there')
+    return files
+
+
+def _album(files: list) -> list[dict]:
+    return [{'url': file.source_url, 'alt_text': file.alt_text, 'file_name': file.file_name} for file in files]
+
+
+def _with_pictures(text: str, files: list) -> str:
+    """A comment holds no attachments: its pictures go in its body, as Markdown images, which PieFed renders."""
+    pictures = ['![{}]({})'.format((file.alt_text or '').replace(']', ''), file.source_url) for file in files]
+    return '\n\n'.join([part for part in (text.strip(), *pictures) if part])
 
 
 def _create(fields: dict):
     text = _text(fields, 'status')
-    if fields.get('media_ids'):
-        raise _Refused('Validation failed: media are not taken yet')
-    if not text.strip():
+    files = _media(fields)
+    if not text.strip() and not files:
         raise _Refused("Validation failed: Text can't be blank")
     if len(text) > MAX_CHARACTERS:
         raise _Refused(f'Validation failed: Text is longer than {MAX_CHARACTERS} characters')
@@ -147,14 +177,21 @@ def _create(fields: dict):
             raise _Refused('Record not found', 404)
         post = parent if isinstance(parent, Post) else parent.post
         _uid, reply = shared_reply.make_reply(
-            {'body': text, 'notify_author': True, 'language_id': language_id, 'content_warning': warning},
+            {'body': _with_pictures(text, files), 'notify_author': True, 'language_id': language_id,
+             'content_warning': warning},
             post, parent.id if isinstance(parent, PostReply) else None, SRC_API, auth)
         return reply
     community = _mentioned_community(text) or find_microblogging_community()
-    _uid, post = shared_post.make_post(
-        {'title': _title(text), 'body': text, 'url': None, 'nsfw': _truthy(fields.get('sensitive')),
-         'language_id': language_id, 'notify_author': True, 'ai_generated': False, 'visibility': visibility,
-         'content_warning': warning}, community, POST_TYPE_ARTICLE, SRC_API, auth)
+    fields_in = {'title': _title(text), 'body': text, 'url': None, 'nsfw': _truthy(fields.get('sensitive')),
+                 'language_id': language_id, 'notify_author': True, 'ai_generated': False, 'visibility': visibility,
+                 'content_warning': warning}
+    kind, album = POST_TYPE_ARTICLE, None
+    if len(files) == 1:   # one picture: a link to it, which edit_post makes an image post, as the alpha API's upload
+        kind = POST_TYPE_LINK
+        fields_in.update(url=files[0].source_url, image_alt_text=files[0].alt_text or '')
+    elif files:           # two to four: a gallery post holds every picture (spec 2026-11-01 G-5)
+        kind, album = POST_TYPE_GALLERY, _album(files)
+    _uid, post = shared_post.make_post(fields_in, community, kind, SRC_API, auth, album=album)
     return post
 
 

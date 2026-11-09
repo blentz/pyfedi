@@ -100,7 +100,7 @@ def post_content(post: Post) -> str:
     return ''.join(parts)
 
 
-def _attachment(file) -> dict:
+def attachment(file) -> dict:
     url = absolute(file.view_url())
     entity = {'id': str(file.id), 'type': 'image', 'url': url, 'preview_url': absolute(file.thumbnail_url() or url),
               'remote_url': None, 'preview_remote_url': None, 'text_url': None,
@@ -115,7 +115,7 @@ def _attachment(file) -> dict:
 def _attachments(post: Post) -> list[dict]:
     if post.type not in (POST_TYPE_IMAGE, POST_TYPE_GALLERY):
         return []
-    return [_attachment(file) for file in post.album_images() if file.view_url()]
+    return [attachment(file) for file in post.album_images() if file.view_url()]
 
 
 def _card(post: Post) -> dict | None:

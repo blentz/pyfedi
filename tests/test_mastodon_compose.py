@@ -184,3 +184,12 @@ def test_a_shared_writes_abort_keeps_its_status(world, monkeypatch):
     monkeypatch.setattr(compose.shared_post, 'make_post', refuse)
     response = _send(world, json={'status': 'Too fast.'})
     assert response.status_code == 429 and 'error' in response.get_json()
+
+
+def test_a_fault_is_logged_and_its_text_never_sent(world, monkeypatch):
+    """Only a shared function's deliberate refusal (a bare Exception) is answered with its reason."""
+    def fail(*args, **kwargs):
+        raise RuntimeError('relation "post" does not exist at 10.0.0.5')
+    monkeypatch.setattr(compose.shared_post, 'make_post', fail)
+    response = _send(world, json={'status': 'Breaks.'})
+    assert response.status_code == 500 and response.get_json() == {'error': 'Something went wrong'}
