@@ -349,6 +349,11 @@ floors and changed-line gates.
        Mastodon's app backed out of its composer).
     Not built: Pleroma/glitch emoji reactions; reblogs as entries in followers' home timelines (a boost is counted,
     flagged and federated, but home lists posts and comments only).
+    Then: e18012bb1 a duplicate reply (PostReplyValidationError) is a 422, not a 500; 0feedc751 POST markers taken;
+    5f88017df the Mastodon routes load from app.mastodon.api (an import cycle); 451312ea8 only a paged list's Link
+    headers are merged with the licence (merging every page's broke ActivityPub discovery); ab94a6dd4 sweep fixes.
+    Gates on ab94a6dd4: two consecutive cold harness runs 21/21; suite 32158 passed, floors 140, changed-line (base
+    97b53cedc) green. (One earlier full run lost to a postgres segfault on the remote box, kernel-logged.)
   - W1.4 Pixelfed extras after a spike (`/api/v1.1`, `/api/pixelfed`), per M7.
 - **W2 PeerTube `/api/v1`.**
   - W2.1 Read-only, for NewPipe: `/api/v1/config`, `/videos` (sorts, local), `/videos/{id}` with `files[]`,
