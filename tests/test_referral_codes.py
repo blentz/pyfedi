@@ -7,6 +7,7 @@ from flask import g
 
 from app import db
 from app.models import Instance, Referral, Role, Site, SiteDomain, User, UserRegistration, role_grant
+from app.oauth_server import admin_scopes
 from app.referral import (REFERRAL_MODE, derive_code, generate_code, may_generate, open_registrations, record_referral,
                           referral_link, referral_namespace, referral_qr_svg, referrer_for, remaining_signups)
 from app.storefront import clear_domain_cache, default_domain, domain_by_id, registration_mode_on
@@ -766,3 +767,16 @@ def test_api_register_never_creates_an_account_in_referral_mode(app, people, mon
         assert Referral.query.filter_by(referred_id=created.id).one().referrer_id == people['admin'].id
     else:
         assert response.status_code >= 400
+
+
+def test_misc_saves_the_role_for_apps_admin_scopes(app, admin_client):
+    """The role an app's admin scopes map to (owner ruling 2026-11-09; app.oauth_server.admin_scopes), chosen here."""
+    helpers = Role(name='Helpers')
+    db.session.add(helpers)
+    db.session.commit()
+    payload = _valid_misc_payload(_language())
+    payload.update({'oauth_admin_role': str(helpers.id), 'submit': 'Save', 'csrf_token': admin_client.token})
+    with patch('app.admin.routes.render_template', return_value='rendered') as rt:
+        admin_client.post('/admin/misc', data=payload)
+    assert rt.call_args.kwargs['form'].errors == {}
+    assert get_setting(admin_scopes.SETTING) == helpers.id
