@@ -47,8 +47,8 @@ class Summit:
         d = self.device
         d.tap_tab('Search')
         d.type_into(d.ui(className='android.widget.EditText', instance=0), QUERY)
-        d.ui.press('enter')
-        d.wait_text(SEED_TITLE, timeout=60)   # in the Posts results
+        # the keyboard, just shown, can swallow the first enter: no search runs, and the query sits in the field
+        d.tap_until(lambda: d.ui.press('enter'), SEED_TITLE, wait=20)   # in the Posts results
         return 'its search finds the seeded post'
 
     def post(self):
