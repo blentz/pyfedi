@@ -1,5 +1,5 @@
 """A person's relations from a Mastodon app (plan W1.3): follow, unfollow, block, unblock, relationships and follow
-requests, through the shared functions; mute is refused (PieFed has none)."""
+requests, through the shared functions (mutes: tests/test_mutes.py)."""
 from unittest.mock import patch
 
 import pytest
@@ -71,12 +71,6 @@ def test_an_account_nobody_holds_is_not_found(world, account_id):
     assert _post(world, f'/api/v1/accounts/{account_id}/follow').status_code == 404
 
 
-def test_mute_is_refused_not_pretended(world):
-    response = _post(world, f"/api/v1/accounts/{world['open'].id}/mute")
-    assert response.status_code == 422 and 'block' in response.get_json()['error']
-    assert _post(world, f"/api/v1/accounts/{world['open'].id}/unmute").status_code == 422
-
-
 def test_relationships_say_both_ways(world):
     me, other, locked = world['me'], world['open'], world['locked']
     make_follow(me, other)
@@ -114,3 +108,13 @@ def test_follow_requests_listed_authorized_and_rejected(world):
 def test_each_needs_its_scope(world):
     reader, _refresh = tokens.issue_token(world['app'], world['me'], 'read')
     assert _post(world, f"/api/v1/accounts/{world['open'].id}/follow", token=reader).status_code == 403
+
+
+def test_a_local_requesters_answer_needs_no_message_sent(world):
+    neighbour = make_user(None, 'neighbour', local=True)
+    db.session.add(UserFollower(local_user_id=world['me'].id, remote_user_id=neighbour.id, is_inward=True,
+                                is_accepted=None))
+    db.session.commit()
+    with patch('app.activitypub.signature.send_post_request') as send:
+        assert _post(world, f'/api/v1/follow_requests/{neighbour.id}/authorize').get_json()['followed_by'] is True
+    send.assert_not_called()

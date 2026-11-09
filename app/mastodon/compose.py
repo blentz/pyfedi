@@ -132,7 +132,8 @@ def _guarded(write):
 
 
 def _media(fields: dict) -> list:
-    """The viewer's own uploads `media_ids` names, at most MAX_MEDIA_ATTACHMENTS; an id of anyone else's, or none at all, refused."""
+    """The viewer's own uploads `media_ids` names, at most MAX_MEDIA_ATTACHMENTS; an id of anyone else's, or of
+    nothing, refused."""
     raw = fields.get('media_ids') or []
     if not isinstance(raw, list):
         raise _Refused('Validation failed: media_ids is not a list')

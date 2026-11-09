@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from flask import abort, flash, current_app
 from flask_babel import _
 from flask_login import current_user
@@ -8,7 +10,7 @@ from app.constants import *
 from app.local_only import REMOTE_CONTACT_REFUSAL, found_here, hidden_here, refuses_remote_contact
 from app.onion import has_real_ip
 from app.models import UserBlock, NotificationSubscription, User, IpBan, UserFollower, Notification, BotChallenge, \
-    Conversation
+    Conversation, UserMute, utcnow
 from app.shared.tasks import task_selector
 from app.user.utils import purge_user_then_delete, purge_remote_user_then_delete
 from app.utils import authorise_api_user, blocked_users, render_template, add_to_modlog, gibberish, user_access
@@ -391,3 +393,38 @@ def answer_follow_request(user: User, requester_id: int, accept: bool) -> bool:
         ap_signature.send_post_request(ap_util.follow_answer_inbox(requester), answer, user.private_key,
                                        f"{user.public_url()}#main-key")
     return True
+
+
+def muted_ids(user_id: int, notifications_only: bool = False) -> list[int]:
+    """The accounts `user_id` has muted now (an expired mute counts no more), only those whose notifications they
+    muted too when `notifications_only` says so."""
+    mutes = db.session.query(UserMute.muted_id).filter(UserMute.muter_id == user_id).filter(
+        (UserMute.expires_at == None) | (UserMute.expires_at > utcnow()))
+    if notifications_only:
+        mutes = mutes.filter(UserMute.notifications == True)
+    return [muted for muted, in mutes]
+
+
+def mute_user(person_id: int, notifications: bool, duration_seconds: int, src, auth=None):
+    """Mute `person_id` for `auth`'s person: their content leaves the muter's timelines (and, with `notifications`,
+    their notifications), for `duration_seconds` (0: until unmuted). Muting again replaces the mute."""
+    user_id = authorise_api_user(auth) if src == SRC_API else current_user.id
+    if user_id == person_id:
+        raise Exception('cannot_mute_self')
+    if found_here(User, person_id) is None:
+        raise Exception('user not found')
+    expires = utcnow() + timedelta(seconds=duration_seconds) if duration_seconds else None
+    mute = UserMute.query.filter_by(muter_id=user_id, muted_id=person_id).first()
+    if mute is None:
+        mute = UserMute(muter_id=user_id, muted_id=person_id)
+        db.session.add(mute)
+    mute.notifications, mute.expires_at = notifications, expires
+    db.session.commit()
+    return user_id
+
+
+def unmute_user(person_id: int, src, auth=None):
+    user_id = authorise_api_user(auth) if src == SRC_API else current_user.id
+    UserMute.query.filter_by(muter_id=user_id, muted_id=person_id).delete()
+    db.session.commit()
+    return user_id

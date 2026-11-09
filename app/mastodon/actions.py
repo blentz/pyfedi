@@ -1,5 +1,6 @@
 """What a Mastodon app does to a status (plan W1.3; ruling M5): favourite is an upvote and unfavourite takes it back,
-bookmark and unbookmark keep it, reblog boosts a post and unreblog takes the boost back (a comment cannot be boosted). Each runs through the shared function the alpha API and the web use (app.shared.post,
+bookmark and unbookmark keep it, reblog boosts a post and unreblog takes the boost back (a comment cannot be
+boosted). Each runs through the shared function the alpha API and the web use (app.shared.post,
 app.shared.reply), as the person the app's token acts for (app.utils.Authorised), and answers the status as it now is.
 Mastodon's actions are idempotent where PieFed's toggle or refuse a repeat, so each acts only when something changes."""
 from flask import g, jsonify

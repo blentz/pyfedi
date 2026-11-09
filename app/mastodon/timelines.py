@@ -25,6 +25,7 @@ from app.reads import users as reads_users
 from app.reads.posts import KEYSET_PAGES, Listing, post_listing
 from app.reads.replies import WHOLE_THREAD, CommentListing, comment_listing, reply_tree, thread_replies
 from app.reads.viewer import Restrictions
+from app.shared import user as shared_user
 from app.storefront import hosted_instance_ids
 from app.visibility import can_view
 
@@ -56,6 +57,14 @@ def _comments(listing: CommentListing):
     return comment_listing(_viewer_id(), _restrictions(), listing).replies
 
 
+def _without_muted(sources: list[Source]) -> list[Source]:
+    """A timeline leaves out whom the viewer muted (their profile and threads still show them, as Mastodon's do)."""
+    muted = shared_user.muted_ids(g.oauth_user.id) if g.oauth_user else []
+    if not muted:
+        return sources
+    return [Source(source.query.filter(source.model.user_id.not_in(muted)), source.model) for source in sources]
+
+
 def _respond(sources: list[Source]):
     viewer_id = _viewer_id()
     rows = page(sources, window(request.args, lambda row: readable(row, viewer_id)))
@@ -75,7 +84,7 @@ def public_timeline():
     posts = _posts(Listing(type='Local' if _truthy('local') else 'All', sort='', ignore_sticky=True))
     if _truthy('remote'):
         posts = posts.filter(Post.instance_id.not_in(hosted_instance_ids()))
-    return _respond([Source(_only_media(posts), Post)])
+    return _respond(_without_muted([Source(_only_media(posts), Post)]))
 
 
 @bp.route('/api/v1/timelines/tag/<tag>')
@@ -83,7 +92,7 @@ def public_timeline():
 def tag_timeline(tag):
     posts = _posts(Listing(sort='', ignore_sticky=True)).filter(
         Post.tags.any(and_(Tag.name == tag.lower().lstrip('#'), Tag.banned == False)))
-    return _respond([Source(_only_media(posts), Post)])
+    return _respond(_without_muted([Source(_only_media(posts), Post)]))
 
 
 def _followed_ids(user_id: int) -> tuple[int, ...]:
@@ -97,8 +106,8 @@ def _followed_ids(user_id: int) -> tuple[int, ...]:
 @require_oauth('read:statuses')
 def home_timeline():
     people = _followed_ids(g.oauth_user.id)
-    return _respond([Source(_posts(Listing(sort='', person_ids=people, ignore_sticky=True)), Post),
-                     Source(_comments(CommentListing(person_ids=people)), PostReply)])
+    return _respond(_without_muted([Source(_posts(Listing(sort='', person_ids=people, ignore_sticky=True)), Post),
+                                    Source(_comments(CommentListing(person_ids=people)), PostReply)]))
 
 
 def _joined(user_id: int, community_id: int) -> Community | None:
@@ -114,7 +123,7 @@ def _joined(user_id: int, community_id: int) -> Community | None:
 def list_timeline(list_id):
     if _joined(g.oauth_user.id, list_id) is None:
         return _not_found()
-    return _respond([Source(_posts(Listing(sort='', community_id=list_id, ignore_sticky=True)), Post)])
+    return _respond(_without_muted([Source(_posts(Listing(sort='', community_id=list_id, ignore_sticky=True)), Post)]))
 
 
 @bp.route('/api/v1/accounts/<int:account_id>/statuses')

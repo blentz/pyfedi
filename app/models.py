@@ -5505,6 +5505,20 @@ class UserBlock(db.Model):
     created_at = db.Column(db.DateTime, default=utcnow)
 
 
+class UserMute(db.Model):
+    """`muter_id` muted `muted_id` (owner ruling 2026-11-08: build mutes): their posts and comments leave the muter's
+    timelines, and with `notifications` their notifications too, until `expires_at` (None: until unmuted). Unlike a
+    block, nothing else changes: the muted can still see, reply to and follow the muter."""
+    __tablename__ = 'user_mute'
+    __table_args__ = (db.UniqueConstraint('muter_id', 'muted_id', name='uq_user_mute_pair'),)
+    id = db.Column(db.Integer, primary_key=True)
+    muter_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False, index=True)
+    muted_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False, index=True)
+    notifications = db.Column(db.Boolean, nullable=False, default=True, server_default='true')
+    expires_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+
+
 class Settings(db.Model):
     name = db.Column(db.String(50), primary_key=True)
     value = db.Column(db.String(1024))

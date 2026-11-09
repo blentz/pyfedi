@@ -21,6 +21,7 @@ from app.mastodon.statuses import Page
 from app.mastodon.timelines import readable
 from app.models import Notification, Post, PostReply, User
 from app.oauth_server.protect import require_oauth
+from app.shared import user as shared_user
 
 _POST_TYPES = (NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC, NOTIF_FEED)
 _COMMENT_TYPES = (NOTIF_POST, NOTIF_REPLY)
@@ -85,6 +86,8 @@ def _entity(notification: Notification, author: User, subject, page: Page) -> di
 @require_oauth('read:notifications')
 def notifications():
     query = Notification.query.filter(Notification.user_id == g.oauth_user.id, Notification.notif_type.in_(_kinds()))
+    if muted := shared_user.muted_ids(g.oauth_user.id, notifications_only=True):   # a mute with its notifications
+        query = query.filter(Notification.author_id.not_in(muted))
     if (max_id := _int('max_id')) is not None:
         query = query.filter(Notification.id < max_id)
     if (since_id := _int('since_id')) is not None:

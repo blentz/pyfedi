@@ -2,7 +2,8 @@
 the Relationship between the viewer and others, and the requests to follow the viewer, accepted or rejected. Each runs
 through the shared function the web and the alpha API use (app.shared.user), as the token's person.
 
-PieFed has no mute: a mute is refused, never pretended (an app shows the refusal). A follow of a local account that
+A mute (owner ruling 2026-11-08) takes the account out of the viewer's timelines, and with `notifications` (Mastodon's
+default) out of their notifications, for `duration` seconds (0: until unmuted). A follow of a local account that
 approves its followers, or of a remote one until its server accepts, is `requested`."""
 from flask import g, jsonify, request
 
@@ -12,7 +13,7 @@ from app.local_only import found_here
 from app.mastodon import bp
 from app.mastodon.errors import failure
 from app.mastodon.statuses import Page
-from app.models import User, UserBlock, UserFollower
+from app.models import User, UserBlock, UserFollower, UserMute, utcnow
 from app.oauth_server.protect import require_oauth
 from app.shared import user as shared_user
 from app.utils import Authorised
@@ -49,14 +50,21 @@ def _blocks(blocker_id: int, blocked_id: int) -> bool:
     return db.session.query(UserBlock.id).filter_by(blocker_id=blocker_id, blocked_id=blocked_id).first() is not None
 
 
+def _mute(muter_id: int, muted_id: int):
+    """The mute in force, or None (an expired one counts no more)."""
+    return UserMute.query.filter(UserMute.muter_id == muter_id, UserMute.muted_id == muted_id).filter(
+        (UserMute.expires_at == None) | (UserMute.expires_at > utcnow())).first()
+
+
 def relationship(me: User, other_id: int) -> dict:
     mine = _outward(me.id, other_id)
+    mute = _mute(me.id, other_id)
     theirs = _outward(other_id, me.id) or _inward(me.id, other_id)   # theirs is a row of its own when they are local
     return {'id': str(other_id), 'following': bool(mine and mine.is_accepted is True), 'showing_reblogs': True,
             'notifying': False, 'languages': None,
             'followed_by': bool(theirs and theirs.is_accepted is True),
             'blocking': _blocks(me.id, other_id), 'blocked_by': _blocks(other_id, me.id),
-            'muting': False, 'muting_notifications': False,
+            'muting': mute is not None, 'muting_notifications': bool(mute and mute.notifications),
             'requested': bool(mine and mine.is_accepted is None),
             'requested_by': bool(theirs and theirs.is_accepted is None),
             'domain_blocking': False, 'endorsed': False, 'note': ''}
@@ -98,11 +106,41 @@ def unblock(account_id):
     return _act(account_id, shared_user.unblock_another_user)
 
 
+def _fields() -> dict:
+    body = request.get_json(silent=True) if request.is_json else request.form
+    return body if isinstance(body, dict) else {}
+
+
+def _seconds(value) -> int:
+    """`duration`: a whole number of seconds, 0 (or nothing usable) for a mute without end."""
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 @bp.route('/api/v1/accounts/<int:account_id>/mute', methods=['POST'])
-@bp.route('/api/v1/accounts/<int:account_id>/unmute', methods=['POST'])
 @require_oauth('write:mutes')
 def mute(account_id):
-    return jsonify({'error': 'Muting is not supported here; block the account instead'}), 422
+    fields = _fields()
+    notifications = str(fields.get('notifications', True)).lower() not in ('false', '0')
+    return _act(account_id, lambda person_id, src, auth: shared_user.mute_user(
+        person_id, notifications, _seconds(fields.get('duration')), src, auth))
+
+
+@bp.route('/api/v1/accounts/<int:account_id>/unmute', methods=['POST'])
+@require_oauth('write:mutes')
+def unmute(account_id):
+    return _act(account_id, shared_user.unmute_user)
+
+
+@bp.route('/api/v1/mutes')
+@require_oauth('read:mutes')
+def mutes():
+    people = User.query.filter(User.id.in_(shared_user.muted_ids(g.oauth_user.id)), User.deleted == False).all()
+    page = Page(g.oauth_user, [])
+    page.authors.update({person.id: person for person in people})
+    return jsonify([page.account(person) for person in people])
 
 
 @bp.route('/api/v1/accounts/relationships')
