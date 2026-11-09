@@ -320,8 +320,35 @@ floors and changed-line gates.
        probed Mastodon/Pixelfed apps' view passes.
     8. the probe counts Mastodon's 401 on the (private) harness instance as served; status_id/list_id classified.
     Merged to local blentz 2026-11-08 at the owner's word, before its two cold harness runs and the full gates
-    finished; their results are recorded below when in.
+    finished. The two cold runs then passed (21/21 apps as the matrix says). 922eeebda's Link merge dropped all but a
+    view's first Link header (a post page's alternates): fixed on W1.3's branch (b2eeb9bfc).
   - W1.3 Writing: statuses, media v2, favourite, boost, bookmark, follow; Pleroma/glitch emoji reactions.
+    **Built 2026-11-08/09** (branch feat/mastodon-writing off blentz 97b53cedc):
+    1. a8ada2db8 `app.utils.Authorised`: the shared write functions take an account a route authorised by OAuth in
+       place of the alpha API's JWT, checked as a JWT's account is.
+    2. 09f0589b1 favourite/unfavourite (M5: upvote and its reversal), bookmark/unbookmark; idempotent.
+    3. 5f5ac67f1 + 05f25355d POST/PUT/DELETE /api/v1/statuses, /source (M4: reply = comment; a status naming a
+       community `@name@host`/`!name@host` = a post there; else a microblog post titled by its first sentence);
+       spoiler_text = content warning (the shared writes now take one), private = followers-only, direct refused,
+       Idempotency-Key honoured for an hour.
+    4. be4539d58 + bfa18fd47 media: POST /api/v2/media (images, through the shared upload), GET/PUT
+       /api/v1/media/:id (uploader only); media_ids make an image post (one) or a gallery (two to four) and go in a
+       comment's body as Markdown images.
+    5. edc80d368 + 695f27935 follow/unfollow/block/unblock, relationships, follow_requests (authorize/reject, the
+       web's logic moved to app.shared.user); mute refused (PieFed has none). One failure rule for every write
+       (app.mastodon.errors): an abort keeps its code, a shared refusal is a 422 with its reason, a fault a logged
+       500 with no text (two security-review findings: errors had echoed exception text).
+    6. harness: the four Mastodon apps reply to the seeded post; PieFed has it as a comment.
+    7. Owner ruling 2026-11-08: **build local boosts and mutes**. f0e497653 + 832ba8953 local boosts
+       (app.shared.post.boost_post/unboost_post; an Announce from the person's actor to their followers' instances
+       and a remote author, an Undo naming it; refused to anyone the community banned or the author blocked; the Undo
+       goes whatever the post became) behind Mastodon's reblog/unreblog. 32948b644 mutes (user_mute, migration
+       b8e4f0c3d5a2; out of timelines and, with notifications, notifications; Mastodon's mute/unmute/mutes and
+       relationships). No web buttons for either yet.
+    8. db5e6ed7d harness post steps hardened after a cold run lost two replies (Elk clicked a comment's Reply,
+       Mastodon's app backed out of its composer).
+    Not built: Pleroma/glitch emoji reactions; reblogs as entries in followers' home timelines (a boost is counted,
+    flagged and federated, but home lists posts and comments only).
   - W1.4 Pixelfed extras after a spike (`/api/v1.1`, `/api/pixelfed`), per M7.
 - **W2 PeerTube `/api/v1`.**
   - W2.1 Read-only, for NewPipe: `/api/v1/config`, `/videos` (sorts, local), `/videos/{id}` with `files[]`,
