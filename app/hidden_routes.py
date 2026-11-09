@@ -121,6 +121,7 @@ NON_OBJECT_ARGUMENTS = {
     # Mastodon's API (plan W1.2): a status id is a snowflake naming a post or comment, a list id a joined community;
     # their routes answer a hidden one as one nobody holds themselves (app.mastodon.timelines.readable, _joined)
     'status_id': ('/api/v1/statuses/',), 'list_id': ('/api/v1/timelines/list/', '/api/v1/lists/'),
+    'media_id': ('/api/v1/media/',),   # the viewer's own upload: anyone else's is answered as one nobody holds
     # the reader's own rows, which show a hidden target as text with a note (app/local_names.py)
     'notification_id': None, 'report_id': None,
     # an activity: the result of one sent here, for its sender, and this storefront's own logged outbound ones, which

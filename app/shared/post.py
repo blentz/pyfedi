@@ -146,9 +146,7 @@ def boost_post(post_id: int, src, auth=None):
     """`auth`'s person boosts the post: recorded (idempotently) and federated as an Announce from them (owner ruling
     2026-11-08). A post that may not reach other servers is refused; a second boost changes nothing."""
     user = authorise_api_user(auth, return_type='model') if src == SRC_API else current_user
-    post = db.session.get(Post, post_id)
-    if post is None:
-        raise NoResultFound
+    post = db.session.get(Post, post_id) or abort(404)
     # the community's and the author's word as for a vote or a reply: banned from it, or blocked by its author, no
     if user.banned or not boosts_task.boostable(post) or user_banned_from_community(user.id, post.community_id) or \
             post.author.has_blocked_user(user.id):
@@ -163,9 +161,7 @@ def unboost_post(post_id: int, src, auth=None):
     """`auth`'s person takes back their boost of the post: removed, and an Undo of the Announce federated. Nothing to
     take back changes nothing."""
     user = authorise_api_user(auth, return_type='model') if src == SRC_API else current_user
-    post = db.session.get(Post, post_id)
-    if post is None:
-        raise NoResultFound
+    post = db.session.get(Post, post_id) or abort(404)
     if db.session.query(PostBoost.id).filter_by(user_id=user.id, post_id=post.id).first() is not None:
         remove_boost(post, user)
         boosts_task.queue_boost(user.id, post.id, undo=True)
