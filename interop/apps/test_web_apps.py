@@ -190,10 +190,6 @@ def holds_account(page: Page, name: str):
     page.wait_for_function(HOLDS_ACCOUNT, arg=name, timeout=TIMEOUT)
 
 
-def no_timelines():
-    raise steps.Unsupported('PieFed serves no Mastodon timelines yet (plan W1.2)')
-
-
 def no_statuses():
     raise steps.Unsupported('PieFed takes no Mastodon statuses yet (plan W1.3)')
 
@@ -218,7 +214,14 @@ class Phanpy:
         holds_account(page, ALICE[0])
         return 'logged in as alice through OAuth'
 
-    view, post = staticmethod(no_timelines), staticmethod(no_statuses)
+    def view(self):
+        # c/apps, which alice joined, is one of her lists (plan W1.2, ruling M2); only comments are added to it, so
+        # the seeded post leads it
+        self.page.goto(f"{self.base}/#/l/{self.world['community']['id']}", wait_until='networkidle')
+        expect(self.page.get_by_text(SEED_TITLE).first).to_be_visible()
+        return 'the c/apps list shows the seeded post'
+
+    post = staticmethod(no_statuses)
 
 
 class Elk:
@@ -239,7 +242,16 @@ class Elk:
         holds_account(page, ALICE[0])
         return 'logged in as alice through OAuth'
 
-    view, post = staticmethod(no_timelines), staticmethod(no_statuses)
+    def view(self):
+        # Elk's server renders a list page it is sent to directly without the token, and its head reads the list's
+        # title unguarded (pages/[[server]]/list/[list]/index.vue): opened from its lists page, it renders in the app
+        page = self.page
+        page.goto(f'{self.base}/lists', wait_until='domcontentloaded')   # not networkidle: Elk keeps a request open
+        page.get_by_text(self.world['community']['title'], exact=True).first.click()
+        expect(page.get_by_text(SEED_TITLE).first).to_be_visible()
+        return 'the c/apps list shows the seeded post'
+
+    post = staticmethod(no_statuses)
 
 
 DRIVERS = {'voyager-web': Voyager, 'blorp-web': Blorp, 'photon-web': Photon, 'phanpy-web': Phanpy, 'elk-web': Elk}

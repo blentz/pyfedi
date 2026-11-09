@@ -14,26 +14,18 @@
       "post": {"outcome": "blocked", "reason": "posting needs the login Jerboa cannot do"}}},
 
     "mastodon-android": {"platform": "mastodon", "surface": "android", "package": "org.joinmastodon.android", "apk": {"fdroid": "org.joinmastodon.android"}, "expect": {
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines yet (/api/v1/timelines/*, plan W1.2)"},
       "post": {"outcome": "unsupported", "reason": "PieFed takes no Mastodon statuses yet (POST /api/v1/statuses, plan W1.3)"}}},
     "tusky-android": {"platform": "mastodon", "surface": "android", "package": "com.keylesspalace.tusky", "apk": {"fdroid": "com.keylesspalace.tusky"}, "expect": {
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines yet (/api/v1/timelines/*, plan W1.2)"},
       "post": {"outcome": "unsupported", "reason": "PieFed takes no Mastodon statuses yet (POST /api/v1/statuses, plan W1.3)"}}},
-    "moshidon-android": {"platform": "mastodon", "surface": "android", "probe": "mastodon", "expect": {
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines yet (/api/v1/timelines/*, plan W1.2)"}}},
+    "moshidon-android": {"platform": "mastodon", "surface": "android", "probe": "mastodon"},
     "phanpy-web": {"platform": "mastodon", "surface": "web", "web": "https://phanpy.test", "image": "phanpy (newest release, built by run.sh)", "expect": {
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines yet (/api/v1/timelines/*, plan W1.2)"},
       "post": {"outcome": "unsupported", "reason": "PieFed takes no Mastodon statuses yet (POST /api/v1/statuses, plan W1.3)"}}},
     "elk-web": {"platform": "mastodon", "surface": "web", "web": "https://elk.test", "image": "ghcr.io/elk-zone/elk:latest", "expect": {
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon timelines yet (/api/v1/timelines/*, plan W1.2)"},
       "post": {"outcome": "unsupported", "reason": "PieFed takes no Mastodon statuses yet (POST /api/v1/statuses, plan W1.3)"}}},
 
-    "pixelfed-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon", "expect": {
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon-compatible timelines"}}},
-    "pixeldroid-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon", "expect": {
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon-compatible timelines"}}},
-    "fedilab-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon", "expect": {
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no Mastodon-compatible timelines"}}},
+    "pixelfed-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon"},
+    "pixeldroid-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon"},
+    "fedilab-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon"},
 
     "peertube-android": {"platform": "peertube", "surface": "android", "probe": "peertube", "expect": {
       "login": {"outcome": "unsupported", "reason": "the PeerTube app logs in with /api/v1/oauth-clients/local and /api/v1/users/token, which PieFed lacks"},

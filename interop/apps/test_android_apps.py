@@ -192,10 +192,6 @@ def chrome_first_run(d):
             d.tap(question, exact=True)
 
 
-def no_timelines():
-    raise steps.Unsupported('PieFed serves no Mastodon timelines yet (plan W1.2)')
-
-
 def no_statuses():
     raise steps.Unsupported('PieFed takes no Mastodon statuses yet (plan W1.3)')
 
@@ -223,7 +219,16 @@ class Tusky:
         piefed_consent(d, self.package)
         return 'logged in as alice through OAuth'
 
-    view, post = staticmethod(no_timelines), staticmethod(no_statuses)
+    def view(self):
+        d = self.device
+        d.ui(description='Search').click(timeout=30)
+        d.wait_text('Posts', timeout=30)   # the search screen, its field focused (a SearchView: no EditText to find)
+        d.type_focused(QUERY)
+        d.ui.press('enter')
+        d.wait_text(SEED_TITLE, timeout=60)   # in the Posts results
+        return 'its search finds the seeded post'
+
+    post = staticmethod(no_statuses)
 
 
 class MastodonAndroid:
@@ -246,7 +251,16 @@ class MastodonAndroid:
         piefed_consent(d, self.package)
         return 'logged in as alice through OAuth'
 
-    view, post = staticmethod(no_timelines), staticmethod(no_statuses)
+    def view(self):
+        d = self.device
+        d.tap_tab('Explore')
+        d.tap('Search Mastodon', exact=True)   # a button until tapped, which opens the search field focused
+        d.type_focused(QUERY)
+        d.ui.press('enter')
+        d.wait_text(SEED_TITLE, timeout=60)
+        return 'its search finds the seeded post'
+
+    post = staticmethod(no_statuses)
 
 
 DRIVERS = {'summit-android': Summit, 'voyager-android': VoyagerAndroid, 'thunder-android': Thunder,

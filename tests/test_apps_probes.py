@@ -82,7 +82,7 @@ def client(app, site):
 
 
 @pytest.mark.parametrize('family, expected', [
-    ('mastodon', {'login': 'passed', 'view': 'unsupported', 'post': 'passed'}),   # app registration (plan W1.1)
+    ('mastodon', {'login': 'passed', 'view': 'passed', 'post': 'passed'}),   # registration (W1.1), timelines (W1.2)
     ('peertube', {'login': 'unsupported', 'view': 'unsupported', 'post': 'blocked'}),
     ('lemmy-v3', {'login': 'unsupported', 'view': 'unsupported', 'post': 'blocked'}),
 ], ids=['mastodon', 'peertube', 'lemmy-v3'])
