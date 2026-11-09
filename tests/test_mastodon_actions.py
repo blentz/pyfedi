@@ -4,12 +4,12 @@ from itertools import count
 
 import pytest
 
+import app.shared.tasks.boosts as boosts
 from app import db
 from app.constants import VISIBILITY_FOLLOWERS
 from app.mastodon import ids
 from app.models import PostBookmark, PostBoost, PostReplyBookmark, PostReplyVote, PostVote
 from app.oauth_server import tokens
-from app.shared import post as shared_post
 from tests.factories import make_community, make_post, make_post_reply, make_user
 
 _SERIAL = count()
@@ -85,7 +85,7 @@ def test_a_refusal_from_the_shared_write_is_mastodons_json(world, monkeypatch):
 
 def test_reblog_boosts_a_post_and_answers_mastodons_reblog_status(world, monkeypatch):
     queued = []
-    monkeypatch.setattr(shared_post, 'queue_boost', lambda *args, **kwargs: queued.append((args, kwargs)))
+    monkeypatch.setattr(boosts, 'queue_boost', lambda *args, **kwargs: queued.append((args, kwargs)))
     response = _do(world, world['post'], 'reblog')
     assert response.status_code == 200, response.get_data(as_text=True)
     status = response.get_json()

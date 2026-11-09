@@ -83,7 +83,7 @@ def test_nobody_or_no_post_sends_nothing(world):
 
 def test_the_shared_functions_record_and_queue_once(world):
     auth = Authorised(world['booster'])
-    with patch.object(shared_post, 'queue_boost') as queued:
+    with patch.object(boosts, 'queue_boost') as queued:
         shared_post.boost_post(world['post'].id, SRC_API, auth)
         shared_post.boost_post(world['post'].id, SRC_API, auth)   # a second boost changes nothing
         assert PostBoost.query.filter_by(user_id=world['booster'].id).count() == 1
@@ -157,7 +157,7 @@ def test_a_person_the_community_or_author_refused_cannot_boost(world, what):
     else:
         db.session.add(UserBlock(blocker_id=world['author'].id, blocked_id=booster.id))
     db.session.commit()
-    with patch.object(shared_post, 'queue_boost') as queued, pytest.raises(Exception, match='cannot be boosted'):
+    with patch.object(boosts, 'queue_boost') as queued, pytest.raises(Exception, match='cannot be boosted'):
         shared_post.boost_post(world['post'].id, SRC_API, Authorised(booster))
     queued.assert_not_called()
     assert PostBoost.query.filter_by(user_id=booster.id).count() == 0

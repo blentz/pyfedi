@@ -33,7 +33,7 @@ from app.onion import apply_audit, is_onion_request, stamp_activity
 from app.onion_account import audit_ip
 from app.storefront import is_upload_link, link_on, stored_link
 from app.shared.tasks import task_selector
-from app.shared.tasks.boosts import boostable, queue_boost
+import app.shared.tasks.boosts as boosts_task   # the module: it reaches this one through app.activitypub (cycle)
 from app.shared.upload import open_uploaded_image
 from app.visibility import is_open, post_title_for
 from app.utils import recipients_for, user_banned_from_community
@@ -150,12 +150,12 @@ def boost_post(post_id: int, src, auth=None):
     if post is None:
         raise NoResultFound
     # the community's and the author's word as for a vote or a reply: banned from it, or blocked by its author, no
-    if user.banned or not boostable(post) or user_banned_from_community(user.id, post.community_id) or \
+    if user.banned or not boosts_task.boostable(post) or user_banned_from_community(user.id, post.community_id) or \
             post.author.has_blocked_user(user.id):
         raise Exception('This post cannot be boosted')
     if db.session.query(PostBoost.id).filter_by(user_id=user.id, post_id=post.id).first() is None:
         record_boost(post, user)
-        queue_boost(user.id, post.id)
+        boosts_task.queue_boost(user.id, post.id)
     return user.id
 
 
@@ -168,7 +168,7 @@ def unboost_post(post_id: int, src, auth=None):
         raise NoResultFound
     if db.session.query(PostBoost.id).filter_by(user_id=user.id, post_id=post.id).first() is not None:
         remove_boost(post, user)
-        queue_boost(user.id, post.id, undo=True)
+        boosts_task.queue_boost(user.id, post.id, undo=True)
     return user.id
 
 

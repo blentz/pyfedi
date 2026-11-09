@@ -433,7 +433,7 @@ def create_app(config_class=Config):
     from app.oauth_server import bp as oauth_server_bp  # cycle: blueprint modules import db and the other globals from here
     app.register_blueprint(oauth_server_bp)
 
-    from app.mastodon import bp as mastodon_bp  # cycle: blueprint modules import db and the other globals from here
+    from app.mastodon.api import bp as mastodon_bp  # cycle: blueprint modules import db and the other globals from here
     app.register_blueprint(mastodon_bp)
 
     from app.user import bp as user_bp  # cycle: blueprint modules import db and the other extensions from this package
