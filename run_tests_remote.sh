@@ -55,9 +55,15 @@ status=${PIPESTATUS[0]}
 set -e
 crashes > "$diagnostics/kernel-after.log" || true
 new=$(comm -13 <(sort "$diagnostics/kernel-before.log") <(sort "$diagnostics/kernel-after.log") | tee "$diagnostics/kernel-new.log")
-if [ -n "$new" ] || grep -qE 'Fatal Python error|worker .* crashed|server closed the connection unexpectedly' "$diagnostics/pytest.log"; then
+# Postgres's own account of a crashed backend: which signal ended it and the query it was running (run_tests.sh saves
+# the log only when the run fails). Printed with the notice, so a crash is never read as a test failure.
+postgres_crash=$(grep -hE 'terminated by signal|Failed process was running' "$diagnostics/postgres.log" 2>/dev/null \
+                 | sed -E 's/\x1b\[[0-9;]*m//g; s/^[^|]*\| //' | cut -c1-240 || true)
+if [ -n "$new" ] || [ -n "$postgres_crash" ] || \
+        grep -qE 'Fatal Python error|worker .* crashed|server closed the connection unexpectedly' "$diagnostics/pytest.log"; then
     echo "run_tests_remote.sh: A CRASH during this run. Diagnostics are in $diagnostics. A clean rerun does not explain it." >&2
     [ -n "$new" ] && echo "$new" >&2
+    [ -n "$postgres_crash" ] && echo "$postgres_crash" >&2
     [ "$status" -ne 0 ] || status=70
 elif [ "$status" -eq 0 ]; then
     rm -rf "$diagnostics"
