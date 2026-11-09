@@ -11,11 +11,11 @@ ask for these, not v2's grouped notifications (plan W1.0 inventory)."""
 from flask import g, jsonify, request
 
 from app import db
-from app.constants import NOTIF_COMMUNITY, NOTIF_FEED, NOTIF_FOLLOW, NOTIF_FOLLOW_REQUEST, NOTIF_MENTION, \
-    NOTIF_POST, NOTIF_REPLY, NOTIF_TOPIC, NOTIF_USER
+from app.constants import NOTIF_FOLLOW, NOTIF_FOLLOW_REQUEST, NOTIF_MENTION
 from app.hidden_routes import hidden_notifications
 from app.mastodon import bp
 from app.mastodon.entities import timestamp
+from app.mastodon.kinds import COMMENT_TYPES, POST_TYPES, TYPES
 from app.mastodon.paging import DEFAULT_LIMIT, MAX_LIMIT, links
 from app.mastodon.statuses import Page
 from app.mastodon.timelines import readable
@@ -23,10 +23,6 @@ from app.models import Notification, Post, PostReply, User
 from app.oauth_server.protect import require_oauth
 from app.shared import user as shared_user
 
-_POST_TYPES = (NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC, NOTIF_FEED)
-_COMMENT_TYPES = (NOTIF_POST, NOTIF_REPLY)
-_TYPES = {**{kind: 'status' for kind in _POST_TYPES}, **{kind: 'mention' for kind in _COMMENT_TYPES},
-          NOTIF_MENTION: 'mention', NOTIF_FOLLOW: 'follow', NOTIF_FOLLOW_REQUEST: 'follow_request'}
 _PG_INT_MAX = 2 ** 31 - 1
 
 
@@ -42,18 +38,18 @@ def _limit() -> int:
 
 def _kinds() -> list[int]:
     """The PieFed types the request's `types[]` and `exclude_types[]` leave."""
-    wanted = set(request.args.getlist('types[]') or request.args.getlist('types')) or set(_TYPES.values())
+    wanted = set(request.args.getlist('types[]') or request.args.getlist('types')) or set(TYPES.values())
     unwanted = set(request.args.getlist('exclude_types[]') or request.args.getlist('exclude_types'))
-    return [kind for kind, name in _TYPES.items() if name in wanted and name not in unwanted]
+    return [kind for kind, name in TYPES.items() if name in wanted and name not in unwanted]
 
 
 def _subject(notification: Notification):
     """The post or comment a notification is about, or None (a follow has none)."""
     targets = notification.targets or {}
-    if notification.notif_type in _POST_TYPES or (notification.notif_type == NOTIF_MENTION and
+    if notification.notif_type in POST_TYPES or (notification.notif_type == NOTIF_MENTION and
                                                   notification.subtype == 'post_mention'):
         return db.session.get(Post, targets.get('post_id') or 0)
-    if notification.notif_type in _COMMENT_TYPES or notification.notif_type == NOTIF_MENTION:
+    if notification.notif_type in COMMENT_TYPES or notification.notif_type == NOTIF_MENTION:
         return db.session.get(PostReply, targets.get('comment_id') or 0)
     return None
 
@@ -74,7 +70,7 @@ def _shown(rows: list[Notification]) -> list[tuple]:
 
 
 def _entity(notification: Notification, author: User, subject, page: Page) -> dict:
-    entity = {'id': str(notification.id), 'type': _TYPES[notification.notif_type],
+    entity = {'id': str(notification.id), 'type': TYPES[notification.notif_type],
               'created_at': timestamp(notification.created_at), 'group_key': f'ungrouped-{notification.id}',
               'account': page.account(author)}
     if subject is not None:
