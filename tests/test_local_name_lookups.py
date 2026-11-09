@@ -27,6 +27,8 @@ ALLOWED = {
                                                  'local_named',
     ('app/mastodon/routes.py', 'lookup_account'): 'scoped by ap_domain: the remote arm, as get_user; a local name '
                                                   'goes through local_named (reads.users.person_named)',
+    ('app/mastodon/compose.py', '_mentioned_community'): 'scoped by ap_domain: the remote arm, a community a status '
+                                                         'names with its host; a hosted one goes through local_named',
     ('app/user/routes.py', 'edit_user_note'): 'deliberately every domain and instance: "apply to all" notes every '
                                               'namesake, local or remote; a namesake search, not an identity lookup',
     ('app/models.py', 'UserRegistration.search_similar_names'): 'deliberately every domain and instance: look-alike '
