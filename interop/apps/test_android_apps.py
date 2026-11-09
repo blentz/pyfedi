@@ -338,7 +338,13 @@ class NewPipe:
         d.tap(TUBE_TITLE)
         d.wait_text(video['account']['displayName'], timeout=60)   # the video's page, its uploader under it
         d.ui(resourceId=self.id('surfaceView')).wait(timeout=60)    # the player, playing the file
-        return f"NewPipe lists {TUBE_TITLE!r} from {TUBE} and plays it"
+        # its quality menu offers the renditions (W2.1b): the controls show on a tap, the menu on the quality button
+        # (NewPipe may start below 720p on mobile data, so the button may show any of them)
+        d.tap_until(lambda: d.ui(resourceId=self.id('surfaceView')).click(), '720p', '480p', '360p', wait=10)
+        d.ui(resourceId=self.id('qualityTextView')).click(timeout=15)
+        for label in ('720p', '480p', '360p'):
+            d.wait_text(label, timeout=15)
+        return f"NewPipe lists {TUBE_TITLE!r} from {TUBE}, plays it, and offers its 480p and 360p renditions"
 
     def post(self):
         raise AssertionError('NewPipe cannot upload: the matrix marks it inapplicable')

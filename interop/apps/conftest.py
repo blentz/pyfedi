@@ -19,7 +19,7 @@ SEED_TITLE = 'Interop apps: a post every app must show'
 # The public domain apps with no account browse (piefed.test is private, R219), its uploader and its video
 TUBE, TESS = 'tube.test', ('tess', 'interop-tess-pw')
 TUBE_TITLE = 'Interop apps video'
-VIDEO_FIXTURE = '/app/tests/fixtures/media/video_h264.mp4'
+VIDEO_FIXTURE = '/app/tests/fixtures/media/video_720p.mp4'   # 720p: it gains 480p and 360p renditions (W2.1b)
 RUN = os.environ.get('APPS_RUN_ID') or time.strftime('%Y%m%d%H%M%S')
 
 
@@ -95,12 +95,18 @@ def _listed_video(http):
 
 
 def tube_video() -> dict:
-    """TUBE_TITLE on tube.test, as PeerTube's API lists it: uploaded by tess to her community the first time, then
-    reused. Listed only once PieFed's media pipeline has made it ready."""
+    """TUBE_TITLE on tube.test, as PeerTube's API shows it: uploaded by tess to her community the first time, then
+    reused. Listed once PieFed's media pipeline has made it ready; returned once its renditions are listed too."""
     with httpx.Client(base_url=f'https://{TUBE}', verify=ssl.create_default_context(cafile=CA), timeout=15) as http:
         video = _listed_video(http)
         if video is None:
             r = PieFedWeb(*TESS, host=TUBE).submit_media('tube', 'video', TUBE_TITLE, VIDEO_FIXTURE, 'video/mp4')
             assert r.status_code == 302, f'upload answered {r.status_code}: {form_errors(r.text)}'
             video = wait_for(lambda: _listed_video(http), timeout=120, interval=2)
-        return video
+        return wait_for(lambda: _with_renditions(http, video['id']), timeout=180, interval=2)
+
+
+def _with_renditions(http, video_id):
+    video = http.get(f'/api/v1/videos/{video_id}').raise_for_status().json()
+    labels = {entry['resolution']['label'] for entry in video['files']}
+    return video if {'480p', '360p'} <= labels else None
