@@ -144,3 +144,11 @@ def test_an_upload_the_shared_store_aborts_keeps_its_status(world, monkeypatch):
     monkeypatch.setattr(media_module, 'process_upload', too_big)
     response = _upload(world)
     assert response.status_code == 413 and 'error' in response.get_json()
+
+
+def test_an_upload_fault_is_logged_and_its_text_never_sent(world, monkeypatch):
+    def fail(*args, **kwargs):
+        raise OSError('/app/app/static/media/posts: disk quota exceeded')
+    monkeypatch.setattr(media_module, 'process_upload', fail)
+    response = _upload(world)
+    assert response.status_code == 500 and response.get_json() == {'error': 'Something went wrong'}
