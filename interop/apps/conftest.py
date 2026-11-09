@@ -10,12 +10,16 @@ import pytest
 
 from interop.apps.android_device import Device
 from interop.apps.matrix import RESULTS
-from interop.clients import CA, PieFed, wait_for
+from interop.clients import CA, PieFed, PieFedWeb, form_errors, wait_for
 
 ALICE = ('alice', 'interop-alice-pw')
 DORA = ('dora', 'interop-dora-pw')
 COMMUNITY = 'apps'
 SEED_TITLE = 'Interop apps: a post every app must show'
+# The public domain apps with no account browse (piefed.test is private, R219), its uploader and its video
+TUBE, TESS = 'tube.test', ('tess', 'interop-tess-pw')
+TUBE_TITLE = 'Interop apps video'
+VIDEO_FIXTURE = '/app/tests/fixtures/media/video_h264.mp4'
 RUN = os.environ.get('APPS_RUN_ID') or time.strftime('%Y%m%d%H%M%S')
 
 
@@ -83,3 +87,20 @@ def tmp_results():
 def http():
     """A plain client for piefed.test, as an app with no account sees it."""
     return httpx.Client(base_url='https://piefed.test', verify=ssl.create_default_context(cafile=CA), timeout=15)
+
+
+def _listed_video(http):
+    found = http.get('/api/v1/videos', params={'sort': '-publishedAt', 'count': 100}).raise_for_status().json()
+    return next((video for video in found['data'] if video['name'] == TUBE_TITLE), None)
+
+
+def tube_video() -> dict:
+    """TUBE_TITLE on tube.test, as PeerTube's API lists it: uploaded by tess to her community the first time, then
+    reused. Listed only once PieFed's media pipeline has made it ready."""
+    with httpx.Client(base_url=f'https://{TUBE}', verify=ssl.create_default_context(cafile=CA), timeout=15) as http:
+        video = _listed_video(http)
+        if video is None:
+            r = PieFedWeb(*TESS, host=TUBE).submit_media('tube', 'video', TUBE_TITLE, VIDEO_FIXTURE, 'video/mp4')
+            assert r.status_code == 302, f'upload answered {r.status_code}: {form_errors(r.text)}'
+            video = wait_for(lambda: _listed_video(http), timeout=120, interval=2)
+        return video

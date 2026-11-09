@@ -25,15 +25,14 @@
 
     "peertube-android": {"platform": "peertube", "surface": "android", "probe": "peertube", "expect": {
       "login": {"outcome": "unsupported", "reason": "the PeerTube app logs in with /api/v1/oauth-clients/local and /api/v1/users/token, which PieFed lacks"},
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no PeerTube video API (/api/v1/videos)"},
+      "view": {"outcome": "unsupported", "reason": "the probe browses piefed.test, which is private (R219): /api/v1/videos (W2.1) answers 401 there with no login, and the app's login is W2.2"},
       "post": {"outcome": "blocked", "reason": "uploading needs the login the app cannot do"}}},
-    "newpipe-android": {"platform": "peertube", "surface": "android", "probe": "peertube", "expect": {
+    "newpipe-android": {"platform": "peertube", "surface": "android", "package": "org.schabi.newpipe", "apk": {"github": "TeamNewPipe/NewPipe", "asset": "\\.apk$"}, "expect": {
       "login": {"outcome": "inapplicable", "reason": "NewPipe has no accounts: it only browses"},
-      "view": {"outcome": "unsupported", "reason": "NewPipe adds a PeerTube instance through PeerTube's REST API, which PieFed lacks"},
       "post": {"outcome": "inapplicable", "reason": "NewPipe cannot upload"}}},
     "tubelab-android": {"platform": "peertube", "surface": "android", "probe": "peertube", "expect": {
       "login": {"outcome": "unsupported", "reason": "TubeLab logs in through PeerTube's OAuth client and token endpoints, which PieFed lacks"},
-      "view": {"outcome": "unsupported", "reason": "PieFed serves no PeerTube video API (/api/v1/videos)"},
+      "view": {"outcome": "unsupported", "reason": "the probe browses piefed.test, which is private (R219): /api/v1/videos (W2.1) answers 401 there with no login, and the app's login is W2.2"},
       "post": {"outcome": "blocked", "reason": "uploading needs the login the app cannot do"}}},
 
     "antennapod-android": {"platform": "castopod", "surface": "android", "package": "de.danoeh.antennapod", "apk": {"fdroid": "de.danoeh.antennapod"}, "expect": {

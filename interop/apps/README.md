@@ -29,9 +29,14 @@ Results land in `interop/apps/results/` (gitignored): one JSON per app, `summary
 | Lemmy | Jerboa | protocol probe | the first calls it makes |
 | Mastodon | Mastodon, Tusky, Moshidon (Android); Phanpy, Elk (web) | protocol probe | |
 | Pixelfed | Pixelfed, PixelDroid, Fedilab (Android) | protocol probe | |
-| PeerTube | PeerTube, NewPipe, TubeLab (Android) | protocol probe | |
+| PeerTube | NewPipe (Android) | the newest APK on the emulator | add `tube.test` as its PeerTube instance, pick it in the service picker, and play the video tess uploaded there |
+| PeerTube | PeerTube, TubeLab (Android) | protocol probe | |
 | Castopod | AntennaPod (Android) | the newest APK on the emulator | subscribe to `pod_media`'s feed by RSS address and see its episode |
 | Castopod | Pocket Casts, Podcast Addict | the feed itself | what a player needs from it: an item with an audio enclosure, its length and duration |
+
+`tube.test` is a second, public domain of the same PieFed (multi-domain storefronts, seeded by
+`interop/seed_piefed.py` with tess and her video community `tube`). `piefed.test` is private (R219), and an app with
+no account can browse only a public domain.
 
 Every comment an app posts carries a marker unique to the app and the run, and is looked for afterwards through
 PieFed's own API: the app saying it posted is not enough.

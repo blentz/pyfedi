@@ -14,7 +14,7 @@ import httpx
 import pytest
 
 from interop.apps import apks, steps
-from interop.apps.conftest import ALICE, SEED_TITLE, find_comment, marker
+from interop.apps.conftest import ALICE, SEED_TITLE, TUBE, TUBE_TITLE, find_comment, marker, tube_video
 from interop.apps.matrix import RESULTS, load_matrix
 
 MATRIX = load_matrix()
@@ -285,7 +285,66 @@ class MastodonAndroid:
         return f'replied {text!r} to the seeded post; PieFed has it as a comment'
 
 
-DRIVERS = {'summit-android': Summit, 'voyager-android': VoyagerAndroid, 'thunder-android': Thunder,
+class NewPipe:
+    """NewPipe (TeamNewPipe/NewPipe): native, with no accounts. Settings > Content > PeerTube instances takes an
+    instance's URL (it reads /api/v1/config) and makes it the PeerTube service's; the drawer's service picker lists that
+    service under the instance's name, and it opens on its Trending kiosk, /api/v1/videos?sort=-trending. The video's
+    page plays its file. It browses tube.test: piefed.test is private (R219), and NewPipe cannot sign in."""
+
+    def __init__(self, device, package, world):
+        self.device, self.world, self.package = device, world, package
+        self.id = lambda name: f'{package}:id/{name}'
+
+    def login(self):
+        raise AssertionError('NewPipe has no login: the matrix marks it inapplicable')
+
+    def _first_run(self):
+        """NewPipe opens on a notice dialog ("Keep Android Open"), shown a moment after launch: wait for it, accept it.
+        A version that shows none gets on with it once the drawer shows."""
+        d = self.device
+        d.wait_text('Keep Android Open', 'Open Drawer', timeout=60)
+        while d.ui(resourceId='android:id/button1').exists:
+            d.ui(resourceId='android:id/button1').click()
+            d.ui(resourceId='android:id/button1').wait_gone(timeout=10)
+
+    def _add_instance(self):
+        d = self.device
+        d.ui(description='Open Drawer').click(timeout=30)
+        d.tap('Settings', exact=True)
+        d.tap('Content', exact=True)
+        d.reveal('PeerTube instances')
+        d.tap('PeerTube instances', exact=True)
+        d.ui(resourceId=self.id('addInstanceButton')).click(timeout=30)
+        d.type_into(d.ui(className='android.widget.EditText', instance=0), f'https://{TUBE}')
+        d.tap('OK', exact=True)
+        d.wait_text(TUBE, timeout=60)   # validated: PieFed answered /api/v1/config
+        d.ui(text=TUBE).sibling(className='android.widget.RadioButton').click(timeout=30)
+        for _ in range(3):
+            d.ui.press('back')
+
+    def _choose_peertube(self):
+        d = self.device
+        d.ui(description='Open Drawer').click(timeout=30)
+        d.ui(resourceId=self.id('drawer_header_action_button')).click(timeout=30)   # the service picker
+        d.tap(TUBE, exact=True)   # the PeerTube service, under its instance's name (/api/v1/config)
+
+    def view(self):
+        video = tube_video()
+        d = self.device
+        self._first_run()
+        self._add_instance()
+        self._choose_peertube()
+        d.wait_text(TUBE_TITLE, timeout=90)
+        d.tap(TUBE_TITLE)
+        d.wait_text(video['account']['displayName'], timeout=60)   # the video's page, its uploader under it
+        d.ui(resourceId=self.id('surfaceView')).wait(timeout=60)    # the player, playing the file
+        return f"NewPipe lists {TUBE_TITLE!r} from {TUBE} and plays it"
+
+    def post(self):
+        raise AssertionError('NewPipe cannot upload: the matrix marks it inapplicable')
+
+
+DRIVERS = {'newpipe-android': NewPipe, 'summit-android': Summit, 'voyager-android': VoyagerAndroid, 'thunder-android': Thunder,
            'tusky-android': Tusky, 'mastodon-android': MastodonAndroid}
 
 

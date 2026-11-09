@@ -7,6 +7,12 @@ piefed.test {
 	reverse_proxy piefed-web:5000
 }
 
+# a second, public domain of the same PieFed (multi-domain storefronts): piefed.test is private (R219), and an app
+# with no account, such as NewPipe, can browse only a public one
+tube.test {
+	reverse_proxy piefed-web:5000
+}
+
 mastodon.test {
 	reverse_proxy mastodon-web:3000
 }

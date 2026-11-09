@@ -151,7 +151,7 @@ services:
       interop:
         aliases: &harness-names [piefed.test, mastodon.test, peertube.test, castopod.test, pixelfed.test, loops.test,
                                  s3.test, relay.test, voyager.test, blorp.test, photon.test, phanpy.test,
-                                 elk.test]
+                                 elk.test, tube.test]
       apps-offline:   # the emulator's only network: the harness names, and no way out (see android-emulator)
         aliases: *harness-names
 

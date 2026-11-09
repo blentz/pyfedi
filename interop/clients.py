@@ -206,8 +206,8 @@ class PieFedWeb:
     """A logged-in browser session on PieFed's web forms, for what the alpha API does not offer, such as media
     uploads (app/community/routes.py add_post). Each POST sends what the form page itself holds, CSRF token included."""
 
-    def __init__(self, user, password):
-        self.http = httpx.Client(base_url='https://piefed.test', verify=ssl.create_default_context(cafile=CA), timeout=30)
+    def __init__(self, user, password, host='piefed.test'):
+        self.http = httpx.Client(base_url=f'https://{host}', verify=ssl.create_default_context(cafile=CA), timeout=30)
         r = self.http.post('/auth/login', data={**self._defaults('/auth/login'), 'user_name': user, 'password': password})
         if r.status_code != 302:
             raise AssertionError(f'PieFedWeb: login as {user} answered {r.status_code}, not a redirect')
