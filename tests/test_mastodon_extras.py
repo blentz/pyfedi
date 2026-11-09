@@ -71,3 +71,13 @@ def test_preferences_are_mastodons_defaults(world):
 def test_nothing_trends_and_nobody_is_suggested(world, path):
     response = _get(world, path, token=False)
     assert response.status_code == 200 and response.get_json() == []
+
+
+def test_saving_markers_is_taken_and_keeps_nothing(world):
+    response = world['client'].post('/api/v1/markers', headers={'Authorization': f"Bearer {world['token']}"},
+                                    json={'home': {'last_read_id': '1'}})
+    assert response.status_code == 403   # a read token cannot write
+    writer, _refresh = tokens.issue_token(world['app'], world['me'], 'read write')
+    response = world['client'].post('/api/v1/markers', headers={'Authorization': f'Bearer {writer}'},
+                                    json={'home': {'last_read_id': '1'}})
+    assert response.status_code == 200 and response.get_json() == {}

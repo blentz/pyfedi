@@ -86,6 +86,14 @@ def markers():
     return jsonify({})
 
 
+@bp.route('/api/v1/markers', methods=['POST'])
+@require_oauth('write:statuses')
+def save_markers():
+    """An app saves where its reader got to (Mastodon Android does on leaving a timeline): kept nowhere yet, so the
+    answer holds no markers, as reading them back would."""
+    return jsonify({})
+
+
 @bp.route('/api/v1/trends')
 @bp.route('/api/v1/trends/tags')
 @bp.route('/api/v1/trends/statuses')
