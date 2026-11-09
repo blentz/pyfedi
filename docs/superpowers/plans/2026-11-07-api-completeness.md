@@ -354,6 +354,17 @@ floors and changed-line gates.
     headers are merged with the licence (merging every page's broke ActivityPub discovery); ab94a6dd4 sweep fixes.
     Gates on ab94a6dd4: two consecutive cold harness runs 21/21; suite 32158 passed, floors 140, changed-line (base
     97b53cedc) green. (One earlier full run lost to a postgres segfault on the remote box, kernel-logged.)
+    **Owner rulings 2026-11-09** (branch feat/admin-scopes-push off feat/mastodon-writing):
+    - *Admin scopes: accept, map to an RBAC role the admin chooses, Staff by default.* 52c495b82: admin:read and
+      admin:write and their parts are accepted; the misc settings page chooses the role (the role named Staff until
+      one is); a person holding it (or Admin) is granted them, anyone else has them left out of the code and is told
+      so on the consent page; a token's admin reach is that role's permissions the person holds
+      (app.oauth_server.admin_scopes.admin_permissions). No admin API routes exist yet to use it.
+    - *Push notifications, clearnet only.* f90e5c0e5 + c686ceb8c app/webpush.py (RFC 8291 encryption, reproducing
+      the RFC's example to the byte; VAPID; endpoints https, public, not ours; sent through the pinned client after a
+      security review); 8aa72e3c9 /api/v1/push/subscription (push_subscription, migration c9f5a1d4e6b3; refused on an
+      onion; the VAPID key in v2 instance on clearnet only); 7937f3355 delivery of every new notification to the
+      subscriptions that want it (alerts, policy, clearnet token, not hidden), a 404/410 forgetting it.
   - W1.4 Pixelfed extras after a spike (`/api/v1.1`, `/api/pixelfed`), per M7.
 - **W2 PeerTube `/api/v1`.**
   - W2.1 Read-only, for NewPipe: `/api/v1/config`, `/videos` (sorts, local), `/videos/{id}` with `files[]`,
