@@ -572,7 +572,7 @@ def test_accepting_a_remote_follow_request_sends_an_accept(app, env):
     a_follow_request(owner, remote)
     token = csrf(app, client)
 
-    with patch('app.user.routes.send_post_request') as send:
+    with patch('app.activitypub.signature.send_post_request') as send:
         client.post(f'/user/follow_request/{remote.id}/accept',
                     data={'csrf_token': token})
 
@@ -585,7 +585,7 @@ def test_accepting_a_local_follow_request_sends_nothing(app, env):
     a_follow_request(owner, other)
     token = csrf(app, client)
 
-    with patch('app.user.routes.send_post_request') as send:
+    with patch('app.activitypub.signature.send_post_request') as send:
         client.post(f'/user/follow_request/{other.id}/accept',
                     data={'csrf_token': token})
 
@@ -639,7 +639,7 @@ def test_rejecting_a_remote_follow_request_sends_a_reject(app, env):
     a_follow_request(owner, remote)
     token = csrf(app, client)
 
-    with patch('app.user.routes.send_post_request') as send:
+    with patch('app.activitypub.signature.send_post_request') as send:
         client.post(f'/user/follow_request/{remote.id}/reject',
                     data={'csrf_token': token})
 

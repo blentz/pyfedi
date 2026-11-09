@@ -128,7 +128,7 @@ def test_a_follow_request_answered_by_hand_goes_to_the_followers_own_inbox(app, 
     a_follow_request(owner, remote)
     token = csrf(app, client)
 
-    with patch('app.user.routes.send_post_request') as send:
+    with patch('app.activitypub.signature.send_post_request') as send:
         client.post(f'/user/follow_request/{remote.id}/{answer}', data={'csrf_token': token})
 
     assert send.call_args.args[0] == OWN
@@ -297,7 +297,7 @@ def test_a_follow_request_answered_by_hand_fetches_an_unknown_own_inbox(app, sit
     _fetch_returns(monkeypatch, _follower_document(remote))
     token = csrf(app, client)
 
-    with patch('app.user.routes.send_post_request') as send:
+    with patch('app.activitypub.signature.send_post_request') as send:
         client.post(f'/user/follow_request/{remote.id}/accept', data={'csrf_token': token})
 
     assert send.call_args.args[0] == OWN

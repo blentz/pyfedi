@@ -13,7 +13,10 @@ from app.shared.tasks import task_selector
 from app.user.utils import purge_user_then_delete, purge_remote_user_then_delete
 from app.utils import authorise_api_user, blocked_users, render_template, add_to_modlog, gibberish, user_access
 from app.permissions import holds_any_grant, may_ban
+import app.activitypub.signature as ap_signature   # the modules: app.activitypub.util reaches this one (cycle)
+import app.activitypub.util as ap_util
 import app.chat.util as chat_util
+import app.federation_urls as federation_urls
 import app as app_pkg
 
 
@@ -353,3 +356,38 @@ If you are NOT using scripts, LLMs or other automation to create posts, please v
     if existing_challenge is None:
         db.session.add(BotChallenge(user_id=recipient.id, sent_by=user.id, uuid=uuid))
         db.session.commit()
+
+
+def follow_requests_of(user: User) -> list:
+    """The people asking to follow `user` whose request is still open, but those who blocked `user` (the web follow
+    requests page's list)."""
+    return db.session.query(User).join(UserFollower, User.id == UserFollower.remote_user_id) \
+        .outerjoin(UserBlock, (User.id == UserBlock.blocker_id) & (UserFollower.local_user_id == UserBlock.blocked_id)) \
+        .filter((UserFollower.local_user_id == user.id) & (UserBlock.id == None)) \
+        .filter(UserFollower.is_accepted == None, UserFollower.is_inward == True) \
+        .all()
+
+
+def answer_follow_request(user: User, requester_id: int, accept: bool) -> bool:
+    """Accept or reject `requester_id`'s request to follow `user`, telling a remote requester's server (Accept or
+    Reject). False when there is no such request. What the web follow requests page and the Mastodon API both do."""
+    requester = db.session.get(User, requester_id)
+    follow_request = UserFollower.query.filter(UserFollower.local_user_id == user.id,
+                                               UserFollower.remote_user_id == requester_id,
+                                               UserFollower.is_inward == True).first()
+    if follow_request is None or requester is None:
+        return False
+    # D1072: a rejection is False, as the column says ("None = request sent. True = accepted. False = Rejected")
+    follow_request.is_accepted = accept
+    db.session.commit()
+    if not requester.is_local():
+        answer = {"@context": ap_signature.default_context(),
+                  "actor": user.public_url(),
+                  "to": [requester.public_url()],
+                  "object": {"actor": requester.public_url(), "to": None, "object": user.public_url(),
+                             "type": "Follow", "id": federation_urls.activity_id('follow', user, gibberish(32))},
+                  "type": "Accept" if accept else "Reject",
+                  "id": federation_urls.activity_id('accept' if accept else 'reject', user, gibberish(32))}
+        ap_signature.send_post_request(ap_util.follow_answer_inbox(requester), answer, user.private_key,
+                                       f"{user.public_url()}#main-key")
+    return True

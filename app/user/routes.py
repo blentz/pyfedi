@@ -16,7 +16,7 @@ from app import db, cache, celery
 from app.payments.core import end_subscriptions_of
 from app.branding import current_branding
 from app.activitypub.signature import default_context, send_post_request
-from app.activitypub.util import find_actor_or_create, extract_domain_and_actor, follow_answer_inbox
+from app.activitypub.util import find_actor_or_create, extract_domain_and_actor
 # The module, not the name: app.auth.util reaches this file through
 # app.activitypub.util before random_token is defined (import cycle: auth.util)
 import app.auth.util as auth_util
@@ -2738,71 +2738,21 @@ def user_file_upload():
 @bp.route('/user/follow_requests', methods=['GET'])
 @login_required
 def user_follow_requests():
-    follow_requests = db.session.query(User).join(UserFollower, User.id == UserFollower.remote_user_id) \
-        .outerjoin(UserBlock,
-                   (User.id == UserBlock.blocker_id) & (UserFollower.local_user_id == UserBlock.blocked_id)) \
-        .filter((UserFollower.local_user_id == current_user.id) & (UserBlock.id == None)) \
-        .filter(UserFollower.is_accepted == None, UserFollower.is_inward == True) \
-        .all()
-
     return render_template('user/follow_requests.html', title=_('Follow requests'),
-                           follow_requests=follow_requests, user=current_user)
+                           follow_requests=shared_user.follow_requests_of(current_user), user=current_user)
 
 
 @bp.route('/user/follow_request/<int:user_id>/accept', methods=['POST'])
 @login_required
 def user_follow_request_accept(user_id):
-    remote_user = db.session.get(User, user_id)
-    follow_request = UserFollower.query.filter(UserFollower.local_user_id == current_user.id,
-                                               UserFollower.remote_user_id == user_id,
-                                               UserFollower.is_inward == True).first()
-    if follow_request:
-        follow_request.is_accepted = True
-        db.session.commit()
-        if not remote_user.is_local():
-            accept = {"@context": default_context(),
-                      "actor": current_user.public_url(),
-                      "to": [remote_user.public_url()],
-                      "object": {"actor": remote_user.public_url(), "to": None,
-                                 "object": current_user.public_url(), "type": "Follow", "id": activity_id('follow', current_user, gibberish(32))},
-                      "type": "Accept",
-                      "id": activity_id('accept', current_user, gibberish(32))}
-            send_post_request(follow_answer_inbox(remote_user), accept, current_user.private_key,
-                              f"{current_user.public_url()}#main-key")
+    shared_user.answer_follow_request(current_user, user_id, True)
     return _('Done')
 
 
 @bp.route('/user/follow_request/<int:user_id>/reject', methods=['POST'])
 @login_required
 def user_follow_request_reject(user_id):
-    remote_user = db.session.get(User, user_id)
-    follow_request = UserFollower.query.filter(UserFollower.local_user_id == current_user.id,
-                                               UserFollower.remote_user_id == user_id,
-                                               UserFollower.is_inward == True).first()
-    if follow_request:
-        # D1072. This said `is_accepted = True` -- a copy of the accept route
-        # that was never changed. So rejecting a follow request sent the remote
-        # side a `Reject` activity AND recorded locally that the follow had
-        # been ACCEPTED: the person appears in the followers list
-        # (`show_profile` selects `is_accepted == True`) of somebody who
-        # believes they turned them away, and the two instances disagree about
-        # what happened. `UserFollower.is_accepted`'s own column comment gives
-        # the value: "None = request sent. True = accepted. False = Rejected",
-        # which is what `app/activitypub/routes.py:1185` writes for an inbound
-        # rejection.
-        follow_request.is_accepted = False
-        db.session.commit()
-        if not remote_user.is_local():
-            accept = {"@context": default_context(),
-                      "actor": current_user.public_url(),
-                      "to": [remote_user.public_url()],
-                      "object": {"actor": remote_user.public_url(), "to": None,
-                                 "object": current_user.public_url(), "type": "Follow",
-                                 "id": activity_id('follow', current_user, gibberish(32))},
-                      "type": "Reject",
-                      "id": activity_id('reject', current_user, gibberish(32))}
-            send_post_request(follow_answer_inbox(remote_user), accept, current_user.private_key,
-                              f"{current_user.public_url()}#main-key")
+    shared_user.answer_follow_request(current_user, user_id, False)
     return _('Done')
 
 
