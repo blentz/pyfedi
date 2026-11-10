@@ -1,19 +1,22 @@
 """The site and logging in (spec 2026-11-10-lemmy-v3-design §2).
 
-GET /api/v3/site is the Lemmy site document other servers and crawlers have long read
-(app.activitypub.routes.lemmy_site). Jerboa reads it too, before and right after logging in. Sent a token, the
+GET /api/v3/site is the Lemmy site document other servers and crawlers have long read (app.activitypub.util
+.lemmy_site_data), cached per domain, and none on a local-only one. Jerboa reads it too, before and right after logging in. Sent a token, the
 document also carries `my_user`, which Jerboa reads without a null check, and is never cached.
 
 POST /api/v3/user/login is alpha's password login under Lemmy's names. The token is alpha's own JWT, good in both
 APIs."""
 from flask import jsonify, request
 
-from app import limiter
+from app import cache, limiter
+from app.activitypub.util import lemmy_site_data
 from app.api.alpha.routes import enable_api, is_trusted_request
 from app.api.alpha.views import user_view
 from app.lemmy import bp, shapes
 from app.lemmy.errors import refusal
+from app.federation_urls import federating_storefront
 from app.shared.auth import log_in_with_password
+from app.storefront import storefront_cache_key
 from app.utils import authorise_api_user, orjson_response
 
 LOGIN_LIMIT = '20/hour'   # alpha's (app.api.alpha.routes.post_alpha_user_login), a bucket of its own per address
@@ -21,8 +24,9 @@ LOGIN_LIMIT = '20/hour'   # alpha's (app.api.alpha.routes.post_alpha_user_login)
 
 @bp.before_request
 def alpha_enabled():
-    """The adapter is alpha under other names, so it is served where alpha is."""
-    if not enable_api():
+    """The adapter is alpha under other names, so it is served where alpha is; the site document, which other servers
+    read, everywhere."""
+    if request.endpoint != 'lemmy.site_document' and not enable_api():
         return refusal('api_disabled')
     return None
 
@@ -43,6 +47,12 @@ def answer(document: dict):
         return refusal('access_lapsed', 403) if str(refusal_reason) == 'access_lapsed' \
             else refusal('incorrect_login', 401)
     return orjson_response({**document, 'my_user': shapes.my_user(user_view(user=user, variant=6), user)})
+
+
+@bp.route('/api/v3/site')
+@cache.cached(timeout=600, key_prefix=storefront_cache_key, unless=signed_in)
+def site_document():
+    return answer(lemmy_site_data(federating_storefront()))
 
 
 @bp.route('/api/v3/user/login', methods=['POST'])

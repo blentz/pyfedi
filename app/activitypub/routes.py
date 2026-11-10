@@ -29,7 +29,7 @@ from app.activitypub.signature import POST_REQUIRED, HttpSignature, publish_asyn
     send_post_request, verify_with_key_refresh, request_key_id
 from app.activitypub.util import MEDIA_OBJECT_TYPES, NEW_CONTENT_TYPES, follow_answer_inbox, MEDIA_URL_KIND, media_url_from, activity_dedupe_key, community_actor_data, refresh_community_profile_task, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
     post_to_activity, post_count_collections, comment_count_collections, find_actor_or_create_cached, find_liked_object, \
-    lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
+    is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
     update_post_from_activity, undo_vote, has_vote_on, vote_state, release_undone_activity, mark_accepted, deferred_key, DEFERRED_SECONDS, \
     activity_accepted_key, deferred_count_key, DEFERRED_PER_HOST, FOLLOW_TYPES, VOTE_TYPES, DEFERRABLE_TYPES, \
@@ -57,7 +57,6 @@ from app.local_only import community_local_only, federated_mentions, federating_
     refused_outbound, user_local_only
 from app.local_names import actor_handle, local_clause, split_local_name
 from app.lemmy import identity as lemmy_identity
-from app.lemmy import site as lemmy_site_answer
 from app.mastodon import instance as mastodon_instance
 from app.federation_urls import activity_id, domain_site_name, federating_storefront, instance_actor_url, \
     is_federating_url, object_base, owned_elsewhere, owner_base, owner_domain
@@ -476,13 +475,6 @@ def api_is_email_banned():
             break
 
     return jsonify(result)
-
-
-@bp.route('/api/v3/site')
-@cache.cached(timeout=600, key_prefix=storefront_cache_key, unless=lemmy_site_answer.signed_in)
-def lemmy_site():
-    """Also Jerboa's, which reads its person's own settings here when it sends a token (app.lemmy.site)."""
-    return lemmy_site_answer.answer(lemmy_site_data(federating_storefront()))
 
 
 @bp.route('/api/v3/federated_instances')
