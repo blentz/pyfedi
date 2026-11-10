@@ -144,7 +144,7 @@ def _descendants(entry: dict):
         yield from _descendants(child)
 
 
-def _comment(entry: dict, post: Post, thread_id: int) -> dict:
+def comment_entity(entry: dict, post: Post, thread_id: int) -> dict:
     reply = entry['comment']
     below = list(_descendants(entry))
     return {'id': reply.id, 'threadId': thread_id, 'inReplyToCommentId': reply.parent_id, 'videoId': post.id,
@@ -156,7 +156,7 @@ def _comment(entry: dict, post: Post, thread_id: int) -> dict:
 
 
 def _branch(entry: dict, post: Post, thread_id: int) -> dict:
-    return {'comment': _comment(entry, post, thread_id),
+    return {'comment': comment_entity(entry, post, thread_id),
             'children': [_branch(child, post, thread_id) for child in entry['replies']]}
 
 
@@ -169,7 +169,8 @@ def comment_threads(video_id):
     start, count = entities.window()
     threads = _thread(post)
     return jsonify({'total': len(threads), 'totalNotDeletedComments': len(threads),
-                    'data': [_comment(entry, post, entry['comment'].id) for entry in threads[start:start + count]]})
+                    'data': [comment_entity(entry, post, entry['comment'].id)
+                             for entry in threads[start:start + count]]})
 
 
 @bp.route('/api/v1/videos/<video_id>/comment-threads/<int:thread_id>')

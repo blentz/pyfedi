@@ -56,6 +56,8 @@ USER = {'account': ACCOUNT, 'autoPlayNextVideo': bool, 'autoPlayNextVideoPlaylis
         'role': {'id': int, 'label': str}, 'theme': str, 'username': str, 'videoChannels': [CHANNEL],
         'videoQuota': int, 'videoQuotaDaily': int, 'p2pEnabled': bool,
         'notificationSettings': {'newCommentOnMyVideo': int}}   # TubeLab reads that one with no null check
+COMMENT = {'id': int, 'url': str, 'text': str, 'threadId': int, 'videoId': int, 'createdAt': str, 'updatedAt': str,
+           'isDeleted': bool, 'totalReplies': int, 'totalRepliesFromVideoAuthor': int}
 PRIVACIES = range(1, 6)   # VideoPrivacy: one outside these fails the decode
 
 TOKEN = {'access_token': str, 'refresh_token': str, 'token_type': str}
