@@ -8,14 +8,17 @@ The emulator trusts the harness CA as a system CA (android/boot.sh) and resolves
 so the apps reach PieFed exactly as they would a public instance. Controls are found by resource id where the app has
 them (native apps) and by the text or content description they show otherwise.
 """
+import ssl
 import time
 
 import httpx
 import pytest
 
 from interop.apps import apks, steps
-from interop.apps.conftest import ALICE, SEED_TITLE, TESS, TUBE, TUBE_TITLE, find_comment, marker, tube_video
+from interop.apps.conftest import ALICE, SEED_TITLE, TESS, TUBE, TUBE_TITLE, VIDEO_FIXTURE, find_comment, marker, \
+    tube_video
 from interop.apps.matrix import RESULTS, load_matrix
+from interop.clients import CA, wait_for
 
 MATRIX = load_matrix()
 # what the apps search for: a prefix of the seeded title, so that only a result, never the search field still holding
@@ -412,17 +415,17 @@ class PeerTubeApp:
 
     def view(self):
         d = self.device
-        tube_video()
+        video = tube_video()
         d.tap_tab('Platforms')   # the platform's page: its videos under "Online videos"
         # seeded after the page loaded, on a cold stack: pull it down to load again
         d.tap_until(lambda: d.ui.swipe_ext('down', scale=0.6), TUBE_TITLE, wait=15)
         d.tap(TUBE_TITLE)   # its item ("Video item, <duration>, <channel>, <title>, ...")
         d.wait_text('comment', 'Comments', timeout=60)   # the video's page: its comments tab ("0 comment")
-        return f'it lists {TUBE_TITLE!r} on {TUBE} and opens it'
+        text = self._comment(video)
+        return f'it lists {TUBE_TITLE!r} on {TUBE}, opens it and comments {text!r}, which PieFed has'
 
-    def post(self):
-        d, text = self.device, marker('peertube-android')
-        video = tube_video()
+    def _comment(self, video) -> str:
+        d, text = self.device, marker('peertube-android-comment')
         # the comment list loads as it scrolls into view, under the description; its button is "Comment" exactly
         # (reveal would stop at the "0 comment" tab)
         for _ in range(6):
@@ -444,7 +447,44 @@ class PeerTubeApp:
         d.ui.click((send[0]['left'] + send[0]['right']) // 2, (send[0]['top'] + send[0]['bottom']) // 2)
         find_comment(self.world['alice'], video['id'], text, timeout=60)
         d.wait_text(text, timeout=30)
-        return f"commented {text!r} on {TUBE_TITLE!r} with the PeerTube API; PieFed has it"
+        return text
+
+    def post(self):
+        """Upload a clip to tess's channel through the app's own screens (W2.3, ruling U4): Creator > Publish >
+        Upload file opens Android's photo picker on the clip put in Movies; its preview > Next; the channel >
+        Start upload; the details (the title, from the file's name, set again) > Next > Publish my video. PieFed
+        lists the video once its media pipeline has made it ready."""
+        d, text = self.device, marker('peertube-android')
+        clip = f'/sdcard/Movies/{text}.mp4'
+        d.adb.sync.push(VIDEO_FIXTURE, clip)
+        d.adb.shell(['content', 'call', '--uri', 'content://media', '--method', 'scan_volume', '--arg',
+                     'external_primary'])   # the photo picker lists what the media store has indexed
+        d.tap_tab('Creator')
+        d.tap('Publish', exact=True, timeout=30)
+        d.tap('Upload file', exact=True)
+        picked = d.ui(descriptionContains='Video')   # the picker's tiles: "Video taken on <date>"
+        picked.click(timeout=60)
+        d.tap('Next', exact=True, timeout=60)   # the preview
+        d.wait_text('Select a video channel', timeout=60)
+        d.tap('tube', exact=True)
+        d.tap('Start upload', exact=True)
+        title = d.ui(className='android.widget.EditText', instance=0)   # the details' first field, the title
+        title.wait(timeout=90)
+        # the picker hands the app a copy with a name of its own, which the title is made from: cleared with the
+        # field's own Clear (Flutter's fields take no clear_text), then typed
+        d.ui(description='Clear').click(timeout=15)
+        self._type(title, text)
+        d.hide_keyboard()
+        d.tap('Next', exact=True)
+        d.tap('Publish my video', exact=True, timeout=60)
+        with httpx.Client(base_url=f'https://{TUBE}', verify=ssl.create_default_context(cafile=CA), timeout=15) as http:
+            def listed():
+                found = http.get('/api/v1/videos', params={'sort': '-publishedAt', 'count': 100})
+                return next((video for video in found.raise_for_status().json()['data'] if video['name'] == text),
+                            None)
+            video = wait_for(listed, timeout=300, interval=3)
+        return f"uploaded {text!r} to tess's channel with PeerTube's resumable upload; PieFed lists it as video " \
+               f"{video['uuid']}"
 
 
 class Jerboa:
