@@ -335,7 +335,9 @@ def test_an_image_of_this_domain_is_a_path_and_one_elsewhere_is_left_out(world):
     mine = _get(world, f'/api/v1/videos/{local.id}').get_json()
     assert mine['thumbnailPath'] == '/static/media/posts/ab/cd/thumb_small.jpg'
     assert mine['previewPath'] == '/static/media/posts/ab/cd/thumb.jpg'
-    assert mine['account']['avatars'] == [{'path': '/static/media/users/ab/cd/me.png', 'width': 120}]
+    [avatar] = mine['account']['avatars']
+    assert avatar['path'] == '/static/media/users/ab/cd/me.png' and avatar['width'] == 120
+    assert avatar['createdAt'] and avatar['updatedAt']   # PeerTube's own app requires both of every image
     elsewhere = _get(world, f'/api/v1/videos/{remote.id}').get_json()
     assert 'thumbnailPath' not in elsewhere and 'previewPath' not in elsewhere
 

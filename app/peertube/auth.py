@@ -3,6 +3,8 @@ any app that asks; a username and password for a token from that client alone, o
 logout that revokes a token. Tokens never expire (P2) and are this domain's only, as every OAuth token is.
 
 Errors are PeerTube's problem+json, whose `code` the official app reads to tell bad credentials from the rest."""
+from functools import wraps
+
 from flask import g, jsonify, make_response
 from werkzeug.exceptions import HTTPException
 
@@ -20,6 +22,30 @@ def problem(status: int, code: str, detail: str):
                                       'code': code}), status)
     response.mimetype = 'application/problem+json'
     return response
+
+
+REFUSALS = {401: 'invalid_token', 403: 'forbidden', 422: 'invalid_token'}
+
+
+def signed_in(scope: str = 'read'):
+    """The route acts for the person a token names (app.oauth_server.protect.require_oauth, with its checks and the
+    login gate left to it), refusing in PeerTube's shape. A 401 is what sends PeerTube's app to refresh its token."""
+    def decorator(view):
+        @wraps(view)
+        def guarded(*args, **kwargs):
+            reached = []
+
+            def inner(*inner_args, **inner_kwargs):
+                reached.append(True)
+                return view(*inner_args, **inner_kwargs)
+            result = require_oauth(scope)(inner)(*args, **kwargs)
+            if reached:
+                return result
+            refusal, status = result
+            return problem(status, REFUSALS.get(status, 'invalid_token'), refusal.get_json()['error'])
+        guarded.has_own_login_gate = True
+        return guarded
+    return decorator
 
 
 @bp.route('/api/v1/oauth-clients/local')
@@ -50,7 +76,7 @@ def issue_token():
 
 
 @bp.route('/api/v1/users/revoke-token', methods=['POST'])
-@require_oauth()
+@signed_in()
 def revoke_token():
     tokens.revoke(g.oauth_token)
     return '', 200

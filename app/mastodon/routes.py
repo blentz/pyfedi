@@ -6,15 +6,12 @@ from sqlalchemy import and_, func
 from sqlalchemy.orm.exc import NoResultFound
 from werkzeug.exceptions import BadRequest
 
-import app.api.alpha.views as alpha_views
-from app import cache, db
-from app.federation_urls import owner_base
 from app.mastodon import bp, entities
 from app.models import User, UserExtraField
 from app.oauth_server.protect import require_oauth
 from app.reads import users as reads_users
 from app.user.profile_images import replace_avatar, replace_cover
-from app.utils import markdown_to_html, piefed_markdown_to_lemmy_markdown, user_pronouns
+from app.user.profile_text import set_profile_text
 
 _PG_INT_MAX = 2 ** 31 - 1
 
@@ -160,19 +157,12 @@ def update_credentials():
                 replace(user, upload)
     except BadRequest:
         return _refuse('the image could not be read')
-    if display_name is not None:
-        user.title = display_name or None
-    if note is not None:
-        user.about = piefed_markdown_to_lemmy_markdown(note, owner_base(user))   # as the profile page (C3)
-        user.about_html = markdown_to_html(note, link_base=owner_base(user))
     if profile_fields is not None:
         user.extra_fields = [UserExtraField(label=name, text=value) for name, value in profile_fields]
     for name, column in (('bot', 'bot'), ('discoverable', 'searchable'), ('indexable', 'indexable')):
         if (value := _flag(fields, name)) is not None:
             setattr(user, column, value)
-    db.session.commit()
-    cache.delete_memoized(user_pronouns)
-    cache.delete_memoized(alpha_views.user_view)
+    set_profile_text(user, display_name, note)   # commits the rest too
     return jsonify(entities.account(user, user.id, with_source=True))
 
 

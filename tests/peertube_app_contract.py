@@ -3,7 +3,9 @@ type (spec 2026-11-09-peertube-login-design §2). Its decoders throw on a missin
 element fails a whole list, so each shape here is a contract an answer must meet.
 
 Read from framasoft/peertube/mobile-application v2.3.0 (commit 9bd3a4d, 2026-11-04): ConfigServer in
-lib/shared/config/config_models.dart, the token in lib/shared/auth/token_api_model.dart.
+lib/shared/config/config_models.dart, the token in lib/shared/auth/token_api_model.dart, User in
+lib/features/user/user_model.dart, Video in lib/features/video/video_model.dart, and the account, channel and image
+models they hold.
 
 A shape is a type (str, int, bool), a dict of shapes, or a one-element list holding the shape of every element."""
 
@@ -38,6 +40,23 @@ CONFIG = {
     'plugin': {'registered': [{'name': str}], 'registeredExternalAuths': [{'name': str}],
                'registeredIdAndPassAuths': [{'name': str}]},
 }
+
+IMAGE = {'createdAt': str, 'updatedAt': str}
+ACTOR = {'id': int, 'url': str, 'name': str, 'host': str, 'displayName': str, 'avatars': [IMAGE]}
+ACCOUNT = {**ACTOR, 'followingCount': int, 'followersCount': int, 'createdAt': str, 'updatedAt': str}
+CHANNEL = {**ACCOUNT, 'banners': [IMAGE], 'isLocal': bool}
+CONSTANT = {'label': str}
+VIDEO = {'id': int, 'uuid': str, 'shortUUID': str, 'name': str, 'category': CONSTANT, 'licence': CONSTANT,
+         'language': CONSTANT, 'privacy': {'id': int, 'label': str}, 'nsfw': bool, 'duration': int, 'views': int,
+         'likes': int, 'dislikes': int, 'createdAt': str, 'updatedAt': str, 'publishedAt': str, 'isLive': bool,
+         'account': ACTOR, 'channel': ACTOR, 'url': str}
+USER = {'account': ACCOUNT, 'autoPlayNextVideo': bool, 'autoPlayNextVideoPlaylist': bool, 'autoPlayVideo': bool,
+        'blocked': bool, 'createdAt': str, 'email': str, 'id': int, 'lastLoginDate': str,
+        'noInstanceConfigWarningModal': bool, 'noAccountSetupWarningModal': bool, 'noWelcomeModal': bool,
+        'role': {'id': int, 'label': str}, 'theme': str, 'username': str, 'videoChannels': [CHANNEL],
+        'videoQuota': int, 'videoQuotaDaily': int, 'p2pEnabled': bool,
+        'notificationSettings': {'newCommentOnMyVideo': int}}   # TubeLab reads that one with no null check
+PRIVACIES = range(1, 6)   # VideoPrivacy: one outside these fails the decode
 
 TOKEN = {'access_token': str, 'refresh_token': str, 'token_type': str}
 

@@ -6,6 +6,7 @@ A video (V1) is a published video post a signed-out reader may read on the domai
 whose media record is ready, or, off an onion, a post whose URL is itself a video file. A link to a video site has
 nothing NewPipe can play, so it is not one."""
 import re
+from datetime import datetime
 
 from flask import jsonify, request
 from sqlalchemy import and_, func, or_
@@ -24,6 +25,7 @@ FILE_SUFFIXES = ('.mp4', '.webm')   # a remote URL NewPipe can play: its format 
 UNKNOWN = {'id': None, 'label': 'Unknown'}   # PeerTube's answer for an unset category, licence or language
 _UUID = re.compile(r'00000000-0000-4000-8000-([0-9a-f]{12})')
 _PG_INT_MAX = 2 ** 31 - 1
+EPOCH = datetime(1970, 1, 1)   # for a date PieFed has not got
 
 
 class BadRequest(ValueError):
@@ -141,9 +143,15 @@ def _path(url: str | None) -> str | None:
     return url if url.startswith('/') and not url.startswith('//') else None
 
 
-def _avatars(url: str | None) -> list:
+def _when(moment) -> str:
+    return timestamp(moment or EPOCH)
+
+
+def _avatars(url: str | None, moment=None) -> list:
+    """The actor's image, dated: PeerTube's app requires `createdAt` and `updatedAt` of every image it decodes."""
     path = _path(url)
-    return [{'path': path, 'width': 120}] if path and not path.endswith('/1px.gif') else []
+    return [{'path': path, 'width': 120, 'createdAt': _when(moment), 'updatedAt': _when(moment)}] \
+        if path and not path.endswith('/1px.gif') else []
 
 
 def _host(handle: str) -> str:
@@ -155,9 +163,12 @@ def _absolute(url: str) -> str:
 
 
 def account(user: User) -> dict:
+    """An account, with what both NewPipe and PeerTube's own app require of one (its AccountDetails)."""
     return {'id': user.id, 'name': user.user_name, 'host': _host(user.lemmy_link()),
             'displayName': user.display_name(), 'url': _absolute(user.public_url()),
-            'avatars': _avatars(user.avatar_image()), 'description': user.about or ''}
+            'avatars': _avatars(user.avatar_image(), user.created), 'description': user.about or '',
+            'followersCount': user.num_followers or 0, 'followingCount': user.num_following or 0,
+            'createdAt': _when(user.created), 'updatedAt': _when(user.created)}
 
 
 def _owner(community: Community) -> User | None:
@@ -174,7 +185,7 @@ def _owner(community: Community) -> User | None:
 def _channel_summary(community: Community) -> dict:
     return {'id': community.id, 'name': community.name, 'host': _host(community.lemmy_link()),
             'displayName': community.title, 'url': _absolute(community.public_url()),
-            'avatars': _avatars(community.icon_image())}
+            'avatars': _avatars(community.icon_image(), community.created_at)}
 
 
 def channel(community: Community) -> dict:
@@ -184,7 +195,8 @@ def channel(community: Community) -> dict:
         community.public_url()), 'host': _host(community.lemmy_link()), 'displayName': community.title, 'avatars': []}
     return {**_channel_summary(community), 'description': community.description or '',
             'followersCount': community.total_subscriptions_count or community.subscriptions_count or 0,
-            'ownerAccount': owner_account, 'banners': []}
+            'followingCount': 0, 'createdAt': _when(community.created_at), 'updatedAt': _when(community.created_at),
+            'isLocal': community.is_local(), 'ownerAccount': owner_account, 'banners': []}
 
 
 def _language(post: Post) -> dict:
