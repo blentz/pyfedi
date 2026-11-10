@@ -124,7 +124,7 @@ def test_only_hashtags_of_two_to_thirty_characters_are_sent(video_post):
     make_post_flair(video_post, 'a flair')
     assert len(video_post.tags_for_activitypub()) == 5
     names = [tag['name'].lstrip('#') for tag in peertube_video(video_post)['tag']]
-    assert names == ['ok', 't' * 30]
+    assert sorted(names) == ['ok', 't' * 30]   # post.tags has no order: the database's, which can differ
 
 
 def test_comments_off_is_policy_two_and_flags_are_sensitive(video_post):
