@@ -1,6 +1,6 @@
 """Lemmy's blueprint with every route module registered on it, for app/__init__ to register (as app.peertube.api)."""
 from app.lemmy import bp
 # each registers its routes on bp
-from app.lemmy import actions, comments, errors, posts, site  # noqa: F401
+from app.lemmy import actions, comments, errors, posts, reads, site  # noqa: F401
 
 __all__ = ['bp']
