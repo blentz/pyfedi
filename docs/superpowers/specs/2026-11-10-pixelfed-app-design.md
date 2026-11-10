@@ -43,7 +43,7 @@ PixelDroid and Fedilab speak the Mastodon API that W1 serves; the official app i
 | `GET /api/v1.1/discover/posts/trending`, `posts/network/trending`, `posts/hashtags` | explore | PieFed's top image and video posts, and its trending tags |
 | `GET /api/v1.1/accounts/username/<name>` | profile | the account by name |
 | `GET /api/v1.1/accounts/mutuals/<id>` | profile | the accounts both follow |
-| `POST /api/v1.1/report` | report | PieFed's report (app.shared) |
+| `POST /api/v1.1/report` | report | a post's, through PieFed's report (app.shared); an account is reported on the web, as PieFed's profile report is the web's alone |
 | `GET /api/pixelfed/v1/app/settings` | settings | defaults |
 | `GET /api/v1.1/nag/state`, `push/*` | notifications settings | push off: Pixelfed's own push relay is not PieFed's (W1.3 push is Mastodon's Web Push) |
 | `GET /api/v1.1/collections/self` | collections | empty |
@@ -56,7 +56,8 @@ PixelDroid and Fedilab speak the Mastodon API that W1 serves; the official app i
 - Identity per X1, on that one path.
 - `_pe=1` adds Pixelfed's fields to W1's Mastodon status (`app.mastodon.statuses`): `pf_type` from the post's media
   (an image post `photo`, a gallery `photo:album`, a video `video`, anything else `text`), `reply_count`, `liked_by`
-  (the count and the first liker's name), `local`. Mastodon's own fields stay as W1 makes them.
+  (always null: who voted is shown to moderators alone on PieFed, and the app takes null), `local`. Mastodon's own
+  fields stay as W1 makes them.
 - Every route through `app/shared` and W1's reads, with the same visibility, blocks and limits.
 - Errors in Pixelfed's (Mastodon's) shape: `{"error": "..."}`.
 
