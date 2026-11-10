@@ -1,17 +1,17 @@
-"""What a member does in Lemmy's API (spec 2026-11-10-lemmy-v3-design §2, ruling L2): vote, comment, save, mark read,
-hide, follow and block. Each takes Lemmy's body under alpha's names, loads it with alpha's own request schema, so a
+"""What a member does in Lemmy's API (spec 2026-11-10-lemmy-v3-design §2, ruling L2): post, vote, comment, save, mark
+read, hide, follow and block. Each takes Lemmy's body under alpha's names, loads it with alpha's own request schema, so a
 mistyped field is refused as alpha refuses it, and calls alpha's handler, so every write goes through app/shared with
 its federation, notifications, limits and checks (plan §3)."""
 from flask import jsonify, request
 
 from app import limiter
-from app.api.alpha.routes import COMMENT_LIMIT, COMMENT_SCOPE, is_trusted_request
-from app.api.alpha.schema import BlockCommunityRequest, CreateCommentRequest, DeleteCommentRequest, \
-    DeletePostRequest, EditCommentRequest, FollowCommunityRequest, LikeCommentRequest, LikePostRequest, \
-    MarkPostAsReadRequest, SaveCommentRequest, SavePostRequest, UserBlockRequest
+from app.api.alpha.routes import COMMENT_LIMIT, COMMENT_SCOPE, POST_LIMIT, POST_SCOPE, is_trusted_request
+from app.api.alpha.schema import BlockCommunityRequest, CreateCommentRequest, CreatePostRequest, \
+    DeleteCommentRequest, DeletePostRequest, EditCommentRequest, EditPostRequest, FollowCommunityRequest, \
+    LikeCommentRequest, LikePostRequest, MarkPostAsReadRequest, SaveCommentRequest, SavePostRequest, UserBlockRequest
 from app.api.alpha.utils.community import post_community_block, post_community_follow
-from app.api.alpha.utils.post import a_visible_post, post_post_delete, post_post_like, post_post_mark_as_read, \
-    put_post_save
+from app.api.alpha.utils.post import a_visible_post, post_post, post_post_delete, post_post_like, \
+    post_post_mark_as_read, put_post, put_post_save
 from app.api.alpha.utils.reply import post_reply, post_reply_delete, post_reply_like, put_reply, put_reply_save
 from app.api.alpha.utils.user import post_user_block
 from app.constants import SRC_API
@@ -19,6 +19,7 @@ from app.lemmy import arguments, bp, shapes
 from app.shared import post as shared_post
 
 COMMENT_NAMES = {'content': 'body'}   # Lemmy's CreateComment and EditComment
+POST_NAMES = {'name': 'title'}   # Lemmy's CreatePost and EditPost
 MAX_POSTS = 50   # posts hidden in one request: Jerboa hides one at a time
 
 
@@ -35,6 +36,21 @@ def _comment_response(alpha: dict):
 @bp.route('/api/v3/post/like', methods=['POST'])
 def like_post():
     return _post_response(post_post_like(arguments.auth(), arguments.body(LikePostRequest)))
+
+
+@bp.route('/api/v3/post', methods=['POST'])
+def create_post():
+    """Lemmy's honeypot is a field a person's form leaves empty and a spam bot fills: one filled is refused."""
+    if (request.get_json(silent=True) or {}).get('honeypot'):
+        raise Exception('honeypot_failed')
+    data = arguments.body(CreatePostRequest, POST_NAMES)
+    with limiter.shared_limit(POST_LIMIT, scope=POST_SCOPE, exempt_when=is_trusted_request):   # alpha's bucket
+        return _post_response(post_post(arguments.auth(), data))
+
+
+@bp.route('/api/v3/post', methods=['PUT'])
+def edit_post():
+    return _post_response(put_post(arguments.auth(), arguments.body(EditPostRequest, POST_NAMES)))
 
 
 @bp.route('/api/v3/post/save', methods=['PUT'])

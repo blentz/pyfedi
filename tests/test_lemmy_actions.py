@@ -39,6 +39,23 @@ def _call(world, method, path, json, model, signed_in=True):
     return body
 
 
+def test_a_post_is_made_and_edited_under_lemmys_names(world):
+    made = _call(world, 'post', '/api/v3/post', {'name': 'From Jerboa', 'community_id': world['community'].id,
+                                                 'body': 'Hello.', 'url': None, 'nsfw': None, 'honeypot': None,
+                                                 'language_id': None}, 'PostResponse')
+    post = made['post_view']['post']
+    assert (post['name'], post['body'], post['creator_id']) == ('From Jerboa', 'Hello.', world['person'].id)
+    edited = _call(world, 'put', '/api/v3/post', {'post_id': post['id'], 'name': 'Renamed', 'body': None},
+                   'PostResponse')
+    assert (edited['post_view']['post']['name'], edited['post_view']['post']['body']) == ('Renamed', 'Hello.')
+
+
+def test_a_filled_honeypot_is_a_bot(world):
+    response = world['client'].post('/api/v3/post', json={'name': 'Spam', 'community_id': world['community'].id,
+                                                          'honeypot': 'filled'}, headers=world['headers'])
+    assert response.status_code == 400 and response.get_json() == {'error': 'honeypot_failed'}
+
+
 def test_a_vote_on_a_post_counts_and_can_be_taken_back(world):
     up = _call(world, 'post', '/api/v3/post/like', {'post_id': world['post'].id, 'score': 1}, 'PostResponse')
     assert up['post_view']['my_vote'] == 1 and up['post_view']['counts']['upvotes'] == 1
@@ -141,6 +158,27 @@ def test_a_mistyped_body_is_refused_in_lemmys_shape(world, path, fields):
 def test_a_write_without_a_login_is_refused(world):
     response = world['client'].post('/api/v3/post/like', json={'post_id': world['post'].id, 'score': 1})
     assert response.status_code == 400 and response.get_json() == {'error': 'incorrect_login'}
+
+
+def test_making_posts_shares_alphas_limit(limited_app, api_baseline, monkeypatch):
+    monkeypatch.setitem(limited_app.config, 'ENABLE_ALPHA_API', 'true')
+    with limited_app.app_context():
+        person = make_user(None, 'lemmypostlimit', local=True, with_keys=True)
+        person.verified, community = True, make_community('lemmypostlimit')
+        db.session.commit()
+        headers, away = {'Authorization': f'Bearer {person.encode_jwt_token()}'}, {'REMOTE_ADDR': '203.0.113.5'}
+        client = limited_app.test_client()
+        limiter.reset()
+        limiter.enabled = True
+        try:
+            codes = [client.post('/api/alpha/post', json={'title': f'alpha {n}', 'community_id': community.id},
+                                 headers=headers, environ_base=away).status_code for n in range(2)]
+            codes += [client.post('/api/v3/post', json={'name': f'lemmy {n}', 'community_id': community.id},
+                                  headers=headers, environ_base=away).status_code for n in range(2)]
+        finally:
+            limiter.reset()
+            limiter.enabled = False
+    assert codes == [200, 200, 200, 429]
 
 
 def test_making_comments_shares_alphas_limit(limited_app, api_baseline, monkeypatch):

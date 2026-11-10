@@ -77,10 +77,11 @@ def is_trusted_request():
 
 get_site_response = GetSiteResponse()
 
-# Creating a comment or sending a private message, in alpha's API and Lemmy's (app.lemmy): one bucket per address
-# each, whichever API is used (shared_limit: limit() keys by endpoint too)
+# Creating a post or a comment, or sending a private message, in alpha's API and Lemmy's (app.lemmy): one bucket per
+# address each, whichever API is used (shared_limit: limit() keys by endpoint too)
 COMMENT_LIMIT, COMMENT_SCOPE = '3/minute', 'api-comment-create'
 MESSAGE_LIMIT, MESSAGE_SCOPE = '3/minute', 'api-private-message-create'
+POST_LIMIT, POST_SCOPE = '3/minute', 'api-post-create'
 
 
 # Site
@@ -685,7 +686,7 @@ def put_alpha_post_subscribe(data):
 def post_alpha_post(data):
     if not enable_api():
         return abort(400, message="alpha api is not enabled")
-    with limiter.limit('3/minute', exempt_when=is_trusted_request):
+    with limiter.shared_limit(POST_LIMIT, scope=POST_SCOPE, exempt_when=is_trusted_request):
         auth = request.headers.get('Authorization')
         resp = post_post(auth, data)
         return GetPostResponse().load(resp)
