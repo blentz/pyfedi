@@ -42,21 +42,49 @@ def videos(listing: Listing, sort: str | None = None):
     return paged(posts.order_by(*order, desc(Post.id)), entities.video)
 
 
+IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp']
+IMAGE_MAX_BYTES = 4 * 1024 * 1024
+UNLIMITED = -1   # PeerTube's quota for no limit
+
+
 @bp.route('/api/v1/config')
 def config():
+    """The instance as PeerTube's apps read it. Every field the official app requires is here (spec
+    2026-11-09-peertube-login-design §2), each feature PieFed has not got (live, imports, plugins, captions) answered
+    as switched off."""
     domain = current_storefront()
+    image = {'size': {'max': IMAGE_MAX_BYTES}, 'extensions': IMAGE_EXTENSIONS}
     return jsonify({
         'instance': {'name': domain_site_name(domain, g.site) or domain.domain, 'shortDescription': '', 'isNSFW': False,
                      'defaultNSFWPolicy': 'do_not_list', 'defaultClientRoute': '/videos/trending',
                      'customizations': {'javascript': '', 'css': ''}},
         'serverVersion': entities.API_LEVEL, 'serverCommit': None,
+        'client': {'videos': {'miniature': {'preferAuthorDisplayName': False},
+                              'resumableUpload': {'maxChunkSize': 10 * 1024 * 1024}},
+                   'menu': {'login': {'redirectOnSingleExternalAuth': False}}},
         'signup': {'allowed': False, 'allowedForCurrentIP': False, 'requiresEmailVerification': False,
                    'requiresApproval': False, 'minimumAge': 16},
         'search': {'remoteUri': {'users': False, 'anonymous': False},
                    'searchIndex': {'enabled': False, 'url': '', 'disableLocalSearch': False,
                                    'isDefaultSearch': False}},
-        'video': {'file': {'extensions': ['.mp4', '.webm']}},
-        'plugin': {'registered': []}, 'theme': {'registered': [], 'default': 'default'},
+        'avatar': {'file': image}, 'banner': {'file': image},
+        'video': {'image': image, 'file': {'extensions': list(entities.FILE_SUFFIXES)}},
+        'videoCaption': {'file': {'size': {'max': 0}, 'extensions': []}},
+        'user': {'videoQuota': UNLIMITED, 'videoQuotaDaily': UNLIMITED},
+        'import': {'videos': {'http': {'enabled': False}, 'torrent': {'enabled': False}},
+                   'videoChannelSynchronization': {'enabled': False}, 'users': {'enabled': False}},
+        'live': {'enabled': False, 'allowReplay': False, 'latencySetting': {'enabled': False}, 'maxDuration': 0,
+                 'maxInstanceLives': 0, 'maxUserLives': 0,
+                 'transcoding': {'enabled': False, 'remoteRunners': {'enabled': False}, 'enabledResolutions': [],
+                                 'profile': 'default', 'availableProfiles': ['default']},
+                 'rtmp': {'port': 1935}},
+        'defaults': {'publish': {'downloadEnabled': True, 'commentsPolicy': 1, 'privacy': 1},
+                     'p2p': {'webapp': {'enabled': False}, 'embed': {'enabled': False}},
+                     'player': {'autoPlay': True}},
+        'storyboards': {'enabled': False},
+        'views': {'videos': {'watchingInterval': {'users': 5000, 'anonymous': 5000}}},
+        'plugin': {'registered': [], 'registeredExternalAuths': [], 'registeredIdAndPassAuths': []},
+        'theme': {'registered': [], 'default': 'default'},
     })
 
 

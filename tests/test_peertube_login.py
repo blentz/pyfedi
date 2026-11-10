@@ -8,6 +8,7 @@ from app.models import OAuthToken, SiteDomain
 from app.oauth_server import tokens
 from app.storefront import clear_domain_cache
 from tests.factories import make_user
+from tests import peertube_app_contract as contract
 from tests import test_login_gate as gate_tests
 from tests import test_onion_guard_limits as limit_tests
 
@@ -70,11 +71,19 @@ def test_a_local_client_made_under_an_old_secret_key_takes_the_new_one(world, mo
     assert _token(world['client'], after).status_code == 200
 
 
+def test_config_has_every_field_peertubes_app_requires(world):
+    """Its add-instance screen decodes the whole config, and refuses an API level below 7.2.0 (D4)."""
+    body = world['client'].get('/api/v1/config').get_json()
+    assert contract.problems(body, contract.CONFIG) == []
+    assert tuple(int(part) for part in body['serverVersion'].split('.')) >= (7, 2, 0)
+
+
 def test_the_password_grant_gives_a_bearer_pair_that_never_expires_and_acts_for_the_person(world):
     response = _token(world['client'], _local(world['client']))
     assert response.status_code == 200, response.get_data(as_text=True)
     body = response.get_json()
-    assert body['token_type'] == 'Bearer' and body['access_token'] and body['refresh_token']
+    assert contract.problems(body, contract.TOKEN) == [] and body['token_type'] == 'Bearer'
+
     assert 'expires_in' not in body   # P2: never expiring, as M6 rules for every app
     stored = tokens.token_for(body['access_token'])
     assert stored.user_id == world['person'].id and stored.scope == tokens.LOCAL_CLIENT_SCOPE
