@@ -225,17 +225,7 @@ def post_community_follow(auth, data):
         if not CommunityMember.query.filter_by(user_id=user.id,
                                                community_id=community.id).first():
             raise Exception('You are not a member of this community')
-    if follow:
-        # The web path refuses this twice (app/community/routes.py,
-        # do_subscribe) and the API did not refuse it at all: an account banned
-        # from a community rejoined it by asking, and the membership row that
-        # came back put the community into its subscribed feed.
-        user = authorise_api_user(auth, return_type='model')
-        if user_banned_from_community(user.id, community.id):  # D995
-            raise Exception('You are banned from this community')
-        if community.is_gone():   # interop C1 item 10: a Group deleted on its home server takes no new members
-            raise Exception('This community was deleted on its home server')
-
+    # A ban from the community, or a Group deleted on its home server, is refused by the shared join itself (D995)
     user_id = shared_community.join_community(community_id, SRC_API, auth) if follow else shared_community.leave_community(community_id, SRC_API, auth)
     community_json = community_view(community=community_id, variant=4, stub=False, user_id=user_id)
     return community_json

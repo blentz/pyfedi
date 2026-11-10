@@ -35,7 +35,8 @@ from app.utils import authorise_api_user, blocked_communities, shorten_string, m
     instance_banned, community_membership, joined_communities, moderating_communities, is_image_url, \
     communities_banned_from, piefed_markdown_to_lemmy_markdown, community_moderators, add_to_modlog, \
     get_recipient_language, moderating_communities_ids, moderating_communities_ids_all_users, gibberish, \
-    favorite_communities, render_template, can_moderate, sanitise_posting_warning, community_membership_private
+    favorite_communities, render_template, can_moderate, sanitise_posting_warning, community_membership_private, \
+    user_banned_from_community
 from app.permissions import user_access
 import app.api.alpha.views as alpha_views
 
@@ -45,6 +46,13 @@ import app.api.alpha.views as alpha_views
 def join_community(community_id: int, src, auth=None, user_id=None):
     if src == SRC_API:
         user_id = authorise_api_user(auth)
+    # Refused here for every caller, before a membership row is written: the join task checks the ban too, but when
+    # it runs asynchronously its refusal comes after the row (D995; security review 2026-11-09)
+    if user_banned_from_community(user_id, community_id):
+        raise Exception('You are banned from this community')
+    community = db.session.get(Community, community_id)
+    if community is not None and community.is_gone():   # interop C1 item 10: a deleted Group takes no new members
+        raise Exception('This community was deleted on its home server')
 
     send_async = not (current_app.debug or src == SRC_WEB)  # False if using a browser
 

@@ -7,11 +7,11 @@ import pytest
 
 from app import db
 from app.constants import POST_TYPE_VIDEO
-from app.models import CommunityMember
+from app.models import CommunityMember, utcnow
 from app.oauth_server import tokens
 from app.shared.media import with_media
 from tests import peertube_app_contract as contract
-from tests.factories import make_community, make_community_member, make_post, make_user
+from tests.factories import make_community, make_community_ban, make_community_member, make_post, make_user
 
 
 @pytest.fixture
@@ -111,3 +111,19 @@ def test_changing_subscriptions_needs_a_token_that_may_write(world):
     response = world['client'].post('/api/v1/users/me/subscriptions', json={'uri': world['other'].name},
                                     headers={'Authorization': f'Bearer {reader}'})
     assert response.status_code == 403 and not _member(world, world['other'])
+
+
+def test_a_person_banned_from_a_community_cannot_rejoin_it(world):
+    """The shared join refuses it for every caller (security review 2026-11-09): the alpha API refused it in its own
+    route, and this one did not."""
+    make_community_ban(world['person'], world['other'])
+    response = _call(world, 'post', '/api/v1/users/me/subscriptions', json={'uri': world['other'].name})
+    assert response.status_code == 400 and 'banned' in response.get_json()['detail']
+    assert not _member(world, world['other'])
+
+
+def test_a_community_deleted_on_its_home_server_takes_no_new_members(world):
+    world['other'].ap_deleted_at = utcnow()
+    db.session.commit()
+    response = _call(world, 'post', '/api/v1/users/me/subscriptions', json={'uri': world['other'].name})
+    assert response.status_code == 400 and not _member(world, world['other'])
