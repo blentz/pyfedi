@@ -94,6 +94,13 @@ def test_a_comment_is_made_edited_and_deleted_under_lemmys_names(world):
     assert deleted['comment_view']['comment']['deleted'] and db.session.get(PostReply, comment['id']).deleted
 
 
+def test_a_field_jerboa_sends_as_null_is_one_it_did_not_send(world):
+    """Jerboa's library encodes every unset optional field as null (kotlinx's explicitNulls)."""
+    made = _call(world, 'post', '/api/v3/comment', {'content': 'Top level', 'post_id': world['post'].id,
+                                                    'parent_id': None, 'language_id': None}, 'CommentResponse')
+    assert made['comment_view']['comment']['path'] == f"0.{made['comment_view']['comment']['id']}"
+
+
 def test_a_comment_is_voted_on_and_saved(world):
     voted = _call(world, 'post', '/api/v3/comment/like', {'comment_id': world['reply'].id, 'score': -1},
                   'CommentResponse')
