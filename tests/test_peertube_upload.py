@@ -364,3 +364,41 @@ def test_choosing_public_never_unstamps_a_local_only_domains_video(env, monkeypa
     assert post.local_only
     assert _details(env, video['uuid'], privacy=1).status_code == 204
     assert db.session.get(Post, post.id).local_only is True
+
+
+def test_a_refused_part_is_answered_in_peertubes_shape(env, monkeypatch):
+    def refuse(*_args):
+        raise video_uploads.Refused(400, 'invalid_request', 'The part was shorter than its Content-Range')
+    monkeypatch.setattr(video_uploads, 'receive', refuse)
+    upload_id = _upload_id(_start(env, b'x' * 1000))
+    response = _part(env, upload_id, b'x' * 10, 0, 1000)
+    assert response.status_code == 400 and response.get_json()['code'] == 'invalid_request'
+
+
+def test_a_file_that_is_no_video_is_refused_at_its_last_byte_when_the_start_carried_the_details(env):
+    data = _clip('not_media.mp4')
+    upload_id = _upload_id(_start(env, data, privacy=1))
+    response = _part(env, upload_id, data, 0, len(data))
+    assert response.status_code == 400 and _post_of(upload_id) is None
+
+
+def _refusing_post(*_args, **_kwargs):
+    raise Exception('You are not permitted to make posts in this community')
+
+
+def test_the_shared_posts_refusals_are_peertubes_400s(env, monkeypatch):
+    monkeypatch.setattr('app.shared.video_uploads.shared_post.make_post', _refusing_post)
+    data = _clip()
+    upload_id = _upload_id(_start(env, data, privacy=1))
+    at_last_byte = _part(env, upload_id, data, 0, len(data))
+    assert at_last_byte.status_code == 400 and 'not permitted' in at_last_byte.get_json()['detail']
+    pending = _uploaded(env, data)
+    at_details = _details(env, pending['uuid'], privacy=1)
+    assert at_details.status_code == 400 and 'not permitted' in at_details.get_json()['detail']
+
+
+def test_a_refused_delete_is_peertubes_400(env, monkeypatch):
+    posted = _uploaded(env, _clip(), privacy=1)
+    monkeypatch.setattr('app.peertube.upload.shared_post.delete_post', _refusing_post)
+    response = env.client.delete(f"/api/v1/videos/{posted['uuid']}", headers=env.headers)
+    assert response.status_code == 400 and 'not permitted' in response.get_json()['detail']
