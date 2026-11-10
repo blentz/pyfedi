@@ -380,6 +380,9 @@ floors and changed-line gates.
 - **W3 Lemmy `/api/v3`** (D3): either a renaming serialiser over the W0.1 read layer plus an alias host whose nodeinfo
   says `lemmy`, or upstream PieFed support into Jerboa's API library (MV-GH/LemmyBackwardsCompatibleAPI), which needs no
   server work. v4 waits for Lemmy 1.0.
+  Spec `docs/superpowers/specs/2026-11-10-lemmy-v3-design.md`. **Ruled 2026-11-10:** L1 report Lemmy 0.19.11; L2 a
+  member's endpoints now, moderation as W3b; L3 polls, galleries and events as the nearest Lemmy post; L4 `/api/v3`
+  answers every caller.
 - **W4 gpodder.net sync** for podcast apps: `/api/2/auth`, subscriptions, episode actions.
 
 ### 2.3 Order (proposed, D1)

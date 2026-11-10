@@ -1,7 +1,7 @@
 # Lemmy `/api/v3` for Jerboa
 
 Date: 2026-11-10
-Status: draft; owner rulings L1-L4 open (§6). Part of the API-completeness plan
+Status: owner rulings L1-L4 given 2026-11-10 (§6), each as recommended. Part of the API-completeness plan
 (`docs/superpowers/plans/2026-11-07-api-completeness.md`, workstream W3), which ruled D3 on 2026-11-07: a v3 shim on
 the main host, with nodeinfo answering Jerboa by name. Nothing here is built yet.
 
@@ -128,13 +128,17 @@ Jerboa shows Lemmy's post types only. Per §6 L3:
 - **L1. The Lemmy version reported.** 0.19.11, the newest the library knows: its newest models, which need a few
   more fields (`hidden`, `unread_comments`, `alt_text`, the vote display mode), and every feature Jerboa gates on
   version (hiding posts needs 0.19.4). Or 0.19.3, fewer fields and fewer features. Recommendation: 0.19.11.
+  **Ruled 2026-11-10: 0.19.11.**
 - **L2. Moderation and admin tools.** (a) W3 serves a member's endpoints only; a moderator's and an admin's answer
   `not_found`, `report_count` answers zeros so the badge never errs, and moderating stays on the web or in a PieFed
   app. (b) Also serve moderation over alpha's handlers (reports, lock, feature, remove, ban from community, vote
   lists) as a second phase, W3b. Recommendation: (a) now and (b) as W3b, after the member's endpoints pass in the
   harness.
+  **Ruled 2026-11-10: (a) now, (b) as W3b.**
 - **L3. PieFed-only posts.** Show polls, galleries and events as the nearest Lemmy post with the rest in the body
   (§4), or leave them out of Jerboa's lists. Recommendation: show them; leaving them out hides real posts.
+  **Ruled 2026-11-10: show them.**
 - **L4. Who `/api/v3` answers.** Every caller (the path is Lemmy's, used by no PieFed client, and Lemmy tools such as
   bots can use it too), or Jerboa's User-Agent only. Nodeinfo still says `lemmy` to Jerboa alone (D3).
   Recommendation: every caller.
+  **Ruled 2026-11-10: every caller.**
