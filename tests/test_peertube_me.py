@@ -135,3 +135,15 @@ def test_a_video_its_account_and_its_channel_decode_in_peertubes_app(world):
     account = world['client'].get('/api/v1/accounts/ptme').get_json()
     channel = world['client'].get(f"/api/v1/video-channels/{world['owned'].name}").get_json()
     assert contract.problems(account, contract.ACCOUNT) == [] and contract.problems(channel, contract.CHANNEL) == []
+
+
+def test_the_email_goes_only_to_the_peertube_login_that_asked_with_the_password(world):
+    """Another app's token (a Mastodon app's, by its own consent screen) reads users/me too, but was never trusted
+    with the address: it gets an empty one (security review 2026-11-09)."""
+    world['person'].email = 'ptme@example.com'
+    db.session.commit()
+    assert _me(world).get_json()['email'] == 'ptme@example.com'
+    other, _secret = tokens.register_app('Tusky', ['https://app.example/cb'], 'read write follow', None)
+    access, _refresh = tokens.issue_token(other, world['person'], 'read')
+    body = _me(world, access).get_json()
+    assert body['email'] == '' and contract.problems(body, contract.USER) == []

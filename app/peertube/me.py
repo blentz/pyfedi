@@ -6,6 +6,7 @@ from sqlalchemy import desc
 
 from app import db
 from app.models import Community, CommunityMember, User
+from app.oauth_server import tokens
 from app.peertube import bp, entities
 from app.peertube.auth import problem, signed_in
 from app.peertube.videos import UNLIMITED, listable_communities
@@ -34,10 +35,13 @@ def _role(user: User) -> dict:
     return {'id': 0, 'label': 'Administrator'} if user.is_admin() else {'id': 2, 'label': 'User'}
 
 
-def me(user: User) -> dict:
+def me(user: User, with_email: bool) -> dict:
+    """`with_email` only for a token from this domain's PeerTube local client, which the person gave their password
+    to: another app's token reads users/me too but was never trusted with the address (security review 2026-11-09)."""
     when = entities.timestamp(user.created or entities.EPOCH)
     return {
-        'id': user.id, 'username': user.user_name, 'email': user.email or '', 'emailVerified': True,
+        'id': user.id, 'username': user.user_name, 'email': (user.email or '') if with_email else '',
+        'emailVerified': True,
         'pendingEmail': None, 'createdAt': when, 'lastLoginDate': entities.timestamp(user.last_seen or user.created
                                                                                      or entities.EPOCH),
         'account': entities.account(user), 'role': _role(user), 'blocked': False, 'blockedReason': None,
@@ -54,7 +58,7 @@ def me(user: User) -> dict:
 @bp.route('/api/v1/users/me')
 @signed_in()
 def get_me():
-    return jsonify(me(g.oauth_user))
+    return jsonify(me(g.oauth_user, g.oauth_token.app.client_id == tokens.local_client_id()))
 
 
 def _text(fields: dict, name: str, limit: int) -> str | None:
