@@ -316,3 +316,12 @@ def test_an_internal_upload_never_leaves_this_server(env):
     post = _post_of(video['upload_id'])
     activity = {'type': 'Create', 'object': {'id': post.profile_id(), 'type': 'Page'}}
     assert outbound_refusal(activity) == 'it names a local-only post'
+
+
+def test_finished_uploads_no_post_came_of_count_against_the_limits(env):
+    """Their file is held until the sweep as an unfinished one's is: finishing upload after upload with no details
+    must not get round U2's limits (security review)."""
+    for _ in range(3):
+        _uploaded(env, _clip())   # finished, no details: no post
+    refused = _start(env, b'x' * 10)
+    assert refused.status_code == 429

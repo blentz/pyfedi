@@ -20,7 +20,7 @@ from app.shared import post as shared_post
 from app.shared.media import upload_byte_limit
 from app.utils import Authorised, ensure_directory_exists, site_language_id
 
-MAX_IN_PROGRESS = 3   # unfinished uploads a person may have (ruling U2)
+MAX_IN_PROGRESS = 3   # uploads a person may have waiting for a post, finished or not (ruling U2)
 KEPT = timedelta(hours=24)   # an upload with no post is removed this long after its last part (ruling U2)
 PUBLIC, UNLISTED, PRIVATE, INTERNAL, PASSWORD = 1, 2, 3, 4, 5   # PeerTube's privacy ids
 # Ruling U1: public, and unlisted made public (PieFed has no local unlisted post); internal is a local-only post
@@ -71,12 +71,13 @@ def start(user, community, filename: str, name: str, content_type: str, size: in
     limit = upload_byte_limit(MEDIA_KIND_VIDEO)
     if size > limit:
         raise Refused(413, 'max_file_size_reached', f'A video may be at most {limit // (1024 * 1024)} MB here')
-    unfinished = VideoUpload.query.filter(VideoUpload.user_id == user.id, VideoUpload.finished_at.is_(None),
-                                          VideoUpload.updated_at > utcnow() - KEPT).all()
-    if len(unfinished) >= MAX_IN_PROGRESS:
-        raise Refused(429, 'too_many_requests', f'At most {MAX_IN_PROGRESS} uploads may be unfinished at once')
-    if sum(upload.size for upload in unfinished) + size > 2 * limit:
-        raise Refused(413, 'quota_reached', 'Your unfinished uploads are too large together: finish or cancel one')
+    # every upload no post has come of holds its file until the sweep, finished or not: each counts (security review)
+    waiting = VideoUpload.query.filter(VideoUpload.user_id == user.id, VideoUpload.post_id.is_(None),
+                                       VideoUpload.updated_at > utcnow() - KEPT).all()
+    if len(waiting) >= MAX_IN_PROGRESS:
+        raise Refused(429, 'too_many_requests', f'At most {MAX_IN_PROGRESS} uploads may wait to be published at once')
+    if sum(upload.size for upload in waiting) + size > 2 * limit:
+        raise Refused(413, 'quota_reached', 'Your waiting uploads are too large together: publish or cancel one')
     if 'privacy' in details:
         checked_privacy(details['privacy'])
     directory = partial_directory()

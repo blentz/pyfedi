@@ -89,7 +89,8 @@ editing: the app hides each where `/api/v1/config` says it is off, which it does
   never do, its replies are stamped too, and the last outbound gate (`app.local_only.outbound_refusal`) refuses any
   activity naming it. Read back, such a video's privacy is 4 Internal.
 - **U2. Unfinished uploads.** Kept 24 hours from their last chunk, then removed by the hourly maintenance; a person
-  may have at most 3 in progress, and the declared sizes of their unfinished uploads may not together pass 2× the video
+  may have at most 3 waiting for a post (finished or not, since each holds its file), and their declared sizes may
+  not together pass 2× the video
   limit. Recommendation: as written. Or: no limit beyond the per-file one.
   **Ruled 2026-11-10: as recommended.**
 - **U3. The quota the app is told.** `users/me` says `videoQuota: -1` (unlimited) today. PieFed has a per-file limit
