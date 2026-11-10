@@ -58,6 +58,17 @@ USER = {'account': ACCOUNT, 'autoPlayNextVideo': bool, 'autoPlayNextVideoPlaylis
         'notificationSettings': {'newCommentOnMyVideo': int}}   # TubeLab reads that one with no null check
 COMMENT = {'id': int, 'url': str, 'text': str, 'threadId': int, 'videoId': int, 'createdAt': str, 'updatedAt': str,
            'isDeleted': bool, 'totalReplies': int, 'totalRepliesFromVideoAuthor': int}
+ACTOR_INFO = {'id': int, 'displayName': str, 'name': str, 'host': str, 'avatars': [{'fileUrl': str}]}
+VIDEO_INFO = {'id': int, 'uuid': str, 'shortUUID': str, 'name': str}
+NOTIFICATION = {'id': int, 'type': int, 'read': bool, 'createdAt': str, 'updatedAt': str}
+NOTIFICATION_OBJECTS = {   # what each type the API sends carries (lib/features/notification/notification_model.dart)
+    1: {'video': {**VIDEO_INFO, 'channel': ACTOR_INFO}},
+    2: {'comment': {'id': int, 'threadId': int, 'account': ACTOR_INFO, 'video': VIDEO_INFO}},
+    10: {'actorFollow': {'id': int, 'follower': ACTOR_INFO, 'state': str,
+                         'following': {'type': str, 'name': str, 'displayName': str, 'host': str}}},
+    11: {'comment': {'id': int, 'threadId': int, 'account': ACTOR_INFO, 'video': VIDEO_INFO}},
+}
+NOTIFICATION_TYPES = range(1, 23)   # UserNotificationType: one outside these fails the whole list
 PRIVACIES = range(1, 6)   # VideoPrivacy: one outside these fails the decode
 
 TOKEN = {'access_token': str, 'refresh_token': str, 'token_type': str}

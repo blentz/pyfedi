@@ -106,7 +106,7 @@ def find_video(key: str) -> Post | None:
 
 # paging
 
-def _whole(name: str, default: int) -> int:
+def whole(name: str, default: int) -> int:
     raw = request.args.get(name, '')
     if raw == '':
         return default
@@ -117,7 +117,7 @@ def _whole(name: str, default: int) -> int:
 
 def window() -> tuple[int, int]:
     """PeerTube's start and count: start from 0, count 1 to 100."""
-    start, count = _whole('start', 0), _whole('count', DEFAULT_COUNT)
+    start, count = whole('start', 0), whole('count', DEFAULT_COUNT)
     if not 0 < count <= MAX_COUNT:
         raise BadRequest('count')
     return start, count
@@ -169,6 +169,18 @@ def _host(handle: str) -> str:
 
 def _absolute(url: str) -> str:
     return _base() + url if url.startswith('/') else url
+
+
+def host_of(actor) -> str:
+    """The host an account or channel is named with."""
+    return _host(actor.lemmy_link())
+
+
+def image_url(url: str | None) -> str | None:
+    """An image's whole URL, one of this site's on the domain asked; None for none, or the 1px placeholder."""
+    if not url or url.endswith('/1px.gif'):
+        return None
+    return storefront_link(_absolute(url))
 
 
 def account(user: User) -> dict:
