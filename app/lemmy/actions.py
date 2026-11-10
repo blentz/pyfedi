@@ -15,7 +15,7 @@ from app.api.alpha.utils.post import a_visible_post, post_post, post_post_delete
 from app.api.alpha.utils.reply import post_reply, post_reply_delete, post_reply_like, put_reply, put_reply_save
 from app.api.alpha.utils.user import post_user_block
 from app.constants import SRC_API
-from app.lemmy import arguments, bp, shapes
+from app.lemmy import arguments, bp, pictrs, shapes
 from app.shared import post as shared_post
 
 COMMENT_NAMES = {'content': 'body'}   # Lemmy's CreateComment and EditComment
@@ -44,13 +44,18 @@ def create_post():
     if (request.get_json(silent=True) or {}).get('honeypot'):
         raise Exception('honeypot_failed')
     data = arguments.body(CreatePostRequest, POST_NAMES)
+    if 'url' in data:
+        data['url'] = pictrs.stored_url(data['url'])
     with limiter.shared_limit(POST_LIMIT, scope=POST_SCOPE, exempt_when=is_trusted_request):   # alpha's bucket
         return _post_response(post_post(arguments.auth(), data))
 
 
 @bp.route('/api/v3/post', methods=['PUT'])
 def edit_post():
-    return _post_response(put_post(arguments.auth(), arguments.body(EditPostRequest, POST_NAMES)))
+    data = arguments.body(EditPostRequest, POST_NAMES)
+    if 'url' in data:
+        data['url'] = pictrs.stored_url(data['url'])
+    return _post_response(put_post(arguments.auth(), data))
 
 
 @bp.route('/api/v3/post/save', methods=['PUT'])

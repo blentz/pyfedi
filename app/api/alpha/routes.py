@@ -77,12 +77,13 @@ def is_trusted_request():
 
 get_site_response = GetSiteResponse()
 
-# Creating a post or a comment, sending a private message or reading a link's metadata, in alpha's API and Lemmy's
-# (app.lemmy): one bucket per address each, whichever API is used (shared_limit: limit() keys by endpoint too)
+# Creating a post or a comment, sending a private message, reading a link's metadata or uploading an image, in alpha's
+# API and Lemmy's (app.lemmy): one bucket per address each, whichever API is used (shared_limit: limit() keys by endpoint too)
 COMMENT_LIMIT, COMMENT_SCOPE = '3/minute', 'api-comment-create'
 MESSAGE_LIMIT, MESSAGE_SCOPE = '3/minute', 'api-private-message-create'
 POST_LIMIT, POST_SCOPE = '3/minute', 'api-post-create'
 METADATA_LIMIT, METADATA_SCOPE = '20/minute', 'api-site-metadata'   # each one fetches the page from its server
+UPLOAD_LIMIT, UPLOAD_SCOPE = '15/hour', 'api-image-upload'
 
 
 # Site
@@ -1674,7 +1675,7 @@ def get_alpha_user_get_captcha():
 def post_alpha_upload_image(files_data):
     if not enable_api():
         return abort(400, message="alpha api is not enabled")
-    with limiter.limit('15/hour', exempt_when=is_trusted_request):
+    with limiter.shared_limit(UPLOAD_LIMIT, scope=UPLOAD_SCOPE, exempt_when=is_trusted_request):
         auth = request.headers.get('Authorization')
         image_file = files_data['file']
         resp = post_upload_image(auth, image_file)
