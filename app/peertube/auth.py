@@ -5,9 +5,11 @@ logout that revokes a token. Tokens never expire (P2) and are this domain's only
 Errors are PeerTube's problem+json, whose `code` the official app reads to tell bad credentials from the rest."""
 from functools import wraps
 
-from flask import g, jsonify, make_response
+from flask import current_app, g, jsonify, make_response
 from werkzeug.exceptions import HTTPException
 
+from app import db
+from app.models import PostReplyValidationError
 from app.oauth_server import tokens
 from app.oauth_server.protect import require_oauth
 from app.oauth_server.server import server
@@ -46,6 +48,19 @@ def signed_in(scope: str = 'read'):
         guarded.has_own_login_gate = True
         return guarded
     return decorator
+
+
+def failure(error: Exception):
+    """A shared write's refusal in PeerTube's shape: its abort as itself, its plain refusal (a ban, a quota, a
+    validation) a 400 with its message, and anything else a 500 that says nothing."""
+    db.session.rollback()
+    if isinstance(error, HTTPException):
+        return problem(error.code, 'forbidden' if error.code == 403 else 'invalid_request',
+                       error.description or error.name)
+    if type(error) is Exception or isinstance(error, PostReplyValidationError):
+        return problem(400, 'invalid_request', str(error) or 'Validation failed')
+    current_app.logger.exception('peertube write failed')
+    return problem(500, 'internal_error', 'Something went wrong')
 
 
 @bp.route('/api/v1/oauth-clients/local')
