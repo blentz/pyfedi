@@ -11,6 +11,9 @@ import time
 FLOOR = 0.00001
 TARGET = 0.002
 MAX_LOOPS = 256
+# A scan under a millisecond can read one ratio of 9 in a run of 4s (seen at a lowered CPU clock), so a scan fails
+# only when every attempt is over the bound. A quadratic scan reads near factor squared (16) on every attempt.
+ATTEMPTS = 3
 
 
 def timed(call):
@@ -35,8 +38,9 @@ def grows_linearly(scan, make, small=20_000, factor=4):
 
     Linear work gives a ratio near `factor`, quadratic near `factor` squared; the bound is twice `factor`.
     `make(size)` builds an input of about `size` units. Time is the thread's CPU time, so load from other
-    processes cannot move the ratio."""
+    processes cannot move the ratio. It passes when any of ATTEMPTS measurements is under the bound."""
     little, big = make(small), make(small * factor)
     scan(little)   # warm caches and lazy imports before timing
     scan(big)
-    return per_call(lambda: scan(big)) < max(per_call(lambda: scan(little)), FLOOR) * factor * 2
+    return any(per_call(lambda: scan(big)) < max(per_call(lambda: scan(little)), FLOOR) * factor * 2
+               for _ in range(ATTEMPTS))
