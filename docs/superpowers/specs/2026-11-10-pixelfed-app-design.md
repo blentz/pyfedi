@@ -1,7 +1,9 @@
 # Pixelfed's own app on PieFed (W1.4 spike)
 
 Date: 2026-11-10
-Status: spike written; owner rulings X1-X4 open (§5). Part of the API-completeness plan
+Status: spike written; owner rulings X1-X4 given 2026-11-10 (§5), X1 as recommended, X2-X4 otherwise. Built in
+phases, one branch each (M8): W1.4a identity, Pixelfed statuses, the core routes and the official app driven; W1.4b
+chats; W1.4c stories; W1.4d PixelDroid and Fedilab driven. Part of the API-completeness plan
 (`docs/superpowers/plans/2026-11-07-api-completeness.md`, W1.4), per ruling M7 of
 `2026-11-07-mastodon-client-api-design.md`: "spike, then build what it needs ... with per-client identity (as for
 Jerboa, plan D3) if it gates on the software name". Nothing here is built yet.
@@ -68,12 +70,22 @@ Per X4.
   (and only it; the standard `/nodeinfo/2.0` and `2.1` stay PieFed's) as Pixelfed 0.12.6, the API level served, as D3
   does for Jerboa; or leave the official app unsupported. Recommendation: answer it: only Pixelfed's clients ask that
   path, so no crawler or statistics site is told anything new.
+  **Ruled 2026-11-10: say Pixelfed 0.12.6 on that path alone.**
+
 - **X2. Chats.** Pixelfed's direct messages (`/api/v1.1/direct/*`) map onto PieFed's chat; build them now, or answer
   them empty and leave chat to the web (no API of PieFed's other than alpha's serves it to apps yet). Recommendation:
   empty now, a later item: the core is browsing, posting photos, comments, likes, follows and notifications.
+  **Ruled 2026-11-10: build chats now** (phase W1.4b): Pixelfed's threads are PieFed's conversations and chat
+  messages (app.chat), through the code the web's chat uses.
+
 - **X3. Stories.** PieFed has none: the carousel answers empty and every story write is refused, or build stories.
   Recommendation: empty and refused; stories are a feature of their own.
+  **Ruled 2026-11-10: stories are microblog posts; clients are shown only those of the last 24 hours** (phase
+  W1.4c). The carousel lists the accounts whose microblog posts with media from the last 24 hours the person may see;
+  publishing a story makes such a post; a story is no longer listed after a day, and stays a post.
+
 - **X4. The harness.** (a) Drive the official app (GitHub release APK): log in as alice, see the seeded post, post a
   photo through its camera tab's picker; PixelDroid and Fedilab stay `mastodon` probes. (b) Drive all three.
   Recommendation: (a): PixelDroid and Fedilab ask only the Mastodon API, which Tusky's and Mastodon's own drivers
   already exercise.
+  **Ruled 2026-11-10: drive all three** (the official app in W1.4a, PixelDroid and Fedilab in W1.4d).
