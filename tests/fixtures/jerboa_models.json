@@ -1,0 +1,2903 @@
+{
+ "classes": {
+  "BlockCommunityResponse": {
+   "fields": [
+    {
+     "key": "community_view",
+     "nullable": false,
+     "optional": false,
+     "type": "CommunityView"
+    },
+    {
+     "key": "blocked",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    }
+   ],
+   "file": "BlockCommunityResponse.kt"
+  },
+  "BlockPersonResponse": {
+   "fields": [
+    {
+     "key": "person_view",
+     "nullable": false,
+     "optional": false,
+     "type": "PersonView"
+    },
+    {
+     "key": "blocked",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    }
+   ],
+   "file": "BlockPersonResponse.kt"
+  },
+  "Comment": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "creator_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "post_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "content",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "removed",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "updated",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "deleted",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "ap_id",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "local",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "path",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "distinguished",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "language_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    }
+   ],
+   "file": "Comment.kt"
+  },
+  "CommentAggregates": {
+   "fields": [
+    {
+     "key": "comment_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "score",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "upvotes",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "downvotes",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "child_count",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    }
+   ],
+   "file": "CommentAggregates.kt"
+  },
+  "CommentReply": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "recipient_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "comment_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "read",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    }
+   ],
+   "file": "CommentReply.kt"
+  },
+  "CommentReplyResponse": {
+   "fields": [
+    {
+     "key": "comment_reply_view",
+     "nullable": false,
+     "optional": false,
+     "type": "CommentReplyView"
+    }
+   ],
+   "file": "CommentReplyResponse.kt"
+  },
+  "CommentReplyView": {
+   "fields": [
+    {
+     "key": "comment_reply",
+     "nullable": false,
+     "optional": false,
+     "type": "CommentReply"
+    },
+    {
+     "key": "comment",
+     "nullable": false,
+     "optional": false,
+     "type": "Comment"
+    },
+    {
+     "key": "creator",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    },
+    {
+     "key": "post",
+     "nullable": false,
+     "optional": false,
+     "type": "Post"
+    },
+    {
+     "key": "community",
+     "nullable": false,
+     "optional": false,
+     "type": "Community"
+    },
+    {
+     "key": "recipient",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    },
+    {
+     "key": "counts",
+     "nullable": false,
+     "optional": false,
+     "type": "CommentAggregates"
+    },
+    {
+     "key": "creator_banned_from_community",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "banned_from_community",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_is_moderator",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_is_admin",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "subscribed",
+     "nullable": false,
+     "optional": false,
+     "type": "SubscribedType"
+    },
+    {
+     "key": "saved",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_blocked",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "my_vote",
+     "nullable": false,
+     "optional": true,
+     "type": "Int"
+    }
+   ],
+   "file": "CommentReplyView.kt"
+  },
+  "CommentResponse": {
+   "fields": [
+    {
+     "key": "comment_view",
+     "nullable": false,
+     "optional": false,
+     "type": "CommentView"
+    },
+    {
+     "key": "recipient_ids",
+     "nullable": false,
+     "optional": false,
+     "type": "List<Long>"
+    }
+   ],
+   "file": "CommentResponse.kt"
+  },
+  "CommentView": {
+   "fields": [
+    {
+     "key": "comment",
+     "nullable": false,
+     "optional": false,
+     "type": "Comment"
+    },
+    {
+     "key": "creator",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    },
+    {
+     "key": "post",
+     "nullable": false,
+     "optional": false,
+     "type": "Post"
+    },
+    {
+     "key": "community",
+     "nullable": false,
+     "optional": false,
+     "type": "Community"
+    },
+    {
+     "key": "counts",
+     "nullable": false,
+     "optional": false,
+     "type": "CommentAggregates"
+    },
+    {
+     "key": "creator_banned_from_community",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "banned_from_community",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_is_moderator",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_is_admin",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "subscribed",
+     "nullable": false,
+     "optional": false,
+     "type": "SubscribedType"
+    },
+    {
+     "key": "saved",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_blocked",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "my_vote",
+     "nullable": false,
+     "optional": true,
+     "type": "Int"
+    }
+   ],
+   "file": "CommentView.kt"
+  },
+  "Community": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "name",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "title",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "description",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "removed",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "updated",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "deleted",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "nsfw",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "actor_id",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "local",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "icon",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "banner",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "hidden",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "posting_restricted_to_mods",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "instance_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "visibility",
+     "nullable": false,
+     "optional": false,
+     "type": "CommunityVisibility"
+    }
+   ],
+   "file": "Community.kt"
+  },
+  "CommunityAggregates": {
+   "fields": [
+    {
+     "key": "community_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "subscribers",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "posts",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "comments",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "users_active_day",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "users_active_week",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "users_active_month",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "users_active_half_year",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "subscribers_local",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    }
+   ],
+   "file": "CommunityAggregates.kt"
+  },
+  "CommunityBlockView": {
+   "fields": [
+    {
+     "key": "person",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    },
+    {
+     "key": "community",
+     "nullable": false,
+     "optional": false,
+     "type": "Community"
+    }
+   ],
+   "file": "CommunityBlockView.kt"
+  },
+  "CommunityFollowerView": {
+   "fields": [
+    {
+     "key": "community",
+     "nullable": false,
+     "optional": false,
+     "type": "Community"
+    },
+    {
+     "key": "follower",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    }
+   ],
+   "file": "CommunityFollowerView.kt"
+  },
+  "CommunityModeratorView": {
+   "fields": [
+    {
+     "key": "community",
+     "nullable": false,
+     "optional": false,
+     "type": "Community"
+    },
+    {
+     "key": "moderator",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    }
+   ],
+   "file": "CommunityModeratorView.kt"
+  },
+  "CommunityResponse": {
+   "fields": [
+    {
+     "key": "community_view",
+     "nullable": false,
+     "optional": false,
+     "type": "CommunityView"
+    },
+    {
+     "key": "discussion_languages",
+     "nullable": false,
+     "optional": false,
+     "type": "List<Long>"
+    }
+   ],
+   "file": "CommunityResponse.kt"
+  },
+  "CommunityView": {
+   "fields": [
+    {
+     "key": "community",
+     "nullable": false,
+     "optional": false,
+     "type": "Community"
+    },
+    {
+     "key": "subscribed",
+     "nullable": false,
+     "optional": false,
+     "type": "SubscribedType"
+    },
+    {
+     "key": "blocked",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "counts",
+     "nullable": false,
+     "optional": false,
+     "type": "CommunityAggregates"
+    },
+    {
+     "key": "banned_from_community",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    }
+   ],
+   "file": "CommunityView.kt"
+  },
+  "CustomEmoji": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "local_site_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "shortcode",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "image_url",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "alt_text",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "category",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "updated",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    }
+   ],
+   "file": "CustomEmoji.kt"
+  },
+  "CustomEmojiKeyword": {
+   "fields": [
+    {
+     "key": "custom_emoji_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "keyword",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    }
+   ],
+   "file": "CustomEmojiKeyword.kt"
+  },
+  "CustomEmojiView": {
+   "fields": [
+    {
+     "key": "custom_emoji",
+     "nullable": false,
+     "optional": false,
+     "type": "CustomEmoji"
+    },
+    {
+     "key": "keywords",
+     "nullable": false,
+     "optional": false,
+     "type": "List<CustomEmojiKeyword>"
+    }
+   ],
+   "file": "CustomEmojiView.kt"
+  },
+  "GetCommentsResponse": {
+   "fields": [
+    {
+     "key": "comments",
+     "nullable": false,
+     "optional": false,
+     "type": "List<CommentView>"
+    }
+   ],
+   "file": "GetCommentsResponse.kt"
+  },
+  "GetCommunityResponse": {
+   "fields": [
+    {
+     "key": "community_view",
+     "nullable": false,
+     "optional": false,
+     "type": "CommunityView"
+    },
+    {
+     "key": "site",
+     "nullable": true,
+     "optional": true,
+     "type": "Site"
+    },
+    {
+     "key": "moderators",
+     "nullable": false,
+     "optional": false,
+     "type": "List<CommunityModeratorView>"
+    },
+    {
+     "key": "discussion_languages",
+     "nullable": false,
+     "optional": false,
+     "type": "List<Long>"
+    }
+   ],
+   "file": "GetCommunityResponse.kt"
+  },
+  "GetPersonDetailsResponse": {
+   "fields": [
+    {
+     "key": "person_view",
+     "nullable": false,
+     "optional": false,
+     "type": "PersonView"
+    },
+    {
+     "key": "site",
+     "nullable": true,
+     "optional": true,
+     "type": "Site"
+    },
+    {
+     "key": "comments",
+     "nullable": false,
+     "optional": false,
+     "type": "List<CommentView>"
+    },
+    {
+     "key": "posts",
+     "nullable": false,
+     "optional": false,
+     "type": "List<PostView>"
+    },
+    {
+     "key": "moderates",
+     "nullable": false,
+     "optional": false,
+     "type": "List<CommunityModeratorView>"
+    }
+   ],
+   "file": "GetPersonDetailsResponse.kt"
+  },
+  "GetPersonMentionsResponse": {
+   "fields": [
+    {
+     "key": "mentions",
+     "nullable": false,
+     "optional": false,
+     "type": "List<PersonMentionView>"
+    }
+   ],
+   "file": "GetPersonMentionsResponse.kt"
+  },
+  "GetPostResponse": {
+   "fields": [
+    {
+     "key": "post_view",
+     "nullable": false,
+     "optional": false,
+     "type": "PostView"
+    },
+    {
+     "key": "community_view",
+     "nullable": false,
+     "optional": false,
+     "type": "CommunityView"
+    },
+    {
+     "key": "moderators",
+     "nullable": false,
+     "optional": false,
+     "type": "List<CommunityModeratorView>"
+    },
+    {
+     "key": "cross_posts",
+     "nullable": false,
+     "optional": false,
+     "type": "List<PostView>"
+    }
+   ],
+   "file": "GetPostResponse.kt"
+  },
+  "GetPostsResponse": {
+   "fields": [
+    {
+     "key": "posts",
+     "nullable": false,
+     "optional": false,
+     "type": "List<PostView>"
+    },
+    {
+     "key": "next_page",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    }
+   ],
+   "file": "GetPostsResponse.kt"
+  },
+  "GetRepliesResponse": {
+   "fields": [
+    {
+     "key": "replies",
+     "nullable": false,
+     "optional": false,
+     "type": "List<CommentReplyView>"
+    }
+   ],
+   "file": "GetRepliesResponse.kt"
+  },
+  "GetReportCountResponse": {
+   "fields": [
+    {
+     "key": "community_id",
+     "nullable": true,
+     "optional": true,
+     "type": "Long"
+    },
+    {
+     "key": "comment_reports",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "post_reports",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "private_message_reports",
+     "nullable": true,
+     "optional": true,
+     "type": "Long"
+    }
+   ],
+   "file": "GetReportCountResponse.kt"
+  },
+  "GetSiteMetadataResponse": {
+   "fields": [
+    {
+     "key": "metadata",
+     "nullable": false,
+     "optional": false,
+     "type": "LinkMetadata"
+    }
+   ],
+   "file": "GetSiteMetadataResponse.kt"
+  },
+  "GetSiteResponse": {
+   "fields": [
+    {
+     "key": "site_view",
+     "nullable": false,
+     "optional": false,
+     "type": "SiteView"
+    },
+    {
+     "key": "admins",
+     "nullable": false,
+     "optional": false,
+     "type": "List<PersonView>"
+    },
+    {
+     "key": "version",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "my_user",
+     "nullable": true,
+     "optional": true,
+     "type": "MyUserInfo"
+    },
+    {
+     "key": "all_languages",
+     "nullable": false,
+     "optional": false,
+     "type": "List<Language>"
+    },
+    {
+     "key": "discussion_languages",
+     "nullable": false,
+     "optional": false,
+     "type": "List<Long>"
+    },
+    {
+     "key": "taglines",
+     "nullable": false,
+     "optional": false,
+     "type": "List<Tagline>"
+    },
+    {
+     "key": "custom_emojis",
+     "nullable": false,
+     "optional": false,
+     "type": "List<CustomEmojiView>"
+    },
+    {
+     "key": "blocked_urls",
+     "nullable": false,
+     "optional": false,
+     "type": "List<LocalSiteUrlBlocklist>"
+    }
+   ],
+   "file": "GetSiteResponse.kt"
+  },
+  "GetUnreadCountResponse": {
+   "fields": [
+    {
+     "key": "replies",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "mentions",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "private_messages",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    }
+   ],
+   "file": "GetUnreadCountResponse.kt"
+  },
+  "GetUnreadRegistrationApplicationCountResponse": {
+   "fields": [
+    {
+     "key": "registration_applications",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    }
+   ],
+   "file": "GetUnreadRegistrationApplicationCountResponse.kt"
+  },
+  "ImageDetails": {
+   "fields": [
+    {
+     "key": "link",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "width",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "height",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "content_type",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    }
+   ],
+   "file": "ImageDetails.kt"
+  },
+  "ImageFile": {
+   "fields": [
+    {
+     "key": "file",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "delete_token",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "url",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "delete_url",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    }
+   ],
+   "file": "ImageFile.kt"
+  },
+  "Instance": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "domain",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "updated",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "software",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "version",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    }
+   ],
+   "file": "Instance.kt"
+  },
+  "InstanceBlockView": {
+   "fields": [
+    {
+     "key": "person",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    },
+    {
+     "key": "instance",
+     "nullable": false,
+     "optional": false,
+     "type": "Instance"
+    },
+    {
+     "key": "site",
+     "nullable": true,
+     "optional": true,
+     "type": "Site"
+    }
+   ],
+   "file": "InstanceBlockView.kt"
+  },
+  "Language": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "code",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "name",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    }
+   ],
+   "file": "Language.kt"
+  },
+  "LinkMetadata": {
+   "fields": [
+    {
+     "key": "title",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "description",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "image",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "embed_video_url",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "content_type",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    }
+   ],
+   "file": "LinkMetadata.kt"
+  },
+  "LocalSite": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "site_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "site_setup",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "enable_downvotes",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "enable_nsfw",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "community_creation_admin_only",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "require_email_verification",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "application_question",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "private_instance",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "default_theme",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "default_post_listing_type",
+     "nullable": false,
+     "optional": false,
+     "type": "ListingType"
+    },
+    {
+     "key": "legal_information",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "hide_modlog_mod_names",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "application_email_admins",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "slur_filter_regex",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "actor_name_max_length",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "federation_enabled",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "captcha_enabled",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "captcha_difficulty",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "updated",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "registration_mode",
+     "nullable": false,
+     "optional": false,
+     "type": "RegistrationMode"
+    },
+    {
+     "key": "reports_email_admins",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "federation_signed_fetch",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "default_post_listing_mode",
+     "nullable": false,
+     "optional": false,
+     "type": "PostListingMode"
+    },
+    {
+     "key": "default_sort_type",
+     "nullable": false,
+     "optional": false,
+     "type": "SortType"
+    }
+   ],
+   "file": "LocalSite.kt"
+  },
+  "LocalSiteRateLimit": {
+   "fields": [
+    {
+     "key": "local_site_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "message",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "message_per_second",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "post",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "post_per_second",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "register",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "register_per_second",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "image",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "image_per_second",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "comment",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "comment_per_second",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "search",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "search_per_second",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "updated",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "import_user_settings",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "import_user_settings_per_second",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    }
+   ],
+   "file": "LocalSiteRateLimit.kt"
+  },
+  "LocalSiteUrlBlocklist": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "url",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "updated",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    }
+   ],
+   "file": "LocalSiteUrlBlocklist.kt"
+  },
+  "LocalUser": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "person_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "email",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "show_nsfw",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "theme",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "default_sort_type",
+     "nullable": false,
+     "optional": false,
+     "type": "SortType"
+    },
+    {
+     "key": "default_listing_type",
+     "nullable": false,
+     "optional": false,
+     "type": "ListingType"
+    },
+    {
+     "key": "interface_language",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "show_avatars",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "send_notifications_to_email",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "show_scores",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "show_bot_accounts",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "show_read_posts",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "email_verified",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "accepted_application",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "open_links_in_new_tab",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "blur_nsfw",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "auto_expand",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "infinite_scroll_enabled",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "admin",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "post_listing_mode",
+     "nullable": false,
+     "optional": false,
+     "type": "PostListingMode"
+    },
+    {
+     "key": "totp_2fa_enabled",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "enable_keyboard_navigation",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "enable_animated_images",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "collapse_bot_comments",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "last_donation_notification",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    }
+   ],
+   "file": "LocalUser.kt"
+  },
+  "LocalUserView": {
+   "fields": [
+    {
+     "key": "local_user",
+     "nullable": false,
+     "optional": false,
+     "type": "LocalUser"
+    },
+    {
+     "key": "local_user_vote_display_mode",
+     "nullable": false,
+     "optional": false,
+     "type": "LocalUserVoteDisplayMode"
+    },
+    {
+     "key": "person",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    },
+    {
+     "key": "counts",
+     "nullable": false,
+     "optional": false,
+     "type": "PersonAggregates"
+    }
+   ],
+   "file": "LocalUserView.kt"
+  },
+  "LocalUserVoteDisplayMode": {
+   "fields": [
+    {
+     "key": "local_user_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "score",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "upvotes",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "downvotes",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "upvote_percentage",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    }
+   ],
+   "file": "LocalUserVoteDisplayMode.kt"
+  },
+  "LoginResponse": {
+   "fields": [
+    {
+     "key": "jwt",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "registration_created",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "verify_email_sent",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    }
+   ],
+   "file": "LoginResponse.kt"
+  },
+  "MyUserInfo": {
+   "fields": [
+    {
+     "key": "local_user_view",
+     "nullable": false,
+     "optional": false,
+     "type": "LocalUserView"
+    },
+    {
+     "key": "follows",
+     "nullable": false,
+     "optional": false,
+     "type": "List<CommunityFollowerView>"
+    },
+    {
+     "key": "moderates",
+     "nullable": false,
+     "optional": false,
+     "type": "List<CommunityModeratorView>"
+    },
+    {
+     "key": "community_blocks",
+     "nullable": false,
+     "optional": false,
+     "type": "List<CommunityBlockView>"
+    },
+    {
+     "key": "instance_blocks",
+     "nullable": false,
+     "optional": false,
+     "type": "List<InstanceBlockView>"
+    },
+    {
+     "key": "person_blocks",
+     "nullable": false,
+     "optional": false,
+     "type": "List<PersonBlockView>"
+    },
+    {
+     "key": "discussion_languages",
+     "nullable": false,
+     "optional": false,
+     "type": "List<Long>"
+    }
+   ],
+   "file": "MyUserInfo.kt"
+  },
+  "Person": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "name",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "display_name",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "avatar",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "banned",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "updated",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "actor_id",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "bio",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "local",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "banner",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "deleted",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "matrix_user_id",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "bot_account",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "ban_expires",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "instance_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    }
+   ],
+   "file": "Person.kt"
+  },
+  "PersonAggregates": {
+   "fields": [
+    {
+     "key": "person_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "post_count",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "comment_count",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    }
+   ],
+   "file": "PersonAggregates.kt"
+  },
+  "PersonBlockView": {
+   "fields": [
+    {
+     "key": "person",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    },
+    {
+     "key": "target",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    }
+   ],
+   "file": "PersonBlockView.kt"
+  },
+  "PersonMention": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "recipient_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "comment_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "read",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    }
+   ],
+   "file": "PersonMention.kt"
+  },
+  "PersonMentionResponse": {
+   "fields": [
+    {
+     "key": "person_mention_view",
+     "nullable": false,
+     "optional": false,
+     "type": "PersonMentionView"
+    }
+   ],
+   "file": "PersonMentionResponse.kt"
+  },
+  "PersonMentionView": {
+   "fields": [
+    {
+     "key": "person_mention",
+     "nullable": false,
+     "optional": false,
+     "type": "PersonMention"
+    },
+    {
+     "key": "comment",
+     "nullable": false,
+     "optional": false,
+     "type": "Comment"
+    },
+    {
+     "key": "creator",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    },
+    {
+     "key": "post",
+     "nullable": false,
+     "optional": false,
+     "type": "Post"
+    },
+    {
+     "key": "community",
+     "nullable": false,
+     "optional": false,
+     "type": "Community"
+    },
+    {
+     "key": "recipient",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    },
+    {
+     "key": "counts",
+     "nullable": false,
+     "optional": false,
+     "type": "CommentAggregates"
+    },
+    {
+     "key": "creator_banned_from_community",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "banned_from_community",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_is_moderator",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_is_admin",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "subscribed",
+     "nullable": false,
+     "optional": false,
+     "type": "SubscribedType"
+    },
+    {
+     "key": "saved",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_blocked",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "my_vote",
+     "nullable": false,
+     "optional": true,
+     "type": "Int"
+    }
+   ],
+   "file": "PersonMentionView.kt"
+  },
+  "PersonView": {
+   "fields": [
+    {
+     "key": "person",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    },
+    {
+     "key": "counts",
+     "nullable": false,
+     "optional": false,
+     "type": "PersonAggregates"
+    },
+    {
+     "key": "is_admin",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    }
+   ],
+   "file": "PersonView.kt"
+  },
+  "Post": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "name",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "url",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "body",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "creator_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "community_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "removed",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "locked",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "updated",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "deleted",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "nsfw",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "embed_title",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "embed_description",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "thumbnail_url",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "ap_id",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "local",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "embed_video_url",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "language_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "featured_community",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "featured_local",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "url_content_type",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "alt_text",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    }
+   ],
+   "file": "Post.kt"
+  },
+  "PostAggregates": {
+   "fields": [
+    {
+     "key": "post_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "comments",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "score",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "upvotes",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "downvotes",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "newest_comment_time",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    }
+   ],
+   "file": "PostAggregates.kt"
+  },
+  "PostResponse": {
+   "fields": [
+    {
+     "key": "post_view",
+     "nullable": false,
+     "optional": false,
+     "type": "PostView"
+    }
+   ],
+   "file": "PostResponse.kt"
+  },
+  "PostView": {
+   "fields": [
+    {
+     "key": "post",
+     "nullable": false,
+     "optional": false,
+     "type": "Post"
+    },
+    {
+     "key": "creator",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    },
+    {
+     "key": "community",
+     "nullable": false,
+     "optional": false,
+     "type": "Community"
+    },
+    {
+     "key": "image_details",
+     "nullable": true,
+     "optional": true,
+     "type": "ImageDetails"
+    },
+    {
+     "key": "creator_banned_from_community",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "banned_from_community",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_is_moderator",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_is_admin",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "counts",
+     "nullable": false,
+     "optional": false,
+     "type": "PostAggregates"
+    },
+    {
+     "key": "subscribed",
+     "nullable": false,
+     "optional": false,
+     "type": "SubscribedType"
+    },
+    {
+     "key": "saved",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "read",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "hidden",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_blocked",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "my_vote",
+     "nullable": false,
+     "optional": true,
+     "type": "Int"
+    },
+    {
+     "key": "unread_comments",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    }
+   ],
+   "file": "PostView.kt"
+  },
+  "PrivateMessage": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "creator_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "recipient_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "content",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "deleted",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "read",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "updated",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "ap_id",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "local",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    }
+   ],
+   "file": "PrivateMessage.kt"
+  },
+  "PrivateMessageResponse": {
+   "fields": [
+    {
+     "key": "private_message_view",
+     "nullable": false,
+     "optional": false,
+     "type": "PrivateMessageView"
+    }
+   ],
+   "file": "PrivateMessageResponse.kt"
+  },
+  "PrivateMessageView": {
+   "fields": [
+    {
+     "key": "private_message",
+     "nullable": false,
+     "optional": false,
+     "type": "PrivateMessage"
+    },
+    {
+     "key": "creator",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    },
+    {
+     "key": "recipient",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    }
+   ],
+   "file": "PrivateMessageView.kt"
+  },
+  "PrivateMessagesResponse": {
+   "fields": [
+    {
+     "key": "private_messages",
+     "nullable": false,
+     "optional": false,
+     "type": "List<PrivateMessageView>"
+    }
+   ],
+   "file": "PrivateMessagesResponse.kt"
+  },
+  "SearchResponse": {
+   "fields": [
+    {
+     "key": "type_",
+     "nullable": false,
+     "optional": false,
+     "type": "SearchType"
+    },
+    {
+     "key": "comments",
+     "nullable": false,
+     "optional": false,
+     "type": "List<CommentView>"
+    },
+    {
+     "key": "posts",
+     "nullable": false,
+     "optional": false,
+     "type": "List<PostView>"
+    },
+    {
+     "key": "communities",
+     "nullable": false,
+     "optional": false,
+     "type": "List<CommunityView>"
+    },
+    {
+     "key": "users",
+     "nullable": false,
+     "optional": false,
+     "type": "List<PersonView>"
+    }
+   ],
+   "file": "SearchResponse.kt"
+  },
+  "Site": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "name",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "sidebar",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "updated",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "icon",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "banner",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "description",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "actor_id",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "last_refreshed_at",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "inbox_url",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "public_key",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "instance_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "content_warning",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    }
+   ],
+   "file": "Site.kt"
+  },
+  "SiteAggregates": {
+   "fields": [
+    {
+     "key": "site_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "users",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "posts",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "comments",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "communities",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "users_active_day",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "users_active_week",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "users_active_month",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "users_active_half_year",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    }
+   ],
+   "file": "SiteAggregates.kt"
+  },
+  "SiteView": {
+   "fields": [
+    {
+     "key": "site",
+     "nullable": false,
+     "optional": false,
+     "type": "Site"
+    },
+    {
+     "key": "local_site",
+     "nullable": false,
+     "optional": false,
+     "type": "LocalSite"
+    },
+    {
+     "key": "local_site_rate_limit",
+     "nullable": false,
+     "optional": false,
+     "type": "LocalSiteRateLimit"
+    },
+    {
+     "key": "counts",
+     "nullable": false,
+     "optional": false,
+     "type": "SiteAggregates"
+    }
+   ],
+   "file": "SiteView.kt"
+  },
+  "Tagline": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "local_site_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "content",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "updated",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    }
+   ],
+   "file": "Tagline.kt"
+  },
+  "UploadImageResponse": {
+   "fields": [
+    {
+     "key": "msg",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "files",
+     "nullable": false,
+     "optional": true,
+     "type": "List<ImageFile>"
+    }
+   ],
+   "file": "UploadImageResponse.kt"
+  }
+ },
+ "enums": {
+  "CommentSortType": [
+   "Hot",
+   "Top",
+   "New",
+   "Old",
+   "Controversial"
+  ],
+  "CommunityVisibility": [
+   "Public",
+   "LocalOnly"
+  ],
+  "ListingType": [
+   "All",
+   "Local",
+   "Subscribed",
+   "ModeratorView"
+  ],
+  "ModlogActionType": [
+   "All",
+   "ModRemovePost",
+   "ModLockPost",
+   "ModFeaturePost",
+   "ModRemoveComment",
+   "ModRemoveCommunity",
+   "ModBanFromCommunity",
+   "ModAddCommunity",
+   "ModTransferCommunity",
+   "ModAdd",
+   "ModBan",
+   "ModHideCommunity",
+   "AdminPurgePerson",
+   "AdminPurgeCommunity",
+   "AdminPurgePost",
+   "AdminPurgeComment"
+  ],
+  "PostFeatureType": [
+   "Local",
+   "Community"
+  ],
+  "PostListingMode": [
+   "List",
+   "Card",
+   "SmallCard"
+  ],
+  "RegistrationMode": [
+   "Closed",
+   "RequireApplication",
+   "Open"
+  ],
+  "SearchType": [
+   "All",
+   "Comments",
+   "Posts",
+   "Communities",
+   "Users",
+   "Url"
+  ],
+  "SortType": [
+   "Active",
+   "Hot",
+   "New",
+   "Old",
+   "TopDay",
+   "TopWeek",
+   "TopMonth",
+   "TopYear",
+   "TopAll",
+   "MostComments",
+   "NewComments",
+   "TopHour",
+   "TopSixHour",
+   "TopTwelveHour",
+   "Controversial",
+   "Scaled"
+  ],
+  "SubscribedType": [
+   "Subscribed",
+   "NotSubscribed",
+   "Pending"
+  ]
+ },
+ "library": "lemmy-api 0.4.2-v1patch (Lemmy 0.19.11 models), Jerboa 0.0.88",
+ "roots": [
+  "GetSiteResponse",
+  "LoginResponse",
+  "GetPostsResponse",
+  "GetPostResponse",
+  "GetCommentsResponse",
+  "CommentResponse",
+  "PostResponse",
+  "CommunityResponse",
+  "GetCommunityResponse",
+  "GetPersonDetailsResponse",
+  "GetUnreadCountResponse",
+  "GetRepliesResponse",
+  "GetPersonMentionsResponse",
+  "PrivateMessagesResponse",
+  "PrivateMessageResponse",
+  "CommentReplyResponse",
+  "PersonMentionResponse",
+  "SearchResponse",
+  "BlockCommunityResponse",
+  "BlockPersonResponse",
+  "GetSiteMetadataResponse",
+  "GetReportCountResponse",
+  "GetUnreadRegistrationApplicationCountResponse",
+  "UploadImageResponse"
+ ]
+}
