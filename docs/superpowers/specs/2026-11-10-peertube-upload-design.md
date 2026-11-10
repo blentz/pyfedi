@@ -79,7 +79,10 @@ editing: the app hides each where `/api/v1/config` says it is off, which it does
   5 Password protected; a PieFed post is public, unlisted, followers-only or direct. Recommendation: 1 public,
   2 unlisted; 3, 4 and 5 refused with a message saying PieFed has no such setting, rather than mapped to one that
   shows the video to other people than the uploader chose (followers-only is neither "only me" nor "this instance").
-  **Ruled 2026-11-10: 1 public and 2 unlisted kept; 4 Internal supported; 3 and 5 refused.** Internal is a post
+  **Ruled 2026-11-10: 1 public; 2 unlisted made public; 4 Internal supported; 3 and 5 refused.** (Unlisted was
+  first ruled kept, on the spec's wrong claim that a local PieFed post can be unlisted: unlisted exists only for
+  posts from other servers, feeds list it as public, and nothing makes or federates a local one. Asked again, the owner
+  ruled an upload marked unlisted is made public.) Internal is a post
   stamped local-only (`Post.local_only`): signed-in readers of this server see it, signed-out ones and other servers
   never do, its replies are stamped too, and the last outbound gate (`app.local_only.outbound_refusal`) refuses any
   activity naming it. Read back, such a video's privacy is 4 Internal.
