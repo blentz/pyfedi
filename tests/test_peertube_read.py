@@ -455,3 +455,9 @@ def test_live_videos_are_none_and_non_live_ones_are_every_video(world):
     assert _listed(_get(world, '/api/v1/videos', isLive='true')) == []
     assert upload.id in _listed(_get(world, '/api/v1/videos', isLive='false'))
     assert _listed(_get(world, '/api/v1/search/videos', search='', isLive='true')) == []
+
+
+def test_the_servers_this_one_follows_are_none(world):
+    """PeerTube's app lists them on a platform's page; PieFed follows no servers as PeerTube does."""
+    response = _get(world, '/api/v1/server/following', state='accepted', count=5, start=0)
+    assert response.status_code == 200 and response.get_json() == {'total': 0, 'data': []}

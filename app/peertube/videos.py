@@ -253,6 +253,13 @@ def search_playlists():
     return entities.empty()
 
 
+@bp.route('/api/v1/server/following')
+@signed_in(optional=True)
+def server_following():
+    """The servers this one follows, which PeerTube's app lists: none, as PieFed follows no servers."""
+    return entities.empty()
+
+
 @bp.route('/api/v1/video-playlists')
 @signed_in(optional=True)
 def list_playlists():
