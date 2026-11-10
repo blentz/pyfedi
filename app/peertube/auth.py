@@ -29,9 +29,11 @@ def problem(status: int, code: str, detail: str):
 REFUSALS = {401: 'invalid_token', 403: 'forbidden', 422: 'invalid_token'}
 
 
-def signed_in(scope: str = 'read'):
+def signed_in(scope: str = 'read', optional: bool = False):
     """The route acts for the person a token names (app.oauth_server.protect.require_oauth, with its checks and the
-    login gate left to it), refusing in PeerTube's shape. A 401 is what sends PeerTube's app to refresh its token."""
+    login gate left to it), refusing in PeerTube's shape. A 401 is what sends PeerTube's app to refresh its token.
+    With `optional`, a request with no token reads as nobody, except on a private domain (spec §7: every read is the
+    person's view, or a signed-out reader's)."""
     def decorator(view):
         @wraps(view)
         def guarded(*args, **kwargs):
@@ -40,7 +42,7 @@ def signed_in(scope: str = 'read'):
             def inner(*inner_args, **inner_kwargs):
                 reached.append(True)
                 return view(*inner_args, **inner_kwargs)
-            result = require_oauth(scope)(inner)(*args, **kwargs)
+            result = require_oauth(scope, optional=optional)(inner)(*args, **kwargs)
             if reached:
                 return result
             refusal, status = result

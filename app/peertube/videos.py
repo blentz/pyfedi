@@ -7,6 +7,7 @@ from sqlalchemy import desc, func, or_
 from app.models import Community, Post, Tag
 from app.peertube import bp
 from app.peertube import entities
+from app.peertube.auth import signed_in
 from app.peertube.entities import BadRequest, error, find_video, not_found, paged
 from app.reads.posts import KEYSET_PAGES, Listing, post_listing
 from app.reads.replies import WHOLE_THREAD, reply_tree, thread_replies
@@ -35,7 +36,8 @@ def _bad_request(_error):
 
 def videos(listing: Listing, sort: str | None = None):
     """The videos `listing` names, as the request's sort orders them and its window pages them."""
-    posts = post_listing(None, Restrictions(None), listing, KEYSET_PAGES).posts.filter(entities.playable_clause())
+    posts = post_listing(entities.viewer(), Restrictions(entities.viewer_id()), listing, KEYSET_PAGES).posts.filter(
+        entities.playable_clause())
     if request.args.get('isLocal', '').lower() == 'true':
         posts = posts.filter(Post.instance_id.in_(hosted_instance_ids()))
     order = SORTS.get(sort or request.args.get('sort', '-publishedAt'), SORTS['-publishedAt'])
@@ -89,33 +91,39 @@ def config():
 
 
 @bp.route('/api/v1/videos')
+@signed_in(optional=True)
 def list_videos():
     return videos(Listing(sort='', ignore_sticky=True))
 
 
 @bp.route('/api/v1/videos/<video_id>')
+@signed_in(optional=True)
 def get_video(video_id):
     post = find_video(video_id)
     return jsonify(entities.video(post, whole=True)) if post is not None else not_found()
 
 
 @bp.route('/api/v1/videos/<video_id>/description')
+@signed_in(optional=True)
 def video_description(video_id):
     post = find_video(video_id)
     return jsonify({'description': post.body or ''}) if post is not None else not_found()
 
 
 @bp.route('/api/v1/videos/<video_id>/captions')
+@signed_in(optional=True)
 def video_captions(video_id):
     return jsonify({'total': 0, 'data': []}) if find_video(video_id) is not None else not_found()
 
 
 @bp.route('/api/v1/videos/<video_id>/chapters')
+@signed_in(optional=True)
 def video_chapters(video_id):
     return jsonify({'chapters': []}) if find_video(video_id) is not None else not_found()
 
 
 @bp.route('/api/v1/videos/<video_id>/storyboards')
+@signed_in(optional=True)
 def video_storyboards(video_id):
     return jsonify({'storyboards': []}) if find_video(video_id) is not None else not_found()
 
@@ -124,8 +132,9 @@ def video_storyboards(video_id):
 
 def _thread(post: Post) -> list[dict]:
     """The post's readable replies as a tree: deleted ones, and any whose parent is not shown, left out."""
-    rows = [reply for reply in thread_replies(post, None, Restrictions(None), 'old', WHOLE_THREAD)
-            if not reply.deleted and can_view(reply, None) and not hidden_here(reply, False)]
+    reader = entities.viewer_id()
+    rows = [reply for reply in thread_replies(post, entities.viewer(), Restrictions(reader), 'old', WHOLE_THREAD)
+            if not reply.deleted and can_view(reply, reader) and not hidden_here(reply, reader is not None)]
     return reply_tree(rows)
 
 
@@ -152,6 +161,7 @@ def _branch(entry: dict, post: Post, thread_id: int) -> dict:
 
 
 @bp.route('/api/v1/videos/<video_id>/comment-threads')
+@signed_in(optional=True)
 def comment_threads(video_id):
     post = find_video(video_id)
     if post is None:
@@ -163,6 +173,7 @@ def comment_threads(video_id):
 
 
 @bp.route('/api/v1/videos/<video_id>/comment-threads/<int:thread_id>')
+@signed_in(optional=True)
 def comment_thread(video_id, thread_id):
     post = find_video(video_id)
     if post is None:
@@ -179,10 +190,12 @@ def _tags() -> list[str]:
 
 
 @bp.route('/api/v1/search/videos')
+@signed_in(optional=True)
 def search_videos():
     query = request.args.get('search', '').strip()[:256]
     listing = Listing(sort='', ignore_sticky=True, query=query)
-    posts = post_listing(None, Restrictions(None), listing, KEYSET_PAGES).posts.filter(entities.playable_clause())
+    posts = post_listing(entities.viewer(), Restrictions(entities.viewer_id()), listing, KEYSET_PAGES).posts.filter(
+        entities.playable_clause())
     if tags := _tags():
         posts = posts.filter(Post.tags.any(Tag.name.in_(tags) & (Tag.banned == False)))
     order = SORTS.get(request.args.get('sort', '-publishedAt'), SORTS['-publishedAt'])
@@ -190,12 +203,13 @@ def search_videos():
 
 
 def listable_communities(query):
-    """The communities a signed-out reader may open here."""
+    """The communities this request's reader may open here (a private one is no channel)."""
     return [community for community in query if not community.banned and not community.private
-            and not hidden_here(community, False)]
+            and not hidden_here(community, entities.viewer() is not None)]
 
 
 @bp.route('/api/v1/search/video-channels')
+@signed_in(optional=True)
 def search_channels():
     start, count = entities.window()
     text = request.args.get('search', '').strip()[:256].lower()
@@ -209,15 +223,18 @@ def search_channels():
 
 
 @bp.route('/api/v1/search/video-playlists')
+@signed_in(optional=True)
 def search_playlists():
     return entities.empty()
 
 
 @bp.route('/api/v1/video-playlists')
+@signed_in(optional=True)
 def list_playlists():
     return entities.empty()
 
 
 @bp.route('/api/v1/video-playlists/<int:playlist_id>')
+@signed_in(optional=True)
 def get_playlist(playlist_id):
     return not_found()

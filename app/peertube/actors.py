@@ -13,6 +13,7 @@ from app.local_only import hidden_here
 from app.models import Community, CommunityMember, User
 from app.peertube import bp
 from app.peertube import entities
+from app.peertube.auth import signed_in
 from app.peertube.entities import not_found
 from app.peertube.videos import listable_communities, videos
 from app.reads.posts import Listing
@@ -25,7 +26,7 @@ def find_person(handle: str) -> User | None:
         return None
     person = User.query.filter(named_by_actor(User, handle.lower()), User.deleted == False,
                                User.banned == False).first()
-    return person if person is not None and not hidden_here(person, False) else None
+    return person if person is not None and not hidden_here(person, entities.viewer() is not None) else None
 
 
 def find_community(handle: str) -> Community | None:
@@ -36,18 +37,21 @@ def find_community(handle: str) -> Community | None:
 
 
 @bp.route('/api/v1/accounts/<handle>')
+@signed_in(optional=True)
 def get_account(handle):
     person = find_person(handle)
     return jsonify(entities.account(person)) if person is not None else not_found()
 
 
 @bp.route('/api/v1/accounts/<handle>/videos')
+@signed_in(optional=True)
 def account_videos(handle):
     person = find_person(handle)
     return videos(Listing(sort='', person_id=person.id, ignore_sticky=True)) if person is not None else not_found()
 
 
 @bp.route('/api/v1/accounts/<handle>/video-channels')
+@signed_in(optional=True)
 def account_channels(handle):
     """The communities the person moderates or owns."""
     person = find_person(handle)
@@ -63,17 +67,20 @@ def account_channels(handle):
 
 
 @bp.route('/api/v1/accounts/<handle>/video-playlists')
+@signed_in(optional=True)
 def account_playlists(handle):
     return entities.empty() if find_person(handle) is not None else not_found()
 
 
 @bp.route('/api/v1/video-channels/<handle>')
+@signed_in(optional=True)
 def get_channel(handle):
     community = find_community(handle)
     return jsonify(entities.channel(community)) if community is not None else not_found()
 
 
 @bp.route('/api/v1/video-channels/<handle>/videos')
+@signed_in(optional=True)
 def channel_videos(handle):
     community = find_community(handle)
     if community is None:
@@ -82,5 +89,6 @@ def channel_videos(handle):
 
 
 @bp.route('/api/v1/video-channels/<handle>/video-playlists')
+@signed_in(optional=True)
 def channel_playlists(handle):
     return entities.empty() if find_community(handle) is not None else not_found()

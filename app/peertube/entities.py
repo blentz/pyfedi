@@ -8,7 +8,7 @@ nothing NewPipe can play, so it is not one."""
 import re
 from datetime import datetime
 
-from flask import jsonify, request
+from flask import g, jsonify, request
 from sqlalchemy import and_, func, or_
 
 from app import db
@@ -70,10 +70,19 @@ def _is_remote_file(post: Post) -> bool:
             and isinstance(post.url, str) and post.url.lower().endswith(FILE_SUFFIXES))
 
 
+def viewer() -> User | None:
+    """Who this request reads as: the person its token names, or None for a signed-out reader."""
+    return g.get('oauth_user')
+
+
+def viewer_id() -> int | None:
+    return viewer().id if viewer() is not None else None
+
+
 def is_video(post: Post | None) -> bool:
-    """`playable_clause` for one row, and readable by a signed-out reader here."""
+    """`playable_clause` for one row, and readable here by this request's reader."""
     return (post is not None and post.type == POST_TYPE_VIDEO and (_is_upload(post) or _is_remote_file(post))
-            and readable(post, None))
+            and readable(post, viewer_id()))
 
 
 def video_uuid(post: Post) -> str:
@@ -82,7 +91,7 @@ def video_uuid(post: Post) -> str:
 
 
 def find_video(key: str) -> Post | None:
-    """The video `key` (an id or a video_uuid) names, if it is one a signed-out reader may play here."""
+    """The video `key` (an id or a video_uuid) names, if it is one this request's reader may play here."""
     if key.isdigit() and len(key) <= 10:
         post_id = int(key)
     elif match := _UUID.fullmatch(key):
