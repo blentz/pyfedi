@@ -31,12 +31,12 @@ def test_jerboa_is_told_lemmy_and_everyone_else_piefed_whichever_asks_first(clie
     assert _software(client, path, 'Jerboa')['name'] == 'lemmy'   # from the cache, still its own
 
 
-@pytest.mark.parametrize('agent', ['Jerboa/0.0.88', 'Jerboa (Android)'])
+@pytest.mark.parametrize('agent', ['Jerboa/0.0.88', 'Jerboa (Android)', 'LemmyKotlinApi'])
 def test_a_jerboa_agent_with_more_after_its_name_is_jerboa(client, agent):
     assert _software(client, '/nodeinfo/2.0.json', agent)['name'] == 'lemmy'
 
 
-@pytest.mark.parametrize('agent', ['NotJerboa', 'Jerboard/1.0', 'Mozilla/5.0 Jerboa'])
+@pytest.mark.parametrize('agent', ['NotJerboa', 'Jerboard/1.0', 'Mozilla/5.0 Jerboa', 'LemmyKotlinApiX'])
 def test_only_an_agent_that_begins_with_the_name_is_jerboa(client, agent):
     assert _software(client, '/nodeinfo/2.0.json', agent)['name'] == 'piefed'
 

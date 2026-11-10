@@ -1,7 +1,7 @@
 """Who PieFed says it is to Jerboa (plan D3; spec 2026-11-10-lemmy-v3-design §3, ruling L1). Jerboa refuses a server
 whose nodeinfo does not say `lemmy`, and picks the models it decodes with from the version, so it is told Lemmy
-0.19.11: the API level /api/v3 serves, not PieFed's version. It names itself on every request (its Http.kt sends
-`User-Agent: Jerboa`); every other agent is told PieFed."""
+0.19.11: the API level /api/v3 serves, not PieFed's version. It names itself (its Http.kt sends `User-Agent: Jerboa`),
+but its nodeinfo request is its API library's, as `LemmyKotlinApi`; every other agent is told PieFed."""
 import re
 
 from flask import Response, request
@@ -9,7 +9,9 @@ from flask import Response, request
 from app.storefront import storefront_cache_key
 
 LEMMY_VERSION = '0.19.11'
-JERBOA = re.compile(r'Jerboa(?![\w-])')
+# Jerboa names itself on its own requests; its nodeinfo request goes through its API library's client
+# (it.vercruysse.lemmyapi), which names itself LemmyKotlinApi
+JERBOA = re.compile(r'(?:Jerboa|LemmyKotlinApi)(?![\w-])')
 
 
 def is_jerboa() -> bool:
