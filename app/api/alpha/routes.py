@@ -77,11 +77,12 @@ def is_trusted_request():
 
 get_site_response = GetSiteResponse()
 
-# Creating a post or a comment, or sending a private message, in alpha's API and Lemmy's (app.lemmy): one bucket per
-# address each, whichever API is used (shared_limit: limit() keys by endpoint too)
+# Creating a post or a comment, sending a private message or reading a link's metadata, in alpha's API and Lemmy's
+# (app.lemmy): one bucket per address each, whichever API is used (shared_limit: limit() keys by endpoint too)
 COMMENT_LIMIT, COMMENT_SCOPE = '3/minute', 'api-comment-create'
 MESSAGE_LIMIT, MESSAGE_SCOPE = '3/minute', 'api-private-message-create'
 POST_LIMIT, POST_SCOPE = '3/minute', 'api-post-create'
+METADATA_LIMIT, METADATA_SCOPE = '20/minute', 'api-site-metadata'   # each one fetches the page from its server
 
 
 # Site
@@ -635,7 +636,7 @@ def post_alpha_post_metadata(data):
     if not enable_api():
         return abort(400, message="alpha api is not enabled")
     auth = request.headers.get('Authorization')
-    with limiter.limit('20/minute', exempt_when=is_trusted_request):
+    with limiter.shared_limit(METADATA_LIMIT, scope=METADATA_SCOPE, exempt_when=is_trusted_request):
         return GetSiteMetadataResponse().load(get_site_metadata(auth, data))
 
 
