@@ -11,7 +11,7 @@ import pytest
 
 from app import db
 from app.constants import COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_VIDEO_CHANNEL, POST_STATUS_PROCESSING, \
-    POST_TYPE_VIDEO
+    POST_STATUS_PUBLISHED, POST_TYPE_VIDEO
 from app.models import Language, Post, Site, VideoUpload, utcnow
 from app.oauth_server import tokens
 from app.peertube.entities import video_uuid
@@ -236,9 +236,27 @@ def test_a_finished_upload_asked_again_answers_its_video(env):
     assert again.status_code == 200 and again.get_json()['video']['uuid'] == video['uuid']
 
 
+def test_a_videos_privacy_may_change_while_it_processes_and_is_fixed_once_published(env):
+    """The app sends the details twice: on its own as the upload ends (the defaults), then the person's choice. The
+    post is not published nor federated while its media processes, so until then its privacy may change."""
+    video = _uploaded(env, _clip(), privacy=1)
+    post = _post_of(video['upload_id'])
+    assert _details(env, video['uuid'], privacy=4).status_code == 204
+    assert db.session.get(Post, post.id).local_only is True
+    assert _details(env, video['uuid'], privacy=1).status_code == 204
+    assert db.session.get(Post, post.id).local_only is False
+    post = db.session.get(Post, post.id)
+    post.status = POST_STATUS_PUBLISHED
+    db.session.commit()
+    refused = _details(env, video['uuid'], privacy=4)
+    assert refused.status_code == 400 and 'published' in refused.get_json()['detail']
+
+
 def test_a_videos_details_are_edited_and_its_privacy_is_fixed(env):
     video = _uploaded(env, _clip(), privacy=1)
     post = _post_of(video['upload_id'])
+    post.status = POST_STATUS_PUBLISHED
+    db.session.commit()
     assert _details(env, video_uuid(post), name='Edited', nsfw=True, tags=['three']).status_code == 204
     post = db.session.get(Post, post.id)
     assert (post.title, post.nsfw, [tag.name for tag in post.tags]) == ('Edited', True, ['three'])
@@ -281,6 +299,15 @@ def test_the_hourly_sweep_removes_what_no_post_came_of(env):
     assert video_uploads.sweep() == 1
     assert VideoUpload.query.filter_by(upload_id=stale_id).first() is None
     assert {row.upload_id for row in VideoUpload.query.all()} == {kept_id, posted['upload_id']}
+
+
+def test_chapters_are_taken_and_not_kept(env):
+    """The app sends them with the details; PieFed keeps no chapters, and a refusal stopped its details screen."""
+    video = _uploaded(env, _clip(), privacy=1)
+    sent = env.client.put(f"/api/v1/videos/{video['uuid']}/chapters", json={'chapters': []}, headers=env.headers)
+    assert sent.status_code == 204
+    assert env.client.put('/api/v1/videos/999999/chapters', json={'chapters': []},
+                          headers=env.headers).status_code == 404
 
 
 def test_the_upload_forms_lists(env):

@@ -13,7 +13,7 @@ import re
 from flask import g, jsonify, make_response, request
 
 from app import db
-from app.constants import POST_TYPE_VIDEO, SRC_API
+from app.constants import POST_STATUS_PROCESSING, POST_TYPE_VIDEO, SRC_API
 from app.models import Community, Post, VideoUpload
 from app.peertube import bp
 from app.peertube.auth import failure, problem, signed_in
@@ -168,6 +168,13 @@ def update_video(video_id):
     return '', 204
 
 
+@bp.route('/api/v1/videos/<video_id>/chapters', methods=['PUT'])
+@signed_in('write')
+def update_chapters(video_id):
+    """Taken and not kept: PieFed has no chapters. The app sends them with the details, and a refusal stopped it."""
+    return ('', 204) if _owned(video_id) is not None else _no_video()
+
+
 @bp.route('/api/v1/videos/<video_id>', methods=['DELETE'])
 @signed_in('write')
 def delete_video(video_id):
@@ -202,11 +209,15 @@ def _no_video():
 
 
 def _edit(post, details: dict) -> None:
-    """Edit the post's title, body, NSFW and tags as the alpha API's edit does; its visibility is fixed (Amendment B)."""
+    """Edit the post's title, body, NSFW and tags as the alpha API's edit does. Its privacy may change while its media
+    processes, since until then it is neither published nor federated (the app sends its defaults on its own as the
+    upload ends, then the person's choice); once published it is fixed (Amendment B)."""
     if 'privacy' in details:
-        privacy = video_uploads.checked_privacy(details['privacy'])
-        if (privacy == video_uploads.INTERNAL) != bool(post.local_only):
-            raise Refused(400, 'invalid_request', 'A video\'s privacy is fixed once it is published')
+        internal = video_uploads.checked_privacy(details['privacy']) == video_uploads.INTERNAL
+        if internal != bool(post.local_only):
+            if post.status != POST_STATUS_PROCESSING:
+                raise Refused(400, 'invalid_request', 'A video\'s privacy is fixed once it is published')
+            post.local_only = internal
     tags = details.get('tags')
     payload = {'title': str(details.get('name') or post.title)[:255],
                'body': str(details['description']) if details.get('description') is not None else (post.body or ''),

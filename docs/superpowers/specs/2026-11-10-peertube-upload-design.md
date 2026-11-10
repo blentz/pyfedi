@@ -56,8 +56,12 @@ Before it offers an upload the app reads `users/me` (its `videoChannels` and `vi
   a day after its last part (U2): making its post there would need a request the maintenance has not got. The
   upload's uuid names its post from then on, for the app's later calls.
 - **Details:** `PUT /videos/<uuid>` makes the post (above), or edits it through `edit_post`: `name` its title,
-  `description` its body, `nsfw`, `tags` its tags; `privacy` is taken when the post is made, per U1, and refused as a
-  change afterwards, as PieFed's visibility is. The author finds their own video while it is still processing. `category`, `licence`, `language`, `commentsPolicy`, `downloadEnabled` and
+  `description` its body, `nsfw`, `tags` its tags; `privacy` per U1. Found on the emulator: the app sends the details on its own as the
+  upload ends (its defaults, before the person has finished the form), then the person's choice from "Publish my
+  video". So privacy may still change while the video processes, since until it is published it is neither listed nor
+  federated, and is refused as a change once it is published, as PieFed's visibility is. The author finds their own
+  video while it is still processing. Chapters the app sends are taken and not kept (PieFed has none; a refusal
+  stopped its details screen). `category`, `licence`, `language`, `commentsPolicy`, `downloadEnabled` and
   `support` are not kept: PieFed has no such thing. A thumbnail is taken and not kept: PieFed makes a video's own from its frames. Only the
   author may. The upload form's lists (`/videos/privacies`, `categories`, `licences`, `languages`) offer Public and
   Internal, and no category, licence or language, since none is kept.
