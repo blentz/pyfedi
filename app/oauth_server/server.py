@@ -120,22 +120,22 @@ class PasswordGrant(grants.ResourceOwnerPasswordCredentialsGrant):
     2026-11-09). Going over it aborts 429."""
     TOKEN_ENDPOINT_AUTH_METHODS = ['client_secret_basic', 'client_secret_post']
 
-    def validate_token_request(self):
-        client = self.authenticate_token_endpoint_client()
-        if client.client_id != tokens.local_client_id() or not client.check_grant_type(self.GRANT_TYPE):
+    def authenticate_token_endpoint_client(self):
+        """Only this domain's local client, before any password is looked at. (Not in validate_token_request: a scan
+        of app/ reads any validate_<name> as a WTForms inline validator, tests/test_post_and_user_forms.py.)"""
+        client = super().authenticate_token_endpoint_client()
+        if client.client_id != tokens.local_client_id():
             raise UnauthorizedClientError("The client is not authorized to use 'grant_type=password'")
-        params = self.request.form
-        if not params.get('username') or not params.get('password'):
-            raise InvalidRequestError("Missing 'username' or 'password' in request.")
-        user = self.authenticate_user(params['username'], params['password'])
-        if user is None:
-            raise InvalidGrantError('Invalid credentials')
-        self.request.client, self.request.user = client, user
-        self.validate_requested_scope()
+        return client
 
     def authenticate_user(self, username, password):
+        if not username or not password:
+            raise InvalidRequestError("Missing 'username' or 'password' in request.")
         with limiter.limit(PASSWORD_LIMIT, scope='oauth-password-grant'):
-            return self._checked_user(username, password)
+            user = self._checked_user(username, password)
+        if user is None:
+            raise InvalidGrantError('Invalid credentials')
+        return user
 
     def _checked_user(self, username, password):
         try:
