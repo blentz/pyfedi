@@ -6,16 +6,12 @@ from marshmallow import EXCLUDE
 from app import db
 from app.api.alpha.schema import ListPostsRequest
 from app.api.alpha.utils.post import get_post, get_post_list
-from app.lemmy import bp, shapes
+from app.lemmy import arguments, bp, shapes
 from app.models import PostReply
 
 # Lemmy's post sorts that alpha has no such name for, as their nearest
 SORTS = {'MostComments': 'Active', 'NewComments': 'Active', 'Controversial': 'Hot'}
 LISTED = ('type_', 'sort', 'page', 'limit', 'community_id', 'community_name', 'saved_only', 'liked_only')
-
-
-def _auth() -> str | None:
-    return request.headers.get('Authorization')
 
 
 def listing_arguments() -> dict:
@@ -31,7 +27,7 @@ def listing_arguments() -> dict:
 
 @bp.route('/api/v3/post/list')
 def post_list():
-    alpha = get_post_list(_auth(), listing_arguments())
+    alpha = get_post_list(arguments.auth(), listing_arguments())
     return jsonify(posts=[shapes.post_view(view) for view in alpha['posts']], next_page=alpha['next_page'])
 
 
@@ -44,4 +40,4 @@ def one_post():
         post_id = comment.post_id if comment is not None else None
     if post_id is None:
         raise Exception('not_found')
-    return jsonify(shapes.get_post_response(get_post(_auth(), {'id': post_id})))
+    return jsonify(shapes.get_post_response(get_post(arguments.auth(), {'id': post_id})))

@@ -5,7 +5,7 @@ from marshmallow import EXCLUDE
 
 from app.api.alpha.schema import ListCommentsRequest
 from app.api.alpha.utils.reply import get_reply_list
-from app.lemmy import bp, shapes
+from app.lemmy import arguments, bp, shapes
 
 LISTED = ('type_', 'sort', 'max_depth', 'page', 'limit', 'community_id', 'post_id', 'parent_id', 'saved_only',
           'liked_only')
@@ -14,20 +14,16 @@ LISTED = ('type_', 'sort', 'max_depth', 'page', 'limit', 'community_id', 'post_i
 WHOLE_THREAD = 300
 
 
-def _auth() -> str | None:
-    return request.headers.get('Authorization')
-
-
 @bp.route('/api/v3/comment/list')
 def comment_list():
     raw = {name: request.args[name] for name in LISTED if request.args.get(name) not in (None, '')}
     data = ListCommentsRequest().load(raw, unknown=EXCLUDE)
     if 'max_depth' not in data or 'limit' in data or 'page' in data:
-        comments = get_reply_list(_auth(), data)['comments']
+        comments = get_reply_list(arguments.auth(), data)['comments']
     else:
         page_length, comments, page = current_app.config['PAGE_LENGTH'], [], 1
         while True:
-            alpha = get_reply_list(_auth(), {**data, 'limit': page_length, 'page': page})
+            alpha = get_reply_list(arguments.auth(), {**data, 'limit': page_length, 'page': page})
             comments += alpha['comments']
             if alpha['next_page'] is None or len(comments) >= WHOLE_THREAD:
                 break

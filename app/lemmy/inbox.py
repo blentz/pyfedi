@@ -16,7 +16,6 @@ from app.lemmy import arguments, bp, shapes
 LISTED = ('sort', 'page', 'limit', 'unread_only')
 
 
-
 def _query(schema) -> dict:
     raw = {name: request.args[name] for name in LISTED if request.args.get(name) not in (None, '')}
     return schema().load(raw, unknown=EXCLUDE)

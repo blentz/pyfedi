@@ -25,7 +25,6 @@ POST_NAMES = {'name': 'title'}   # Lemmy's CreatePost and EditPost
 MAX_POSTS = 50   # posts hidden in one request: Jerboa hides one at a time
 
 
-
 def _post_response(alpha: dict):
     return jsonify(post_view=shapes.post_view(alpha['post_view']))
 
