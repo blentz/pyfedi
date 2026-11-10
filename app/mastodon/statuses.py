@@ -11,6 +11,7 @@ A `Page` holds what one response's statuses share: the viewer's votes, bookmarks
 each loaded once for the whole page."""
 from functools import cached_property
 
+from flask import has_request_context, request
 from markupsafe import escape
 
 from app import db
@@ -176,4 +177,22 @@ def status(row: Post | PostReply, page: Page) -> dict:
     if page.viewer_id is not None:
         entity.update(favourited=favourited, reblogged=reblogged, muted=False, bookmarked=bookmarked,
                       pinned=False if is_reply else bool(row.sticky))
+    if has_request_context() and request.args.get('_pe') == '1':
+        entity.update(pixelfed_fields(row, entity))
     return entity
+
+
+def pixelfed_fields(row: Post | PostReply, entity: dict) -> dict:
+    """Pixelfed's extended status (`_pe=1`; spec 2026-11-10-pixelfed-app-design §3): its app's profile grid shows only
+    statuses whose `pf_type` is a photo, an album or a video, and picks its player by it. `liked_by` names nobody: who
+    voted is shown to moderators alone on PieFed, and the app takes null."""
+    kinds = [attachment['type'] for attachment in entity['media_attachments']]
+    if any(kind in ('video', 'gifv') for kind in kinds):
+        pf_type = 'video'
+    elif len(kinds) > 1:
+        pf_type = 'photo:album'
+    elif kinds == ['image']:
+        pf_type = 'photo'
+    else:
+        pf_type = 'text'
+    return {'pf_type': pf_type, 'reply_count': entity['replies_count'], 'liked_by': None, 'local': row.is_local()}
