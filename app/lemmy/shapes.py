@@ -176,3 +176,32 @@ def get_post_response(alpha: dict) -> dict:
     return {'post_view': post_view(alpha['post_view']), 'community_view': community_view(alpha['community_view']),
             'moderators': [moderator_view(row) for row in alpha['moderators']],
             'cross_posts': [post_view(row) for row in alpha['cross_posts']]}
+
+
+def comment(alpha: dict) -> dict:
+    """Comment, from alpha's (views.reply_view variant 1), or a stub's: a comment the viewer may not see keeps its id
+    and place in the thread and nothing else (alpha's D18), so its text, author and date are Lemmy's empty ones."""
+    return {'id': alpha['id'], 'creator_id': alpha.get('user_id') or 0, 'post_id': alpha['post_id'],
+            'content': alpha.get('body') or '', 'removed': bool(alpha['removed']),
+            'published': alpha.get('published') or EPOCH, 'updated': alpha.get('updated'),
+            'deleted': bool(alpha['deleted']), 'ap_id': alpha.get('ap_id') or '', 'local': bool(alpha['local']),
+            'path': alpha['path'], 'distinguished': bool(alpha.get('distinguished')),
+            'language_id': alpha.get('language_id') or 0}
+
+
+def comment_aggregates(alpha: dict) -> dict:
+    return {'comment_id': alpha['comment_id'], 'score': alpha['score'] or 0, 'upvotes': alpha['upvotes'] or 0,
+            'downvotes': alpha['downvotes'] or 0, 'published': alpha['published'],
+            'child_count': alpha.get('child_count') or 0}
+
+
+def comment_view(alpha: dict) -> dict:
+    """CommentView, from alpha's (variant 3, or a stub)."""
+    return {'comment': comment(alpha['comment']), 'creator': person(alpha['creator']), 'post': post(alpha['post']),
+            'community': community(alpha['community']), 'counts': comment_aggregates(alpha['counts']),
+            'creator_banned_from_community': bool(alpha['creator_banned_from_community']),
+            'banned_from_community': bool(alpha['banned_from_community']),
+            'creator_is_moderator': bool(alpha['creator_is_moderator']),
+            'creator_is_admin': bool(alpha['creator_is_admin']), 'subscribed': alpha.get('subscribed') or 'NotSubscribed',
+            'saved': bool(alpha['saved']), 'creator_blocked': bool(alpha['creator_blocked']),
+            'my_vote': alpha.get('my_vote') or 0}
