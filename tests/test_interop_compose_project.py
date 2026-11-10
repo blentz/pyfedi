@@ -56,13 +56,15 @@ def test_the_client_app_harness_is_its_own_profile():
 
 def test_the_emulator_reaches_the_harness_and_nothing_else():
     """The apps open on their default instance's live feed, which reflows under the harness's taps: offline, the
-    emulator sees only the harness names, which Caddy answers there too."""
+    emulator sees only the harness names, which Caddy answers there too, and a stand-in for Jerboa's default instance,
+    lemmy.ml, which it must reach before anything else (interop/Caddyfile)."""
     compose = yaml.safe_load((ROOT / 'compose.interop.yaml').read_text())
     services, networks = compose['services'], compose['networks']
     assert services['android-emulator']['networks'] == ['apps-offline']
     assert networks['apps-offline']['internal'] is True
     caddy = services['caddy']['networks']
-    assert caddy['apps-offline']['aliases'] == caddy['interop']['aliases']
+    assert caddy['apps-offline']['aliases'] == caddy['interop']['aliases'] + ['lemmy.ml']
+    assert 'lemmy.ml' not in caddy['interop']['aliases']   # the federating servers never see the stand-in
     assert 'piefed.test' in caddy['apps-offline']['aliases']
     assert set(services['apps-runner']['networks']) == {'interop', 'apps-offline'}
 
