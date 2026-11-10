@@ -77,6 +77,9 @@ def is_trusted_request():
 
 get_site_response = GetSiteResponse()
 
+# Creating a comment, in alpha's API and Lemmy's (app.lemmy.actions): one bucket per address, whichever API is used
+COMMENT_LIMIT, COMMENT_SCOPE = '3/minute', 'api-comment-create'
+
 
 # Site
 @site_bp.route('/site', methods=['GET'])
@@ -966,7 +969,7 @@ def put_alpha_comment_subscribe(data):
 def post_alpha_comment(data):
     if not enable_api():
         return abort(400, message="alpha api is not enabled")
-    with limiter.limit('3/minute', exempt_when=is_trusted_request):
+    with limiter.shared_limit(COMMENT_LIMIT, scope=COMMENT_SCOPE, exempt_when=is_trusted_request):
         auth = request.headers.get('Authorization')
         resp = post_reply(auth, data)
         return GetCommentResponse().load(resp)
