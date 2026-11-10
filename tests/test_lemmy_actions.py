@@ -73,8 +73,10 @@ def test_posts_are_hidden_several_at_once(world):
     assert {view['post']['id'] for view in listed['posts']}.isdisjoint({world['post'].id, other.id})
 
 
-@pytest.mark.parametrize('fields', [{}, {'post_ids': [], 'hide': True}, {'post_ids': [1], 'hide': 'yes'}])
-def test_hiding_needs_posts_and_a_yes_or_no(world, fields):
+@pytest.mark.parametrize('fields', [{}, {'post_ids': [], 'hide': True}, {'post_ids': [1], 'hide': 'yes'},
+                                    {'post_ids': ['x'], 'hide': True}, {'post_ids': [True], 'hide': True},
+                                    {'post_ids': list(range(1, 52)), 'hide': True}])
+def test_hiding_needs_a_few_posts_and_a_yes_or_no(world, fields):
     response = world['client'].post('/api/v3/post/hide', json=fields, headers=world['headers'])
     assert response.status_code == 400 and response.get_json() == {'error': 'invalid_request'}
 

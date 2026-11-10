@@ -11,13 +11,16 @@ from app.api.alpha.schema import BlockCommunityRequest, CreateCommentRequest, De
     DeletePostRequest, EditCommentRequest, FollowCommunityRequest, LikeCommentRequest, LikePostRequest, \
     MarkPostAsReadRequest, SaveCommentRequest, SavePostRequest, UserBlockRequest
 from app.api.alpha.utils.community import post_community_block, post_community_follow
-from app.api.alpha.utils.post import post_post_delete, post_post_hide, post_post_like, post_post_mark_as_read, \
+from app.api.alpha.utils.post import a_visible_post, post_post_delete, post_post_like, post_post_mark_as_read, \
     put_post_save
 from app.api.alpha.utils.reply import post_reply, post_reply_delete, post_reply_like, put_reply, put_reply_save
 from app.api.alpha.utils.user import post_user_block
+from app.constants import SRC_API
 from app.lemmy import bp, shapes
+from app.shared import post as shared_post
 
 COMMENT_NAMES = {'content': 'body'}   # Lemmy's CreateComment and EditComment
+MAX_POSTS = 50   # posts hidden in one request: Jerboa hides one at a time
 
 
 def _auth() -> str | None:
@@ -65,14 +68,16 @@ def mark_posts_read():
 
 @bp.route('/api/v3/post/hide', methods=['POST'])
 def hide_posts():
-    """Lemmy hides several at once ({post_ids, hide}); alpha one a call."""
+    """Lemmy hides several at once ({post_ids, hide}): at most MAX_POSTS, each one the person may see, through the
+    shared hide alone (no post view is rendered for an answer that carries none)."""
     fields = request.get_json(silent=True)
     fields = fields if isinstance(fields, dict) else {}
     post_ids, hide = fields.get('post_ids'), fields.get('hide')
-    if not isinstance(post_ids, list) or not post_ids or not isinstance(hide, bool):
+    if not isinstance(post_ids, list) or not 0 < len(post_ids) <= MAX_POSTS or not isinstance(hide, bool) \
+            or not all(isinstance(post_id, int) and not isinstance(post_id, bool) for post_id in post_ids):
         raise Exception('invalid_request')
     for post_id in post_ids:
-        post_post_hide(_auth(), {'post_id': post_id, 'hidden': hide})
+        shared_post.hide_post(a_visible_post(post_id, _auth()).id, hide, SRC_API, _auth())
     return jsonify(success=True)
 
 
