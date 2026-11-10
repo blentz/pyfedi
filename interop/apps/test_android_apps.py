@@ -46,9 +46,12 @@ class Summit:
     def view(self):
         d = self.device
         d.tap_tab('Search')
-        d.type_into(d.ui(className='android.widget.EditText', instance=0), QUERY)
-        # the keyboard, just shown, can swallow the first enter: no search runs, and the query sits in the field
-        d.tap_until(lambda: d.ui.press('enter'), SEED_TITLE, wait=20)   # in the Posts results
+        field = d.ui(className='android.widget.EditText', instance=0)
+        d.type_into(field, QUERY)
+        # The keyboard, just shown, can swallow the first enter: no search runs, and the query sits in the field. A
+        # repeated enter must go to the field: with focus elsewhere it activated the You tab, whose accounts sheet
+        # then covered the results. Focus the field again before each.
+        d.tap_until(lambda: (field.click(), d.ui.press('enter')), SEED_TITLE, wait=20)   # in the Posts results
         return 'its search finds the seeded post'
 
     def post(self):
@@ -84,6 +87,7 @@ class VoyagerAndroid:
         # The form's inputs reach the WebView's accessibility tree late (after Ionic's page transition) and without
         # their labels: wait for both, longer than an element's implicit wait.
         d.wait_text('You are logging in to', timeout=30)
+        d.hide_keyboard()   # the server field's keyboard, still up, kept the form's second input out of the tree once
         password = d.ui(className='android.widget.EditText', instance=1)
         if not password.wait(timeout=60):
             raise AssertionError(f'android: the login form never showed two inputs; on screen: {d.screen_text()[:400]}')
