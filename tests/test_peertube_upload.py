@@ -16,6 +16,7 @@ from app.models import Language, Post, Site, VideoUpload, utcnow
 from app.oauth_server import tokens
 from app.peertube.entities import video_uuid
 from app.shared import video_uploads
+from app.local_only import outbound_refusal
 from app.shared.media import with_media
 from app.utils import set_setting
 from tests.factories import make_community, make_community_member, make_instance, make_user
@@ -308,3 +309,10 @@ def test_an_internal_video_reads_back_as_internal(env):
     body = env.client.get(f'/api/v1/videos/{post.id}', headers=env.headers).get_json()
     assert body['privacy'] == {'id': 4, 'label': 'Internal'}
     assert env.client.get(f'/api/v1/videos/{post.id}').status_code == 404   # signed out: not there at all
+
+
+def test_an_internal_upload_never_leaves_this_server(env):
+    video = _uploaded(env, _clip(), privacy=4)
+    post = _post_of(video['upload_id'])
+    activity = {'type': 'Create', 'object': {'id': post.profile_id(), 'type': 'Page'}}
+    assert outbound_refusal(activity) == 'it names a local-only post'
