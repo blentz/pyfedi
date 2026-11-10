@@ -228,6 +228,28 @@ def test_no_form_of_the_request_and_no_other_endpoint_escapes_the_limit(limited_
     assert 429 in codes[:21] and codes.index(429) == 20, codes
 
 
+def test_both_endpoints_draw_on_one_bucket(limited_app, api_baseline):
+    """Guesses spread over /api/v1/users/token and /oauth/token are counted together: a limit per endpoint would give
+    an address twice the guesses."""
+    with limited_app.app_context():
+        person = make_user(None, 'ptlimitshared', local=True)
+        person.set_password(PASSWORD)
+        db.session.commit()
+        client = limited_app.test_client()
+        local = _local(client)
+        fields = {'client_id': local['client_id'], 'client_secret': local['client_secret'], 'grant_type': 'password',
+                  'username': person.user_name, 'password': 'wrong'}
+        limiter.reset()
+        limiter.enabled = True
+        try:
+            codes = [client.post('/api/v1/users/token', data=fields).status_code for _ in range(10)]
+            codes += [client.post('/oauth/token', data=fields).status_code for _ in range(11)]
+        finally:
+            limiter.reset()
+            limiter.enabled = False
+    assert codes.index(429) == 20, codes
+
+
 def test_two_first_asks_at_once_share_one_local_client(world, monkeypatch):
     """The second to insert finds the first's row: a unique client_id refuses its own."""
     made, secret = tokens.local_client()

@@ -131,7 +131,7 @@ class PasswordGrant(grants.ResourceOwnerPasswordCredentialsGrant):
     def authenticate_user(self, username, password):
         if not username or not password:
             raise InvalidRequestError("Missing 'username' or 'password' in request.")
-        with limiter.limit(PASSWORD_LIMIT, scope='oauth-password-grant'):
+        with limiter.shared_limit(PASSWORD_LIMIT, scope='oauth-password-grant'):   # limit() keys by endpoint too
             user = self._checked_user(username, password)
         if user is None:
             raise InvalidGrantError('Invalid credentials')
