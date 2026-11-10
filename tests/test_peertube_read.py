@@ -179,7 +179,8 @@ def test_a_video_by_id_or_uuid_has_newpipes_required_fields(world):
 def test_an_uploads_file_is_progressive_with_a_torrent_url_key(world):
     upload = _upload(world)
     files = _get(world, f'/api/v1/videos/{upload.id}').get_json()['files']
-    assert files == [{'fileUrl': upload.url, 'fileDownloadUrl': upload.url, 'torrentUrl': '', 'magnetUri': '',
+    assert files == [{'id': upload.id * entities.FILES_PER_VIDEO, 'fileUrl': upload.url, 'fileDownloadUrl': upload.url,
+                      'torrentUrl': '', 'torrentDownloadUrl': '', 'magnetUri': '',
                       'resolution': {'id': 720, 'label': '720p'}, 'size': 12345, 'fps': 30}]
 
 
@@ -365,7 +366,8 @@ def test_an_upload_without_a_height_or_a_size_is_still_one_file(world):
     with_media(upload, height='tall', bytes=None, fps=None)
     db.session.commit()
     [entry] = _get(world, f'/api/v1/videos/{upload.id}').get_json()['files']
-    assert entry['resolution'] == {'id': 0, 'label': 'Original'} and entry['size'] == 0 and 'fps' not in entry
+    assert entry['resolution'] == {'id': 0, 'label': 'Original'} and entry['size'] == 0
+    assert entry['fps'] == 0   # PeerTube's app requires one; NewPipe reads a missing one as 0 too
 
 
 def test_a_banned_tag_is_not_listed(world):

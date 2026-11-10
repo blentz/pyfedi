@@ -20,6 +20,7 @@ from app.storefront import current_storefront, domain_base_url, storefront_link
 
 API_LEVEL = '7.2.0'   # D4: the PeerTube API level served, which PeerTube's own app requires; not PieFed's version
 DEFAULT_COUNT, MAX_COUNT = 15, 100   # PeerTube's
+FILES_PER_VIDEO = 8   # the source and its renditions (W2.1b): room for each to have its own file id
 DESCRIPTION_CUT = 250   # a list's description, as PeerTube cuts it; NewPipe then asks /description for the rest
 FILE_SUFFIXES = ('.mp4', '.webm')   # a remote URL NewPipe can play: its format is read from the extension
 UNKNOWN = {'id': None, 'label': 'Unknown'}   # PeerTube's answer for an unset category, licence or language
@@ -238,25 +239,28 @@ def _images(post: Post) -> dict:
     return {key: value for key, value in found.items() if value}
 
 
-def _file(url: str, label_id: int, label: str, size: int, fps: dict) -> dict:
+def _file(file_id: int, url: str, label_id: int, label: str, size: int, fps: int) -> dict:
     """One progressive file, from the domain asked: the stored URL names the uploader's domain, and JSON gets no link
-    rewrite, so an onion's viewer would otherwise be sent to the clearnet. `torrentUrl` is always there."""
+    rewrite, so an onion's viewer would otherwise be sent to the clearnet. Every key either app requires is there
+    (`torrentUrl` for NewPipe; an id, `torrentDownloadUrl` and `fps` for PeerTube's own), 0 where PieFed knows none."""
     url = storefront_link(url)
-    return {'fileUrl': url, 'fileDownloadUrl': url, 'torrentUrl': '', 'magnetUri': '',
-            'resolution': {'id': label_id, 'label': label}, 'size': size, **fps}
+    return {'id': file_id, 'fileUrl': url, 'fileDownloadUrl': url, 'torrentUrl': '', 'torrentDownloadUrl': '',
+            'magnetUri': '', 'resolution': {'id': label_id, 'label': label}, 'size': size, 'fps': fps}
 
 
 def files(post: Post) -> list:
     """The progressive files (§3.1): an upload's stored file then its renditions (W2.1b), or a remote file's URL."""
+    base = post.id * FILES_PER_VIDEO   # a file's id: unique, and the same on every ask
     if not _is_upload(post):
-        return [_file(post.url, 0, 'Original', 0, {})]
+        return [_file(base, post.url, 0, 'Original', 0, 0)]
     media = media_of(post)
     height = media.get('height') if type(media.get('height')) is int else 0
     size = media.get('bytes') if type(media.get('bytes')) is int else 0
-    fps = {'fps': media['fps']} if type(media.get('fps')) is int else {}
-    return [_file(post.url, height, f'{height}p' if height else 'Original', size, fps)] + [
-        _file(rendition_name(post.url, copy['side']), copy['side'], f"{copy['side']}p", copy['bytes'], fps)
-        for copy in renditions_of(post)]
+    fps = media['fps'] if type(media.get('fps')) is int else 0
+    return [_file(base, post.url, height, f'{height}p' if height else 'Original', size, fps)] + [
+        _file(base + index, rendition_name(post.url, copy['side']), copy['side'], f"{copy['side']}p", copy['bytes'],
+              fps)
+        for index, copy in enumerate(renditions_of(post), start=1)]
 
 
 def video(post: Post, whole: bool = False) -> dict:
@@ -282,6 +286,7 @@ def video(post: Post, whole: bool = False) -> dict:
             'files': files(post), 'streamingPlaylists': [], 'tags': [tag.name for tag in post.tags if not tag.banned],
             'support': None, 'descriptionPath': f'/api/v1/videos/{post.id}/description',
             'commentsEnabled': bool(post.comments_enabled), 'downloadEnabled': True, 'waitTranscoding': False,
-            'state': {'id': 1, 'label': 'Published'},
+            'state': {'id': 1, 'label': 'Published'}, 'blacklisted': False,
+            'channel': channel(post.community),   # its own page shows the channel whole (VideoChannelDetails)
         })
     return found
