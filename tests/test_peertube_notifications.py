@@ -8,11 +8,11 @@ import pytest
 from app import db
 from app.constants import (NOTIF_BAN, NOTIF_COMMUNITY, NOTIF_FOLLOW, NOTIF_MENTION, NOTIF_MESSAGE, NOTIF_POST,
                            NOTIF_REPLY, POST_TYPE_VIDEO)
-from app.models import Notification
+from app.models import Notification, UserMute
 from app.oauth_server import tokens
 from app.shared.media import with_media
 from tests import peertube_app_contract as contract
-from tests.factories import make_community, make_post, make_post_reply, make_user
+from tests.factories import make_community, make_file, make_post, make_post_reply, make_user
 
 
 @pytest.fixture
@@ -131,3 +131,16 @@ def test_read_all_marks_every_one(world):
     db.session.expire_all()
     assert Notification.query.filter_by(user_id=world['person'].id, read=False).count() == 0
     assert world['person'].unread_notifications == 0
+
+
+def test_a_muted_authors_notifications_are_left_out_and_an_avatar_is_a_whole_url(world):
+    world['other'].avatar = make_file(file_path='app/static/media/users/ab/cd/other.png')
+    db.session.commit()
+    follow = _notify(world, NOTIF_FOLLOW)
+    [item] = _list(world)['data']
+    assert item['id'] == follow.id
+    assert item['actorFollow']['follower']['avatars'][0]['fileUrl'].endswith('/static/media/users/ab/cd/other.png')
+    assert item['actorFollow']['follower']['avatars'][0]['fileUrl'].startswith('http')
+    db.session.add(UserMute(muter_id=world['person'].id, muted_id=world['other'].id, notifications=True))
+    db.session.commit()
+    assert _list(world) == {'total': 0, 'data': []}

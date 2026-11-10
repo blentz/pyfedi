@@ -4,6 +4,7 @@ upvote and a dislike a downvote, set as a state; a comment and a reply go throug
 import uuid
 
 import pytest
+from werkzeug.exceptions import Forbidden
 
 from app import db
 from app.constants import POST_TYPE_VIDEO
@@ -143,3 +144,24 @@ def test_acting_needs_a_token_that_may_write(world):
     response = world['client'].put(f"/api/v1/videos/{world['post'].id}/rate", json={'rating': 'like'},
                                    headers={'Authorization': f'Bearer {reader}'})
     assert response.status_code == 403 and _effects(world) == []
+
+
+@pytest.mark.parametrize('raised, status, code', [(Forbidden(), 403, 'forbidden'),
+                                                  (ValueError('bug'), 500, 'internal_error')], ids=['abort', 'bug'])
+def test_a_shared_writes_abort_is_itself_and_a_bug_says_nothing(world, monkeypatch, raised, status, code):
+    def fail(*args, **kwargs):
+        raise raised
+    monkeypatch.setattr('app.shared.post.vote_for_post', fail)
+    response = _call(world, 'put', f"/api/v1/videos/{world['post'].id}/rate", json={'rating': 'like'})
+    assert response.status_code == status and response.get_json()['code'] == code
+    assert 'bug' not in response.get_data(as_text=True)
+
+
+def test_a_refused_delete_is_a_400(world, monkeypatch):
+    made = _call(world, 'post', f"/api/v1/videos/{world['post'].id}/comment-threads",
+                 json={'text': 'Mine'}).get_json()['comment']
+    def refuse(*args, **kwargs):
+        raise Exception('This comment cannot be deleted')
+    monkeypatch.setattr('app.shared.reply.delete_reply', refuse)
+    response = _call(world, 'delete', f"/api/v1/videos/{world['post'].id}/comments/{made['id']}")
+    assert response.status_code == 400 and 'cannot be deleted' in response.get_json()['detail']

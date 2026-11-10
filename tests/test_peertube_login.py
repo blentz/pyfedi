@@ -2,10 +2,13 @@
 same on every ask; the password grant for that client only, with the API login's checks; refusals in PeerTube's
 problem+json with the `code` its apps read; refresh and logout."""
 import pytest
+from flask import abort as flask_abort
+from werkzeug.exceptions import Forbidden
 
 from app import db, limiter
 from app.models import OAuthToken, SiteDomain
 from app.oauth_server import tokens
+from app.peertube import auth as peertube_auth
 from app.storefront import clear_domain_cache
 from tests.factories import make_user
 from tests import peertube_app_contract as contract
@@ -213,3 +216,34 @@ def test_no_form_of_the_request_and_no_other_endpoint_escapes_the_limit(limited_
             limiter.reset()
             limiter.enabled = False
     assert 429 in codes[:21] and codes.index(429) == 20, codes
+
+
+def test_two_first_asks_at_once_share_one_local_client(world, monkeypatch):
+    """The second to insert finds the first's row: a unique client_id refuses its own."""
+    made, secret = tokens.local_client()
+    monkeypatch.setattr(type(tokens.OAuthApp.query), 'first', lambda self: None)   # as if it had not been made yet
+    again, again_secret = tokens.local_client()
+    assert again.id == made.id and again_secret == secret
+
+
+def test_a_local_client_whose_secret_changed_is_given_the_new_one(world, monkeypatch):
+    made, _secret = tokens.local_client()
+    derived = tokens._derived
+    monkeypatch.setattr(tokens, '_derived', lambda purpose: 'a-new-secret' if purpose == 'peertube-client-secret'
+                        else derived(purpose))
+    again, secret = tokens.local_client()
+    assert again.id == made.id and secret == 'a-new-secret' and again.check_client_secret('a-new-secret')
+
+
+def test_the_onion_gates_wait_is_a_429_in_peertubes_shape(world, monkeypatch):
+    def wait(username, password):
+        flask_abort(429)
+    monkeypatch.setattr('app.oauth_server.server.log_in_with_password', wait)
+    _refused(_token(world['client'], _local(world['client'])), 'too_many_requests', 429)
+
+
+def test_another_http_refusal_of_the_token_endpoint_is_passed_through(world, monkeypatch):
+    def forbidden():
+        raise Forbidden()
+    monkeypatch.setattr(peertube_auth.server, 'create_token_response', forbidden)
+    assert _token(world['client'], _local(world['client'])).status_code == 403
