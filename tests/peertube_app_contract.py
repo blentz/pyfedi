@@ -39,6 +39,8 @@ CONFIG = {
     'views': {'videos': {'watchingInterval': {'users': int}}},
     'plugin': {'registered': [{'name': str}], 'registeredExternalAuths': [{'name': str}],
                'registeredIdAndPassAuths': [{'name': str}]},
+    # optional in the app's model, but an object the API sends is decoded whole: its own fields are then required
+    'theme': {'registered': [{'name': str}], 'default': str, 'builtIn': [{'name': str}]},
 }
 
 IMAGE = {'createdAt': str, 'updatedAt': str}

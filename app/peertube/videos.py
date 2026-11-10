@@ -86,7 +86,7 @@ def config():
         'storyboards': {'enabled': False},
         'views': {'videos': {'watchingInterval': {'users': 5000, 'anonymous': 5000}}},
         'plugin': {'registered': [], 'registeredExternalAuths': [], 'registeredIdAndPassAuths': []},
-        'theme': {'registered': [], 'default': 'default'},
+        'theme': {'registered': [], 'default': 'default', 'builtIn': [{'name': 'default'}]},
     })
 
 
