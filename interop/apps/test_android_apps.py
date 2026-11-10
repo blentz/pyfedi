@@ -447,8 +447,69 @@ class PeerTubeApp:
         return f"commented {text!r} on {TUBE_TITLE!r} with the PeerTube API; PieFed has it"
 
 
+class Jerboa:
+    """Jerboa (LemmyNet/jerboa; Jetpack Compose). It asks nodeinfo who a server is and refuses one that is not Lemmy;
+    PieFed tells it Lemmy 0.19.11 (plan D3, ruling L1) and serves /api/v3 (W3). Its login is in the drawer: Menu, the
+    account header ("Anonymous") > Add account > Instance, Email or username, Password > Login, the
+    lowest (the screen's title says it too). Its search finds communities only: the seeded post is found in alice's
+    home feed, her subscriptions, which hold dora's community."""
+
+    def __init__(self, device, package, world):
+        self.device, self.world = device, world
+
+    def _startup_dialogs(self):
+        """A fresh install opens on dialogs over its feed, one after another: the F-Droid build's notice about Google's
+        developer verification (OK) and its changelog (Done). Each is closed until the feed's Menu shows."""
+        d = self.device
+        for _ in range(4):
+            if d.ui(description='Menu').wait(timeout=15) and not d.showing('OK', exact=True) \
+                    and not d.showing('Done', exact=True):
+                return
+            for button in ('OK', 'Done'):
+                if d.showing(button, exact=True):
+                    d.tap(button, exact=True)
+                    time.sleep(1)
+
+    def login(self):
+        d = self.device
+        self._startup_dialogs()
+        d.ui(description='Menu').click(timeout=60)
+        # the account header ("Anonymous") opens the account list; its arrow's description is no guide to its state
+        d.tap_until(lambda: d.tap('Anonymous', exact=True), 'Add account')
+        d.tap('Add account', exact=True)
+        d.wait_text('Email or username', timeout=30)
+        for index, text in enumerate(('piefed.test', ALICE[0], ALICE[1])):
+            d.type_into(d.ui(className='android.widget.EditText', instance=index), text)
+        d.hide_keyboard()
+        d.tap_tab('Login')   # the button, the lowest "Login"
+        # it goes back to the feed with its drawer still open, whose header names her once the site document has
+        # (my_user, read with no null check)
+        d.wait_text(f'{ALICE[0]}@piefed.test', timeout=90)
+        if d.showing('Close navigation menu'):
+            d.ui(description='Close navigation menu').click(timeout=15)
+        return 'logged in as alice@piefed.test; nodeinfo told it Lemmy'
+
+    def view(self):
+        d = self.device
+        d.reveal(SEED_TITLE, swipes=6)
+        return 'its home feed, her subscriptions, shows the seeded post'
+
+    def post(self):
+        d, text = self.device, marker('jerboa-android')
+        d.tap(SEED_TITLE)
+        d.tap_until(lambda: d.ui(description='Reply to post').click(timeout=30), 'Type your comment')
+        editor = d.ui(className='android.widget.EditText', instance=0)
+        editor.wait(timeout=30)
+        d.type_into(editor, text)
+        d.ui(description='Send reply').click(timeout=15)
+        find_comment(self.world['alice'], self.world['seed']['id'], text, timeout=60)
+        d.wait_text(text, timeout=30)
+        return f'commented {text!r} on the seeded post with the Lemmy API; PieFed has it'
+
+
 DRIVERS = {'newpipe-android': NewPipe, 'summit-android': Summit, 'voyager-android': VoyagerAndroid, 'thunder-android': Thunder,
-           'tusky-android': Tusky, 'mastodon-android': MastodonAndroid, 'peertube-android': PeerTubeApp}
+           'tusky-android': Tusky, 'mastodon-android': MastodonAndroid, 'peertube-android': PeerTubeApp,
+           'jerboa-android': Jerboa}
 
 
 @pytest.mark.parametrize('name', sorted(DRIVERS), ids=sorted(DRIVERS))

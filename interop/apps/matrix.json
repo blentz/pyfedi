@@ -8,10 +8,7 @@
     "thunder-android": {"platform": "lemmy", "surface": "android", "package": "com.hjiangsu.thunder",
                         "apk": {"github": "thunder-app/thunder", "asset": "x86_64\\.apk$", "prerelease": true}},
     "summit-android": {"platform": "lemmy", "surface": "android", "package": "com.idunnololz.summit.fdroid", "apk": {"fdroid": "com.idunnololz.summit.fdroid"}},
-    "jerboa-android": {"platform": "lemmy", "surface": "android", "probe": "lemmy-v3", "expect": {
-      "login": {"outcome": "unsupported", "reason": "Jerboa speaks only Lemmy's /api/v3; PieFed serves its own /api/alpha"},
-      "view": {"outcome": "unsupported", "reason": "Jerboa reads posts from /api/v3/post/list, which PieFed does not serve"},
-      "post": {"outcome": "blocked", "reason": "posting needs the login Jerboa cannot do"}}},
+    "jerboa-android": {"platform": "lemmy", "surface": "android", "package": "com.jerboa", "apk": {"fdroid": "com.jerboa"}},
 
     "mastodon-android": {"platform": "mastodon", "surface": "android", "package": "org.joinmastodon.android", "apk": {"fdroid": "org.joinmastodon.android"}},
     "tusky-android": {"platform": "mastodon", "surface": "android", "package": "com.keylesspalace.tusky", "apk": {"fdroid": "com.keylesspalace.tusky"}},

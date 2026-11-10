@@ -153,7 +153,9 @@ services:
                                  s3.test, relay.test, voyager.test, blorp.test, photon.test, phanpy.test,
                                  elk.test, tube.test]
       apps-offline:   # the emulator's only network: the harness names, and no way out (see android-emulator)
-        aliases: *harness-names
+        # and lemmy.ml, Jerboa's default instance, which it must reach before anything else (Caddyfile)
+        aliases: [piefed.test, mastodon.test, peertube.test, castopod.test, pixelfed.test, loops.test, s3.test,
+                  relay.test, voyager.test, blorp.test, photon.test, phanpy.test, elk.test, tube.test, lemmy.ml]
 
   piefed-db:
     image: docker.io/library/postgres:17.11@sha256:3cec7eb015ba8adb28139fa5c83b8489cdf0e666e53dfdf20f598ae0cc8739e3

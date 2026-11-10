@@ -64,3 +64,12 @@ phanpy.test {
 elk.test {
 	reverse_proxy elk-web:5314
 }
+
+# Jerboa's default instance, on the emulator's network alone. On a fresh install Jerboa asks lemmy.ml's nodeinfo before
+# anything else and nothing catches its failure: offline, the request's timeout killed the app. Here it is told Lemmy
+# and finds nothing else (a 404 it does catch), so it starts and its login can be reached.
+lemmy.ml {
+	header Content-Type application/json
+	respond /nodeinfo/2.0.json `{"version":"2.0","software":{"name":"lemmy","version":"0.19.11"},"protocols":["activitypub"],"usage":{"users":{"total":0,"activeHalfyear":0,"activeMonth":0},"localPosts":0,"localComments":0},"openRegistrations":false}` 200
+	respond 404
+}

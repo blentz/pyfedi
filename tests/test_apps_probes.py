@@ -99,13 +99,20 @@ def test_lemmy_v3_with_the_api_passes():
     assert [outcome for outcome, _ in result.values()] == ['passed', 'passed', 'passed']
 
 
+def test_lemmy_v3_refusing_a_wrong_password_is_served():
+    result = probes.run('lemmy-v3', _client({('POST', '/api/v3/user/login'): (400, {'error': 'incorrect_login'})}),
+                        'a', 'p')
+    assert result['login'][0] == 'passed' and 'login refusal' in result['login'][1]
+
+
 def test_lemmy_v3_list_must_hold_posts():
     result = probes.run('lemmy-v3', _client({('GET', '/api/v3/post/list'): (200, {'error': 'x'})}), 'a', 'p')
     assert result['view'][0] == 'unsupported'
 
 
 @pytest.fixture
-def client(app, site):
+def client(app, site, monkeypatch):
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')   # as the harness's PieFed: Lemmy's API is alpha's
     return app.test_client()
 
 
@@ -113,7 +120,7 @@ def client(app, site):
     ('mastodon', {'login': 'passed', 'view': 'passed', 'post': 'passed'}),   # registration (W1.1), timelines (W1.2)
     ('peertube', {'login': 'passed', 'view': 'passed', 'post': 'passed'}),   # videos (W2.1a), login (W2.2a)
     ('tubelab', {'login': 'unsupported', 'view': 'passed', 'post': 'blocked'}),   # nodeinfo says piefed (P4)
-    ('lemmy-v3', {'login': 'unsupported', 'view': 'unsupported', 'post': 'blocked'}),
+    ('lemmy-v3', {'login': 'passed', 'view': 'passed', 'post': 'passed'}),   # Lemmy's /api/v3 (W3)
 ], ids=['mastodon', 'peertube', 'tubelab', 'lemmy-v3'])
 def test_this_tree_serves_what_the_probes_expect(client, family, expected):
     """What the live harness records, checked against the app itself: a probe of this tree's routes. A failure here

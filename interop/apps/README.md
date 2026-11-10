@@ -26,7 +26,7 @@ Results land in `interop/apps/results/` (gitignored): one JSON per app, `summary
 |---|---|---|---|
 | Lemmy | Voyager, Blorp, Photon (web) | Chromium (Playwright) on the app's own image | log in as alice, open `c/apps` and see the seeded post, comment on it |
 | Lemmy | Voyager, Thunder, Summit (Android) | the newest APK on the emulator (uiautomator2) | log in, find the seeded post with the app's search, comment on it |
-| Lemmy | Jerboa | protocol probe | the first calls it makes |
+| Lemmy | Jerboa (Android) | the newest APK on the emulator | log in as alice (nodeinfo tells it Lemmy, ruling D3), find the seeded post in her home feed, comment on it |
 | Mastodon | Mastodon, Tusky, Moshidon (Android); Phanpy, Elk (web) | protocol probe | |
 | Pixelfed | Pixelfed, PixelDroid, Fedilab (Android) | protocol probe | |
 | PeerTube | NewPipe (Android) | the newest APK on the emulator | add `tube.test` as its PeerTube instance, pick it in the service picker, and play the video tess uploaded there |

@@ -13,7 +13,8 @@ The calls, from each app's source (interop/apps/README.md lists the versions rea
   (password grant); browsing is GET /api/v1/videos.
 - tubelab (TubeLab): GET /.well-known/nodeinfo and the document its last link names, before the PeerTube calls; it
   logs in only where that says `peertube`, or where nodeinfo fails (LoginActivity.java:283-351, ruling P4).
-- lemmy-v3 (Jerboa, and Thunder on a Lemmy-only build): POST /api/v3/user/login; browsing is GET /api/v3/post/list.
+- lemmy-v3 (Thunder on a Lemmy-only build; Jerboa is driven since W3): POST /api/v3/user/login; browsing is GET
+  /api/v3/post/list.
 """
 import httpx
 
@@ -97,6 +98,8 @@ def lemmy_v3(http: httpx.Client, username: str, password: str) -> Probe:
     body = _json(response)
     if response.status_code == 200 and isinstance(body, dict) and body.get('jwt'):
         login = ('passed', f'{_answer(response)} with a jwt')
+    elif response.status_code == 400 and body == {'error': 'incorrect_login'}:
+        login = ('passed', f'{_answer(response)}: a Lemmy login refusal, so the login is served')
     else:
         login = ('unsupported', f'{_answer(response)}: no Lemmy v3 API')
     posts = http.get('/api/v3/post/list', params={'limit': 5})
