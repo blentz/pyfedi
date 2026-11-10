@@ -180,8 +180,16 @@ def piefed_consent(d, package):
         d.type_into(d.ui(className='android.widget.EditText', instance=1), ALICE[1])
         d.hide_keyboard()
         d.ui(className='android.widget.Button', text='Log In').click(timeout=30)   # not the "Log in" heading
-    d.tap('Allow', exact=True, timeout=60)
-    d.wait_foreground(package, timeout=60)
+    # Chrome can swallow a tap while the consent page settles: PieFed then gets no POST and the page stays. Tap
+    # again while it still shows Allow; once the POST goes, the app comes back.
+    for attempt in range(3):
+        d.tap('Allow', exact=True, timeout=60)
+        try:
+            d.wait_foreground(package, timeout=20)
+            break
+        except AssertionError:
+            if attempt == 2 or not d.showing('Allow', exact=True):
+                raise
     d.wait_text(*SIGNED_IN, timeout=60)
 
 
