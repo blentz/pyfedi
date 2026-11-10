@@ -57,6 +57,7 @@ from app.local_only import community_local_only, federated_mentions, federating_
     refused_outbound, user_local_only
 from app.local_names import actor_handle, local_clause, split_local_name
 from app.lemmy import identity as lemmy_identity
+from app.lemmy import site as lemmy_site_answer
 from app.mastodon import instance as mastodon_instance
 from app.federation_urls import activity_id, domain_site_name, federating_storefront, instance_actor_url, \
     is_federating_url, object_base, owned_elsewhere, owner_base, owner_domain
@@ -478,9 +479,10 @@ def api_is_email_banned():
 
 
 @bp.route('/api/v3/site')
-@cache.cached(timeout=600, key_prefix=storefront_cache_key)
+@cache.cached(timeout=600, key_prefix=storefront_cache_key, unless=lemmy_site_answer.signed_in)
 def lemmy_site():
-    return orjson_response(lemmy_site_data(federating_storefront()))
+    """Also Jerboa's, which reads its person's own settings here when it sends a token (app.lemmy.site)."""
+    return lemmy_site_answer.answer(lemmy_site_data(federating_storefront()))
 
 
 @bp.route('/api/v3/federated_instances')

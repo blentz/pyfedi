@@ -6337,7 +6337,11 @@ def lemmy_site_data(domain: DomainInfo):
                 "published": site.created_at.isoformat(),
                 "updated": site.updated.isoformat(),
                 "registration_mode": registration_mode,
-                "reports_email_admins": site.reports_email_admins
+                "reports_email_admins": site.reports_email_admins,
+                # what Lemmy 0.19.11's model requires, which Jerboa decodes this with (spec 2026-11-10-lemmy-v3-design)
+                "federation_signed_fetch": True,
+                "default_post_listing_mode": "List",
+                "default_sort_type": "Hot"
             },
             "local_site_rate_limit": {
                 "id": 1,
@@ -6354,6 +6358,8 @@ def lemmy_site_data(domain: DomainInfo):
                 "comment_per_second": 600,
                 "search": 999,
                 "search_per_second": 600,
+                "import_user_settings": 1,
+                "import_user_settings_per_second": 86400,
                 "published": site.created_at.isoformat(),
             },
             "counts": {
@@ -6374,7 +6380,8 @@ def lemmy_site_data(domain: DomainInfo):
         "all_languages": [],
         "discussion_languages": [],
         "taglines": [],
-        "custom_emojis": []
+        "custom_emojis": [],
+        "blocked_urls": []
     }
 
     # Languages
@@ -6401,13 +6408,17 @@ def lemmy_site_data(domain: DomainInfo):
         keywords = []
         if emoji.aliases:
             for alias in emoji.aliases.split():
-                keywords.append({"keyword": alias})
+                keywords.append({"custom_emoji_id": emoji.id, "keyword": alias})
 
         emoji_data = {
             "custom_emoji": {
+                "id": emoji.id,
+                "local_site_id": 1,
                 "shortcode": shortcode,
                 "image_url": link_on(emoji.url, base),
-                "category": emoji.category if emoji.category else ""
+                "alt_text": shortcode,
+                "category": emoji.category if emoji.category else "",
+                "published": site.created_at.isoformat()
             },
             "keywords": keywords
         }

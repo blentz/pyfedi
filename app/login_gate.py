@@ -39,6 +39,8 @@ OPEN = frozenset({
     # PeerTube's: the instance an app is added by, its local client, and the password login (spec
     # 2026-11-09-peertube-login-design §4)
     'peertube.config', 'peertube.config_about', 'peertube.server_translations', 'peertube.oauth_client_local', 'peertube.issue_token',
+    # Lemmy's login, for Jerboa (spec 2026-11-10-lemmy-v3-design §2); its site document is a federation endpoint's
+    'lemmy.login',
 })
 
 # Open where the storefront federates, as other servers read them with no account. Each view that also serves a browser
