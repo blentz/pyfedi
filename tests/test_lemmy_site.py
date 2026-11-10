@@ -14,7 +14,8 @@ from app.models import Emoji
 from tests import lemmy_app_contract as contract
 from tests import test_login_gate as gate_tests
 from tests import test_onion_guard_limits as limit_tests
-from tests.factories import make_community, make_community_member, make_user, make_user_block
+from tests.factories import make_community, make_community_member, make_instance, make_instance_block, make_user, \
+    make_user_block
 
 private = gate_tests.private   # the private-instance fixture
 limited_app = limit_tests.limited_app   # an app whose limiter counts
@@ -32,6 +33,7 @@ def world(app, api_baseline, monkeypatch):
     community = make_community('lemmysite')
     make_community_member(person, community)
     make_user_block(person, other)
+    make_instance_block(person, make_instance('blocked.example', software='lemmy'))
     db.session.commit()
     return {'person': person, 'community': community, 'client': app.test_client(), 'flask': app}
 
@@ -76,6 +78,7 @@ def test_logging_in_gives_a_token_the_site_document_knows(world):
     assert view['local_user']['blur_nsfw'] and view['local_user']['show_nsfw']
     assert [row['community']['name'] for row in mine['my_user']['follows']] == ['lemmysite']
     assert [row['target']['name'] for row in mine['my_user']['person_blocks']] == ['lemmyother']
+    assert [row['instance']['domain'] for row in mine['my_user']['instance_blocks']] == ['blocked.example']
 
 
 def test_jerboa_is_never_asked_to_show_its_yearly_donation_dialog(world):
