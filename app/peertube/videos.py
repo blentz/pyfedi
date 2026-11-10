@@ -181,6 +181,16 @@ def _branch(entry: dict, post: Post, thread_id: int) -> dict:
             'children': [_branch(child, post, thread_id) for child in entry['replies']]}
 
 
+def _sorted_threads(threads: list[dict], sort: str) -> list[dict]:
+    """PeerTube's orders: newest first (its default, so a new comment shows at the top), oldest first, or the most
+    answered first. Each thread's replies stay oldest first, as a conversation reads."""
+    if sort == 'createdAt':
+        return threads
+    if sort == '-totalReplies':
+        return sorted(threads, key=lambda entry: -len(list(_descendants(entry))))
+    return threads[::-1]
+
+
 @bp.route('/api/v1/videos/<video_id>/comment-threads')
 @bp.route('/api/v1/videos/<video_id>/comment-threads/')   # PeerTube's app asks with the slash
 @signed_in(optional=True)
@@ -189,7 +199,7 @@ def comment_threads(video_id):
     if post is None:
         return not_found()
     start, count = entities.window()
-    threads = _thread(post)
+    threads = _sorted_threads(_thread(post), request.args.get('sort', '-createdAt'))
     return jsonify({'total': len(threads), 'totalNotDeletedComments': len(threads),
                     'data': [comment_entity(entry, post, entry['comment'].id)
                              for entry in threads[start:start + count]]})

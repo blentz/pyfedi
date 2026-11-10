@@ -478,3 +478,19 @@ def test_server_translations_are_an_empty_map(world, locale):
     before showing a video; PieFed's labels are English and need none."""
     response = _get(world, f'/client/locales/{locale}/server.json')
     assert response.status_code == 200 and response.get_json() == {}
+
+
+@pytest.mark.parametrize('sort, expected', [(None, 'newest'), ('-createdAt', 'newest'), ('createdAt', 'oldest'),
+                                            ('-totalReplies', 'answered')])
+def test_comment_threads_are_newest_first_unless_sorted_otherwise(world, sort, expected):
+    """PeerTube's own order is -createdAt, so a new comment shows at the top in its apps."""
+    upload = _upload(world)
+    older, newer = make_post_reply(upload, world['author']), make_post_reply(upload, world['author'])
+    older.posted_at, newer.posted_at = START, START + timedelta(minutes=5)
+    make_post_reply(upload, world['author']).parent_id = older.id
+    db.session.commit()
+    query = {'sort': sort} if sort else {}
+    ids = [thread['id'] for thread in _get(world, f'/api/v1/videos/{upload.id}/comment-threads', **query)
+           .get_json()['data']]
+    assert ids == {'newest': [newer.id, older.id], 'oldest': [older.id, newer.id],
+                   'answered': [older.id, newer.id]}[expected]
