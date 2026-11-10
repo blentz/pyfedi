@@ -352,3 +352,15 @@ def test_finished_uploads_no_post_came_of_count_against_the_limits(env):
         _uploaded(env, _clip())   # finished, no details: no post
     refused = _start(env, b'x' * 10)
     assert refused.status_code == 429
+
+
+def test_choosing_public_never_unstamps_a_local_only_domains_video(env, monkeypatch):
+    """A local-only domain's (the onion's) content is stamped local-only whatever is asked: Public must not clear it
+    (security review)."""
+    monkeypatch.setattr('app.shared.post.content_local_only', lambda *_args: True)
+    monkeypatch.setattr('app.peertube.upload.content_local_only', lambda *_args: True)
+    video = _uploaded(env, _clip(), privacy=4)
+    post = _post_of(video['upload_id'])
+    assert post.local_only
+    assert _details(env, video['uuid'], privacy=1).status_code == 204
+    assert db.session.get(Post, post.id).local_only is True

@@ -14,6 +14,7 @@ from flask import g, jsonify, make_response, request
 
 from app import db
 from app.constants import POST_STATUS_PROCESSING, POST_TYPE_VIDEO, SRC_API
+from app.local_only import content_local_only
 from app.models import Community, Post, VideoUpload
 from app.peertube import bp
 from app.peertube.auth import failure, problem, signed_in
@@ -217,7 +218,8 @@ def _edit(post, details: dict) -> None:
         if internal != bool(post.local_only):
             if post.status != POST_STATUS_PROCESSING:
                 raise Refused(400, 'invalid_request', 'A video\'s privacy is fixed once it is published')
-            post.local_only = internal
+            # recomputed, never just cleared: a local-only domain's (the onion's) content stays stamped (review)
+            post.local_only = internal or content_local_only(post.author, post.community)
     tags = details.get('tags')
     payload = {'title': str(details.get('name') or post.title)[:255],
                'body': str(details['description']) if details.get('description') is not None else (post.body or ''),
