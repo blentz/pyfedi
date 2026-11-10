@@ -1,5 +1,5 @@
 """What a member does in Lemmy's API (spec 2026-11-10-lemmy-v3-design §2, ruling L2): post, vote, comment, save, mark
-read, hide, follow and block. Each takes Lemmy's body under alpha's names, loads it with alpha's own request schema, so a
+read, hide, report, follow and block. Each takes Lemmy's body under alpha's names, loads it with alpha's own request schema, so a
 mistyped field is refused as alpha refuses it, and calls alpha's handler, so every write goes through app/shared with
 its federation, notifications, limits and checks (plan §3)."""
 from flask import jsonify, request
@@ -8,11 +8,13 @@ from app import limiter
 from app.api.alpha.routes import COMMENT_LIMIT, COMMENT_SCOPE, POST_LIMIT, POST_SCOPE, is_trusted_request
 from app.api.alpha.schema import BlockCommunityRequest, CreateCommentRequest, CreatePostRequest, \
     DeleteCommentRequest, DeletePostRequest, EditCommentRequest, EditPostRequest, FollowCommunityRequest, \
-    LikeCommentRequest, LikePostRequest, MarkPostAsReadRequest, SaveCommentRequest, SavePostRequest, UserBlockRequest
+    LikeCommentRequest, LikePostRequest, MarkPostAsReadRequest, ReportCommentRequest, ReportPostRequest, \
+    SaveCommentRequest, SavePostRequest, UserBlockRequest
 from app.api.alpha.utils.community import post_community_block, post_community_follow
 from app.api.alpha.utils.post import a_visible_post, post_post, post_post_delete, post_post_like, \
-    post_post_mark_as_read, put_post, put_post_save
-from app.api.alpha.utils.reply import post_reply, post_reply_delete, post_reply_like, put_reply, put_reply_save
+    post_post_mark_as_read, post_post_report, put_post, put_post_save
+from app.api.alpha.utils.reply import post_reply, post_reply_delete, post_reply_like, post_reply_report, put_reply, \
+    put_reply_save
 from app.api.alpha.utils.user import post_user_block
 from app.constants import SRC_API
 from app.lemmy import arguments, bp, pictrs, shapes
@@ -113,6 +115,18 @@ def like_comment():
 @bp.route('/api/v3/comment/save', methods=['PUT'])
 def save_comment():
     return _comment_response(put_reply_save(arguments.auth(), arguments.body(SaveCommentRequest)))
+
+
+@bp.route('/api/v3/post/report', methods=['POST'])
+def report_post():
+    alpha = post_post_report(arguments.auth(), arguments.body(ReportPostRequest))
+    return jsonify(post_report_view=shapes.post_report_view(alpha['post_report_view']))
+
+
+@bp.route('/api/v3/comment/report', methods=['POST'])
+def report_comment():
+    alpha = post_reply_report(arguments.auth(), arguments.body(ReportCommentRequest))
+    return jsonify(comment_report_view=shapes.comment_report_view(alpha['comment_report_view']))
 
 
 @bp.route('/api/v3/community/follow', methods=['POST'])

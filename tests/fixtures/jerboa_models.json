@@ -299,6 +299,171 @@
    ],
    "file": "CommentReplyView.kt"
   },
+  "CommentReport": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "creator_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "comment_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "original_comment_text",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "reason",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "resolved",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "resolver_id",
+     "nullable": true,
+     "optional": true,
+     "type": "Long"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "updated",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    }
+   ],
+   "file": "CommentReport.kt"
+  },
+  "CommentReportResponse": {
+   "fields": [
+    {
+     "key": "comment_report_view",
+     "nullable": false,
+     "optional": false,
+     "type": "CommentReportView"
+    }
+   ],
+   "file": "CommentReportResponse.kt"
+  },
+  "CommentReportView": {
+   "fields": [
+    {
+     "key": "comment_report",
+     "nullable": false,
+     "optional": false,
+     "type": "CommentReport"
+    },
+    {
+     "key": "comment",
+     "nullable": false,
+     "optional": false,
+     "type": "Comment"
+    },
+    {
+     "key": "post",
+     "nullable": false,
+     "optional": false,
+     "type": "Post"
+    },
+    {
+     "key": "community",
+     "nullable": false,
+     "optional": false,
+     "type": "Community"
+    },
+    {
+     "key": "creator",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    },
+    {
+     "key": "comment_creator",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    },
+    {
+     "key": "counts",
+     "nullable": false,
+     "optional": false,
+     "type": "CommentAggregates"
+    },
+    {
+     "key": "creator_banned_from_community",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_is_moderator",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_is_admin",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_blocked",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "subscribed",
+     "nullable": false,
+     "optional": false,
+     "type": "SubscribedType"
+    },
+    {
+     "key": "saved",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "my_vote",
+     "nullable": false,
+     "optional": true,
+     "type": "Int"
+    },
+    {
+     "key": "resolver",
+     "nullable": true,
+     "optional": true,
+     "type": "Person"
+    }
+   ],
+   "file": "CommentReportView.kt"
+  },
   "CommentResponse": {
    "fields": [
     {
@@ -2304,6 +2469,195 @@
    ],
    "file": "PostAggregates.kt"
   },
+  "PostReport": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "creator_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "post_id",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "original_post_name",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "original_post_url",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "original_post_body",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    },
+    {
+     "key": "reason",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "resolved",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "resolver_id",
+     "nullable": true,
+     "optional": true,
+     "type": "Long"
+    },
+    {
+     "key": "published",
+     "nullable": false,
+     "optional": false,
+     "type": "String"
+    },
+    {
+     "key": "updated",
+     "nullable": true,
+     "optional": true,
+     "type": "String"
+    }
+   ],
+   "file": "PostReport.kt"
+  },
+  "PostReportResponse": {
+   "fields": [
+    {
+     "key": "post_report_view",
+     "nullable": false,
+     "optional": false,
+     "type": "PostReportView"
+    }
+   ],
+   "file": "PostReportResponse.kt"
+  },
+  "PostReportView": {
+   "fields": [
+    {
+     "key": "post_report",
+     "nullable": false,
+     "optional": false,
+     "type": "PostReport"
+    },
+    {
+     "key": "post",
+     "nullable": false,
+     "optional": false,
+     "type": "Post"
+    },
+    {
+     "key": "community",
+     "nullable": false,
+     "optional": false,
+     "type": "Community"
+    },
+    {
+     "key": "creator",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    },
+    {
+     "key": "post_creator",
+     "nullable": false,
+     "optional": false,
+     "type": "Person"
+    },
+    {
+     "key": "creator_banned_from_community",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_is_moderator",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_is_admin",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "subscribed",
+     "nullable": false,
+     "optional": false,
+     "type": "SubscribedType"
+    },
+    {
+     "key": "saved",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "read",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "hidden",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "creator_blocked",
+     "nullable": false,
+     "optional": false,
+     "type": "Boolean"
+    },
+    {
+     "key": "my_vote",
+     "nullable": false,
+     "optional": true,
+     "type": "Int"
+    },
+    {
+     "key": "unread_comments",
+     "nullable": false,
+     "optional": false,
+     "type": "Long"
+    },
+    {
+     "key": "counts",
+     "nullable": false,
+     "optional": false,
+     "type": "PostAggregates"
+    },
+    {
+     "key": "resolver",
+     "nullable": true,
+     "optional": true,
+     "type": "Person"
+    }
+   ],
+   "file": "PostReportView.kt"
+  },
   "PostResponse": {
    "fields": [
     {
@@ -2898,6 +3252,8 @@
   "GetSiteMetadataResponse",
   "GetReportCountResponse",
   "GetUnreadRegistrationApplicationCountResponse",
-  "UploadImageResponse"
+  "UploadImageResponse",
+  "PostReportResponse",
+  "CommentReportResponse"
  ]
 }

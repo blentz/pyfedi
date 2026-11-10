@@ -6,8 +6,8 @@ import uuid
 import pytest
 
 from app import cache, db, limiter
-from app.models import CommunityBlock, CommunityMember, PostBookmark, PostReply, PostReplyBookmark, UserBlock, \
-    read_posts
+from app.models import CommunityBlock, CommunityMember, PostBookmark, PostReply, PostReplyBookmark, Report, \
+    UserBlock, read_posts
 from tests import lemmy_app_contract as contract
 from tests import test_onion_guard_limits as limit_tests
 from tests.factories import make_community, make_post, make_post_reply, make_user
@@ -125,6 +125,19 @@ def test_a_comment_is_voted_on_and_saved(world):
     saved = _call(world, 'put', '/api/v3/comment/save', {'comment_id': world['reply'].id, 'save': True},
                   'CommentResponse')
     assert saved['comment_view']['saved'] and PostReplyBookmark.query.filter_by(user_id=world['person'].id).count() == 1
+
+
+def test_a_post_and_a_comment_are_reported(world):
+    body = _call(world, 'post', '/api/v3/post/report', {'post_id': world['post'].id, 'reason': 'Spam'},
+                 'PostReportResponse')
+    view = body['post_report_view']
+    assert view['post_report']['reason'] == 'Spam' and view['creator']['name'] == 'lemmyactor'
+    assert view['post_creator']['name'] == 'lemmyacted'
+    body = _call(world, 'post', '/api/v3/comment/report', {'comment_id': world['reply'].id, 'reason': 'Rude'},
+                 'CommentReportResponse')
+    view = body['comment_report_view']
+    assert view['comment_report']['original_comment_text'] == 'a comment' and view['creator']['name'] == 'lemmyactor'
+    assert Report.query.filter_by(reporter_id=world['person'].id).count() == 2
 
 
 def test_a_community_is_followed_and_left(world):

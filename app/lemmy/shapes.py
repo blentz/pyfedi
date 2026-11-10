@@ -223,3 +223,28 @@ def private_message_view(alpha: dict) -> dict:
     message = alpha['private_message']
     return {'private_message': {**message, 'deleted': bool(message['deleted']), 'read': bool(message['read'])},
             'creator': person(alpha['creator']), 'recipient': person(alpha['recipient'])}
+
+
+def post_report_view(alpha: dict) -> dict:
+    """PostReportView, from alpha's (views.post_report_view): the reported post's view, its reporter as `creator`."""
+    report = alpha['post_report']
+    return {**post_view({**alpha, 'creator': alpha['post_creator']}), 'creator': person(alpha['creator']),
+            'post_creator': person(alpha['post_creator']),
+            'post_report': {'id': report['id'], 'creator_id': report['creator_id'], 'post_id': report['post_id'],
+                            'original_post_name': report['original_post_name'],
+                            'original_post_body': report.get('original_post_body') or None,
+                            'reason': report['reason'] or '', 'resolved': bool(report['resolved']),
+                            'published': report['published']}}
+
+
+def comment_report_view(alpha: dict) -> dict:
+    """CommentReportView, from alpha's (views.reply_report_view): the reported comment's view, its reporter as
+    `creator`."""
+    report = alpha['comment_report']
+    return {**comment_view({**alpha, 'creator': alpha['comment_creator']}), 'creator': person(alpha['creator']),
+            'comment_creator': person(alpha['comment_creator']),
+            'comment_report': {'id': report['id'], 'creator_id': report['creator_id'],
+                               'comment_id': report['comment_id'],
+                               'original_comment_text': report['original_comment_text'] or '',
+                               'reason': report['reason'] or '', 'resolved': bool(report['resolved']),
+                               'published': report['published']}}
