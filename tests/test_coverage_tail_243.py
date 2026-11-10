@@ -313,7 +313,9 @@ class TestWhatTheSiteDictPublishes:
                      if e['custom_emoji']['shortcode'] == 'partyparrot')
         assert entry['custom_emoji']['image_url'] == 'https://test.piefed.local/e.png'
         assert entry['custom_emoji']['category'] == 'fun'
-        assert entry['keywords'] == [{'keyword': 'party'}, {'keyword': 'parrot'}]
+        # each keyword names its emoji, as Lemmy 0.19's model requires (Jerboa decodes this document)
+        assert [keyword['keyword'] for keyword in entry['keywords']] == ['party', 'parrot']
+        assert {keyword['custom_emoji_id'] for keyword in entry['keywords']} == {entry['custom_emoji']['id']}
 
     def test_an_emoji_with_no_aliases_or_category_still_publishes(self, seeded):
         """Both `if`s. `category` is rendered as an empty string rather than None, and
