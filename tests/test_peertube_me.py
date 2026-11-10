@@ -46,7 +46,7 @@ def test_me_has_every_field_peertubes_app_requires(world):
     response = _me(world)
     assert response.status_code == 200, response.get_data(as_text=True)
     body = response.get_json()
-    assert contract.problems(body, contract.USER) == []
+    assert contract.problems(body, 'User') == []
     assert body['username'] == 'ptme' and body['account']['name'] == 'ptme' and body['role']['id'] == 2
     assert body['videoQuota'] == -1 and body['noWelcomeModal'] is True
 
@@ -131,11 +131,11 @@ def test_a_video_its_account_and_its_channel_decode_in_peertubes_app(world):
     item = next(item for item in listed if item['id'] == post.id)
     whole = world['client'].get(f'/api/v1/videos/{post.id}').get_json()
     for video in (item, whole):
-        assert contract.problems(video, contract.VIDEO) == [] and video['privacy']['id'] in contract.PRIVACIES
-    assert contract.problems(whole, contract.VIDEO_DETAILS) == []
+        assert contract.problems(video, 'Video') == []
+    assert contract.problems(whole, 'VideoDetails') == []
     account = world['client'].get('/api/v1/accounts/ptme').get_json()
     channel = world['client'].get(f"/api/v1/video-channels/{world['owned'].name}").get_json()
-    assert contract.problems(account, contract.ACCOUNT) == [] and contract.problems(channel, contract.CHANNEL) == []
+    assert contract.problems(account, 'AccountDetails') == [] and contract.problems(channel, 'VideoChannelDetails') == []
 
 
 def test_the_email_goes_only_to_the_peertube_login_that_asked_with_the_password(world):
@@ -147,7 +147,7 @@ def test_the_email_goes_only_to_the_peertube_login_that_asked_with_the_password(
     other, _secret = tokens.register_app('Tusky', ['https://app.example/cb'], 'read write follow', None)
     access, _refresh = tokens.issue_token(other, world['person'], 'read')
     body = _me(world, access).get_json()
-    assert body['email'] == '' and contract.problems(body, contract.USER) == []
+    assert body['email'] == '' and contract.problems(body, 'User') == []
 
 
 def test_the_apps_comment_threads_path_with_its_trailing_slash_is_served(world):

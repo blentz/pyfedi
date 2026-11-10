@@ -50,7 +50,7 @@ def _video(world, community):
 def test_the_list_is_the_joined_communities_as_channels(world):
     body = _call(world, 'get', '/api/v1/users/me/subscriptions').get_json()
     assert body['total'] == 1 and [channel['id'] for channel in body['data']] == [world['joined'].id]
-    assert contract.problems(body['data'][0], contract.CHANNEL) == []
+    assert contract.problems(body['data'][0], 'VideoChannelDetails') == []
 
 
 @pytest.mark.parametrize('how', ['handle', 'handle-with-host', 'actor-url', 'form'])
@@ -103,7 +103,7 @@ def test_the_subscriptions_videos_are_the_joined_communities_videos(world):
     body = _call(world, 'get', '/api/v1/users/me/subscriptions/videos').get_json()
     ids = [video['id'] for video in body['data']]
     assert mine.id in ids and theirs.id not in ids
-    assert all(contract.problems(video, contract.VIDEO) == [] for video in body['data'])
+    assert all(contract.problems(video, 'Video') == [] for video in body['data'])
 
 
 def test_changing_subscriptions_needs_a_token_that_may_write(world):

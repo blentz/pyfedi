@@ -1,0 +1,3185 @@
+{
+ "app": "framasoft/peertube/mobile-application v2.3.0 (9bd3a4d)",
+ "classes": {
+  "AbuseCommentNotification": {
+   "fields": [
+    {
+     "key": "threadId",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "video",
+     "nullable": false,
+     "type": "VideoInfo"
+    }
+   ],
+   "file": "features/notification/notification_model.dart",
+   "params": []
+  },
+  "AbuseNotification": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "state",
+     "nullable": false,
+     "type": "AbuseStateType"
+    },
+    {
+     "key": "video",
+     "nullable": true,
+     "type": "VideoInfo"
+    },
+    {
+     "key": "comment",
+     "nullable": true,
+     "type": "AbuseCommentNotification"
+    },
+    {
+     "key": "account",
+     "nullable": true,
+     "type": "ActorInfo"
+    }
+   ],
+   "file": "features/notification/notification_model.dart",
+   "params": []
+  },
+  "Account": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "url",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "name",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "host",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "displayName",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "avatars",
+     "nullable": false,
+     "type": "List<ActorImage>"
+    }
+   ],
+   "file": "features/account/account_model.dart",
+   "params": []
+  },
+  "AccountDetails": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "url",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "name",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "host",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "hostRedundancyAllowed",
+     "nullable": true,
+     "type": "bool"
+    },
+    {
+     "key": "followingCount",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "followersCount",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "createdAt",
+     "nullable": false,
+     "type": "DateTime"
+    },
+    {
+     "key": "displayName",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "updatedAt",
+     "nullable": false,
+     "type": "DateTime"
+    },
+    {
+     "key": "avatars",
+     "nullable": false,
+     "type": "List<ActorImage>"
+    },
+    {
+     "key": "description",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "userId",
+     "nullable": true,
+     "type": "int"
+    }
+   ],
+   "file": "features/account/account_model.dart",
+   "params": []
+  },
+  "ActorFollowNotification": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "follower",
+     "nullable": false,
+     "type": "ActorInfo"
+    },
+    {
+     "key": "state",
+     "nullable": false,
+     "type": "FollowStateType"
+    },
+    {
+     "key": "following",
+     "nullable": false,
+     "type": "FollowingInfo"
+    }
+   ],
+   "file": "features/notification/notification_model.dart",
+   "params": []
+  },
+  "ActorImage": {
+   "fields": [
+    {
+     "key": "width",
+     "nullable": true,
+     "type": "int"
+    },
+    {
+     "key": "fileUrl",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "createdAt",
+     "nullable": false,
+     "type": "DateTime"
+    },
+    {
+     "key": "updatedAt",
+     "nullable": false,
+     "type": "DateTime"
+    }
+   ],
+   "file": "shared/actor/actor_image_model.dart",
+   "params": []
+  },
+  "ActorInfo": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "displayName",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "name",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "host",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "avatars",
+     "nullable": false,
+     "type": "List<AvatarInfo>"
+    },
+    {
+     "key": "avatar",
+     "nullable": true,
+     "type": "AvatarInfo"
+    }
+   ],
+   "file": "features/notification/notification_model.dart",
+   "params": []
+  },
+  "AvatarInfo": {
+   "fields": [
+    {
+     "key": "width",
+     "nullable": true,
+     "type": "int"
+    },
+    {
+     "key": "fileUrl",
+     "nullable": false,
+     "type": "String"
+    }
+   ],
+   "file": "features/notification/notification_model.dart",
+   "params": []
+  },
+  "ClientScriptJSON": {
+   "fields": [
+    {
+     "key": "script",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "scopes",
+     "nullable": false,
+     "type": "List<PluginClientScope>"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "CommentNotification": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "threadId",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "account",
+     "nullable": false,
+     "type": "ActorInfo"
+    },
+    {
+     "key": "video",
+     "nullable": false,
+     "type": "VideoInfo"
+    }
+   ],
+   "file": "features/notification/notification_model.dart",
+   "params": []
+  },
+  "ConfigAutoBlacklist": {
+   "fields": [
+    {
+     "key": "videos",
+     "nullable": false,
+     "type": "ConfigVideosBlacklist"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigAvatar": {
+   "fields": [
+    {
+     "key": "file",
+     "nullable": false,
+     "type": "ConfigFile"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigBanner": {
+   "fields": [
+    {
+     "key": "file",
+     "nullable": false,
+     "type": "ConfigFile"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigClient": {
+   "fields": [
+    {
+     "key": "videos",
+     "nullable": false,
+     "type": "ConfigVideos"
+    },
+    {
+     "key": "menu",
+     "nullable": false,
+     "type": "ConfigMenu"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigContactForm": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigDefaults": {
+   "fields": [
+    {
+     "key": "publish",
+     "nullable": false,
+     "type": "ConfigPublish"
+    },
+    {
+     "key": "p2p",
+     "nullable": false,
+     "type": "ConfigP2P"
+    },
+    {
+     "key": "player",
+     "nullable": false,
+     "type": "ConfigPlayer"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigEmail": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigExport": {
+   "fields": [
+    {
+     "key": "users",
+     "nullable": false,
+     "type": "ConfigExportUsers"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigExportUsers": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "exportExpiration",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "maxUserVideoQuota",
+     "nullable": false,
+     "type": "int"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigFederation": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigFieldPassword": {
+   "fields": [
+    {
+     "key": "minLength",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "maxLength",
+     "nullable": false,
+     "type": "int"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigFieldsConstraints": {
+   "fields": [
+    {
+     "key": "users",
+     "nullable": false,
+     "type": "ConfigFieldsUsers"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigFieldsUsers": {
+   "fields": [
+    {
+     "key": "password",
+     "nullable": false,
+     "type": "ConfigFieldPassword"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigFile": {
+   "fields": [
+    {
+     "key": "size",
+     "nullable": false,
+     "type": "ConfigFileSize"
+    },
+    {
+     "key": "extensions",
+     "nullable": false,
+     "type": "List<String>"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigFileSize": {
+   "fields": [
+    {
+     "key": "max",
+     "nullable": false,
+     "type": "int"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigImport": {
+   "fields": [
+    {
+     "key": "videos",
+     "nullable": false,
+     "type": "ConfigImportVideos"
+    },
+    {
+     "key": "videoChannelSynchronization",
+     "nullable": false,
+     "type": "ConfigVideoChannelSynchronization"
+    },
+    {
+     "key": "users",
+     "nullable": false,
+     "type": "ConfigImportUsers"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigImportHttp": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigImportTorrent": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigImportUsers": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigImportVideos": {
+   "fields": [
+    {
+     "key": "http",
+     "nullable": false,
+     "type": "ConfigImportHttp"
+    },
+    {
+     "key": "torrent",
+     "nullable": false,
+     "type": "ConfigImportTorrent"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigInstance": {
+   "fields": [
+    {
+     "key": "name",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "shortDescription",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "isNSFW",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "defaultNSFWPolicy",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "defaultClientRoute",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "avatars",
+     "nullable": true,
+     "type": "List<ActorImage>"
+    },
+    {
+     "key": "banners",
+     "nullable": true,
+     "type": "List<ActorImage>"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigLatencySetting": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigLive": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "allowReplay",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "latencySetting",
+     "nullable": false,
+     "type": "ConfigLatencySetting"
+    },
+    {
+     "key": "maxDuration",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "maxInstanceLives",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "maxUserLives",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "transcoding",
+     "nullable": false,
+     "type": "ConfigLiveTranscoding"
+    },
+    {
+     "key": "rtmp",
+     "nullable": false,
+     "type": "ConfigRtmp"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigLiveTranscoding": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "remoteRunners",
+     "nullable": false,
+     "type": "ConfigRemoteRunners"
+    },
+    {
+     "key": "enabledResolutions",
+     "nullable": false,
+     "type": "List<int>"
+    },
+    {
+     "key": "profile",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "availableProfiles",
+     "nullable": false,
+     "type": "List<String>"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigLogin": {
+   "fields": [
+    {
+     "key": "redirectOnSingleExternalAuth",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigMenu": {
+   "fields": [
+    {
+     "key": "login",
+     "nullable": false,
+     "type": "ConfigLogin"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigMiniature": {
+   "fields": [
+    {
+     "key": "preferAuthorDisplayName",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigOfUsers": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigP2P": {
+   "fields": [
+    {
+     "key": "webapp",
+     "nullable": false,
+     "type": "ConfigP2PWebapp"
+    },
+    {
+     "key": "embed",
+     "nullable": false,
+     "type": "ConfigP2PEmbed"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigP2PEmbed": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigP2PWebapp": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigPlayer": {
+   "fields": [
+    {
+     "key": "theme",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "autoPlay",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigPlugin": {
+   "fields": [
+    {
+     "key": "registered",
+     "nullable": false,
+     "type": "List<ServerConfigPlugin>"
+    },
+    {
+     "key": "registeredExternalAuths",
+     "nullable": false,
+     "type": "List<RegisteredExternalAuthConfig>"
+    },
+    {
+     "key": "registeredIdAndPassAuths",
+     "nullable": false,
+     "type": "List<RegisteredIdAndPassAuthConfig>"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigPublish": {
+   "fields": [
+    {
+     "key": "downloadEnabled",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "commentsPolicy",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "privacy",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "licence",
+     "nullable": true,
+     "type": "int"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigRemoteRunners": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigRemoteUri": {
+   "fields": [
+    {
+     "key": "users",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "anonymous",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigResumableUpload": {
+   "fields": [
+    {
+     "key": "maxChunkSize",
+     "nullable": false,
+     "type": "int"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigRtmp": {
+   "fields": [
+    {
+     "key": "port",
+     "nullable": false,
+     "type": "int"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigSearch": {
+   "fields": [
+    {
+     "key": "remoteUri",
+     "nullable": false,
+     "type": "ConfigRemoteUri"
+    },
+    {
+     "key": "searchIndex",
+     "nullable": false,
+     "type": "ConfigSearchIndex"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigSearchIndex": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "url",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "disableLocalSearch",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "isDefaultSearch",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigServer": {
+   "fields": [
+    {
+     "key": "serverVersion",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "client",
+     "nullable": false,
+     "type": "ConfigClient"
+    },
+    {
+     "key": "instance",
+     "nullable": false,
+     "type": "ConfigInstance"
+    },
+    {
+     "key": "search",
+     "nullable": false,
+     "type": "ConfigSearch"
+    },
+    {
+     "key": "avatar",
+     "nullable": false,
+     "type": "ConfigAvatar"
+    },
+    {
+     "key": "banner",
+     "nullable": false,
+     "type": "ConfigBanner"
+    },
+    {
+     "key": "video",
+     "nullable": false,
+     "type": "ConfigVideo"
+    },
+    {
+     "key": "videoCaption",
+     "nullable": false,
+     "type": "ConfigVideoCaption"
+    },
+    {
+     "key": "user",
+     "nullable": false,
+     "type": "ConfigUser"
+    },
+    {
+     "key": "import",
+     "nullable": false,
+     "type": "ConfigImport"
+    },
+    {
+     "key": "live",
+     "nullable": false,
+     "type": "ConfigLive"
+    },
+    {
+     "key": "defaults",
+     "nullable": false,
+     "type": "ConfigDefaults"
+    },
+    {
+     "key": "signup",
+     "nullable": false,
+     "type": "ConfigSignup"
+    },
+    {
+     "key": "storyboards",
+     "nullable": false,
+     "type": "ConfigStoryboards"
+    },
+    {
+     "key": "views",
+     "nullable": false,
+     "type": "ConfigViews"
+    },
+    {
+     "key": "fieldsConstraints",
+     "nullable": true,
+     "type": "ConfigFieldsConstraints"
+    },
+    {
+     "key": "plugin",
+     "nullable": false,
+     "type": "ConfigPlugin"
+    },
+    {
+     "key": "transcoding",
+     "nullable": true,
+     "type": "ConfigTranscoding"
+    },
+    {
+     "key": "autoBlacklist",
+     "nullable": true,
+     "type": "ConfigAutoBlacklist"
+    },
+    {
+     "key": "videoStudio",
+     "nullable": true,
+     "type": "ConfigVideoStudio"
+    },
+    {
+     "key": "videoFile",
+     "nullable": true,
+     "type": "ConfigVideoFileConfig"
+    },
+    {
+     "key": "videoTranscription",
+     "nullable": true,
+     "type": "ConfigVideoTranscription"
+    },
+    {
+     "key": "export",
+     "nullable": true,
+     "type": "ConfigExport"
+    },
+    {
+     "key": "federation",
+     "nullable": true,
+     "type": "ConfigFederation"
+    },
+    {
+     "key": "videoChannels",
+     "nullable": true,
+     "type": "ConfigVideoChannels"
+    },
+    {
+     "key": "email",
+     "nullable": true,
+     "type": "ConfigEmail"
+    },
+    {
+     "key": "contactForm",
+     "nullable": true,
+     "type": "ConfigContactForm"
+    },
+    {
+     "key": "theme",
+     "nullable": true,
+     "type": "ConfigTheme"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigSignup": {
+   "fields": [
+    {
+     "key": "allowed",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "allowedForCurrentIP",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "requiresEmailVerification",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "requiresApproval",
+     "nullable": true,
+     "type": "bool"
+    },
+    {
+     "key": "minimumAge",
+     "nullable": false,
+     "type": "int"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigStoryboards": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "remoteRunners",
+     "nullable": true,
+     "type": "ConfigRemoteRunners"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigTheme": {
+   "fields": [
+    {
+     "key": "registered",
+     "nullable": false,
+     "type": "List<ConfigThemeRegistered>"
+    },
+    {
+     "key": "default",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "builtIn",
+     "nullable": false,
+     "type": "List<ConfigThemeBuiltIn>"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigThemeBuiltIn": {
+   "fields": [
+    {
+     "key": "name",
+     "nullable": false,
+     "type": "String"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigThemeRegistered": {
+   "fields": [
+    {
+     "key": "npmName",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "name",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "version",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "description",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "css",
+     "nullable": false,
+     "type": "List<String>"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigTranscoding": {
+   "fields": [
+    {
+     "key": "remoteRunners",
+     "nullable": false,
+     "type": "ConfigRemoteRunners"
+    },
+    {
+     "key": "hls",
+     "nullable": false,
+     "type": "ConfigTranscodingHls"
+    },
+    {
+     "key": "web_videos",
+     "nullable": false,
+     "type": "ConfigTranscodingWebVideos"
+    },
+    {
+     "key": "enabledResolutions",
+     "nullable": false,
+     "type": "List<int>"
+    },
+    {
+     "key": "profile",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "availableProfiles",
+     "nullable": false,
+     "type": "List<String>"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigTranscodingHls": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigTranscodingWebVideos": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigUser": {
+   "fields": [
+    {
+     "key": "videoQuota",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "videoQuotaDaily",
+     "nullable": false,
+     "type": "int"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigVideo": {
+   "fields": [
+    {
+     "key": "image",
+     "nullable": false,
+     "type": "ConfigFile"
+    },
+    {
+     "key": "file",
+     "nullable": false,
+     "type": "ConfigVideoFile"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigVideoCaption": {
+   "fields": [
+    {
+     "key": "file",
+     "nullable": false,
+     "type": "ConfigFile"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigVideoChannelSynchronization": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigVideoChannels": {
+   "fields": [
+    {
+     "key": "maxPerUser",
+     "nullable": false,
+     "type": "int"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigVideoFile": {
+   "fields": [
+    {
+     "key": "extensions",
+     "nullable": false,
+     "type": "List<String>"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigVideoFileConfig": {
+   "fields": [
+    {
+     "key": "update",
+     "nullable": false,
+     "type": "ConfigVideoFileUpdate"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigVideoFileUpdate": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigVideoStudio": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "remoteRunners",
+     "nullable": false,
+     "type": "ConfigRemoteRunners"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigVideoTranscription": {
+   "fields": [
+    {
+     "key": "enabled",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "remoteRunners",
+     "nullable": false,
+     "type": "ConfigRemoteRunners"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigVideoViews": {
+   "fields": [
+    {
+     "key": "watchingInterval",
+     "nullable": false,
+     "type": "ConfigWatchingInterval"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigVideos": {
+   "fields": [
+    {
+     "key": "miniature",
+     "nullable": false,
+     "type": "ConfigMiniature"
+    },
+    {
+     "key": "resumableUpload",
+     "nullable": false,
+     "type": "ConfigResumableUpload"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigVideosBlacklist": {
+   "fields": [
+    {
+     "key": "ofUsers",
+     "nullable": false,
+     "type": "ConfigOfUsers"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigViews": {
+   "fields": [
+    {
+     "key": "videos",
+     "nullable": false,
+     "type": "ConfigVideoViews"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ConfigWatchingInterval": {
+   "fields": [
+    {
+     "key": "anonymous",
+     "nullable": true,
+     "type": "int"
+    },
+    {
+     "key": "users",
+     "nullable": false,
+     "type": "int"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "FollowingInfo": {
+   "fields": [
+    {
+     "key": "type",
+     "nullable": false,
+     "type": "FollowType"
+    },
+    {
+     "key": "name",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "displayName",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "host",
+     "nullable": false,
+     "type": "String"
+    }
+   ],
+   "file": "features/notification/notification_model.dart",
+   "params": []
+  },
+  "NotificationVideo": {
+   "fields": [
+    {
+     "key": "channel",
+     "nullable": false,
+     "type": "ActorInfo"
+    }
+   ],
+   "file": "features/notification/notification_model.dart",
+   "params": []
+  },
+  "PeertubeNotification": {
+   "fields": [
+    {
+     "key": "latestVersion",
+     "nullable": false,
+     "type": "String"
+    }
+   ],
+   "file": "features/notification/notification_model.dart",
+   "params": []
+  },
+  "PlatformAPI": {
+   "fields": [
+    {
+     "key": "name",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "shortDescription",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "description",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "terms",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "codeOfConduct",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "hardwareInformation",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "creationReason",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "moderationInformation",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "administrator",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "maintenanceLifetime",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "businessModel",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "languages",
+     "nullable": false,
+     "type": "List<String>"
+    },
+    {
+     "key": "categories",
+     "nullable": false,
+     "type": "List<dynamic>"
+    },
+    {
+     "key": "banners",
+     "nullable": false,
+     "type": "List<ActorImage>"
+    },
+    {
+     "key": "avatars",
+     "nullable": false,
+     "type": "List<ActorImage>"
+    }
+   ],
+   "file": "shared/current_platform/current_platform_models.dart",
+   "params": []
+  },
+  "PluginNotification": {
+   "fields": [
+    {
+     "key": "name",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "type",
+     "nullable": false,
+     "type": "PluginType"
+    },
+    {
+     "key": "latestVersion",
+     "nullable": false,
+     "type": "String"
+    }
+   ],
+   "file": "features/notification/notification_model.dart",
+   "params": []
+  },
+  "RegisteredExternalAuthConfig": {
+   "fields": [
+    {
+     "key": "npmName",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "name",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "version",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "authName",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "authDisplayName",
+     "nullable": false,
+     "type": "String"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "RegisteredIdAndPassAuthConfig": {
+   "fields": [
+    {
+     "key": "npmName",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "name",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "version",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "authName",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "weight",
+     "nullable": false,
+     "type": "int"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "RegistrationNotification": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "username",
+     "nullable": false,
+     "type": "String"
+    }
+   ],
+   "file": "features/notification/notification_model.dart",
+   "params": []
+  },
+  "Role": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "label",
+     "nullable": false,
+     "type": "String"
+    }
+   ],
+   "file": "features/user/models/role_model.dart",
+   "params": []
+  },
+  "ServerConfigPlugin": {
+   "fields": [
+    {
+     "key": "name",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "npmName",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "version",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "description",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "clientScripts",
+     "nullable": false,
+     "type": "Map<String,ClientScriptJSON>"
+    }
+   ],
+   "file": "shared/config/config_models.dart",
+   "params": []
+  },
+  "ThumbnailImage": {
+   "fields": [
+    {
+     "key": "width",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "fileUrl",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "height",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "aspectRatio",
+     "nullable": false,
+     "type": "String"
+    }
+   ],
+   "file": "features/video/video_model.dart",
+   "params": []
+  },
+  "User": {
+   "fields": [
+    {
+     "key": "account",
+     "nullable": false,
+     "type": "AccountDetails"
+    },
+    {
+     "key": "autoPlayNextVideo",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "autoPlayNextVideoPlaylist",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "autoPlayVideo",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "blocked",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "blockedReason",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "createdAt",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "email",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "pendingEmail",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "emailVerified",
+     "nullable": true,
+     "type": "bool"
+    },
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "pluginAuth",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "lastLoginDate",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "noInstanceConfigWarningModal",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "noAccountSetupWarningModal",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "noWelcomeModal",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "role",
+     "nullable": false,
+     "type": "Role"
+    },
+    {
+     "key": "theme",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "username",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "videoChannels",
+     "nullable": false,
+     "type": "List<VideoChannelDetails>"
+    },
+    {
+     "key": "videoQuota",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "videoQuotaDaily",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "videoLanguages",
+     "nullable": true,
+     "type": "List<String>"
+    },
+    {
+     "key": "p2pEnabled",
+     "nullable": false,
+     "type": "bool"
+    }
+   ],
+   "file": "features/user/user_model.dart",
+   "params": []
+  },
+  "UserNotification": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "type",
+     "nullable": false,
+     "type": "UserNotificationType"
+    },
+    {
+     "key": "read",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "video",
+     "nullable": true,
+     "type": "NotificationVideo"
+    },
+    {
+     "key": "videoImport",
+     "nullable": true,
+     "type": "VideoImportNotification"
+    },
+    {
+     "key": "comment",
+     "nullable": true,
+     "type": "CommentNotification"
+    },
+    {
+     "key": "abuse",
+     "nullable": true,
+     "type": "AbuseNotification"
+    },
+    {
+     "key": "videoBlacklist",
+     "nullable": true,
+     "type": "VideoBlacklistNotification"
+    },
+    {
+     "key": "account",
+     "nullable": true,
+     "type": "ActorInfo"
+    },
+    {
+     "key": "actorFollow",
+     "nullable": true,
+     "type": "ActorFollowNotification"
+    },
+    {
+     "key": "plugin",
+     "nullable": true,
+     "type": "PluginNotification"
+    },
+    {
+     "key": "peertube",
+     "nullable": true,
+     "type": "PeertubeNotification"
+    },
+    {
+     "key": "registration",
+     "nullable": true,
+     "type": "RegistrationNotification"
+    },
+    {
+     "key": "videoCaption",
+     "nullable": true,
+     "type": "VideoCaptionNotification"
+    },
+    {
+     "key": "createdAt",
+     "nullable": false,
+     "type": "DateTime"
+    },
+    {
+     "key": "updatedAt",
+     "nullable": false,
+     "type": "DateTime"
+    }
+   ],
+   "file": "features/notification/notification_model.dart",
+   "params": []
+  },
+  "Video": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "uuid",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "shortUUID",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "name",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "category",
+     "nullable": false,
+     "type": "VideoConstant<int?>"
+    },
+    {
+     "key": "licence",
+     "nullable": false,
+     "type": "VideoConstant<int?>"
+    },
+    {
+     "key": "language",
+     "nullable": false,
+     "type": "VideoConstant<String?>"
+    },
+    {
+     "key": "privacy",
+     "nullable": false,
+     "type": "VideoConstant<VideoPrivacy>"
+    },
+    {
+     "key": "nsfw",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "truncatedDescription",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "description",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "isLocal",
+     "nullable": true,
+     "type": "bool"
+    },
+    {
+     "key": "duration",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "aspectRatio",
+     "nullable": true,
+     "type": "double"
+    },
+    {
+     "key": "views",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "viewers",
+     "nullable": true,
+     "type": "int"
+    },
+    {
+     "key": "likes",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "dislikes",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "thumbnailPath",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "previewPath",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "embedPath",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "createdAt",
+     "nullable": false,
+     "type": "DateTime"
+    },
+    {
+     "key": "updatedAt",
+     "nullable": false,
+     "type": "DateTime"
+    },
+    {
+     "key": "publishedAt",
+     "nullable": false,
+     "type": "DateTime"
+    },
+    {
+     "key": "originallyPublishedAt",
+     "nullable": true,
+     "type": "DateTime"
+    },
+    {
+     "key": "isLive",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "account",
+     "nullable": false,
+     "type": "Account"
+    },
+    {
+     "key": "channel",
+     "nullable": false,
+     "type": "VideoChannel"
+    },
+    {
+     "key": "url",
+     "nullable": false,
+     "type": "Uri"
+    },
+    {
+     "key": "userHistory",
+     "nullable": true,
+     "type": "VideoUserHistory"
+    },
+    {
+     "key": "state",
+     "nullable": true,
+     "type": "VideoConstant<VideoState>"
+    }
+   ],
+   "file": "features/video/video_model.dart",
+   "params": []
+  },
+  "VideoBlacklistNotification": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "video",
+     "nullable": false,
+     "type": "VideoInfo"
+    }
+   ],
+   "file": "features/notification/notification_model.dart",
+   "params": []
+  },
+  "VideoCaptionNotification": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "video",
+     "nullable": false,
+     "type": "VideoInfo"
+    }
+   ],
+   "file": "features/notification/notification_model.dart",
+   "params": []
+  },
+  "VideoChannel": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "url",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "name",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "host",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "displayName",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "avatars",
+     "nullable": false,
+     "type": "List<ActorImage>"
+    }
+   ],
+   "file": "features/channel/channel_model.dart",
+   "params": []
+  },
+  "VideoChannelDetails": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "url",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "name",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "host",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "hostRedundancyAllowed",
+     "nullable": true,
+     "type": "bool"
+    },
+    {
+     "key": "followingCount",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "followersCount",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "createdAt",
+     "nullable": false,
+     "type": "DateTime"
+    },
+    {
+     "key": "displayName",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "updatedAt",
+     "nullable": false,
+     "type": "DateTime"
+    },
+    {
+     "key": "avatars",
+     "nullable": false,
+     "type": "List<ActorImage>"
+    },
+    {
+     "key": "banners",
+     "nullable": false,
+     "type": "List<ActorImage>"
+    },
+    {
+     "key": "description",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "support",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "isLocal",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "ownerAccount",
+     "nullable": true,
+     "type": "Account"
+    },
+    {
+     "key": "videosCount",
+     "nullable": true,
+     "type": "int"
+    }
+   ],
+   "file": "features/channel/channel_model.dart",
+   "params": []
+  },
+  "VideoCommentThread": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "url",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "text",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "threadId",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "inReplyToCommentId",
+     "nullable": true,
+     "type": "int"
+    },
+    {
+     "key": "videoId",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "createdAt",
+     "nullable": false,
+     "type": "DateTime"
+    },
+    {
+     "key": "updatedAt",
+     "nullable": false,
+     "type": "DateTime"
+    },
+    {
+     "key": "deletedAt",
+     "nullable": true,
+     "type": "DateTime"
+    },
+    {
+     "key": "isDeleted",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "account",
+     "nullable": true,
+     "type": "Account"
+    },
+    {
+     "key": "totalRepliesFromVideoAuthor",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "totalReplies",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "by",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "isLocal",
+     "nullable": true,
+     "type": "bool"
+    }
+   ],
+   "file": "features/video/comments/comment_model.dart",
+   "params": []
+  },
+  "VideoCommentThreadTree": {
+   "fields": [
+    {
+     "key": "comment",
+     "nullable": false,
+     "type": "VideoCommentThread"
+    },
+    {
+     "key": "children",
+     "nullable": false,
+     "type": "List<VideoCommentThreadTree>"
+    }
+   ],
+   "file": "features/video/comments/comment_model.dart",
+   "params": []
+  },
+  "VideoConstant": {
+   "fields": [
+    {
+     "key": "label",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "description",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "id",
+     "nullable": true,
+     "type": "T"
+    }
+   ],
+   "file": "features/video/video_model.dart",
+   "params": [
+    "T"
+   ]
+  },
+  "VideoDetails": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "uuid",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "shortUUID",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "name",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "category",
+     "nullable": false,
+     "type": "VideoConstant<int?>"
+    },
+    {
+     "key": "licence",
+     "nullable": false,
+     "type": "VideoConstant<int?>"
+    },
+    {
+     "key": "language",
+     "nullable": false,
+     "type": "VideoConstant<String?>"
+    },
+    {
+     "key": "privacy",
+     "nullable": false,
+     "type": "VideoConstant<VideoPrivacy>"
+    },
+    {
+     "key": "nsfw",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "truncatedDescription",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "description",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "isLocal",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "duration",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "aspectRatio",
+     "nullable": true,
+     "type": "double"
+    },
+    {
+     "key": "views",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "viewers",
+     "nullable": true,
+     "type": "int"
+    },
+    {
+     "key": "likes",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "dislikes",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "thumbnailPath",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "previewPath",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "embedPath",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "createdAt",
+     "nullable": false,
+     "type": "DateTime"
+    },
+    {
+     "key": "updatedAt",
+     "nullable": false,
+     "type": "DateTime"
+    },
+    {
+     "key": "publishedAt",
+     "nullable": false,
+     "type": "DateTime"
+    },
+    {
+     "key": "originallyPublishedAt",
+     "nullable": true,
+     "type": "DateTime"
+    },
+    {
+     "key": "isLive",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "account",
+     "nullable": false,
+     "type": "AccountDetails"
+    },
+    {
+     "key": "channel",
+     "nullable": false,
+     "type": "VideoChannelDetails"
+    },
+    {
+     "key": "url",
+     "nullable": false,
+     "type": "Uri"
+    },
+    {
+     "key": "userHistory",
+     "nullable": true,
+     "type": "VideoUserHistory"
+    },
+    {
+     "key": "thumbnails",
+     "nullable": true,
+     "type": "List<ThumbnailImage>"
+    },
+    {
+     "key": "blacklisted",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "blacklistedReason",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "files",
+     "nullable": false,
+     "type": "List<VideoFile>"
+    },
+    {
+     "key": "streamingPlaylists",
+     "nullable": false,
+     "type": "List<VideoStreamingPlaylist>"
+    },
+    {
+     "key": "support",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "tags",
+     "nullable": false,
+     "type": "List<String>"
+    },
+    {
+     "key": "commentsEnabled",
+     "nullable": true,
+     "type": "bool"
+    },
+    {
+     "key": "commentsPolicy",
+     "nullable": true,
+     "type": "VideoConstant<int?>"
+    },
+    {
+     "key": "downloadEnabled",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "waitTranscoding",
+     "nullable": false,
+     "type": "bool"
+    },
+    {
+     "key": "inputFileUpdatedAt",
+     "nullable": true,
+     "type": "DateTime"
+    },
+    {
+     "key": "nsfwFlags",
+     "nullable": true,
+     "type": "int"
+    },
+    {
+     "key": "nsfwSummary",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "state",
+     "nullable": false,
+     "type": "VideoConstant<VideoState>"
+    },
+    {
+     "key": "trackerUrls",
+     "nullable": false,
+     "type": "List<Uri>"
+    }
+   ],
+   "file": "features/video/video_model.dart",
+   "params": []
+  },
+  "VideoFile": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "resolution",
+     "nullable": false,
+     "type": "VideoConstant<int?>"
+    },
+    {
+     "key": "size",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "torrentUrl",
+     "nullable": false,
+     "type": "Uri"
+    },
+    {
+     "key": "torrentDownloadUrl",
+     "nullable": false,
+     "type": "Uri"
+    },
+    {
+     "key": "fileUrl",
+     "nullable": false,
+     "type": "Uri"
+    },
+    {
+     "key": "fileDownloadUrl",
+     "nullable": false,
+     "type": "Uri"
+    },
+    {
+     "key": "fps",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "metadataUrl",
+     "nullable": true,
+     "type": "Uri"
+    },
+    {
+     "key": "magnetUri",
+     "nullable": true,
+     "type": "Uri"
+    },
+    {
+     "key": "hasAudio",
+     "nullable": true,
+     "type": "bool"
+    },
+    {
+     "key": "hasVideo",
+     "nullable": true,
+     "type": "bool"
+    }
+   ],
+   "file": "features/video/video_model.dart",
+   "params": []
+  },
+  "VideoImportNotification": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "video",
+     "nullable": true,
+     "type": "VideoInfo"
+    },
+    {
+     "key": "torrentName",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "magnetUri",
+     "nullable": true,
+     "type": "String"
+    },
+    {
+     "key": "targetUrl",
+     "nullable": true,
+     "type": "String"
+    }
+   ],
+   "file": "features/notification/notification_model.dart",
+   "params": []
+  },
+  "VideoInfo": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "uuid",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "shortUUID",
+     "nullable": false,
+     "type": "String"
+    },
+    {
+     "key": "name",
+     "nullable": false,
+     "type": "String"
+    }
+   ],
+   "file": "features/notification/notification_model.dart",
+   "params": []
+  },
+  "VideoStreamingPlaylist": {
+   "fields": [
+    {
+     "key": "id",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "type",
+     "nullable": false,
+     "type": "int"
+    },
+    {
+     "key": "playlistUrl",
+     "nullable": false,
+     "type": "Uri"
+    },
+    {
+     "key": "segmentsSha256Url",
+     "nullable": false,
+     "type": "Uri"
+    },
+    {
+     "key": "redundancies",
+     "nullable": false,
+     "type": "List<dynamic>"
+    },
+    {
+     "key": "files",
+     "nullable": false,
+     "type": "List<VideoFile>"
+    }
+   ],
+   "file": "features/video/video_model.dart",
+   "params": []
+  },
+  "VideoUserHistory": {
+   "fields": [
+    {
+     "key": "currentTime",
+     "nullable": true,
+     "type": "int"
+    }
+   ],
+   "file": "features/video/video_model.dart",
+   "params": []
+  }
+ },
+ "enums": {
+  "AbuseStateType": [
+   1,
+   2,
+   3
+  ],
+  "AirPlayRouteType": [
+   "none",
+   "audio",
+   "video",
+   "mirroring"
+  ],
+  "AvatarShape": [
+   "channel",
+   "platform",
+   "account"
+  ],
+  "BuildType": [
+   "playstore",
+   "appstore",
+   "fdroid",
+   "unknown"
+  ],
+  "ChannelActivityAction": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15
+  ],
+  "ChannelActivityTargetType": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "ChannelSortCriteria": [
+   "name",
+   "-name",
+   "createdAt",
+   "-createdAt",
+   "updatedAt",
+   "-updatedAt",
+   "channelUpdatedAt",
+   "-channelUpdatedAt"
+  ],
+  "CommentSortCriteria": [
+   "createdAt",
+   "-createdAt",
+   "totalReplies",
+   "-totalReplies"
+  ],
+  "DeviceType": [
+   "phone",
+   "tablet",
+   "tv"
+  ],
+  "FollowState": [
+   "following",
+   "notFollowing"
+  ],
+  "FollowStateType": [
+   "pending",
+   "accepted",
+   "rejected"
+  ],
+  "FollowType": [
+   "account",
+   "channel",
+   "instance"
+  ],
+  "LiveQualityPreset": [
+   "dataSaver",
+   "standard",
+   "high"
+  ],
+  "LiveVideoEventType": [
+   "viewsChange",
+   "stateChange"
+  ],
+  "MiniPlayerState": [
+   "hidden",
+   "video",
+   "download"
+  ],
+  "NotificationChannelType": [
+   "upload",
+   "download",
+   "general"
+  ],
+  "NotificationEvent": [
+   "newNotification",
+   "read",
+   "readAll"
+  ],
+  "NsfwFilter": [
+   "false",
+   "both",
+   "true"
+  ],
+  "PlatformBannerEntityType": [
+   "channel",
+   "account"
+  ],
+  "PlatformSortCriteria": [
+   "id",
+   "-id",
+   "host",
+   "-host",
+   "createdAt",
+   "-createdAt",
+   "name",
+   "-name",
+   "health",
+   "-health",
+   "totalUsers",
+   "-totalUsers",
+   "totalVideos",
+   "-totalVideos",
+   "totalLocalVideos",
+   "-totalLocalVideos",
+   "totalInstanceFollowers",
+   "-totalInstanceFollowers",
+   "totalInstanceFollowing",
+   "-totalInstanceFollowing",
+   "signupAllowed",
+   "-signupAllowed",
+   "liveEnabled",
+   "-liveEnabled",
+   "version",
+   "-version",
+   "country",
+   "-country",
+   "customizations",
+   "-customizations"
+  ],
+  "PlatformSwitchResult": [
+   "ok",
+   "blocked",
+   "versionTooOld",
+   "unreachable",
+   "certificateError"
+  ],
+  "PlaylistElementsMode": [
+   "queue",
+   "browse"
+  ],
+  "PlaylistListViewSourceType": [
+   "channel",
+   "account"
+  ],
+  "PlaylistType": [
+   1,
+   2
+  ],
+  "PluginClientScope": [
+   "common",
+   "video-watch",
+   "search",
+   "signup",
+   "login",
+   "embed",
+   "video-edit",
+   "admin-plugin",
+   "my-library",
+   "video-channel",
+   "my-account",
+   "admin-users",
+   "admin-comments",
+   "moderation"
+  ],
+  "PluginType": [
+   1,
+   2
+  ],
+  "PredefinedReasons": [
+   "violentOrAbusive",
+   "hatefulOrAbusive",
+   "spamOrMisleading",
+   "privacy",
+   "rights",
+   "serverRules",
+   "thumbnails",
+   "captions"
+  ],
+  "Rating": [
+   "like",
+   "dislike"
+  ],
+  "ReportType": [
+   "video",
+   "account",
+   "comment"
+  ],
+  "SignupNextStep": [
+   "autoLogin",
+   "awaitingEmailVerification",
+   "awaitingApproval"
+  ],
+  "SnackbarPosition": [
+   "top",
+   "bottom"
+  ],
+  "TimecodeFormat": [
+   "hhmmss",
+   "mmss"
+  ],
+  "TransferStatus": [
+   "notStarted",
+   "inProgress",
+   "completed",
+   "failed",
+   "paused",
+   "canceled"
+  ],
+  "UserNotificationType": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22
+  ],
+  "VideoChannelCollaboratorState": [
+   1,
+   2
+  ],
+  "VideoListType": [
+   "listView",
+   "listViewHorizontal",
+   "sliverList"
+  ],
+  "VideoPrivacy": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "VideoQualityCategory": [
+   "automatic",
+   "high",
+   "dataSaver",
+   "advanced"
+  ],
+  "VideoResolution": [
+   "auto",
+   "noVideo",
+   "h144p",
+   "h240p",
+   "h360p",
+   "h480p",
+   "h720p",
+   "h1080p",
+   "h1440p",
+   "h4k"
+  ],
+  "VideoSearchSortCriteria": [
+   "name",
+   "-name",
+   "duration",
+   "-duration",
+   "createdAt",
+   "-createdAt",
+   "publishedAt",
+   "-publishedAt",
+   "views",
+   "-views",
+   "likes",
+   "-likes",
+   "match",
+   "-match",
+   "hot",
+   "-hot"
+  ],
+  "VideoSearchTarget": [
+   "local",
+   "search-index"
+  ],
+  "VideoSortCriteria": [
+   "name",
+   "-name",
+   "duration",
+   "-duration",
+   "createdAt",
+   "-createdAt",
+   "publishedAt",
+   "-publishedAt",
+   "views",
+   "-views",
+   "likes",
+   "-likes",
+   "hot",
+   "-hot",
+   "trending",
+   "-trending",
+   "best",
+   "-best"
+  ],
+  "VideoState": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12
+  ],
+  "VideoStatsMetric": [
+   "viewers",
+   "aggregateWatchTime"
+  ],
+  "_CaptionChangeType": [
+   "none",
+   "create",
+   "delete",
+   "update"
+  ],
+  "_CommentAction": [
+   "approve",
+   "delete",
+   "deleteAllByAccount"
+  ],
+  "_MiniPlayerCorner": [
+   "topLeft",
+   "topRight",
+   "bottomLeft",
+   "bottomRight"
+  ],
+  "_SaveToPlaylistSheetResult": [
+   "createPlaylist"
+  ]
+ },
+ "roots": [
+  "ConfigServer",
+  "PlatformAPI",
+  "User",
+  "Video",
+  "VideoDetails",
+  "VideoChannelDetails",
+  "AccountDetails",
+  "VideoCommentThread",
+  "VideoCommentThreadTree",
+  "UserNotification"
+ ]
+}

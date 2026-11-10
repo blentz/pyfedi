@@ -54,8 +54,7 @@ def _list(world, **query):
 
 
 def _check(item):
-    assert contract.problems(item, contract.NOTIFICATION) == [] and item['type'] in contract.NOTIFICATION_TYPES
-    assert contract.problems(item, contract.NOTIFICATION_OBJECTS[item['type']]) == []
+    assert contract.problems(item, 'UserNotification') == []
 
 
 def test_each_of_the_four_kinds_is_its_peertube_type(world):

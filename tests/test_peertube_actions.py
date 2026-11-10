@@ -87,7 +87,7 @@ def test_a_comment_answers_200_with_the_comment_as_the_app_decodes_it(world):
                      json={'text': 'A *fine* video'})
     assert response.status_code == 200, response.get_data(as_text=True)
     made = response.get_json()['comment']
-    assert contract.problems(made, contract.COMMENT) == []
+    assert contract.problems(made, 'VideoCommentThread') == []
     assert made['threadId'] == made['id'] and made['videoId'] == world['post'].id and '<em>fine</em>' in made['text']
     reply = db.session.get(PostReply, made['id'])
     assert reply.user_id == world['person'].id and reply.parent_id is None

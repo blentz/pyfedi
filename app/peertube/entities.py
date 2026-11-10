@@ -286,7 +286,7 @@ def video(post: Post, whole: bool = False) -> dict:
             'files': files(post), 'streamingPlaylists': [], 'tags': [tag.name for tag in post.tags if not tag.banned],
             'support': None, 'descriptionPath': f'/api/v1/videos/{post.id}/description',
             'commentsEnabled': bool(post.comments_enabled), 'downloadEnabled': True, 'waitTranscoding': False,
-            'state': {'id': 1, 'label': 'Published'}, 'blacklisted': False,
+            'state': {'id': 1, 'label': 'Published'}, 'blacklisted': False, 'trackerUrls': [],
             'channel': channel(post.community),   # its own page shows the channel whole (VideoChannelDetails)
         })
     return found

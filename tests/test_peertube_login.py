@@ -77,14 +77,14 @@ def test_a_local_client_made_under_an_old_secret_key_takes_the_new_one(world, mo
 def test_config_has_every_field_peertubes_app_requires(world):
     """Its add-instance screen decodes the whole config, and refuses an API level below 7.2.0 (D4)."""
     body = world['client'].get('/api/v1/config').get_json()
-    assert contract.problems(body, contract.CONFIG) == []
+    assert contract.problems(body, 'ConfigServer') == []
     assert tuple(int(part) for part in body['serverVersion'].split('.')) >= (7, 2, 0)
 
 
 def test_about_has_what_peertubes_app_requires_to_open_the_platform(world):
     """It reads /config/about to open a platform and calls it unreachable when that fails."""
     response = world['client'].get('/api/v1/config/about')
-    assert response.status_code == 200 and contract.problems(response.get_json(), contract.ABOUT) == []
+    assert response.status_code == 200 and contract.problems(response.get_json()['instance'], 'PlatformAPI') == []
     assert response.get_json()['instance']['name']
 
 
@@ -92,7 +92,9 @@ def test_the_password_grant_gives_a_bearer_pair_that_never_expires_and_acts_for_
     response = _token(world['client'], _local(world['client']))
     assert response.status_code == 200, response.get_data(as_text=True)
     body = response.get_json()
-    assert contract.problems(body, contract.TOKEN) == [] and body['token_type'] == 'Bearer'
+    # TokenAPI's fromJson is written by hand: these three, strings, are what it reads
+    assert all(isinstance(body.get(key), str) for key in ('access_token', 'refresh_token', 'token_type'))
+    assert body['token_type'] == 'Bearer'
 
     assert 'expires_in' not in body   # P2: never expiring, as M6 rules for every app
     stored = tokens.token_for(body['access_token'])

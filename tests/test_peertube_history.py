@@ -68,7 +68,7 @@ def test_watching_marks_the_video_read_and_lists_it_newest_first(world):
     _set_read_at(world, older, utcnow() - timedelta(hours=1))
     body = _history(world)
     assert [video['id'] for video in body['data']] == [newer.id, older.id] and body['total'] == 2
-    assert all(contract.problems(video, contract.VIDEO) == [] for video in body['data'])
+    assert all(contract.problems(video, 'Video') == [] for video in body['data'])
 
 
 def test_a_view_marks_at_most_once_in_ten_minutes(world):
