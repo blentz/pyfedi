@@ -205,3 +205,21 @@ def comment_view(alpha: dict) -> dict:
             'creator_is_admin': bool(alpha['creator_is_admin']), 'subscribed': alpha.get('subscribed') or 'NotSubscribed',
             'saved': bool(alpha['saved']), 'creator_blocked': bool(alpha['creator_blocked']),
             'my_vote': alpha.get('my_vote') or 0}
+
+
+def inbox_view(alpha: dict, kind: str) -> dict:
+    """CommentReplyView (`kind` comment_reply) or PersonMentionView (person_mention), from alpha's reply or mention:
+    a CommentView with the inbox entry and its recipient. Alpha's entry is keyed by the comment, so its id is the
+    comment's, which is what marking it read names."""
+    entry = alpha['comment_reply']
+    return {**comment_view(alpha), kind: {'id': entry['id'], 'recipient_id': entry['recipient_id'],
+                                          'comment_id': entry['comment_id'], 'read': bool(entry['read']),
+                                          'published': entry['published']},
+            'recipient': person(alpha['recipient'])}
+
+
+def private_message_view(alpha: dict) -> dict:
+    """PrivateMessageView, from alpha's (views.private_message_view variant 1), already Lemmy's but for the people."""
+    message = alpha['private_message']
+    return {'private_message': {**message, 'deleted': bool(message['deleted']), 'read': bool(message['read'])},
+            'creator': person(alpha['creator']), 'recipient': person(alpha['recipient'])}
