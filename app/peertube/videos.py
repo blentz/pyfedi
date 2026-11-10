@@ -2,7 +2,7 @@
 §3, §3.2, §3.4). Every list of posts is the read layer's for a signed-out reader (app.reads), narrowed to the videos
 (V1); a video or a thread asked by id is found only if that same reader may read it."""
 from flask import g, jsonify, request
-from sqlalchemy import desc, func, or_
+from sqlalchemy import desc, false, func, or_
 
 from app.models import Community, Post, Tag
 from app.peertube import bp
@@ -42,6 +42,8 @@ def videos(listing: Listing, sort: str | None = None):
     if request.args.get('isLocal', '').lower() == 'true':
         posts = posts.filter(Post.instance_id.in_(hosted_instance_ids()))
     order = SORTS.get(sort or request.args.get('sort', '-publishedAt'), SORTS['-publishedAt'])
+    if request.args.get('isLive', '').lower() == 'true':   # PieFed has no live streams
+        posts = posts.filter(false())
     return paged(posts.order_by(*order, desc(Post.id)), entities.video)
 
 
@@ -220,6 +222,8 @@ def search_videos():
     if tags := _tags():
         posts = posts.filter(Post.tags.any(Tag.name.in_(tags) & (Tag.banned == False)))
     order = SORTS.get(request.args.get('sort', '-publishedAt'), SORTS['-publishedAt'])
+    if request.args.get('isLive', '').lower() == 'true':   # PieFed has no live streams
+        posts = posts.filter(false())
     return paged(posts.order_by(*order, desc(Post.id)), entities.video)
 
 

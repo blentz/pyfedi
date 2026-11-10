@@ -446,3 +446,12 @@ def test_a_comment_thread_of_an_unknown_video_is_a_404(world):
     assert _get(world, '/api/v1/videos/999999999/comment-threads').status_code == 404
     assert _get(world, '/api/v1/videos/999999999/comment-threads/1').status_code == 404
     assert _get(world, '/api/v1/videos/999999999/description').status_code == 404
+
+
+def test_live_videos_are_none_and_non_live_ones_are_every_video(world):
+    """PieFed has no live streams: PeerTube's app lists "Current lives" with isLive=true, which must be empty, and
+    every video under isLive=false."""
+    upload = _upload(world)
+    assert _listed(_get(world, '/api/v1/videos', isLive='true')) == []
+    assert upload.id in _listed(_get(world, '/api/v1/videos', isLive='false'))
+    assert _listed(_get(world, '/api/v1/search/videos', search='', isLive='true')) == []
