@@ -144,3 +144,13 @@ def test_a_muted_authors_notifications_are_left_out_and_an_avatar_is_a_whole_url
     db.session.add(UserMute(muter_id=world['person'].id, muted_id=world['other'].id, notifications=True))
     db.session.commit()
     assert _list(world) == {'total': 0, 'data': []}
+
+
+@pytest.mark.parametrize('query', ['typeOneOf=1', 'typeOneOf[]=1', 'typeOneOf=1,99', 'typeOneOf=1&typeOneOf=x'])
+def test_type_one_of_keeps_only_those_types(world, query):
+    """PeerTube's app counts new videos with typeOneOf=1."""
+    video = _post(world)
+    new_video = _notify(world, NOTIF_COMMUNITY, post_id=video.id)
+    _notify(world, NOTIF_FOLLOW)
+    response = world['client'].get(f'/api/v1/users/me/notifications?{query}', headers=world['headers'])
+    assert [item['id'] for item in response.get_json()['data']] == [new_video.id]

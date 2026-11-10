@@ -90,11 +90,21 @@ def _count() -> tuple[int, int]:
     return entities.window()
 
 
+def _types() -> set[int] | None:
+    """typeOneOf, repeated, bracketed or joined by commas; None for every type."""
+    named = request.args.getlist('typeOneOf') + request.args.getlist('typeOneOf[]')
+    if not named:
+        return None
+    return {int(part) for value in named for part in value.split(',') if part.strip().isdigit()}
+
+
 @bp.route('/api/v1/users/me/notifications')
 @signed_in()
 def list_notifications():
     start, count = _count()
     listed = _listed(request.args.get('unread', '').lower() == 'true')
+    if (types := _types()) is not None:
+        listed = [item for item in listed if item['type'] in types]
     return jsonify({'total': len(listed), 'data': listed[start:start + count]})
 
 
