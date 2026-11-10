@@ -376,8 +376,13 @@ class PeerTubeApp:
 
     def _add_platform(self):
         d = self.device
-        d.tap('I know where to go', timeout=90)
-        d.ui(description='Add a platform').click(timeout=60)
+        d.wait_text('I know where to go', timeout=90, contains=False)
+        time.sleep(2)   # its picture loads and moves the buttons: a tap too soon lands on "Discover content" above
+        d.tap('I know where to go', exact=True)
+        add = d.ui(description='Add a platform')
+        if not add.wait(timeout=15):   # it went to Explore all the same, whose platform list is empty offline
+            d.tap_tab('Platforms')
+        add.click(timeout=30)
         self._type(d.ui(className='android.widget.EditText', instance=0), TUBE)
         d.hide_keyboard()
         d.tap('Connect', exact=True)
