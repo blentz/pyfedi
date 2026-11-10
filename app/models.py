@@ -6749,9 +6749,13 @@ class RevokedToken(db.Model):
     revoked_at = db.Column(db.DateTime, default=utcnow)
 
 
+# A domain's PeerTube local client (app.peertube.auth): the only app that may use the password grant (ruling P1)
+PEERTUBE_LOCAL_CLIENT_PREFIX = 'peertube-local-'
+
+
 class OAuthApp(db.Model):
-    """A client app registered with POST /api/v1/apps (plan W0.2). Its secret is shown once and kept as a SHA-256
-    digest; its redirect URIs are matched exactly."""
+    """A client app registered with POST /api/v1/apps (plan W0.2), or a domain's PeerTube local client. Its secret is
+    shown once and kept as a SHA-256 digest; its redirect URIs are matched exactly."""
     __tablename__ = 'oauth_app'
     id = db.Column(db.Integer, primary_key=True)
     client_id = db.Column(db.String(64), unique=True, nullable=False)
@@ -6793,6 +6797,8 @@ class OAuthApp(db.Model):
         return response_type == 'code'
 
     def check_grant_type(self, grant_type: str) -> bool:
+        if grant_type == 'password':   # the password grant also checks it is this domain's (app.oauth_server.server)
+            return self.client_id.startswith(PEERTUBE_LOCAL_CLIENT_PREFIX)
         return grant_type in ('authorization_code', 'refresh_token', 'client_credentials')
 
 

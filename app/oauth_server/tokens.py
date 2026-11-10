@@ -3,17 +3,21 @@
 usable credential; a raw value is found by its digest. A code or token belongs to the domain (storefront) it was issued
 on and is found only there (owner ruling 2026-11-08): a login on one domain is no credential on another, and cannot be
 exchanged, refreshed, revoked or used to link the two."""
+import hmac
 import secrets
 from datetime import timedelta
 from hashlib import sha256
 
+from flask import current_app
 from sqlalchemy import update
+from sqlalchemy.exc import IntegrityError
 
 from app import db
-from app.models import OAuthApp, OAuthCode, OAuthToken, User, utcnow
+from app.models import PEERTUBE_LOCAL_CLIENT_PREFIX, OAuthApp, OAuthCode, OAuthToken, User, utcnow
 from app.storefront import current_storefront
 
 CODE_LIFETIME_SECONDS = 600
+LOCAL_CLIENT_SCOPE = 'read write follow'   # what PeerTube's apps do: read, comment, rate and subscribe
 
 
 def here() -> str:
@@ -146,3 +150,33 @@ def revoke_app_for(user: User, app_id: int) -> None:
                                                 OAuthToken.revoked_at.is_(None)).values(revoked_at=utcnow()))
     OAuthCode.query.filter(OAuthCode.user_id == user.id, OAuthCode.app_id == app_id).delete()
     db.session.commit()
+
+
+def _derived(purpose: str) -> str:
+    """A value fixed for this domain, made from the site's secret key, so the local client needs no stored secret."""
+    key = str(current_app.config['SECRET_KEY']).encode()
+    return hmac.new(key, f'{purpose}:{here()}'.encode(), sha256).hexdigest()
+
+
+def local_client_id() -> str:
+    return PEERTUBE_LOCAL_CLIENT_PREFIX + _derived('peertube-client-id')[:40]
+
+
+def local_client() -> tuple[OAuthApp, str]:
+    """This domain's PeerTube local client and its secret, which PeerTube hands to anyone who asks: the password is the
+    credential (spec 2026-11-09-peertube-login-design §3, §7, ruling P1). Made the first time it is asked for, and the
+    same every time after."""
+    client_id, secret = local_client_id(), _derived('peertube-client-secret')
+    found = OAuthApp.query.filter_by(client_id=client_id).first()
+    if found is None:
+        db.session.add(OAuthApp(client_id=client_id, client_secret_hash=digest(secret), name='PeerTube',
+                                redirect_uris='', scope=LOCAL_CLIENT_SCOPE))
+        try:
+            db.session.commit()
+        except IntegrityError:   # another request made it first
+            db.session.rollback()
+        found = OAuthApp.query.filter_by(client_id=client_id).one()
+    if not found.check_client_secret(secret):   # the site's secret key has changed since it was made
+        found.client_secret_hash = digest(secret)
+        db.session.commit()
+    return found, secret

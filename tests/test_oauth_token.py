@@ -80,7 +80,8 @@ def test_a_code_works_once(world):
     ({'client_id': 'nobody'}, 400, 'invalid_client'),   # 401 is for a client that tried Basic (RFC 6749 5.2)
     ({'redirect_uri': 'https://app.example/other'}, 400, 'invalid_grant'),
     ({'code': 'not-a-code'}, 400, 'invalid_grant'),
-    ({'grant_type': 'password', 'username': 'oauthtoken', 'password': 'x'}, 400, 'unsupported_grant_type'),
+    # the password grant is a domain's PeerTube local client's alone (ruling P1, app.peertube.auth)
+    ({'grant_type': 'password', 'username': 'oauthtoken', 'password': 'x'}, 400, 'unauthorized_client'),
 ], ids=['wrong-secret', 'unknown-app', 'other-redirect', 'unknown-code', 'password-grant'])
 def test_a_bad_exchange_is_refused(world, fields, status, error):
     response = _exchange(world, _code(world), **fields)

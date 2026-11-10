@@ -83,7 +83,7 @@ def client(app, site):
 
 @pytest.mark.parametrize('family, expected', [
     ('mastodon', {'login': 'passed', 'view': 'passed', 'post': 'passed'}),   # registration (W1.1), timelines (W1.2)
-    ('peertube', {'login': 'unsupported', 'view': 'passed', 'post': 'blocked'}),   # the video API (W2.1a)
+    ('peertube', {'login': 'passed', 'view': 'passed', 'post': 'passed'}),   # videos (W2.1a), login (W2.2a)
     ('lemmy-v3', {'login': 'unsupported', 'view': 'unsupported', 'post': 'blocked'}),
 ], ids=['mastodon', 'peertube', 'lemmy-v3'])
 def test_this_tree_serves_what_the_probes_expect(client, family, expected):

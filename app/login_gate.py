@@ -36,6 +36,9 @@ OPEN = frozenset({
     # What an OAuth app calls before anyone is signed in, or to end a token
     'oauth_server.register_app', 'oauth_server.issue_token', 'oauth_server.revoke_token',
     'oauth_server.authorization_server_metadata',
+    # PeerTube's: the instance an app is added by, its local client, and the password login (spec
+    # 2026-11-09-peertube-login-design §4)
+    'peertube.config', 'peertube.oauth_client_local', 'peertube.issue_token',
 })
 
 # Open where the storefront federates, as other servers read them with no account. Each view that also serves a browser

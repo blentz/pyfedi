@@ -13,9 +13,18 @@ from app.utils import ip_address, user_ip_banned, user_cookie_banned, banned_ip_
 
 # D582: the API's login. The web logs in through app.auth.util.log_user_in.
 def api_log_user_in(input):
+    user = log_in_with_password(input['username'], input['password'])
+    login_json = {'jwt': user.encode_jwt_token()}
+    return login_json
+
+
+def log_in_with_password(username: str, password: str):
+    """The account a username (or email, or profile URL) and password log in to, with every check and record of the
+    API's login: raises Exception('incorrect_login') for any refusal, and aborts 429 while the onion gate waits. Also
+    PeerTube's password grant (spec 2026-11-09-peertube-login-design §3, ruling P1)."""
     ip = ip_address()
-    username = input['username'].lower().strip()
-    password = input['password'].strip()
+    username = username.lower().strip()
+    password = password.strip()
 
     # D584: the web login's finder, so both accept the same forms
     user = find_user(username)
@@ -62,5 +71,4 @@ def api_log_user_in(input):
     except Exception:
         ...
 
-    login_json = {'jwt': user.encode_jwt_token()}
-    return login_json
+    return user

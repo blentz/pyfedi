@@ -5,7 +5,7 @@ from functools import cached_property
 
 from authlib.integrations.flask_oauth2 import AuthorizationServer as FlaskAuthorizationServer
 from authlib.integrations.flask_oauth2.requests import FlaskOAuth2Payload, FlaskOAuth2Request
-from authlib.oauth2.rfc6749 import InvalidGrantError, InvalidScopeError, grants
+from authlib.oauth2.rfc6749 import InvalidGrantError, InvalidRequestError, InvalidScopeError, UnauthorizedClientError, grants
 from authlib.oauth2.rfc7009 import RevocationEndpoint as _RevocationEndpoint
 from authlib.oauth2.rfc7636 import CodeChallenge
 from flask import request as flask_request
@@ -15,6 +15,7 @@ from app import db
 from app.models import OAuthApp, User
 from app.oauth_scopes import covers
 from app.oauth_server import admin_scopes, tokens
+from app.shared.auth import log_in_with_password
 
 _SECRET_OR_PKCE = ['client_secret_basic', 'client_secret_post', 'none']
 
@@ -106,6 +107,35 @@ class RefreshTokenGrant(grants.RefreshTokenGrant):
         pass   # claimed in create_token_response, before the new pair
 
 
+class PasswordGrant(grants.ResourceOwnerPasswordCredentialsGrant):
+    """PeerTube's login: a username and password for a token, from this domain's PeerTube local client only (spec
+    2026-11-09-peertube-login-design §3, ruling P1), with every check of the API's password login. Any refusal is
+    invalid_grant, so it never tells which names have accounts."""
+    TOKEN_ENDPOINT_AUTH_METHODS = ['client_secret_basic', 'client_secret_post']
+
+    def validate_token_request(self):
+        client = self.authenticate_token_endpoint_client()
+        if client.client_id != tokens.local_client_id() or not client.check_grant_type(self.GRANT_TYPE):
+            raise UnauthorizedClientError("The client is not authorized to use 'grant_type=password'")
+        params = self.request.form
+        if not params.get('username') or not params.get('password'):
+            raise InvalidRequestError("Missing 'username' or 'password' in request.")
+        user = self.authenticate_user(params['username'], params['password'])
+        if user is None:
+            raise InvalidGrantError('Invalid credentials')
+        self.request.client, self.request.user = client, user
+        self.validate_requested_scope()
+
+    def authenticate_user(self, username, password):
+        try:
+            user = log_in_with_password(username, password)
+        except Exception as refusal:   # the one exception the login raises for every refusal; an abort passes through
+            if str(refusal) == 'incorrect_login':
+                return None
+            raise
+        return user if tokens.usable_user(user) else None
+
+
 class ClientCredentialsGrant(grants.ClientCredentialsGrant):
     """An app's own token, with no person behind it: read only (spec §3.1). Only with the app's secret."""
     TOKEN_ENDPOINT_AUTH_METHODS = ['client_secret_basic', 'client_secret_post']
@@ -136,8 +166,11 @@ def _query_client(client_id):
 
 
 def _generate_token(grant_type, client, user=None, scope=None, expires_in=None, include_refresh_token=True):
-    """Mastodon's token: no expiry (ruling M6), its scope and when it was made."""
-    token = {'token_type': 'Bearer', 'access_token': tokens.new_secret(), 'scope': scope or 'read',
+    """Mastodon's token: no expiry (ruling M6, and P2 for PeerTube's), its scope and when it was made. PeerTube's
+    apps ask for no scope, and get what the local client may do."""
+    if not scope:
+        scope = client.scope if grant_type == 'password' else 'read'
+    token = {'token_type': 'Bearer', 'access_token': tokens.new_secret(), 'scope': scope,
              'created_at': int(time.time())}
     if include_refresh_token and user is not None:
         token['refresh_token'] = tokens.new_secret()
@@ -152,6 +185,7 @@ server = AuthorizationServer()
 server.register_grant(AuthorizationCodeGrant, [_S256Only(required=True)])
 server.register_grant(RefreshTokenGrant)
 server.register_grant(ClientCredentialsGrant)
+server.register_grant(PasswordGrant)
 server.register_endpoint(RevocationEndpoint)
 
 
