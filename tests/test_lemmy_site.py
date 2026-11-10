@@ -1,6 +1,8 @@
 """Lemmy's site document and login for Jerboa (plan W3; spec 2026-11-10-lemmy-v3-design §2, §3): the site document
 decodes as Lemmy 0.19.11's, carries the person's own `my_user` when they send a token and is then never cached; the
 login is alpha's under Lemmy's names, with its checks and limit; refusals are Lemmy's `{"error": code}`."""
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from flask import abort as flask_abort
 from flask_smorest import abort as smorest_abort
@@ -74,6 +76,14 @@ def test_logging_in_gives_a_token_the_site_document_knows(world):
     assert view['local_user']['blur_nsfw'] and view['local_user']['show_nsfw']
     assert [row['community']['name'] for row in mine['my_user']['follows']] == ['lemmysite']
     assert [row['target']['name'] for row in mine['my_user']['person_blocks']] == ['lemmyother']
+
+
+def test_jerboa_is_never_asked_to_show_its_yearly_donation_dialog(world):
+    """Jerboa's F-Droid build shows Lemmy's donation dialog on every start while the last one shown is over a year ago,
+    and PieFed cannot mark it shown: so it is always just now."""
+    mine = world['client'].get('/api/v3/site', headers={'Authorization': f"Bearer {world['person'].encode_jwt_token()}"})
+    shown = mine.get_json()['my_user']['local_user_view']['local_user']['last_donation_notification']
+    assert datetime.fromisoformat(shown.replace('Z', '+00:00')) > datetime.now(timezone.utc) - timedelta(minutes=5)
 
 
 def test_a_persons_site_document_is_never_served_from_the_cache_nor_cached(world):

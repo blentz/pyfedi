@@ -4,6 +4,8 @@ here". Every function takes alpha's dict for the model and returns Lemmy's; test
 against the models Jerboa decodes."""
 from datetime import datetime
 
+from app.models import utcnow
+
 EPOCH = '1970-01-01T00:00:00.000000Z'
 
 # PieFed's stored sorts and listings, as Lemmy names them: one Lemmy has no such name for takes its nearest
@@ -87,7 +89,8 @@ def local_user(user) -> dict:
             'blur_nsfw': user.hide_nsfw == 2, 'auto_expand': False, 'infinite_scroll_enabled': True,
             'admin': user.is_admin(), 'post_listing_mode': 'List', 'totp_2fa_enabled': False,
             'enable_keyboard_navigation': False, 'enable_animated_images': True, 'collapse_bot_comments': False,
-            'last_donation_notification': EPOCH}
+            # Jerboa asks for Lemmy's donations while this is over a year ago, on every start, as PieFed cannot mark it
+            'last_donation_notification': timestamp(utcnow())}
 
 
 def community_aggregates(alpha: dict) -> dict:
