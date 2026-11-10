@@ -91,28 +91,37 @@ whole list. The shapes below are therefore requirements, and contract tests chec
 - **Comments:** through the shared reply code, with its rate limits, spam checks and federation. `text` is Markdown,
   as PeerTube's is. A comment on a remote video federates to that video's community as any reply does.
 - **History:** PieFed's `read_posts`, limited to video posts, newest read first. Removing history entries deletes
-  read marks (P5).
+  read marks (P5). The official app reports watching with `POST videos/{id}/views` (every few seconds while it
+  plays): a signed-in viewer's marks the post read, at most once in ten minutes; a signed-out one's is taken and
+  counted nowhere, as PieFed counts no views.
 - **Notifications (P3):** PieFed's types are mapped to the nearest PeerTube type, and the rest left out of the list
   and its `total`:
 
   | PieFed type | PeerTube type |
   |---|---|
   | `NOTIF_REPLY`, `NOTIF_POST` (comments) | 2 `NEW_COMMENT_ON_MY_VIDEO`, with its `comment` object |
-  | `NOTIF_MENTION` | 11 `COMMENT_MENTION` |
-  | `NOTIF_USER`, `NOTIF_COMMUNITY`, `NOTIF_TOPIC` (new posts) | 1 `NEW_VIDEO_FROM_SUBSCRIPTION`, video posts only |
+  | `NOTIF_MENTION` in a comment | 11 `COMMENT_MENTION` |
+  | `NOTIF_USER`, `NOTIF_COMMUNITY`, `NOTIF_TOPIC`, `NOTIF_FEED` (new posts) | 1 `NEW_VIDEO_FROM_SUBSCRIPTION` |
   | `NOTIF_FOLLOW` | 10 `NEW_FOLLOW` |
 
-  Reading marks PieFed's own rows read.
+  Types 1, 2 and 11 carry a video, so they are sent only when a video is the subject: a new video post, or a comment
+  on one. The rest go unsent, as a mention in a post does. Who may be told of what is the Mastodon API's rule
+  (`app.mastodon.notifications.shown`). Reading marks PieFed's own rows read.
 - **`users/me`:**
   - `videoChannels` lists the communities the person owns. Upload targets them in W2.3.
-  - `email` is the person's own.
+  - `email` is the person's own, for a token from the PeerTube local client only. Another app's token, such as a
+    Mastodon app's from its own consent screen, gets an empty one (security review 2026-11-09).
   - `lastLoginDate` is their `last_seen`.
-  - `role` is 0 Administrator, 1 Moderator or 2 User, from PieFed's admin and staff roles.
+  - `role` is 0 Administrator for an admin, else 2 User. PieFed's custom roles have no PeerTube equivalent; the app
+    shows admin screens only to PeerTube's moderators and admins.
   - Quotas are -1 (unlimited) until W2.3 sets a real one.
   - Every boolean is the PeerTube default unless PieFed has the same setting: `autoPlayVideo` maps to nothing, so it
     is `true`.
   - `PUT users/me` changes `displayName` and `description` only. Other fields are accepted and ignored, as PeerTube
     ignores unknown ones.
+- **Reads:** every read route takes the app's token when it sends one and reads as that person. Their blocks and
+  filters apply, and a private community they belong to can be opened, though it is never listed as a channel. With
+  no token, a route reads as a signed-out reader, and a private domain refuses with 401.
 - **Errors:** PeerTube's `application/problem+json` shape, `{type, title, detail, status, code}`, on every
   `/api/v1` route this phase adds, and on 401 for a missing or bad token.
 
