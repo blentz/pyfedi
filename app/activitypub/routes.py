@@ -56,6 +56,7 @@ from app.relays import inbound as relay_inbound
 from app.local_only import community_local_only, federated_mentions, federating_clause, \
     refused_outbound, user_local_only
 from app.local_names import actor_handle, local_clause, split_local_name
+from app.lemmy import identity as lemmy_identity
 from app.mastodon import instance as mastodon_instance
 from app.federation_urls import activity_id, domain_site_name, federating_storefront, instance_actor_url, \
     is_federating_url, object_base, owned_elsewhere, owner_base, owner_domain
@@ -353,39 +354,40 @@ def nodeinfo_usage(domain) -> dict:
     }
 
 
+# Jerboa is told Lemmy (lemmy.identity), so each document is cached per agent class and says it varies by agent.
 @bp.route('/nodeinfo/2.0')
 @bp.route('/nodeinfo/2.0.json')
-@cache.cached(timeout=3600, key_prefix=storefront_cache_key)
+@cache.cached(timeout=3600, key_prefix=lemmy_identity.nodeinfo_cache_key)
 def nodeinfo2():
     domain = federating_storefront()
     nodeinfo_data = {
         "version": "2.0",
-        "software": {
+        "software": lemmy_identity.software({
             "name": "piefed",
             "version": current_app.config["VERSION"]
-        },
+        }),
         "protocols": [
             "activitypub"
         ],
         "usage": nodeinfo_usage(domain),
         "openRegistrations": open_registrations(domain, g.site)
     }
-    return jsonify(nodeinfo_data)
+    return lemmy_identity.varying(jsonify(nodeinfo_data))
 
 
 @bp.route('/nodeinfo/2.1')
 @bp.route('/nodeinfo/2.1.json')
-@cache.cached(timeout=3600, key_prefix=storefront_cache_key)
+@cache.cached(timeout=3600, key_prefix=lemmy_identity.nodeinfo_cache_key)
 def nodeinfo21():
     domain = federating_storefront()
     nodeinfo_data = {
         "version": "2.1",
-        "software": {
+        "software": lemmy_identity.software({
             "name": "piefed",
             "version": current_app.config["VERSION"],
             "repository": "https://codeberg.org/rimu/pyfedi",
             "homepage": "https://join.piefed.social"
-        },
+        }),
         "protocols": [
             "activitypub"
         ],
@@ -405,7 +407,7 @@ def nodeinfo21():
             ]
         }
     }
-    return jsonify(nodeinfo_data)
+    return lemmy_identity.varying(jsonify(nodeinfo_data))
 
 
 @bp.route('/api/v1/instance')
