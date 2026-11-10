@@ -30,7 +30,8 @@ Results land in `interop/apps/results/` (gitignored): one JSON per app, `summary
 | Mastodon | Mastodon, Tusky, Moshidon (Android); Phanpy, Elk (web) | protocol probe | |
 | Pixelfed | Pixelfed, PixelDroid, Fedilab (Android) | protocol probe | |
 | PeerTube | NewPipe (Android) | the newest APK on the emulator | add `tube.test` as its PeerTube instance, pick it in the service picker, and play the video tess uploaded there |
-| PeerTube | PeerTube, TubeLab (Android) | protocol probe | |
+| PeerTube | PeerTube (Android) | the newest APK on the emulator | add `tube.test`, log in as tess with her password, open her video from the platform's page, comment on it |
+| PeerTube | TubeLab (Android) | protocol probe | it reads nodeinfo first and logs in only where that says `peertube` (ruling P4: left out) |
 | Castopod | AntennaPod (Android) | the newest APK on the emulator | subscribe to `pod_media`'s feed by RSS address and see its episode |
 | Castopod | Pocket Casts, Podcast Addict | the feed itself | what a player needs from it: an item with an audio enclosure, its length and duration |
 

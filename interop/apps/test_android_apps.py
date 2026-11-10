@@ -14,7 +14,7 @@ import httpx
 import pytest
 
 from interop.apps import apks, steps
-from interop.apps.conftest import ALICE, SEED_TITLE, TUBE, TUBE_TITLE, find_comment, marker, tube_video
+from interop.apps.conftest import ALICE, SEED_TITLE, TESS, TUBE, TUBE_TITLE, find_comment, marker, tube_video
 from interop.apps.matrix import RESULTS, load_matrix
 
 MATRIX = load_matrix()
@@ -350,8 +350,88 @@ class NewPipe:
         raise AssertionError('NewPipe cannot upload: the matrix marks it inapplicable')
 
 
+class PeerTubeApp:
+    """PeerTube's own app (Framasoft, framasoft/peertube/mobile-application; Flutter, so its labels are content
+    descriptions). Its onboarding's "I know where to go" opens the platform list with a login offer to follow; the
+    unlabelled plus ("Add a platform") takes a host, which it checks against /api/v1/config (serverVersion >= 7.2.0,
+    D4); the platform's page offers "Login to <name>" (the password grant, W2.2). It browses tube.test, where tess and
+    her video live: piefed.test is private (R219), and an account belongs to its own domain."""
+
+    def __init__(self, device, package, world):
+        self.device, self.world = device, world
+
+    def _type(self, field, text: str) -> None:
+        """Its fields take no set_text: focus one with a tap and type through the keyboard."""
+        field.click(timeout=30)
+        time.sleep(0.5)
+        self.device.type_focused(text)
+
+    def _add_platform(self):
+        d = self.device
+        d.tap('I know where to go', timeout=90)
+        d.ui(description='Add a platform').click(timeout=60)
+        self._type(d.ui(className='android.widget.EditText', instance=0), TUBE)
+        d.hide_keyboard()
+        d.tap('Connect', exact=True)
+        d.wait_text('Confirm', 'Login to', timeout=60)   # a confirm dialog first, unless told not to show it again
+        if d.showing('Confirm', exact=True):
+            d.tap('Confirm', exact=True)
+
+    def login(self):
+        d = self.device
+        self._add_platform()
+        d.tap('Login to', timeout=60)   # "Login to <the instance's name>", offered once the platform opens
+        d.wait_text('Or e-mail address', timeout=30)   # the login screen: its fields show their helper text alone
+        self._type(d.ui(className='android.widget.EditText', instance=0), TESS[0])
+        self._type(d.ui(className='android.widget.EditText', instance=1), TESS[1])   # Tab does not reach it
+        d.hide_keyboard()
+        d.tap_tab('Login')   # the button, the lowest "Login": the screen's heading says it too
+        forgotten = d.wait_text("I've forgotten my password", timeout=10)
+        assert forgotten.wait_gone(timeout=60), f'the login screen stayed; on screen: {d.screen_text()[:600]}'
+        d.ui(description='Manage accounts').click(timeout=60)   # the account sheet names who is signed in
+        d.wait_text(f'{TESS[0]}@{TUBE}', TESS[0], timeout=30)
+        d.ui.press('back')
+        return f'logged in to {TUBE} as {TESS[0]} with its username and password'
+
+    def view(self):
+        d = self.device
+        tube_video()
+        d.tap_tab('Platforms')   # the platform's page: its videos under "Online videos"
+        # seeded after the page loaded, on a cold stack: pull it down to load again
+        d.tap_until(lambda: d.ui.swipe_ext('down', scale=0.6), TUBE_TITLE, wait=15)
+        d.tap(TUBE_TITLE)   # its item ("Video item, <duration>, <channel>, <title>, ...")
+        d.wait_text('comment', 'Comments', timeout=60)   # the video's page: its comments tab ("0 comment")
+        return f'it lists {TUBE_TITLE!r} on {TUBE} and opens it'
+
+    def post(self):
+        d, text = self.device, marker('peertube-android')
+        video = tube_video()
+        # the comment list loads as it scrolls into view, under the description; its button is "Comment" exactly
+        # (reveal would stop at the "0 comment" tab)
+        for _ in range(6):
+            if d.showing('Comment', exact=True):
+                break
+            d.ui.swipe_ext('up', scale=0.4)
+            time.sleep(1)
+        d.tap('Comment', exact=True, timeout=30)
+        field = d.ui(className='android.widget.EditText', instance=0)
+        self._type(field, text)
+        bounds = field.info['bounds']
+        middle = (bounds['top'] + bounds['bottom']) // 2
+        # the send button has no label: the button right of the field, at its height (Flutter marks it focusable, not
+        # clickable)
+        send = [element.info['bounds'] for element in d.ui(className='android.widget.Button')
+                if element.info['bounds']['left'] >= bounds['right'] - 5
+                and element.info['bounds']['top'] <= middle <= element.info['bounds']['bottom']]
+        assert send, f'no send button right of the comment field; on screen: {d.screen_text()[:600]}'
+        d.ui.click((send[0]['left'] + send[0]['right']) // 2, (send[0]['top'] + send[0]['bottom']) // 2)
+        find_comment(self.world['alice'], video['id'], text, timeout=60)
+        d.wait_text(text, timeout=30)
+        return f"commented {text!r} on {TUBE_TITLE!r} with the PeerTube API; PieFed has it"
+
+
 DRIVERS = {'newpipe-android': NewPipe, 'summit-android': Summit, 'voyager-android': VoyagerAndroid, 'thunder-android': Thunder,
-           'tusky-android': Tusky, 'mastodon-android': MastodonAndroid}
+           'tusky-android': Tusky, 'mastodon-android': MastodonAndroid, 'peertube-android': PeerTubeApp}
 
 
 @pytest.mark.parametrize('name', sorted(DRIVERS), ids=sorted(DRIVERS))

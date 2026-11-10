@@ -23,17 +23,14 @@
     "pixeldroid-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon"},
     "fedilab-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon"},
 
-    "peertube-android": {"platform": "peertube", "surface": "android", "probe": "peertube", "expect": {
-      "login": {"outcome": "unsupported", "reason": "the PeerTube app logs in with /api/v1/oauth-clients/local and /api/v1/users/token, which PieFed lacks"},
-      "view": {"outcome": "unsupported", "reason": "the probe browses piefed.test, which is private (R219): /api/v1/videos (W2.1) answers 401 there with no login, and the app's login is W2.2"},
-      "post": {"outcome": "blocked", "reason": "uploading needs the login the app cannot do"}}},
+    "peertube-android": {"platform": "peertube", "surface": "android", "package": "org.framasoft.peertube", "apk": {"fdroid": "org.framasoft.peertube"}},
     "newpipe-android": {"platform": "peertube", "surface": "android", "package": "org.schabi.newpipe", "apk": {"github": "TeamNewPipe/NewPipe", "asset": "\\.apk$"}, "expect": {
       "login": {"outcome": "inapplicable", "reason": "NewPipe has no accounts: it only browses"},
       "post": {"outcome": "inapplicable", "reason": "NewPipe cannot upload"}}},
-    "tubelab-android": {"platform": "peertube", "surface": "android", "probe": "peertube", "expect": {
-      "login": {"outcome": "unsupported", "reason": "TubeLab logs in through PeerTube's OAuth client and token endpoints, which PieFed lacks"},
-      "view": {"outcome": "unsupported", "reason": "the probe browses piefed.test, which is private (R219): /api/v1/videos (W2.1) answers 401 there with no login, and the app's login is W2.2"},
-      "post": {"outcome": "blocked", "reason": "uploading needs the login the app cannot do"}}},
+    "tubelab-android": {"platform": "peertube", "surface": "android", "probe": "tubelab", "expect": {
+      "login": {"outcome": "unsupported", "reason": "TubeLab reads nodeinfo first and logs in only where it says peertube; PieFed's says piefed (ruling P4: TubeLab is left out)"},
+      "view": {"outcome": "unsupported", "reason": "the probe browses piefed.test, which is private (R219): /api/v1/videos answers 401 there with no login, and TubeLab cannot log in"},
+      "post": {"outcome": "blocked", "reason": "uploading needs the login TubeLab cannot do"}}},
 
     "antennapod-android": {"platform": "castopod", "surface": "android", "package": "de.danoeh.antennapod", "apk": {"fdroid": "de.danoeh.antennapod"}, "expect": {
       "login": {"outcome": "inapplicable", "reason": "podcast players subscribe to a public feed; there is no account"},

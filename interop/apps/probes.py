@@ -11,6 +11,8 @@ The calls, from each app's source (interop/apps/README.md lists the versions rea
   /api/v1/timelines/public.
 - peertube (the PeerTube app, Fedilab/TubeLab): GET /api/v1/oauth-clients/local, then POST /api/v1/users/token
   (password grant); browsing is GET /api/v1/videos.
+- tubelab (TubeLab): GET /.well-known/nodeinfo and the document its last link names, before the PeerTube calls; it
+  logs in only where that says `peertube`, or where nodeinfo fails (LoginActivity.java:283-351, ruling P4).
 - lemmy-v3 (Jerboa, and Thunder on a Lemmy-only build): POST /api/v3/user/login; browsing is GET /api/v3/post/list.
 """
 import httpx
@@ -66,6 +68,30 @@ def peertube(http: httpx.Client) -> Probe:
     return {'login': login, 'view': view, 'post': _after(login, 'POST /api/v1/videos/upload')}
 
 
+def _software(http: httpx.Client) -> str | None:
+    """The software nodeinfo's last link names, as TubeLab reads it; None where nodeinfo answers nothing usable, which
+    TubeLab takes for PeerTube."""
+    index = http.get('/.well-known/nodeinfo')
+    body = _json(index) if index.status_code == 200 else None
+    links = body.get('links') if isinstance(body, dict) else None
+    if not isinstance(links, list) or not links or not isinstance(links[-1], dict):
+        return None
+    document = http.get(httpx.URL(str(links[-1].get('href', ''))).path)
+    body = _json(document) if document.status_code == 200 else None
+    software = body.get('software') if isinstance(body, dict) else None
+    return software.get('name') if isinstance(software, dict) else None
+
+
+def tubelab(http: httpx.Client) -> Probe:
+    found = peertube(http)
+    name = _software(http)
+    if found['login'][0] == 'passed' and name not in (None, 'peertube'):
+        login = ('unsupported', f"nodeinfo's software is {name}: TubeLab logs in only where it reads peertube "
+                                '(LoginActivity.java:338-351, ruling P4)')
+        return {**found, 'login': login, 'post': _after(login, 'POST /api/v1/videos/upload')}
+    return found
+
+
 def lemmy_v3(http: httpx.Client, username: str, password: str) -> Probe:
     response = http.post('/api/v3/user/login', json={'username_or_email': username, 'password': password})
     body = _json(response)
@@ -89,7 +115,7 @@ def _after(login: tuple[str, str], call: str) -> tuple[str, str]:
     return ('passed', f'login works: drive the app to check {call}')
 
 
-PROBES = {'mastodon': mastodon, 'peertube': peertube, 'lemmy-v3': lemmy_v3}
+PROBES = {'mastodon': mastodon, 'peertube': peertube, 'tubelab': tubelab, 'lemmy-v3': lemmy_v3}
 
 
 def run(family: str, http: httpx.Client, username: str = '', password: str = '') -> Probe:

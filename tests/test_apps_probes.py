@@ -56,6 +56,34 @@ def test_peertube_video_list_must_have_data():
     assert result['view'][0] == 'unsupported'
 
 
+PEERTUBE_API = {('GET', '/api/v1/oauth-clients/local'): (200, {'client_id': 'c'}),
+                ('GET', '/api/v1/videos'): (200, {'data': []})}
+
+
+def _nodeinfo(name):
+    """A nodeinfo index whose last link names a document saying `name`, as TubeLab reads it."""
+    return {('GET', '/.well-known/nodeinfo'): (200, {'links': [
+                {'rel': 'http://nodeinfo.diaspora.software/ns/schema/2.0', 'href': 'https://piefed.test/nodeinfo/2.0'},
+                {'rel': 'http://nodeinfo.diaspora.software/ns/schema/2.1', 'href': 'https://piefed.test/nodeinfo/2.1'}]}),
+            ('GET', '/nodeinfo/2.1'): (200, {'software': {'name': name}})}
+
+
+def test_tubelab_logs_in_nowhere_nodeinfo_calls_other_than_peertube():
+    """TubeLab reads nodeinfo's last link first and logs in only where it says peertube (ruling P4): a piefed
+    nodeinfo stops its login with no error, whatever PeerTube API the server has."""
+    result = probes.run('tubelab', _client({**PEERTUBE_API, **_nodeinfo('piefed')}))
+    assert result['login'] == ('unsupported', "nodeinfo's software is piefed: TubeLab logs in only where it reads "
+                                               'peertube (LoginActivity.java:338-351, ruling P4)')
+    assert result['view'][0] == 'passed' and result['post'][0] == 'blocked'
+
+
+@pytest.mark.parametrize('answers', [_nodeinfo('peertube'), {}, {('GET', '/.well-known/nodeinfo'): (200, {})}],
+                         ids=['peertube', 'no-nodeinfo', 'no-links'])
+def test_tubelab_logs_in_where_nodeinfo_says_peertube_or_says_nothing(answers):
+    result = probes.run('tubelab', _client({**PEERTUBE_API, **answers}))
+    assert [outcome for outcome, _ in result.values()] == ['passed', 'passed', 'passed']
+
+
 def test_lemmy_v3_without_the_api():
     result = probes.run('lemmy-v3', _client({}), 'alice', 'pw')
     assert result == {
@@ -84,8 +112,9 @@ def client(app, site):
 @pytest.mark.parametrize('family, expected', [
     ('mastodon', {'login': 'passed', 'view': 'passed', 'post': 'passed'}),   # registration (W1.1), timelines (W1.2)
     ('peertube', {'login': 'passed', 'view': 'passed', 'post': 'passed'}),   # videos (W2.1a), login (W2.2a)
+    ('tubelab', {'login': 'unsupported', 'view': 'passed', 'post': 'blocked'}),   # nodeinfo says piefed (P4)
     ('lemmy-v3', {'login': 'unsupported', 'view': 'unsupported', 'post': 'blocked'}),
-], ids=['mastodon', 'peertube', 'lemmy-v3'])
+], ids=['mastodon', 'peertube', 'tubelab', 'lemmy-v3'])
 def test_this_tree_serves_what_the_probes_expect(client, family, expected):
     """What the live harness records, checked against the app itself: a probe of this tree's routes. A failure here
     means PieFed gained one of these APIs; update interop/apps/matrix.json with it."""
