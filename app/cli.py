@@ -56,6 +56,7 @@ from app.media_cap import evict_old_post_media, remove_post_orphans, remove_user
 from app.shared.tasks.maintenance import add_remote_communities, remove_old_bot_content, pwn_bots
 from app.shared.post import feature_published_post, make_post
 from app.shared.tasks.media import requeue_stuck_media
+from app.shared import video_uploads
 from app.relays.expiry import expire_relayed_posts
 from app.utils import retrieve_block_list, blocked_domains, retrieve_peertube_block_list, canonical_host, \
     shorten_string, get_request, blocked_communities, gibberish, user_name_is_taken, \
@@ -1617,10 +1618,12 @@ def register(app):
     @app.cli.command("expire_old_media")
     def expire_old_media():
         """ Hourly: relayed posts past their retention, then local copies of remote images past the media cap. Each has
-        a time budget, and relayed posts arrive faster than one budget a day can expire them """
+        a time budget, and relayed posts arrive faster than one budget a day can expire them. Then video uploads no post
+        came of """
         with app.app_context():
             expire_relayed_posts()
             evict_old_post_media()
+            video_uploads.sweep()   # uploads no post came of, a day past their last part (W2.3 ruling U2)
             log_cron_task_to_db("expire_old_media")
 
     @app.cli.command("evict_onion_media")

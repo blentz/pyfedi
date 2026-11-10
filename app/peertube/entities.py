@@ -86,22 +86,30 @@ def is_video(post: Post | None) -> bool:
             and readable(post, viewer_id()))
 
 
+# A local-only post is PeerTube's Internal: this server's signed-in users see it (W2.3 ruling U1)
+PRIVACY_PUBLIC, PRIVACY_INTERNAL = {'id': 1, 'label': 'Public'}, {'id': 4, 'label': 'Internal'}
+
+
 def video_uuid(post: Post) -> str:
     """A UUID holding the post id, so finding a video by it needs no column (spec §3)."""
     return f'00000000-0000-4000-8000-{post.id:012x}'
 
 
-def find_video(key: str) -> Post | None:
-    """The video `key` (an id or a video_uuid) names, if it is one this request's reader may play here."""
+def post_id_of(key: str) -> int | None:
+    """The post id a video `key` (an id or a video_uuid) holds, or None."""
     if key.isdigit() and len(key) <= 10:
         post_id = int(key)
     elif match := _UUID.fullmatch(key):
         post_id = int(match[1], 16)
     else:
         return None
-    if not 0 < post_id <= _PG_INT_MAX:
-        return None
-    post = db.session.get(Post, post_id)
+    return post_id if 0 < post_id <= _PG_INT_MAX else None
+
+
+def find_video(key: str) -> Post | None:
+    """The video `key` (an id or a video_uuid) names, if it is one this request's reader may play here."""
+    post_id = post_id_of(key)
+    post = db.session.get(Post, post_id) if post_id is not None else None
     return post if is_video(post) else None
 
 
@@ -276,7 +284,7 @@ def video(post: Post, whole: bool = False) -> dict:
         'publishedAt': timestamp(post.posted_at), 'originallyPublishedAt': None,
         'createdAt': timestamp(post.posted_at), 'updatedAt': timestamp(post.edited_at or post.posted_at),
         'category': UNKNOWN, 'licence': UNKNOWN, 'language': _language(post),
-        'privacy': {'id': 1, 'label': 'Public'}, 'url': _absolute(post.public_url()),
+        'privacy': PRIVACY_INTERNAL if post.local_only else PRIVACY_PUBLIC, 'url': _absolute(post.public_url()),
         'embedPath': f'/videos/embed/{video_uuid(post)}',
         'account': account(post.author), 'channel': _channel_summary(post.community),
         **_images(post),

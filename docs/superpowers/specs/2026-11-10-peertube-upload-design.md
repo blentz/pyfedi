@@ -52,13 +52,15 @@ Before it offers an upload the app reads `users/me` (its `videoChannels` and `vi
   post; an upload's is in a namespace of its own, `...-9000-<upload id>`), and the post is made when the details
   come, through `make_post` as the web's form makes one: one code path for the post, its media record, its
   federation and its probe. An upload whose start already carried the details (`privacy`, as PeerTube's API also
-  takes there) is made at its last byte. A finished upload no details came for within 10 minutes is made with
-  PeerTube's own default, public, by the maintenance task. The upload's uuid names its post from then on, for the
-  app's later calls.
+  takes there) is made at its last byte. A finished upload no details come for is removed with the unfinished ones,
+  a day after its last part (U2): making its post there would need a request the maintenance has not got. The
+  upload's uuid names its post from then on, for the app's later calls.
 - **Details:** `PUT /videos/<uuid>` makes the post (above), or edits it through `edit_post`: `name` its title,
   `description` its body, `nsfw`, `tags` its tags; `privacy` is taken when the post is made, per U1, and refused as a
-  change afterwards, as PieFed's visibility is. `category`, `licence`, `language`, `commentsPolicy`, `downloadEnabled` and
-  `support` are not kept: PieFed has no such thing. The thumbnail becomes the post's image. Only the author may.
+  change afterwards, as PieFed's visibility is. The author finds their own video while it is still processing. `category`, `licence`, `language`, `commentsPolicy`, `downloadEnabled` and
+  `support` are not kept: PieFed has no such thing. A thumbnail is taken and not kept: PieFed makes a video's own from its frames. Only the
+  author may. The upload form's lists (`/videos/privacies`, `categories`, `licences`, `languages`) offer Public and
+  Internal, and no category, licence or language, since none is kept.
 - **Deleting:** `DELETE /videos/<uuid>` deletes the post as its author would on the web (`delete_post`).
 - **Errors:** PeerTube's problem+json with a `code`, as W2.2's (`app.peertube.auth.problem`).
 

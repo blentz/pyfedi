@@ -6819,6 +6819,33 @@ class PushSubscription(db.Model):
     created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
 
 
+class VideoUpload(db.Model):
+    """A video uploaded in parts through PeerTube's resumable upload (W2.3, spec 2026-11-10-peertube-upload-design §3):
+    who sends it, to which community, its declared size and type, the bytes held so far in `path` (a file named by 160
+    random bits, never shown), and its post once made. The post is made when the details come (`details`, or those the
+    start carried), so its visibility is fixed when it is made. Kept 24 hours past its last part while unfinished
+    (ruling U2)."""
+    __tablename__ = 'video_upload'
+    id = db.Column(db.Integer, primary_key=True)
+    upload_id = db.Column(db.String(64), unique=True, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False, index=True)
+    community_id = db.Column(db.Integer, db.ForeignKey('community.id', ondelete='CASCADE'), nullable=False)
+    filename = db.Column(db.String(256), nullable=False)
+    name = db.Column(db.String(256), nullable=False)
+    content_type = db.Column(db.String(128), nullable=False)
+    size = db.Column(db.BigInteger, nullable=False)
+    received = db.Column(db.BigInteger, nullable=False, default=0, server_default='0')
+    path = db.Column(db.String(512), nullable=False)
+    details = db.Column(db.JSON)   # what the start carried beyond the file, to make the post with at its last byte
+    finished_at = db.Column(db.DateTime)
+    post_id = db.Column(db.Integer, db.ForeignKey('post.id', ondelete='SET NULL'), index=True)
+    created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+
+    user = db.relationship('User', foreign_keys=[user_id])
+    community = db.relationship('Community', foreign_keys=[community_id])
+
+
 class OAuthCode(db.Model):
     """An authorization code, single use and short lived; kept as a SHA-256 digest."""
     __tablename__ = 'oauth_code'

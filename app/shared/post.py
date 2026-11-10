@@ -354,7 +354,8 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None, album=
     post = Post(user_id=user.id, community_id=community.id, instance_id=user.instance_id,
                 from_bot=user.bot or user.bot_override, from_reposter=user.reposter or user.reposter_override,
                 posted_at=utcnow(), ap_id=gibberish(), title=title, language_id=language_id, visibility=visibility,
-                local_only=content_local_only(user, community))
+                # an API caller may also ask for it (PeerTube's Internal, W2.3 ruling U1): a post only more private
+                local_only=content_local_only(user, community) or (src == SRC_API and input.get('local_only') is True))
     if user.ban_posts:
         post.status = POST_STATUS_REVIEWING
     if media_upload:   # A13.1: committed below, before the file is copied: never listed, not even for that while
