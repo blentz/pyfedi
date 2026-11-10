@@ -83,13 +83,6 @@ def _listed(unread_only: bool) -> list[dict]:
     return listed
 
 
-def _count() -> tuple[int, int]:
-    """start and count, where a count of 0 asks for the total alone (the unread badge)."""
-    if request.args.get('count', '') == '0':
-        return entities.whole('start', 0), 0
-    return entities.window()
-
-
 def _types() -> set[int] | None:
     """typeOneOf, repeated, bracketed or joined by commas; None for every type."""
     named = request.args.getlist('typeOneOf') + request.args.getlist('typeOneOf[]')
@@ -101,7 +94,7 @@ def _types() -> set[int] | None:
 @bp.route('/api/v1/users/me/notifications')
 @signed_in()
 def list_notifications():
-    start, count = _count()
+    start, count = entities.window()   # a count of 0: the unread badge's total alone
     listed = _listed(request.args.get('unread', '').lower() == 'true')
     if (types := _types()) is not None:
         listed = [item for item in listed if item['type'] in types]

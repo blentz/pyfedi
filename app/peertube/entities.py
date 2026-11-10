@@ -117,9 +117,9 @@ def whole(name: str, default: int) -> int:
 
 
 def window() -> tuple[int, int]:
-    """PeerTube's start and count: start from 0, count 1 to 100."""
+    """PeerTube's start and count: start from 0, count 0 (the total alone) to 100."""
     start, count = whole('start', 0), whole('count', DEFAULT_COUNT)
-    if not 0 < count <= MAX_COUNT:
+    if count > MAX_COUNT:
         raise BadRequest('count')
     return start, count
 

@@ -96,7 +96,7 @@ def test_the_total_counts_every_video_and_start_and_count_page(world):
     assert [item['id'] for item in second['data']] == [made[2].id, made[1].id]
 
 
-@pytest.mark.parametrize('start, count_', [('-1', '2'), ('x', '2'), ('0', '0'), ('0', 'x'), ('0', '101')])
+@pytest.mark.parametrize('start, count_', [('-1', '2'), ('x', '2'), ('0', 'x'), ('0', '101')])
 def test_a_bad_page_is_a_400(world, start, count_):
     assert _get(world, '/api/v1/videos', start=start, count=count_).status_code == 400
 
@@ -461,3 +461,12 @@ def test_the_servers_this_one_follows_are_none(world):
     """PeerTube's app lists them on a platform's page; PieFed follows no servers as PeerTube does."""
     response = _get(world, '/api/v1/server/following', state='accepted', count=5, start=0)
     assert response.status_code == 200 and response.get_json() == {'total': 0, 'data': []}
+
+
+def test_a_count_of_zero_is_the_total_alone(world):
+    """PeerTube takes count=0, and its app asks comment threads for their total so (comment-threads/?count=0)."""
+    upload = _upload(world)
+    make_post_reply(upload, world['author'])
+    assert _get(world, '/api/v1/videos', count=0).get_json()['data'] == []
+    threads = _get(world, f'/api/v1/videos/{upload.id}/comment-threads/', count=0).get_json()
+    assert threads['total'] == 1 and threads['data'] == []
