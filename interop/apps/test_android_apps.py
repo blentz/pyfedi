@@ -120,6 +120,14 @@ class VoyagerAndroid:
         editor.wait(timeout=30)
         editor.click()
         d.ui.send_keys(text)
+        # a cold run's send_keys left the editor empty (the WebView's editor not yet taking input), and Post sends
+        # nothing then: type again through the keyboard until the text shows
+        for _ in range(3):
+            if d.ui(textContains=text).wait(timeout=5):
+                break
+            editor.click()
+            d.type_focused(text)
+        d.wait_text(text, timeout=10)
         d.tap('Post')
         find_comment(self.world['alice'], self.world['seed']['id'], text, timeout=60)
         d.wait_text(text, timeout=30)
