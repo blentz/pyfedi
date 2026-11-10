@@ -470,3 +470,11 @@ def test_a_count_of_zero_is_the_total_alone(world):
     assert _get(world, '/api/v1/videos', count=0).get_json()['data'] == []
     threads = _get(world, f'/api/v1/videos/{upload.id}/comment-threads/', count=0).get_json()
     assert threads['total'] == 1 and threads['data'] == []
+
+
+@pytest.mark.parametrize('locale', ['en', 'fr', 'pt-BR'])
+def test_server_translations_are_an_empty_map(world, locale):
+    """PeerTube's app reads its server's translations of category, licence and privacy labels, and waits for them
+    before showing a video; PieFed's labels are English and need none."""
+    response = _get(world, f'/client/locales/{locale}/server.json')
+    assert response.status_code == 200 and response.get_json() == {}

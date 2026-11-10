@@ -130,6 +130,7 @@ NON_OBJECT_ARGUMENTS = {
     'thread_id': ('/api/v1/videos/',),
     'handle': ('/api/v1/accounts/', '/api/v1/video-channels/', '/api/v1/users/me/subscriptions/'),
     'playlist_id': ('/api/v1/video-playlists/',),
+    'locale': ('/client/locales/',),   # a language code: PeerTube's server translations name no row
     # the reader's own rows, which show a hidden target as text with a note (app/local_names.py)
     'notification_id': None, 'report_id': None,
     # an activity: the result of one sent here, for its sender, and this storefront's own logged outbound ones, which
