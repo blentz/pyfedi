@@ -2,14 +2,16 @@
 users/me. Every field the official app requires is there; each setting PieFed has not got is PeerTube's default,
 the welcome and setup prompts answered as already seen."""
 from flask import g, jsonify, request
-from sqlalchemy import desc
+from sqlalchemy import and_, desc, or_
 
 from app import db
+from app.constants import COMMUNITY_KIND_VIDEO_CHANNEL
 from app.models import Community, CommunityMember, User
 from app.oauth_server import tokens
 from app.peertube import bp, entities
 from app.peertube.auth import problem, signed_in
 from app.peertube.videos import UNLIMITED, listable_communities
+from app.shared.media import can_upload_media
 from app.user.profile_text import set_profile_text
 
 MAX_DISPLAY_NAME, MAX_DESCRIPTION = 120, 5000
@@ -24,11 +26,15 @@ NOTIFICATION_SETTINGS = ('newVideoFromSubscription', 'newCommentOnMyVideo', 'abu
 
 
 def owned_channels(user: User) -> list[Community]:
-    """The communities `user` owns, which are the channels they can publish to in PeerTube's terms."""
-    owned = db.session.query(Community).join(CommunityMember, CommunityMember.community_id == Community.id).filter(
-        CommunityMember.user_id == user.id, CommunityMember.is_owner == True, CommunityMember.is_banned == False) \
+    """The person's channels in PeerTube's terms: the communities they own, and the video communities they may upload
+    to as a moderator (app.shared.media.can_upload_media, W2.3), so the app offers each one an upload goes to."""
+    mine = db.session.query(Community).join(CommunityMember, CommunityMember.community_id == Community.id).filter(
+        CommunityMember.user_id == user.id, CommunityMember.is_banned == False,
+        or_(CommunityMember.is_owner == True,
+            and_(CommunityMember.is_moderator == True, Community.kind == COMMUNITY_KIND_VIDEO_CHANNEL))) \
         .order_by(desc(Community.total_subscriptions_count), Community.id).limit(1000)
-    return listable_communities(owned)
+    return [community for community in listable_communities(mine)
+            if community.is_owner(user) or can_upload_media(user, community)]
 
 
 def _role(user: User) -> dict:
