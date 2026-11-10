@@ -88,3 +88,91 @@ def local_user(user) -> dict:
             'admin': user.is_admin(), 'post_listing_mode': 'List', 'totp_2fa_enabled': False,
             'enable_keyboard_navigation': False, 'enable_animated_images': True, 'collapse_bot_comments': False,
             'last_donation_notification': EPOCH}
+
+
+def community_aggregates(alpha: dict) -> dict:
+    """CommunityAggregates, from alpha's counts (views.community_view variant 2): `subscribers` is everyone's,
+    `subscribers_local` this server's."""
+    return {'community_id': alpha['id'], 'subscribers': alpha.get('total_subscriptions_count') or 0,
+            'posts': alpha.get('post_count') or 0, 'comments': alpha.get('post_reply_count') or 0,
+            'published': alpha['published'], 'users_active_day': alpha.get('active_daily') or 0,
+            'users_active_week': alpha.get('active_weekly') or 0, 'users_active_month': alpha.get('active_monthly') or 0,
+            'users_active_half_year': alpha.get('active_6monthly') or 0,
+            'subscribers_local': alpha.get('subscriptions_count') or 0}
+
+
+def community_view(alpha: dict) -> dict:
+    """CommunityView, from alpha's (variant 2). A ban from the community is not shown on its view in alpha either."""
+    return {'community': community(alpha['community']), 'subscribed': alpha['subscribed'],
+            'blocked': bool(alpha['blocked']), 'counts': community_aggregates(alpha['counts']),
+            'banned_from_community': False}
+
+
+def moderator_view(alpha: dict) -> dict:
+    return {'community': community(alpha['community']), 'moderator': person(alpha['moderator'])}
+
+
+def _poll(poll: dict, link: str) -> str:
+    """A poll as Jerboa can show it (ruling L3): its choices and their votes, and where to vote."""
+    choices = '\n'.join(f"- {choice['choice_text']} ({choice['num_votes']})" for choice in poll.get('choices', []))
+    return f'{choices}\n\n[Vote on the web]({link})'
+
+
+def _event(event: dict) -> str:
+    """When and where an event is, as the first lines of its body (ruling L3)."""
+    when = event['start'] + (f" – {event['end']}" if event.get('end') else '') + f" ({event['timezone']})"
+    lines = [f'**When:** {when}']
+    place = event.get('location') or {}
+    where = ', '.join(part for part in (place.get('address'), place.get('city'), place.get('country')) if part)
+    if where or event.get('online_link'):
+        lines.append(f"**Where:** {where or event['online_link']}")
+    return '\n\n'.join(lines)
+
+
+def _gallery(images: list[dict]) -> str:
+    return '\n\n'.join(f"![{image.get('alt_text') or ''}]({image['url']})" for image in images)
+
+
+def post(alpha: dict) -> dict:
+    """Post, from alpha's (views.post_view variant 1). Lemmy has links, images and text only; a poll, a gallery or an
+    event is shown as the nearest of them, with the rest in its body (ruling L3)."""
+    body, url = alpha.get('body'), alpha.get('url')
+    gallery = alpha.get('extensions', {}).get('gallery', [])
+    if alpha.get('post_type') == 'Gallery' and gallery:
+        url, body = gallery[0]['url'], '\n\n'.join(part for part in (body, _gallery(gallery[1:])) if part)
+    if alpha.get('event'):
+        body = '\n\n'.join(part for part in (_event(alpha['event']), body) if part)
+    if alpha.get('poll'):
+        body = '\n\n'.join(part for part in (body, _poll(alpha['poll'], alpha['ap_id'])) if part)
+    return {'id': alpha['id'], 'name': alpha['title'], 'url': url, 'body': body or None,
+            'creator_id': alpha['user_id'], 'community_id': alpha['community_id'], 'removed': bool(alpha['removed']),
+            'locked': bool(alpha['locked']), 'published': alpha['published'], 'updated': alpha.get('updated'),
+            'deleted': bool(alpha['deleted']), 'nsfw': bool(alpha['nsfw']), 'thumbnail_url': alpha.get('thumbnail_url'),
+            'ap_id': alpha['ap_id'], 'local': bool(alpha['local']), 'language_id': alpha.get('language_id') or 0,
+            'featured_community': bool(alpha['sticky']), 'featured_local': bool(alpha['instance_sticky']),
+            'alt_text': alpha.get('alt_text')}
+
+
+def post_aggregates(alpha: dict) -> dict:
+    return {'post_id': alpha['post_id'], 'comments': alpha['comments'] or 0, 'score': alpha['score'] or 0,
+            'upvotes': alpha['upvotes'] or 0, 'downvotes': alpha['downvotes'] or 0, 'published': alpha['published'],
+            'newest_comment_time': alpha.get('newest_comment_time') or alpha['published']}
+
+
+def post_view(alpha: dict) -> dict:
+    """PostView, from alpha's (variant 2). A blocked author's posts are not listed, so `creator_blocked` is false."""
+    return {'post': post(alpha['post']), 'creator': person(alpha['creator']), 'community': community(alpha['community']),
+            'creator_banned_from_community': bool(alpha['creator_banned_from_community']),
+            'banned_from_community': bool(alpha['banned_from_community']),
+            'creator_is_moderator': bool(alpha['creator_is_moderator']),
+            'creator_is_admin': bool(alpha['creator_is_admin']), 'counts': post_aggregates(alpha['counts']),
+            'subscribed': alpha['subscribed'], 'saved': bool(alpha['saved']), 'read': bool(alpha['read']),
+            'hidden': bool(alpha['hidden']), 'creator_blocked': False, 'my_vote': alpha.get('my_vote') or 0,
+            'unread_comments': alpha.get('unread_comments') or 0}
+
+
+def get_post_response(alpha: dict) -> dict:
+    """GetPostResponse, from alpha's (views.post_view variant 3)."""
+    return {'post_view': post_view(alpha['post_view']), 'community_view': community_view(alpha['community_view']),
+            'moderators': [moderator_view(row) for row in alpha['moderators']],
+            'cross_posts': [post_view(row) for row in alpha['cross_posts']]}
