@@ -11,7 +11,7 @@ from authlib.oauth2.rfc7636 import CodeChallenge
 from flask import request as flask_request
 from werkzeug.datastructures import MultiDict
 
-from app import db
+from app import db, limiter
 from app.models import OAuthApp, User
 from app.oauth_scopes import covers
 from app.oauth_server import admin_scopes, tokens
@@ -107,10 +107,17 @@ class RefreshTokenGrant(grants.RefreshTokenGrant):
         pass   # claimed in create_token_response, before the new pair
 
 
+PASSWORD_LIMIT = '20/hour'   # the API's password login's (app.api.alpha.routes.post_alpha_user_login)
+
+
 class PasswordGrant(grants.ResourceOwnerPasswordCredentialsGrant):
     """PeerTube's login: a username and password for a token, from this domain's PeerTube local client only (spec
     2026-11-09-peertube-login-design §3, ruling P1), with every check of the API's password login. Any refusal is
-    invalid_grant, so it never tells which names have accounts."""
+    invalid_grant, so it never tells which names have accounts.
+
+    The guess limit is the grant's own, one bucket per address whichever endpoint and whichever form of request (form,
+    JSON, query) reached it: a limit on a route, deciding from one form, could be walked round (security review
+    2026-11-09). Going over it aborts 429."""
     TOKEN_ENDPOINT_AUTH_METHODS = ['client_secret_basic', 'client_secret_post']
 
     def validate_token_request(self):
@@ -127,6 +134,10 @@ class PasswordGrant(grants.ResourceOwnerPasswordCredentialsGrant):
         self.validate_requested_scope()
 
     def authenticate_user(self, username, password):
+        with limiter.limit(PASSWORD_LIMIT, scope='oauth-password-grant'):
+            return self._checked_user(username, password)
+
+    def _checked_user(self, username, password):
         try:
             user = log_in_with_password(username, password)
         except Exception as refusal:   # the one exception the login raises for every refusal; an abort passes through

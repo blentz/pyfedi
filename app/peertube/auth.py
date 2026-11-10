@@ -3,16 +3,14 @@ any app that asks; a username and password for a token from that client alone, o
 logout that revokes a token. Tokens never expire (P2) and are this domain's only, as every OAuth token is.
 
 Errors are PeerTube's problem+json, whose `code` the official app reads to tell bad credentials from the rest."""
-from flask import g, jsonify, make_response, request
+from flask import g, jsonify, make_response
 from werkzeug.exceptions import HTTPException
 
-from app import limiter
 from app.oauth_server import tokens
 from app.oauth_server.protect import require_oauth
 from app.oauth_server.server import server
 from app.peertube import bp
 
-PASSWORD_LIMIT = '20/hour'   # the API's password login's (app.api.alpha.routes.post_alpha_user_login)
 ERRORS = 'https://docs.joinpeertube.org/api-rest-reference.html#section/Errors/'
 
 
@@ -42,12 +40,10 @@ def _as_peertube(response):
 
 @bp.route('/api/v1/users/token', methods=['POST'])
 def issue_token():
-    if request.form.get('grant_type') != 'password':
-        return _as_peertube(server.create_token_response())
+    """Every grant, the password grant counting its guesses itself (app.oauth_server.server.PasswordGrant)."""
     try:
-        with limiter.limit(PASSWORD_LIMIT):
-            return _as_peertube(server.create_token_response())
-    except HTTPException as refusal:   # the limit, or the onion login gate's wait
+        return _as_peertube(server.create_token_response())
+    except HTTPException as refusal:   # the password limit, or the onion login gate's wait
         if refusal.code != 429:
             raise
         return problem(429, 'too_many_requests', 'Too many login attempts, try again later')

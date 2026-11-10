@@ -186,3 +186,30 @@ def test_password_guesses_are_limited_as_the_api_login_is(limited_app, api_basel
             limiter.enabled = False
     assert codes[:20] == [400] * 20 and codes[20] == 429
     _refused(last, 'too_many_requests', 429)
+
+
+@pytest.mark.parametrize('how', ['json-body', 'query-string', 'oauth-token-endpoint'])
+def test_no_form_of_the_request_and_no_other_endpoint_escapes_the_limit(limited_app, api_baseline, how):
+    """The limit is the password grant's own: Authlib also reads a JSON body or the query, and /oauth/token reaches
+    the same grant, so a limit put on one route for one form could be walked round (security review 2026-11-09)."""
+    with limited_app.app_context():
+        person = make_user(None, f'ptlimit{how.replace("-", "")}', local=True)
+        person.set_password(PASSWORD)
+        db.session.commit()
+        client = limited_app.test_client()
+        local = _local(client)
+        fields = {'client_id': local['client_id'], 'client_secret': local['client_secret'], 'grant_type': 'password',
+                  'username': person.user_name, 'password': 'wrong'}
+        limiter.reset()
+        limiter.enabled = True
+        try:
+            if how == 'json-body':
+                codes = [client.post('/api/v1/users/token', json=fields).status_code for _ in range(21)]
+            elif how == 'query-string':
+                codes = [client.post('/api/v1/users/token', query_string=fields).status_code for _ in range(21)]
+            else:
+                codes = [client.post('/oauth/token', data=fields).status_code for _ in range(21)]
+        finally:
+            limiter.reset()
+            limiter.enabled = False
+    assert 429 in codes[:21] and codes.index(429) == 20, codes
