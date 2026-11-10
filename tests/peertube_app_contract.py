@@ -4,7 +4,7 @@ element fails a whole list, so each shape here is a contract an answer must meet
 
 Read from framasoft/peertube/mobile-application v2.3.0 (commit 9bd3a4d, 2026-11-04): ConfigServer in
 lib/shared/config/config_models.dart, the token in lib/shared/auth/token_api_model.dart, User in
-lib/features/user/user_model.dart, Video in lib/features/video/video_model.dart, and the account, channel and image
+lib/features/user/user_model.dart, PlatformAPI (/config/about), Video in lib/features/video/video_model.dart, and the account, channel and image
 models they hold.
 
 A shape is a type (str, int, bool), a dict of shapes, or a one-element list holding the shape of every element."""
@@ -52,6 +52,10 @@ VIDEO = {'id': int, 'uuid': str, 'shortUUID': str, 'name': str, 'category': CONS
          'language': CONSTANT, 'privacy': {'id': int, 'label': str}, 'nsfw': bool, 'duration': int, 'views': int,
          'likes': int, 'dislikes': int, 'createdAt': str, 'updatedAt': str, 'publishedAt': str, 'isLive': bool,
          'account': ACTOR, 'channel': ACTOR, 'url': str}
+VIDEO_FILE = {'id': int, 'resolution': CONSTANT, 'size': int, 'torrentUrl': str, 'torrentDownloadUrl': str,
+              'fileUrl': str, 'fileDownloadUrl': str, 'fps': int}
+VIDEO_DETAILS = {**VIDEO, 'isLocal': bool, 'account': ACCOUNT, 'channel': CHANNEL, 'blacklisted': bool,
+                 'files': [VIDEO_FILE], 'streamingPlaylists': [{'id': int}]}   # a video's own page
 USER = {'account': ACCOUNT, 'autoPlayNextVideo': bool, 'autoPlayNextVideoPlaylist': bool, 'autoPlayVideo': bool,
         'blocked': bool, 'createdAt': str, 'email': str, 'id': int, 'lastLoginDate': str,
         'noInstanceConfigWarningModal': bool, 'noAccountSetupWarningModal': bool, 'noWelcomeModal': bool,
@@ -72,6 +76,11 @@ NOTIFICATION_OBJECTS = {   # what each type the API sends carries (lib/features/
 }
 NOTIFICATION_TYPES = range(1, 23)   # UserNotificationType: one outside these fails the whole list
 PRIVACIES = range(1, 6)   # VideoPrivacy: one outside these fails the decode
+
+ABOUT = {'instance': {**{name: str for name in (
+    'name', 'shortDescription', 'description', 'terms', 'codeOfConduct', 'hardwareInformation', 'creationReason',
+    'moderationInformation', 'administrator', 'maintenanceLifetime', 'businessModel')},
+    'languages': [str], 'categories': [int], 'banners': [IMAGE], 'avatars': [IMAGE]}}   # PlatformAPI
 
 TOKEN = {'access_token': str, 'refresh_token': str, 'token_type': str}
 

@@ -12,6 +12,7 @@ from app.peertube.entities import BadRequest, error, find_video, not_found, page
 from app.reads.posts import KEYSET_PAGES, Listing, post_listing
 from app.reads.replies import WHOLE_THREAD, reply_tree, thread_replies
 from app.reads.viewer import Restrictions
+from app.branding import own_value
 from app.federation_urls import domain_site_name
 from app.local_only import hidden_here
 from app.mastodon.entities import timestamp
@@ -90,6 +91,24 @@ def config():
     })
 
 
+def _own(domain, field: str) -> str:
+    """`domain`'s own text, or the Site row's on the default domain alone, as the Mastodon API's instance reads it."""
+    return own_value(domain, field) or ((getattr(g.site, field) or '') if domain.is_default else '')
+
+
+@bp.route('/api/v1/config/about')
+def config_about():
+    """The instance's page, which PeerTube's app reads to open a platform (it calls one unreachable without it): every
+    field its PlatformAPI requires, PieFed's description and legal information in theirs, the rest empty."""
+    domain = current_storefront()
+    empty = ('codeOfConduct', 'hardwareInformation', 'creationReason', 'moderationInformation', 'administrator',
+             'maintenanceLifetime', 'businessModel')
+    return jsonify({'instance': {
+        'name': domain_site_name(domain, g.site) or domain.domain, 'shortDescription': _own(domain, 'description'),
+        'description': _own(domain, 'about'), 'terms': _own(domain, 'legal_information'),
+        **{name: '' for name in empty}, 'languages': [], 'categories': [], 'banners': [], 'avatars': []}})
+
+
 @bp.route('/api/v1/videos')
 @signed_in(optional=True)
 def list_videos():
@@ -161,6 +180,7 @@ def _branch(entry: dict, post: Post, thread_id: int) -> dict:
 
 
 @bp.route('/api/v1/videos/<video_id>/comment-threads')
+@bp.route('/api/v1/videos/<video_id>/comment-threads/')   # PeerTube's app asks with the slash
 @signed_in(optional=True)
 def comment_threads(video_id):
     post = find_video(video_id)
