@@ -48,7 +48,18 @@ class Device:
             time.sleep(0.5)
 
     def tap(self, *texts: str, timeout: float = 30.0, exact: bool = False) -> None:
-        self.wait_text(*texts, timeout=timeout, contains=not exact).click()
+        """Tap the first element showing any of `texts`. A list that redraws (a pull to refresh) can take the element
+        found away before the click looks it up again: it is found again, until `timeout`."""
+        deadline = time.monotonic() + timeout
+        while True:
+            found = self.wait_text(*texts, timeout=max(deadline - time.monotonic(), 0.5), contains=not exact)
+            try:
+                found.click(timeout=2)
+                return
+            except uiautomator2.UiObjectNotFoundError:
+                if time.monotonic() > deadline:
+                    raise AssertionError(f'android: {texts!r} kept going away before a tap; on screen: '
+                                         f'{self.screen_text()[:600]}')
 
     def showing(self, text: str, exact: bool = False) -> bool:
         """Whether `text` shows now (no waiting), as wait_text matches it."""
