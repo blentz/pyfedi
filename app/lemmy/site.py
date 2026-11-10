@@ -55,3 +55,11 @@ def login():
     with limiter.limit(LOGIN_LIMIT, scope='lemmy-password-login', exempt_when=is_trusted_request):
         user = log_in_with_password(name, password)
     return jsonify(jwt=user.encode_jwt_token(), registration_created=False, verify_email_sent=False)
+
+
+@bp.route('/api/v3/user/validate_auth')
+def validate_auth():
+    """Jerboa asks whether its stored token is still good on every start, and marks the account for a new login if
+    not."""
+    authorise_api_user(request.headers.get('Authorization'))
+    return jsonify(success=True)

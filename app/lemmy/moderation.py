@@ -8,7 +8,7 @@ from app.lemmy import bp
 from app.utils import authorise_api_user
 
 
-@bp.route('/api/v3/report_count')
+@bp.route('/api/v3/user/report_count')   # where Lemmy 0.19 serves it
 def report_count():
     authorise_api_user(request.headers.get('Authorization'))
     return jsonify(community_id=request.args.get('community_id', type=int), comment_reports=0, post_reports=0,

@@ -15,7 +15,7 @@ def world(app, api_baseline, monkeypatch):
     return {'client': app.test_client(), 'headers': {'Authorization': f'Bearer {person.encode_jwt_token()}'}}
 
 
-@pytest.mark.parametrize('path,model', [('/api/v3/report_count', 'GetReportCountResponse'),
+@pytest.mark.parametrize('path,model', [('/api/v3/user/report_count', 'GetReportCountResponse'),
                                         ('/api/v3/admin/registration_application/count',
                                          'GetUnreadRegistrationApplicationCountResponse')])
 def test_the_counts_are_zero_and_need_a_login(world, path, model):
@@ -31,3 +31,10 @@ def test_the_counts_are_zero_and_need_a_login(world, path, model):
 def test_moderating_is_not_served(world, path):
     response = world['client'].post(path, json={}, headers=world['headers'])
     assert response.status_code == 404 and response.get_json() == {'error': 'not_found'}
+
+
+def test_a_token_is_validated(world):
+    response = world['client'].get('/api/v3/user/validate_auth', headers=world['headers'])
+    assert response.status_code == 200 and response.get_json() == {'success': True}
+    refused = world['client'].get('/api/v3/user/validate_auth', headers={'Authorization': 'Bearer nonsense'})
+    assert refused.status_code == 400 and refused.get_json() == {'error': 'incorrect_login'}
