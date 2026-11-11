@@ -16,7 +16,7 @@
     "phanpy-web": {"platform": "mastodon", "surface": "web", "web": "https://phanpy.test", "image": "phanpy (newest release, built by run.sh)"},
     "elk-web": {"platform": "mastodon", "surface": "web", "web": "https://elk.test", "image": "ghcr.io/elk-zone/elk:latest"},
 
-    "pixelfed-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon"},
+    "pixelfed-android": {"platform": "pixelfed", "surface": "android", "package": "com.pixelfed", "apk": {"github": "pixelfed/pixelfed-rn", "asset": "app-release\\.apk$", "extract_native_libs": true}},
     "pixeldroid-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon"},
     "fedilab-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon"},
 

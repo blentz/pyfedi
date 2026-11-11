@@ -8,6 +8,7 @@ The emulator trusts the harness CA as a system CA (android/boot.sh) and resolves
 so the apps reach PieFed exactly as they would a public instance. Controls are found by resource id where the app has
 them (native apps) and by the text or content description they show otherwise.
 """
+import io
 import ssl
 import time
 
@@ -15,8 +16,8 @@ import httpx
 import pytest
 
 from interop.apps import apks, steps
-from interop.apps.conftest import ALICE, SEED_TITLE, TESS, TUBE, TUBE_TITLE, VIDEO_FIXTURE, find_comment, marker, \
-    tube_video
+from interop.apps.conftest import ALICE, PHOTO_TITLE, SEED_TITLE, TESS, TUBE, TUBE_TITLE, VIDEO_FIXTURE, find_comment, find_post, \
+    marker, png, tube_video
 from interop.apps.matrix import RESULTS, load_matrix
 from interop.clients import CA, wait_for
 
@@ -185,7 +186,7 @@ class Thunder:
         return f'commented {text!r} on the seeded post; PieFed has it'
 
 
-def piefed_consent(d, package):
+def piefed_consent(d, package, signed_in=None):
     """PieFed's half of an OAuth login (plan W0.2), in the browser the app opened: its login page as alice, the consent
     page's Allow, and then the app itself back on screen, holding the code PieFed sent it, and signed in. The login
     form's fields are found by order: they are the page's only inputs (its nav has no search box logged out)."""
@@ -216,7 +217,7 @@ def piefed_consent(d, package):
         except AssertionError:
             if attempt == 2 or not d.showing('Allow', exact=True):
                 raise
-    d.wait_text(*SIGNED_IN, timeout=60)
+    d.wait_text(*(signed_in or SIGNED_IN), timeout=60)
 
 
 def chrome_first_run(d):
@@ -566,9 +567,108 @@ class Jerboa:
         return f'commented {text!r} on the seeded post with the Lemmy API; PieFed has it'
 
 
+class PixelfedApp:
+    """Pixelfed's own app (pixelfed/pixelfed-rn, React Native; plan W1.4a). It reads /api/nodeinfo/2.0.json and goes on
+    only for Pixelfed, which PieFed says there alone (ruling X1). Its welcome screen's SERVER button > the server > Sign
+    in; PieFed's pages open in the browser, and PieFed sends the code back to pixelfed://. Its tabs are icons labelled
+    Home, Trending, Notifications, Search and Profile; the camera is the home screen's top left. A profile shows only
+    its photos and videos (pf_type, `_pe=1`)."""
+
+    def __init__(self, device, package, world):
+        self.device, self.world, self.package = device, world, package
+
+
+    def login(self):
+        d = self.device
+        # its welcome screen: a SERVER button naming pixelfed.social, then Sign in
+        server = d.ui(descriptionContains='SERVER')
+        server.wait(timeout=90)
+        # its server sheet opens with the current server selected and the keyboard up; the sheet's field is not
+        # always in the hierarchy, so the server is typed through the keyboard, over the selection
+        d.tap_until(lambda: server.click(timeout=15), 'Pick your server', wait=10)   # a tap can be swallowed
+        for _ in range(3):
+            d.type_focused('piefed.test')
+            if d.ui(text='Use piefed.test').wait(timeout=10):
+                break
+            field = d.ui(className='android.widget.EditText', instance=0)
+            if field.exists:   # a keyboard that added or kept a character: set the field itself
+                field.set_text('piefed.test')
+                if d.ui(text='Use piefed.test').wait(timeout=10):
+                    break
+        d.hide_keyboard()
+        d.wait_text('Use piefed.test', timeout=30, contains=False)
+        d.tap_until(lambda: d.tap('Use piefed.test', exact=True), 'Sign in', wait=15)   # a tap can be swallowed
+        # Sign in reads /api/v2.1/config (a Pixelfed of 0.14.4 or later) and opens PieFed's pages in the browser
+        d.tap_until(lambda: d.tap('Sign in', exact=True), 'Log In', 'Allow', wait=30)
+        chrome_first_run(d)
+        piefed_consent(d, self.package, signed_in=('Your story', 'Trending'))
+        return 'logged in as alice through OAuth; its /api/v2.1/config check was told Pixelfed 0.15.2'
+
+    def view(self):
+        d = self.device
+        d.tap_tab('Search')
+        # its search screen: one field, whose results (/api/v2/search) come as it is typed into
+        d.type_into(d.ui(className='android.widget.EditText', instance=0), 'dora')
+        d.hide_keyboard()   # its suggestion strip offers a "dora" too
+        d.ui(descriptionStartsWith='dora, @dora').click(timeout=60)   # her account, from the results' People
+        # the grid's tiles carry no label: its first tile is the first thing to tap below the Posts and Reposts tabs
+        d.wait_text('Reposts', timeout=60)
+        tabs_bottom = d.ui(description='Reposts').info['bounds']['bottom']
+        d.tap_until(lambda: d.ui.click(d.ui.info['displayWidth'] // 6, tabs_bottom + d.ui.info['displayWidth'] // 6),
+                    PHOTO_TITLE, wait=20)
+        d.wait_text(PHOTO_TITLE, timeout=60)
+        return f"dora's profile shows her photo {PHOTO_TITLE!r} in its grid (pf_type photo), and it opens"
+
+    def post(self):
+        """A photo post through its camera, as its people post: the home screen's camera (top left) > its gallery >
+        Android's photo picker on a picture put in Pictures > Add > its Edit screen's Next > a caption > Share. The
+        app uploads the photo (/api/v2/media) and posts it (/api/v1/statuses); PieFed has it in alice's microblog as
+        an image post."""
+        d, text = self.device, marker('pixelfed-android')
+        d.adb.sync.push(io.BytesIO(png(320, 240)), f'/sdcard/Pictures/{text}.png')
+        d.adb.shell(['content', 'call', '--uri', 'content://media', '--method', 'scan_volume', '--arg',
+                     'external_primary'])   # the photo picker lists what the media store has indexed
+        for _ in range(4):   # view left it on dora's photo, a screen over her profile and the search, with no tabs
+            if d.ui(description='Home').exists:
+                break
+            d.ui.press('back')
+            time.sleep(1)
+        d.tap_tab('Home')
+        # the home screen's camera, top left of its header, is an unlabelled icon
+        width, height = d.ui.info['displayWidth'], d.ui.info['displayHeight']
+        d.tap_until(lambda: d.ui.click(width * 0.075, height * 0.08), 'Photo', wait=20)
+        # its camera: the gallery, bottom left, is an icon font's glyph (Ionicons' images)
+        d.ui(description='\uf391').click(timeout=30)
+        d.ui(descriptionContains='Photo taken').click(timeout=60)   # the photo picker's tile of the pushed picture
+        d.tap('Add (1)', exact=True, timeout=30)   # the picker takes several: its Add confirms the one
+        d.wait_text('Filter', 'Crop', timeout=60)   # its Edit screen: filters and crop, as picked
+        d.tap('Next', exact=True)
+        # New Post opens with the keyboard up, and its fields are out of the hierarchy while it shows
+        d.wait_text('New Post', timeout=30)
+        # its fields, the photo's alt text then the caption, are below the photo, where the keyboard it opens with
+        # covers them, and a list leaves what it does not show out of the hierarchy: the form is scrolled up to them
+        caption = d.ui(className='android.widget.EditText', instance=1)
+        for _ in range(6):
+            if caption.wait(timeout=3):
+                break
+            d.ui.swipe(width // 2, int(height * 0.45), width // 2, int(height * 0.15), duration=0.3)
+        # the field leaves the hierarchy again as the layout shifts: tapped where it was, and typed through the keyboard
+        bounds = caption.info['bounds']
+        d.ui.click((bounds['left'] + bounds['right']) // 2, (bounds['top'] + bounds['bottom']) // 2)
+        time.sleep(1)
+        d.type_focused(text)   # not to be seen in the hierarchy while the keyboard shows: PieFed's post says it
+        time.sleep(1)
+        d.tap('Share', exact=True)   # in the header, above the keyboard
+        alice = self.world['alice']
+        found = find_post(alice, alice.microblogs_id(), text, timeout=90)['post']
+        # a photo, not words alone: an image post once PieFed's media pipeline has the upload (a link until then)
+        wait_for(lambda: alice.get_post(found['id'])['post']['post_type'] == 'Image', timeout=120, interval=3)
+        return f"posted a photo captioned {text!r} through its camera; PieFed has it as alice's image post " \
+               f"{found['id']}"
+
 DRIVERS = {'newpipe-android': NewPipe, 'summit-android': Summit, 'voyager-android': VoyagerAndroid, 'thunder-android': Thunder,
            'tusky-android': Tusky, 'mastodon-android': MastodonAndroid, 'peertube-android': PeerTubeApp,
-           'jerboa-android': Jerboa}
+           'jerboa-android': Jerboa, 'pixelfed-android': PixelfedApp}
 
 
 @pytest.mark.parametrize('name', sorted(DRIVERS), ids=sorted(DRIVERS))
@@ -576,6 +676,8 @@ def test_android_app(world, device, name):
     app = MATRIX[name]
     with httpx.Client(timeout=300, follow_redirects=True) as http:
         apk, version = apks.fetch(app['apk'], http)
+    if app['apk'].get('extract_native_libs'):
+        apk = apks.with_native_libs_extracted(apk)
     device.install(apk, app['package'])
     device.launch(app['package'])
     driver = DRIVERS[name](device, app['package'], world)

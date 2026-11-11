@@ -3,7 +3,9 @@ must show, which alice (the account every app logs in as) has joined. Idempotent
 import os
 from datetime import datetime
 import ssl
+import struct
 import time
+import zlib
 
 import httpx
 import pytest
@@ -16,6 +18,8 @@ ALICE = ('alice', 'interop-alice-pw')
 DORA = ('dora', 'interop-dora-pw')
 COMMUNITY = 'apps'
 SEED_TITLE = 'Interop apps: a post every app must show'
+# A photo post of dora's, for the photo apps (Pixelfed's shows a profile's photos alone, by pf_type: plan W1.4a)
+PHOTO_TITLE = 'Interop apps photo'
 # The public domain apps with no account browse (piefed.test is private, R219), its uploader and its video
 TUBE, TESS = 'tube.test', ('tess', 'interop-tess-pw')
 TUBE_TITLE = 'Interop apps video'
@@ -40,8 +44,21 @@ def world():
     seed = next((p['post'] for p in posts.raise_for_status().json()['posts'] if p['post']['title'] == SEED_TITLE), None)
     if seed is None:
         seed = dora.post(SEED_TITLE, 'Seeded by interop/apps/conftest.py.', community['id'])['post']
+    photo = next((p['post'] for p in posts.json()['posts'] if p['post']['title'] == PHOTO_TITLE), None)
+    if photo is None:
+        uploaded = dora.http.post('/upload/image', files={'file': ('photo.png', png(), 'image/png')})
+        photo = dora.post(PHOTO_TITLE, '', community['id'], url=uploaded.raise_for_status().json()['url'])['post']
     alice.http.post('/community/follow', json={'community_id': community['id'], 'follow': True}).raise_for_status()
-    return {'alice': alice, 'dora': dora, 'community': community, 'seed': seed}
+    return {'alice': alice, 'dora': dora, 'community': community, 'seed': seed, 'photo': photo}
+
+
+def png(width: int = 64, height: int = 48) -> bytes:
+    """A plain blue PNG, made without an imaging library (the apps runner has none)."""
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)
+    rows = b''.join(b'\x00' + b'\x30\x60\xc0' * width for _ in range(height))
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b''))
 
 
 def status_id(post: dict) -> str:
