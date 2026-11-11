@@ -16,10 +16,10 @@ import httpx
 import pytest
 
 from interop.apps import apks, steps
-from interop.apps.conftest import ALICE, PHOTO_TITLE, SEED_TITLE, TESS, TUBE, TUBE_TITLE, VIDEO_FIXTURE, find_comment, find_post, \
+from interop.apps.conftest import ALICE, DORA, PHOTO_TITLE, SEED_TITLE, TESS, TUBE, TUBE_TITLE, VIDEO_FIXTURE, find_comment, find_post, \
     marker, png, tube_video
 from interop.apps.matrix import RESULTS, load_matrix
-from interop.clients import CA, wait_for
+from interop.clients import CA, PieFedWeb, wait_for
 
 MATRIX = load_matrix()
 # what the apps search for: a prefix of the seeded title, so that only a result, never the search field still holding
@@ -674,7 +674,8 @@ class PixelfedApp:
     def _message_dora(self, text: str) -> str:
         """A direct message (W1.4b1): Home's paper plane > Messages > New message > dora, found by the search (direct
         lookup) > Chat (a conversation started: a request of dora's, who does not follow alice) > the message > Send.
-        dora answers through alpha, which accepts it, and her answer shows in the conversation, polled by min_id."""
+        dora answers through alpha, which accepts it, and her answer shows in the conversation, polled by min_id. Then a
+        photo with a caption (W1.4b2), which dora's web chat shows."""
         d, dora = self.device, self.world['dora']
         for _ in range(4):   # the post left the app on its home screen or a screen over it
             if d.ui(description='Home').exists:
@@ -701,15 +702,36 @@ class PixelfedApp:
         d.type_focused(text)
         d.ui(description='Send').click(timeout=15)
 
-        def received():
+        def received(content):
             listed = dora.http.get('/private_message/list', params={'limit': 20}).raise_for_status().json()
-            return next((pm for pm in listed['private_messages'] if pm['private_message']['content'] == text), None)
-        message = wait_for(received, timeout=60, interval=2)
+            return next((pm for pm in listed['private_messages'] if pm['private_message']['content'] == content),
+                        None)
+        message = wait_for(lambda: received(text), timeout=60, interval=2)
         answer = f'{text}-answer'
         dora.http.post('/private_message', json={'recipient_id': message['creator']['id'],
                                                  'content': answer}).raise_for_status()
         d.wait_text(answer, timeout=60)
-        return f"Messaged dora {text!r} from its chat; she has it, and her answer {answer!r} shows there"
+        # a photo (W1.4b2): the attach button opens Android's photo picker on a picture put in Pictures; the app
+        # uploads it at once (/api/v2/media) and shows it above the field; its caption names the message
+        d.adb.sync.push(io.BytesIO(png(200, 150)), f'/sdcard/Pictures/{text}-pic.png')
+        d.scan_media()
+        d.ui(description='Add photos or videos').click(timeout=15)
+        d.ui(descriptionContains='Photo taken').click(timeout=60)
+        if d.ui(text='Add (1)').wait(timeout=5):   # a picker that takes several asks to confirm
+            d.tap('Add (1)', exact=True)
+        d.ui(description='Remove attachment').wait(timeout=60)
+        caption = f'{text}-photo'
+        field.click(timeout=15)
+        time.sleep(1)
+        d.type_focused(caption)
+        d.ui(description='Send').click(timeout=15)
+        photo = wait_for(lambda: received(caption), timeout=60, interval=2)
+        page = PieFedWeb(*DORA).http.get(f"/chat/{photo['conversation_id']}").raise_for_status().text
+        shown = page[page.index(caption):]
+        shown = shown.split('id="message_')[0]   # the photo's own message, to the next one
+        assert 'message_picture' in shown and '<img' in shown, 'dora\'s web chat does not show the photo'
+        return f"Messaged dora {text!r} from its chat; she has it, and her answer {answer!r} shows there; a photo " \
+               f"captioned {caption!r} reached her, and her web chat shows it"
 
 DRIVERS = {'newpipe-android': NewPipe, 'summit-android': Summit, 'voyager-android': VoyagerAndroid, 'thunder-android': Thunder,
            'tusky-android': Tusky, 'mastodon-android': MastodonAndroid, 'peertube-android': PeerTubeApp,
