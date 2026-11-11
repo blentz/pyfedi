@@ -42,7 +42,7 @@
                     <h3>{{ _('People') }}</h3>
                     <div class="flex-grow-1 overflow-auto min-h-0">
                         <ul class="list-group list-group-flush">
-                        {% for conversation in conversations %}
+                        {% for conversation in conversations if conversation.id not in requests %}
                             <li class="list-group-item">
                                 {% if conversation.id == current_conversation %}
                                     {{ conversation_members(conversation) }}
@@ -54,9 +54,34 @@
                             </li>
                         {% endfor %}
                         </ul>
+                        {% if requests %}
+                        <h3 class="mt-3">{{ _('Requests') }}</h3>
+                        <ul class="list-group list-group-flush">
+                        {% for conversation in conversations if conversation.id in requests %}
+                            <li class="list-group-item">
+                                {% if conversation.id == current_conversation %}
+                                    {{ conversation_members(conversation) }}
+                                {% else %}
+                                    <a href="{{ url_for('chat.chat_home', conversation_id=conversation.id) }}">
+                                        {{ conversation_members(conversation) }}
+                                    </a>
+                                {% endif %}
+                            </li>
+                        {% endfor %}
+                        </ul>
+                        {% endif %}
                     </div>
                 </div>
                 <div class="col col-md-10 h-100 d-flex flex-column min-h-0 pl-2">
+                    {% if request_pending %}
+                        <div class="alert alert-info d-flex align-items-center flex-shrink-0" role="status">
+                            <span class="me-auto">{{ _('%(name)s is not someone you follow. Their messages will not notify you until you accept or answer.', name=conversation.member_names(current_user.id)) }}</span>
+                            <form method="post" action="{{ url_for('chat.chat_accept', conversation_id=current_conversation) }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="btn btn-primary btn-sm">{{ _('Accept') }}</button>
+                            </form>
+                        </div>
+                    {% endif %}
                     {% if messages %}
                         <h3 class="d-none d-md-inline">{{ _('Messages with %(name)s', name=conversation.member_names(current_user.id)) }}</h3>
                         <h3 class="d-md-none">{{ _('Messages with: ') }}

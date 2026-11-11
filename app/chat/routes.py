@@ -1,7 +1,7 @@
 from flask import request, flash, url_for, redirect, abort, make_response
 from flask_babel import _
 from flask_login import current_user
-from sqlalchemy import desc, or_, text
+from sqlalchemy import desc, or_, select, text
 
 from app import db
 from app.chat import bp, membership
@@ -79,10 +79,19 @@ def chat_home(conversation_id=None):
             current_user.unread_notifications = Notification.query.filter_by(user_id=current_user.id, read=False).count()
             db.session.commit()
 
+            # each member's own state (spec 2026-11-10-pixelfed-app-design §6): requests listed apart, with Accept
+            requests = set(db.session.execute(
+                select(conversation_member.c.conversation_id).where(
+                    conversation_member.c.user_id == current_user.id,
+                    conversation_member.c.state == membership.REQUEST,
+                    conversation_member.c.conversation_id.in_([c.id for c in conversations]))).scalars())
+            mine = membership.member(conversation_id, current_user.id)
             return render_template('chat/conversation.html',
                                    title=_('Chat with %(name)s', name=conversation.member_names(current_user.id)),
                                    conversations=conversations, messages=messages, form=form, alone=alone,
-                                   current_conversation=conversation_id, conversation=conversation)
+                                   current_conversation=conversation_id, conversation=conversation,
+                                   requests=requests, request_pending=bool(mine and mine.state == membership.REQUEST),
+                                   muted=bool(mine and mine.muted))
 
 
 @bp.route('/chat/<int:to>/new', methods=['GET', 'POST'])
@@ -172,7 +181,36 @@ def chat_options(conversation_id):
     conversation = db.session.get(Conversation, conversation_id) or abort(404)
     if not (user_access('read private messages', current_user.get_id()) or conversation.is_member(current_user)):
         abort(400)
-    return render_template('chat/chat_options.html', conversation=conversation)
+    mine = membership.member(conversation.id, current_user.id)
+    return render_template('chat/chat_options.html', conversation=conversation, muted=bool(mine and mine.muted))
+
+
+def _set_own(conversation_id, **values):
+    """The signed-in member's own state in a conversation they are in (spec 2026-11-10-pixelfed-app-design §6)."""
+    mine = membership.member(conversation_id, current_user.id)
+    if mine is None or not mine.joined:
+        abort(404)
+    membership.update_member(conversation_id, current_user.id, **values)
+    return redirect(url_for('chat.chat_home', conversation_id=conversation_id))
+
+
+@bp.route('/chat/<int:conversation_id>/accept', methods=['POST'])
+@login_required
+def chat_accept(conversation_id):
+    """A message request accepted: its messages notify from now on, as answering it does."""
+    return _set_own(conversation_id, state=membership.ACTIVE)
+
+
+@bp.route('/chat/<int:conversation_id>/mute', methods=['POST'])
+@login_required
+def chat_mute(conversation_id):
+    return _set_own(conversation_id, muted=True)
+
+
+@bp.route('/chat/<int:conversation_id>/unmute', methods=['POST'])
+@login_required
+def chat_unmute(conversation_id):
+    return _set_own(conversation_id, muted=False)
 
 
 @bp.route('/chat/<int:conversation_id>/delete', methods=['POST'])

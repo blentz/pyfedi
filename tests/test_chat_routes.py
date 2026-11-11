@@ -1603,3 +1603,98 @@ def test_the_report_loops_already_notified_set_can_never_be_true(app, db_session
     notified = Notification.query.filter_by(subtype='chat_conversation_reported').all()
     assert len(admin_ids) == len(set(admin_ids)) == 3
     assert sorted(n.user_id for n in notified) == admin_ids
+
+
+# --------------------------------------------------------------------------
+# Message requests and mute (spec 2026-11-10-pixelfed-app-design §6, rulings 2026-11-11)
+# --------------------------------------------------------------------------
+
+
+def _request_for(alice, carol):
+    """carol messages alice, who does not follow her: a request of alice's."""
+    conversation = membership.start_conversation(carol, alice)
+    _message(conversation, carol, alice, 'hello from carol')
+    return conversation
+
+
+def test_requests_are_told_apart_from_the_other_conversations(app, db_session):
+    instance, alice, bob, carol = _seed()
+    known = make_conversation(alice, bob)
+    _message(known, bob, alice, 'hi alice')
+    asking = _request_for(alice, carol)
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered') as render:
+        client.get(f'/chat/{asking.id}')
+
+    context = render.call_args.kwargs
+    assert context['requests'] == {asking.id} and context['request_pending'] is True
+    assert context['muted'] is False
+    with patch('app.chat.routes.render_template', return_value='rendered') as render:
+        client.get(f'/chat/{known.id}')
+    assert render.call_args.kwargs['request_pending'] is False
+
+
+def test_the_page_lists_requests_under_their_own_heading_with_accept(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the page's reply form renders its csrf_token
+    instance, alice, bob, carol = _seed()
+    asking = _request_for(alice, carol)
+    client = app.test_client()
+    login(client, alice)
+
+    page = client.get(f'/chat/{asking.id}').get_data(as_text=True)
+
+    assert 'Requests' in page and f'/chat/{asking.id}/accept' in page
+    assert 'is not someone you follow' in page
+
+
+def test_accepting_a_request_makes_it_an_ordinary_conversation(app, db_session):
+    instance, alice, bob, carol = _seed()
+    asking = _request_for(alice, carol)
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+
+    response = client.post(f'/chat/{asking.id}/accept', data={'csrf_token': token})
+
+    assert response.status_code == 302 and response.headers['Location'] == f'/chat/{asking.id}'
+    assert membership.member(asking.id, alice.id).state == membership.ACTIVE
+
+
+@pytest.mark.parametrize('action,muted', [('mute', True), ('unmute', False)])
+def test_a_conversation_is_muted_and_unmuted_from_its_options(app, db_session, action, muted):
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    membership.update_member(conversation.id, alice.id, muted=not muted)
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+
+    response = client.post(f'/chat/{conversation.id}/{action}', data={'csrf_token': token})
+
+    assert response.status_code == 302
+    assert membership.member(conversation.id, alice.id).muted is muted
+
+
+@pytest.mark.parametrize('muted,offered', [(False, 'Mute conversation'), (True, 'Unmute conversation')])
+def test_the_options_offer_mute_or_unmute(app, db_session, muted, offered):
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    membership.update_member(conversation.id, alice.id, muted=muted)
+    client = app.test_client()
+    login(client, alice)
+
+    assert offered in client.get(f'/chat/{conversation.id}/options').get_data(as_text=True)
+
+
+@pytest.mark.parametrize('action', ['accept', 'mute', 'unmute'])
+def test_only_a_member_changes_their_own_state(app, db_session, action):
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    client = app.test_client()
+    login(client, carol)
+    token = csrf(app, client)
+
+    assert client.post(f'/chat/{conversation.id}/{action}', data={'csrf_token': token}).status_code == 404
+    assert client.post(f'/chat/99999999/{action}', data={'csrf_token': token}).status_code == 404
