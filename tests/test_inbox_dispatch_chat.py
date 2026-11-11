@@ -811,7 +811,7 @@ def test_a_message_s_pictures_are_taken_with_it(app, db_session, monkeypatch):
               'https://peer.example/m/bare.jpg', {'type': 'Image'}]
 
     dispatch(chat_activity(sender, to=recipient.ap_profile_id, content='look',
-                           id='https://peer.example/pm/1', attachment=[others[2]] + pictures + others))
+                           id='https://peer.example/pm/1', attachment=others + pictures))   # the rejects first
 
     message = db_session.query(ChatMessage).one()
     assert [file.source_url for file in message.files] == \
