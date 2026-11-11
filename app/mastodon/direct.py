@@ -237,14 +237,14 @@ def direct_start():
     return jsonify(conversation_entity(conversation, membership.member(conversation.id, me.id))), status
 
 
-@bp.route('/api/v1.1/direct/conversations/<conversation_id>')
+@bp.route('/api/v1.1/direct/conversations/<int:conversation_id>')
 @require_oauth('read')
 def direct_conversation(conversation_id):
     found = _membership(conversation_id)
     return jsonify(conversation_entity(*found)) if found else _not_found()
 
 
-@bp.route('/api/v1.1/direct/conversations/<conversation_id>/messages')
+@bp.route('/api/v1.1/direct/conversations/<int:conversation_id>/messages')
 @require_oauth('read')
 def direct_messages(conversation_id):
     """Newest first: `max_id` pages back in time, `min_id` is what arrived since (what the app polls with)."""
@@ -270,7 +270,7 @@ def direct_messages(conversation_id):
                              'oldest_id': str(rows[-1].id) if rows else None}})
 
 
-@bp.route('/api/v1.1/direct/conversations/<conversation_id>/messages', methods=['POST'])
+@bp.route('/api/v1.1/direct/conversations/<int:conversation_id>/messages', methods=['POST'])
 @require_oauth('write')
 def direct_send(conversation_id):
     """A text message, through the web chat's own send; whoever had left is in the conversation again, as the web's
@@ -296,7 +296,7 @@ def direct_send(conversation_id):
     return jsonify(message_entity(message, me.id)), 201
 
 
-@bp.route('/api/v1.1/direct/conversations/<conversation_id>/messages/<message_id>', methods=['DELETE'])
+@bp.route('/api/v1.1/direct/conversations/<int:conversation_id>/messages/<int:message_id>', methods=['DELETE'])
 @require_oauth('write')
 def direct_delete(conversation_id, message_id):
     """One's own message, deleted as alpha's delete does it, and federated."""
@@ -312,7 +312,7 @@ def direct_delete(conversation_id, message_id):
     return jsonify({'deleted': True})
 
 
-@bp.route('/api/v1.1/direct/conversations/<conversation_id>/read', methods=['POST'])
+@bp.route('/api/v1.1/direct/conversations/<int:conversation_id>/read', methods=['POST'])
 @require_oauth('write')
 def direct_read(conversation_id):
     """The viewer's messages in it read, up to `message_id` or all of them, with their notifications."""
@@ -348,37 +348,37 @@ def _set(conversation_id, **values):
     return jsonify(_state(found[0], membership.member(found[0].id, g.oauth_user.id)))
 
 
-@bp.route('/api/v1.1/direct/conversations/<conversation_id>/accept', methods=['POST'])
+@bp.route('/api/v1.1/direct/conversations/<int:conversation_id>/accept', methods=['POST'])
 @require_oauth('write')
 def direct_accept(conversation_id):
     return _set(conversation_id, state=membership.ACTIVE)
 
 
-@bp.route('/api/v1.1/direct/conversations/<conversation_id>/mute', methods=['POST'])
+@bp.route('/api/v1.1/direct/conversations/<int:conversation_id>/mute', methods=['POST'])
 @require_oauth('write')
 def direct_mute(conversation_id):
     return _set(conversation_id, muted=True)
 
 
-@bp.route('/api/v1.1/direct/conversations/<conversation_id>/unmute', methods=['POST'])
+@bp.route('/api/v1.1/direct/conversations/<int:conversation_id>/unmute', methods=['POST'])
 @require_oauth('write')
 def direct_unmute(conversation_id):
     return _set(conversation_id, muted=False)
 
 
-@bp.route('/api/v1.1/direct/conversations/<conversation_id>/hide', methods=['POST'])
+@bp.route('/api/v1.1/direct/conversations/<int:conversation_id>/hide', methods=['POST'])
 @require_oauth('write')
 def direct_hide(conversation_id):
     return _set(conversation_id, hidden=True)
 
 
-@bp.route('/api/v1.1/direct/conversations/<conversation_id>/unhide', methods=['POST'])
+@bp.route('/api/v1.1/direct/conversations/<int:conversation_id>/unhide', methods=['POST'])
 @require_oauth('write')
 def direct_unhide(conversation_id):
     return _set(conversation_id, hidden=False)
 
 
-@bp.route('/api/v1.1/direct/conversations/<conversation_id>/leave', methods=['POST'])
+@bp.route('/api/v1.1/direct/conversations/<int:conversation_id>/leave', methods=['POST'])
 @require_oauth('write')
 def direct_leave(conversation_id):
     """PieFed's leave (alpha's and the web's): out of it, and the conversation gone once nobody here is in it."""
