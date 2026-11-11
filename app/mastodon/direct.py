@@ -16,7 +16,7 @@ from app.local_only import found_here, refuses_remote_contact, without_hidden_co
 from app.mastodon import bp
 from app.mastodon.entities import account, timestamp
 from app.mastodon.instance import MAX_CHARACTERS
-from app.models import ChatMessage, Conversation, Notification, User, conversation_member
+from app.models import ChatMessage, Conversation, Notification, User, UserFollower, conversation_member
 from app.oauth_server.protect import require_oauth
 from app.shared.tasks import task_selector
 
@@ -137,6 +137,33 @@ def direct_unread_count():
         ChatMessage.conversation_id == Conversation.id, ChatMessage.recipient_id == viewer_id,
         ChatMessage.read.is_(False), ChatMessage.deleted.is_(False)).exists())
     return jsonify({'primary': primary.count(), 'requests': _inbox(viewer_id, 'requests').count()})
+
+
+MUTUALS_PAGE = 10
+
+
+@bp.route('/api/v1.1/direct/compose/mutuals')
+@require_oauth('read')
+def direct_mutuals():
+    """Whom the viewer follows and who follow them back, the app's first suggestions on its New message screen,
+    ten at a time by `cursor` (the last one's id), as Pixelfed's FollowerService::getMutualsWithProfiles."""
+    me = g.oauth_user
+    raw = request.args.get('cursor')
+    after = _whole(raw) if raw else 0
+    if after is None:
+        return _refused('cursor is not an account id')
+    followed = db.session.query(UserFollower.remote_user_id).filter(
+        UserFollower.local_user_id == me.id, UserFollower.is_inward.is_(False), UserFollower.is_accepted.is_(True))
+    following_me = db.session.query(UserFollower.local_user_id).filter(
+        UserFollower.remote_user_id == me.id, UserFollower.is_inward.is_(False), UserFollower.is_accepted.is_(True))
+    mutuals = without_local_only_actors(User.query.filter(User.id.in_(followed), User.id.in_(following_me),
+                                                           User.deleted.is_(False), User.banned.is_(False)),
+                                        User, True)
+    total = mutuals.count()
+    rows = mutuals.filter(User.id > after).order_by(User.id).limit(MUTUALS_PAGE + 1).all()
+    more, rows = len(rows) > MUTUALS_PAGE, rows[:MUTUALS_PAGE]
+    return jsonify({'data': [account(person, me.id) for person in rows], 'has_more': more,
+                    'next_cursor': str(rows[-1].id) if more else None, 'total_count': total})
 
 
 def _may_message(sender: User, recipient: User):

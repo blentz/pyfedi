@@ -271,3 +271,20 @@ def test_a_local_only_account_cannot_message_a_remote_one(world, monkeypatch):
     monkeypatch.setattr('app.mastodon.direct.refuses_remote_contact', lambda sender, other: True)
     response = _post(world, '/conversations', recipient_ids=[world['friend'].id])
     assert response.status_code == 403 and 'from here' in response.get_json()['error']
+
+
+def test_the_people_to_message_first_are_those_who_follow_back(world):
+    """The app's New message screen lists `compose/mutuals` (Pixelfed's FollowerService::getMutualsWithProfiles):
+    whom the viewer follows and who follow them, ten at a time, by `cursor` (the last one's id)."""
+    more = [make_user(None, f'dmmutual{n}', local=True) for n in range(11)]
+    for other in more:
+        make_follow(world['me'], other)
+        make_follow(other, world['me'])
+    make_follow(world['me'], world['stranger'])   # one way only: not listed
+    first = _get(world, '/compose/mutuals').get_json()
+    assert len(first['data']) == 10 and first['has_more'] is True and first['total_count'] == 12
+    rest = _get(world, '/compose/mutuals', cursor=first['next_cursor']).get_json()
+    assert len(rest['data']) == 2 and rest['has_more'] is False and rest['next_cursor'] is None
+    names = {person['username'] for person in first['data'] + rest['data']}
+    assert names == {'dmfriend', *(other.user_name for other in more)}
+    assert _get(world, '/compose/mutuals', cursor='x').status_code == 422
