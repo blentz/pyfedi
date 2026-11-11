@@ -154,8 +154,10 @@ def get_user_unread_count(auth):
         unread_replies = counted(NOTIF_REPLY, 'new_reply_on_followed_comment') + \
             counted(NOTIF_POST, 'top_level_comment_on_followed_post')
         unread_mentions = counted(NOTIF_MENTION, 'comment_mention') + counted(NOTIF_MENTION, 'post_mention')
-        unread_messages = without_hidden_messages(ChatMessage.query.filter_by(recipient_id=user.id, read=False)).count()
         unread_notifications = max(0, unread_notifications - sum(hidden.values()))
+    # the messages themselves, notified or not: a message request or a muted conversation's message makes no
+    # notification but is listed unread (spec 2026-11-10-pixelfed-app-design §6)
+    unread_messages = without_hidden_messages(ChatMessage.query.filter_by(recipient_id=user.id, read=False)).count()
 
     # "other" is things like reports and activity alerts that this endpoint isn't really intended to support
 
@@ -163,7 +165,7 @@ def get_user_unread_count(auth):
         "replies": unread_replies,
         "mentions": unread_mentions,
         "private_messages": unread_messages,
-        "other": unread_notifications - unread_replies - unread_messages - unread_mentions
+        "other": max(0, unread_notifications - unread_replies - unread_messages - unread_mentions)
     }
 
     return unread_count

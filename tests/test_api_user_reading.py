@@ -699,3 +699,18 @@ def test_a_reply_already_read_is_marked_as_read_in_the_feed(app, env):
                   for r in answer['replies']}
     assert read_by_id[reply.id] is True
     assert read_by_id[other.id] is False
+
+
+def test_a_message_that_notified_nobody_is_counted_unread_all_the_same(app, env):
+    """A message request, or a muted conversation's message, makes no notification (spec 2026-11-10-pixelfed-app-
+    design §6) but is listed unread: the count is of the messages, not of their notifications."""
+    from app.api.alpha.utils.user import get_user_unread_count
+
+    reader, author, reply, baseline = env
+    reader.unread_notifications = 0
+    conversation = make_conversation(author, reader)
+    message = make_chat_message(author, reader, 'https://test.piefed.local/m/2')
+    message.conversation_id = conversation.id
+    db.session.commit()
+
+    assert get_user_unread_count(token(reader)) == {'replies': 0, 'mentions': 0, 'private_messages': 1, 'other': 0}
