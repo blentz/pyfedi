@@ -190,8 +190,15 @@ def piefed_consent(d, package, signed_in=None):
     """PieFed's half of an OAuth login (plan W0.2), in the browser the app opened: its login page as alice, the consent
     page's Allow, and then the app itself back on screen, holding the code PieFed sent it, and signed in. The login
     form's fields are found by order: they are the page's only inputs (its nav has no search box logged out)."""
-    d.wait_text('Log In', 'Allow', timeout=60, contains=False)   # PieFed's buttons, not an app's "Log in with…"
-    if not d.showing('Allow', exact=True):
+    # PieFed's login form (its Log In button, not an app's "Log in with…"), or, when Chrome is signed in already from
+    # an earlier app, its consent page, whose Allow can be below the fold: known by its heading
+    deadline = time.monotonic() + 60
+    while not (consenting := d.showing('to use your account')) and not d.showing('Log In', exact=True):
+        if time.monotonic() > deadline:
+            raise AssertionError(f'android: neither PieFed\'s login nor its consent showed in 60s; on screen: '
+                                 f'{d.screen_text()[:600]}')
+        time.sleep(0.5)
+    if not consenting:
         d.type_into(d.ui(className='android.widget.EditText', instance=0), ALICE[0])
         d.type_into(d.ui(className='android.widget.EditText', instance=1), ALICE[1])
         d.hide_keyboard()
