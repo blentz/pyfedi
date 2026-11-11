@@ -121,6 +121,7 @@ def network_trending_posts():
 
 @bp.route('/api/v1.1/discover/posts/hashtags')
 @bp.route('/api/v1.1/discover/accounts/popular')
+@bp.route('/api/v1.2/discover/accounts/popular')   # the app's release (2.0.1) reads this one
 @bp.route('/api/v1.1/collections/self')
 @require_oauth('read', optional=True)
 def nothing_listed():

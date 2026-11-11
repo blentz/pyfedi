@@ -71,6 +71,7 @@ def test_trending_is_the_most_voted_photos_as_pixelfeds_statuses(world, path, qu
 
 
 @pytest.mark.parametrize('path', ['/api/v1.1/discover/posts/hashtags', '/api/v1.1/discover/accounts/popular',
+                                  '/api/v1.2/discover/accounts/popular',   # the app's release (2.0.1) reads v1.2
                                   '/api/v1.1/collections/self', '/api/pixelfed/v1/app/settings'])
 def test_what_is_not_kept_here_is_an_empty_list(world, path):
     assert _get(world, path).get_json() == []
