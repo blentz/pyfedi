@@ -1354,6 +1354,11 @@ class File(db.Model):
             return base
         return storefront.canonical_url() if canonical else storefront.storefront_url()
 
+    def stored_here(self) -> bool:
+        """Whether the picture is ours, kept on disk or at a hosted domain's address (an upload through the APIs
+        keeps only that), rather than a peer's we name by its address."""
+        return bool(self.file_path) or is_hosted_url(self.source_url)
+
     def view_url(self, resize=False, canonical=False, base=None):
         if self.source_url:
             if resize and '/pictrs/' in self.source_url and '?' not in self.source_url:

@@ -1701,14 +1701,15 @@ def test_only_a_member_changes_their_own_state(app, db_session, action):
     assert client.post(f'/chat/99999999/{action}', data={'csrf_token': token}).status_code == 404
 
 
-def test_the_page_shows_our_pictures_and_links_a_peer_s(app, db_session, monkeypatch):
+@pytest.mark.parametrize('on_disk', [True, False])   # an upload through the APIs keeps only its address here
+def test_the_page_shows_our_pictures_and_links_a_peer_s(app, db_session, monkeypatch, on_disk):
     """W1.4b2: a picture stored here shows in the message; a peer's is a link, so no remote server learns who read
     the chat until the reader opens it (the page already strips images from a message's text)."""
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the page's reply form renders its csrf_token
     instance, alice, bob, carol = _seed()
     conversation = make_conversation(alice, bob)
-    ours = make_file(file_path='app/static/media/posts/aa/ourpic.png',
-                     source_url='https://test.piefed.local/static/media/posts/aa/ourpic.png')
+    ours = make_file(file_path='app/static/media/posts/aa/ourpic.png' if on_disk else None,
+                     source_url=f"{app.config['SERVER_URL']}/static/media/posts/aa/ourpic.png")
     ours.alt_text = 'our picture'
     theirs = File(source_url='https://peer.example/m/theirpic.jpg', alt_text='their picture')
     message = _message(conversation, bob, alice, 'pictures')

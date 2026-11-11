@@ -11,7 +11,7 @@
                 {{ message.body_html|remove_images|person_links|community_links|feed_links|safe }}
                 {# its pictures (W1.4b2): ours shown; a peer's linked, so no remote server learns who read the chat #}
                 {% for file in message.files %}
-                    {% if file.file_path %}
+                    {% if file.stored_here() %}
                         <a href="{{ file.view_url() }}" class="message_picture" target="_blank" rel="noopener"><img src="{{ file.thumbnail_url() or file.view_url() }}" alt="{{ file.alt_text or '' }}" loading="lazy" class="img-fluid rounded mt-1" style="max-height: 240px"></a>
                     {% elif file.source_url %}
                         <a href="{{ file.source_url }}" class="message_picture d-block" target="_blank" rel="noopener nofollow noreferrer"><span class="fe fe-image"></span> {{ file.alt_text or _('A picture') }}</a>
