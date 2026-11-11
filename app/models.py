@@ -2216,6 +2216,21 @@ read_posts = db.Table('read_posts',
                       )
 
 
+class StoryView(db.Model):
+    """A story (a microblog post with a picture, of the last day) its viewer has seen, written only by Pixelfed's
+    app's stories `seen` (W1.4c; spec 2026-11-10-pixelfed-app-design §7, ruling S1). It greys the story out for that
+    viewer; nobody else is shown it. Rows older than two days are pruned as new ones are written."""
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), primary_key=True)
+    post_id = db.Column(db.Integer, db.ForeignKey('post.id', ondelete='CASCADE'), primary_key=True, index=True)
+    created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+
+
+class StoryExpiry(db.Model):
+    """A story its author expired early (ruling S2): no longer in any carousel, still a post. Pruned as StoryView."""
+    post_id = db.Column(db.Integer, db.ForeignKey('post.id', ondelete='CASCADE'), primary_key=True)
+    created_at = db.Column(db.DateTime, default=utcnow, nullable=False, index=True)
+
+
 # table to hold users' hidden post ids
 hidden_posts = db.Table('hidden_posts',
                       db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True, nullable=False),

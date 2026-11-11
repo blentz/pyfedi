@@ -38,8 +38,8 @@ PixelDroid and Fedilab speak the Mastodon API that W1 serves; the official app i
 | `GET /api/v2/config` | settings | PieFed's limits in Pixelfed's shape |
 | `GET /api/v1.1/compose/settings` | camera (posting) | the media limits and types, the caption length |
 | `POST /api/v2/media` | camera (posting) | already served: W1's media upload (`app.mastodon.media`) |
-| `GET /api/v1.2/stories/carousel` | home | empty: PieFed has no stories |
-| `POST /api/v1.1/stories/seen`, `stories/self-expire`, `v1.2/stories/*` | stories | refused: none |
+| `GET /api/v1.2/stories/carousel` | home | the stories of §7 (W1.4c) |
+| `POST /api/v1.1/stories/seen`, `stories/self-expire`, `stories/comment`, `GET v1.2/stories/viewers` | stories | §7; publishing refused (S4) |
 | `GET /api/v1.1/discover/posts/trending`, `posts/network/trending`, `posts/hashtags` | explore | PieFed's top image and video posts, and its trending tags |
 | `GET /api/v1.1/accounts/username/<name>` | profile | the account by name |
 | `GET /api/v1.1/accounts/mutuals/<id>` | profile | the accounts both follow |
@@ -139,3 +139,29 @@ through `/api/v2/media` and named by `media_ids`; federated as the object's `att
 **Phases.** W1.4b1: per-member state, the API for text, the web chat's Requests and mute, the app driven (alice
 messages dora; dora's reply is read). W1.4b2: media in messages, both ways and on the web.
 
+
+## 7. Stories (W1.4c, ruling X3 and rulings S1–S4 of 2026-11-11)
+
+A story is a microblog post (`Post.microblog`, or a post in the local `microblogs` community) with a picture, posted
+in the last 24 hours by the viewer or someone they follow, that the viewer may read (`readable`). Image and gallery
+posts count, and a gallery shows its first picture. A video post does not: PieFed's video post points at a page, not
+a file the app's player can play. Nothing new is stored for the story itself. The app (2.0.1) calls these
+(Pixelfed's StoryApiV1Controller `carouselNext`, `viewed`, `delete`, `viewers`, `comment`):
+
+- `GET /api/v1.2/stories/carousel` returns `{nodes: [{id: 'self:<id>' | 'pfs:<id>', username, username_acct,
+  profile_id, avatar, is_author, stories: [{id, type: 'photo', url, overlays: [], duration: 10000, viewed,
+  created_at, view_count (the author's own only)}], url, hasViewed}]`. The viewer's own node comes first, then the
+  others, latest first. A story's id is its post's.
+- `POST /api/v1.1/stories/seen {id}`: **S1, recorded, with no viewers list.** A `story_view` row (user, post,
+  when) is written only by this call, never by reading the post elsewhere. It greys the story out for the viewer.
+  `viewers` always lists nobody, and `view_count` is 0, so no author learns who looked or how many did.
+- `POST /api/v1.1/stories/self-expire/<id>`: **S2, drop from the carousel.** It applies to the author's own story
+  only. A `story_expiry` row removes it from every carousel; the post stays a post, everywhere else unchanged.
+- `POST /api/v1.1/stories/comment {sid, caption}`: **S3, sent as a chat.** The caption and a link to the post go to
+  the author as a chat message, through W1.4b's send with its request, mute, block and may-message rules. Only a
+  story in the commenter's carousel, not their own, may be commented on.
+- **S4, publish refused.** `stories/add`, `stories/publish` and the v1.2 publish stay unbuilt (404) until an app
+  uses them. App 2.0.1 never calls its publish, and a photo posted as usual is a story for a day anyway.
+
+Rows in `story_view` and `story_expiry` matter for a day: each write deletes that table's rows older than two
+days. Deleting a post deletes its rows (cascade).

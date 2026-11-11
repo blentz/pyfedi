@@ -1,8 +1,8 @@
 """Pixelfed's own routes beside Mastodon's, for its official app (plan W1.4a; spec 2026-11-10-pixelfed-app-design §2,
-§3). Each answers in Pixelfed's shape, read from its server (app/Http/Controllers/Api/ApiV1Dot1Controller.php and
-Stories/StoryApiV1Controller.php), through W1's reads and app/shared, with W1's visibility, blocks and limits. What
-PieFed has no such thing for answers empty: no stories until W1.4c (ruling X3), no chats until W1.4b (X2), no
-Pixelfed push relay (W1's push is Mastodon's Web Push), no collections, no computed trends (as W1's /trends)."""
+§3). Each answers in Pixelfed's shape, read from its server (app/Http/Controllers/Api/ApiV1Dot1Controller.php),
+through W1's reads and app/shared, with W1's visibility, blocks and limits. Stories (W1.4c) are app/mastodon/stories,
+chats (W1.4b) app/mastodon/direct. What PieFed has no such thing for answers empty: no Pixelfed push relay (W1's push
+is Mastodon's Web Push), no collections, no computed trends (as W1's /trends)."""
 from flask import current_app, g, jsonify, request
 
 from app import db
@@ -90,13 +90,6 @@ def compose_settings():
     return jsonify({'default_license': 1, 'media_descriptions': False, 'max_altext_length': MAX_ALT_TEXT,
                     'max_media_attachments': max_album_images(), 'max_caption_length': MAX_CHARACTERS,
                     'default_scope': 'public', 'default_visibility': 'public'})
-
-
-@bp.route('/api/v1.2/stories/carousel')
-@require_oauth('read')
-def stories_carousel():
-    """No stories yet (W1.4c, ruling X3): Pixelfed's own answer when there are none."""
-    return jsonify({'self': [], 'nodes': []})
 
 
 def _trending(sort: str):

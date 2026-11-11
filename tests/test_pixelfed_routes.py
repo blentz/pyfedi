@@ -1,7 +1,7 @@
 """Pixelfed's own routes for its official app (plan W1.4a; spec 2026-11-10-pixelfed-app-design §2, §3): its config
 and compose limits, explore's trending photos, an account by name and mutual followers, a post's report, and the
-answers for what PieFed has none of yet (stories W1.4c, chats W1.4b) or at all (Pixelfed's push relay, collections,
-computed trends)."""
+answers for what PieFed has none of: stories when nobody posted one (the rest in tests/test_pixelfed_stories.py),
+Pixelfed's push relay, collections, computed trends."""
 import uuid
 from datetime import datetime
 
@@ -78,8 +78,8 @@ def test_what_is_not_kept_here_is_an_empty_list(world, path):
     assert _get(world, path).get_json() == []
 
 
-def test_no_stories_yet_and_no_pixelfed_push(world):
-    assert _get(world, '/api/v1.2/stories/carousel').get_json() == {'self': [], 'nodes': []}
+def test_no_stories_and_no_pixelfed_push(world):
+    assert _get(world, '/api/v1.2/stories/carousel').get_json() == {'nodes': []}
     assert _get(world, '/api/v1.1/nag/state').get_json() == {'active': False}
     assert _get(world, '/api/v1.1/push/state').status_code == 404
     pushed = world['client'].post('/api/v1.1/push/update', headers=world['headers'], json={})

@@ -4,6 +4,6 @@ app.mastodon.instance) does not load every route, and through them the read laye
 import app.push_delivery  # noqa: F401  registers the listeners that push each new notification
 from app.mastodon import bp
 from app.mastodon import actions, compose, direct, extras, media, notifications, pixelfed, push, relations, \
-    routes, search, timelines  # noqa: F401  each registers its routes on bp
+    routes, search, stories, timelines  # noqa: F401  each registers its routes on bp
 
 __all__ = ['bp']

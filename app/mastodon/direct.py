@@ -32,7 +32,7 @@ def _refused(reason: str, status: int = 422):
     return jsonify({'error': reason}), status
 
 
-def _whole(value, low: int = 1, high: int = LARGEST_ID) -> int | None:
+def whole_number(value, low: int = 1, high: int = LARGEST_ID) -> int | None:
     """`value` as a whole number in [low, high], else None: an id or a count from a query string or a JSON body."""
     text = str(value) if isinstance(value, (int, str)) and not isinstance(value, bool) else ''
     return int(text) if text.isdigit() and len(text) <= 10 and low <= int(text) <= high else None
@@ -41,7 +41,7 @@ def _whole(value, low: int = 1, high: int = LARGEST_ID) -> int | None:
 def _membership(conversation_id):
     """The viewer's conversation `conversation_id` and their membership of it, or None: for one they are not in, have
     left, nobody holds, or is hidden here alike (follow-up F6)."""
-    number = _whole(conversation_id)
+    number = whole_number(conversation_id)
     conversation = found_here(Conversation, number) if number else None
     found = membership.member(conversation.id, g.oauth_user.id) if conversation else None
     return (conversation, found) if found is not None and found.joined else None
@@ -120,9 +120,9 @@ def _inbox(viewer_id: int, kind: str):
 @require_oauth('read')
 def direct_conversations():
     kind = request.args.get('filter', 'primary')
-    limit = _whole(request.args.get('limit', 20), high=MAX_CONVERSATIONS)
+    limit = whole_number(request.args.get('limit', 20), high=MAX_CONVERSATIONS)
     raw_cursor = request.args.get('cursor') or '0'
-    offset = _whole(raw_cursor, low=0) if raw_cursor != '0' else 0
+    offset = whole_number(raw_cursor, low=0) if raw_cursor != '0' else 0
     if kind not in FILTERS or limit is None or offset is None:
         return _refused('The filter, limit or cursor is not one this server knows')
     rows = _inbox(g.oauth_user.id, kind).offset(offset).limit(limit + 1).all()
@@ -153,7 +153,7 @@ def direct_mutuals():
     ten at a time by `cursor` (the last one's id), as Pixelfed's FollowerService::getMutualsWithProfiles."""
     me = g.oauth_user
     raw = request.args.get('cursor')
-    after = _whole(raw) if raw else 0
+    after = whole_number(raw) if raw else 0
     if after is None:
         return _refused('cursor is not an account id')
     followed = db.session.query(UserFollower.remote_user_id).filter(
@@ -196,7 +196,7 @@ def direct_lookup():
                      'avatar': entity['avatar'], 'account': entity} for person, entity in accounts])
 
 
-def _may_message(sender: User, recipient: User):
+def may_message(sender: User, recipient: User):
     """None when `sender` may message `recipient`, else the refusal: a block either way, a local-only account and a
     remote one (spec 3.4), or the sender's own standing (can_send_pm_to, as the web chat asks)."""
     if recipient.has_blocked_user(sender.id) or sender.has_blocked_user(recipient.id):
@@ -224,12 +224,12 @@ def direct_start():
         return _refused('Name someone other than yourself')
     if len(ids) > 1:
         return _refused('A conversation here is with one person: group chats are not supported')
-    number = _whole(ids.pop())
+    number = whole_number(ids.pop())
     recipient = without_local_only_actors(User.query.filter(User.id == number, User.deleted.is_(False)), User,
                                           True).first() if number else None
     if recipient is None:
         return _refused('One or more recipients could not be found.', 404)
-    refusal = _may_message(me, recipient)
+    refusal = may_message(me, recipient)
     if refusal:
         return refusal
     conversation = Conversation.find_existing_conversation(recipient=recipient, sender=me)
@@ -254,8 +254,8 @@ def direct_messages(conversation_id):
     found = _membership(conversation_id)
     if not found:
         return _not_found()
-    limit = _whole(request.args.get('limit', 20), high=MAX_MESSAGES)
-    max_id, min_id = (_whole(request.args[name]) if request.args.get(name) else 0 for name in ('max_id', 'min_id'))
+    limit = whole_number(request.args.get('limit', 20), high=MAX_MESSAGES)
+    max_id, min_id = (whole_number(request.args[name]) if request.args.get(name) else 0 for name in ('max_id', 'min_id'))
     if limit is None or max_id is None or min_id is None:
         return _refused('The limit, max_id or min_id is not a whole number this server takes')
     query = _messages(found[0])
@@ -292,7 +292,7 @@ def direct_send(conversation_id):
     if not isinstance(text, str) or len(text) > MAX_CHARACTERS or not (text.strip() or pictures):
         return _refused(f'A message is text of 1 to {MAX_CHARACTERS} characters, photos, or both')
     for other in conversation.members:
-        refusal = None if other.id == me.id else _may_message(me, other)
+        refusal = None if other.id == me.id else may_message(me, other)
         if refusal:
             return refusal
     for person in conversation.members:
@@ -306,7 +306,7 @@ def direct_send(conversation_id):
 def direct_delete(conversation_id, message_id):
     """One's own message, deleted as alpha's delete does it, and federated."""
     found = _membership(conversation_id)
-    number = _whole(message_id)
+    number = whole_number(message_id)
     message = ChatMessage.query.filter_by(id=number, conversation_id=found[0].id, sender_id=g.oauth_user.id,
                                           deleted=False).first() if found and number else None
     if message is None:
@@ -329,9 +329,9 @@ def direct_read(conversation_id):
     me = g.oauth_user
     unread = _unread(found[0], me.id)
     if up_to is not None:
-        if _whole(up_to) is None:
+        if whole_number(up_to) is None:
             return _refused('message_id is not a message id')
-        unread = unread.filter(ChatMessage.id <= _whole(up_to))
+        unread = unread.filter(ChatMessage.id <= whole_number(up_to))
     read_ids = set()
     for message in unread.all():
         message.read = True
