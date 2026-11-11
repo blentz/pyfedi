@@ -8,9 +8,47 @@ from app.activitypub.serializers.microblog import image_document
 from app.activitypub.signature import send_post_request
 from app.constants import NOTIF_MESSAGE, SRC_WEB
 from app.federation_urls import activity_id, owner_base
-from app.models import User, ChatMessage, Notification, utcnow, Conversation, chat_message_file
+from app.models import User, ChatMessage, File, Notification, utcnow, Conversation, chat_message_file, \
+    storable_alt_text
 from app.storefront import canonicalise_text
 from app.utils import shorten_string, markdown_to_html, publish_sse_event
+
+
+MAX_MESSAGE_PICTURES = 4   # /api/v2.1/config's direct_messages.max_media_attachments says so too
+
+
+def attach_files(reply: ChatMessage, files: list | None) -> None:
+    """`files` as the message's pictures, in that order."""
+    if not files:
+        return
+    db.session.add_all(file for file in files if file.id is None)
+    db.session.flush()
+    db.session.execute(chat_message_file.insert(), [{'chat_message_id': reply.id, 'file_id': file.id,
+                                                     'weight': weight} for weight, file in enumerate(files)])
+    db.session.commit()
+    db.session.refresh(reply)
+
+
+def incoming_pictures(attachment) -> list[File]:
+    """An incoming message's pictures (W1.4b2): its image attachments (an Image, or a Document of an image type),
+    at most MAX_MESSAGE_PICTURES and over https only, as new Files naming them by address, with their alt text.
+    Nothing is fetched here."""
+    items = attachment if isinstance(attachment, list) else [attachment] if isinstance(attachment, dict) else []
+    pictures = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        media = item.get('mediaType')
+        if not (media.startswith('image/') if isinstance(media, str) else item.get('type') == 'Image'):
+            continue
+        url = item.get('url')
+        url = url.get('href') if isinstance(url, dict) else url
+        if not isinstance(url, str) or not url.startswith('https://') or len(url) > 1024:
+            continue
+        pictures.append(File(source_url=url, alt_text=storable_alt_text(item.get('name'))))
+        if len(pictures) == MAX_MESSAGE_PICTURES:
+            break
+    return pictures
 
 
 def message_attachments(reply: ChatMessage) -> list[dict]:
@@ -29,11 +67,7 @@ def send_message(message: str, conversation_id: int, user: User = current_user, 
     conversation.updated_at = utcnow()
     db.session.add(reply)
     db.session.commit()
-    if files:
-        db.session.execute(chat_message_file.insert(), [{'chat_message_id': reply.id, 'file_id': file.id,
-                                                         'weight': weight} for weight, file in enumerate(files)])
-        db.session.commit()
-        db.session.refresh(reply)
+    attach_files(reply, files)
     membership.message_sent(conversation.id, user.id)
     for recipient in conversation.members:
         if recipient.id != user.id:

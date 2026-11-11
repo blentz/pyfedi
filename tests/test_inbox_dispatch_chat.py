@@ -794,3 +794,38 @@ def test_a_message_into_a_muted_conversation_notifies_nobody(app, db_session, mo
     assert db_session.query(ChatMessage).count() == 1 and db_session.query(Notification).count() == 0
     assert membership.member(conversation.id, recipient.id).hidden is False   # back in view
 
+
+
+def test_a_message_s_pictures_are_taken_with_it(app, db_session, monkeypatch):
+    """W1.4b2: an incoming message's image attachments, at most four and over https only, are its pictures, by their
+    address (fetched by nobody here until a reader opens one), with their alt text."""
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    db.session.commit()
+    record_moderation(monkeypatch, 'publish_sse_event')
+    pictures = [{'type': 'Document', 'mediaType': 'image/jpeg', 'url': f'https://peer.example/m/{n}.jpg',
+                 'name': f'picture {n}'} for n in range(5)]
+    others = [{'type': 'Document', 'mediaType': 'video/mp4', 'url': 'https://peer.example/m/clip.mp4'},
+              {'type': 'Image', 'url': 'http://peer.example/m/plain.jpg'},
+              {'type': 'Image', 'url': {'type': 'Link', 'href': 'https://peer.example/m/linked.png'}},
+              'https://peer.example/m/bare.jpg', {'type': 'Image'}]
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id, content='look',
+                           id='https://peer.example/pm/1', attachment=[others[2]] + pictures + others))
+
+    message = db_session.query(ChatMessage).one()
+    assert [file.source_url for file in message.files] == \
+        ['https://peer.example/m/linked.png'] + [f'https://peer.example/m/{n}.jpg' for n in range(3)]
+    assert [file.alt_text for file in message.files][1:] == ['picture 0', 'picture 1', 'picture 2']
+
+
+def test_one_picture_alone_is_taken_too(app, db_session, monkeypatch):
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    db.session.commit()
+    record_moderation(monkeypatch, 'publish_sse_event')
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id, content='look', id='https://peer.example/pm/1',
+                           attachment={'type': 'Image', 'mediaType': 'image/png', 'url': 'https://peer.example/a.png'}))
+
+    assert [file.source_url for file in db_session.query(ChatMessage).one().files] == ['https://peer.example/a.png']

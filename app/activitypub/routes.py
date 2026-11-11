@@ -3716,6 +3716,7 @@ def process_chat(user, store_ap_json, core_activity, session):
                 session.add(new_message)
                 existing_conversation.updated_at = utcnow()
                 session.commit()
+                chat_util.attach_files(new_message, chat_util.incoming_pictures(core_activity['object'].get('attachment')))
 
                 notification_text = 'New message from '
                 message_id = new_message.id
