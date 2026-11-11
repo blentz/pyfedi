@@ -16,8 +16,9 @@ from app.local_only import found_here, refuses_remote_contact, without_hidden_co
 from app.mastodon import bp
 from app.mastodon.entities import account, timestamp
 from app.mastodon.instance import MAX_CHARACTERS
-from app.models import ChatMessage, Conversation, Notification, User, UserFollower, conversation_member
+from app.models import ChatMessage, Conversation, Notification, User, UserBlock, UserFollower, conversation_member
 from app.oauth_server.protect import require_oauth
+from app.reads import users as reads_users
 from app.shared.tasks import task_selector
 
 FILTERS = ('primary', 'requests', 'hidden')
@@ -164,6 +165,32 @@ def direct_mutuals():
     more, rows = len(rows) > MUTUALS_PAGE, rows[:MUTUALS_PAGE]
     return jsonify({'data': [account(person, me.id) for person in rows], 'has_more': more,
                     'next_cursor': str(rows[-1].id) if more else None, 'total_count': total})
+
+
+LOOKUP_LIMIT = 8
+
+
+@bp.route('/api/v1.1/direct/lookup', methods=['POST'])
+@require_oauth('read')
+def direct_lookup():
+    """The app's New message search (Pixelfed's composeLookup): up to eight accounts whose name (or remote address,
+    with an '@' in it) holds `q`, from the people listing W1's search reads (nothing is fetched from another server),
+    without blocks either way. Each is wrapped as Pixelfed wraps one, or with `_pe` the account itself."""
+    me = g.oauth_user
+    fields = request.get_json(silent=True)
+    fields = fields if isinstance(fields, dict) else {}
+    query = fields.get('q', request.args.get('q'))
+    if not isinstance(query, str) or not 2 <= len(query) <= 50:
+        return _refused('q is 2 to 50 characters')
+    blocked = db.session.query(UserBlock.blocked_id).filter(UserBlock.blocker_id == me.id)
+    blocking = db.session.query(UserBlock.blocker_id).filter(UserBlock.blocked_id == me.id)
+    people = reads_users.person_listing(me.id, reads_users.People(search=query.lstrip('@'))) \
+        .filter(User.id.notin_(blocked), User.id.notin_(blocking)).limit(LOOKUP_LIMIT).all()
+    accounts = [(person, account(person, me.id)) for person in people]
+    if fields.get('_pe') or request.args.get('_pe'):
+        return jsonify([entity for _person, entity in accounts])
+    return jsonify([{'local': person.is_local(), 'id': str(person.id), 'name': person.user_name, 'privacy': True,
+                     'avatar': entity['avatar'], 'account': entity} for person, entity in accounts])
 
 
 def _may_message(sender: User, recipient: User):

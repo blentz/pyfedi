@@ -288,3 +288,27 @@ def test_the_people_to_message_first_are_those_who_follow_back(world):
     names = {person['username'] for person in first['data'] + rest['data']}
     assert names == {'dmfriend', *(other.user_name for other in more)}
     assert _get(world, '/compose/mutuals', cursor='x').status_code == 422
+
+
+def _lookup(world, query, **extra):
+    return world['client'].post(BASE + '/lookup', headers=_as(world, 'me'), json={'q': query, **extra})
+
+
+def test_looking_someone_up_by_name_finds_them_as_pixelfed_wraps_them(world):
+    """The app's New message search (Pixelfed's composeLookup): up to eight accounts by name, each wrapped as
+    {local, id, name, privacy, avatar, account}; with `_pe` the accounts themselves."""
+    found = _lookup(world, 'dmfri').get_json()
+    assert [(row['name'], row['local'], row['id']) for row in found] == [('dmfriend', True, str(world['friend'].id))]
+    assert found[0]['account']['username'] == 'dmfriend' and found[0]['privacy'] is True
+    assert [row['username'] for row in _lookup(world, '@dmfriend', _pe=1).get_json()] == ['dmfriend']
+
+
+def test_a_lookup_leaves_out_blocks_either_way(world):
+    make_user_block(world['me'], world['friend'])
+    make_user_block(world['stranger'], world['me'])
+    assert {row['name'] for row in _lookup(world, 'dm').get_json()} == {'dmme'}
+
+
+@pytest.mark.parametrize('query', ['', 'd', 'x' * 51, 7])
+def test_a_lookup_needs_two_to_fifty_characters(world, query):
+    assert _lookup(world, query).status_code == 422
