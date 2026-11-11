@@ -23,6 +23,20 @@ class Device:
             self.adb.uninstall(package)
         self.adb.install(str(apk), nolaunch=True, flags=['-r', '-g'])
 
+    def reset_shared_state(self) -> None:
+        """What one app's test leaves on the device for the next, taken away before each: Chrome's data (the PieFed
+        session an earlier app's OAuth login signed in, which would skip the next one's login form) and the media a
+        driver pushed for a photo picker (which would list one test's picture in another's). Chrome's trust in the
+        harness root and its command line are outside its data (android/boot.sh) and stay."""
+        self.adb.shell(['pm', 'clear', 'com.android.chrome'])
+        self.adb.shell(['sh', '-c', 'rm -f /sdcard/Pictures/interop-* /sdcard/Movies/interop-*'])
+        self.scan_media()
+
+    def scan_media(self) -> None:
+        """The media store indexed again: Android's photo picker lists what it has indexed."""
+        self.adb.shell(['content', 'call', '--uri', 'content://media', '--method', 'scan_volume', '--arg',
+                        'external_primary'])
+
     def launch(self, package: str) -> None:
         self.adb.shell(['logcat', '-c'])   # a failure's log then starts at this app
         self.ui.app_start(package, wait=True, stop=True)

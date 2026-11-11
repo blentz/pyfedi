@@ -477,8 +477,7 @@ class PeerTubeApp:
         d, text = self.device, marker('peertube-android')
         clip = f'/sdcard/Movies/{text}.mp4'
         d.adb.sync.push(VIDEO_FIXTURE, clip)
-        d.adb.shell(['content', 'call', '--uri', 'content://media', '--method', 'scan_volume', '--arg',
-                     'external_primary'])   # the photo picker lists what the media store has indexed
+        d.scan_media()
         d.tap_tab('Creator')
         d.tap('Publish', exact=True, timeout=30)
         d.tap('Upload file', exact=True)
@@ -627,8 +626,7 @@ class PixelfedApp:
         an image post."""
         d, text = self.device, marker('pixelfed-android')
         d.adb.sync.push(io.BytesIO(png(320, 240)), f'/sdcard/Pictures/{text}.png')
-        d.adb.shell(['content', 'call', '--uri', 'content://media', '--method', 'scan_volume', '--arg',
-                     'external_primary'])   # the photo picker lists what the media store has indexed
+        d.scan_media()
         for _ in range(4):   # view left it on dora's photo, a screen over her profile and the search, with no tabs
             if d.ui(description='Home').exists:
                 break
@@ -679,6 +677,7 @@ def test_android_app(world, device, name):
         apk, version = apks.fetch(app['apk'], http)
     if app['apk'].get('extract_native_libs'):
         apk = apks.with_native_libs_extracted(apk)
+    device.reset_shared_state()   # each app starts as if it were the first: no browser session, no pushed media
     device.install(apk, app['package'])
     device.launch(app['package'])
     driver = DRIVERS[name](device, app['package'], world)

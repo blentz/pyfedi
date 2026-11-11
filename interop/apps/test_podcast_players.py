@@ -75,6 +75,7 @@ def test_antennapod_subscribes_and_lists_the_episode(episode, device, tmp_result
     name, app = 'antennapod-android', MATRIX['antennapod-android']
     with httpx.Client(timeout=300, follow_redirects=True) as http:
         apk, version = apks.fetch(app['apk'], http)
+    device.reset_shared_state()   # as each Android app: it starts as if it were the first
     device.install(apk, app['package'])
     device.launch(app['package'])
 
