@@ -3,6 +3,7 @@ and compose limits, explore's trending photos, an account by name and mutual fol
 answers for what PieFed has none of yet (stories W1.4c, chats W1.4b) or at all (Pixelfed's push relay, collections,
 computed trends)."""
 import uuid
+from datetime import datetime
 
 import pytest
 
@@ -10,7 +11,7 @@ from app import db
 from app.constants import POST_TYPE_IMAGE
 from app.models import File, Report, UserFollower
 from app.oauth_server import tokens
-from tests.factories import make_community, make_file, make_post, make_user
+from tests.factories import make_community, make_file, make_instance, make_post, make_user
 from tests import test_login_gate as gate_tests
 
 private = gate_tests.private   # the private-instance fixture
@@ -156,3 +157,19 @@ def test_a_hidden_account_is_answered_as_nobody(world, monkeypatch):
 def test_the_app_reads_its_config_from_a_private_instance_before_it_signs_in(private, app):
     response = app.test_client().get('/api/v2.1/config')
     assert response.status_code == 200 and response.get_json()['version'] == '0.15.2'
+
+
+def test_an_extended_account_says_whether_it_is_local(world):
+    """Pixelfed's app badges an account "Remote" unless its `_pe=1` account says `local`; a remote one says when it
+    was last fetched."""
+    remote = make_user(make_instance('pixels.example'), 'pfremote')
+    remote.ap_fetched_at = datetime(2026, 11, 1, 12, 0)
+    db.session.commit()
+    mine = _get(world, f"/api/v1/accounts/{world['author'].id}", _pe=1).get_json()
+    theirs = _get(world, f'/api/v1/accounts/{remote.id}', _pe=1).get_json()
+    assert (mine['local'], mine['last_fetched_at']) == (True, None)
+    assert theirs['local'] is False and theirs['last_fetched_at'].startswith('2026-11-01T12:00')
+    assert 'local' not in _get(world, f"/api/v1/accounts/{world['author'].id}").get_json()
+    remote.ap_fetched_at = None   # one never fetched again since it was made
+    db.session.commit()
+    assert _get(world, f'/api/v1/accounts/{remote.id}', _pe=1).get_json()['last_fetched_at'] is None

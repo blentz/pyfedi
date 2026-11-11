@@ -1,5 +1,7 @@
 """Mastodon's entities, built from PieFed's rows (spec 2026-11-07-mastodon-client-api-design §3.2). The fields every
 app decodes are always there; Tusky's decoder, the strictest, fails a whole page on one that is missing (plan W1.0)."""
+from flask import has_request_context, request
+
 from app.models import User
 from app.reads.users import listable_counts
 from app.storefront import current_storefront, domain_base_url
@@ -51,4 +53,9 @@ def account(user: User, viewer_id: int | None, with_source: bool = False, counts
                             'fields': _fields(user), 'follow_requests_count': 0,
                             'hide_collections': False, 'discoverable': bool(user.searchable),
                             'indexable': bool(user.indexable)}
+    if has_request_context() and request.args.get('_pe') == '1':
+        # Pixelfed's extended account: its app badges one "Remote" unless it is `local`
+        local = user.is_local()
+        fetched = user.ap_fetched_at if not local else None
+        entity.update({'local': local, 'last_fetched_at': timestamp(fetched) if fetched else None})
     return entity
