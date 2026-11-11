@@ -1,8 +1,29 @@
 import json
 import os
 import re
+import socket
 import sys
 import time
+
+# --- Reserved names are not known, at once -----------------------------------
+#
+# The suite's hosts are under .test, .example and .invalid, which no resolver may answer (RFC 2606, RFC 6761 §6.2,
+# §6.5). Code under test resolves some of them (is_invalid_get_request_uri's private-address check), and a healthy
+# resolver says "not known" at once; the remote test host's took 20s to give up, and a full run four times as long.
+# The suite answers these names itself, as a resolver should. It replaces socket.getaddrinfo HERE, at import, so a
+# test module that keeps the function it found (a `_REAL_GETADDRINFO` for its own fake) keeps this one.
+_RESOLVER_GETADDRINFO = socket.getaddrinfo
+_RESERVED_NAMES = ('.test', '.example', '.invalid')
+
+
+def _getaddrinfo_knowing_reserved_names(host, *args, **kwargs):
+    name = host.decode('ascii', 'replace') if isinstance(host, bytes) else host
+    if isinstance(name, str) and name.rstrip('.').lower().endswith(_RESERVED_NAMES):
+        raise socket.gaierror(socket.EAI_NONAME, 'Name or service not known')
+    return _RESOLVER_GETADDRINFO(host, *args, **kwargs)
+
+
+socket.getaddrinfo = _getaddrinfo_knowing_reserved_names
 
 # --- One database and one pair of Redis dbs per xdist worker -----------------
 #
