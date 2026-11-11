@@ -214,10 +214,9 @@ def delete_avatar():
     """The avatar removed, as the web's Remove avatar does; Pixelfed answers with the account."""
     user = g.oauth_user
     if user.avatar_id:
-        picture = db.session.get(File, user.avatar_id)
+        picture = db.session.get(File, user.avatar_id)   # there while the avatar points at it (user_avatar_id_fkey)
         user.avatar_id = None
-        if picture is not None:
-            picture.delete_from_disk()
-            db.session.delete(picture)
+        picture.delete_from_disk()
+        db.session.delete(picture)
         db.session.commit()
     return jsonify(account(user, user.id))
