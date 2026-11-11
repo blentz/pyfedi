@@ -668,8 +668,40 @@ class PixelfedApp:
         # a photo, not words alone: an image post once PieFed's media pipeline has the upload (a link until then)
         wait_for(lambda: alice.get_post(found['id'])['post']['post_type'] == 'Image', timeout=120, interval=3)
         chat = self._message_dora(f'{text}-dm')
+        story = self._dora_story(f'{text}-story')
         return f"posted a photo captioned {text!r} through its camera; PieFed has it as alice's image post " \
-               f"{found['id']}. {chat}"
+               f"{found['id']}. {chat}. {story}"
+
+    def _dora_story(self, title: str) -> str:
+        """A story (W1.4c): a microblog photo of dora's from the last day, while alice follows her, is in the home
+        screen's carousel under dora's name, and opens. alice follows dora for this alone: the follow is undone, so
+        the apps after this one see the world as before."""
+        d, alice, dora = self.device, self.world['alice'], self.world['dora']
+        uploaded = dora.http.post('/upload/image', files={'file': ('story.png', png(240, 320), 'image/png')})
+        story = dora.post(title, '', dora.microblogs_id(), url=uploaded.raise_for_status().json()['url'])['post']
+        wait_for(lambda: dora.get_post(story['id'])['post']['post_type'] == 'Image', timeout=120, interval=3)
+        dora_id = story['user_id']
+        alice.follow_user(dora_id)
+        try:
+            # the carousel is read when the home screen is built, not on its pull to refresh: the app is started again
+            d.ui.app_start(self.package, wait=True, stop=True)
+            own = d.ui(text='Your story')
+            own.wait(timeout=60)
+            # dora's node: her name in the carousel's row, beside "Your story" (her feed post's header names her too)
+            row = own.info['bounds']
+            node = d.ui(text='dora')
+            assert node.wait(timeout=30), 'the carousel has no story of dora\'s'
+            shown = [found.info['bounds'] for found in node]
+            assert any(abs(bounds['top'] - row['top']) < 40 for bounds in shown), \
+                f'dora is not in the carousel beside Your story ({row}): {shown}'
+            in_row = next(found for found in node if abs(found.info['bounds']['top'] - row['top']) < 40)
+            in_row.click()
+            time.sleep(5)
+            d.ui.screenshot(str(RESULTS / 'pixelfed-android-story.png'))
+            (RESULTS / 'pixelfed-android-story.xml').write_text(d.ui.dump_hierarchy())
+        finally:
+            alice.unfollow_user(dora_id)
+        return f"dora's microblog photo {title!r} is a story in its home carousel, and opens"
 
     def _message_dora(self, text: str) -> str:
         """A direct message (W1.4b1): Home's paper plane > Messages > New message > dora, found by the search (direct
