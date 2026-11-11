@@ -5,7 +5,8 @@ export FLASK_APP=pyfedi.py
 echo "Running database migrations..."
 
 flask db upgrade
-flask populate_community_search
+# the communities the web suggests, from data.lemmyverse.net: a slow or absent lemmyverse leaves last run's list
+flask populate_community_search || echo "The community search list was not refreshed (data.lemmyverse.net); starting anyway."
 
 # Schedule cron jobs in background
 if [[ "${CRON:-}" == [YyTt1]* ]]; then
