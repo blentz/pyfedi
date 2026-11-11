@@ -1,8 +1,10 @@
 """Resolving and caching the client-app harness's APKs (interop/apps/apks.py), against canned F-Droid and GitHub."""
+import struct
+
 import httpx
 import pytest
 
-from interop.apps.apks import _abi_rank, fetch, resolve
+from interop.apps.apks import _abi_rank, extracting_native_libs, fetch, resolve
 
 
 def _client(routes, served=None):
@@ -83,3 +85,34 @@ def test_fetch_downloads_once_then_reuses_the_cache(tmp_path):
     fetch({'fdroid': 'com.keylesspalace.tusky'}, _client(FDROID, served), cache=tmp_path)
     assert sum(url.endswith('.apk') for url in served) == 1
     assert not list(tmp_path.glob('*.part'))
+
+
+def _axml(attributes: dict[str, int]) -> bytes:
+    """A binary manifest of one <application> element with boolean attributes, as aapt writes them (UTF-16 pool)."""
+    names = list(attributes)
+    pool_strings = b''.join(struct.pack('<H', len(name)) + name.encode('utf-16-le') + b'\x00\x00' for name in names)
+    offsets, at = [], 0
+    for name in names:
+        offsets.append(at)
+        at += 2 + len(name) * 2 + 2
+    header = 28
+    strings_start = header + 4 * len(names)
+    pool = struct.pack('<HHIIIIII', 0x0001, header, strings_start + len(pool_strings), len(names), 0, 0,
+                       strings_start, 0) + struct.pack(f'<{len(names)}I', *offsets) + pool_strings
+    attrs = b''.join(struct.pack('<iIIHBBI', -1, index, 0xFFFFFFFF, 8, 0, 0x12, value)
+                     for index, value in enumerate(attributes.values()))
+    element = struct.pack('<HHIIiiIHHHHHH', 0x0102, 16, 36 + len(attrs), 1, -1, -1, 0, 20, 20, len(names), 0, 0,
+                          0) + attrs
+    return struct.pack('<HHI', 0x0003, 8, 8 + len(pool) + len(element)) + pool + element
+
+
+def test_a_manifest_is_made_to_extract_its_native_libraries():
+    manifest = _axml({'debuggable': 0, 'extractNativeLibs': 0})
+    patched = extracting_native_libs(manifest)
+    assert len(patched) == len(manifest)
+    assert patched == _axml({'debuggable': 0, 'extractNativeLibs': 0xFFFFFFFF})
+
+
+def test_a_manifest_without_the_attribute_is_refused():
+    with pytest.raises(LookupError):
+        extracting_native_libs(_axml({'debuggable': 0}))

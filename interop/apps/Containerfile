@@ -4,6 +4,9 @@
 # test are recorded per run in interop/apps/results/.
 FROM docker.io/library/python:3-slim
 
+# apksigner and zipalign: an app whose native libraries must be extracted is signed again (apks.py)
+RUN apt-get update && apt-get install -y --no-install-recommends apksigner zipalign default-jre-headless \
+    && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir --disable-pip-version-check pytest pytest-timeout httpx playwright uiautomator2 adbutils \
     && playwright install --with-deps chromium
 

@@ -7,14 +7,24 @@ An app's matrix.json entry names where its APK comes from:
   several match, one built for x86_64 or for every ABI wins over an arm-only one: the emulator is x86_64 (it can
   translate arm64, but slower).
 Downloads are cached by file name under interop/apps/.apks (gitignored), so a re-run fetches only new releases.
+
+With "extract_native_libs": true, the APK is rewritten to have its native libraries extracted at install
+(android:extractNativeLibs="true") and signed again with the harness's own key. An arm-only React Native app (the
+official Pixelfed app, plan W1.4a) keeps its libraries stored in the APK, and React Native's SoLoader cannot load them
+from there through the emulator's arm translation: the app died at launch. Extracted, it runs.
 """
 import re
+import struct
+import subprocess
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 
 CACHE = Path(__file__).parent / '.apks'
+EXTRACT_NATIVE_LIBS = 'extractNativeLibs'
+_STRING_POOL, _START_ELEMENT, _BOOLEAN = 0x0001, 0x0102, 0x12
 FDROID = 'https://f-droid.org'
 GITHUB = 'https://api.github.com'
 
@@ -77,3 +87,70 @@ def fetch(source: dict, http: httpx.Client, cache: Path = CACHE) -> tuple[Path, 
                     out.write(chunk)
         partial.rename(path)
     return path, apk.version
+
+
+def _pool_strings(axml: bytes) -> list[str]:
+    """The string pool of a binary XML document (its first chunk after the 8-byte document header)."""
+    kind, header_size, _size = struct.unpack_from('<HHI', axml, 8)
+    if kind != _STRING_POOL:
+        raise ValueError('no string pool where a binary manifest has one')
+    count, _styles, flags, strings_start, _styles_start = struct.unpack_from('<IIIII', axml, 16)
+    offsets = struct.unpack_from(f'<{count}I', axml, 8 + header_size)
+    found = []
+    for offset in offsets:
+        at = 8 + strings_start + offset
+        if flags & 0x100:   # UTF-8: two lengths, characters then bytes, each one or two bytes
+            at += 2 if axml[at] & 0x80 else 1
+            length = ((axml[at] & 0x7f) << 8 | axml[at + 1]) if axml[at] & 0x80 else axml[at]
+            at += 2 if axml[at] & 0x80 else 1
+            found.append(axml[at:at + length].decode('utf-8', 'replace'))
+        else:
+            length = struct.unpack_from('<H', axml, at)[0]
+            found.append(axml[at + 2:at + 2 + length * 2].decode('utf-16-le', 'replace'))
+    return found
+
+
+def extracting_native_libs(axml: bytes) -> bytes:
+    """The binary manifest `axml` with android:extractNativeLibs set to true where it is set, the same length."""
+    names = _pool_strings(axml)
+    target = names.index(EXTRACT_NATIVE_LIBS) if EXTRACT_NATIVE_LIBS in names else None
+    data, at, changed = bytearray(axml), 8, False
+    while at < len(data):
+        kind, _header_size, size = struct.unpack_from('<HHI', data, at)
+        if kind == _START_ELEMENT:
+            attribute_start, attribute_size, attribute_count = struct.unpack_from('<HHH', data, at + 24)
+            for index in range(attribute_count):
+                attribute = at + 16 + attribute_start + index * attribute_size
+                if target is not None and struct.unpack_from('<I', data, attribute + 4)[0] == target:
+                    struct.pack_into('<BI', data, attribute + 15, _BOOLEAN, 0xFFFFFFFF)
+                    changed = True
+        at += size
+    if not changed:
+        raise LookupError(f'the manifest sets no {EXTRACT_NATIVE_LIBS}')
+    return bytes(data)
+
+
+def with_native_libs_extracted(apk: Path, cache: Path = CACHE) -> Path:
+    """`apk` rewritten to extract its native libraries, aligned and signed with the harness's key (made on first use),
+    cached beside it."""
+    signed = apk.with_name(apk.stem + '-extracted.apk')
+    if signed.exists() and signed.stat().st_size:
+        return signed
+    unsigned, aligned = apk.with_name(apk.stem + '-unsigned.apk'), apk.with_name(apk.stem + '-aligned.apk')
+    with zipfile.ZipFile(apk) as source, zipfile.ZipFile(unsigned, 'w') as target:
+        for item in source.infolist():
+            if item.filename.startswith('META-INF/') and item.filename.rsplit('.', 1)[-1] in ('SF', 'RSA', 'EC', 'MF'):
+                continue   # the old signature, which no longer matches
+            body = source.read(item.filename)
+            target.writestr(item, extracting_native_libs(body) if item.filename == 'AndroidManifest.xml' else body)
+    keystore = cache / 'harness.keystore'
+    if not keystore.exists():
+        subprocess.run(['keytool', '-genkeypair', '-keystore', str(keystore), '-storepass', 'harness', '-keypass',
+                        'harness', '-alias', 'harness', '-keyalg', 'RSA', '-keysize', '2048', '-validity', '3650',
+                        '-dname', 'CN=PieFed interop harness'], check=True, capture_output=True)
+    subprocess.run(['zipalign', '-f', '4', str(unsigned), str(aligned)], check=True, capture_output=True)
+    subprocess.run(['apksigner', 'sign', '--ks', str(keystore), '--ks-pass', 'pass:harness', '--out', str(signed),
+                    str(aligned)], check=True, capture_output=True)
+    unsigned.unlink()
+    aligned.unlink()
+    return signed
