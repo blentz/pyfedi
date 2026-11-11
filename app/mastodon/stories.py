@@ -123,11 +123,11 @@ def story_seen():
     return jsonify({'code': 200})
 
 
-@bp.route('/api/v1.1/stories/self-expire/<int:story_id>', methods=['POST'])
+@bp.route('/api/v1.1/stories/self-expire/<int:post_id>', methods=['POST'])   # a story's id is its post's
 @require_oauth('write')
-def story_self_expire(story_id):
+def story_self_expire(post_id):
     """Ruling S2: one's own story leaves every carousel; the post stays."""
-    story = _story(g.oauth_user.id, story_id)
+    story = _story(g.oauth_user.id, post_id)
     if story is None or story.user_id != g.oauth_user.id:
         return _not_found()
     StoryExpiry.query.filter(StoryExpiry.created_at < utcnow() - KEPT).delete()
