@@ -4,15 +4,23 @@ from flask_login import current_user
 
 from app import db
 from app.chat import membership
+from app.activitypub.serializers.microblog import image_document
 from app.activitypub.signature import send_post_request
 from app.constants import NOTIF_MESSAGE, SRC_WEB
 from app.federation_urls import activity_id, owner_base
-from app.models import User, ChatMessage, Notification, utcnow, Conversation
+from app.models import User, ChatMessage, Notification, utcnow, Conversation, chat_message_file
 from app.storefront import canonicalise_text
 from app.utils import shorten_string, markdown_to_html, publish_sse_event
 
 
-def send_message(message: str, conversation_id: int, user: User = current_user, src=SRC_WEB) -> ChatMessage:
+def message_attachments(reply: ChatMessage) -> list[dict]:
+    """A message's pictures as the object's attachment, one Document each, as a post's pictures go (W1.4b2)."""
+    return [image_document(file, owner_base(reply.sender)) for file in reply.files if file.source_url]
+
+
+def send_message(message: str, conversation_id: int, user: User = current_user, src=SRC_WEB,
+                 files: list | None = None) -> ChatMessage:
+    """`files`: the message's pictures, in order (W1.4b2), already the sender's uploads."""
     conversation = db.session.get(Conversation, conversation_id)
     base = owner_base(user)   # stored and federated: a local-only host's link names the sender's federating base
     message = canonicalise_text(message, base)
@@ -21,6 +29,11 @@ def send_message(message: str, conversation_id: int, user: User = current_user, 
     conversation.updated_at = utcnow()
     db.session.add(reply)
     db.session.commit()
+    if files:
+        db.session.execute(chat_message_file.insert(), [{'chat_message_id': reply.id, 'file_id': file.id,
+                                                         'weight': weight} for weight, file in enumerate(files)])
+        db.session.commit()
+        db.session.refresh(reply)
     membership.message_sent(conversation.id, user.id)
     for recipient in conversation.members:
         if recipient.id != user.id:
@@ -78,6 +91,9 @@ def send_message(message: str, conversation_id: int, user: User = current_user, 
                             "type": "Mention"
                         }
                     ]
+                attachments = message_attachments(reply)
+                if attachments:
+                    reply_json['object']['attachment'] = attachments
                 send_post_request(recipient.ap_inbox_url, reply_json, user.private_key,
                                   user.public_url() + '#main-key')
 
@@ -106,6 +122,9 @@ def chat_message_ap_object(reply: ChatMessage, recipient: User) -> dict:
                 "type": "Mention"
             }
         ]
+    attachments = message_attachments(reply)
+    if attachments:
+        obj['attachment'] = attachments
     return obj
 
 

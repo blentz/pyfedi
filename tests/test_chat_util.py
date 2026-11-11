@@ -22,9 +22,9 @@ import pytest
 from unittest.mock import patch
 
 from app import db
-from app.chat.util import send_message, update_message
+from app.chat.util import chat_message_ap_object, send_message, update_message
 from app.models import ChatMessage, Notification, Site
-from tests.factories import make_conversation, make_instance, make_user
+from tests.factories import make_conversation, make_file, make_instance, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -312,3 +312,36 @@ def test_the_edit_carries_both_timestamps_and_the_senders_key(app, db_session):
     assert payload['object']['id'] == reply.ap_id
     assert payload['object']['content'] == reply.body_html
     assert payload['actor'] == sender.public_url()
+
+
+def _picture(name, alt='a picture'):
+    picture = make_file(file_path=f'app/static/media/posts/aa/{name}.png',
+                        source_url=f'https://test.piefed.local/static/media/posts/aa/{name}.png')
+    picture.alt_text, picture.width, picture.height = alt, 320, 240
+    db.session.commit()
+    return picture
+
+
+def test_a_message_carries_its_pictures_in_order_and_federates_them(app, db_session):
+    """W1.4b2 (spec 2026-11-10-pixelfed-app-design §6): a message's pictures are its own, in the order given, and go
+    out as the object's attachment, one Document each, as a post's pictures do."""
+    sender, recipient = _seed('pixelfed')
+    first, second = _picture('one', 'the first'), _picture('two', 'the second')
+    conversation = make_conversation(sender, recipient)
+    with app.test_request_context():
+        with patch('app.chat.util.send_post_request') as delivery:
+            reply = send_message('look', conversation.id, user=sender, files=[second, first])
+
+    assert [file.id for file in reply.files] == [second.id, first.id]
+    attachment = delivery.call_args.args[1]['object']['attachment']
+    assert [(item['type'], item['mediaType'], item['url'], item['name']) for item in attachment] == [
+        ('Document', 'image/png', second.source_url, 'the second'),
+        ('Document', 'image/png', first.source_url, 'the first')]
+    assert attachment[0]['width'] == 320
+    assert chat_message_ap_object(reply, recipient)['attachment'] == attachment   # fetched or updated, the same
+
+
+def test_a_message_without_pictures_has_no_attachment(app, db_session):
+    sender, recipient = _seed('pixelfed')
+    conversation, reply, delivery = _send(app, sender, recipient)
+    assert 'attachment' not in delivery.call_args.args[1]['object'] and reply.files == []

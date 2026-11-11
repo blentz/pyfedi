@@ -1215,6 +1215,17 @@ conversation_member = db.Table('conversation_member',
                                )
 
 
+# a message's pictures, in order (W1.4b2, spec 2026-11-10-pixelfed-app-design §6): uploaded first, or a peer's
+# attachment; deleted with the message
+chat_message_file = db.Table('chat_message_file',
+                             db.Column('chat_message_id', db.Integer,
+                                       db.ForeignKey('chat_message.id', ondelete='CASCADE')),
+                             db.Column('file_id', db.Integer, db.ForeignKey('file.id', ondelete='CASCADE'),
+                                       index=True),
+                             db.Column('weight', db.Integer, nullable=False, default=0),
+                             db.PrimaryKeyConstraint('chat_message_id', 'file_id'))
+
+
 class ChatMessage(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), index=True)
@@ -1232,6 +1243,8 @@ class ChatMessage(db.Model):
     ap_id = db.Column(db.String(255), index=True, unique=True)
 
     sender = db.relationship('User', foreign_keys=[sender_id])
+    files = db.relationship('File', secondary=chat_message_file, order_by=chat_message_file.c.weight,
+                            passive_deletes=True)
 
 
 class Tag(db.Model):

@@ -108,10 +108,16 @@ def note_addressing(post, mentions: list) -> dict:
 
 def _image_document(file, post) -> dict:
     """One picture of an image post as a Document: our WebP, AVIF or HEIC as its JPEG, which Pixelfed takes (R3)."""
+    return image_document(file, object_base(post))
+
+
+def image_document(file, base: str) -> dict:
+    """A picture as an ActivityPub Document, its JPEG named under `base` (the federating base of what carries it: a
+    post, or a direct message, W1.4b2) when ours is WebP, AVIF or HEIC."""
     attachment = {'type': 'Document', 'mediaType': guess_mime_type(file.source_url), 'url': file.source_url,
                   'name': file.alt_text or ''}
     if needs_jpeg(file):   # Pixelfed drops a post with a WebP, AVIF or HEIC attachment
-        attachment.update(mediaType='image/jpeg', url=jpeg_url(file, object_base(post)))
+        attachment.update(mediaType='image/jpeg', url=jpeg_url(file, base))
     if file.width and file.height:
         attachment['width'] = file.width
         attachment['height'] = file.height
