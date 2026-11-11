@@ -357,3 +357,14 @@ def test_a_lookup_leaves_out_blocks_either_way(world):
 @pytest.mark.parametrize('query', ['', 'd', 'x' * 51, 7])
 def test_a_lookup_needs_two_to_fifty_characters(world, query):
     assert _lookup(world, query).status_code == 422
+
+
+def test_a_message_read_since_is_not_called_edited(world):
+    """ChatMessage.edited_at moves on any change of the row (onupdate), its read flag's too, so PieFed cannot tell an
+    edit from a reading: no message says it was edited."""
+    conversation = _start(world)
+    sent = _say(world, conversation, 'just once', who='friend')
+    stored = db.session.get(ChatMessage, int(sent['id']))
+    stored.edited_at = stored.created_at.replace(year=stored.created_at.year + 1)
+    db.session.commit()
+    assert _get(world, f"/conversations/{conversation['id']}/messages").get_json()['data'][0]['edited_at'] is None

@@ -68,14 +68,13 @@ def _last_read_id(conversation: Conversation, viewer_id: int) -> str | None:
 
 
 def message_entity(message: ChatMessage, viewer_id: int) -> dict:
-    edited = message.edited_at and message.created_at and \
-        (message.edited_at - message.created_at).total_seconds() > 1   # edited_at is set as it is made, too
     pictures = [attachment(file) for file in message.files if file.view_url()]
     kind = 'photos' if len(pictures) > 1 else 'photo' if pictures else 'text'   # Pixelfed's message types
     return {'id': str(message.id), 'conversation_id': str(message.conversation_id),
             'sender_id': str(message.sender_id), 'is_author': message.sender_id == viewer_id, 'type': kind,
             'text': message.body or '', 'media': pictures, 'meta': None, 'sensitive': False, 'in_reply_to_id': None,
-            'edited_at': timestamp(message.edited_at) if edited else None, 'created_at': timestamp(message.created_at)}
+            # edited_at moves on any change of the row (its read flag's too): an edit cannot be told from a reading
+            'edited_at': None, 'created_at': timestamp(message.created_at)}
 
 
 def _state(conversation: Conversation, found) -> dict:
