@@ -117,15 +117,23 @@ class Device:
         self.adb.shell(['input', 'keyevent', 'KEYCODE_TAB'])
         time.sleep(0.5)
 
-    def reveal(self, text: str, swipes: int = 4) -> None:
+    def reveal(self, text: str, swipes: int = 4, exact: bool = False, above: float = 1.0) -> None:
         """Scroll `text` into view by swiping up: Flutter leaves a control under the keyboard out of the hierarchy, and
-        its sheets close on back, so hiding the keyboard is not an option there."""
+        its sheets close on back, so hiding the keyboard is not an option there. With `above` below 1, it must also
+        end above that share of the screen's height: a page's fixed bottom bar covers what is shown behind it."""
         for _ in range(swipes):
-            if self.showing(text):
+            if self.showing(text, exact=exact) and (above >= 1.0 or self._bottom(text, exact) <= above * self.ui.info[
+                    'displayHeight']):
                 return
             self.ui.swipe_ext('up', scale=0.4)
             time.sleep(0.8)
-        self.wait_text(text, timeout=5)
+        self.wait_text(text, timeout=5, contains=not exact)
+
+    def _bottom(self, text: str, exact: bool) -> int:
+        pattern = f'(?is){re.escape(text)}' if exact else f'(?is).*{re.escape(text)}.*'
+        found = self.ui(textMatches=pattern)
+        found = found if found.exists else self.ui(descriptionMatches=pattern)
+        return found.info['bounds']['bottom']
 
     def hide_keyboard(self) -> None:
         """Back, only while the keyboard shows: with no keyboard, back closes the app's sheet or screen instead."""

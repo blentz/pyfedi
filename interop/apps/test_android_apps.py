@@ -194,7 +194,18 @@ def piefed_consent(d, package):
         d.type_into(d.ui(className='android.widget.EditText', instance=0), ALICE[0])
         d.type_into(d.ui(className='android.widget.EditText', instance=1), ALICE[1])
         d.hide_keyboard()
-        d.ui(className='android.widget.Button', text='Log In').click(timeout=30)   # not the "Log in" heading
+        log_in = d.ui(className='android.widget.Button', text='Log In')   # not the "Log in" heading
+
+        def submit():
+            if log_in.exists:   # gone once the form went: the next page is only slow
+                log_in.click()
+        # a tap as the keyboard goes down can be swallowed, leaving the form as it was
+        log_in.wait(timeout=30)
+        d.tap_until(submit, 'to use your account', wait=30)
+    # an app asking many scopes (Pixelfed's eight) pushes Allow below the fold: it is scrolled into view, the button
+    # and not the heading "Allow <app> to use your account?", and clear of PieFed's fixed bottom nav on a phone
+    d.wait_text('to use your account', timeout=60)
+    d.reveal('Allow', swipes=6, exact=True, above=0.8)
     # Chrome can swallow a tap while the consent page settles: PieFed then gets no POST and the page stays. Tap
     # again while it still shows Allow; once the POST goes, the app comes back.
     for attempt in range(3):
