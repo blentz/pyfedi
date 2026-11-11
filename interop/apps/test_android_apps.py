@@ -568,8 +568,9 @@ class Jerboa:
 
 
 class PixelfedApp:
-    """Pixelfed's own app (pixelfed/pixelfed-rn, React Native; plan W1.4a). It reads /api/nodeinfo/2.0.json and goes on
-    only for Pixelfed, which PieFed says there alone (ruling X1). Its welcome screen's SERVER button > the server > Sign
+    """Pixelfed's own app (pixelfed/pixelfed-rn, React Native; plan W1.4a). Its release reads /api/v2.1/config before
+    signing in and goes on only for a Pixelfed of 0.14.4 or later, which PieFed says on Pixelfed's paths alone
+    (ruling X1). Its welcome screen's SERVER button > the server > Sign
     in; PieFed's pages open in the browser, and PieFed sends the code back to pixelfed://. Its tabs are icons labelled
     Home, Trending, Notifications, Search and Profile; the camera is the home screen's top left. A profile shows only
     its photos and videos (pf_type, `_pe=1`)."""
