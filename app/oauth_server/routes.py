@@ -93,8 +93,8 @@ def register_app():
         redirect_uris = _redirect_uris(fields.get('redirect_uris'))
         try:
             scope = parse_scope(fields.get('scopes'))
-        except ValueError:
-            raise _Invalid('Scopes are invalid') from None
+        except ValueError as unknown:   # named, so an app's developer knows which
+            raise _Invalid(f'Scopes are invalid ({unknown})') from None
     except _Invalid as invalid:
         return _refuse(str(invalid))
     registered, client_secret = tokens.register_app(name, redirect_uris, scope, website)

@@ -130,3 +130,11 @@ def test_authorizing_on_a_private_instance_still_starts_at_the_login_page(app, p
     response = app.test_client().get('/oauth/authorize', query_string={
         'response_type': 'code', 'client_id': registered.client_id, 'redirect_uri': TUSKY})
     assert response.status_code == 302 and '/auth/login' in response.headers['Location']
+
+
+def test_an_unknown_scope_is_named_in_the_refusal(client):
+    """An app's developer is told which scope PieFed does not know, not just that one is wrong."""
+    response = client.post('/api/v1/apps', data={'client_name': 'A', 'redirect_uris': OOB,
+                                                 'scopes': 'read write mystery:scope'})
+    assert response.status_code == 422
+    assert response.get_json()['error'] == 'Validation failed: Scopes are invalid (unknown scope: mystery:scope)'
