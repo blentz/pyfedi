@@ -46,6 +46,7 @@ from app.activitypub.util import MEDIA_OBJECT_TYPES, NEW_CONTENT_TYPES, follow_a
 # The module, not the name: app.community.routes reaches this file through
 # app.activitypub.signature before show_community is defined (U-circular-import)
 import app.chat.util as chat_util
+from app.chat import membership
 import app.community.live as community_live
 import app.community.routes as community_routes
 from app.community.util import send_to_remote_instance, send_to_remote_instance_fast
@@ -3700,12 +3701,8 @@ def process_chat(user, store_ap_json, core_activity, session):
                         return True
             # Find existing conversation to add to
             existing_conversation = Conversation.find_existing_conversation(recipient=recipient, sender=sender)
-            if not existing_conversation:
-                existing_conversation = Conversation(user_id=sender.id)
-                existing_conversation.members.append(recipient)
-                existing_conversation.members.append(sender)
-                session.add(existing_conversation)
-                session.commit()
+            if not existing_conversation:   # a request, unless the recipient follows the sender (spec §6)
+                existing_conversation = membership.start_conversation(sender, recipient)
             # Save ChatMessage to DB
             encrypted = core_activity['object']['encrypted'] if 'encrypted' in core_activity['object'] else None
             updated_message = session.query(ChatMessage).filter_by(ap_id=core_activity['object']['id']).first()
@@ -3732,16 +3729,17 @@ def process_chat(user, store_ap_json, core_activity, session):
                 notification_text = 'Updated message from '
                 message_id = updated_message.id
 
+            membership.message_sent(existing_conversation.id, sender.id)
             publish_sse_event(f"messages:{recipient.id}", json.dumps({'conversation': existing_conversation.id}))
-            # Notify recipient
-            targets_data = {'gen': '0', 'conversation_id': existing_conversation.id, 'message_id': message_id}
-            notify = Notification(title=shorten_string(notification_text + sender.display_name()),
-                                  url=f'/chat/{existing_conversation.id}#message_{message_id}',
-                                  user_id=recipient.id,
-                                  author_id=sender.id, notif_type=NOTIF_MESSAGE, subtype='chat_message',
-                                  targets=targets_data)
-            session.add(notify)
-            recipient.unread_notifications += 1
+            if membership.notifies(existing_conversation.id, recipient.id):   # not a request of theirs, nor muted
+                targets_data = {'gen': '0', 'conversation_id': existing_conversation.id, 'message_id': message_id}
+                notify = Notification(title=shorten_string(notification_text + sender.display_name()),
+                                      url=f'/chat/{existing_conversation.id}#message_{message_id}',
+                                      user_id=recipient.id,
+                                      author_id=sender.id, notif_type=NOTIF_MESSAGE, subtype='chat_message',
+                                      targets=targets_data)
+                session.add(notify)
+                recipient.unread_notifications += 1
             existing_conversation.read = False
             session.commit()
             log_incoming_ap(id, log_type, APLOG_SUCCESS, saved_json)

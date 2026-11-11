@@ -4,7 +4,7 @@ from flask_login import current_user
 from sqlalchemy import desc, or_, text
 
 from app import db
-from app.chat import bp
+from app.chat import bp, membership
 from app.chat.forms import AddReply, ReportConversationForm
 from app.chat.util import send_message
 from app.constants import NOTIF_REPORT, SRC_WEB, REPORT_TYPE_MESSAGE
@@ -116,12 +116,8 @@ def new_message(to):
                                 "sender_id": current_user.id, "recipient_id": recipient.id})
             db.session.commit()
             conversation = existing_conversation
-        else:
-            conversation = Conversation(user_id=current_user.id)
-            conversation.members.append(recipient)
-            conversation.members.append(current_user)
-            db.session.add(conversation)
-            db.session.commit()
+        else:   # a request, unless the recipient follows the sender (spec 2026-11-10-pixelfed-app-design §6)
+            conversation = membership.start_conversation(current_user, recipient)
         send_message(form.message.data, conversation.id)
         return redirect(url_for('chat.chat_home', conversation_id=conversation.id, _anchor='message'))
     else:

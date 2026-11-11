@@ -3,6 +3,7 @@ from flask_babel import _
 from flask_login import current_user
 
 from app import db
+from app.chat import membership
 from app.activitypub.signature import send_post_request
 from app.constants import NOTIF_MESSAGE, SRC_WEB
 from app.federation_urls import activity_id, owner_base
@@ -20,6 +21,7 @@ def send_message(message: str, conversation_id: int, user: User = current_user, 
     conversation.updated_at = utcnow()
     db.session.add(reply)
     db.session.commit()
+    membership.message_sent(conversation.id, user.id)
     for recipient in conversation.members:
         if recipient.id != user.id:
             reply.recipient_id = recipient.id
@@ -27,6 +29,8 @@ def send_message(message: str, conversation_id: int, user: User = current_user, 
             db.session.commit()
             if recipient.is_local():
                 publish_sse_event(f"messages:{recipient.id}", json.dumps({'conversation': conversation.id}))
+                if not membership.notifies(conversation.id, recipient.id):   # a request of theirs, or muted
+                    continue
 
                 # Notify local recipient
                 targets_data = {'gen': '0', 'conversation_id': conversation.id, 'message_id': reply.id}

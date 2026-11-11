@@ -5,9 +5,10 @@ import pytest
 
 from app import db
 from app.activitypub import routes as activitypub_routes
+from app.chat import membership
 from app.models import (ActivityPubLog, ChatMessage, Conversation, Notification, Site,
                         User, utcnow)
-from tests.factories import (inbox_activity, make_conversation, make_instance,
+from tests.factories import (inbox_activity, make_conversation, make_follow, make_instance,
                              make_instance_block, make_site, make_user, make_user_block)
 from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
@@ -546,6 +547,7 @@ def test_a_new_message_is_stored_with_both_body_forms_and_notifies(app, db_sessi
     instance, sender, recipient = seed_chat_pair()
     sender.created = utcnow() - timedelta(days=2)
     recipient.unread_notifications = 0
+    make_follow(recipient, sender)   # not a message request: those notify nobody (test_a_first_message_from_...)
     db.session.commit()
     recipient_id = recipient.id
     calls = record_moderation(monkeypatch, 'publish_sse_event')
@@ -749,6 +751,7 @@ def test_the_inner_is_local_check_can_never_be_false(app, db_session, monkeypatc
     instance, sender, recipient = seed_chat_pair()
     sender.created = utcnow() - timedelta(days=2)
     recipient.unread_notifications = 0
+    make_follow(recipient, sender)   # not a message request: those notify nobody (test_a_first_message_from_...)
     db.session.commit()
     recipient_id = recipient.id
     calls = record_moderation(monkeypatch, 'publish_sse_event')
@@ -760,3 +763,34 @@ def test_the_inner_is_local_check_can_never_be_false(app, db_session, monkeypatc
     assert len(calls['publish_sse_event']) == 1
     assert db_session.query(Notification).count() == 1
     assert db_session.get(User, recipient_id).unread_notifications == 1
+
+
+def test_a_first_message_from_someone_not_followed_is_a_request_that_notifies_nobody(app, db_session, monkeypatch):
+    """Spec 2026-11-10-pixelfed-app-design §6 (ruling 2026-11-11): a request, until the recipient accepts or answers."""
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    db.session.commit()
+    calls = record_moderation(monkeypatch, 'publish_sse_event')
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='hello', id='https://peer.example/pm/1'))
+
+    conversation = db_session.query(Conversation).one()
+    assert membership.member(conversation.id, recipient.id).state == membership.REQUEST
+    assert db_session.query(ChatMessage).count() == 1 and db_session.query(Notification).count() == 0
+    assert len(calls['publish_sse_event']) == 1   # a page showing the chat still hears of it
+
+
+def test_a_message_into_a_muted_conversation_notifies_nobody(app, db_session, monkeypatch):
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    conversation = make_conversation(sender, recipient)
+    membership.update_member(conversation.id, recipient.id, muted=True, hidden=True)
+    record_moderation(monkeypatch, 'publish_sse_event')
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='hello', id='https://peer.example/pm/1'))
+
+    assert db_session.query(ChatMessage).count() == 1 and db_session.query(Notification).count() == 0
+    assert membership.member(conversation.id, recipient.id).hidden is False   # back in view
+

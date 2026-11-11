@@ -1203,6 +1203,14 @@ conversation_member = db.Table('conversation_member',
                                db.Column('user_id', db.Integer, db.ForeignKey('user.id')),
                                db.Column('conversation_id', db.Integer, db.ForeignKey('conversation.id')),
                                db.Column('joined', db.Boolean, default=True),
+                               # each member's own (spec 2026-11-10-pixelfed-app-design §6): 'active', or 'request'
+                               # until a recipient who does not follow the sender accepts or answers; hidden (filed
+                               # away by the person, back with the next message); muted (its messages notify nobody
+                               # who muted it)
+                               db.Column('state', db.String(10), nullable=False, default='active',
+                                         server_default='active'),
+                               db.Column('hidden', db.Boolean, nullable=False, default=False, server_default='false'),
+                               db.Column('muted', db.Boolean, nullable=False, default=False, server_default='false'),
                                db.PrimaryKeyConstraint('user_id', 'conversation_id')
                                )
 

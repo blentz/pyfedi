@@ -7,6 +7,7 @@ from app.api.alpha.views import private_message_view, conversation_report_view
 from app.constants import NOTIF_MESSAGE, NOTIF_REPORT, REPORT_TYPE_MESSAGE, REPORT_STATE_RESOLVED, REPORT_STATE_NEW
 # The module, not the names: app.chat.util reaches this file through
 # app.activitypub.signature before they are defined (import cycle: chat.util)
+import app.chat.membership as membership
 import app.chat.util as chat_util
 from app.federation_urls import object_base
 from app.models import ChatMessage, Conversation, User, Notification, Report, Site
@@ -170,12 +171,8 @@ def post_private_message(auth, data):
             "account is too new.")
 
     existing_conversation = Conversation.find_existing_conversation(recipient=recipient, sender=sender)
-    if not existing_conversation:
-        existing_conversation = Conversation(user_id=sender.id)
-        existing_conversation.members.append(recipient)
-        existing_conversation.members.append(sender)
-        db.session.add(existing_conversation)
-        db.session.commit()
+    if not existing_conversation:   # a request, unless the recipient follows the sender (spec 2026-11-10 §6)
+        existing_conversation = membership.start_conversation(sender, recipient)
 
     private_message = chat_util.send_message(data['content'], existing_conversation.id, user=sender)
 

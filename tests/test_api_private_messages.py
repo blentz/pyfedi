@@ -26,6 +26,7 @@ import app.api.alpha.utils.private_message as private_message_module
 from app.api.alpha.utils.private_message import get_private_message_list
 from app.constants import (NOTIF_MESSAGE, REPORT_STATE_NEW,
                            REPORT_STATE_RESOLVED, REPORT_TYPE_MESSAGE)
+from app.chat import membership
 from app.models import (ChatMessage, Conversation, Notification, Report, Role,
                         RolePermission, Site, User, role_grant)
 from tests.factories import make_chat_message, make_conversation, make_user
@@ -411,6 +412,8 @@ def test_a_message_starts_a_conversation_when_there_is_none(app, env):
     assert answer['private_message_view']['private_message']['content'] == \
         'hello there'
     assert Conversation.query.count() == 2
+    started = answer['private_message_view']['conversation_id']
+    assert membership.member(started, stranger.id).state == membership.REQUEST   # spec 2026-11-10 §6
 
 
 def test_a_message_joins_the_conversation_that_already_exists(app, env):

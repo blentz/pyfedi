@@ -31,6 +31,7 @@ from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.constants import NOTIF_MESSAGE
+from app.chat import membership
 from app.models import ChatMessage, Conversation, InstanceBlock, Notification, Site, User, utcnow
 from tests.factories import (make_community, make_conversation, make_instance, make_user,
                              make_user_block)
@@ -635,6 +636,9 @@ def test_sending_a_first_message_creates_the_conversation(app, db_session):
     assert sorted(member.id for member in conversation.members) == sorted([alice.id, bob.id])
     assert [(m.sender_id, m.recipient_id, m.body) for m in ChatMessage.query.all()] == \
         [(alice.id, bob.id, 'first contact')]
+    # bob does not follow alice: a message request of his until he accepts or answers (spec 2026-11-10 §6)
+    assert membership.member(conversation.id, bob.id).state == membership.REQUEST
+    assert membership.member(conversation.id, alice.id).state == membership.ACTIVE
 
 
 def test_a_recipient_who_has_left_still_takes_the_redirect(app, db_session):
