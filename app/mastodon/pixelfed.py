@@ -58,6 +58,30 @@ def pixelfed_config():
     })
 
 
+@bp.route('/api/v2.1/config')
+def pixelfed_app_config():
+    """What Pixelfed's app (2.0.1) reads before anyone signs in, and refuses a server by: its version must be 0.14.4 or
+    later. Pixelfed's own shape (app/Services/AppService.php getConfig), with PieFed's limits."""
+    site = g.site
+    media_types = list(IMAGE_TYPES + VIDEO_TYPES)
+    upload_limit = current_app.config['MAX_CONTENT_LENGTH']
+    return jsonify({
+        'version': PIXELFED_VERSION, 'oauth': True,
+        'signup': {'curated': site.registration_mode == 'RequireApplication', 'mobile_registration': False},
+        'features': {'stories': True, 'video': True, 'timelines': {'local': True, 'network': True},
+                     'content_credentials': {'enabled': False, 'signing': False, 'ai_labels': False}},
+        'limits': {
+            'account': {'max_avatar_size': upload_limit // 1024, 'max_bio_length': MAX_BIO, 'max_name_length': 50,
+                        'min_password_length': 8},
+            'collections': {'max_collection_length': 0},
+            'direct_messages': {'max_characters': MAX_CHARACTERS, 'max_media_attachments': 0,
+                                'group_chats': {'enabled': False, 'max_participants': 0}},
+            'media': {'image_size_limit': upload_limit, 'max_album_limit': max_album_images(),
+                      'max_alt_text_length': MAX_ALT_TEXT, 'supported_mime_types': media_types,
+                      'video_size_limit': upload_limit},
+            'statuses': {'max_characters': MAX_CHARACTERS}}})
+
+
 @bp.route('/api/v1.1/compose/settings')
 @require_oauth('read')
 def compose_settings():

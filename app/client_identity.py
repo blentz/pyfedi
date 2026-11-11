@@ -5,7 +5,8 @@ PieFed. Each answer is the API level PieFed serves that app, not PieFed's versio
   `lemmy`, and picks the models it decodes with from the version, so it is told Lemmy 0.19.11. It names itself (its
   Http.kt sends `User-Agent: Jerboa`), but its nodeinfo request is its API library's, as `LemmyKotlinApi`.
 - Pixelfed's own app (spec 2026-11-10-pixelfed-app-design, ruling X1) sends no agent of its own and reads nodeinfo at
-  a path of Pixelfed's, /api/nodeinfo/2.0.json, which only Pixelfed's clients ask: that path says Pixelfed 0.12.6."""
+  a path of Pixelfed's, /api/nodeinfo/2.0.json, which only Pixelfed's clients ask: that path says Pixelfed 0.15.2,
+  as /api/v2.1/config does (app.mastodon.pixelfed), which its newer releases read instead."""
 import re
 
 from flask import Response, request
@@ -13,7 +14,7 @@ from flask import Response, request
 from app.storefront import storefront_cache_key
 
 LEMMY_VERSION = '0.19.11'
-PIXELFED_VERSION = '0.12.6'
+PIXELFED_VERSION = '0.15.2'   # its app (2.0.1) takes 0.14.4 or later, read from /api/v2.1/config
 PIXELFED_NODEINFO = '/api/nodeinfo/2.0.json'
 # Jerboa names itself on its own requests; its nodeinfo request goes through its API library's client
 # (it.vercruysse.lemmyapi), which names itself LemmyKotlinApi

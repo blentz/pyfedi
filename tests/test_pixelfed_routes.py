@@ -11,6 +11,9 @@ from app.constants import POST_TYPE_IMAGE
 from app.models import File, Report, UserFollower
 from app.oauth_server import tokens
 from tests.factories import make_community, make_file, make_post, make_user
+from tests import test_login_gate as gate_tests
+
+private = gate_tests.private   # the private-instance fixture
 
 
 @pytest.fixture
@@ -37,9 +40,17 @@ def _photo(world, title='A photo', votes=1):
     return post
 
 
+def test_the_v2_1_config_says_a_pixelfed_the_app_takes(world):
+    """Pixelfed's app (2.0.1) refuses a server whose /api/v2.1/config version is below 0.14.4; read before login."""
+    config = world['client'].get('/api/v2.1/config').get_json()
+    assert config['version'] == '0.15.2' and config['oauth'] is True
+    assert config['limits']['account']['max_bio_length'] == 1000
+    assert config['limits']['media']['max_album_limit'] >= 1 and config['features']['video'] is True
+
+
 def test_the_config_and_compose_limits(world):
     config = _get(world, '/api/v2/config').get_json()
-    assert config['version'] == '0.12.6' and config['account']['max_bio_length'] == 1000
+    assert config['version'] == '0.15.2' and config['account']['max_bio_length'] == 1000
     assert config['uploader']['album_limit'] >= 1 and 'image/jpeg' in config['uploader']['mime_types']
     compose = _get(world, '/api/v1.1/compose/settings').get_json()
     assert compose['max_media_attachments'] >= 1 and compose['max_altext_length'] == 1500
@@ -139,3 +150,8 @@ def test_a_hidden_account_is_answered_as_nobody(world, monkeypatch):
     monkeypatch.setattr('app.mastodon.pixelfed.reads_users.refuse_hidden_person', lambda *_args: (_ for _ in ()).throw(
         Exception('hidden here')))
     assert _get(world, '/api/v1.1/accounts/username/pfauthor').get_json() == []
+
+
+def test_the_app_reads_its_config_from_a_private_instance_before_it_signs_in(private, app):
+    response = app.test_client().get('/api/v2.1/config')
+    assert response.status_code == 200 and response.get_json()['version'] == '0.15.2'

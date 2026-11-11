@@ -71,7 +71,9 @@ Per X4.
   (and only it; the standard `/nodeinfo/2.0` and `2.1` stay PieFed's) as Pixelfed 0.12.6, the API level served, as D3
   does for Jerboa; or leave the official app unsupported. Recommendation: answer it: only Pixelfed's clients ask that
   path, so no crawler or statistics site is told anything new.
-  **Ruled 2026-11-10: say Pixelfed 0.12.6 on that path alone.**
+  **Ruled 2026-11-10: say Pixelfed 0.12.6 on that path alone.** Found on the emulator: the app's 2.0.1 release (newer
+  than its public source) reads `GET /api/v2.1/config` instead, before sign-in, and needs 0.14.4 or later; both
+  Pixelfed-only paths now say 0.15.2, Pixelfed's current version, in the ruling's sense (the API level served).
 
 - **X2. Chats.** Pixelfed's direct messages (`/api/v1.1/direct/*`) map onto PieFed's chat; build them now, or answer
   them empty and leave chat to the web (no API of PieFed's other than alpha's serves it to apps yet). Recommendation:

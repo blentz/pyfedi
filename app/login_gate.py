@@ -42,6 +42,8 @@ OPEN = frozenset({
     # Lemmy's site document, which other servers read too (a local-only domain answers it 404), and its login, for
     # Jerboa (spec 2026-11-10-lemmy-v3-design §2)
     'lemmy.site_document', 'lemmy.login',
+    # Pixelfed's server configuration, which its app reads before anyone signs in (plan W1.4a)
+    'mastodon.pixelfed_app_config',
 })
 
 # Open where the storefront federates, as other servers read them with no account. Each view that also serves a browser

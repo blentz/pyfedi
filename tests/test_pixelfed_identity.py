@@ -1,6 +1,6 @@
 """Who PieFed says it is to Pixelfed's own app (plan W1.4; spec 2026-11-10-pixelfed-app-design, ruling X1). The app
 reads /api/nodeinfo/2.0.json, a path only Pixelfed's clients ask, and refuses any server that is not Pixelfed 0.12.3 or
-later; that path alone says Pixelfed 0.12.6, and the standard nodeinfo stays PieFed's."""
+later; that path alone says Pixelfed 0.15.2, and the standard nodeinfo stays PieFed's."""
 import pytest
 
 from app import cache
@@ -16,7 +16,7 @@ def test_pixelfeds_own_path_says_pixelfed(client):
     response = client.get('/api/nodeinfo/2.0.json')
     assert response.status_code == 200
     body = response.get_json()
-    assert (body['software']['name'], body['software']['version']) == ('pixelfed', '0.12.6')
+    assert (body['software']['name'], body['software']['version']) == ('pixelfed', '0.15.2')
     assert body['version'] == '2.0' and 'usage' in body and body['protocols'] == ['activitypub']
 
 
