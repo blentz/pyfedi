@@ -80,6 +80,11 @@ Per X4.
   empty now, a later item: the core is browsing, posting photos, comments, likes, follows and notifications.
   **Ruled 2026-11-10: build chats now** (phase W1.4b): Pixelfed's threads are PieFed's conversations and chat
   messages (app.chat), through the code the web's chat uses.
+  Found on the emulator 2026-11-11: the 2.0.1 release uses Pixelfed's newer direct API (its server's
+  DirectConversationController: `/api/v1.1/direct/conversations[/{id}[/messages|/read|/accept|/mute|/hide|/leave…]]`
+  and `/api/v1.1/direct/unread_count`), with Inbox, Requests and Hidden tabs. PieFed's chat is one-to-one and
+  text-only, with no requests, hiding or muting. **Ruled 2026-11-11:** build requests (the web chat too), build hide
+  and mute, build media in messages; group chats stay refused (`/api/v2.1/config` says so). See §6.
 
 - **X3. Stories.** PieFed has none: the carousel answers empty and every story write is refused, or build stories.
   Recommendation: empty and refused; stories are a feature of their own.
@@ -92,3 +97,39 @@ Per X4.
   Recommendation: (a): PixelDroid and Fedilab ask only the Mastodon API, which Tusky's and Mastodon's own drivers
   already exercise.
   **Ruled 2026-11-10: drive all three** (the official app in W1.4a, PixelDroid and Fedilab in W1.4d).
+
+## 6. Chats (W1.4b, rulings X2 and 2026-11-11)
+
+PieFed's `Conversation`, `conversation_member` and `ChatMessage` stay the model; every write goes through the code the
+web chat and alpha's private messages use (`app.chat.util.send_message`, the inbox's ChatMessage arm), so a message
+sent from the app, the web or alpha, or received over ActivityPub, is one thing.
+
+**Per-member state** (new columns on `conversation_member`, one migration): `state` (`active` | `request`),
+`hidden` (bool), `muted` (bool).
+- *Requests.* When a message starts a conversation, its sender's membership is `active`; the recipient's is `request`
+  unless the recipient follows the sender. Sending a message in a conversation, or Accept, makes one's own membership
+  `active`. A request makes no notification (Pixelfed's own behaviour); it is counted in the app's `requests` and
+  listed in the web chat's new Requests section, with Accept. PieFed's who-may-message-me settings still gate first.
+- *Hidden* is the app's own filing: hide moves a conversation to its Hidden tab; one's own message or a new message
+  from the other side brings it back. The web chat's list does not filter on it.
+- *Mute* stops a conversation's chat notifications for that member, whatever sent the message (web, app, alpha,
+  federation); the web chat's options page gets a mute toggle.
+- *Leave* is PieFed's existing leave (`joined` false; the conversation is deleted once abandoned).
+
+**The app's API** (`app/mastodon/direct.py`), Pixelfed's shapes (its DirectMessagePayloadService): a conversation is
+`{id, type: 'direct', name: null, participants: [account…], participant_count, state, unread_count, muted, hidden,
+last_read_message_id, last_message, created_at, updated_at}`; a message is `{id, conversation_id, sender_id, is_author,
+type, text, media: [attachment…], meta: null, sensitive, in_reply_to_id: null, edited_at, created_at}`. Lists filter
+`primary|requests|hidden` with an opaque cursor; messages page newest first by `max_id`, and `min_id` polls.
+`unread_count` is `{primary, requests}`. A conversation started with more than one recipient is refused (422).
+Unread is per message (`ChatMessage.read` for its recipient), as the web chat reads it; `read` marks messages up to
+`message_id` (or all) read, with their notifications.
+
+**Media** (W1.4b2): a `chat_message_file` link (message, file, order); up to 4 images per message, uploaded first
+through `/api/v2/media` and named by `media_ids`; federated as the object's `attachment` (Image documents with
+`mediaType`, `url`, `name` for the alt text) and taken from an incoming one's; the web chat shows them.
+`/api/v2.1/config`'s `direct_messages.max_media_attachments` says 4.
+
+**Phases.** W1.4b1: per-member state, the API for text, the web chat's Requests and mute, the app driven (alice
+messages dora; dora's reply is read). W1.4b2: media in messages, both ways and on the web.
+
