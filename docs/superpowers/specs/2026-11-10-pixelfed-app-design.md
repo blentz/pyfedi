@@ -128,7 +128,13 @@ Unread is per message (`ChatMessage.read` for its recipient), as the web chat re
 **Media** (W1.4b2): a `chat_message_file` link (message, file, order); up to 4 images per message, uploaded first
 through `/api/v2/media` and named by `media_ids`; federated as the object's `attachment` (Image documents with
 `mediaType`, `url`, `name` for the alt text) and taken from an incoming one's; the web chat shows them.
-`/api/v2.1/config`'s `direct_messages.max_media_attachments` says 4.
+`/api/v2.1/config`'s `direct_messages.max_media_attachments` says 4. Built 2026-11-11:
+- The web chat shows a picture stored here inline (on disk, or in `/static/media/` at a hosted domain's address, with
+  no query, fragment or `..`: `File.stored_here`). A peer's is a link, so no remote server learns who read the chat
+  until the reader opens it (the page already strips images from a message's text).
+- An incoming picture naming any hosted domain's address is refused (security review 2026-11-11: it would be shown
+  as ours, an `<img>` carrying the reader's cookies).
+- A message gives no `edited_at`: `ChatMessage.edited_at` moves on any change of the row, its read flag's too.
 
 **Phases.** W1.4b1: per-member state, the API for text, the web chat's Requests and mute, the app driven (alice
 messages dora; dora's reply is read). W1.4b2: media in messages, both ways and on the web.
