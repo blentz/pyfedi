@@ -194,15 +194,20 @@ def piefed_consent(d, package, signed_in=None):
     if not d.showing('Allow', exact=True):
         d.type_into(d.ui(className='android.widget.EditText', instance=0), ALICE[0])
         d.type_into(d.ui(className='android.widget.EditText', instance=1), ALICE[1])
-        d.hide_keyboard()
-        log_in = d.ui(className='android.widget.Button', text='Log In')   # not the "Log in" heading
+        # the keyboard's go key submits the form from its password field: a fresh Chrome's keyboard, with its
+        # autofill strip, can stay up over the Log In button, and a tap as it goes down can be swallowed
+        d.ui.press('enter')
+        try:
+            d.wait_text('to use your account', timeout=30)
+        except AssertionError:   # the key did not submit: the button, once the keyboard is down (not before: back
+            # while the next page loads would take Chrome back to the form)
+            log_in = d.ui(className='android.widget.Button', text='Log In')   # not the "Log in" heading
 
-        def submit():
-            if log_in.exists:   # gone once the form went: the next page is only slow
-                log_in.click()
-        # a tap as the keyboard goes down can be swallowed, leaving the form as it was
-        log_in.wait(timeout=30)
-        d.tap_until(submit, 'to use your account', wait=30)
+            def submit():
+                if log_in.exists:   # gone once the form went: the next page is only slow
+                    d.hide_keyboard()
+                    log_in.click()
+            d.tap_until(submit, 'to use your account', wait=30)
     # an app asking many scopes (Pixelfed's eight) pushes Allow below the fold: it is scrolled into view, the button
     # and not the heading "Allow <app> to use your account?", and clear of PieFed's fixed bottom nav on a phone
     d.wait_text('to use your account', timeout=60)
