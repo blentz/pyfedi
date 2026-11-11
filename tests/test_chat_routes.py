@@ -32,8 +32,9 @@ from flask_wtf.csrf import generate_csrf
 from app import db
 from app.constants import NOTIF_MESSAGE
 from app.chat import membership
-from app.models import ChatMessage, Conversation, InstanceBlock, Notification, Site, User, utcnow
-from tests.factories import (make_community, make_conversation, make_instance, make_user,
+from app.chat.util import attach_files
+from app.models import ChatMessage, Conversation, File, InstanceBlock, Notification, Site, User, utcnow
+from tests.factories import (make_community, make_conversation, make_file, make_instance, make_user,
                              make_user_block)
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -1698,3 +1699,25 @@ def test_only_a_member_changes_their_own_state(app, db_session, action):
 
     assert client.post(f'/chat/{conversation.id}/{action}', data={'csrf_token': token}).status_code == 404
     assert client.post(f'/chat/99999999/{action}', data={'csrf_token': token}).status_code == 404
+
+
+def test_the_page_shows_our_pictures_and_links_a_peer_s(app, db_session, monkeypatch):
+    """W1.4b2: a picture stored here shows in the message; a peer's is a link, so no remote server learns who read
+    the chat until the reader opens it (the page already strips images from a message's text)."""
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the page's reply form renders its csrf_token
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    ours = make_file(file_path='app/static/media/posts/aa/ourpic.png',
+                     source_url='https://test.piefed.local/static/media/posts/aa/ourpic.png')
+    ours.alt_text = 'our picture'
+    theirs = File(source_url='https://peer.example/m/theirpic.jpg', alt_text='their picture')
+    message = _message(conversation, bob, alice, 'pictures')
+    attach_files(message, [ours, theirs])
+    client = app.test_client()
+    login(client, alice)
+
+    page = client.get(f'/chat/{conversation.id}').get_data(as_text=True)
+
+    assert '<img' in page and 'ourpic.png' in page and 'alt="our picture"' in page
+    assert 'href="https://peer.example/m/theirpic.jpg"' in page and 'their picture' in page
+    assert 'src="https://peer.example/m/theirpic.jpg"' not in page
