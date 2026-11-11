@@ -12,7 +12,10 @@ _ADMIN = ('accounts', 'reports', 'domain_allows', 'domain_blocks', 'ip_blocks', 
           'canonical_email_blocks')
 ADMIN_SCOPES = frozenset(('admin:read', 'admin:write') + tuple(f'admin:read:{name}' for name in _ADMIN)
                          + tuple(f'admin:write:{name}' for name in _ADMIN))
-SCOPES = frozenset(('read', 'write', 'follow', 'push', 'profile')
+# Pixelfed's, which its app (2.0.1) asks for its account-security screens (two-factor, password, sign-in activity, apps):
+# known, so it registers, and covering nothing, as PieFed serves those screens to no app (plan W1.4a)
+PIXELFED_SECURITY_SCOPES = frozenset(('security:read', 'security:write'))
+SCOPES = PIXELFED_SECURITY_SCOPES | frozenset(('read', 'write', 'follow', 'push', 'profile')
                    + tuple(f'read:{name}' for name in _READ) + tuple(f'write:{name}' for name in _WRITE)) | ADMIN_SCOPES
 
 

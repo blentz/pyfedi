@@ -111,6 +111,8 @@ SCOPE_LABELS = {
     'profile': _l('See your profile'),
     'admin:read': _l('Read moderation and admin data, as far as your role allows'),
     'admin:write': _l('Moderate and administer, as far as your role allows'),
+    'security:read': _l("Your account's security settings (not given to apps here)"),
+    'security:write': _l("Change your account's security settings (not given to apps here)"),
 }
 
 

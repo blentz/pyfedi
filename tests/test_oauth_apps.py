@@ -3,6 +3,7 @@ docs/superpowers/specs/2026-11-07-mastodon-client-api-design.md §3.1)."""
 import pytest
 
 from app.models import OAuthApp
+from app.oauth_scopes import SCOPES, covers
 from app.oauth_server import tokens
 from tests.test_login_gate import private  # noqa: F401  the private-instance fixture
 
@@ -138,3 +139,15 @@ def test_an_unknown_scope_is_named_in_the_refusal(client):
                                                  'scopes': 'read write mystery:scope'})
     assert response.status_code == 422
     assert response.get_json()['error'] == 'Validation failed: Scopes are invalid (unknown scope: mystery:scope)'
+
+
+def test_pixelfeds_security_scopes_are_taken_and_grant_nothing(client):
+    """Pixelfed's app (2.0.1) asks security:read and security:write, for screens PieFed serves no route of: they are
+    known, so it registers, and cover no scope a route asks (W1.4a)."""
+    scopes = 'read write follow push admin:read admin:write security:read security:write'
+    response = client.post('/api/v1/apps', data={'client_name': 'Pixelfed for Android', 'redirect_uris': 'pixelfed://login',
+                                                 'scopes': scopes})
+    assert response.status_code == 200, response.get_json()
+    assert 'security:write' in response.get_json()['scopes']
+    assert not any(covers('security:read security:write', scope) for scope in SCOPES - {'security:read',
+                                                                                         'security:write'})
