@@ -829,3 +829,20 @@ def test_one_picture_alone_is_taken_too(app, db_session, monkeypatch):
                            attachment={'type': 'Image', 'mediaType': 'image/png', 'url': 'https://peer.example/a.png'}))
 
     assert [file.source_url for file in db_session.query(ChatMessage).one().files] == ['https://peer.example/a.png']
+
+
+def test_a_peer_cannot_name_an_address_of_ours_as_its_picture(app, db_session, monkeypatch):
+    """Security review 2026-11-11: an attachment at one of our hosted domains' addresses would be shown as ours, an
+    <img> whose request carries the reader's cookies: one is refused, whatever its path."""
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    db.session.commit()
+    record_moderation(monkeypatch, 'publish_sse_event')
+    ours = app.config['SERVER_URL']
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id, content='look', id='https://peer.example/pm/1',
+                           attachment=[{'type': 'Image', 'url': f'{ours}/static/media/posts/aa/x.png'},
+                                       {'type': 'Image', 'url': f'{ours}/u/someone/block'},
+                                       {'type': 'Image', 'url': 'https://peer.example/ok.png'}]))
+
+    assert [f.source_url for f in db_session.query(ChatMessage).one().files] == ['https://peer.example/ok.png']

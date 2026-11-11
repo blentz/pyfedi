@@ -1722,3 +1722,12 @@ def test_the_page_shows_our_pictures_and_links_a_peer_s(app, db_session, monkeyp
     assert '<img' in page and 'ourpic.png' in page and 'alt="our picture"' in page
     assert 'href="https://peer.example/m/theirpic.jpg"' in page and 'their picture' in page
     assert 'src="https://peer.example/m/theirpic.jpg"' not in page
+
+
+@pytest.mark.parametrize('path,ours', [('/static/media/posts/aa/x.png', True), ('/u/someone/block', False),
+                                       ('/static/media/posts/aa/x.png?next=/logout', False),
+                                       ('/static/media/../../chat/1/leave', False)])
+def test_only_our_media_storage_is_shown_as_ours(app, db_session, path, ours):
+    picture = File(source_url=app.config['SERVER_URL'] + path)
+    assert picture.stored_here() is ours
+    assert File(source_url='https://peer.example/static/media/x.png').stored_here() is False

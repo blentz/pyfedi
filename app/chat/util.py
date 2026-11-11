@@ -9,7 +9,7 @@ from app.activitypub.signature import send_post_request
 from app.constants import NOTIF_MESSAGE, SRC_WEB
 from app.federation_urls import activity_id, owner_base
 from app.models import User, ChatMessage, File, Notification, utcnow, Conversation, chat_message_file, \
-    storable_alt_text
+    is_hosted_url, storable_alt_text
 from app.storefront import canonicalise_text
 from app.utils import shorten_string, markdown_to_html, publish_sse_event
 
@@ -43,8 +43,8 @@ def incoming_pictures(attachment) -> list[File]:
             continue
         url = item.get('url')
         url = url.get('href') if isinstance(url, dict) else url
-        if not isinstance(url, str) or not url.startswith('https://') or len(url) > 1024:
-            continue
+        if not isinstance(url, str) or not url.startswith('https://') or len(url) > 1024 or is_hosted_url(url):
+            continue   # a peer names its own pictures, never an address of ours (it would be shown as ours)
         pictures.append(File(source_url=url, alt_text=storable_alt_text(item.get('name'))))
         if len(pictures) == MAX_MESSAGE_PICTURES:
             break

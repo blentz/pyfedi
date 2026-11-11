@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, date, timezone
 from hashlib import sha256
 from time import time
 from typing import List, Union
-from urllib.parse import urlparse, parse_qs, urlencode, unquote
+from urllib.parse import urlparse, urlsplit, parse_qs, urlencode, unquote
 from zoneinfo import ZoneInfo
 
 import pendulum
@@ -1355,9 +1355,16 @@ class File(db.Model):
         return storefront.canonical_url() if canonical else storefront.storefront_url()
 
     def stored_here(self) -> bool:
-        """Whether the picture is ours, kept on disk or at a hosted domain's address (an upload through the APIs
-        keeps only that), rather than a peer's we name by its address."""
-        return bool(self.file_path) or is_hosted_url(self.source_url)
+        """Whether the picture is ours, kept on disk or in our media storage at a hosted domain's address (an upload
+        through the APIs keeps only that), rather than a peer's we name by its address. Only the media path, with no
+        query or fragment: a page shows ours as an <img>, whose request carries the reader's cookies."""
+        if self.file_path:
+            return True
+        if not is_hosted_url(self.source_url):
+            return False
+        parts = urlsplit(self.source_url)
+        return parts.path.startswith('/static/media/') and '..' not in parts.path and not parts.query and \
+            not parts.fragment
 
     def view_url(self, resize=False, canonical=False, base=None):
         if self.source_url:
