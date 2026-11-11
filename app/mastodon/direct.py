@@ -3,19 +3,21 @@
 PieFed's Conversation, a message its ChatMessage, and every message is sent through the web chat's own send
 (app.chat.util.send_message), so it is notified, federated and shown on the web as one sent there. Each member's
 state (a request, hidden, muted) is app.chat.membership's. One-to-one: a group is refused, as /api/v2.1/config says.
-Media in messages is W1.4b2."""
+Photos in messages (W1.4b2) are the sender's uploads, through /api/v2/media."""
 from flask import g, jsonify, request
 from sqlalchemy import and_, func, select
 
 from app import db
 from app.chat import membership
-from app.chat.util import send_message
+from app.chat.util import MAX_MESSAGE_PICTURES, send_message
 from app.constants import NOTIF_MESSAGE, SRC_API
 from app.local_only import found_here, refuses_remote_contact, without_hidden_conversations, \
     without_local_only_actors
 from app.mastodon import bp
 from app.mastodon.entities import account, timestamp
 from app.mastodon.instance import MAX_CHARACTERS
+from app.mastodon.media import own_uploads
+from app.mastodon.statuses import attachment
 from app.models import ChatMessage, Conversation, Notification, User, UserBlock, UserFollower, conversation_member
 from app.oauth_server.protect import require_oauth
 from app.reads import users as reads_users
@@ -68,9 +70,11 @@ def _last_read_id(conversation: Conversation, viewer_id: int) -> str | None:
 def message_entity(message: ChatMessage, viewer_id: int) -> dict:
     edited = message.edited_at and message.created_at and \
         (message.edited_at - message.created_at).total_seconds() > 1   # edited_at is set as it is made, too
+    pictures = [attachment(file) for file in message.files if file.view_url()]
+    kind = 'photos' if len(pictures) > 1 else 'photo' if pictures else 'text'   # Pixelfed's message types
     return {'id': str(message.id), 'conversation_id': str(message.conversation_id),
-            'sender_id': str(message.sender_id), 'is_author': message.sender_id == viewer_id, 'type': 'text',
-            'text': message.body or '', 'media': [], 'meta': None, 'sensitive': False, 'in_reply_to_id': None,
+            'sender_id': str(message.sender_id), 'is_author': message.sender_id == viewer_id, 'type': kind,
+            'text': message.body or '', 'media': pictures, 'meta': None, 'sensitive': False, 'in_reply_to_id': None,
             'edited_at': timestamp(message.edited_at) if edited else None, 'created_at': timestamp(message.created_at)}
 
 
@@ -273,26 +277,28 @@ def direct_messages(conversation_id):
 @bp.route('/api/v1.1/direct/conversations/<int:conversation_id>/messages', methods=['POST'])
 @require_oauth('write')
 def direct_send(conversation_id):
-    """A text message, through the web chat's own send; whoever had left is in the conversation again, as the web's
-    new message does (D748). Media is W1.4b2."""
+    """Text, photos (the sender's own uploads, through /api/v2/media; W1.4b2) or both, through the web chat's own
+    send; whoever had left is in the conversation again, as the web's new message does (D748)."""
     found = _membership(conversation_id)
     if not found:
         return _not_found()
     conversation, me = found[0], g.oauth_user
     fields = request.get_json(silent=True)
     fields = fields if isinstance(fields, dict) else {}
-    if fields.get('media_ids'):
-        return _refused('Photos in messages are not supported here yet')
-    text = fields.get('message')
-    if not isinstance(text, str) or not text.strip() or len(text) > MAX_CHARACTERS:
-        return _refused(f'A message is text of 1 to {MAX_CHARACTERS} characters')
+    named = fields.get('media_ids') or []
+    pictures = own_uploads(me.id, named) if isinstance(named, list) and len(named) <= MAX_MESSAGE_PICTURES else None
+    if pictures is None or len(pictures) != len(named):
+        return _refused(f'media_ids name up to {MAX_MESSAGE_PICTURES} of your own uploads')
+    text = fields.get('message') or ''
+    if not isinstance(text, str) or len(text) > MAX_CHARACTERS or not (text.strip() or pictures):
+        return _refused(f'A message is text of 1 to {MAX_CHARACTERS} characters, photos, or both')
     for other in conversation.members:
         refusal = None if other.id == me.id else _may_message(me, other)
         if refusal:
             return refusal
     for person in conversation.members:
         membership.update_member(conversation.id, person.id, joined=True)
-    message = send_message(text, conversation.id, user=me, src=SRC_API)
+    message = send_message(text, conversation.id, user=me, src=SRC_API, files=pictures)
     return jsonify(message_entity(message, me.id)), 201
 
 

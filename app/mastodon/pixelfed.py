@@ -7,6 +7,7 @@ from flask import current_app, g, jsonify, request
 
 from app import db
 from app.constants import POST_TYPE_GALLERY, POST_TYPE_IMAGE, POST_TYPE_VIDEO, SRC_API
+from app.chat.util import MAX_MESSAGE_PICTURES
 from app.mastodon import bp
 from app.mastodon.entities import account
 from app.mastodon.instance import IMAGE_TYPES, MAX_CHARACTERS, VIDEO_TYPES
@@ -74,7 +75,7 @@ def pixelfed_app_config():
             'account': {'max_avatar_size': upload_limit // 1024, 'max_bio_length': MAX_BIO, 'max_name_length': 50,
                         'min_password_length': 8},
             'collections': {'max_collection_length': 0},
-            'direct_messages': {'max_characters': MAX_CHARACTERS, 'max_media_attachments': 0,
+            'direct_messages': {'max_characters': MAX_CHARACTERS, 'max_media_attachments': MAX_MESSAGE_PICTURES,
                                 'group_chats': {'enabled': False, 'max_participants': 0}},
             'media': {'image_size_limit': upload_limit, 'max_album_limit': max_album_images(),
                       'max_alt_text_length': MAX_ALT_TEXT, 'supported_mime_types': media_types,

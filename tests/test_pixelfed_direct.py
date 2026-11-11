@@ -7,9 +7,10 @@ import pytest
 
 from app import db
 from app.chat import membership
-from app.models import ChatMessage, Notification, User
+from app.chat.util import attach_files
+from app.models import ChatMessage, File, Notification, User, user_file
 from app.oauth_server import tokens
-from tests.factories import make_follow, make_user, make_user_block
+from tests.factories import make_file, make_follow, make_user, make_user_block
 
 BASE = '/api/v1.1/direct'
 
@@ -218,10 +219,54 @@ def test_an_empty_or_overlong_message_is_refused(world, body):
     assert _post(world, f"/conversations/{conversation['id']}/messages", **body).status_code == 422
 
 
-def test_media_waits_for_w1_4b2(world):
+def _upload(person, name):
+    picture = make_file(file_path=f'app/static/media/posts/aa/{name}.png',
+                        source_url=f'https://test.piefed.local/static/media/posts/aa/{name}.png')
+    db.session.execute(user_file.insert().values(user_id=person.id, file_id=picture.id))
+    db.session.commit()
+    return picture
+
+
+def test_a_message_carries_photos_its_sender_uploaded(world):
+    """W1.4b2: media_ids name the sender's own uploads (through /api/v2/media), up to four, in order; a message may be
+    photos alone. Its type is Pixelfed's: photo for one, photos for more."""
     conversation = _start(world)
-    response = _post(world, f"/conversations/{conversation['id']}/messages", message='look', media_ids=['1'])
+    first, second = _upload(world['me'], 'dmone'), _upload(world['me'], 'dmtwo')
+    one = _post(world, f"/conversations/{conversation['id']}/messages", media_ids=[str(first.id)]).get_json()
+    assert (one['type'], one['text'], [m['id'] for m in one['media']]) == ('photo', '', [str(first.id)])
+    assert one['media'][0]['url'].endswith('/dmone.png')
+    two = _post(world, f"/conversations/{conversation['id']}/messages", message='both',
+                media_ids=[second.id, first.id]).get_json()
+    assert two['type'] == 'photos' and [m['id'] for m in two['media']] == [str(second.id), str(first.id)]
+    assert [file.id for file in db.session.get(ChatMessage, int(two['id'])).files] == [second.id, first.id]
+
+
+@pytest.mark.parametrize('media', ['nope', ['x'], [99999999], 'theirs', 'five'])
+def test_photos_that_are_not_the_sender_s_own_or_too_many_are_refused(world, media):
+    conversation = _start(world)
+    if media == 'theirs':
+        media = [_upload(world['friend'], 'notmine').id]
+    elif media == 'five':
+        media = [_upload(world['me'], f'many{n}').id for n in range(5)]
+    response = _post(world, f"/conversations/{conversation['id']}/messages", message='look', media_ids=media)
     assert response.status_code == 422
+
+
+def test_a_peer_s_pictures_are_listed_by_their_address(world):
+    conversation = _start(world)
+    message = ChatMessage(sender_id=world['friend'].id, recipient_id=world['me'].id,
+                          conversation_id=int(conversation['id']), body='from afar', body_html='<p>from afar</p>')
+    db.session.add(message)
+    db.session.commit()
+    attach_files(message, [File(source_url='https://peer.example/m/far.jpg', alt_text='far away')])
+    listed = _get(world, f"/conversations/{conversation['id']}/messages").get_json()['data'][0]
+    assert listed['type'] == 'photo' and listed['media'][0]['url'] == 'https://peer.example/m/far.jpg'
+    assert listed['media'][0]['description'] == 'far away'
+
+
+def test_the_config_says_four_photos_a_message(world):
+    config = world['client'].get('/api/v2.1/config').get_json()
+    assert config['limits']['direct_messages']['max_media_attachments'] == 4
 
 
 @pytest.mark.parametrize('path', ['', '/messages'])
