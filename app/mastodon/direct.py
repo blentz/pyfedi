@@ -1,0 +1,338 @@
+"""Pixelfed's direct messages for its official app (plan W1.4b1; spec 2026-11-10-pixelfed-app-design §6, rulings
+2026-11-11), in its server's shapes (DirectConversationController, DirectMessagePayloadService): a conversation is
+PieFed's Conversation, a message its ChatMessage, and every message is sent through the web chat's own send
+(app.chat.util.send_message), so it is notified, federated and shown on the web as one sent there. Each member's
+state (a request, hidden, muted) is app.chat.membership's. One-to-one: a group is refused, as /api/v2.1/config says.
+Media in messages is W1.4b2."""
+from flask import g, jsonify, request
+from sqlalchemy import and_, func, select
+
+from app import db
+from app.chat import membership
+from app.chat.util import send_message
+from app.constants import NOTIF_MESSAGE, SRC_API
+from app.local_only import found_here, refuses_remote_contact, without_hidden_conversations, \
+    without_local_only_actors
+from app.mastodon import bp
+from app.mastodon.entities import account, timestamp
+from app.mastodon.instance import MAX_CHARACTERS
+from app.models import ChatMessage, Conversation, Notification, User, conversation_member
+from app.oauth_server.protect import require_oauth
+from app.shared.tasks import task_selector
+
+FILTERS = ('primary', 'requests', 'hidden')
+MAX_CONVERSATIONS, MAX_MESSAGES = 40, 50
+LARGEST_ID = 2 ** 31 - 1
+
+
+def _refused(reason: str, status: int = 422):
+    return jsonify({'error': reason}), status
+
+
+def _whole(value, low: int = 1, high: int = LARGEST_ID) -> int | None:
+    """`value` as a whole number in [low, high], else None: an id or a count from a query string or a JSON body."""
+    text = str(value) if isinstance(value, (int, str)) and not isinstance(value, bool) else ''
+    return int(text) if text.isdigit() and len(text) <= 10 and low <= int(text) <= high else None
+
+
+def _membership(conversation_id):
+    """The viewer's conversation `conversation_id` and their membership of it, or None: for one they are not in, have
+    left, nobody holds, or is hidden here alike (follow-up F6)."""
+    number = _whole(conversation_id)
+    conversation = found_here(Conversation, number) if number else None
+    found = membership.member(conversation.id, g.oauth_user.id) if conversation else None
+    return (conversation, found) if found is not None and found.joined else None
+
+
+def _not_found():
+    return _refused('Record not found', 404)
+
+
+def _messages(conversation: Conversation):
+    return ChatMessage.query.filter(ChatMessage.conversation_id == conversation.id, ChatMessage.deleted.is_(False),
+                                    ChatMessage.recipient_id.isnot(None))
+
+
+def _unread(conversation: Conversation, viewer_id: int):
+    return _messages(conversation).filter(ChatMessage.recipient_id == viewer_id, ChatMessage.read.is_(False))
+
+
+def _last_read_id(conversation: Conversation, viewer_id: int) -> str | None:
+    newest = db.session.query(func.max(ChatMessage.id)).filter(
+        ChatMessage.conversation_id == conversation.id, ChatMessage.recipient_id == viewer_id,
+        ChatMessage.read.is_(True)).scalar()
+    return str(newest) if newest else None
+
+
+def message_entity(message: ChatMessage, viewer_id: int) -> dict:
+    edited = message.edited_at and message.created_at and \
+        (message.edited_at - message.created_at).total_seconds() > 1   # edited_at is set as it is made, too
+    return {'id': str(message.id), 'conversation_id': str(message.conversation_id),
+            'sender_id': str(message.sender_id), 'is_author': message.sender_id == viewer_id, 'type': 'text',
+            'text': message.body or '', 'media': [], 'meta': None, 'sensitive': False, 'in_reply_to_id': None,
+            'edited_at': timestamp(message.edited_at) if edited else None, 'created_at': timestamp(message.created_at)}
+
+
+def _state(conversation: Conversation, found) -> dict:
+    viewer_id = g.oauth_user.id
+    return {'id': str(conversation.id), 'state': found.state if found.joined else 'left',
+            'unread_count': _unread(conversation, viewer_id).count(), 'muted': found.muted, 'hidden': found.hidden,
+            'last_read_message_id': _last_read_id(conversation, viewer_id)}
+
+
+def conversation_entity(conversation: Conversation, found) -> dict:
+    viewer_id = g.oauth_user.id
+    others = [person for person in conversation.members if person.id != viewer_id]
+    last = _messages(conversation).order_by(ChatMessage.id.desc()).first()
+    entity = _state(conversation, found)
+    entity.update({'type': 'direct', 'name': None, 'participants': [account(person, viewer_id) for person in others],
+                   'participant_count': len(conversation.members),
+                   'last_message': message_entity(last, viewer_id) if last else None,
+                   'created_at': timestamp(conversation.created_at),
+                   'updated_at': timestamp(conversation.updated_at or conversation.created_at)})
+    return entity
+
+
+def _inbox(viewer_id: int, kind: str):
+    """The viewer's conversations in one of the app's tabs, newest first: those they are in and that hold a
+    message (as Pixelfed lists them), without any whose member is hidden here."""
+    member = conversation_member.c
+    query = Conversation.query.join(conversation_member, and_(member.conversation_id == Conversation.id,
+                                                              member.user_id == viewer_id)) \
+        .filter(member.joined.is_(True),
+                select(ChatMessage.id).where(ChatMessage.conversation_id == Conversation.id,
+                                             ChatMessage.deleted.is_(False)).exists())
+    if kind == 'requests':
+        query = query.filter(member.state == membership.REQUEST, member.hidden.is_(False))
+    elif kind == 'hidden':
+        query = query.filter(member.hidden.is_(True))
+    else:
+        query = query.filter(member.state == membership.ACTIVE, member.hidden.is_(False))
+    return without_hidden_conversations(query, Conversation.id) \
+        .order_by(Conversation.updated_at.desc(), Conversation.id.desc())
+
+
+@bp.route('/api/v1.1/direct/conversations')
+@require_oauth('read')
+def direct_conversations():
+    kind = request.args.get('filter', 'primary')
+    limit = _whole(request.args.get('limit', 20), high=MAX_CONVERSATIONS)
+    raw_cursor = request.args.get('cursor') or '0'
+    offset = _whole(raw_cursor, low=0) if raw_cursor != '0' else 0
+    if kind not in FILTERS or limit is None or offset is None:
+        return _refused('The filter, limit or cursor is not one this server knows')
+    rows = _inbox(g.oauth_user.id, kind).offset(offset).limit(limit + 1).all()
+    data = [conversation_entity(row, membership.member(row.id, g.oauth_user.id)) for row in rows[:limit]]
+    return jsonify({'data': data, 'meta': {'filter': kind,
+                                           'next_cursor': str(offset + limit) if len(rows) > limit else None,
+                                           'prev_cursor': str(max(offset - limit, 0)) if offset else None}})
+
+
+@bp.route('/api/v1.1/direct/unread_count')
+@require_oauth('read')
+def direct_unread_count():
+    viewer_id = g.oauth_user.id
+    member = conversation_member.c
+    primary = _inbox(viewer_id, 'primary').filter(member.muted.is_(False), select(ChatMessage.id).where(
+        ChatMessage.conversation_id == Conversation.id, ChatMessage.recipient_id == viewer_id,
+        ChatMessage.read.is_(False), ChatMessage.deleted.is_(False)).exists())
+    return jsonify({'primary': primary.count(), 'requests': _inbox(viewer_id, 'requests').count()})
+
+
+def _may_message(sender: User, recipient: User):
+    """None when `sender` may message `recipient`, else the refusal: a block either way, a local-only account and a
+    remote one (spec 3.4), or the sender's own standing (can_send_pm_to, as the web chat asks)."""
+    if recipient.has_blocked_user(sender.id) or sender.has_blocked_user(recipient.id):
+        return _refused('You cannot message this account.', 403)
+    if refuses_remote_contact(sender, recipient):
+        return _refused('This account cannot be messaged from here.', 403)
+    if not sender.can_send_pm_to(recipient):
+        return _refused('You are not permitted to send a private message at this time, likely because your '
+                        'account is too new.', 403)
+    return None
+
+
+@bp.route('/api/v1.1/direct/conversations', methods=['POST'])
+@require_oauth('write')
+def direct_start():
+    """The conversation with this person, found or started (as a request of theirs unless they follow the sender).
+    One recipient: PieFed's chat is one-to-one."""
+    me = g.oauth_user
+    fields = request.get_json(silent=True)
+    named = fields.get('recipient_ids') if isinstance(fields, dict) else None
+    if not isinstance(named, list) or not named:
+        return _refused('Name the person to message in recipient_ids')
+    ids = {str(value) for value in named} - {str(me.id)}
+    if not ids:
+        return _refused('Name someone other than yourself')
+    if len(ids) > 1:
+        return _refused('A conversation here is with one person: group chats are not supported')
+    number = _whole(ids.pop())
+    recipient = without_local_only_actors(User.query.filter(User.id == number, User.deleted.is_(False)), User,
+                                          True).first() if number else None
+    if recipient is None:
+        return _refused('One or more recipients could not be found.', 404)
+    refusal = _may_message(me, recipient)
+    if refusal:
+        return refusal
+    conversation = Conversation.find_existing_conversation(recipient=recipient, sender=me)
+    status = 200
+    if conversation is None:
+        conversation, status = membership.start_conversation(me, recipient), 201
+    membership.update_member(conversation.id, me.id, joined=True, hidden=False)   # opening it again shows it
+    return jsonify(conversation_entity(conversation, membership.member(conversation.id, me.id))), status
+
+
+@bp.route('/api/v1.1/direct/conversations/<conversation_id>')
+@require_oauth('read')
+def direct_conversation(conversation_id):
+    found = _membership(conversation_id)
+    return jsonify(conversation_entity(*found)) if found else _not_found()
+
+
+@bp.route('/api/v1.1/direct/conversations/<conversation_id>/messages')
+@require_oauth('read')
+def direct_messages(conversation_id):
+    """Newest first: `max_id` pages back in time, `min_id` is what arrived since (what the app polls with)."""
+    found = _membership(conversation_id)
+    if not found:
+        return _not_found()
+    limit = _whole(request.args.get('limit', 20), high=MAX_MESSAGES)
+    max_id, min_id = (_whole(request.args[name]) if request.args.get(name) else 0 for name in ('max_id', 'min_id'))
+    if limit is None or max_id is None or min_id is None:
+        return _refused('The limit, max_id or min_id is not a whole number this server takes')
+    query = _messages(found[0])
+    if min_id:
+        rows = query.filter(ChatMessage.id > min_id).order_by(ChatMessage.id).limit(limit + 1).all()
+        more, rows = len(rows) > limit, list(reversed(rows[:limit]))
+    else:
+        if max_id:
+            query = query.filter(ChatMessage.id < max_id)
+        rows = query.order_by(ChatMessage.id.desc()).limit(limit + 1).all()
+        more, rows = len(rows) > limit, rows[:limit]
+    viewer_id = g.oauth_user.id
+    return jsonify({'data': [message_entity(row, viewer_id) for row in rows],
+                    'meta': {'has_more': more, 'newest_id': str(rows[0].id) if rows else None,
+                             'oldest_id': str(rows[-1].id) if rows else None}})
+
+
+@bp.route('/api/v1.1/direct/conversations/<conversation_id>/messages', methods=['POST'])
+@require_oauth('write')
+def direct_send(conversation_id):
+    """A text message, through the web chat's own send; whoever had left is in the conversation again, as the web's
+    new message does (D748). Media is W1.4b2."""
+    found = _membership(conversation_id)
+    if not found:
+        return _not_found()
+    conversation, me = found[0], g.oauth_user
+    fields = request.get_json(silent=True)
+    fields = fields if isinstance(fields, dict) else {}
+    if fields.get('media_ids'):
+        return _refused('Photos in messages are not supported here yet')
+    text = fields.get('message')
+    if not isinstance(text, str) or not text.strip() or len(text) > MAX_CHARACTERS:
+        return _refused(f'A message is text of 1 to {MAX_CHARACTERS} characters')
+    for other in conversation.members:
+        refusal = None if other.id == me.id else _may_message(me, other)
+        if refusal:
+            return refusal
+    for person in conversation.members:
+        membership.update_member(conversation.id, person.id, joined=True)
+    message = send_message(text, conversation.id, user=me, src=SRC_API)
+    return jsonify(message_entity(message, me.id)), 201
+
+
+@bp.route('/api/v1.1/direct/conversations/<conversation_id>/messages/<message_id>', methods=['DELETE'])
+@require_oauth('write')
+def direct_delete(conversation_id, message_id):
+    """One's own message, deleted as alpha's delete does it, and federated."""
+    found = _membership(conversation_id)
+    number = _whole(message_id)
+    message = ChatMessage.query.filter_by(id=number, conversation_id=found[0].id, sender_id=g.oauth_user.id,
+                                          deleted=False).first() if found and number else None
+    if message is None:
+        return _not_found()
+    message.deleted = True
+    db.session.commit()
+    task_selector('delete_pm', message_id=message.id)
+    return jsonify({'deleted': True})
+
+
+@bp.route('/api/v1.1/direct/conversations/<conversation_id>/read', methods=['POST'])
+@require_oauth('write')
+def direct_read(conversation_id):
+    """The viewer's messages in it read, up to `message_id` or all of them, with their notifications."""
+    found = _membership(conversation_id)
+    if not found:
+        return _not_found()
+    fields = request.get_json(silent=True)
+    up_to = fields.get('message_id') if isinstance(fields, dict) else None
+    me = g.oauth_user
+    unread = _unread(found[0], me.id)
+    if up_to is not None:
+        if _whole(up_to) is None:
+            return _refused('message_id is not a message id')
+        unread = unread.filter(ChatMessage.id <= _whole(up_to))
+    read_ids = set()
+    for message in unread.all():
+        message.read = True
+        read_ids.add(message.id)
+    for notification in Notification.query.filter_by(user_id=me.id, notif_type=NOTIF_MESSAGE,
+                                                      subtype='chat_message', read=False):
+        if (notification.targets or {}).get('message_id') in read_ids:
+            notification.read = True
+            me.unread_notifications = max((me.unread_notifications or 0) - 1, 0)
+    db.session.commit()
+    return jsonify(_state(found[0], membership.member(found[0].id, me.id)))
+
+
+def _set(conversation_id, **values):
+    found = _membership(conversation_id)
+    if not found:
+        return _not_found()
+    membership.update_member(found[0].id, g.oauth_user.id, **values)
+    return jsonify(_state(found[0], membership.member(found[0].id, g.oauth_user.id)))
+
+
+@bp.route('/api/v1.1/direct/conversations/<conversation_id>/accept', methods=['POST'])
+@require_oauth('write')
+def direct_accept(conversation_id):
+    return _set(conversation_id, state=membership.ACTIVE)
+
+
+@bp.route('/api/v1.1/direct/conversations/<conversation_id>/mute', methods=['POST'])
+@require_oauth('write')
+def direct_mute(conversation_id):
+    return _set(conversation_id, muted=True)
+
+
+@bp.route('/api/v1.1/direct/conversations/<conversation_id>/unmute', methods=['POST'])
+@require_oauth('write')
+def direct_unmute(conversation_id):
+    return _set(conversation_id, muted=False)
+
+
+@bp.route('/api/v1.1/direct/conversations/<conversation_id>/hide', methods=['POST'])
+@require_oauth('write')
+def direct_hide(conversation_id):
+    return _set(conversation_id, hidden=True)
+
+
+@bp.route('/api/v1.1/direct/conversations/<conversation_id>/unhide', methods=['POST'])
+@require_oauth('write')
+def direct_unhide(conversation_id):
+    return _set(conversation_id, hidden=False)
+
+
+@bp.route('/api/v1.1/direct/conversations/<conversation_id>/leave', methods=['POST'])
+@require_oauth('write')
+def direct_leave(conversation_id):
+    """PieFed's leave (alpha's and the web's): out of it, and the conversation gone once nobody here is in it."""
+    found = _membership(conversation_id)
+    if not found:
+        return _not_found()
+    conversation = found[0]
+    membership.update_member(conversation.id, g.oauth_user.id, joined=False)
+    state = _state(conversation, membership.member(conversation.id, g.oauth_user.id))
+    conversation.delete_if_abandoned()
+    return jsonify(state)
