@@ -667,8 +667,49 @@ class PixelfedApp:
         found = find_post(alice, alice.microblogs_id(), text, timeout=90)['post']
         # a photo, not words alone: an image post once PieFed's media pipeline has the upload (a link until then)
         wait_for(lambda: alice.get_post(found['id'])['post']['post_type'] == 'Image', timeout=120, interval=3)
+        chat = self._message_dora(f'{text}-dm')
         return f"posted a photo captioned {text!r} through its camera; PieFed has it as alice's image post " \
-               f"{found['id']}"
+               f"{found['id']}. {chat}"
+
+    def _message_dora(self, text: str) -> str:
+        """A direct message (W1.4b1): Home's paper plane > Messages > New message > dora, found by the search (direct
+        lookup) > Chat (a conversation started: a request of dora's, who does not follow alice) > the message > Send.
+        dora answers through alpha, which accepts it, and her answer shows in the conversation, polled by min_id."""
+        d, dora = self.device, self.world['dora']
+        for _ in range(4):   # the post left the app on its home screen or a screen over it
+            if d.ui(description='Home').exists:
+                break
+            d.ui.press('back')
+            time.sleep(1)
+        d.tap_tab('Home')
+        width, height = d.ui.info['displayWidth'], d.ui.info['displayHeight']
+        # Messages: the unlabelled paper plane at the home header's right; a tap can be swallowed
+        d.tap_until(lambda: d.ui.click(width * 0.925, height * 0.08), 'New message', wait=15)
+        d.ui(description='New message').click(timeout=30)
+        search = d.ui(className='android.widget.EditText', instance=0)
+        search.click(timeout=30)
+        time.sleep(1)
+        d.type_focused('dora')
+        person = d.ui(className='android.widget.CheckBox', descriptionStartsWith='dora')   # a result: "dora, dora"
+        person.wait(timeout=30)
+        d.hide_keyboard()
+        d.tap_until(lambda: person.click(timeout=15), '1 of 9', wait=10)
+        d.tap('Chat', exact=True)
+        field = d.ui(className='android.widget.EditText', description='Message')
+        field.click(timeout=60)
+        time.sleep(1)
+        d.type_focused(text)
+        d.ui(description='Send').click(timeout=15)
+
+        def received():
+            listed = dora.http.get('/private_message/list', params={'limit': 20}).raise_for_status().json()
+            return next((pm for pm in listed['private_messages'] if pm['private_message']['content'] == text), None)
+        message = wait_for(received, timeout=60, interval=2)
+        answer = f'{text}-answer'
+        dora.http.post('/private_message', json={'recipient_id': message['creator']['id'],
+                                                 'content': answer}).raise_for_status()
+        d.wait_text(answer, timeout=60)
+        return f"Messaged dora {text!r} from its chat; she has it, and her answer {answer!r} shows there"
 
 DRIVERS = {'newpipe-android': NewPipe, 'summit-android': Summit, 'voyager-android': VoyagerAndroid, 'thunder-android': Thunder,
            'tusky-android': Tusky, 'mastodon-android': MastodonAndroid, 'peertube-android': PeerTubeApp,
