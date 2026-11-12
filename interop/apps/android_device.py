@@ -23,14 +23,17 @@ class Device:
             self.adb.uninstall(package)
         self.adb.install(str(apk), nolaunch=True, flags=['-r', '-g'])
 
-    def reset_shared_state(self) -> None:
-        """What one app's test leaves on the device for the next, taken away before each: Chrome's data (the PieFed
-        session an earlier app's OAuth login signed in, which would skip the next one's login form) and the media a
-        driver pushed for a photo picker (which would list one test's picture in another's). Chrome's trust in the
-        harness root and its command line are outside its data (android/boot.sh) and stay."""
+    def reset(self, keep: set[str]) -> None:
+        """The device as the session found it: every app not in `keep` (the packages it had then) uninstalled, with
+        its data and accounts; Chrome's data (the PieFed session an app's OAuth login signed in) cleared; the media a
+        driver pushed for a photo picker removed. Chrome's trust in the harness root and its command line are outside
+        its data (android/boot.sh) and stay."""
+        for package in sorted(set(self.adb.list_packages()) - keep):
+            self.adb.uninstall(package)
         self.adb.shell(['pm', 'clear', 'com.android.chrome'])
         self.adb.shell(['sh', '-c', 'rm -f /sdcard/Pictures/interop-* /sdcard/Movies/interop-*'])
         self.scan_media()
+        self.adb.shell(['logcat', '-c'])
 
     def scan_media(self) -> None:
         """The media store indexed again: Android's photo picker lists what it has indexed."""

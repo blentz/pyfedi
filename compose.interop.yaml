@@ -504,6 +504,9 @@ services:
       - ./interop/trust_ca.sh:/trust_ca.sh:ro
       - ./interop:/app/interop   # read-write: results land in interop/apps/results, the APK cache in interop/apps/.apks
       - ./tests/fixtures/media:/app/tests/fixtures/media:ro   # the podcast episode the players subscribe to
+      # PieFed's folders, copied and put back around each test with its database and Redis (interop/apps/stack_state.py)
+      - piefed-media:/piefed/media   # not :U, which would hand them to this root container: PieFed's own them
+      - piefed-tmp:/piefed/tmp
     networks: [interop, apps-offline]   # the internet for the APKs, adb on the emulator's network
     profiles: [apps]
 

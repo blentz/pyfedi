@@ -5,9 +5,11 @@
 FROM docker.io/library/python:3-slim
 
 # apksigner and zipalign: an app whose native libraries must be extracted is signed again (apks.py)
-RUN apt-get update && apt-get install -y --no-install-recommends apksigner zipalign default-jre-headless \
+# rsync: PieFed's media and tmp folders are copied and put back around each test (stack_state.py)
+RUN apt-get update && apt-get install -y --no-install-recommends apksigner zipalign default-jre-headless rsync \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir --disable-pip-version-check pytest pytest-timeout httpx playwright uiautomator2 adbutils \
+        'psycopg[binary]' redis \
     && playwright install --with-deps chromium
 
 WORKDIR /app

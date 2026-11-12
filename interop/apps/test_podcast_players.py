@@ -8,44 +8,25 @@ the feed is checked for what any player needs: an item with an audio enclosure, 
 The harness instance is private (R219), so the feed URL carries alice's RSS token, as its community page's link does.
 """
 import base64
-import re
 import ssl
-import xml.etree.ElementTree as ET
 
 import httpx
 import pytest
 
 from interop.apps import apks, steps
-from interop.apps.conftest import ALICE
+from interop.apps.conftest import ALICE, EPISODE, episode_items as _items
 from interop.apps.matrix import inapplicable, load_matrix, record
-from interop.clients import CA, PieFedWeb, form_errors, wait_for
+from interop.clients import CA, PieFedWeb, wait_for
 
 MATRIX = load_matrix()
-EPISODE = 'Interop apps episode'
-FIXTURE = '/app/tests/fixtures/media/audio.mp3'
 NS = {'itunes': 'http://www.itunes.com/dtds/podcast-1.0.dtd'}
 
 
-def _items(http, feed_url):
-    feed = ET.fromstring(http.get(feed_url).raise_for_status().content)
-    return [item for item in feed.iter('item') if item.findtext('title') == EPISODE and item.find('enclosure') is not None]
 
-
-@pytest.fixture(scope='module')
-def episode():
-    """The feed URL of pod_media, holding EPISODE: uploaded once, reused by later runs on the same stack."""
-    web = PieFedWeb(*ALICE)
-    link = re.search(r'/community/pod_media/feed\?token=([\w-]+)', web.http.get('/c/pod_media').text)
-    assert link, 'the pod_media page has no feed link carrying the member token'
-    feed_url = f'https://piefed.test/community/pod_media/feed?token={link[1]}'
-    with httpx.Client(verify=ssl.create_default_context(cafile=CA), timeout=15) as http:
-        if not _items(http, feed_url + '&t=check'):
-            r = web.submit_media('pod_media', 'audio', EPISODE, FIXTURE, 'audio/mpeg')
-            assert r.status_code == 302, f'upload answered {r.status_code}: {form_errors(r.text)}'
-            # the feed is cached per URL and query string: a fresh query each look
-            looks = iter(range(10_000))
-            wait_for(lambda: _items(http, f'{feed_url}&t=wait{next(looks)}'), timeout=90, interval=2)
-    return feed_url
+@pytest.fixture
+def episode(baseline, world):
+    """The feed URL of pod_media, which holds EPISODE: uploaded when the session made its world (conftest.py)."""
+    return world['podcast_feed']
 
 
 RSS_ONLY = sorted(name for name, app in MATRIX.items() if app.get('rss'))
@@ -87,7 +68,6 @@ def test_antennapod_syncs_with_piefed_and_lists_the_episode(episode, device, tmp
     package = app['package']
     with httpx.Client(timeout=300, follow_redirects=True) as http:
         apk, version = apks.fetch(app['apk'], http)
-    device.reset_shared_state()   # as each Android app: it starts as if it were the first
     device.install(apk, package)
     device.launch(package)
     password = PieFedWeb(*ALICE).app_password('AntennaPod')

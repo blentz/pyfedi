@@ -32,6 +32,12 @@ up_piefed() {
     # podman-compose's `up -d` keeps a running container whose image was just rebuilt: recreate PieFed's, or a re-run
     # of `up` (and `test`) runs the old code
     $COMPOSE up -d --force-recreate --no-deps piefed-web piefed-celery piefed-celery-background
+    # The media and tmp folders to the image's user python: podman-compose mounts them with --mount, which drops the
+    # :U, and podman gives an EMPTY volume to whichever container mounts it next (root's apps-runner too), where
+    # PieFed could write no upload. Its own folders made in them, as python, so they are empty no longer.
+    podman exec -u 0 pyfedi-interop_piefed-web_1 chown python:python /app/app/static/media /app/app/static/tmp
+    podman exec pyfedi-interop_piefed-web_1 mkdir -p /app/app/static/media/posts /app/app/static/media/users \
+        /app/app/static/media/communities /app/app/static/tmp/uploads
     wait_http piefed-web https://piefed.test/health
     # init-db drops every table first, so run it only before it has seeded the languages (a re-run of `up` keeps the
     # data). Not the instance table: the migrations `flask db upgrade` ran at start-up seed a row there. Not the site
@@ -117,7 +123,18 @@ up() {
 
 # The client-app harness (interop/apps/README.md): PieFed alone, the apps' seed, the emulator and the web apps, then the
 # app tests. The tests record what each app did; the verdict is interop.apps.matrix's, against interop/apps/matrix.json.
+# PieFed with nothing in it: its containers and the volumes of its database (tmpfs), Redis and folders made again. The
+# apps run starts from here every time, so nothing an earlier run, or another suite, left is in what its apps see
+# (owner ruling H1). The peers keep theirs: they meet a fresh PieFed after any reboot of the host too.
+fresh_piefed() {
+    for service in piefed-web piefed-celery piefed-celery-background piefed-db piefed-redis; do
+        podman rm -f "pyfedi-interop_${service}_1" > /dev/null 2>&1 || true   # podman-compose has no rm
+    done
+    podman volume rm -f pyfedi-interop_piefed-media pyfedi-interop_piefed-tmp > /dev/null 2>&1 || true   # its project's
+}
+
 apps() {
+    fresh_piefed
     up_piefed
     $COMPOSE --profile apps build android-emulator apps-runner
     # Phanpy publishes no image: build its newest release's static files into one (interop/apps/phanpy)

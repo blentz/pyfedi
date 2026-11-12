@@ -900,7 +900,6 @@ def test_android_app(world, device, name):
         apk, version = apks.fetch(app['apk'], http)
     if app['apk'].get('extract_native_libs'):
         apk = apks.with_native_libs_extracted(apk)
-    device.reset_shared_state()   # each app starts as if it were the first: no browser session, no pushed media
     device.install(apk, app['package'])
     device.launch(app['package'])
     driver = DRIVERS[name](device, app['package'], world)
