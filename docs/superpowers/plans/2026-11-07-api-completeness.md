@@ -384,6 +384,10 @@ floors and changed-line gates.
   member's endpoints now, moderation as W3b; L3 polls, galleries and events as the nearest Lemmy post; L4 `/api/v3`
   answers every caller.
 - **W4 gpodder.net sync** for podcast apps: `/api/2/auth`, subscriptions, episode actions.
+  Spec `docs/superpowers/specs/2026-11-12-gpodder-sync-design.md`. **Ruled 2026-11-12:** G1 app passwords (named,
+  shown once, revocable); G2 the synced list, and a PieFed community's own feed joins it; G3 actions kept, and a
+  play of a PieFed post marks it read; G4 gpodder.net v2 only. Phases W4a login, W4b subscriptions, W4c episode
+  actions, W4d AntennaPod in the harness.
 
 ### 2.3 Order (proposed, D1)
 
