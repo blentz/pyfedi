@@ -2225,6 +2225,30 @@ class StoryView(db.Model):
     created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
 
 
+class GpodderDevice(db.Model):
+    """A device of a person's in gpodder sync (plan W4b; spec 2026-11-12-gpodder-sync-design §4): named by the app,
+    made by its first call. A person's subscriptions are theirs, not a device's (GpodderSubscription)."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False)
+    device_id = db.Column(db.String(64), nullable=False)
+    caption = db.Column(db.String(100), nullable=False, default='')
+    type = db.Column(db.String(16), nullable=False, default='other')
+    created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+    __table_args__ = (db.UniqueConstraint('user_id', 'device_id', name='uq_gpodder_device_user_device'),)
+
+
+class GpodderSubscription(db.Model):
+    """A feed URL in a person's gpodder subscriptions (ruling G2): kept, with subscribed false, once removed, so that a
+    device asking what changed since is told of the removal."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False)
+    url = db.Column(db.String(2000), nullable=False)
+    subscribed = db.Column(db.Boolean, nullable=False, default=True)
+    changed_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+    __table_args__ = (db.UniqueConstraint('user_id', 'url', name='uq_gpodder_subscription_user_url'),
+                      db.Index('ix_gpodder_subscription_user_changed', 'user_id', 'changed_at'))
+
+
 class StoryExpiry(db.Model):
     """A story its author expired early (ruling S2): no longer in any carousel, still a post. Pruned as StoryView."""
     post_id = db.Column(db.Integer, db.ForeignKey('post.id', ondelete='CASCADE'), primary_key=True)
