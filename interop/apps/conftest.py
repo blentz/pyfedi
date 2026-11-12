@@ -149,7 +149,8 @@ def _listed_video(http):
 
 def tube_video() -> dict:
     """TUBE_TITLE on tube.test, as PeerTube's API shows it: uploaded by tess to her community the first time, then
-    reused. Listed once PieFed's media pipeline has made it ready; returned once its renditions are listed too."""
+    reused. Listed once PieFed's media pipeline has made it ready; returned once its renditions and HLS copies are
+    listed too."""
     with httpx.Client(base_url=f'https://{TUBE}', verify=ssl.create_default_context(cafile=CA), timeout=15) as http:
         video = _listed_video(http)
         if video is None:
@@ -169,9 +170,10 @@ def tess_avatar() -> None:
 
 
 def _with_renditions(http, video_id):
+    """The video once its renditions are listed and its HLS copies offered (the stack offers HLS, ruling H4)."""
     video = http.get(f'/api/v1/videos/{video_id}').raise_for_status().json()
     labels = {entry['resolution']['label'] for entry in video['files']}
-    return video if {'480p', '360p'} <= labels else None
+    return video if {'480p', '360p'} <= labels and video['streamingPlaylists'] else None
 
 
 def episode_items(http, feed_url):

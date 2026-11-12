@@ -94,4 +94,5 @@ if Community.query.filter_by(name='tube', ap_id=None, site_domain_id=tube.id).fi
     db.session.commit()
 set_setting('allow_video_file_uploads', 'users')
 set_setting('allow_audio_file_uploads', 'users')
+set_setting('video_hls', True)   # videos as HLS streams too (ruling H4): P2Play plays HLS only
 print('seed_piefed: ok')
