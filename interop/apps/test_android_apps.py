@@ -854,10 +854,16 @@ class Fedilab:
         d = self.device
         d.type_into(d.ui(resourceId=self.id('login_instance')), 'piefed.test')
         d.hide_keyboard()
-        for _ in range(3):   # a tap as the keyboard closes is lost: tap until the login screen goes
+        for _ in range(3):   # a tap as the keyboard closes is lost, or lands on the instance list: until PieFed's page
+            d.hide_keyboard()
             d.ui(resourceId=self.id('continue_button')).click(timeout=30)
-            if d.ui(resourceId=self.id('login_instance')).wait_gone(timeout=15):
-                break
+            if not d.ui(resourceId=self.id('login_instance')).wait_gone(timeout=15):
+                continue
+            if d.ui(textContains='Select a category').wait(timeout=3):   # its instance list: back, and again
+                d.ui.press('back')
+                d.ui(resourceId=self.id('login_instance')).wait(timeout=15)
+                continue
+            break
         chrome_first_run(d)
         piefed_consent(d, self.package)
         # a new install shows its release notes, and a warning that no push distributor is installed (Disable turns

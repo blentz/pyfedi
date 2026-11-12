@@ -156,9 +156,15 @@ class Device:
         """Back, only while the keyboard shows: with no keyboard, back closes the app's sheet or screen instead."""
         # the keyboard's own window is in the hierarchy uiautomator dumps while it shows (dumpsys input_method's
         # mInputShown is gone from Android 17)
-        if re.search(r'package="[^"]*inputmethod[^"]*"', self.ui.dump_hierarchy()):
+        if self._keyboard_shows():
             self.ui.press('back')
-            time.sleep(0.5)
+            # until it has gone: a tap while it slides away lands on whatever is under it (Fedilab's instance list)
+            deadline = time.monotonic() + 5
+            while self._keyboard_shows() and time.monotonic() < deadline:
+                time.sleep(0.25)
+
+    def _keyboard_shows(self) -> bool:
+        return bool(re.search(r'package="[^"]*inputmethod[^"]*"', self.ui.dump_hierarchy()))
 
     def type_into(self, field, text: str) -> None:
         field.click()
