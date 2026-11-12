@@ -28,6 +28,16 @@ def own_uploads(user_id: int, file_ids) -> list[File]:
     return [files[file_id] for file_id in dict.fromkeys(wanted) if file_id in files]
 
 
+def store_upload(upload) -> File | tuple:
+    """The token's person's upload stored through the shared upload, or the refusal to answer: the shared upload
+    refuses a type it does not take (is_refused_upload). Pixelfed's stories take theirs this way (ruling S5)."""
+    try:
+        url = process_upload(upload, user=g.oauth_user)
+    except Exception as error:
+        return failure(error, refusals=(is_refused_upload,))
+    return File.query.filter(File.source_url == url).order_by(File.id.desc()).first()
+
+
 def _description(value) -> str | None:
     return value.strip()[:ALT_TEXT_MAX] or None if isinstance(value, str) else None
 
@@ -39,11 +49,9 @@ def upload_media():
     upload = request.files.get('file')
     if upload is None or not upload.filename:
         return jsonify({'error': 'Validation failed: File is missing'}), 422
-    try:
-        url = process_upload(upload, user=g.oauth_user)
-    except Exception as error:   # the shared upload refuses a type it does not take (is_refused_upload)
-        return failure(error, refusals=(is_refused_upload,))
-    file = File.query.filter(File.source_url == url).order_by(File.id.desc()).first()
+    file = store_upload(upload)
+    if not isinstance(file, File):
+        return file
     file.alt_text = _description(request.form.get('description'))
     db.session.commit()
     return jsonify(attachment(file))

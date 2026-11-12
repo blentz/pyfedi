@@ -120,7 +120,7 @@ def _respond(row, status: int = 200):
     return jsonify(entity), status
 
 
-def _guarded(write):
+def guarded(write):
     """Runs `write`, answering a refusal as Mastodon does (app.mastodon.errors)."""
     try:
         return write()
@@ -155,7 +155,8 @@ def _with_pictures(text: str, files: list) -> str:
     return '\n\n'.join([part for part in (text.strip(), *pictures) if part])
 
 
-def _create(fields: dict):
+def write_status(fields: dict):
+    """A status as POST /api/v1/statuses makes it (M4); refusals are _Refused, which `guarded` answers."""
     text = _text(fields, 'status')
     files = _media(fields)
     if not text.strip() and not files:
@@ -201,11 +202,11 @@ def create_status():
             return _respond(row)
 
     def write():
-        row = _create(_fields())
+        row = write_status(_fields())
         if cache_key:
             cache.set(cache_key, ids.status_id(row), timeout=IDEMPOTENCY_SECONDS)
         return _respond(row)
-    return _guarded(write)
+    return guarded(write)
 
 
 def _own(status: str):
@@ -231,7 +232,7 @@ def delete_status(status_id):
         else:
             shared_reply.delete_reply(row.id, SRC_API, auth)
         return jsonify(entity)
-    return _guarded(write)
+    return guarded(write)
 
 
 @bp.route('/api/v1/statuses/<status_id>/source')
@@ -240,7 +241,7 @@ def status_source(status_id):
     def read():
         row = _own(status_id)
         return jsonify({'id': ids.status_id(row), 'text': row.body or '', 'spoiler_text': row.content_warning or ''})
-    return _guarded(read)
+    return guarded(read)
 
 
 @bp.route('/api/v1/statuses/<status_id>', methods=['PUT'])
@@ -266,4 +267,4 @@ def edit_status(status_id):
             shared_post.edit_post({**changes, 'title': title, 'url': row.url, 'nsfw': _truthy(fields.get('sensitive')),
                                    'ai_generated': row.ai_generated}, row, row.type, SRC_API, auth=auth)
         return _respond(row)
-    return _guarded(write)
+    return guarded(write)
