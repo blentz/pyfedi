@@ -68,12 +68,28 @@ This summary covers the branch up to the end of the fuzzing track
 
 Before the rebase the same work was 3,250 commits on `v1.7.17`; the two that
 dropped out are listed in section 1.1. The branch has since grown to
-4,147 commits. The tracks after 2026-10-14 (onion storefronts and
-multi-domain storefronts, Pixelfed and Loops interop, referral-code
-registration) are not yet summarised here.
+4,478 commits. Of the tracks after 2026-10-14, roles and permissions, payments,
+the media cap and the client-app APIs are summarised here; onion storefronts and
+multi-domain storefronts, Pixelfed and Loops interop and referral-code
+registration are not yet.
 
-The test suite collected 23,526 tests on 2026-10-14 and 29,440 after the
-rebase.
+The client-app APIs (2026-11-07 to 2026-11-12, 233 commits after the payments
+track) follow `docs/superpowers/plans/2026-11-07-api-completeness.md`, whose goal
+is to serve as many fediverse client apps as PieFed can. A harness under
+`interop/apps/` drives 21 third-party apps against a PieFed stack, on an Android
+emulator and in browsers, and each phase was merged only when the apps it serves
+logged in, read and posted there:
+
+- An OAuth 2 authorization server for client apps (W0.2), and a shared read layer
+  under `/api/alpha` that every new API reads through (W0.1).
+- Mastodon's client API (W1), with Pixelfed's own routes for its official app,
+  PixelDroid and Fedilab (W1.4), including direct messages and stories.
+- PeerTube's API for NewPipe and PeerTube's own app, uploads included (W2).
+- Lemmy's `/api/v3` for Jerboa (W3).
+- gpodder.net sync for podcast apps (W4).
+
+The test suite collected 23,526 tests on 2026-10-14, 29,440 after the
+rebase, and 33,001 on 2026-11-12.
 
 ### 1.1 The rebase onto v1.8.10
 
@@ -287,6 +303,21 @@ scan. The backfill `UPDATE`s touch only rows that are actually NULL.
 | 28 | `c5f9e3b7a2d1` split_permissions | Moves every role onto the finer permission catalogue so that each keeps what it could do: each old permission's rows become the permissions split from it, and the role named Staff gains what its name used to give it. Removes `change user roles`. (`ec35df1e`) | Yes, `role_permission` rows. The downgrade does not restore `change user roles` |
 | 29 | `d6a1f4c8e2b3` permission_scope | Adds `role_permission.all_domains` and `role_permission_domain`, and drops `role_grant.site_domain_id`: a role granted on a domain becomes its own role limited to that domain. The role named Staff gains `administer all users` and its scopable permissions are limited to the default domain. `site_domain.registration` values `staff` and `admin` become `closed`. | Yes. The downgrade restores Staff's reach and drops other limited permissions rather than widen them |
 | 30 | `e4c8a1d7f3b6` split_moderation_permissions | Gives every role holding `moderate all communities` the new `remove and restore content` and `turn comments off`, at the same domains, so nobody loses anything. The downgrade drops both. |
+| 31 | `a7d3f1c9e5b2` cms_nav_links_and_donate_page | Adds `in_header`, `in_footer` and `show_sidebar` to `cms_page`, and seeds the `/donate` page, or turns all three on for an existing one. (`aa71e0c2`) | Yes, an existing `/donate` page's three flags |
+| 32 | `b2e6c4a8d1f3` payments | Creates `payment_provider`, `offer`, `offer_domain`, `member_subscription`, `payment` and `payment_event`, and adds `user.donor_until`. (`3c9ba6bc`) | No |
+| 33 | `c3f7a9e1d5b8` payment_link_offers | Adds `offer.url`, an offer that links elsewhere. (`0e58d103`) | No |
+| 34 | `d4a8b2f6c1e9` paid_private_domains | Adds `site_domain.login_required`, `registration_offer_id` and `lapse_grace_days`, `member_subscription.ends_at`, and `user.registration_pending_since` and `access_lapsed_at`. Every domain but the default takes `login_required` from the site's `private_instance`. (`94917dfa`) | Yes, `site_domain.login_required` |
+| 35 | `e5b9c3a7d2f4` prepaid_reminders | Adds `member_subscription.reminded_at`. (`ca555b17`) | No |
+| 36 | `f6c2a8e4b1d7` oauth_server | Creates `oauth_app`, `oauth_code` and `oauth_token`. Secrets and tokens are stored as SHA-256 digests. (`bd9e7096`) | No |
+| 37 | `a7d3e9b2c4f1` oauth_domain | Adds `domain` to `oauth_code` and `oauth_token`: a code or token is found only on the domain it was issued on. Existing rows take the default domain. (`ec88a532`) | Yes, existing codes and tokens |
+| 38 | `b8e4f0c3d5a2` user_mute | Creates `user_mute` (muter, muted, whether notifications too, until when). (`32948b64`) | No |
+| 39 | `c9f5a1d4e6b3` push_subscription | Creates `push_subscription`, a Web Push subscription per token. (`8aa72e3c`) | No |
+| 40 | `d1a6b2e7f4c8` video_upload | Creates `video_upload`, a video arriving in parts through PeerTube's resumable upload. (`88bac4d8`) | No |
+| 41 | `e2b7c3f9a1d5` conversation_member_state | Adds `state` (`active` or `request`), `hidden` and `muted` to `conversation_member`. Existing members are active, shown and unmuted. (`e84dc5fb`) | No |
+| 42 | `f3c8d4a2b6e9` chat_message_file | Creates `chat_message_file`, a message's pictures in order. (`a22c9518`) | No |
+| 43 | `a4d9e1c7b3f2` story_view_and_expiry | Creates `story_view` (who saw a story) and `story_expiry` (a story its author ended early). (`c9aadf19`) | No |
+| 44 | `b7e2c9d4f1a3` gpodder_devices_and_subscriptions | Creates `gpodder_device` and `gpodder_subscription`. (`35f5053a`) | No |
+| 45 | `c3f8a1e6d2b9` gpodder_episode_actions | Creates `gpodder_episode_action`. (`03f0b400`) | No |
 
 Downgrades remove defaults, constraints, columns and the new tables, but do
 not restore the NULLs, invented counters, rankings, cross-post links or
@@ -312,6 +343,8 @@ New or changed settings in `env.sample`, `env.docker.sample` and `config.py`:
 | `relay_retention_days` (admin Relays page) | 7 | Relayed posts that nobody here engaged with are purged after this many days (`18ee6657`). |
 | `discovery_sync_per_host` (admin Discovery tab) | 0 (off) | How many of each host's top PeerTube channels and Castopod podcasts the instance actor follows and polls. Proactive sync does nothing until it is set (`cdc0ab1c`, `819fb1b4`). |
 | `discovery_external_search` (admin Discovery tab) | on | Lets search include PeerTube videos from the wider network through SepiaSearch. Each viewer must still tick the option (`35b61d6c`). |
+| `remote_image_cache_days` (admin Misc page) | 30 | **Now enforced.** Local copies of a remote post's images are deleted once the post arrived this many days ago, and pages load the image from its origin instead. 0 or empty keeps them forever. The column existed before but nothing read it, so an instance holding the old default of 30 starts evicting once `expire_old_media.sh` runs (see 2.2.1). (`f2182a54`) |
+| `oauth_admin_role` (admin Misc page) | the role named Staff | Which role an app's `admin:read` and `admin:write` scopes stand for. A person holding it (or Admin) is granted them; anyone else is told on the consent page that they are left out. A token's admin reach is that role's permissions, as the person holds them. No admin API routes use them yet. (`52c495b8`) |
 
 `config.py` no longer imports `app.constants`; it reads `VERSION` from
 `app/constants.py` by path so that `import config` does not cycle through
@@ -325,6 +358,23 @@ default build is still the production image (`c0f01c47`). atheris has no
 aarch64 wheel, which is why it must stay out of the production install.
 
 #### 2.2.1 Deployment
+
+- **Schedule `expire_old_media.sh` hourly.** It expires relayed posts past
+  `relay_retention_days`, enforces `remote_image_cache_days`, and removes
+  PeerTube app uploads no post came of a day after their last part
+  (`f2182a54`, W2.3). It is not yet in `docker.cron`, `INSTALL.md` or
+  `INSTALL-docker.md`: add it the way `send_queue.sh` is run, for example
+  `30 * * * * cd /app && ./expire_old_media.sh`. Relay expiry also still runs
+  daily, but the media cap and the upload sweep run nowhere else. Once the job
+  has run, the admin dashboard warns when it is more than two hours overdue; an
+  instance that never runs it gets no warning, because the dashboard reads the
+  jobs' last runs.
+- **Video uploads gain 480p and 360p copies** (`23d94091`), made with ffmpeg on
+  the `background` queue after the upload is ready. Expect that worker to use
+  more CPU on an instance that takes video uploads.
+- **The web container starts when data.lemmyverse.net does not answer**
+  (`b0f9a296`). `entrypoint.sh` used to exit when `flask populate_community_search`
+  failed; it now keeps the previous run's list and starts anyway.
 
 - **A second Celery worker is required.** `entrypoint_celery.sh` now runs the
   queues named in `CELERY_QUEUES`, by default `celery,send` (the inbox and
@@ -739,6 +789,57 @@ wants the old reach sets those permissions to "All domains" on the role.
 The work follows `docs/superpowers/specs/2026-11-03-rbac-design.md`; its Status
 section records what is done.
 
+**Third-party client apps.** Mastodon, Pixelfed, PeerTube and Lemmy apps, and
+podcast apps that sync through gpodder.net, can now sign in to a PieFed account.
+2.4 lists what each API serves; here is what operators and members will see.
+
+- **Authorised apps** (`/user/settings/apps`, in the settings menu) lists every app
+  a member has allowed, with what it may do and when it was last used, and takes
+  any one's access back. An app's tokens never expire; revoking it, changing the
+  password, a ban or deleting the account ends them (ruling M6, `bd9e7096`). A
+  token works only on the domain it was issued on (`ec88a532`).
+- **App passwords** for podcast sync are made on the same page: named, shown once,
+  revoked like any app, and good for `/api/2` alone (ruling G1, `796fe990`). A
+  podcast app's sign-in never takes the account password.
+- **A private instance answers a few routes logged out**, the ones an app needs
+  before anyone signs in: app registration and the token endpoint, OAuth's
+  metadata, PeerTube's config and local client, Lemmy's site document and login,
+  and Pixelfed's `/api/v2.1/config`. Every other new route checks its own token,
+  and a token passes only for its own person.
+- **Nodeinfo answers by agent.** Jerboa refuses a server whose nodeinfo does not
+  say `lemmy`, so its agents (`Jerboa`, `LemmyKotlinApi`) are told Lemmy 0.19.11
+  (ruling D3, `daf11055`). PixelDroid (`PixelDroid`) is told Pixelfed 0.15.2, with
+  Pixelfed's configuration as `metadata.config` (ruling S6, `c0e007ea`), and
+  Pixelfed's own path `/api/nodeinfo/2.0.json` says Pixelfed to anyone (ruling X1,
+  `d141223a`). Every other caller, crawler or server is told PieFed, and the
+  answers are cached and `Vary`-ed apart.
+- **Chat requests.** A conversation someone starts with a local member who does
+  not follow them is a request: it notifies nobody until the member accepts it or
+  answers. The web chat lists requests apart, with Accept, and a member can mute or
+  hide a conversation; a muted one notifies nobody who muted it (`e84dc5fb`,
+  `85ad13ac`). Conversations from moderation, admin contact and the bot challenge
+  are never requests.
+- **Pictures in chat.** A message may carry up to four pictures. They federate as
+  a post's attachments do and arrive the same way, and the web chat shows them
+  (`a22c9518`, `5b87b982`, `bdd2a7ea`). The web form does not send them yet; apps
+  do.
+- **Local boosts and mutes** exist for apps (rulings of 2026-11-08). A boost is an
+  Announce from the member's own actor (`f0e49765`); a mute hides an account from
+  timelines, and optionally its notifications, for a while or for good
+  (`32948b64`). Neither has a web button yet.
+- **Push notifications** reach Mastodon apps through Web Push, on the clearnet
+  only (`8aa72e3c`, `7937f335`). The VAPID key is made on first use and kept in the
+  settings table.
+- **Stories** in the Pixelfed apps are a member's microblog posts with a picture
+  from the last 24 hours. Who saw one is recorded for that viewer alone; its
+  author is shown no viewers (rulings X3, S1 to S5, `c9aadf19`, `40878b92`).
+- **PeerTube app uploads** become video posts in video communities whose
+  moderators may upload there, as on the web. "Internal" makes a local-only post
+  (ruling U1, `88bac4d8`).
+- **gpodder sync joins communities.** Adding a PieFed community's own feed in a
+  podcast app joins that community, and removing it leaves; playing an episode
+  that is a PieFed post marks it read (rulings G2 and G3, `35f5053a`, `03f0b400`).
+
 ### 2.4 API contract changes (for client developers)
 
 - **`notif_type` 15, a moderation notice.** `GET /api/alpha/user/notifications`
@@ -805,6 +906,66 @@ section records what is done.
   (`3ee7755c`, `18c4b541`).
 - **Language variants.** Posts and comments return their language variants
   (`0f652577`).
+
+**New client APIs.** Each follows its own platform's shapes and errors, with
+PieFed's visibility rules (blocks, bans, NSFW and NSFL settings, private
+communities, local-only content, the domain's rules) and writes through
+`app/shared/`, as the web and `/api/alpha` do. The specs give every mapping.
+
+- **OAuth 2** (W0.2, `bd9e7096`): `POST /api/v1/apps`, `/oauth/authorize` (a
+  CSRF-protected, frame-denied consent page), `/oauth/token` (authorization code
+  with PKCE for public clients, refresh, client credentials), `/oauth/revoke` and
+  `/.well-known/oauth-authorization-server`. Redirects are matched exactly; codes
+  are single-use and last ten minutes; tokens are stored hashed. Mastodon's scopes
+  are known; `admin:*` map to a role (2.2), Pixelfed's `security:*` grant nothing.
+- **Mastodon `/api/v1` and `/api/v2`** (W1, spec
+  `2026-11-07-mastodon-client-api-design.md`, rulings M2 to M8): accounts,
+  instance, timelines (home is people followed; each joined community is a list),
+  statuses and threads, notifications, search, media, favourites (upvotes),
+  boosts, bookmarks, follows, blocks, mutes, follow requests, markers, filters and
+  push. A titled post shows its title in bold; a status naming a community is a
+  post there, otherwise a microblog post. A status id is a snowflake over posts
+  and comments (`a2a3b65d`, `5c531097`). Not served: emoji reactions, admin
+  routes, reblogs as entries in home.
+- **Pixelfed** (W1.4, spec `2026-11-10-pixelfed-app-design.md`): `/api/v1.1`,
+  `/api/v1.2`, `/api/pixelfed/v1` and `/api/v2.1/config` for its official app,
+  PixelDroid and Fedilab: its account and status extras, direct messages on
+  PieFed's chat (`/api/v1.1/direct/*`, one to one; group chats refused), and
+  stories. Uploads named without an extension are known by their declared
+  picture type (`d10266d2`).
+- **PeerTube `/api/v1`** (W2, specs `2026-11-09-peertube-read-api-design.md`,
+  `2026-11-09-peertube-login-design.md`, `2026-11-10-peertube-upload-design.md`):
+  config, videos with `files[]` per resolution, channels (communities), accounts,
+  comments, search, subscriptions (joins), ratings (votes), watch history (read
+  marks), notifications (four kinds), the local client with the password grant
+  (rulings P1 to P5), and resumable uploads (rulings U1 to U3). TubeLab is left out
+  (P4).
+- **Lemmy `/api/v3`** (W3, spec `2026-11-10-lemmy-v3-design.md`, rulings L1 to
+  L4), over `/api/alpha`'s handlers, for any caller: login, site, feeds, posts,
+  comments, votes, saves, read and hidden marks, follows, blocks, search, inbox,
+  settings, reports and pict-rs-style image uploads. Moderation and admin
+  endpoints answer `not_found` and the report count is zero (L2; W3b later).
+  Polls, galleries and events show as the nearest Lemmy post.
+- **gpodder.net `/api/2`** (W4, spec `2026-11-12-gpodder-sync-design.md`, rulings
+  G1 to G4): sign-in by HTTP Basic with an app password, or the `sessionid` cookie
+  `login.json` sets; devices; one subscription list per person shared by their
+  devices; episode actions. Failed sign-ins are counted per address and account
+  and refused with 429 past 20 an hour, before any password is tried.
+
+**`/api/alpha` changes from the shared read layer** (W0.1). Moving alpha's reads
+into `app/reads/` found five places where it told a reader more than the web does:
+
+- A private community's comments were answered to anyone through
+  `/post/replies` and `/comment/list` (`b997abfa`).
+- A person's `moderates` named private communities to non-members (`e5b5a86f`),
+  and a community's moderators were named when they are private (`9b069476`).
+- The person list and search listed accounts that opted out of it (`d68b6871`).
+- A person's post and comment counts included what the viewer could not list
+  (`69ce7d90`).
+
+Also: the unread private-message count counts messages, notified or not
+(`abc4b9a2`), and CORS allows `PATCH` for a browser app's profile update
+(`bd140a63`).
 
 ### 2.5 Federation and wire-format changes (for other implementers)
 
@@ -1034,6 +1195,29 @@ Since the register closed:
   Announce ids up to 255 characters are kept (`49f3bf17`). A peer's published
   date is clamped to now (`5ddb3ddd`).
 
+**From the client-app APIs**
+
+- **Local boosts.** A member's boost is an `Announce` from their own actor to
+  Public, cc their followers and the post's author, delivered to every instance
+  holding an accepted follower of theirs and to a remote author's inbox; an
+  `Undo` naming the same id takes it back, and goes whatever the post later became
+  (`f0e49765`, `832ba895`). Only an open post outside a private or local-only
+  community may be boosted, and not by someone its community banned or its author
+  blocked.
+- **Pictures in chat messages.** A message's `Create` and its object carry its
+  pictures as `attachment`, one `Document` each; WebP, AVIF and HEIC go out as
+  JPEG (`a22c9518`). An incoming message keeps up to four `Image`s, or
+  `Document`s of an image type, over https, as links to the picture, fetching
+  nothing (`5b87b982`); a peer cannot have an address of ours shown as its picture
+  (`f16d7ae9`).
+- **Video renditions.** A published `Video`'s `url` lists the 480p and 360p
+  copies once they are made, and is updated then (`23d94091`).
+- **Internal videos stay home.** A PeerTube app upload marked Internal is
+  local-only: the outbound gate refuses any activity naming it (ruling U1).
+- **Nodeinfo by agent.** Only Jerboa's and PixelDroid's agents, and Pixelfed's
+  own path, are told another software's name (2.3). Servers and crawlers are told
+  PieFed, as before.
+
 ---
 
 ### Payments
@@ -1245,6 +1429,60 @@ were committed as `fix:`.
 - `links_with_parens` turned an HTML comment after a link into visible text
   (`bad2a3d3`).
 
+### 3.2 In the client-app API tracks
+
+Each phase had a security review before it merged, and an automated reviewer read
+every commit. What they found, in code that never shipped without the fix unless
+noted:
+
+**OAuth and sign-in**
+- On a private instance the login gate let any OAuth token through to all of
+  `/api/`, where `/api/alpha`, which does not read OAuth tokens, served the caller
+  as nobody: a token with no read scope could read the instance. The gate no longer
+  reads OAuth tokens; each `require_oauth` route checks its own (`517ddfd0`).
+- A stolen refresh token worked without the app's secret; a refresh now needs
+  it, and two refreshes at once yield one pair (`e8ec0c93`). An authorization
+  error is sent only to a registered redirect
+  (`fa6ff997`); a registered redirect may not hold whitespace (`5dbb6c75`).
+- PeerTube's password grant counts its guesses in one bucket, whatever endpoint or
+  form the request takes (`dc199b6d`, `5371836f`).
+- gpodder: failed sign-ins are limited before a password is tried (`736918d3`),
+  counted per address and account so that cookieless onion clients, who share one
+  address key, cannot lock each other out (`36b00122`); a wrong password is refused
+  even beside a good session cookie (`e9cefd7b`).
+
+**What a reader is told**
+- A Mastodon status id kept 15 bits of the row id, which a remote server's chosen
+  `published` time could collide; it now holds the whole id (`5c531097`).
+- A paging bound naming a status the viewer may not read revealed that it exists
+  and when it was posted (`c94f0dcf`).
+- Status and media writes echoed exception text in their errors (`be4539d5`,
+  `bfa18fd4`).
+- A push told an app more than the notifications list would, or for another domain
+  (`a0c98295`). A push resolved its endpoint's name again to connect, so a name
+  that answered differently after the check (DNS rebinding) could reach a private
+  address; pushes now go through the pinned client, under a deadline
+  (`c686ceb8`).
+- PeerTube's `users/me` gave the email to any token; now only to the login the
+  password was given to (`06174e55`).
+
+**Writes and limits**
+- A member banned from a community, or blocked by a post's author, could boost it;
+  a boost's Undo was gated like the boost, so it never left once the post changed
+  (`832ba895`).
+- A person banned from a community could rejoin it through PeerTube's subscribe:
+  only the alpha route checked the ban. The shared join now refuses a banned person
+  and a deleted Group for every caller, before any row is written (`7376cef2`).
+- Choosing Public in the PeerTube app could unstamp a local-only domain's video
+  (`7625c6a2`), and uploads no post came of escaped the upload limits (`ed35c3b7`).
+- Lemmy's hide-posts took any number of ids, of any type (`0515117f`).
+- gpodder: removed subscriptions, kept so that `since` can report them, were not
+  counted against the cap (`c33c60d1`); episode actions are capped from the start.
+- A chat peer could have an address of ours shown as its picture, a request with
+  the viewer's cookies (`f16d7ae9`).
+- A story's self-expire took its id under a name the hidden-row gate did not check
+  (`979c7107`).
+
 ---
 
 ## 4. Other fixes by area
@@ -1419,6 +1657,17 @@ their features in 2.3 and 2.5. Fixes to code that predates the tracks:
   another string were cleared (`54c61620`, `a8428597`).
 - **`fastapi_server`** starts and stops with a lifespan handler, not
   `@app.on_event` (`d5a225d6`).
+- **Orphan sweep.** `remove_orphan_files` read `File` once per file under
+  `media/users`, about an hour on a large instance, which ran the weekly job past
+  its timeout; it now reads the names once (`2332dbc5`). It also sweeps pictures
+  in `media/posts` that deleted posts leave behind (`f2182a54`).
+- **The web container's start** no longer depends on data.lemmyverse.net
+  (`b0f9a296`, 2.2.1).
+- **Test suite.** Tests that named a real domain (`mastodon.cloud`) resolved it
+  on every run, and hung when the test host's DNS stalled; they use a reserved
+  name, which the suite answers itself (`4877bacf`). A crashed parallel worker
+  reruns the whole run, and heavy tests run alone after the parallel phase
+  (`674f03b6`, `bd5644c5`).
 
 ### Fuzzing track
 
@@ -1478,6 +1727,23 @@ owner ruled; those rulings are the limits listed in 2.3. Typical fixes:
 - **The Donate page is a CMS page.** `/donate` is seeded and edited at `/admin/pages`, and any
   CMS page can opt in to a header link, a footer link and the sidebar. Spec
   `docs/superpowers/specs/2026-11-05-cms-donate-page-design.md`.
+- **A media cap.** Local copies of remote posts' images last `remote_image_cache_days`
+  from the post's arrival; relay expiry runs hourly so its backlog drains. Both run in
+  `expire_old_media.sh` (2.2.1).
+- **Third-party client apps** (plan `docs/superpowers/plans/2026-11-07-api-completeness.md`).
+  Members can use, against a PieFed account:
+  - Mastodon apps: Tusky, Mastodon's own, Phanpy, Elk and others;
+  - Pixelfed's official app, PixelDroid and Fedilab, with direct messages and stories;
+  - NewPipe, and PeerTube's own app with uploads;
+  - Jerboa;
+  - AntennaPod, which syncs subscriptions and listening through gpodder.net sync;
+    Kasts and gPodder speak the same API but have not been tried.
+
+  Members manage the apps and app passwords at `/user/settings/apps` (2.3, 2.4). The
+  harness `interop/apps/` drives 21 apps; every one that can reach PieFed logs in, reads
+  and posts, as its matrix expects.
+- **Chat requests, muting, hiding and pictures**, for the web chat and apps alike (2.3).
+- **Local boosts, mutes and Web Push**, for apps (2.3).
 
 There are 146 `feat` commits. The first twelve came during the coverage
 campaign:
@@ -1523,6 +1789,13 @@ is described in 2.3 to 2.5:
 | Interop C1 | `2026-10-11-ap-interop-c1-design.md` | JSON-LD content type, actor Update, Undo of EmojiReact, Flag, Add and Remove, Group self-Delete, Person collections, user outbox, `rel="alternate"` links, WebFinger-confirmed handles |
 | Interop C2 to C5 | `2026-10-12-ap-interop-c2-quote-posts-design.md` and C3 to C5 | Quote posts on input, multi-language variants, media-type objects, count-only likes, shares, liked and following collections |
 | Interface | | Italian, Korean and Russian translations offered (`15dc82fc`) |
+| Media cap | | Remote post images evicted by age, hourly relay expiry, orphan sweep of `media/posts` |
+| OAuth and read layer (W0) | `2026-11-07-mastodon-client-api-design.md` §3.1, plan W0 | OAuth 2 server, Authorised apps page, `app/reads/` under `/api/alpha` |
+| Mastodon (W1) | `2026-11-07-mastodon-client-api-design.md` | Accounts, timelines, statuses, notifications, search, media, follows, local boosts, mutes, Web Push, admin scopes |
+| Pixelfed (W1.4) | `2026-11-10-pixelfed-app-design.md` | Pixelfed's routes for its three apps, direct messages on chat (requests, mute, hide, pictures), stories |
+| PeerTube (W2) | `2026-11-09-peertube-read-api-design.md`, `2026-11-09-peertube-login-design.md`, `2026-11-10-peertube-upload-design.md` | Read API, 480p and 360p renditions, login, subscriptions, ratings, history, notifications, resumable upload |
+| Lemmy (W3) | `2026-11-10-lemmy-v3-design.md` | `/api/v3` for Jerboa, member endpoints |
+| gpodder (W4) | `2026-11-12-gpodder-sync-design.md` | App passwords, devices, subscriptions that join communities, episode actions that mark posts read |
 
 ---
 
@@ -1627,6 +1900,21 @@ PERM-1 to PERM-5.
   costs about 30 s and 3.3 GB. The owner chose not to add a frame cap. Remote
   thumbnails and federated images are bounded by the 16 MP cap, which counts
   every frame.
+- **`expire_old_media.sh` is not scheduled by the repository.** It is missing from
+  `docker.cron` and the install guides (2.2.1).
+- **What the client APIs do not serve yet.**
+  - Mastodon: emoji reactions; admin routes, though the admin scopes exist;
+    reblogs as entries in followers' home timelines.
+  - Lemmy: moderation and admin endpoints (W3b, ruling L2).
+  - Pixelfed: group chats.
+  - PeerTube: the Private and Password-protected privacies (ruling U1). TubeLab is
+    unsupported (P4): its login needs nodeinfo to say `peertube`, and it sends a
+    user agent other apps share.
+- **No web buttons for boosts or mutes, and no pictures from the web chat's form.**
+  Apps can do all three.
+- **A gpodder lockout is per account.** Someone who knows an account name can lock
+  it out of podcast sync for up to an hour from an address it shares, such as the
+  onion's common bucket: the price of checking the limit before any password.
 - **Converted form buttons are not browser-verified.** The Join, Leave,
   notification-bell and feed buttons that changed from links to POST forms
   are covered by tests but have not been checked by hand in a browser.
