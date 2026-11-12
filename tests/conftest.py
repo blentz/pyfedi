@@ -657,7 +657,7 @@ def http_mock():
 def federation_peer(http_mock):
     """Serve webfinger and actor responses for a remote handle.
 
-    Returns a callable: federation_peer('wakko@mastodon.cloud') -> actor dict.
+    Returns a callable: federation_peer('wakko@mastodon.example') -> actor dict.
 
     The domain must not end in '.local' -- get_request() rejects those via
     is_invalid_get_request_uri() before respx ever sees the request.

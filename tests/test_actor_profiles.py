@@ -1088,7 +1088,7 @@ def test_a_childless_feed_lists_no_child_feeds(app, db_session, monkeypatch):
 #   (anonymous, AP-Accept, banned-instance-exception-not-500), and the
 #   resulting resolve_remote_handle/search_for_user call:
 #   tests/test_remote_handle_resolution.py (all four tests)
-#   NOTE: all four request '/u/wakko@mastodon.cloud', so the BARE-USERNAME
+#   NOTE: all four request '/u/wakko@mastodon.example', so the BARE-USERNAME
 #   branch missing is not covered there. Task 10's two guard tests below
 #   (test_a_deleted_user_profile_is_not_served, test_a_banned_user_profile_is_not_served)
 #   cover it, and with it user_profile's own abort(404): each makes an

@@ -32,49 +32,49 @@ class TestDirectoryCandidates(unittest.TestCase):
 
     def test_bare_acct_gains_the_queried_domain(self):
         """Mastodon returns a bare username for local accounts; we must qualify it"""
-        handles, _ = directory_candidates([account(acct='wakko')], 'mastodon.cloud',
+        handles, _ = directory_candidates([account(acct='wakko')], 'mastodon.example',
                                           minimum_statuses=1, minimum_followers=1,
                                           exclude_bots=True, limit=10)
-        self.assertEqual(handles, ['wakko@mastodon.cloud'])
+        self.assertEqual(handles, ['wakko@mastodon.example'])
 
     def test_already_qualified_acct_is_left_alone(self):
         """A directory can return an already-qualified acct; do not double-append"""
         handles, _ = directory_candidates([account(acct='wakko@elsewhere.example')],
-                                          'mastodon.cloud', minimum_statuses=1,
+                                          'mastodon.example', minimum_statuses=1,
                                           minimum_followers=1, exclude_bots=True, limit=10)
         self.assertEqual(handles, ['wakko@elsewhere.example'])
 
     def test_below_minimum_statuses_excluded(self):
-        handles, stats = directory_candidates([account(statuses=5)], 'mastodon.cloud',
+        handles, stats = directory_candidates([account(statuses=5)], 'mastodon.example',
                                               minimum_statuses=50, minimum_followers=1,
                                               exclude_bots=True, limit=10)
         self.assertEqual(handles, [])
         self.assertEqual(stats['below_minimum_statuses'], 1)
 
     def test_below_minimum_followers_excluded(self):
-        handles, stats = directory_candidates([account(followers=2)], 'mastodon.cloud',
+        handles, stats = directory_candidates([account(followers=2)], 'mastodon.example',
                                               minimum_statuses=1, minimum_followers=10,
                                               exclude_bots=True, limit=10)
         self.assertEqual(handles, [])
         self.assertEqual(stats['below_minimum_followers'], 1)
 
     def test_bots_excluded_when_flag_set(self):
-        handles, stats = directory_candidates([account(bot=True)], 'mastodon.cloud',
+        handles, stats = directory_candidates([account(bot=True)], 'mastodon.example',
                                               minimum_statuses=1, minimum_followers=1,
                                               exclude_bots=True, limit=10)
         self.assertEqual(handles, [])
         self.assertEqual(stats['bots'], 1)
 
     def test_bots_included_when_flag_clear(self):
-        handles, _ = directory_candidates([account(acct='botty', bot=True)], 'mastodon.cloud',
+        handles, _ = directory_candidates([account(acct='botty', bot=True)], 'mastodon.example',
                                           minimum_statuses=1, minimum_followers=1,
                                           exclude_bots=False, limit=10)
-        self.assertEqual(handles, ['botty@mastodon.cloud'])
+        self.assertEqual(handles, ['botty@mastodon.example'])
 
     def test_limit_caps_the_result(self):
         """The admin asked for N accounts; return no more than N"""
         accounts = [account(acct=f'user{i}') for i in range(10)]
-        handles, stats = directory_candidates(accounts, 'mastodon.cloud',
+        handles, stats = directory_candidates(accounts, 'mastodon.example',
                                               minimum_statuses=1, minimum_followers=1,
                                               exclude_bots=True, limit=3)
         self.assertEqual(len(handles), 3)
@@ -82,7 +82,7 @@ class TestDirectoryCandidates(unittest.TestCase):
 
     def test_missing_counts_are_treated_as_zero(self):
         """A directory entry missing a count must not raise"""
-        handles, _ = directory_candidates([{'acct': 'sparse'}], 'mastodon.cloud',
+        handles, _ = directory_candidates([{'acct': 'sparse'}], 'mastodon.example',
                                           minimum_statuses=1, minimum_followers=1,
                                           exclude_bots=True, limit=10)
         self.assertEqual(handles, [])
@@ -90,13 +90,13 @@ class TestDirectoryCandidates(unittest.TestCase):
     def test_entry_without_acct_is_skipped(self):
         """Malformed entries are skipped rather than producing an unusable handle"""
         handles, _ = directory_candidates([{'statuses_count': 100, 'followers_count': 100}],
-                                          'mastodon.cloud', minimum_statuses=1,
+                                          'mastodon.example', minimum_statuses=1,
                                           minimum_followers=1, exclude_bots=True, limit=10)
         self.assertEqual(handles, [])
 
     def test_stats_total_counts_everything_seen(self):
         accounts = [account(statuses=5), account(followers=1), account(bot=True), account()]
-        _, stats = directory_candidates(accounts, 'mastodon.cloud', minimum_statuses=50,
+        _, stats = directory_candidates(accounts, 'mastodon.example', minimum_statuses=50,
                                         minimum_followers=10, exclude_bots=True, limit=10)
         self.assertEqual(stats['seen'], 4)
         self.assertEqual(stats['candidates'], 1)
@@ -133,7 +133,7 @@ class TestFetchDirectory(unittest.TestCase):
         original = admin_util.get_request
         admin_util.get_request = fake_get
         try:
-            accounts = admin_util.fetch_mastodon_directory('https://mastodon.cloud', max_pages=10)
+            accounts = admin_util.fetch_mastodon_directory('https://mastodon.example', max_pages=10)
         finally:
             admin_util.get_request = original
 
@@ -147,7 +147,7 @@ class TestFetchDirectory(unittest.TestCase):
         original = admin_util.get_request
         admin_util.get_request = fake_get
         try:
-            accounts = admin_util.fetch_mastodon_directory('https://mastodon.cloud', max_pages=3)
+            accounts = admin_util.fetch_mastodon_directory('https://mastodon.example', max_pages=3)
         finally:
             admin_util.get_request = original
 
@@ -161,7 +161,7 @@ class TestFetchDirectory(unittest.TestCase):
         original = admin_util.get_request
         admin_util.get_request = fake_get
         try:
-            admin_util.fetch_mastodon_directory('https://mastodon.cloud', max_pages=5)
+            admin_util.fetch_mastodon_directory('https://mastodon.example', max_pages=5)
         finally:
             admin_util.get_request = original
 
@@ -203,27 +203,27 @@ class TestRemoteInstanceSoftware(unittest.TestCase):
         original = app_utils.get_request
         app_utils.get_request = fake_get
         try:
-            return admin_util.remote_instance_software('https://mastodon.cloud'), calls
+            return admin_util.remote_instance_software('https://mastodon.example'), calls
         finally:
             app_utils.get_request = original
 
     def test_reads_software_name_from_schema_2_0(self):
         nodeinfo = {'links': [{'rel': 'http://nodeinfo.diaspora.software/ns/schema/2.0',
-                               'href': 'https://mastodon.cloud/nodeinfo/2.0'}]}
+                               'href': 'https://mastodon.example/nodeinfo/2.0'}]}
         software, calls = self._run([nodeinfo, {'software': {'name': 'mastodon'}}])
         self.assertEqual(software, 'mastodon')
-        self.assertEqual(calls[0], 'https://mastodon.cloud/.well-known/nodeinfo')
+        self.assertEqual(calls[0], 'https://mastodon.example/.well-known/nodeinfo')
 
     def test_reads_software_name_from_schema_2_1(self):
         nodeinfo = {'links': [{'rel': 'http://nodeinfo.diaspora.software/ns/schema/2.1',
-                               'href': 'https://mastodon.cloud/nodeinfo/2.1'}]}
+                               'href': 'https://mastodon.example/nodeinfo/2.1'}]}
         software, _ = self._run([nodeinfo, {'software': {'name': 'mastodon'}}])
         self.assertEqual(software, 'mastodon')
 
     def test_name_is_lowercased(self):
         """Software names are compared against a literal, so casing must not matter"""
         nodeinfo = {'links': [{'rel': 'http://nodeinfo.diaspora.software/ns/schema/2.0',
-                               'href': 'https://mastodon.cloud/nodeinfo/2.0'}]}
+                               'href': 'https://mastodon.example/nodeinfo/2.0'}]}
         software, _ = self._run([nodeinfo, {'software': {'name': 'Mastodon'}}])
         self.assertEqual(software, 'mastodon')
 
@@ -241,4 +241,4 @@ class TestRemoteInstanceSoftware(unittest.TestCase):
         nodeinfo2 = {'version': '1.0', 'server': {'name': 'Castopod', 'software': 'Castopod', 'version': '1.13.5'}}
         software, calls = self._run(['', nodeinfo2])
         self.assertEqual(software, 'castopod')
-        self.assertEqual(calls[1], 'https://mastodon.cloud/.well-known/x-nodeinfo2')
+        self.assertEqual(calls[1], 'https://mastodon.example/.well-known/x-nodeinfo2')

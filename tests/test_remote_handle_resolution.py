@@ -1,7 +1,7 @@
 """/u/<actor> resolving a remote handle the instance has never seen.
 
 Before this, `user_profile` only queried the local database, so visiting
-/u/wakko@mastodon.cloud for an unknown account returned 404 and there was no way
+/u/wakko@mastodon.example for an unknown account returned 404 and there was no way
 to reach that account's profile — and therefore no way to reach its Follow button.
 
 The resolution is gated three ways, and each guard has its own test below:
@@ -35,7 +35,7 @@ def test_anonymous_request_does_not_resolve(app, db_session, resolve_spy):
     _, calls = resolve_spy
 
     with app.test_client() as client:
-        response = client.get('/u/wakko@mastodon.cloud')
+        response = client.get('/u/wakko@mastodon.example')
 
     assert response.status_code == 404
     assert calls == [], 'no outbound lookup may happen for an anonymous request'
@@ -54,7 +54,7 @@ def test_activitypub_request_does_not_resolve(app, db_session, resolve_spy):
     _, calls = resolve_spy
 
     with app.test_client() as client:
-        response = client.get('/u/wakko@mastodon.cloud',
+        response = client.get('/u/wakko@mastodon.example',
                               headers={'Accept': 'application/activity+json'})
 
     assert response.status_code == 400
@@ -72,10 +72,10 @@ def test_unresolvable_handle_still_returns_404(app, db_session, resolve_spy):
         with client.session_transaction() as session:
             session['_user_id'] = str(local.id)
             session['_fresh'] = True
-        response = client.get('/u/wakko@mastodon.cloud')
+        response = client.get('/u/wakko@mastodon.example')
 
     assert response.status_code == 404
-    assert calls == ['wakko@mastodon.cloud'], 'the lookup should have been attempted once'
+    assert calls == ['wakko@mastodon.example'], 'the lookup should have been attempted once'
 
 
 def test_banned_instance_returns_404_not_500(app, db_session, resolve_spy):
@@ -90,7 +90,7 @@ def test_banned_instance_returns_404_not_500(app, db_session, resolve_spy):
 
     def raising_search(address, allow_fetch=True):
         attempted.append(address)
-        raise Exception('mastodon.cloud is blocked.')
+        raise Exception('mastodon.example is blocked.')
 
     import app.activitypub.routes as ap_routes
     ap_routes.search_for_user = raising_search
@@ -99,11 +99,11 @@ def test_banned_instance_returns_404_not_500(app, db_session, resolve_spy):
         with client.session_transaction() as session:
             session['_user_id'] = str(local.id)
             session['_fresh'] = True
-        response = client.get('/u/wakko@mastodon.cloud')
+        response = client.get('/u/wakko@mastodon.example')
 
     # Both halves matter: the lookup must be attempted (otherwise this test would
     # pass against code that never resolves at all), and the raise must become a 404.
-    assert attempted == ['wakko@mastodon.cloud']
+    assert attempted == ['wakko@mastodon.example']
     assert response.status_code == 404
 
 

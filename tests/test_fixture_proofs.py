@@ -61,9 +61,9 @@ def test_delay_runs_the_task_inline(app, db_session, federation_peer):
     make_instance('test.piefed.local', software='piefed')
     make_site()
     local = make_user(None, 'localuser', local=True)
-    federation_peer('wakko@mastodon.cloud')
+    federation_peer('wakko@mastodon.example')
 
-    bulk_follow.delay(local.id, ['wakko@mastodon.cloud'])
+    bulk_follow.delay(local.id, ['wakko@mastodon.example'])
 
     assert UserFollower.query.filter_by(local_user_id=local.id,
                                         is_inward=False).count() == 1
@@ -79,7 +79,7 @@ def test_delay_reraises_a_failing_task(app, db_session, federation_peer):
     make_site()
 
     with pytest.raises(Exception):
-        bulk_follow.delay(999999, ['wakko@mastodon.cloud'])
+        bulk_follow.delay(999999, ['wakko@mastodon.example'])
 
 
 def test_delivery_can_be_proved_when_the_sender_has_keys(app, db_session, federation_peer):
@@ -93,9 +93,9 @@ def test_delivery_can_be_proved_when_the_sender_has_keys(app, db_session, federa
     make_instance('test.piefed.local', software='piefed')
     make_site()
     local = make_user(None, 'localuser', local=True, with_keys=True)
-    federation_peer('wakko@mastodon.cloud', include_inbox=True)
+    federation_peer('wakko@mastodon.example', include_inbox=True)
 
-    bulk_follow.delay(local.id, ['wakko@mastodon.cloud'])
+    bulk_follow.delay(local.id, ['wakko@mastodon.example'])
 
     log = ActivityPubLog.query.filter_by(activity_type='Follow').one()
     assert log.result == 'success', log.exception_message
