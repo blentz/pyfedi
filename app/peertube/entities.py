@@ -15,8 +15,10 @@ from app import db
 from app.constants import POST_TYPE_VIDEO
 from app.mastodon.entities import timestamp
 from app.mastodon.timelines import readable
-from app.models import Community, CommunityMember, Language, Post, User, media_of, rendition_name, renditions_of
+from app.models import (HLS_SETTING, Community, CommunityMember, Language, Post, User, hls_master, hls_of, media_of,
+                        rendition_name, renditions_of)
 from app.storefront import current_storefront, domain_base_url, storefront_link
+from app.utils import get_setting
 
 API_LEVEL = '7.2.0'   # D4: the PeerTube API level served, which PeerTube's own app requires; not PieFed's version
 DEFAULT_COUNT, MAX_COUNT = 15, 100   # PeerTube's
@@ -271,6 +273,16 @@ def files(post: Post) -> list:
         for index, copy in enumerate(renditions_of(post), start=1)]
 
 
+def streaming_playlists(post: Post) -> list:
+    """The upload's HLS copies (owner ruling H4), while the admin offers HLS: one playlist, the master naming each
+    variant. None otherwise, as a PeerTube server with web videos only answers."""
+    if not (_is_upload(post) and get_setting(HLS_SETTING, False) and hls_of(post)):
+        return []
+    url = storefront_link(hls_master(post.url))
+    return [{'id': post.id * FILES_PER_VIDEO, 'type': 1, 'playlistUrl': url, 'segmentsSha256Url': '', 'files': [],
+             'redundancies': [], 'p2pMediaLoaderInfohashes': [], 'playlistZipUrl': ''}]
+
+
 def video(post: Post, whole: bool = False) -> dict:
     """A video as a list shows it, or, `whole`, as its own page does."""
     media = media_of(post) or {}
@@ -291,7 +303,7 @@ def video(post: Post, whole: bool = False) -> dict:
     }
     if whole:
         found.update({
-            'files': files(post), 'streamingPlaylists': [], 'tags': [tag.name for tag in post.tags if not tag.banned],
+            'files': files(post), 'streamingPlaylists': streaming_playlists(post), 'tags': [tag.name for tag in post.tags if not tag.banned],
             'support': None, 'descriptionPath': f'/api/v1/videos/{post.id}/description',
             'commentsEnabled': bool(post.comments_enabled), 'downloadEnabled': True, 'waitTranscoding': False,
             'state': {'id': 1, 'label': 'Published'}, 'blacklisted': False, 'trackerUrls': [],

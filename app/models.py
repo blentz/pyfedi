@@ -637,6 +637,43 @@ def rendition_name(source: str, side: int) -> str:
     return f'{os.path.splitext(source)[0]}_{side}p.mp4'
 
 
+# Owner ruling H4: an upload's HLS copies, when the admin offers HLS (app.shared.tasks.media's make_hls), in
+# `<name>_hls/` beside it: a master playlist, and for each variant (the upload itself when it is H.264, then each
+# rendition) a playlist and the one fragmented MP4 it plays by byte range. The names are derived, never stored, so a
+# removal never trusts a name from the record.
+HLS_VARIANTS = ('source',) + tuple(f'{side}p' for side in RENDITION_SIDES)
+HLS_SETTING = 'video_hls'
+
+
+def hls_directory(source: str) -> str:
+    """The HLS copies' directory (or key prefix) of the upload at `source`: a path, a URL or an S3 key."""
+    return f'{os.path.splitext(source)[0]}_hls'
+
+
+def hls_master(source: str) -> str:
+    return f'{hls_directory(source)}/master.m3u8'
+
+
+def hls_names(source: str) -> list[str]:
+    """Every file the HLS copies of the upload at `source` can be: what a removal takes away."""
+    directory = hls_directory(source)
+    return [hls_master(source)] + [f'{directory}/{variant}.{extension}' for variant in HLS_VARIANTS
+                                   for extension in ('m3u8', 'mp4')]
+
+
+def hls_of(post) -> list[dict]:
+    """The HLS variants recorded for `post`'s upload, in HLS_VARIANTS' order: only well-formed entries, one per name."""
+    found = (media_of(post) or {}).get('hls')
+    entries = [entry for entry in found if isinstance(entry, dict)] if isinstance(found, list) else []
+    by_name = {}
+    for entry in entries:
+        name = entry.get('name')
+        if name in HLS_VARIANTS and all(type(entry.get(key)) is int and entry[key] > 0
+                                        for key in ('width', 'height', 'bandwidth', 'bytes')):
+            by_name[name] = {key: entry[key] for key in ('name', 'width', 'height', 'bandwidth', 'bytes')}
+    return [by_name[name] for name in HLS_VARIANTS if name in by_name]
+
+
 def renditions_of(post) -> list[dict]:
     """The renditions recorded for `post`'s upload, largest first: only well-formed entries, at most one per side."""
     found = (media_of(post) or {}).get('renditions')
@@ -4199,9 +4236,12 @@ class Post(db.Model):
         owns_media = media_of(self) is not None and self.is_local()
         local_media = media_local_path(self)   # only the strict stored name is ever unlinked
         if local_media:
-            for path in [local_media] + [rendition_name(local_media, side) for side in RENDITION_SIDES]:
+            for path in [local_media] + [rendition_name(local_media, side) for side in RENDITION_SIDES] + \
+                    hls_names(local_media):
                 with suppress(FileNotFoundError):
                     os.unlink(path)
+            with suppress(OSError):   # emptied above; gone already, or holding something not ours, it stays
+                os.rmdir(hls_directory(local_media))
         if (owns_media or self.type == POST_TYPE_VIDEO) and _store_files_in_s3() and self.url:
             # D1343. This passed `self.url` -- the whole `https://...` -- as an S3
             # KEY, so `delete_objects` was asked for an object that cannot exist
@@ -4214,8 +4254,10 @@ class Post(db.Model):
             s3_key = s3_key_from_url(self.url)
             if s3_key and (owns_media or not s3_object_is_referenced_elsewhere(self.url, post_id=self.id)):
                 from app.shared.tasks.maintenance import delete_from_s3  # cycle: app.shared.tasks.maintenance imports from this module
-                # an upload's renditions sit beside it in the bucket (W2.1b); a mirrored video has none of ours
-                keys = [s3_key] + ([rendition_name(s3_key, side) for side in RENDITION_SIDES] if owns_media else [])
+                # an upload's renditions and HLS copies sit beside it in the bucket (W2.1b, H4); a mirrored video
+                # has none of ours
+                keys = [s3_key] + ([rendition_name(s3_key, side) for side in RENDITION_SIDES] + hls_names(s3_key)
+                                   if owns_media else [])
                 if current_app.debug:
                     delete_from_s3(keys)
                 else:

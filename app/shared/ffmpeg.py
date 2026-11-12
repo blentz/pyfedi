@@ -93,3 +93,20 @@ def transcode(path: str, out_path: str, side: int, portrait: bool, timeout_s: in
     _run(['ffmpeg', '-nostdin', '-v', 'error', *_INPUT_LIMITS, *_DECODE_LIMITS, '-i', 'file:' + path,
           '-map', '0:v:0', '-map', '0:a:0?', '-vf', scale, *_TRANSCODE_ENCODE, '-y', 'file:' + out_path],
          (path, out_path), timeout_s)
+
+
+# HLS (owner ruling H4): a variant is an MP4 repackaged, never encoded again: its own H.264 and audio, cut into
+# HLS_SEGMENT_S fragments inside one fragmented MP4, which its playlist names by byte range. A copy needs no more time
+# than reading and writing the file, so it has the transcode's limit.
+HLS_SEGMENT_S = 6
+
+
+def hls_package(path: str, playlist_path: str, media_path: str, timeout_s: int) -> None:
+    """`path`'s first video stream and, if there is one, its first audio stream, as an HLS VOD playlist at
+    `playlist_path` playing the one fragmented MP4 at `media_path` (named in the playlist by its file name)."""
+    _run(['ffmpeg', '-nostdin', '-v', 'error', *_INPUT_LIMITS, '-i', 'file:' + path,
+          '-map', '0:v:0', '-map', '0:a:0?', '-c', 'copy', '-f', 'hls', '-hls_time', str(HLS_SEGMENT_S),
+          '-hls_playlist_type', 'vod', '-hls_segment_type', 'fmp4', '-hls_flags', 'single_file',
+          '-hls_segment_filename', media_path, '-y', playlist_path], (path, playlist_path, media_path), timeout_s)
+    if not (os.path.isfile(playlist_path) and os.path.getsize(media_path) if os.path.isfile(media_path) else 0):
+        raise MediaToolError('ffmpeg wrote no HLS variant')

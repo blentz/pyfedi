@@ -17,18 +17,19 @@ from PIL import Image, ImageOps
 from app import celery, db
 from app.activitypub.util import make_image_sizes, notify_about_post
 from app.community.util import notify_admins_of_post_needing_approval
-from app.constants import (MEDIA_KIND_AUDIO, MEDIA_KIND_VIDEO, NOTIF_DEFAULT, POST_STATUS_PROCESSING,
+from app.constants import (MEDIA_KIND_AUDIO, MEDIA_KIND_VIDEO, NOTIF_DEFAULT, POST_STATUS_PROCESSING, POST_TYPE_VIDEO,
                            POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING, POST_STATUS_SCHEDULED)
 from app.activitypub.serializers.peertube import uses_peertube_video
-from app.models import (RENDITION_SIDES, CommunityMember, File, Notification, Post, federation_base, rendition_name,
-                        s3_key_from_url, served_path, utcnow)
-from app.shared.ffmpeg import (TRANSCODE_MAX_S, MediaToolError, extract_cover, extract_frame, run_ffprobe, transcode,
-                               transcode_timeout)
+from app.models import (HLS_SETTING, RENDITION_SIDES, CommunityMember, File, Notification, Post, federation_base,
+                        hls_directory, hls_names, rendition_name, renditions_of, s3_key_from_url, served_path, utcnow)
+from app.shared.ffmpeg import (TRANSCODE_MAX_S, MediaToolError, extract_cover, extract_frame, hls_package, run_ffprobe,
+                               transcode, transcode_timeout)
 from app.shared.post import feature_published_post
 from app.shared.media import MEDIA_DIRECTORY, can_upload_media, media_local_path, media_of, queue_probe, with_media
 from app.shared.tasks import task_selector
 from app.shared.tasks.maintenance import delete_from_s3
-from app.utils import (can_create_post, download_from_s3, ensure_directory_exists, get_recipient_language, get_task_session, gibberish,
+from app.utils import (can_create_post, download_from_s3, ensure_directory_exists, get_recipient_language, get_setting,
+                       get_task_session, gibberish,
                        guess_mime_type, patch_db_session, save_image_without_metadata, shorten_string,
                        store_files_in_s3, to_srgb, upload_file_to_s3, user_banned_from_community)
 
@@ -216,6 +217,8 @@ def _probe(post_id, token: str) -> None:
         make_image_sizes(thumbnail.id, 512, 1200, 'posts', post.community.low_quality)
     if refusal is None and wants_renditions(post):   # after the local copy went to the bucket: the post never waits
         task_selector('make_renditions', post_id=post.id)
+    elif refusal is None and wants_hls(post):   # no renditions to wait for (H4)
+        task_selector('make_hls', post_id=post.id)
     if published:
         _announce_post(post)
 
@@ -583,6 +586,8 @@ def _record_renditions(post_id, made, in_s3: bool) -> None:
     with_media(post, renditions=[{'side': side, 'width': width, 'height': height, 'bytes': size}
                                  for side, width, height, size, _ in made])
     db.session.commit()
+    if wants_hls(post):   # its variants made, the HLS copies can be (H4)
+        task_selector('make_hls', post_id=post.id)
     if made and post.status == POST_STATUS_PUBLISHED and uses_peertube_video(post):
         task_selector('edit_post', post_id=post.id)   # peers that have the Video learn its new files
 
@@ -595,3 +600,225 @@ def _discard_renditions(post_id, made, in_s3: bool) -> None:
         return
     for *_, where in made:
         _remove(where)
+
+
+# HLS (owner rulings H4, HL1-HL3): while the admin offers it, a ready video upload, once its renditions are made, is
+# also offered as HLS: each MP4 it has (the upload itself when its codecs play in HLS, then each rendition)
+# repackaged, never encoded again, into `<name>_hls/` beside it, with a master playlist naming them; into the bucket
+# with S3. New uploads only: the admin's backfill makes them for the rest, and the admin's delete removes them all.
+
+HLS_VIDEO_CODECS = {'h264'}
+HLS_AUDIO_CODECS = {'aac', 'mp3'}
+_PLAYLIST_TYPE = 'application/vnd.apple.mpegurl'
+
+
+def hls_offered() -> bool:
+    return bool(get_setting(HLS_SETTING, False))
+
+
+def wants_hls(post) -> bool:
+    """A ready local video upload, no HLS copies recorded yet, and no renditions still to make, while HLS is offered."""
+    media = media_of(post) if post is not None else None
+    return bool(media is not None and hls_offered() and post.is_local() and media.get('status') == 'ready'
+                and str(media.get('mime', '')).startswith('video/') and 'hls' not in media and not wants_renditions(post))
+
+
+@celery.task
+def make_hls(send_async, post_id):
+    session = get_task_session()
+    try:
+        with patch_db_session(session):
+            _make_hls(post_id)
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def _plays_in_hls(path: str) -> bool:
+    """Whether the upload's own streams can go into HLS as they are: H.264 video, and AAC or MP3 audio or none."""
+    found = {stream.get('codec_type'): stream.get('codec_name') for stream in run_ffprobe(path).get('streams', [])
+             if isinstance(stream, dict) and stream.get('codec_type') in ('video', 'audio')}
+    return found.get('video') in HLS_VIDEO_CODECS and found.get('audio', 'aac') in HLS_AUDIO_CODECS
+
+
+def _make_hls(post_id) -> None:
+    """Each variant packaged into the HLS directory (a scratch one, uploaded after, with S3), then the master playlist,
+    then recorded under the post's row lock. A variant that fails is logged and dropped."""
+    post = db.session.get(Post, post_id)
+    if not wants_hls(post):
+        return
+    media = media_of(post)
+    duration_s = max(media['duration_s'] if type(media.get('duration_s')) is int else 0, 1)
+    sources = [('source', None, media.get('width'), media.get('height'))] + [
+        (f"{copy['side']}p", copy['side'], copy['width'], copy['height']) for copy in renditions_of(post)]
+    local, key = media_local_path(post), None
+    if local is None and store_files_in_s3():
+        key = s3_key_from_url(post.url)
+    db.session.commit()   # no transaction held open through the packaging
+    if local is None and key is None:
+        return
+    directory = hls_directory(local) if key is None else f'{TMP_DIRECTORY}/{gibberish(15)}_hls'
+    ensure_directory_exists(directory)
+    made = []   # (name, width, height, bandwidth, bytes)
+    deadline = monotonic() + TRANSCODE_MAX_S
+    for name, side, width, height in sources:
+        if not (type(width) is int and type(height) is int):
+            continue
+        source = _hls_source(post_id, local, key, side)
+        if source is None:
+            continue
+        playlist, packaged = f'{directory}/{name}.m3u8', f'{directory}/{name}.mp4'
+        try:
+            if side is None and not _plays_in_hls(source):
+                continue
+            hls_package(source, playlist, packaged, max(int(deadline - monotonic()), 1))
+            size = os.path.getsize(packaged)
+            made.append((name, width, height, math.ceil(size * 8 / duration_s), size))
+        except MediaToolError as error:
+            current_app.logger.warning(f'make_hls: post {post_id}: no {name}: {error!r}')
+            _remove(playlist)
+            _remove(packaged)
+        finally:
+            if key is not None:
+                _remove(source)
+    if made:
+        _write_master(f'{directory}/master.m3u8', made)
+    if key is not None:
+        made = _upload_hls(post_id, directory, key, made)
+    _record_hls(post_id, made, key is not None, local)
+
+
+def _hls_source(post_id, local, key, side) -> str | None:
+    """The MP4 a variant packages: the upload or its rendition at `side`, or with S3 a scratch copy of the object."""
+    if key is None:
+        path = local if side is None else rendition_name(local, side)
+        if os.path.isfile(path):
+            return path
+        current_app.logger.warning(f'make_hls: post {post_id}: {path} is missing')
+        return None
+    return _rendition_source(post_id, None, key if side is None else rendition_name(key, side))
+
+
+def _write_master(path: str, made) -> None:
+    lines = ['#EXTM3U', '#EXT-X-VERSION:7', '#EXT-X-INDEPENDENT-SEGMENTS']
+    for name, width, height, bandwidth, _size in made:
+        lines += [f'#EXT-X-STREAM-INF:BANDWIDTH={bandwidth},RESOLUTION={width}x{height}', f'{name}.m3u8']
+    with open(path, 'w') as master:
+        master.write('\n'.join(lines) + '\n')
+
+
+def _upload_hls(post_id, directory, key, made) -> list:
+    """The scratch directory's files into the bucket under the upload's HLS prefix, then the directory removed. A
+    failed upload loses the HLS copies: what went up is removed, and nothing is recorded."""
+    prefix, sent = hls_directory(key), []
+    try:
+        for name in ([f'{variant}.{extension}' for variant, *_ in made for extension in ('m3u8', 'mp4')]
+                     + (['master.m3u8'] if made else [])):
+            upload_file_to_s3(f'{directory}/{name}', f'{prefix}/{name}',
+                              _PLAYLIST_TYPE if name.endswith('.m3u8') else 'video/mp4')
+            sent.append(f'{prefix}/{name}')
+    except _STORE_ERRORS as error:
+        current_app.logger.warning(f'make_hls: post {post_id}: the HLS copies could not be stored: {error!r}')
+        if sent:
+            delete_from_s3(sent)
+        made = []
+    finally:
+        _remove_directory(directory)
+    return made
+
+
+def _remove_directory(directory: str) -> None:
+    if os.path.isdir(directory):
+        for name in os.listdir(directory):
+            _remove(os.path.join(directory, name))
+        with suppress(OSError):
+            os.rmdir(directory)
+
+
+def _record_hls(post_id, made, in_s3: bool, local) -> None:
+    """Record `made` in the media record, under the post's row lock. A post purged meanwhile, or no longer ready,
+    keeps nothing: its HLS copies are removed here. One another run recorded first keeps that run's record and files
+    (the same names), and so does a run that made nothing: an empty record is not tried again."""
+    locked = db.session.execute(select(Post.id).where(Post.id == post_id).with_for_update()).first()
+    post = db.session.get(Post, post_id) if locked is not None else None
+    if post is not None:
+        db.session.refresh(post)
+    media = media_of(post) if post is not None else None
+    if media is not None and 'hls' in media:
+        db.session.commit()
+        return
+    if media is None or media.get('status') != 'ready':
+        db.session.commit()
+        current_app.logger.warning(f'make_hls: post {post_id}: gone or no longer ready; its HLS copies go')
+        _discard_hls(post_id, local, s3_key_from_url(post.url) if in_s3 and post is not None else None)
+        return
+    with_media(post, hls=[{'name': name, 'width': width, 'height': height, 'bandwidth': bandwidth, 'bytes': size}
+                          for name, width, height, bandwidth, size in made])
+    db.session.commit()
+
+
+def _discard_hls(post_id, local, key) -> None:
+    if key is not None:
+        delete_from_s3(hls_names(key))
+    elif local is not None:
+        _remove_directory(hls_directory(local))
+
+
+def _in_task_session(work) -> None:
+    session = get_task_session()
+    try:
+        with patch_db_session(session):
+            work()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def _video_ids() -> list[int]:
+    """Every video post's id: the candidates the admin's HLS buttons look at, each judged on its own record."""
+    return [row.id for row in db.session.query(Post.id).filter(Post.type == POST_TYPE_VIDEO,
+                                                               Post.extensions.isnot(None)).order_by(Post.id)]
+
+
+@celery.task
+def backfill_hls(send_async):
+    """HL1: the admin's button. Every local video upload that HLS would be made for now, queued for it."""
+    _in_task_session(_backfill_hls)
+
+
+def _backfill_hls() -> None:
+    queued = 0
+    for post_id in _video_ids():
+        if wants_hls(db.session.get(Post, post_id)):
+            task_selector('make_hls', post_id=post_id)
+            queued += 1
+    current_app.logger.info(f'backfill_hls: queued {queued} videos')
+
+
+@celery.task
+def delete_all_hls(send_async):
+    """HL2: the admin's button. Every recorded HLS copy removed, on disk and in the bucket, and its record with it, so
+    a later backfill makes it again."""
+    _in_task_session(_delete_all_hls)
+
+
+def _delete_all_hls() -> None:
+    removed = 0
+    for post_id in _video_ids():
+        post = db.session.get(Post, post_id)
+        media = media_of(post)
+        if media is None or 'hls' not in media:
+            continue
+        local = media_local_path(post)
+        key = s3_key_from_url(post.url) if local is None and store_files_in_s3() else None
+        extensions = dict(post.extensions)
+        extensions['media'] = {name: value for name, value in media.items() if name != 'hls'}
+        post.extensions = extensions
+        db.session.commit()   # the record first: a file left by a failed removal is no longer offered
+        _discard_hls(post_id, local, key)
+        removed += 1
+    current_app.logger.info(f'delete_all_hls: removed the HLS copies of {removed} videos')

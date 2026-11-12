@@ -1,0 +1,38 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% set active_child = 'admin_misc' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col">
+        <h1>{{ _('Video streaming (HLS)') }}</h1>
+        <p>{{ _('Offer uploaded videos as HLS streams too, beside the MP4 files every app can already play. Some apps play HLS only (P2Play, for one), and HLS lets a player change size as the connection changes.') }}</p>
+        <p class="alert alert-warning">{{ _('Storage: each video gains a second copy of every size it is offered in (the upload, when it is H.264, and its 480p and 360p copies), so its storage roughly doubles. The copies are made by repackaging, not by encoding again, so they cost little CPU.') }}</p>
+        <form method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" name="enabled" id="hls_enabled" {{ 'checked' if enabled }}>
+                <label class="form-check-label" for="hls_enabled">{{ _('Offer videos as HLS streams') }}</label>
+            </div>
+            <p class="small field_hint">{{ _('Turning this on makes HLS copies of videos uploaded from then on. Turning it off stops offering them at once and keeps their files, so turning it on again needs no rebuilding.') }}</p>
+            <button type="submit" name="action" value="save" class="btn btn-primary">{{ _('Save') }}</button>
+        </form>
+        <hr>
+        <p id="hls_usage">{{ ngettext('%(num)d video has HLS copies, taking %(size)s.', '%(num)d videos have HLS copies, taking %(size)s.', videos, size=size|filesizeformat) }}</p>
+        <form method="post" class="d-inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" name="action" value="backfill" class="btn btn-outline-secondary" {{ 'disabled' if not enabled }}>{{ _('Make HLS copies of earlier videos') }}</button>
+        </form>
+        <form method="post" class="d-inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" name="action" value="delete" class="btn btn-outline-danger confirm_first">{{ _('Delete every HLS copy') }}</button>
+        </form>
+        <p class="small field_hint mt-2">{{ _('Both run in the background. Deleting frees the storage; while HLS is on, new uploads still get copies, and making them again for earlier videos is the button beside it.') }}</p>
+    </div>
+</div>
+{% endblock %}

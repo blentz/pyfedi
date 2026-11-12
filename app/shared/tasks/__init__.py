@@ -17,7 +17,7 @@ def task_selector(task_key, send_async=True, **kwargs):
     from app.shared.tasks.removes import unsticky_post, remove_mod  # cycle: each task module imports task_selector from this package
     from app.shared.tasks.groups import edit_community  # cycle: each task module imports task_selector from this package
     from app.shared.tasks.blocks import ban_from_community, unban_from_community, ban_from_site, unban_from_site  # cycle: each task module imports task_selector from this package
-    from app.shared.tasks.media import make_renditions, probe_media  # cycle: it imports task_selector from this package
+    from app.shared.tasks.media import backfill_hls, delete_all_hls, make_hls, make_renditions, probe_media  # cycle: it imports task_selector from this package
     tasks = {
         'join_community': join_community,
         'leave_community': leave_community,
@@ -62,6 +62,9 @@ def task_selector(task_key, send_async=True, **kwargs):
         'unfollow_user': unfollow_user,
         'probe_media': probe_media,
         'make_renditions': make_renditions,
+        'make_hls': make_hls,
+        'backfill_hls': backfill_hls,
+        'delete_all_hls': delete_all_hls,
     }
 
     if current_app.debug:
