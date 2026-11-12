@@ -363,3 +363,42 @@ def test_a_failing_make_hls_rolls_back(hls_on, monkeypatch):
     monkeypatch.setattr(media_tasks, '_make_hls', lambda post_id: (_ for _ in ()).throw(RuntimeError('boom')))
     with pytest.raises(RuntimeError):
         make_hls(False, 1)
+
+
+# the edges
+
+def test_with_s3_a_store_failing_at_once_sends_nothing_back(hls_on, s3, monkeypatch):
+    removed = []
+    post = rendered(hls_on)
+    monkeypatch.setattr(media_tasks, 'upload_file_to_s3', lambda *args: (_ for _ in ()).throw(OSError('down')))
+    monkeypatch.setattr(media_tasks, 'delete_from_s3', removed.append)
+    post = packaged(post)
+    assert media_of(post)['hls'] == [] and removed == []
+
+
+def test_a_post_purged_meanwhile_keeps_no_copies(hls_on, monkeypatch):
+    post = rendered(hls_on)
+    source, post_id = media_local_path(post), post.id
+    real = media_tasks._write_master
+
+    def purged(path, made):
+        real(path, made)
+        db.session.execute(db.text('UPDATE post SET extensions = NULL WHERE id = :id'), {'id': post_id})
+        db.session.commit()
+        monkeypatch.setattr(media_tasks.db.session, 'get', lambda model, ident: None)
+    monkeypatch.setattr(media_tasks, '_write_master', purged)
+    make_hls(False, post_id)
+    assert not os.path.exists(hls_directory(source))
+
+
+def test_removing_a_directory_that_is_not_there_is_nothing(tmp_path):
+    media_tasks._remove_directory(str(tmp_path / 'never-made_hls'))
+    media_tasks._discard_hls(1, None, None)   # neither a file nor a key: nothing to remove
+
+
+def test_delete_all_passes_over_videos_without_copies(hls_on):
+    without = rendered(hls_on)
+    packaged(rendered(hls_on, title='Second'))
+    delete_all_hls(False)
+    db.session.expire_all()
+    assert 'hls' not in media_of(db.session.get(Post, without.id))

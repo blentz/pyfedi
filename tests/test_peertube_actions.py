@@ -204,3 +204,11 @@ def test_a_report_without_a_reason_is_refused(world, form):
 
 def test_an_unknown_video_is_not_reported(world):
     assert _call(world, 'post', '/api/v1/videos/99999999/abuse', data={'reason': 'x'}).status_code == 404
+
+
+def test_a_report_the_shared_report_refuses_is_a_400(world, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise Exception('Already reported')
+    monkeypatch.setattr('app.peertube.actions.shared_post.report_post', refuse)
+    response = _call(world, 'post', f"/api/v1/videos/{world['post'].id}/abuse", data={'reason': 'again'})
+    assert response.status_code == 400 and response.get_json()['detail'] == 'Already reported'
