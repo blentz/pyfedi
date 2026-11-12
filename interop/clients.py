@@ -219,6 +219,14 @@ class PieFedWeb:
             raise AssertionError(f'PieFedWeb: no csrf_token on {path}')
         return parser.values
 
+    def app_password(self, name):
+        """A new app password named `name`, for gpodder sync (plan W4), made as a person makes one in settings."""
+        r = self.http.post('/user/settings/apps/passwords', data={**self._defaults('/user/settings/apps'), 'name': name})
+        found = re.search(r'<code class="user-select-all">([\w-]+)</code>', r.raise_for_status().text)
+        if not found:
+            raise AssertionError('PieFedWeb: the settings page showed no new app password')
+        return found[1]
+
     def submit_media(self, community, kind, title, path, mime):
         """POST `path` as a `kind` ('video' or 'audio') upload to `community`; the raw response, redirects unfollowed."""
         form = f'/community/{community}/submit/{kind}'
