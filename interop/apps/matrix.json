@@ -17,8 +17,8 @@
     "elk-web": {"platform": "mastodon", "surface": "web", "web": "https://elk.test", "image": "ghcr.io/elk-zone/elk:latest"},
 
     "pixelfed-android": {"platform": "pixelfed", "surface": "android", "package": "com.pixelfed", "apk": {"github": "pixelfed/pixelfed-rn", "asset": "app-release\\.apk$", "extract_native_libs": true}},
-    "pixeldroid-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon"},
-    "fedilab-android": {"platform": "pixelfed", "surface": "android", "probe": "mastodon"},
+    "pixeldroid-android": {"platform": "pixelfed", "surface": "android", "package": "org.pixeldroid.app", "apk": {"fdroid": "org.pixeldroid.app"}},
+    "fedilab-android": {"platform": "pixelfed", "surface": "android", "package": "fr.gouv.etalab.mastodon", "apk": {"fdroid": "fr.gouv.etalab.mastodon"}},
 
     "peertube-android": {"platform": "peertube", "surface": "android", "package": "org.framasoft.peertube", "apk": {"fdroid": "org.framasoft.peertube"}},
     "newpipe-android": {"platform": "peertube", "surface": "android", "package": "org.schabi.newpipe", "apk": {"github": "TeamNewPipe/NewPipe", "asset": "\\.apk$"}, "expect": {

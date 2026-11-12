@@ -13,8 +13,8 @@ Jerboa, plan D3) if it gates on the software name". Nothing here is built yet.
 | App | Source read | What it speaks | Today |
 |---|---|---|---|
 | Pixelfed (official, React Native) | `pixelfed/pixelfed-rn` v2.0.1, commit da4bcf7 (GitHub release `app-release.apk`) | Mastodon's API plus ~30 Pixelfed-only routes | a `mastodon` probe; refuses PieFed at its first call |
-| PixelDroid | F-Droid `org.pixeldroid.app` 1.0.beta42 (its GitLab refused cloning) | Mastodon's API | a `mastodon` probe |
-| Fedilab | `tom79/Fedilab` commit 1dfcb7f | Mastodon's API, adapting to nodeinfo's software | a `mastodon` probe |
+| PixelDroid | F-Droid `org.pixeldroid.app` 1.0.beta42; source read from the GitHub mirror `H-PixelDroid/PixelDroid` 7db32eb (its GitLab refused cloning) | Mastodon's API, plus Pixelfed's stories | driven (W1.4d, §8) |
+| Fedilab | `tom79/Fedilab` commit 1dfcb7f (3.45.1; F-Droid `fr.gouv.etalab.mastodon`) | Mastodon's API, adapting to nodeinfo's software | driven (W1.4d, §8) |
 
 PixelDroid and Fedilab speak the Mastodon API that W1 serves; the official app is the one M7 is about.
 
@@ -39,7 +39,7 @@ PixelDroid and Fedilab speak the Mastodon API that W1 serves; the official app i
 | `GET /api/v1.1/compose/settings` | camera (posting) | the media limits and types, the caption length |
 | `POST /api/v2/media` | camera (posting) | already served: W1's media upload (`app.mastodon.media`) |
 | `GET /api/v1.2/stories/carousel` | home | the stories of §7 (W1.4c) |
-| `POST /api/v1.1/stories/seen`, `stories/self-expire`, `stories/comment`, `GET v1.2/stories/viewers` | stories | §7; publishing refused (S4) |
+| `POST /api/v1.1/stories/seen`, `stories/self-expire`, `stories/comment`, `GET v1.2/stories/viewers` | stories | §7; publishing is PixelDroid's (§8, S5) |
 | `GET /api/v1.1/discover/posts/trending`, `posts/network/trending`, `posts/hashtags` | explore | PieFed's top image and video posts, and its trending tags |
 | `GET /api/v1.1/accounts/username/<name>` | profile | the account by name |
 | `GET /api/v1.1/accounts/mutuals/<id>` | profile | the accounts both follow |
@@ -160,8 +160,47 @@ a file the app's player can play. Nothing new is stored for the story itself. Th
 - `POST /api/v1.1/stories/comment {sid, caption}`: **S3, sent as a chat.** The caption and a link to the post go to
   the author as a chat message, through W1.4b's send with its request, mute, block and may-message rules. Only a
   story in the commenter's carousel, not their own, may be commented on.
-- **S4, publish refused.** `stories/add`, `stories/publish` and the v1.2 publish stay unbuilt (404) until an app
-  uses them. App 2.0.1 never calls its publish, and a photo posted as usual is a story for a day anyway.
+- **S4, publish refused** until an app uses it. App 2.0.1 never calls its publish, and a photo posted as usual is a
+  story for a day anyway. PixelDroid does publish: S5 (§8) builds `stories/add` and `stories/publish`; the v1.2
+  publish stays unbuilt (404).
 
 Rows in `story_view` and `story_expiry` matter for a day: each write deletes that table's rows older than two
 days. Deleting a post deletes its rows (cascade).
+
+## 8. PixelDroid and Fedilab (W1.4d, ruling X4 and rulings S5–S6 of 2026-11-11)
+
+Both are driven in the harness: each logs in through OAuth, views dora's photo or the seeded post, and posts.
+
+**Fedilab** reads nodeinfo first and picks its API from `software.name`: anything it does not know, `piefed`
+included, gets Mastodon's API, which W1 serves. Its OAuth redirect is `fedilab://backtofedilab`. Nothing was built
+for it.
+
+**PixelDroid** speaks Mastodon's API and, without checking the server, Pixelfed's stories. At login it reads the
+standard nodeinfo (`/.well-known/nodeinfo`, then the schema 2.0 document) and:
+
+- warns, "This doesn't seem to be a Pixelfed instance, so the app could break in unexpected ways", where
+  `software.name` lacks `pixelfed`;
+- stops ("The API is not activated on this instance") where it does say pixelfed but `metadata.config.features.
+  mobile_apis` is not true;
+- stores the instance from `metadata.config` (site, uploader limits) when it has the site's url and name and a caption
+  length, else from `/api/v1/instance`.
+
+**S6, told Pixelfed by agent.** PixelDroid sends `User-Agent: PixelDroid` on every request. That agent alone is told
+Pixelfed 0.15.2 on the standard nodeinfo (2.0 and 2.1), and the 2.0 document carries `metadata: {nodeName, software:
+{homepage, repo}, config}`, the config being `/api/v2/config`'s. The repository stays PieFed's, so PixelDroid does not
+treat the server as Pixelfed for its avatar upload (it uses Mastodon's `update_credentials`). Every other agent is told
+PieFed, as before; the answer is cached per agent class and says it varies by agent.
+
+**S5, stories viewed and published** (reversing S4, now that an app publishes):
+
+- `GET /api/pixelfed/v1/stories/self-carousel` (Pixelfed's `selfCarousel`) returns `{self: {user: {id, username
+  (acct), avatar, local, is_author: true}, nodes: [stories]}, nodes: [{id: 'pfs:<id>', user: {id, username,
+  username_acct, avatar, local, is_author: false}, nodes: [stories], url, seen}]}`, each story `{id, pid, type:
+  'photo', src, duration: 10 (seconds), seen, created_at}`, oldest first. The stories are §7's. Authors whose newest
+  story is unseen come first.
+- `seen` and `comment` take their fields from the query, as PixelDroid sends them, as well as from a JSON body.
+- `POST /api/v1.1/stories/add` (multipart `file`) stores the photo as `/api/v2/media` does and answers `{code, msg,
+  media_id, media_url, media_type: 'photo'}`. Pictures only, as Mastodon's media here.
+- `POST /api/v1.1/stories/publish {media_id, duration, can_reply, can_react}` posts the person's own upload to their
+  microblog with no words, as `POST /api/v1/statuses` would: a story for a day, and a post. Duration, replies and
+  reactions are not kept: a story shows for ten seconds, and a reply to it is a chat (S3).

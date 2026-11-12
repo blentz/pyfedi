@@ -28,7 +28,9 @@ Results land in `interop/apps/results/` (gitignored): one JSON per app, `summary
 | Lemmy | Voyager, Thunder, Summit (Android) | the newest APK on the emulator (uiautomator2) | log in, find the seeded post with the app's search, comment on it |
 | Lemmy | Jerboa (Android) | the newest APK on the emulator | log in as alice (nodeinfo tells it Lemmy, ruling D3), find the seeded post in her home feed, comment on it |
 | Mastodon | Mastodon, Tusky, Moshidon (Android); Phanpy, Elk (web) | protocol probe | |
-| Pixelfed | Pixelfed, PixelDroid, Fedilab (Android) | protocol probe | |
+| Pixelfed | Pixelfed (Android) | the newest APK on the emulator (its native libraries extracted) | log in as alice (Pixelfed's config path tells it Pixelfed, ruling X1), open dora's photo from her profile's grid, post a photo through its camera, message dora and read her answer, send her a photo, and see dora's story in its carousel |
+| Pixelfed | PixelDroid (Android) | the newest APK on the emulator | log in as alice (nodeinfo tells its agent Pixelfed, ruling S6), open dora's photo from her profile's grid, post a photo and publish a story through its Create tab (S5) |
+| Pixelfed | Fedilab (Android) | the newest APK on the emulator | log in as alice (it speaks Mastodon's API to PieFed), find the seeded post with its search, reply to it |
 | PeerTube | NewPipe (Android) | the newest APK on the emulator | add `tube.test` as its PeerTube instance, pick it in the service picker, and play the video tess uploaded there |
 | PeerTube | PeerTube (Android) | the newest APK on the emulator | add `tube.test`, log in as tess with her password, open her video from the platform's page and comment on it, upload a clip to her channel through the app's own screens and Android's photo picker |
 | PeerTube | TubeLab (Android) | protocol probe | it reads nodeinfo first and logs in only where that says `peertube` (ruling P4: left out) |

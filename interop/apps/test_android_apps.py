@@ -765,9 +765,132 @@ class PixelfedApp:
         return f"Messaged dora {text!r} from its chat; she has it, and her answer {answer!r} shows there; a photo " \
                f"captioned {caption!r} reached her, and her web chat shows it"
 
+class PixelDroid:
+    """PixelDroid (pixeldroid/PixelDroid, F-Droid org.pixeldroid.app; plan W1.4d): native, Pixelfed's API where it
+    differs from Mastodon's. Its login screen takes the domain; it reads the standard nodeinfo, which tells its agent
+    Pixelfed (ruling S6), and opens PieFed's pages in the browser, which send the code back to oauth2redirect://. A
+    first login asks about a tutorial. Its tabs are Home, Search, Create, Updates and Public."""
+
+    def __init__(self, device, package, world):
+        self.device, self.world, self.package = device, world, package
+        self.id = lambda name: f'{package}:id/{name}'
+
+    def login(self):
+        d = self.device
+        d.adb.shell(['pm', 'grant', self.package, 'android.permission.CAMERA'])   # its Create tab opens the camera
+        d.type_into(d.ui(resourceId=self.id('editText')), 'piefed.test')
+        d.hide_keyboard()
+        d.ui(resourceId=self.id('connect_instance_button')).click(timeout=30)
+        chrome_first_run(d)
+        piefed_consent(d, self.package, signed_in=('No, continue',))
+        d.tap('No, continue', exact=True)   # no tutorial
+        d.wait_text('Home', timeout=60)
+        return 'logged in as alice through OAuth; its nodeinfo check was told Pixelfed (S6), so it did not warn'
+
+    def view(self):
+        d = self.device
+        d.tap_tab('Search')
+        d.ui(resourceId=self.id('search')).click(timeout=30)
+        d.type_focused('dora')
+        d.ui.press('enter')
+        d.tap('ACCOUNTS', exact=True, timeout=60)
+        d.tap('@dora', exact=True, timeout=60)   # her row (the field says dora too): her profile
+        d.ui(resourceId=self.id('postPreview')).click(timeout=60)   # the grid's first tile: her photo
+        d.wait_text(PHOTO_TITLE, timeout=60)
+        return f"its search finds dora; her profile's grid shows her photo {PHOTO_TITLE!r}, and it opens"
+
+    def _pick_photo(self, name: str) -> None:
+        """Create > its camera's gallery > Android's photo picker on a picture put in Pictures."""
+        d = self.device
+        d.adb.sync.push(io.BytesIO(png(320, 240)), f'/sdcard/Pictures/{name}.png')
+        d.scan_media()
+        d.launch(self.package)   # afresh on its Home tab, whatever the last step left open (it stays logged in)
+        d.ui(resourceId=self.id('tabsId')).wait(timeout=60)
+        d.tap_tab('Create')
+        d.ui(resourceId=self.id('photo_view_button')).click(timeout=30)
+        d.ui(descriptionContains='Photo taken').click(timeout=60)
+        if d.ui(textStartsWith='Add').wait(timeout=5):   # a picker that takes several confirms the one
+            d.ui(textStartsWith='Add').click()
+
+    def post(self):
+        """A photo post (/api/v2/media, then /api/v1/statuses) and a story (stories/add, then stories/publish, S5),
+        each through its Create tab; PieFed has both as alice's image posts in her microblog."""
+        d, text = self.device, marker('pixeldroid-android')
+        alice = self.world['alice']
+        self._pick_photo(text)
+        d.ui(resourceId=self.id('post_creation_next_button')).click(timeout=60)
+        d.type_into(d.ui(resourceId=self.id('new_post_description_input_field')), text)
+        d.hide_keyboard()
+        d.ui(resourceId=self.id('post_submission_send_button')).click(timeout=60)
+        found = find_post(alice, alice.microblogs_id(), text, timeout=90)['post']
+        wait_for(lambda: alice.get_post(found['id'])['post']['post_type'] == 'Image', timeout=120, interval=3)
+        before = {post['post']['id'] for post in alice.http.get('/post/list', params={
+            'community_id': alice.microblogs_id(), 'sort': 'New', 'limit': 50}).raise_for_status().json()['posts']}
+        self._pick_photo(f'{text}-story')
+        d.ui(resourceId=self.id('buttonStory')).click(timeout=60)
+        d.ui(resourceId=self.id('post_creation_next_button')).click(timeout=60)
+        d.ui(resourceId=self.id('post_submission_send_button')).click(timeout=60)
+
+        def story():
+            posts = alice.http.get('/post/list', params={'community_id': alice.microblogs_id(), 'sort': 'New',
+                                                         'limit': 50}).raise_for_status().json()['posts']
+            return next((post['post'] for post in posts if post['post']['id'] not in before
+                         and post['creator']['user_name'] == ALICE[0]), None)
+        published = wait_for(story, timeout=90, interval=3)
+        return f"posted a photo captioned {text!r} (alice's image post {found['id']}) and published a story, which " \
+               f"PieFed has as her post {published['id']}"
+
+
+class Fedilab:
+    """Fedilab (tom79/Fedilab, F-Droid fr.gouv.etalab.mastodon; plan W1.4d): native. It reads nodeinfo, which says
+    piefed, and speaks Mastodon's API to any software it does not know. Its login screen takes the instance >
+    Continue; PieFed's pages open in a Chrome custom tab, and PieFed sends the code back to fedilab://."""
+
+    def __init__(self, device, package, world):
+        self.device, self.world, self.package = device, world, package
+        self.id = lambda name: f'{package}:id/{name}'
+
+    def login(self):
+        d = self.device
+        d.type_into(d.ui(resourceId=self.id('login_instance')), 'piefed.test')
+        d.hide_keyboard()
+        for _ in range(3):   # a tap as the keyboard closes is lost: tap until the login screen goes
+            d.ui(resourceId=self.id('continue_button')).click(timeout=30)
+            if d.ui(resourceId=self.id('login_instance')).wait_gone(timeout=15):
+                break
+        chrome_first_run(d)
+        piefed_consent(d, self.package)
+        # a new install shows its release notes, and a warning that no push distributor is installed (Disable turns
+        # push off, so it does not come back), over the home screen, in either order
+        for _ in range(4):
+            if not d.ui(textMatches='Disable|Close').wait(timeout=20):
+                break
+            d.tap('Disable' if d.showing('Disable', exact=True) else 'Close', exact=True)
+        return 'logged in as alice through OAuth'
+
+    def view(self):
+        d = self.device
+        d.ui(resourceId=self.id('toolbar_search')).click(timeout=30)
+        d.type_focused(QUERY)
+        d.ui.press('enter')
+        d.wait_text(SEED_TITLE, timeout=60)
+        return 'its search finds the seeded post'
+
+    def post(self):
+        d, text = self.device, marker('fedilab-android')
+        d.tap(SEED_TITLE)
+        d.ui(resourceId=self.id('action_button_reply')).click(timeout=30)
+        d.type_into(d.ui(resourceId=self.id('content')), text)
+        d.hide_keyboard()
+        d.ui(resourceId=self.id('button_post')).click(timeout=30)
+        find_comment(self.world['alice'], self.world['seed']['id'], text, timeout=60)
+        return f'replied {text!r} to the seeded post; PieFed has it as a comment'
+
+
 DRIVERS = {'newpipe-android': NewPipe, 'summit-android': Summit, 'voyager-android': VoyagerAndroid, 'thunder-android': Thunder,
            'tusky-android': Tusky, 'mastodon-android': MastodonAndroid, 'peertube-android': PeerTubeApp,
-           'jerboa-android': Jerboa, 'pixelfed-android': PixelfedApp}
+           'jerboa-android': Jerboa, 'pixelfed-android': PixelfedApp, 'pixeldroid-android': PixelDroid,
+           'fedilab-android': Fedilab}
 
 
 @pytest.mark.parametrize('name', sorted(DRIVERS), ids=sorted(DRIVERS))
