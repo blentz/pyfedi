@@ -6,6 +6,7 @@ import re
 
 import pytest
 
+import app as app_pkg
 from app import db
 from app.models import OAuthToken, Site
 from app.oauth_scopes import GPODDER_SCOPE, SCOPES
@@ -214,3 +215,36 @@ def test_an_app_password_is_this_domains_alone(world):
     db.session.commit()
     assert world['client'].post('/api/2/auth/gpalice/logout.json').status_code == 401
     assert _login(world).status_code == 401
+
+
+class TestFailureLimit:
+    """Failed sign-ins per address are limited, checked before a password is tried, so it cannot be guessed rapidly;
+    good calls, which Kasts and gPodder make with Basic on every request, are never counted."""
+
+    @pytest.fixture
+    def few(self, world, monkeypatch):
+        monkeypatch.setattr(gpodder_auth, 'MAX_FAILURES', 3)
+        return world
+
+    def test_too_many_failures_refuse_even_the_right_password(self, few):
+        for _ in range(3):
+            assert _login(few, password='a guess').status_code == 401
+        response = _login(few)
+        assert response.status_code == 429 and int(response.headers['Retry-After']) > 0
+
+    def test_good_sign_ins_are_not_counted(self, few):
+        for _ in range(5):
+            assert _login(few).status_code == 200
+        assert _login(few, password='a guess').status_code == 401
+        assert _login(few).status_code == 200
+
+    def test_a_failure_count_expires(self, few):
+        _login(few, password='a guess')
+        keys = app_pkg.redis_client.keys('gpodder_login_fail:*')
+        assert len(keys) == 1 and 0 < app_pkg.redis_client.ttl(keys[0]) <= gpodder_auth.FAILURE_WINDOW
+
+    def test_the_session_cookie_is_limited_as_basic_is(self, few):
+        few['client'].set_cookie('sessionid', 'not-signed', domain=few['flask'].config['SERVER_NAME'], path='/api/2/')
+        for _ in range(3):
+            assert few['client'].post('/api/2/auth/gpalice/logout.json').status_code == 401
+        assert few['client'].post('/api/2/auth/gpalice/logout.json').status_code == 429

@@ -46,10 +46,11 @@ Kasts and gPodder send Basic on every call. Every call therefore takes either.
 - **The session cookie** `sessionid` (HttpOnly, Secure off an onion, SameSite=Lax, path `/api/2/`) is the token's id
   signed with the app's secret (itsdangerous, salt `gpodder-session`), good for a day. Each request re-reads the token,
   so revoking it ends the session at once. `logout.json` deletes the cookie.
-- **Failures** answer 401 with `WWW-Authenticate: Basic realm="PieFed"`. They are not rate limited: an app password
-  is a random 256-bit secret, as a bearer token is (whose check is not limited either), and the account password is
-  never taken, so nothing guessable is offered. (A limit on the sign-in wrapper also broke the onion guard's rule that
-  every limited function is a routed view, tests/test_onion_guard_limits.py.) A private instance's login gate leaves these routes to their own check
+- **Failures** answer 401 with `WWW-Authenticate: Basic realm="PieFed"`, and are counted per address (Flask-Limiter's
+  key, onion requests included): past 20 in an hour from the first, every sign-in from that address is refused 429
+  with `Retry-After`, checked before a password is tried, so none is guessed rapidly (owner 2026-11-12). Good calls
+  are never counted, as Kasts and gPodder send Basic on every one. A Redis counter of its own, not `@limiter.limit`,
+  which the onion guard allows only on routed views (tests/test_onion_guard_limits.py). A private instance's login gate leaves these routes to their own check
   (`has_own_login_gate`), as `require_oauth` does.
 
 ## 4. Devices and subscriptions (G2)

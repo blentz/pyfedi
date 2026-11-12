@@ -391,7 +391,7 @@ def db_session(app):
     from app import redis_client
     if redis_client is not None:
         stale = []
-        for pattern in ('votes_cast_*', 'honeypot:*', 'ban:*'):
+        for pattern in ('votes_cast_*', 'honeypot:*', 'ban:*', 'gpodder_login_fail:*'):   # gpodder's per address
             stale.extend(redis_client.keys(pattern))
         if stale:
             redis_client.delete(*stale)
