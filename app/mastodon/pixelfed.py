@@ -33,12 +33,11 @@ def _viewer_id() -> int | None:
     return g.oauth_user.id if g.oauth_user else None
 
 
-@bp.route('/api/v2/config')
-@require_oauth('read', optional=True)
-def pixelfed_config():
-    """Pixelfed's server configuration, which its app reads for its limits (the bio's length among them)."""
+def pixelfed_configuration() -> dict:
+    """Pixelfed's server configuration: what its apps read for its limits (the bio's length among them), and
+    PixelDroid in nodeinfo's metadata (app.activitypub.routes, ruling S6)."""
     site = g.site
-    return jsonify({
+    return {
         'version': PIXELFED_VERSION, 'open_registration': site.registration_mode == 'Open',
         'uploader': {'max_photo_size': current_app.config['MAX_CONTENT_LENGTH'] // 1024,
                      'max_caption_length': MAX_CHARACTERS, 'max_altext_length': MAX_ALT_TEXT,
@@ -56,7 +55,13 @@ def pixelfed_config():
         'features': {'timelines': {'local': True, 'network': True}, 'mobile_apis': True, 'stories': True,
                      'video': True, 'import': {'instagram': False}, 'label': {'covid': {'enabled': False}},
                      'hashtags': {'enabled': True}, 'groups': False},
-    })
+    }
+
+
+@bp.route('/api/v2/config')
+@require_oauth('read', optional=True)
+def pixelfed_config():
+    return jsonify(pixelfed_configuration())
 
 
 @bp.route('/api/v2.1/config')

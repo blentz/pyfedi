@@ -59,6 +59,7 @@ from app.local_only import community_local_only, federated_mentions, federating_
 from app.local_names import actor_handle, local_clause, split_local_name
 import app.client_identity as client_identity
 from app.mastodon import instance as mastodon_instance
+from app.mastodon.pixelfed import pixelfed_configuration
 from app.federation_urls import activity_id, domain_site_name, federating_storefront, instance_actor_url, \
     is_federating_url, object_base, owned_elsewhere, owner_base, owner_domain
 from app.storefront import acting_for, current_storefront, domain_authority, domain_base_url, domain_for_host, federating_base, \
@@ -355,8 +356,8 @@ def nodeinfo_usage(domain) -> dict:
     }
 
 
-# Jerboa is told Lemmy and Pixelfed's app Pixelfed (app.client_identity), so each document is cached per agent class
-# and path, and says it varies by agent.
+# Jerboa is told Lemmy, and Pixelfed's app and PixelDroid Pixelfed (app.client_identity), so each document is cached
+# per agent class and path, and says it varies by agent.
 @bp.route('/nodeinfo/2.0')
 @bp.route('/nodeinfo/2.0.json')
 @bp.route(client_identity.PIXELFED_NODEINFO)   # Pixelfed's own path, which its app reads (ruling X1)
@@ -375,6 +376,11 @@ def nodeinfo2():
         "usage": nodeinfo_usage(domain),
         "openRegistrations": open_registrations(domain, g.site)
     }
+    if client_identity.is_pixeldroid():   # its config, without which it stops (ruling S6); the repository is ours
+        nodeinfo_data["metadata"] = {"nodeName": g.site.name,
+                                     "software": {"homepage": "https://join.piefed.social",
+                                                  "repo": "https://codeberg.org/rimu/pyfedi"},
+                                     "config": pixelfed_configuration()}
     return client_identity.varying(jsonify(nodeinfo_data))
 
 
