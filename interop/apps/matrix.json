@@ -12,7 +12,8 @@
 
     "mastodon-android": {"platform": "mastodon", "surface": "android", "package": "org.joinmastodon.android", "apk": {"fdroid": "org.joinmastodon.android"}},
     "tusky-android": {"platform": "mastodon", "surface": "android", "package": "com.keylesspalace.tusky", "apk": {"fdroid": "com.keylesspalace.tusky"}},
-    "moshidon-android": {"platform": "mastodon", "surface": "android", "probe": "mastodon"},
+    "moshidon-android": {"platform": "mastodon", "surface": "android", "package": "org.joinmastodon.android.moshinda",
+                         "apk": {"github": "LucasGGamerM/moshidon", "asset": "^moshidon\\.apk$"}},
     "phanpy-web": {"platform": "mastodon", "surface": "web", "web": "https://phanpy.test", "image": "phanpy (newest release, built by run.sh)"},
     "elk-web": {"platform": "mastodon", "surface": "web", "web": "https://elk.test", "image": "ghcr.io/elk-zone/elk:latest"},
 
@@ -24,11 +25,8 @@
     "newpipe-android": {"platform": "peertube", "surface": "android", "package": "org.schabi.newpipe", "apk": {"github": "TeamNewPipe/NewPipe", "asset": "\\.apk$"}, "expect": {
       "login": {"outcome": "inapplicable", "reason": "NewPipe has no accounts: it only browses"},
       "post": {"outcome": "inapplicable", "reason": "NewPipe cannot upload"}}},
-    "tubelab-android": {"platform": "peertube", "surface": "android", "probe": "tubelab", "expect": {
-      "login": {"outcome": "unsupported", "reason": "TubeLab reads nodeinfo first and logs in only where it says peertube; PieFed's says piefed (ruling P4: TubeLab is left out)"},
-      "view": {"outcome": "unsupported", "reason": "the probe browses piefed.test, which is private (R219): /api/v1/videos answers 401 there with no login, and TubeLab cannot log in"},
-      "post": {"outcome": "blocked", "reason": "uploading needs the login TubeLab cannot do"}}},
-
+    "p2play-android": {"platform": "peertube", "surface": "android", "package": "org.libre.agosto.p2play",
+                       "apk": {"fdroid": "org.libre.agosto.p2play"}},
     "antennapod-android": {"platform": "castopod", "surface": "android", "package": "de.danoeh.antennapod", "apk": {"fdroid": "de.danoeh.antennapod"}, "expect": {
       "post": {"outcome": "inapplicable", "reason": "podcast players do not publish"}}},
     "pocketcasts-android": {"platform": "castopod", "surface": "android", "rss": true, "expect": {

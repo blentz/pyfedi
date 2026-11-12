@@ -325,6 +325,102 @@ class MastodonAndroid:
         return f'replied {text!r} to the seeded post; PieFed has it as a comment'
 
 
+class Moshidon:
+    """Moshidon (LucasGGamerM/moshidon, a fork of Mastodon's app; package ...moshinda): its welcome screen takes the
+    instance, which it looks up and lists under the field > Next; PieFed's pages open in a Chrome custom tab, as for
+    Mastodon's app. It searches from its Search tab and replies from a post's Reply button."""
+
+    def __init__(self, device, package, world):
+        self.device, self.world, self.package = device, world, package
+        self.id = lambda name: f'{package}:id/{name}'
+
+    def login(self):
+        d = self.device
+        d.type_into(d.ui(resourceId=self.id('search_edit')), 'piefed.test')
+        d.ui(resourceId=self.id('title'), text='piefed.test').wait(timeout=30)   # looked up: Next goes on to its login
+        d.hide_keyboard()
+        d.ui(resourceId=self.id('btn_next')).click(timeout=30)
+        chrome_first_run(d)
+        piefed_consent(d, self.package)
+        d.ui(resourceId=self.id('tab_home')).wait(timeout=60)
+        return 'logged in as alice through OAuth'
+
+    def view(self):
+        d = self.device
+        d.ui(resourceId=self.id('tab_search')).click(timeout=30)
+        d.ui(resourceId=self.id('search_text')).click(timeout=30)   # opens the search field focused
+        d.type_focused(QUERY)
+        d.ui.press('enter')
+        d.wait_text(SEED_TITLE, timeout=60)
+        return 'its search finds the seeded post'
+
+    def post(self):
+        d, text = self.device, marker('moshidon-android')
+        d.ui(resourceId=self.id('reply_btn')).click(timeout=30)   # the seeded post's, the one result
+        d.type_into(d.ui(resourceId=self.id('toot_text')), text)
+        d.hide_keyboard()   # with it up, the composer's bar moves and a tap meant for Publish opens Language
+        d.ui(description='Publish').click(timeout=30)
+        find_comment(self.world['alice'], self.world['seed']['id'], text, timeout=60)
+        return f'replied {text!r} to the seeded post; PieFed has it as a comment'
+
+
+class P2Play:
+    """P2Play (agosto182/p2play, F-Droid org.libre.agosto.p2play; harness ruling H2, in place of the abandoned TubeLab):
+    a PeerTube client in Compose. Its first screen takes an instance; it browses tube.test, which is public, as NewPipe
+    does: it stops on the 401 piefed.test (private, R219) answers its first, signed-out listing. It logs in with
+    PeerTube's password grant as tess, and loads that login on its next start only (its main screen reloads a session
+    once one was loaded before), so it is started again. Its post is a comment on tess's video: it cannot upload."""
+
+    def __init__(self, device, package, world):
+        self.device, self.world, self.package = device, world, package
+        self.id = lambda name: f'{package}:id/{name}'
+
+    def _rightmost_button(self):
+        buttons = [self.device.ui(className='android.widget.Button', instance=i)
+                   for i in range(self.device.ui(className='android.widget.Button').count)]
+        return max(buttons, key=lambda button: button.info['bounds']['right'])
+
+    def login(self):
+        d = self.device
+        d.ui(className='android.widget.EditText', instance=0).click(timeout=60)
+        d.type_focused(TUBE)
+        d.hide_keyboard()
+        self._rightmost_button().click()   # the arrow at the field's end
+        d.wait_text('Videos', timeout=60)
+        d.tap('You', exact=True)
+        d.tap('Login', exact=True)
+        d.type_into(d.ui(resourceId=self.id('userText')), TESS[0])
+        d.type_into(d.ui(resourceId=self.id('passwordText')), TESS[1])
+        d.hide_keyboard()
+        d.ui(resourceId=self.id('loginBtn')).click(timeout=30)
+        assert d.ui(resourceId=self.id('loginBtn')).wait_gone(timeout=30), 'its login screen stayed'
+        d.stop(self.package)
+        d.launch(self.package)
+        d.tap('You', exact=True, timeout=60)
+        d.wait_text('Logout', timeout=60, contains=False)
+        d.wait_text(TESS[0], timeout=30, contains=False)
+        return f'logged in to {TUBE} as tess with PeerTube\'s password grant'
+
+    def view(self):
+        d = self.device
+        d.tap('Videos', exact=True)
+        d.tap(TUBE_TITLE, exact=True, timeout=60)
+        d.wait_text('Comments', timeout=60)   # the video's page, its comments under it
+        return f'opens {TUBE_TITLE!r} from its list; its page shows the video and its comments'
+
+    def post(self):
+        d, text = self.device, marker('p2play-android')
+        field = d.ui(className='android.widget.EditText', instance=0)
+        if not field.exists:
+            d.ui.swipe_ext('up', scale=0.6)
+        field.click(timeout=30)
+        d.type_focused(text)
+        d.hide_keyboard()
+        self._rightmost_button().click()   # the comment box's send
+        find_comment(self.world['alice'], self.world['video']['id'], text, timeout=60)
+        return f'commented {text!r} on tess\'s video; PieFed has it as a comment'
+
+
 class NewPipe:
     """NewPipe (TeamNewPipe/NewPipe): native, with no accounts. Settings > Content > PeerTube instances takes an
     instance's URL (it reads /api/v1/config) and makes it the PeerTube service's; the drawer's service picker lists that
@@ -896,7 +992,8 @@ class Fedilab:
 DRIVERS = {'newpipe-android': NewPipe, 'summit-android': Summit, 'voyager-android': VoyagerAndroid, 'thunder-android': Thunder,
            'tusky-android': Tusky, 'mastodon-android': MastodonAndroid, 'peertube-android': PeerTubeApp,
            'jerboa-android': Jerboa, 'pixelfed-android': PixelfedApp, 'pixeldroid-android': PixelDroid,
-           'fedilab-android': Fedilab}
+           'fedilab-android': Fedilab, 'moshidon-android': Moshidon,
+           'p2play-android': P2Play}
 
 
 @pytest.mark.parametrize('name', sorted(DRIVERS), ids=sorted(DRIVERS))

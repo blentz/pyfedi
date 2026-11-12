@@ -27,13 +27,14 @@ Results land in `interop/apps/results/` (gitignored): one JSON per app, `summary
 | Lemmy | Voyager, Blorp, Photon (web) | Chromium (Playwright) on the app's own image | log in as alice, open `c/apps` and see the seeded post, comment on it |
 | Lemmy | Voyager, Thunder, Summit (Android) | the newest APK on the emulator (uiautomator2) | log in, find the seeded post with the app's search, comment on it |
 | Lemmy | Jerboa (Android) | the newest APK on the emulator | log in as alice (nodeinfo tells it Lemmy, ruling D3), find the seeded post in her home feed, comment on it |
-| Mastodon | Mastodon, Tusky, Moshidon (Android); Phanpy, Elk (web) | protocol probe | |
+| Mastodon | Mastodon, Tusky, Moshidon (Android) | the newest APK on the emulator | log in as alice through OAuth, find the seeded post with the app's search, reply to it |
+| Mastodon | Phanpy, Elk (web) | Chromium (Playwright) on the app's own image | log in as alice, find the seeded post, reply to it |
 | Pixelfed | Pixelfed (Android) | the newest APK on the emulator (its native libraries extracted) | log in as alice (Pixelfed's config path tells it Pixelfed, ruling X1), open dora's photo from her profile's grid, post a photo through its camera, message dora and read her answer, send her a photo, and see dora's story in its carousel |
 | Pixelfed | PixelDroid (Android) | the newest APK on the emulator | log in as alice (nodeinfo tells its agent Pixelfed, ruling S6), open dora's photo from her profile's grid, post a photo and publish a story through its Create tab (S5) |
 | Pixelfed | Fedilab (Android) | the newest APK on the emulator | log in as alice (it speaks Mastodon's API to PieFed), find the seeded post with its search, reply to it |
 | PeerTube | NewPipe (Android) | the newest APK on the emulator | add `tube.test` as its PeerTube instance, pick it in the service picker, and play the video tess uploaded there |
 | PeerTube | PeerTube (Android) | the newest APK on the emulator | add `tube.test`, log in as tess with her password, open her video from the platform's page and comment on it, upload a clip to her channel through the app's own screens and Android's photo picker |
-| PeerTube | TubeLab (Android) | protocol probe | it reads nodeinfo first and logs in only where that says `peertube` (ruling P4: left out) |
+| PeerTube | P2Play (Android) | the newest APK on the emulator | add `tube.test`, log in as tess with her password (and start it again: it loads a login on its next start), open her video and comment on it (it cannot upload). In place of TubeLab, abandoned since 2022 (ruling H2) |
 | Castopod | AntennaPod (Android) | the newest APK on the emulator | log in to PieFed's gpodder sync with an app password (plan W4), subscribe to `pod_media`'s feed by RSS address, see its episode, and find the feed in alice's synced list |
 | Castopod | Pocket Casts, Podcast Addict | the feed itself | what a player needs from it: an item with an audio enclosure, its length and duration |
 
@@ -44,26 +45,21 @@ no account can browse only a public domain.
 Every comment an app posts carries a marker unique to the app and the run, and is looked for afterwards through
 PieFed's own API: the app saying it posted is not enough.
 
-The stack is shared: after `interop/run.sh test` or `conformance` PieFed holds their Loops, Mastodon and Pixelfed
-posts too, and a feed's first screen shows those. So the Android apps find the seeded post by searching for it, as on
-a busy instance, rather than expecting it on a feed's first screen (the web apps open `c/apps` directly by URL).
-Taps that an app can swallow while it starts or while its keyboard animates are retried a bounded number of times
-(`Device.tap_until`), and tabs are tapped as the lowest element with that label (`Device.tap_tab`), never by a
-substring that a feed post could also contain.
-
-**Protocol probes** (`probes.py`) stand in for the apps whose client API PieFed does not serve. Driving those apps'
-UIs would only show an error screen, so a probe sends the request the app's login and timeline start with (Mastodon's
-`POST /api/v1/apps` and `GET /api/v1/timelines/public`, PeerTube's `GET /api/v1/oauth-clients/local` and
-`GET /api/v1/videos`, Lemmy's `POST /api/v3/user/login` and `GET /api/v3/post/list`) and records PieFed's answer.
-While those answer 404 the matrix expects `unsupported`; when one starts to work the gate fails with "now passes", and
-that app is due a real driver. `tests/test_apps_probes.py` runs the same probes against this tree in the unit suite.
+Every run starts from a PieFed with nothing in it (`run.sh`'s `fresh_piefed`), and every test from the same state
+and leaves nothing behind (owner ruling H1): once the session has made its world (dora's community `apps` with the
+seeded post and a photo, tess's video and avatar, the podcast episode), `stack_state.py` snapshots PieFed's database,
+Redis and media, and the `clean_state` fixture restores that snapshot before each test and again in its teardown,
+checking every table matches it. On the emulator, every app installed since the session began is uninstalled after
+each test, and Chrome's data and the pushed media are cleared. So no test sees what another did, and no run depends on
+an earlier one. Taps that an app can swallow while it starts or while its keyboard animates are retried a bounded
+number of times (`Device.tap_until`, and `hide_keyboard` waits until the keyboard has gone), and tabs are tapped as
+the lowest element with that label (`Device.tap_tab`), never by a substring that a feed post could also contain.
 
 ## The matrix
 
 `matrix.json` names every app, its platform, how it is checked, and what it is expected to do. A step with no
 expectation must pass. An expectation records a known non-pass and why:
 
-- `unsupported`: PieFed lacks the API the app speaks (Mastodon's, PeerTube's, Lemmy's v3).
 - `blocked`: not tried, because an earlier step did not pass (posting without a login).
 - `inapplicable`: the app has no such step (a podcast player neither logs in nor posts).
 - `failed`: a known failure, with its reason, until it is fixed.
@@ -76,7 +72,7 @@ matrix in the unit suite.
 
 1. Add it to `matrix.json`: `web` (a URL served in the stack, plus its `image`), `apk` (`{"fdroid": "<package>"}`, or
    `{"github": "<owner>/<repo>", "asset": "<regex>"}`, with `"prerelease": true` to take prereleases) with its
-   `package`, `probe` (`mastodon`, `peertube` or `lemmy-v3`) or `rss`.
+   `package`, or `rss`. Every app is driven: a check that stops short of the app's own screens is not one.
 2. For a web app, a service in `compose.interop.yaml` (profile `apps`), its name in Caddy's aliases and
    `interop/Caddyfile`, and its image in `run.sh`'s `WEB_IMAGES` and `APPS_SERVICES`.
 3. For a driven app, a driver class in `test_web_apps.py` or `test_android_apps.py`: `login`, `view` and `post`, each

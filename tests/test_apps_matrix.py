@@ -133,6 +133,6 @@ def test_the_committed_matrix_is_well_formed():
     for name, app in matrix.items():
         assert app.get('platform') in ('mastodon', 'lemmy', 'pixelfed', 'peertube', 'castopod'), name
         assert app.get('surface') in ('web', 'android'), name
-        assert sum(key in app for key in ('web', 'apk', 'probe', 'rss')) == 1, f'{name}: one way to check it'
+        assert sum(key in app for key in ('web', 'apk', 'rss')) == 1, f'{name}: one way to check it'
         if 'apk' in app or 'web' in app:
             assert 'package' in app or 'web' in app, name

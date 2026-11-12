@@ -105,9 +105,9 @@ class RetryAfterTransport(httpx.BaseTransport):
 class PieFed:
     """Alpha API routes and payload names checked against app/api/alpha/routes.py and schema.py."""
 
-    def __init__(self, user, password):
+    def __init__(self, user, password, host='piefed.test'):
         transport = RetryAfterTransport(httpx.HTTPTransport(verify=ssl.create_default_context(cafile=CA)))
-        self.http = httpx.Client(base_url='https://piefed.test/api/alpha', transport=transport, timeout=10)
+        self.http = httpx.Client(base_url=f'https://{host}/api/alpha', transport=transport, timeout=10)
         jwt = self.http.post('/user/login', json={'username': user, 'password': password}).raise_for_status().json()['jwt']
         self.http.headers['Authorization'] = f'Bearer {jwt}'
 

@@ -63,6 +63,7 @@ def baseline(world):
     """PieFed once the session's world is made, the video transcoded and the episode in its feed: what every test
     starts from and is put back to."""
     world['video'] = tube_video()
+    tess_avatar()
     world['podcast_feed'] = podcast_feed()
     return stack_state.take()
 
@@ -156,6 +157,15 @@ def tube_video() -> dict:
             assert r.status_code == 302, f'upload answered {r.status_code}: {form_errors(r.text)}'
             video = wait_for(lambda: _listed_video(http), timeout=120, interval=2)
         return wait_for(lambda: _with_renditions(http, video['id']), timeout=180, interval=2)
+
+
+def tess_avatar() -> None:
+    """tess with an avatar, as an uploader has: P2Play reads an account's first avatar unguarded and stops on one
+    with none (its AccountBanner), as it would against PeerTube itself."""
+    tess = PieFed(*TESS, host=TUBE)
+    uploaded = tess.http.post('/upload/user_image', files={'file': ('tess.png', png(96, 96), 'image/png')})
+    tess.http.put('/user/save_user_settings', json={'avatar': uploaded.raise_for_status().json()['url']}) \
+        .raise_for_status()
 
 
 def _with_renditions(http, video_id):
