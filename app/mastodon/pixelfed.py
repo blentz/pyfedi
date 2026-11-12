@@ -11,6 +11,7 @@ from app.chat.util import MAX_MESSAGE_PICTURES
 from app.mastodon import bp
 from app.mastodon.entities import account
 from app.mastodon.instance import IMAGE_TYPES, MAX_CHARACTERS, VIDEO_TYPES
+from app.mastodon.pixelfed_config import MAX_ALT_TEXT, MAX_BIO, pixelfed_configuration
 from app.mastodon.statuses import Page
 from app.mastodon.timelines import readable
 from app.models import File, Post, User, UserFollower
@@ -22,8 +23,6 @@ from app.shared import post as shared_post
 from app.client_identity import PIXELFED_VERSION
 from app.utils import Authorised, max_album_images
 
-MAX_ALT_TEXT = 1500
-MAX_BIO = 1000   # the web form's (app.user.forms)
 TRENDING = {'daily': 'TopDay', 'monthly': 'TopMonth', 'yearly': 'TopYear'}
 TRENDING_COUNT = 20
 _SHOWN = (POST_TYPE_IMAGE, POST_TYPE_GALLERY, POST_TYPE_VIDEO)
@@ -31,31 +30,6 @@ _SHOWN = (POST_TYPE_IMAGE, POST_TYPE_GALLERY, POST_TYPE_VIDEO)
 
 def _viewer_id() -> int | None:
     return g.oauth_user.id if g.oauth_user else None
-
-
-def pixelfed_configuration() -> dict:
-    """Pixelfed's server configuration: what its apps read for its limits (the bio's length among them), and
-    PixelDroid in nodeinfo's metadata (app.activitypub.routes, ruling S6)."""
-    site = g.site
-    return {
-        'version': PIXELFED_VERSION, 'open_registration': site.registration_mode == 'Open',
-        'uploader': {'max_photo_size': current_app.config['MAX_CONTENT_LENGTH'] // 1024,
-                     'max_caption_length': MAX_CHARACTERS, 'max_altext_length': MAX_ALT_TEXT,
-                     'album_limit': max_album_images(), 'image_quality': 90, 'max_collection_length': 0,
-                     'optimize_image': True, 'optimize_video': True,
-                     'media_types': ','.join(IMAGE_TYPES + VIDEO_TYPES), 'mime_types': list(IMAGE_TYPES + VIDEO_TYPES),
-                     'enforce_account_limit': False},
-        'activitypub': {'enabled': True, 'remote_follow': True},
-        'ab': {'hls': False},
-        'site': {'name': site.name, 'domain': request.host, 'url': request.host_url.rstrip('/'),
-                 'description': site.description or ''},
-        'account': {'max_avatar_size': current_app.config['MAX_CONTENT_LENGTH'] // 1024, 'max_bio_length': MAX_BIO,
-                    'max_name_length': 50, 'min_password_length': 8, 'max_account_size': 0},
-        'username': {'remote': {'formats': ['@'], 'format': '@', 'custom': None}},
-        'features': {'timelines': {'local': True, 'network': True}, 'mobile_apis': True, 'stories': True,
-                     'video': True, 'import': {'instagram': False}, 'label': {'covid': {'enabled': False}},
-                     'hashtags': {'enabled': True}, 'groups': False},
-    }
 
 
 @bp.route('/api/v2/config')
