@@ -46,8 +46,10 @@ Kasts and gPodder send Basic on every call. Every call therefore takes either.
 - **The session cookie** `sessionid` (HttpOnly, Secure off an onion, SameSite=Lax, path `/api/2/`) is the token's id
   signed with the app's secret (itsdangerous, salt `gpodder-session`), good for a day. Each request re-reads the token,
   so revoking it ends the session at once. `logout.json` deletes the cookie.
-- **Failures** are rate limited per IP as the Lemmy and OAuth password logins are (`limiter`), and answer 401 with
-  `WWW-Authenticate: Basic realm="PieFed"`. A private instance's login gate leaves these routes to their own check
+- **Failures** answer 401 with `WWW-Authenticate: Basic realm="PieFed"`. They are not rate limited: an app password
+  is a random 256-bit secret, as a bearer token is (whose check is not limited either), and the account password is
+  never taken, so nothing guessable is offered. (A limit on the sign-in wrapper also broke the onion guard's rule that
+  every limited function is a routed view, tests/test_onion_guard_limits.py.) A private instance's login gate leaves these routes to their own check
   (`has_own_login_gate`), as `require_oauth` does.
 
 ## 4. Devices and subscriptions (G2)

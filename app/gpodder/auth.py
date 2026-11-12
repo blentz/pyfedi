@@ -1,14 +1,15 @@
 """Signing in to gpodder sync (spec §3, ruling G1). An app password (app.oauth_server.tokens.issue_app_password) by
 HTTP Basic signs in any call; AntennaPod sends it to login.json alone and carries the `sessionid` cookie that sets: the
 token's id, signed, for a day. Every call re-reads the token, so revoking its app ends a session at once. The path's
-user name must be the person signed in. The login gate leaves these routes to this check, as require_oauth's."""
+user name must be the person signed in. The login gate leaves these routes to this check, as require_oauth's. No rate
+limit: an app password is a random 256-bit secret, as a bearer token is (whose check is not limited either), and the
+account password, which a person could choose weakly, is never taken."""
 from functools import wraps
 
 from flask import current_app, g, jsonify, make_response, request
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 
-from app import db, limiter
-from app.api.alpha.routes import is_trusted_request
+from app import db
 from app.models import OAuthToken, User
 from app.oauth_scopes import GPODDER_SCOPE, covers
 from app.oauth_server import tokens
@@ -17,8 +18,6 @@ from app.gpodder import bp
 from app.storefront import act_in_this_request
 
 COOKIE, COOKIE_PATH, SESSION_SECONDS = 'sessionid', '/api/2/', 24 * 60 * 60
-# Failed sign-ins only, per address: Kasts and gPodder send Basic on every call, so a good one is never metered
-LOGIN_LIMIT = '20/hour'
 
 
 def _serializer() -> URLSafeTimedSerializer:
@@ -59,14 +58,9 @@ def unauthorised():
     return response
 
 
-def _deduct_failure(response) -> bool:
-    return response.status_code == 401
-
-
 def signed_in(view):
     """The route acts for the person an app password names, by Basic or the session cookie, who must be the path's
     `username`. Sets g.gpodder_user and g.gpodder_token."""
-    @limiter.limit(LOGIN_LIMIT, scope='gpodder-login', deduct_when=_deduct_failure, exempt_when=is_trusted_request)
     @wraps(view)
     def guarded(username, *args, **kwargs):
         token = _from_basic() or _from_cookie()
