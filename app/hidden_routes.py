@@ -132,7 +132,8 @@ NON_OBJECT_ARGUMENTS = {
     'playlist_id': ('/api/v1/video-playlists/',),
     'locale': ('/client/locales/',),   # a language code: PeerTube's server translations name no row
     # Pixelfed's account by name (plan W1.4a): a hidden account is answered as one nobody holds, Pixelfed's []
-    'username': ('/api/v1.1/accounts/username/',),
+    # and gpodder sync's (plan W4): the person signed in, whose own rows alone a call reaches (app.gpodder.auth)
+    'username': ('/api/v1.1/accounts/username/', '/api/2/'),
     '_anything': ('/api/v3/',),   # Lemmy's API's endpoints not served: every one answers not_found alike (app.lemmy)
     # the reader's own rows, which show a hidden target as text with a note (app/local_names.py)
     'notification_id': None, 'report_id': None,

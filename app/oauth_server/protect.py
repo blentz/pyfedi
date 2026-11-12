@@ -32,7 +32,7 @@ def _refuse(status: int, error: str):
     return response, status
 
 
-def _record_use(token: OAuthToken) -> None:
+def record_use(token: OAuthToken) -> None:
     now = utcnow()
     if token.last_used_at is None or token.last_used_at < now - LAST_USED_RESOLUTION:
         token.last_used_at = now
@@ -62,7 +62,7 @@ def require_oauth(scope: str | None = None, user_required: bool = True, optional
             user = db.session.get(User, token.user_id) if token.user_id else None
             if user is not None:
                 act_in_this_request(user.home_domain())   # its fetches name its domain, as the alpha API's do
-            _record_use(token)
+            record_use(token)
             g.oauth_token, g.oauth_user = token, user
             return view(*args, **kwargs)
         # The login gate (app.login_gate._has_own_gate) leaves the token to this check, scope and all: the gate

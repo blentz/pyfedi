@@ -15,6 +15,9 @@ ADMIN_SCOPES = frozenset(('admin:read', 'admin:write') + tuple(f'admin:read:{nam
 # Pixelfed's, which its app (2.0.1) asks for its account-security screens (two-factor, password, sign-in activity, apps):
 # known, so it registers, and covering nothing, as PieFed serves those screens to no app (plan W1.4a)
 PIXELFED_SECURITY_SCOPES = frozenset(('security:read', 'security:write'))
+# gpodder.net sync's (plan W4, ruling G1): an app password's only scope, outside SCOPES, so no OAuth client may ask for
+# it and no other API's route covers it (app.gpodder.auth)
+GPODDER_SCOPE = 'gpodder'
 SCOPES = PIXELFED_SECURITY_SCOPES | frozenset(('read', 'write', 'follow', 'push', 'profile')
                    + tuple(f'read:{name}' for name in _READ) + tuple(f'write:{name}' for name in _WRITE)) | ADMIN_SCOPES
 

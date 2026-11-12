@@ -39,6 +39,26 @@
         {% else %}
             <p>{{ _('No apps can use your account.') }}</p>
         {% endif %}
+
+        <h2 class="mt-4">{{ _('App passwords') }}</h2>
+        <p>{{ _('A podcast app (AntennaPod, Kasts, gPodder) can keep your subscriptions and listening in step across your devices through this site, as a gpodder.net sync server. Give each app a password of its own: it can do nothing else with your account, and you can revoke it above at any time.') }}</p>
+        {% if new_password %}
+            <div class="alert alert-success" role="status">
+                <p>{{ _('The password for %(name)s. Copy it now: it is not shown again.', name=new_password_name) }}</p>
+                <p><code class="user-select-all">{{ new_password }}</code></p>
+                <p class="mb-0 small">{{ _('In the app, choose gpodder.net sync with a custom server: the server is %(server)s, the user name %(user)s.', server=server, user=user.user_name) }}</p>
+            </div>
+        {% endif %}
+        <form method="post" action="{{ url_for('oauth_server.new_app_password') }}" class="row g-2 align-items-end">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="col-auto">
+                <label for="app_password_name" class="form-label">{{ _('Name') }}</label>
+                <input type="text" id="app_password_name" name="name" maxlength="50" required class="form-control" placeholder="{{ _('e.g. AntennaPod on my phone') }}">
+            </div>
+            <div class="col-auto">
+                <button type="submit" class="btn btn-primary">{{ _('New app password') }}</button>
+            </div>
+        </form>
     </main>
 </div>
 {% endblock %}

@@ -2,16 +2,16 @@
 from urllib.parse import parse_qs, urlsplit
 
 from authlib.oauth2 import OAuth2Error
-from flask import jsonify, make_response, redirect, request, url_for
+from flask import abort, jsonify, make_response, redirect, request, url_for
 from flask_babel import lazy_gettext as _l
 from flask_login import current_user
 
 from app import limiter
 from app.models import OAuthApp
-from app.oauth_scopes import SCOPES, is_admin, parse_scope
+from app.oauth_scopes import GPODDER_SCOPE, SCOPES, is_admin, parse_scope
 from app.oauth_server import admin_scopes, bp, tokens
 from app.oauth_server.server import server
-from app.storefront import current_storefront, domain_base_url
+from app.storefront import current_storefront, domain_base_url, storefront_url
 from app.utils import login_required, render_template
 
 OOB = 'urn:ietf:wg:oauth:2.0:oob'
@@ -113,7 +113,9 @@ SCOPE_LABELS = {
     'admin:write': _l('Moderate and administer, as far as your role allows'),
     'security:read': _l("Your account's security settings (not given to apps here)"),
     'security:write': _l("Change your account's security settings (not given to apps here)"),
+    GPODDER_SCOPE: _l('Sync your podcast subscriptions and listening (an app password)'),
 }
+APP_PASSWORD_NAME_MAX = 50
 
 
 def _framed_never(response):
@@ -203,6 +205,23 @@ def authorised_apps():
     """The apps this person has allowed, and a button to take each one's access back."""
     return render_template('user/oauth_apps.html', title=_l('Authorised apps'), user=current_user,
                            apps=tokens.authorised_apps(current_user), scope_labels=SCOPE_LABELS)
+
+
+@bp.route('/user/settings/apps/passwords', methods=['POST'])
+@login_required(csrf=True)
+def new_app_password():
+    """An app password for gpodder sync (plan W4, ruling G1), named by the person and shown on this answer alone."""
+    name = (request.form.get('name') or '').strip()
+    if not name or len(name) > APP_PASSWORD_NAME_MAX:
+        abort(400, description=_l('An app password needs a name of up to %(max)d characters',
+                                  max=APP_PASSWORD_NAME_MAX))
+    password = tokens.issue_app_password(current_user, name)
+    response = make_response(render_template('user/oauth_apps.html', title=_l('Authorised apps'), user=current_user,
+                                             apps=tokens.authorised_apps(current_user), scope_labels=SCOPE_LABELS,
+                                             new_password=password, new_password_name=name,
+                                             server=storefront_url()))
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 @bp.route('/user/settings/apps/<int:app_id>/revoke', methods=['POST'])

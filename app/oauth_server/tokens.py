@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app import db
 from app.models import PEERTUBE_LOCAL_CLIENT_PREFIX, OAuthApp, OAuthCode, OAuthToken, User, utcnow
+from app.oauth_scopes import GPODDER_SCOPE
 from app.storefront import current_storefront
 
 CODE_LIFETIME_SECONDS = 600
@@ -58,6 +59,14 @@ def register_app(name: str, redirect_uris: list[str], scope: str, website: str |
     db.session.add(registered)
     db.session.commit()
     return registered, client_secret
+
+
+def issue_app_password(user: User, name: str) -> str:
+    """A new app password (plan W4, ruling G1): a token of the scope `gpodder` alone, with no refresh, of an app named
+    `name` with no redirect, so that settings lists it as an app and revokes it as one."""
+    registered, _secret = register_app(name, [], GPODDER_SCOPE, None)
+    access, _refresh = issue_token(registered, user, GPODDER_SCOPE, with_refresh=False)
+    return access
 
 
 def issue_code(registered: OAuthApp, user: User, redirect_uri: str, scope: str, code_challenge: str | None,
