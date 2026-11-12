@@ -1,5 +1,6 @@
 """gpodder sync's devices and subscriptions (spec §4, ruling G2). A device is made by its first call. The subscriptions
-are the person's, one list every device of theirs reads and writes, as a gpodder.net sync group holding all of them. A
+are the person's, one list every device of theirs reads and writes, as a gpodder.net sync group holding all of them,
+of at most MAX_SUBSCRIPTIONS, with as many removals kept for since to report. A
 URL that is a community's own feed here (/community/<actor>/feed on a host this site answers) joins it, through the
 shared join with its checks and federation, and its removal leaves it; a refusal of either is logged and the URL kept,
 so syncing never fails for it.
@@ -12,6 +13,7 @@ from datetime import datetime, timezone
 from urllib.parse import unquote, urlsplit
 
 from flask import current_app, g, jsonify, request
+from sqlalchemy import select
 
 from app import db
 from app.community.util import actor_to_community
@@ -135,9 +137,19 @@ def _follow(user: User, url: str, join: bool) -> None:
                                 'join' if join else 'leave', community.id, user.id, refusal)
 
 
+def _prune_removals(user: User) -> None:
+    """A removal is kept only so that since reports it: beyond as many as a person may subscribe to, the oldest go,
+    so adding and removing ever new URLs grows nothing without bound."""
+    stale = select(GpodderSubscription.id).where(GpodderSubscription.user_id == user.id,
+                                                 GpodderSubscription.subscribed.is_(False)) \
+        .order_by(GpodderSubscription.changed_at.desc(), GpodderSubscription.id.desc()).offset(MAX_SUBSCRIPTIONS)
+    GpodderSubscription.query.filter(GpodderSubscription.id.in_(stale)).delete(synchronize_session=False)
+
+
 def _urls(body: dict, key: str) -> list | None:
     value = body.get(key, [])
-    if not isinstance(value, list) or not all(isinstance(url, str) and len(url) <= MAX_URL for url in value):
+    if not isinstance(value, list) or len(value) > MAX_SUBSCRIPTIONS \
+            or not all(isinstance(url, str) and len(url) <= MAX_URL for url in value):
         return None
     return value
 
@@ -177,6 +189,8 @@ def upload_subscriptions(username, device_id):
     for url in remove:
         if url in rows and rows[url].subscribed:
             rows[url].subscribed, rows[url].changed_at = False, now
+    db.session.flush()
+    _prune_removals(user)
     db.session.commit()
     for url in add:
         _follow(user, url, join=True)

@@ -141,6 +141,25 @@ class TestSubscriptions:
         assert response.status_code == 400 and GpodderSubscription.query.count() == 2
         assert _upload(world, add=['https://a.example/f']).status_code == 200   # already had: no more than before
 
+    def test_an_upload_lists_at_most_so_many(self, world, monkeypatch):
+        monkeypatch.setattr(sync_module, 'MAX_SUBSCRIPTIONS', 2)
+        many = ['https://a.example/f', 'https://b.example/f', 'https://c.example/f']
+        assert _upload(world, remove=many).status_code == 400
+        assert _upload(world, add=many).status_code == 400 and GpodderSubscription.query.count() == 0
+
+    def test_removals_kept_are_bounded_the_oldest_going_first(self, world, monkeypatch):
+        """Adding and removing ever new URLs grows nothing without bound: a removal kept only so that since reports
+        it is pruned, oldest first, beyond as many as a person may subscribe to."""
+        monkeypatch.setattr(sync_module, 'MAX_SUBSCRIPTIONS', 2)
+        for turn in range(4):
+            urls = [f'https://{turn}-{n}.example/f' for n in range(2)]
+            _upload(world, add=urls)
+            GpodderSubscription.query.update({'changed_at': GpodderSubscription.changed_at - timedelta(minutes=1)})
+            db.session.commit()
+            _upload(world, remove=urls)
+        assert GpodderSubscription.query.filter_by(subscribed=True).count() == 0
+        assert sorted(row.url for row in GpodderSubscription.query) == ['https://3-0.example/f', 'https://3-1.example/f']
+
     def test_since_must_be_a_number(self, world):
         response = world['client'].get('/api/2/subscriptions/subalice/phone.json?since=yesterday',
                                         headers=world['auth'])
