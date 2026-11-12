@@ -583,6 +583,14 @@ Every minute PieFed will retry federation sending attempts that failed previousl
 The send_queue cron job is also needed to make scheduled posts publish themselves and a few other things. 
 Do not skip this one!
 
+Every hour PieFed expires relayed posts past their retention, deletes local copies of remote posts' images older
+than the "Keep local copies of remote posts' images" setting (Admin > Misc), and removes video uploads from apps that
+never became posts:
+
+```
+30 * * * * rimu cd /home/rimu/pyfedi && /home/rimu/pyfedi/expire_old_media.sh
+```
+
 
 ### Email
 
