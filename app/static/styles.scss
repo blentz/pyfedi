@@ -2391,6 +2391,11 @@ h1 .warning_badge {
   .list-group-item:first-child {
     padding-top: 0;
   }
+
+  // The sidebar's boxes are written in the order admins choose (app/sidebar.py): each but the first has a gap above
+  > .card + .card {
+    margin-top: 1rem;
+  }
 }
 
 [data-bs-theme=dark] .main_pane {

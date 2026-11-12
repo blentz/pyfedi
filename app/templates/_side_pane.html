@@ -1,6 +1,7 @@
 <aside id="side_pane" class="col-12 {{ 'col-lg-2' if post_layout == 'masonry_wide' else 'col-lg-4' }} side_pane mt-3 mt-lg-0" role="complementary" {{ oob }}>
 {% if community %}
-    {% block community_actions %}
+    {#- Each box by name, written in the order and with the boxes this domain shows (app/sidebar.py) #}
+    {% set actions_box -%}
         {% if not hide_community_actions -%}
         <div class="card" id="community_actions">
             <div class="card-body">
@@ -68,10 +69,10 @@
             </div>
         </div>
         {% endif -%}
-    {% endblock %}
-    {% block about_community %}
+    {%- endset %}
+    {% set upcoming_events_box -%}
         {% if upcoming_events and not (community.private and (current_user.is_anonymous or not community.is_member(current_user))) -%}
-        <div class="card mt-3" id="upcoming_events">
+        <div class="card" id="upcoming_events">
             <div class="card-header">
                 <h2><span class="fe fe-event"></span> {{ _('Upcoming events') }}</h2>
             </div>
@@ -91,8 +92,10 @@
             </div>
         </div>
         {% endif -%}
+    {%- endset %}
+    {% set microblog_servers_box -%}
         {% if microblog_servers -%}
-        <div class="card {% if not hide_community_actions -%}mt-3{% endif %}" id="microblog_servers">
+        <div class="card" id="microblog_servers">
             <div class="card-header">
                  <h2>{{ _('Servers') }}</h2>
             </div>
@@ -105,7 +108,9 @@
             </div>
         </div>
         {% endif -%}
-        <div class="card {% if not hide_community_actions or microblog_servers or (view_actor and current_user.is_authenticated) -%}mt-3{% endif %}" id="about_community">
+    {%- endset %}
+    {% set about_community_box -%}
+        <div class="card" id="about_community">
             <div class="card-header">
                  <h2>{{ community.title }}</h2>
             </div>
@@ -199,8 +204,10 @@
                 {% endif -%}
             </div>
         </div>
+    {%- endset %}
+    {% set related_communities_box -%}
         {% if related_communities -%}
-        <div class="card mt-3" id="related_communities">
+        <div class="card" id="related_communities">
             <div class="card-header">
                  <h2>{{ _('Related communities') }}</h2>
             </div>
@@ -216,8 +223,10 @@
             </div>
         </div>
         {% endif -%}
+    {%- endset %}
+    {% set community_feeds_box -%}
         {% if community_feeds -%}
-            <div class="card mt-3" id="community_feeds">
+            <div class="card" id="community_feeds">
                 <div class="card-header">
                      <h2>{{ _('Feeds') }}</h2>
                 </div>
@@ -234,7 +243,11 @@
                 </div>
             </div>
         {% endif -%}
-    {% endblock %}
+    {%- endset %}
+    {{ sidebar_boxes('community', {'actions': actions_box, 'upcoming_events': upcoming_events_box,
+                                   'microblog_servers': microblog_servers_box, 'about_community': about_community_box,
+                                   'related_communities': related_communities_box,
+                                   'community_feeds': community_feeds_box}) }}
 {% endif %}
 
     {% include "_inoculation_links.html" %}

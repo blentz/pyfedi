@@ -20,7 +20,8 @@
             {{ render_field(form.name) }}
             {{ render_field(form.description) }}
             {{ render_field(form.sidebar) }}
-            <p class="small field_hint">{{ _('You can use markdown here.') }}</p>
+            <p class="small field_hint">{{ _('You can use markdown here.') }}
+                <a href="{{ url_for('admin.admin_sidebar') }}">{{ _('Order and hide the sidebar boxes') }}</a></p>
             {{ render_field(form.announcement) }}
             <p class="small field_hint">{{ _('You can use markdown here.') }}</p>
             {{ render_field(form.icon) }}

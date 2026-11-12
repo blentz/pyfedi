@@ -11,7 +11,7 @@ browser fetch from another host. Three checks hold the scanner and the scrubber 
   HTML), its tagline, sidebar and About HTML, each as written and followed by each of a set of page finishings of the
   oracle's own, or in its logo and icon URLs,
   and a field onion_safe left alone is the input's own. Fields that are text (the name, the Markdown sidebar, the
-  theme) are as given.
+  theme, the sidebars' box orders) are as given.
 * branding_style_kept_open: _style_kept_open never raises, leaves no `</` in the custom CSS, so the CSS can never close
   the `<style>` element pages write it in, and changes no other field.
 
@@ -31,7 +31,7 @@ MAX_INPUT = 4096
 ONION_HOST = 'fuzzfuzzfuzzfuzz.onion'
 _URL_FIELDS = ('logo', 'logo_180', 'logo_152', 'logo_32', 'logo_16', 'logo_dark', 'logo_dark_152')
 _HTML_FIELDS = ('description', 'sidebar_html', 'about_html')
-_TEXT_FIELDS = ('name', 'default_theme', 'sidebar')
+_TEXT_FIELDS = ('name', 'default_theme', 'sidebar', 'home_sidebar', 'community_sidebar')
 
 
 def _branding(data: bytes) -> Branding:

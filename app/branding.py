@@ -1,4 +1,5 @@
-"""What each domain looks like: its name, description, logos, theme, CSS, sidebar and about text (project 4).
+"""What each domain looks like: its name, description, logos, theme, CSS, sidebar and about text, and the order of
+its sidebars' boxes (project 4).
 
 A domain's `DomainBranding` row holds only what it sets. Every field it leaves NULL or blank is the first domain's,
 which is `Site` row 1's; the first domain itself is exactly `Site`'s values.
@@ -38,6 +39,8 @@ class Branding(NamedTuple):
     sidebar: str   # the Markdown sidebar_html is made from: page descriptions are its text
     sidebar_html: str
     about_html: str
+    home_sidebar: str        # the sidebars' boxes in order, a hidden one marked (app/sidebar.py)
+    community_sidebar: str
 
     @property
     def header_logo(self) -> str:

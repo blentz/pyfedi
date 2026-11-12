@@ -52,6 +52,8 @@
 {% endblock %}
 
 {% block side_panel %}
+    {#- Each box by name, written in the order and with the boxes this domain shows (app/sidebar.py) #}
+    {% set new_communities_box -%}
     {% if new_communities and len(new_communities) > 0 -%}
     <h2 class="mt-0" style="border: none; padding-left: 0; margin-top: 0;">{{ _('New communities') }}</h2>
         {% for community in new_communities %}
@@ -59,7 +61,8 @@
         {% endfor %}
     <hr>
     {% endif -%}
-    
+    {%- endset %}
+    {% set active_communities_box -%}
     {% if active_communities -%}
     <h2 style="border: none; padding-left: 0;">{{ _('Active communities') }}</h2>
                 {% for community in active_communities %}
@@ -68,11 +71,10 @@
             <p class="mt-4"><a class="btn btn-primary" href="/communities">{{ _('More communities') }}</a> |
                 <a class="btn btn-primary" href="/topics">{{ _('Browse topics') }}</a>
             </p>
-        </div>
-    </div>
     <hr>
     {% endif -%}
-
+    {%- endset %}
+    {% set about_box -%}
     <h2 style="border: none; padding-left: 0;">{{ _('About %(site_name)s', site_name=branding.name) }}</h2>
         <p><strong>{{ branding.description|safe }}</strong></p>
         {% if branding.sidebar_html -%}
@@ -87,7 +89,9 @@
             {% endfor %}
             </ul>
         {% endif %}
-    
     <hr>
+    {%- endset %}
+    {{ sidebar_boxes('home', {'new_communities': new_communities_box, 'active_communities': active_communities_box,
+                              'about': about_box}) }}
     {% include "_inoculation_links.html" %}
 {% endblock %}

@@ -21,7 +21,8 @@ SITE_VALUES = dict(name='Site name', description='Site description', logo='site.
                    logo_152='site152.png', logo_32='site32.png', logo_16='site16.png', logo_dark='site_dark.png',
                    logo_dark_152='site_dark152.png', default_theme='site-theme',
                    additional_css='.site{}', sidebar='site sidebar', sidebar_html='<p>site sidebar</p>',
-                   about_html='<p>site about</p>')
+                   about_html='<p>site about</p>', home_sidebar='about,-new_instances',
+                   community_sidebar='-actions')
 ONION_VALUES = {field: f'onion {field}' for field in Branding._fields}
 
 
@@ -143,17 +144,19 @@ def load_migration(pattern):
 
 
 def test_migration_creates_and_drops_the_table(db_session):
-    """The table, then its icon columns (Task 5), then its dark logo columns, each dropped and made again in revision
+    """The table, then its icon columns (Task 5), then its dark logo and sidebar order columns, each dropped and made again in revision
     order: the database is left as `flask db upgrade` made it."""
     migration = load_migration('*_domain_branding.py')
     icons = load_migration('*_domain_branding_icons.py')
     dark = load_migration('*_dark_mode_logo.py')
+    sidebar = load_migration('*_sidebar_box_order.py')
     db.session.commit()
 
     def columns():
         return {column['name'] for column in inspect(db.session.connection()).get_columns('domain_branding')}
     try:
         with Operations.context(MigrationContext.configure(db.session.connection())):
+            sidebar.downgrade()
             dark.downgrade()
             icons.downgrade()
             assert {'logo_192', 'logo_512'}.isdisjoint(columns())
@@ -165,6 +168,8 @@ def test_migration_creates_and_drops_the_table(db_session):
             assert {'logo_192', 'logo_512'} <= columns()
             dark.upgrade()
             assert {'logo_dark', 'logo_dark_152'} <= columns()
+            sidebar.upgrade()
+            assert {'home_sidebar', 'community_sidebar'} <= columns()
         db.session.commit()
     finally:
         db.session.rollback()

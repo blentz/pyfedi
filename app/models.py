@@ -6125,6 +6125,8 @@ class Site(db.Model):
     logo_16 = db.Column(db.String(40), default='')
     logo_dark = db.Column(db.String(40), default='')       # what dark mode shows instead of logo, '' for logo itself
     logo_dark_152 = db.Column(db.String(40), default='')   # and instead of logo_152
+    home_sidebar = db.Column(db.Text, default='')        # the home page sidebar's boxes in order (app/sidebar.py)
+    community_sidebar = db.Column(db.Text, default='')   # and the community pages'
     show_inoculation_block = db.Column(db.Boolean, default=True)
     additional_css = db.Column(db.Text)
     additional_js = db.Column(db.Text)
@@ -6281,6 +6283,8 @@ class DomainBranding(db.Model):
     sidebar_html = db.Column(db.Text)
     about = db.Column(db.Text)
     about_html = db.Column(db.Text)
+    home_sidebar = db.Column(db.Text)        # the sidebars' boxes in order (app/sidebar.py)
+    community_sidebar = db.Column(db.Text)
 
 
 class InstanceInUse(ValueError):

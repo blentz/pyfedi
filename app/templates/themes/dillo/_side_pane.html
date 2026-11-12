@@ -1,6 +1,7 @@
 {% if community %}
-    {% block community_actions %}
-        <div class="card">
+    {#- Each box by name, written in the order and with the boxes this domain shows (app/sidebar.py) #}
+    {% set actions_box -%}
+        <div class="card" id="community_actions">
             <div class="card-body">
                 {% if not view_actor -%}
                 <div class="row">
@@ -28,8 +29,8 @@
                 </form>
             </div>
         </div>
-    {% endblock %}
-    {% block about_community %}
+    {%- endset %}
+    {% set about_community_box -%}
         <div class="card mt-3" id="about_community">
             <div class="card-header">
                  <h2>{{ community.title }}</h2>
@@ -68,6 +69,8 @@
                 {% endif -%}
             </div>
         </div>
+    {%- endset %}
+    {% set related_communities_box -%}
         {% if related_communities -%}
         <div class="card mt-3" id="related_communities">
             <div class="card-header">
@@ -85,7 +88,9 @@
             </div>
         </div>
         {% endif -%}
-    {% endblock %}
+    {%- endset %}
+    {{ sidebar_boxes('community', {'actions': actions_box, 'about_community': about_community_box,
+                                   'related_communities': related_communities_box}) }}
     {% block community_settings %}
         {% if is_moderator or is_admin -%}
         <div class="card mt-3">

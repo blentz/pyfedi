@@ -57,8 +57,10 @@
     </main>
 
     <aside id="side_pane" class="col-12 col-lg-4 side_pane" role="complementary">
+        {#- Each box by name, written in the order and with the boxes this domain shows (app/sidebar.py) #}
+        {% set new_communities_box -%}
         {% if new_communities and len(new_communities) > 0 -%}
-        <div id="new_communities_card" class="card mb-3">
+        <div id="new_communities_card" class="card">
             <div class="card-header">
                  <h2>{{ _('New communities') }}</h2>
             </div>
@@ -74,7 +76,8 @@
             </div>
         </div>
         {% endif -%}
-
+        {%- endset %}
+        {% set active_communities_box -%}
         <div id="active_communities_card" class="card">
             <div class="card-header">
                  <h2>{{ _('Active communities') }}</h2>
@@ -94,9 +97,10 @@
                 </p>
             </div>
         </div>
-
+        {%- endset %}
+        {% set upcoming_events_box -%}
         {% if upcoming_events -%}
-        <div id="upcoming_events_card" class="card mt-3" id="upcoming_events">
+        <div id="upcoming_events_card" class="card">
             <div class="card-header">
                 <h2><span class="fe fe-event"></span> {{ _('Upcoming events') }}</h2>
             </div>
@@ -112,9 +116,10 @@
             </div>
         </div>
         {% endif -%}
-
+        {%- endset %}
+        {% set recent_tags_box -%}
         {% if tags and len(tags) > 0 -%}
-        <div id="recent_tags_card" class="card mt-3" id="recent_tags">
+        <div id="recent_tags_card" class="card">
             <div class="card-header">
                 <h2>{{ _('Recent tags') }}</h2>
             </div>
@@ -129,8 +134,9 @@
             </div>
         </div>
         {% endif -%}
-
-        <div id="about_card" class="card mt-3">
+        {%- endset %}
+        {% set about_box -%}
+        <div id="about_card" class="card">
             <div class="card-header">
                  <h2>{{ _('About %(site_name)s', site_name=branding.name) }}</h2>
             </div>
@@ -172,9 +178,10 @@
                 {% endcache -%}
             </div>
         </div>
-
+        {%- endset %}
+        {% set new_instances_box -%}
         {% if new_instances and len(new_instances) > 0 -%}
-        <div id="new_instances_card" class="card mb-3 mt-3">
+        <div id="new_instances_card" class="card">
             <div class="card-header">
                  <h2>{{ _('New instances') }}</h2>
             </div>
@@ -190,6 +197,10 @@
             </div>
         </div>
         {% endif -%}
+        {%- endset %}
+        {{ sidebar_boxes('home', {'new_communities': new_communities_box, 'active_communities': active_communities_box,
+                                  'upcoming_events': upcoming_events_box, 'recent_tags': recent_tags_box,
+                                  'about': about_box, 'new_instances': new_instances_box}) }}
 
         {% include "_inoculation_links.html" %}
     </aside>

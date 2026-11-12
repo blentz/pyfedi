@@ -210,6 +210,11 @@ SURFACES: dict[str, list[str]] = {
         'app.branding.onion_safe',
         'app.branding._style_kept_open',
     ],
+    # The sidebars' box order: the stored order every page reads, and the admin button posted to change it.
+    'sidebar': [
+        'app.sidebar.layout',
+        'app.admin.sidebar_routes.apply_action',
+    ],
     # Discovery (T4): third-party directory rows and podcast feeds, turned into entries, links and credits.
     'discovery': [
         'app.discovery.filters.request_host',

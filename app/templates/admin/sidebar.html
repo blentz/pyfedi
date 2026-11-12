@@ -1,0 +1,58 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% set active_child = 'admin_domains' if row else 'admin_site' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col">
+        <h1>{{ _('Sidebar boxes: %(domain)s', domain=row.domain) if row else _('Sidebar boxes') }}</h1>
+        <p>{{ _('The order the sidebar boxes show in, and which are hidden. A shown box with nothing in it still shows nothing.') }}</p>
+        {% for sidebar in sidebars %}
+        <h2 id="sidebar-{{ sidebar.area }}">{{ _('Home page') if sidebar.area == 'home' else _('Community pages') }}</h2>
+        <form method="post" action="#sidebar-{{ sidebar.area }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            {% if row %}
+            <p>
+                {% if sidebar.own -%}
+                    {{ _('This domain has its own order.') }}
+                    <button type="submit" name="action" value="reset:{{ sidebar.area }}" class="btn btn-sm btn-outline-secondary">{{ _("Use the site's order") }}</button>
+                {%- else -%}
+                    {{ _("This domain shows the site's order. A change here gives it its own.") }}
+                {%- endif %}
+            </p>
+            {% endif %}
+            <table class="table table-sm align-middle">
+                <thead>
+                    <tr><th scope="col">{{ _('Box') }}</th><th scope="col">{{ _('Shown') }}</th><th scope="col">{{ _('Change') }}</th></tr>
+                </thead>
+                <tbody>
+                {% for name, label, shown in sidebar.boxes %}
+                    <tr id="box-{{ sidebar.area }}-{{ name }}">
+                        <td>{{ label }}</td>
+                        <td>{{ _('Yes') if shown else _('Hidden') }}</td>
+                        <td>
+                            <button type="submit" name="action" value="{{ sidebar.area }}:up:{{ name }}" class="btn btn-sm btn-outline-secondary"
+                                    title="{{ _('Move up') }}" aria-label="{{ _('Move %(box)s up', box=label) }}" {{ 'disabled' if loop.first }}>&uarr;</button>
+                            <button type="submit" name="action" value="{{ sidebar.area }}:down:{{ name }}" class="btn btn-sm btn-outline-secondary"
+                                    title="{{ _('Move down') }}" aria-label="{{ _('Move %(box)s down', box=label) }}" {{ 'disabled' if loop.last }}>&darr;</button>
+                            <button type="submit" name="action" value="{{ sidebar.area }}:toggle:{{ name }}" class="btn btn-sm btn-outline-secondary">{{ _('Show') if not shown else _('Hide') }}</button>
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </form>
+        {% endfor %}
+        {% if row %}
+        <p><a href="{{ url_for('admin.admin_domain_branding', domain_id=row.id) }}">{{ _('Back to branding') }}</a></p>
+        {% else %}
+        <p><a href="{{ url_for('admin.admin_site') }}">{{ _('Back to site profile') }}</a></p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
