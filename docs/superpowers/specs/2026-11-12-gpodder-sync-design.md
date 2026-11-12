@@ -58,7 +58,9 @@ Kasts and gPodder send Basic on every call. Every call therefore takes either.
 - **Subscriptions are the person's, not a device's.** Every device of a person reads and writes one list, as a
   gpodder.net sync group holding all of them: an app on a new phone sees what the old one subscribed to.
   `gpodder_subscription` holds (user, URL, subscribed, changed at); a removal keeps the row with subscribed false, so
-  `since` can report it. At most 2000 URLs per person, each an http(s) URL up to 2000 characters.
+  `since` can report it. At most 2000 URLs per person, each an http(s) URL up to 2000 characters, and as many
+  removals kept, the oldest pruned beyond that, so adding and removing ever new URLs grows nothing without bound
+  (security review 2026-11-12). An upload lists at most 2000 of each.
 - **Upload** sanitises each URL as gpodder.net does (trimmed; not http(s) is dropped and reported in `update_urls` as
   `[url, ""]`), applies removes after adds, and answers the server time as `timestamp`. A URL in both is refused 400.
 - **Pull** answers the URLs added and removed since `since` (seconds, inclusive: a repeat is harmless, a miss is not),
@@ -76,7 +78,8 @@ Kasts and gPodder send Basic on every call. Every call therefore takes either.
 - **Kept** in `gpodder_episode_action` (user, podcast URL, episode URL, guid, action, device, timestamp as the app
   sent it, started, position, total, received at). Actions are `download`, `delete`, `play`, `new` (gpodder.net's
   `flattr` is dropped). Only the newest per (user, episode URL, action) is kept: each upload replaces the older one,
-  which is what an app syncing a position reads, and keeps the table bounded. At most 1000 actions per upload.
+  which is what an app syncing a position reads; an older one sent late changes nothing. At most 20000 kept per
+  person, the oldest received pruned, and at most 1000 actions per upload.
 - **Pull** answers the actions received since `since`, narrowed by `podcast` and `device` if given; `aggregated=true`
   answers only the newest action per episode. Answered in gpodder.net's shape (timestamps `YYYY-MM-DDTHH:MM:SS`, UTC).
 - **Marking read (G3):** a `play` whose episode is a post here marks it read for the person

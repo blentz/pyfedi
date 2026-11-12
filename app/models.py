@@ -2249,6 +2249,27 @@ class GpodderSubscription(db.Model):
                       db.Index('ix_gpodder_subscription_user_changed', 'user_id', 'changed_at'))
 
 
+class GpodderEpisodeAction(db.Model):
+    """The newest of an action (download, delete, play, new) a person's podcast app took on an episode, for gpodder
+    sync (plan W4c; spec 2026-11-12-gpodder-sync-design §5, ruling G3). One row per person, episode and action, so the
+    table stays bounded; the episode's URL is matched by its digest, as a URL is too long to index whole."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False)
+    podcast = db.Column(db.String(2000), nullable=False)
+    episode = db.Column(db.String(2000), nullable=False)
+    episode_digest = db.Column(db.String(64), nullable=False)
+    guid = db.Column(db.String(2000))
+    action = db.Column(db.String(8), nullable=False)
+    device = db.Column(db.String(64))
+    timestamp = db.Column(db.DateTime, nullable=False)   # when the app says it was taken
+    started = db.Column(db.Integer)
+    position = db.Column(db.Integer)
+    total = db.Column(db.Integer)
+    received_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+    __table_args__ = (db.UniqueConstraint('user_id', 'episode_digest', 'action', name='uq_gpodder_episode_action'),
+                      db.Index('ix_gpodder_episode_action_user_received', 'user_id', 'received_at'))
+
+
 class StoryExpiry(db.Model):
     """A story its author expired early (ruling S2): no longer in any carousel, still a post. Pruned as StoryView."""
     post_id = db.Column(db.Integer, db.ForeignKey('post.id', ondelete='CASCADE'), primary_key=True)
