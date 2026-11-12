@@ -362,10 +362,11 @@ aarch64 wheel, which is why it must stay out of the production install.
 - **Schedule `expire_old_media.sh` hourly.** It expires relayed posts past
   `relay_retention_days`, enforces `remote_image_cache_days`, and removes
   PeerTube app uploads no post came of a day after their last part
-  (`f2182a54`, W2.3). It is not yet in `docker.cron`, `INSTALL.md` or
-  `INSTALL-docker.md`: add it the way `send_queue.sh` is run, for example
-  `30 * * * * cd /app && ./expire_old_media.sh`. Relay expiry also still runs
-  daily, but the media cap and the upload sweep run nowhere else. Once the job
+  (`f2182a54`, W2.3). `docker.cron` runs it at half past each hour for a
+  container with `CRON=true`; `INSTALL.md` and `INSTALL-docker.md` give the line
+  for a host's crontab. An instance whose cron lines were copied from the guides
+  before must add it. Relay expiry also still runs daily, but the media cap and
+  the upload sweep run nowhere else. Once the job
   has run, the admin dashboard warns when it is more than two hours overdue; an
   instance that never runs it gets no warning, because the dashboard reads the
   jobs' last runs.
@@ -1900,8 +1901,6 @@ PERM-1 to PERM-5.
   costs about 30 s and 3.3 GB. The owner chose not to add a frame cap. Remote
   thumbnails and federated images are bounded by the 16 MP cap, which counts
   every frame.
-- **`expire_old_media.sh` is not scheduled by the repository.** It is missing from
-  `docker.cron` and the install guides (2.2.1).
 - **What the client APIs do not serve yet.**
   - Mastodon: emoji reactions; admin routes, though the admin scopes exist;
     reblogs as entries in followers' home timelines.
