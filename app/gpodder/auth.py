@@ -63,7 +63,8 @@ def signed_in(view):
     `username`. Sets g.gpodder_user and g.gpodder_token."""
     @wraps(view)
     def guarded(username, *args, **kwargs):
-        token = _from_basic() or _from_cookie()
+        # Basic, when sent, decides alone: a wrong password is a failure even beside a good session cookie
+        token = _from_basic() if request.authorization is not None else _from_cookie()
         if token is None:
             return unauthorised()
         user = db.session.get(User, token.user_id)

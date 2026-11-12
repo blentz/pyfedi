@@ -113,6 +113,11 @@ def test_revoking_the_app_ends_its_password_and_its_session(world):
     assert _login(world).status_code == 401
 
 
+def test_a_wrong_password_beside_a_good_session_is_refused(world):
+    _login(world)
+    assert _login(world, password='not it').status_code == 401
+
+
 def test_a_forged_session_cookie_is_refused(world):
     world['client'].set_cookie('sessionid', 'not-signed', domain=world['flask'].config['SERVER_NAME'], path='/api/2/')
     assert world['client'].post('/api/2/auth/gpalice/logout.json').status_code == 401
