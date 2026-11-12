@@ -123,3 +123,25 @@ def delete_comment(video_id, comment_id):
     except Exception as error:
         return failure(error)
     return '', 204
+
+
+MAX_ABUSE_REASON = 3000   # PeerTube's own limit on an abuse report's reason
+
+
+@bp.route('/api/v1/videos/<video_id>/abuse', methods=['POST'])
+@signed_in('write')
+def report_video(video_id):
+    """A report of the video, through PieFed's report (app.shared.post), its reason as given (PeerTube's older
+    endpoint, which P2Play reports with). 200 {abuse: {id}}, as PeerTube answers."""
+    post = find_video(video_id)
+    if post is None:
+        return not_found()
+    reason = _fields().get('reason')
+    if not isinstance(reason, str) or not reason.strip() or len(reason) > MAX_ABUSE_REASON:
+        return problem(400, 'invalid_request', f'reason is required, at most {MAX_ABUSE_REASON} characters')
+    try:
+        _uid, report = shared_post.report_post(post, {'reason': reason.strip(), 'description': reason.strip(),
+                                                      'report_remote': True}, SRC_API, Authorised(g.oauth_user))
+    except Exception as error:   # a duplicate, or another refusal of the shared report
+        return failure(error)
+    return jsonify({'abuse': {'id': report.id}})

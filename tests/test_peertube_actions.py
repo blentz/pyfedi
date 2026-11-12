@@ -165,3 +165,42 @@ def test_a_refused_delete_is_a_400(world, monkeypatch):
     monkeypatch.setattr('app.shared.reply.delete_reply', refuse)
     response = _call(world, 'delete', f"/api/v1/videos/{world['post'].id}/comments/{made['id']}")
     assert response.status_code == 400 and 'cannot be deleted' in response.get_json()['detail']
+
+
+# P2Play (harness ruling H2, 2026-11-12): its "My videos" and its report of a video
+
+def test_my_videos_lists_the_persons_own_videos_only(world):
+    own = make_post(world['post'].community, world['person'], ap_id=f'{world["post"].ap_id}-own', title='Mine')
+    own.type = POST_TYPE_VIDEO
+    own.url = world['post'].url.replace('.mp4', 'b.mp4')
+    with_media(own, status='ready', uuid=str(uuid.uuid4()), mime='video/mp4', bytes=1, duration_s=3, width=640,
+               height=360, fps=30, codec='h264')
+    db.session.commit()
+    body = _call(world, 'get', '/api/v1/users/me/videos', query_string={'start': 0, 'count': 15}).get_json()
+    assert [video['id'] for video in body['data']] == [own.id] and body['total'] == 1
+
+
+def test_my_videos_needs_a_login(world):
+    response = world['client'].get('/api/v1/users/me/videos')
+    assert response.status_code == 401 and response.get_json()['code'] == 'invalid_token'
+
+
+def test_a_video_is_reported_with_the_reason_given(world):
+    from app.models import Report
+    response = _call(world, 'post', f"/api/v1/videos/{world['post'].id}/abuse", data={'reason': 'Spam in the title'})
+    assert response.status_code == 200, response.get_data(as_text=True)
+    report = db.session.get(Report, response.get_json()['abuse']['id'])
+    assert report.reporter_id == world['person'].id and report.suspect_post_id == world['post'].id
+    assert 'Spam in the title' in report.description
+
+
+@pytest.mark.parametrize('form', [{}, {'reason': ''}, {'reason': 'x' * 3001}], ids=['missing', 'blank', 'too-long'])
+def test_a_report_without_a_reason_is_refused(world, form):
+    from app.models import Report
+    response = _call(world, 'post', f"/api/v1/videos/{world['post'].id}/abuse", data=form)
+    assert response.status_code == 400 and response.get_json()['code'] == 'invalid_request'
+    assert Report.query.filter_by(reporter_id=world['person'].id).count() == 0
+
+
+def test_an_unknown_video_is_not_reported(world):
+    assert _call(world, 'post', '/api/v1/videos/99999999/abuse', data={'reason': 'x'}).status_code == 404

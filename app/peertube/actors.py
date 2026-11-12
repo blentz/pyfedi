@@ -4,7 +4,7 @@ is not found, as a missing one is not.
 
 Mastodon's /api/v1/accounts/<int> routes take a number; these take a name, which is never a bare number on PieFed,
 so the two never answer the same path."""
-from flask import jsonify
+from flask import g, jsonify
 from sqlalchemy import desc, or_
 
 from app import db
@@ -48,6 +48,13 @@ def get_account(handle):
 def account_videos(handle):
     person = find_person(handle)
     return videos(Listing(sort='', person_id=person.id, ignore_sticky=True)) if person is not None else not_found()
+
+
+@bp.route('/api/v1/users/me/videos')
+@signed_in()
+def my_videos():
+    """The signed-in person's own videos, as their account lists them (P2Play's "My videos")."""
+    return videos(Listing(sort='', person_id=g.oauth_user.id, ignore_sticky=True))
 
 
 @bp.route('/api/v1/accounts/<handle>/video-channels')
