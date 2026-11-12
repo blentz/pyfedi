@@ -3,8 +3,10 @@ HTTP Basic signs in any call; AntennaPod sends it to login.json alone and carrie
 token's id, signed, for a day. Every call re-reads the token, so revoking its app ends a session at once. The path's
 user name must be the person signed in. The login gate leaves these routes to this check, as require_oauth's.
 
-Failed sign-ins are counted per address (as Flask-Limiter keys an address, onion requests included) and refused with a
-429 past MAX_FAILURES in FAILURE_WINDOW, checked before a password is tried, so none can be guessed rapidly. Good calls
+Failed sign-ins are counted per address (as Flask-Limiter keys one, onion requests included) and account named in the
+path, and refused with a 429 past MAX_FAILURES in FAILURE_WINDOW, checked before a password is tried, so none can be
+guessed rapidly. By account too, since onion clients without a session share one address key, as people behind one
+NAT share an address: guessing at one account locks out that account alone, not everyone beside it. Good calls
 are never counted: Kasts and gPodder send Basic on every one. A counter of its own, not a @limiter.limit, as a limit
 on this wrapper would sit on no routed view (tests/test_onion_guard_limits.py)."""
 from functools import wraps
@@ -57,20 +59,20 @@ def _from_cookie() -> OAuthToken | None:
     return token if _usable(token) and token.revoked_at is None and token.domain == tokens.here() else None
 
 
-def failure_key() -> str:
-    return FAILURE_KEY.format(rate_limit_key())
+def failure_key(username: str) -> str:
+    return FAILURE_KEY.format(f'{rate_limit_key()}:{username.lower()}')
 
 
-def _too_many_failures() -> int:
-    """The seconds until this address may try again, or 0 if it may now."""
-    key = failure_key()
+def _too_many_failures(username: str) -> int:
+    """The seconds until this address may try again at `username`, or 0 if it may now."""
+    key = failure_key(username)
     if int(app_pkg.redis_client.get(key) or 0) < MAX_FAILURES:
         return 0
     return max(app_pkg.redis_client.ttl(key), 1)
 
 
-def _failed():
-    key = failure_key()
+def _failed(username: str):
+    key = failure_key(username)
     with app_pkg.redis_client.pipeline() as pipe:
         pipe.incr(key)
         pipe.expire(key, FAILURE_WINDOW, nx=True)   # the window runs from the first failure
@@ -89,7 +91,7 @@ def signed_in(view):
     `username`. Sets g.gpodder_user and g.gpodder_token."""
     @wraps(view)
     def guarded(username, *args, **kwargs):
-        wait = _too_many_failures()
+        wait = _too_many_failures(username)
         if wait:
             response = make_response(jsonify({'error': 'Too many failed sign-ins: try again later'}), 429)
             response.headers['Retry-After'] = str(wait)
@@ -97,10 +99,10 @@ def signed_in(view):
         # Basic, when sent, decides alone: a wrong password is a failure even beside a good session cookie
         token = _from_basic() if request.authorization is not None else _from_cookie()
         if token is None:
-            return _failed()
+            return _failed(username)
         user = db.session.get(User, token.user_id)
         if user.user_name.lower() != username.lower():
-            return _failed()
+            return _failed(username)
         act_in_this_request(user.home_domain())
         record_use(token)
         g.gpodder_user, g.gpodder_token = user, token

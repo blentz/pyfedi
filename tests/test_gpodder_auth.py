@@ -232,6 +232,15 @@ class TestFailureLimit:
         response = _login(few)
         assert response.status_code == 429 and int(response.headers['Retry-After']) > 0
 
+    def test_failures_against_one_account_lock_out_no_other_from_the_address(self, few):
+        """Onion clients without a session share one address key, as people behind one NAT share an address: the
+        count is per account named, so guessing at bob locks out bob alone, not alice beside him."""
+        bob_password = tokens.issue_app_password(few['bob'], 'Phone')
+        for _ in range(3):
+            assert _login(few, name='gpbob', password='a guess').status_code == 401
+        assert _login(few, name='gpbob', password=bob_password).status_code == 429
+        assert _login(few).status_code == 200
+
     def test_good_sign_ins_are_not_counted(self, few):
         for _ in range(5):
             assert _login(few).status_code == 200
