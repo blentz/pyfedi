@@ -41,10 +41,11 @@ def _png(width=40, height=20) -> io.BytesIO:
     return data
 
 
-def _upload(world, token=None, name='pie.png', content=None, **form):
+def _upload(world, token=None, name='pie.png', content=None, kind=None, **form):
+    part = (content or _png(), name) if kind is None else (content or _png(), name, kind)
     return world['client'].post('/api/v2/media', content_type='multipart/form-data',
                                 headers={'Authorization': f"Bearer {token or world['token']}"},
-                                data={'file': (content or _png(), name), **form})
+                                data={'file': part, **form})
 
 
 def _our_picture_is_an_image(http_mock):
@@ -70,6 +71,21 @@ def test_an_image_upload_is_answered_processed_with_its_description(world):
                          ids=['video', 'nothing'])
 def test_what_is_not_an_image_is_refused(world, name, content):
     response = _upload(world, name=name, content=content)
+    assert response.status_code == 422 and response.get_json()['error']
+
+
+def test_a_picture_named_without_an_extension_is_known_by_its_type(world):
+    """PixelDroid names an upload by the time alone (1731380000000), with its type in the part's Content-Type."""
+    response = _upload(world, name='1731380000000', kind='image/png')
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert db.session.get(File, int(response.get_json()['id'])).source_url.endswith('.png')
+
+
+@pytest.mark.parametrize('kind, content', [('image/png', io.BytesIO(b'not an image')),
+                                           ('application/octet-stream', None), ('video/mp4', None)],
+                         ids=['not-what-it-says', 'no-type', 'not-a-picture-type'])
+def test_a_file_named_without_an_extension_is_refused_unless_it_is_the_picture_its_type_says(world, kind, content):
+    response = _upload(world, name='1731380000000', kind=kind, content=content)
     assert response.status_code == 422 and response.get_json()['error']
 
 

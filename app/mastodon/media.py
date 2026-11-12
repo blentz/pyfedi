@@ -3,6 +3,9 @@ the shared upload (app.shared.upload.process_upload, which records the uploader 
 processed (200); GET and PUT /api/v1/media/:id read it and set its description. Only the uploader reaches an upload.
 Images only, as the alpha API's uploads: PieFed takes video and audio with a post, from moderators of media communities
 (spec A13.6)."""
+import mimetypes
+import os
+
 from flask import g, jsonify, request
 from sqlalchemy import text
 
@@ -28,9 +31,17 @@ def own_uploads(user_id: int, file_ids) -> list[File]:
     return [files[file_id] for file_id in dict.fromkeys(wanted) if file_id in files]
 
 
+def _named_by_its_type(upload) -> None:
+    """An upload named without an extension (PixelDroid names one by the time alone) is named by the picture type its
+    part declares, which the shared upload knows its type by; Pillow still refuses what is not that picture."""
+    if not os.path.splitext(upload.filename)[1] and (upload.mimetype or '').startswith('image/'):
+        upload.filename += mimetypes.guess_extension(upload.mimetype) or ''
+
+
 def store_upload(upload) -> File | tuple:
     """The token's person's upload stored through the shared upload, or the refusal to answer: the shared upload
     refuses a type it does not take (is_refused_upload). Pixelfed's stories take theirs this way (ruling S5)."""
+    _named_by_its_type(upload)
     try:
         url = process_upload(upload, user=g.oauth_user)
     except Exception as error:
