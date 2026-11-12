@@ -8,12 +8,12 @@ from app.branding import own_value
 from app.federation_urls import domain_site_name
 from app.mastodon.entities import absolute
 from app.models import Language
+from app.project_links import project_links
 from app.storefront import domain_authority, open_registrations, registration_mode_on
 
 # The Mastodon release whose API PieFed answers, raised as the phases add what it has (plan W1): apps choose their
 # features by it, so it never claims an endpoint that is not here yet
 MASTODON_COMPAT = '4.0.0'
-SOURCE_URL = 'https://codeberg.org/rimu/pyfedi'
 MAX_CHARACTERS = 5000
 MAX_MEDIA_ATTACHMENTS = 4
 IMAGE_TYPES = ('image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif', 'image/heic', 'image/heif')
@@ -85,7 +85,7 @@ def instance_v2(domain, usage: dict) -> dict:
     enabled, approval = _registration(domain)
     return {
         'domain': domain_authority(domain), 'title': domain_site_name(domain, g.site), 'version': version(),
-        'source_url': SOURCE_URL, 'description': _own(domain, 'description'),
+        'source_url': project_links().source_url, 'description': _own(domain, 'description'),
         'usage': {'users': {'active_month': usage['users']['activeMonth']}},
         'thumbnail': {'url': absolute(_own(domain, 'logo'), LOGO)}, 'languages': _languages(),
         'configuration': {'urls': {}, **_configuration(), **_vapid(domain)},

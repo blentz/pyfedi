@@ -13,6 +13,7 @@ from wtforms.validators import ValidationError, DataRequired, EqualTo, InputRequ
     NumberRange, Optional
 from flask_babel import _, lazy_gettext as _l
 
+from app.project_links import MAX_LENGTH, UPSTREAM_BUG_REPORT, UPSTREAM_GET_INVOLVED, UPSTREAM_SOURCE, is_web_url
 from app import db
 from app.constants import DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
     DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE, MAX_ALBUM_IMAGES_CEILING
@@ -22,6 +23,13 @@ from app.storefront import REFERRAL_MODE, default_domain, domain_rows, domain_by
 from app.local_names import local_named
 from app.onion_guard import MAX_POW_DIFFICULTY
 from app.form_choices import select_choices
+
+
+def web_url_or_blank(form, field):
+    """A link the footer and nodeinfo can name: blank (upstream PieFed's) or an http or https URL."""
+    field.data = (field.data or '').strip()
+    if field.data and not is_web_url(field.data):
+        raise ValidationError(_l('Enter an http:// or https:// address, or leave it blank for PieFed\'s.'))
 
 
 def no_nul(form, field):
@@ -45,6 +53,13 @@ class SiteProfileForm(FlaskForm):
     announcement = TextAreaField(_l('Announcement at top of home page'))
     legal_information = TextAreaField(_l('Legal information'))
     tos_url = StringField(_l('Terms of service url'), validators=[Length(max=255)])
+    source_url = StringField(_l('AGPL compliance URL: where this server\'s source code is'),
+                             validators=[Length(max=MAX_LENGTH), web_url_or_blank],
+                             render_kw={'placeholder': UPSTREAM_SOURCE})
+    bug_report_url = StringField(_l('Bug report URL'), validators=[Length(max=MAX_LENGTH), web_url_or_blank],
+                                 render_kw={'placeholder': UPSTREAM_BUG_REPORT})
+    get_involved_url = StringField(_l('Get involved URL'), validators=[Length(max=MAX_LENGTH), web_url_or_blank],
+                                   render_kw={'placeholder': UPSTREAM_GET_INVOLVED})
     contact_email = EmailField(_l('General instance contact email address'), validators=[DataRequired(), Length(min=5, max=255)])
     submit = SubmitField(_l('Save'))
 

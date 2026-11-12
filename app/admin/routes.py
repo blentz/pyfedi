@@ -420,6 +420,9 @@ def admin_site():
             site.legal_information_html = ""
 
         site.tos_url = form.tos_url.data
+        site.source_url = form.source_url.data
+        site.bug_report_url = form.bug_report_url.data
+        site.get_involved_url = form.get_involved_url.data
         site.updated = utcnow()
         site.contact_email = form.contact_email.data
         if site.id is None:
@@ -487,6 +490,9 @@ def admin_site():
         form.sidebar.data = site.sidebar if site.sidebar is not None else ''
         form.legal_information.data = site.legal_information if site.legal_information is not None else ''
         form.tos_url.data = site.tos_url
+        form.source_url.data = site.source_url or ''
+        form.bug_report_url.data = site.bug_report_url or ''
+        form.get_involved_url.data = site.get_involved_url or ''
         form.contact_email.data = site.contact_email
         form.announcement.data = get_setting('announcement', '')
     return render_template('admin/site.html', title=_('Site profile'), form=form, site=site,

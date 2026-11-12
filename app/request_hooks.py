@@ -13,6 +13,7 @@ from app.payments.offers import donations_menu_shown, money
 from app.permissions import holds_any_grant, may_act_on_user, may_ban
 from app.referral import referrals_available
 from app.branding import DERIVED_FIELDS, Branding, current_branding
+from app.project_links import footer_invitation, project_links
 from app.sidebar import sidebar_boxes
 from app.activitypub.entitlement import secure_mode_cache_headers, signed_fetch_refusal
 from app.community.live import post_community_link
@@ -126,6 +127,8 @@ def register_request_hooks(app):
 
     app.jinja_env.globals['len'] = len
     app.jinja_env.globals['sidebar_boxes'] = sidebar_boxes
+    app.jinja_env.globals['project_links'] = project_links
+    app.jinja_env.globals['footer_invitation'] = footer_invitation
     app.jinja_env.globals['target_link'] = target_link
     app.jinja_env.globals['content_link'] = content_link
     app.jinja_env.globals['stored_feed_path'] = stored_feed_path

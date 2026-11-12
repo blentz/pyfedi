@@ -215,6 +215,11 @@ SURFACES: dict[str, list[str]] = {
         'app.sidebar.layout',
         'app.admin.sidebar_routes.apply_action',
     ],
+    # The source, bug report and get-involved links an admin sets, and the footer that writes two of them.
+    'project_links': [
+        'app.project_links.is_web_url',
+        'app.project_links.footer_invitation',
+    ],
     # Discovery (T4): third-party directory rows and podcast feeds, turned into entries, links and credits.
     'discovery': [
         'app.discovery.filters.request_host',

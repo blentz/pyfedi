@@ -21,6 +21,7 @@ from sqlalchemy import desc, or_, text, func, select, union_all, literal_column
 from app import db, cache, celery, limiter
 from app.activitypub import bp
 from app.onion import apply_audit, audit_field, is_onion_request
+from app.project_links import project_links
 from app.onion_store import onion_store_optional
 from app.activitypub.actor import find_actor_by_url
 from app.activitypub.entitlement import PRIVATE_HEADERS, actor_document, addressees_of, audience_entitles, signed_requester_actor, \
@@ -379,7 +380,7 @@ def nodeinfo2():
     if client_identity.is_pixeldroid():   # its config, without which it stops (ruling S6); the repository is ours
         nodeinfo_data["metadata"] = {"nodeName": g.site.name,
                                      "software": {"homepage": "https://join.piefed.social",
-                                                  "repo": "https://codeberg.org/rimu/pyfedi"},
+                                                  "repo": project_links().source_url},
                                      "config": pixelfed_configuration()}
     return client_identity.varying(jsonify(nodeinfo_data))
 
@@ -394,7 +395,7 @@ def nodeinfo21():
         "software": client_identity.software({
             "name": "piefed",
             "version": current_app.config["VERSION"],
-            "repository": "https://codeberg.org/rimu/pyfedi",
+            "repository": project_links().source_url,
             "homepage": "https://join.piefed.social"
         }),
         "protocols": [

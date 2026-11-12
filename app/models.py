@@ -6132,6 +6132,9 @@ class Site(db.Model):
     legal_information = db.Column(db.Text, default='')
     legal_information_html = db.Column(db.Text, default='')
     tos_url = db.Column(db.String(256))
+    source_url = db.Column(db.String(256), default='')         # where this server's source is (AGPL §13; app/project_links.py)
+    bug_report_url = db.Column(db.String(256), default='')     # where bugs are reported: '' for upstream PieFed's
+    get_involved_url = db.Column(db.String(256), default='')   # how to get involved: '' for upstream PieFed's
     public_key = db.Column(db.Text)
     private_key = db.Column(db.Text)
     enable_downvotes = db.Column(db.Boolean, default=True)
