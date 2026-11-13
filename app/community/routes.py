@@ -2655,7 +2655,7 @@ def community_wiki_view(actor, slug):
                                    inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None)
 
 
-@bp.route('/<actor>/wiki/<slug>/<revision_id>', methods=['GET', 'POST'])
+@bp.route('/<actor>/wiki/<slug>/<int:revision_id>', methods=['GET', 'POST'])
 @login_required
 def community_wiki_view_revision(actor, slug, revision_id):
     community = actor_to_community(actor)
@@ -2713,7 +2713,7 @@ def community_wiki_view_revision(actor, slug, revision_id):
                                    )
 
 
-@bp.route('/<actor>/wiki/<slug>/<revision_id>/revert', methods=['GET'])
+@bp.route('/<actor>/wiki/<slug>/<int:revision_id>/revert', methods=['GET'])
 @login_required
 def community_wiki_revert_revision(actor, slug, revision_id):
     if current_user.banned:
