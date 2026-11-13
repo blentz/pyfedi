@@ -1757,11 +1757,18 @@ def put_alpha_admin_registration_approve(data):
 
 # Not yet implemented. Copied from lemmy's V3 api, so some aren't needed, and some need changing
 
+
+def placeholder(message: str):
+    """A path PieFed answers but does not serve: a 400 in alpha's error format, keeping the `error` it always had
+    (ruling FR4), so an app reading either still works."""
+    return jsonify({'code': 400, 'message': message, 'status': 'Bad Request', 'error': message}), 400
+
+
 # Site - not yet implemented
 @bp.route('/api/alpha/site', methods=['POST'])  # Create New Site. No plans to implement
 @bp.route('/api/alpha/site', methods=['PUT'])  # Edit Site. Not available in app
 def alpha_site():
-    return jsonify({"error": "not_yet_implemented"}), 400
+    return placeholder('not_yet_implemented')
 
 
 # Community - not yet implemented
@@ -1769,7 +1776,7 @@ def alpha_site():
 @bp.route('/api/alpha/community/remove', methods=['POST'])
 @bp.route('/api/alpha/community/transfer', methods=['POST'])
 def alpha_community():
-    return jsonify({"error": "not_yet_implemented"}), 400
+    return placeholder('not_yet_implemented')
 
 
 # User - not yet implemented
@@ -1790,12 +1797,12 @@ def alpha_community():
 @bp.route('/api/alpha/user/list_logins', methods=['GET'])  # Not available in app
 @bp.route('/api/alpha/user/validate_auth', methods=['GET'])  # Not available in app
 def alpha_user():
-    return jsonify({"error": "not_yet_implemented"}), 400
+    return placeholder('not_yet_implemented')
 
 
 @bp.route('/api/alpha/user/mention', methods=['GET'])
 def alpha_user_mention():
-    return jsonify({"error": "renamed to user/mentions"}), 400
+    return placeholder('renamed to user/mentions')
 
 
 # Admin - not yet implemented
@@ -1806,7 +1813,7 @@ def alpha_user_mention():
 @bp.route('/api/alpha/admin/purge/post', methods=['POST'])  # endpoints
 @bp.route('/api/alpha/admin/purge/comment', methods=['POST'])  # for admin user)
 def alpha_admin():
-    return jsonify({"error": "not_yet_implemented"}), 400
+    return placeholder('not_yet_implemented')
 
 
 # CustomEmoji - not yet implemented
@@ -1814,4 +1821,4 @@ def alpha_admin():
 @bp.route('/api/alpha/custom_emoji', methods=['POST'])  # seem
 @bp.route('/api/alpha/custom_emoji/delete', methods=['POST'])  # important)
 def alpha_emoji():
-    return jsonify({"error": "not_yet_implemented"}), 400
+    return placeholder('not_yet_implemented')

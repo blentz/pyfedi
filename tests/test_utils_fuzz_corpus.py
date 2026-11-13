@@ -86,6 +86,8 @@ def corpus_cases():
     """A list, not a generator: pytest 10 will stop accepting the latter."""
     cases = []
     for name, target in REGISTRY.items():
+        if target.own_replay:   # replayed by a test of its own (tests/test_fuzz_routes_corpus.py)
+            continue
         directory = CORPUS_ROOT / name
         for path in sorted(directory.glob('*')):
             if path.is_file():

@@ -39,9 +39,11 @@ def show_domain(domain_id):
         if '.' in domain_id:
             domain = Domain.query.filter_by(name=domain_id, banned=False).first()
         else:
-            if not domain_id.isdigit():  # neither a name nor an id, so nothing to find
+            # neither a name nor an id, so nothing to find. The id goes as a number, which PostgreSQL compares with
+            # any integer column; as text beyond its range (or in digits not ASCII) it was refused, a 500
+            if not (domain_id.isascii() and domain_id.isdigit()):
                 abort(404)
-            domain = db.session.get(Domain, domain_id) or abort(404)
+            domain = db.session.get(Domain, int(domain_id)) or abort(404)
             if domain.banned:
                 domain = None
         if domain and host_hidden_here(domain.name):   # a sister local-only domain: not shown off its own
@@ -130,9 +132,11 @@ def show_domain_rss(domain_id):
         if '.' in domain_id:
             domain = Domain.query.filter_by(name=domain_id, banned=False).first()
         else:
-            if not domain_id.isdigit():  # neither a name nor an id, so nothing to find
+            # neither a name nor an id, so nothing to find. The id goes as a number, which PostgreSQL compares with
+            # any integer column; as text beyond its range (or in digits not ASCII) it was refused, a 500
+            if not (domain_id.isascii() and domain_id.isdigit()):
                 abort(404)
-            domain = db.session.get(Domain, domain_id) or abort(404)
+            domain = db.session.get(Domain, int(domain_id)) or abort(404)
             if domain.banned:
                 domain = None
         if domain and host_hidden_here(domain.name):   # as show_domain

@@ -24,6 +24,8 @@ PAID = 'https://paid.example'
 PUBLIC = 'https://public.example'
 CHECKOUT = 'https://checkout.example/session'
 
+pytestmark = pytest.mark.usefixtures('oauth_providers_configured')
+
 
 @pytest.fixture
 def env(app, api_baseline, monkeypatch):

@@ -33,14 +33,17 @@ def per_call(call, repeats=5):
     return min(timed(lambda: [call() for _ in range(loops)]) for _ in range(repeats)) / loops
 
 
-def grows_linearly(scan, make, small=20_000, factor=4):
+def grows_linearly(scan, make, small=20_000, factor=8, margin=3):
     """True if `scan` over `make(small * factor)` costs well under `factor` squared times `scan` over `make(small)`.
 
-    Linear work gives a ratio near `factor`, quadratic near `factor` squared; the bound is twice `factor`.
+    Linear work gives a ratio near `factor`, quadratic near `factor` squared; the bound is `margin` times `factor`.
+    A scan under a millisecond reads ratios up to twice `factor` on an idle machine and more with the suite's workers
+    beside it (a style scan read 10 at factor 4, 2026-11-13, failing the bound of 8 on every attempt), so linear work
+    has `margin` of headroom, and at factor 8 quadratic work (64) is still well over the bound (24).
     `make(size)` builds an input of about `size` units. Time is the thread's CPU time, so load from other
     processes cannot move the ratio. It passes when any of ATTEMPTS measurements is under the bound."""
     little, big = make(small), make(small * factor)
     scan(little)   # warm caches and lazy imports before timing
     scan(big)
-    return any(per_call(lambda: scan(big)) < max(per_call(lambda: scan(little)), FLOOR) * factor * 2
+    return any(per_call(lambda: scan(big)) < max(per_call(lambda: scan(little)), FLOOR) * factor * margin
                for _ in range(ATTEMPTS))

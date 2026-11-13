@@ -193,8 +193,13 @@ def test_a_remote_files_one_entry_is_its_url(world):
 
 @pytest.mark.parametrize('key', ['999999999', '00000000-0000-4000-8000-00003b9ac9ff', 'nonsense', '9' * 30])
 def test_an_unknown_video_is_a_404_in_peertubes_shape(world, key):
+    """PeerTube's problem+json, as its login's refusals are, keeping the `error` field PeerTube kept for older clients
+    (NewPipe reads it): every PeerTube error of PieFed's in one shape (fuzz-routes finding, 2026-11-13)."""
     response = _get(world, f'/api/v1/videos/{key}')
-    assert response.status_code == 404 and response.get_json()['status'] == 404
+    body = response.get_json()
+    assert response.status_code == 404 and response.mimetype == 'application/problem+json'
+    assert body['status'] == 404 and body['code'] == 'not_found' and body['type'].endswith('not_found')
+    assert body['title'] == body['detail'] == body['error'] == 'Not found'
 
 
 def test_a_long_description_is_cut_in_lists_and_whole_by_its_own_endpoint(world):

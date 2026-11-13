@@ -42,6 +42,9 @@ class Target:
     surface: str
     budget_ms: int | None
     needs_app: bool
+    # own_replay -- the corpus is replayed by a test of its own, not the generic replay (route targets: they need a
+    #              seeded database, set up once per family; tests/test_fuzz_routes_corpus.py)
+    own_replay: bool = False
 
 
 def reference_work() -> int:

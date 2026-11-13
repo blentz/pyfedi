@@ -7,7 +7,7 @@ from flask_login import login_user
 from sqlalchemy import false
 from webauthn import generate_authentication_options, options_to_json, verify_authentication_response
 from webauthn.helpers import parse_authentication_credential_json
-from webauthn.helpers.exceptions import InvalidAuthenticationResponse
+from webauthn.helpers.exceptions import InvalidAuthenticationResponse, InvalidJSONStructure
 from webauthn.helpers.structs import UserVerificationRequirement, PublicKeyCredentialDescriptor
 
 from app import db, cache
@@ -87,7 +87,12 @@ def passkey_verification():
     redirect = request_json.get('redirect')
     error_message = ''
 
-    auth_credential = parse_authentication_credential_json(request_json.get('response'))
+    # a body that is no credential is a malformed request, refused before any account is looked at, so the answer
+    # names no one (fuzz-routes finding, 2026-11-13: it was a 500)
+    try:
+        auth_credential = parse_authentication_credential_json(request_json.get('response'))
+    except (InvalidJSONStructure, InvalidAuthenticationResponse, ValueError):
+        abort(400)
     user = passkey_user(username)
     if user:
         # .count(), not truthiness: User.passkeys is lazy='dynamic', so the

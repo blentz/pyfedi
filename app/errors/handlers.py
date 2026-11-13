@@ -6,10 +6,39 @@ from flask import current_app, jsonify, render_template, request
 from app import db, limiter
 from app.errors import bp
 from app.models import CmsPage
+from app.peertube.entities import problem
+
+
+# A routing error's words in each API's format: 404, the path names no route; 405, its route takes other methods
+_ROUTING = {404: ('not_found', 'not found', 'Not Found', 'Not found', 'Record not found'),
+            405: ('method_not_allowed', 'method not allowed', 'Method Not Allowed', 'Method not allowed',
+                  'Method not allowed')}
+
+
+def api_routing_error(status: int):
+    """The routing error `status` of the API whose prefix the path is under, in that API's own error format (ruling
+    FR1), or None for a path no API owns. Mastodon and PeerTube share /api/v1 and /api/v2: PeerTube's problem+json
+    carries the `error` Mastodon's clients read."""
+    code, message, name, title, mastodon = _ROUTING[status]
+    path = request.path
+    if path.startswith('/api/v3/') or path == '/api/v3':
+        return jsonify({'error': code}), status
+    if path.startswith('/api/alpha/'):
+        return jsonify({'code': status, 'message': message, 'status': name, 'error': code}), status
+    if path.startswith(('/api/v1.1/', '/api/pixelfed/')):
+        return jsonify({'error': mastodon}), status
+    if path.startswith(('/api/v1/', '/api/v2/')):
+        return problem(status, code, title)
+    if path.startswith('/oauth/') and not path.startswith('/oauth/authorize'):
+        return jsonify({'error': code}), status
+    return None
 
 
 @bp.app_errorhandler(404)
 def not_found_error(error):
+    answer = api_routing_error(404)
+    if answer is not None:
+        return answer
     # Skip page lookup for static files and known non-page paths to avoid unnecessary DB hits
     if (request.path.startswith('/static/') or
             request.path.startswith('/api/') or
@@ -33,6 +62,13 @@ def not_found_error(error):
     # that rendered it, and a person who mistyped a URL got nine bytes of
     # unstyled text.
     return render_template('errors/404.html'), 404
+
+
+@bp.app_errorhandler(405)
+def method_not_allowed_405(error):
+    """An API's own 405; any other path's as flask-smorest's handler of every HTTPException has answered it."""
+    answer = api_routing_error(405)
+    return answer if answer is not None else (jsonify({'code': 405, 'status': error.name}), 405)
 
 
 @bp.app_errorhandler(500)

@@ -382,6 +382,26 @@ class TestBlockedImages:
         image = BlockedImage.query.filter_by(hash='1' * 255 + '0').one()
         assert image.file_name == 'photo.png'
 
+    # Neither a url nor a hash, or a hash that is not 256 bits (fuzz-routes finding, 2026-11-13): the empty or
+    # malformed hash reached the bit(256) column and PostgreSQL refused it, a 500. Each is the form's own refusal.
+    @pytest.mark.parametrize('data', [{}, {'hash': 'x' * 256}, {'hash': '2' * 256},
+                                      {'url': 'https://remote.test/a.png', 'hash': '1' * 256}],
+                             ids=['neither', 'letters', 'digits-not-bits', 'both'])
+    def test_an_add_without_one_usable_image_is_refused(self, env, moderator, data):
+        token = csrf(env.app, env.client)
+        with patch('app.admin.routes.retrieve_image_hash', return_value='1' * 256):
+            response = env.client.post('/admin/blocked_image/add', data={**data, 'csrf_token': token})
+        assert response.status_code == 200
+        assert BlockedImage.query.count() == 0
+
+    def test_an_edit_to_a_hash_that_is_not_bits_is_refused(self, env, moderator, blocked):
+        token = csrf(env.app, env.client)
+        response = env.client.post(f'/admin/blocked_image/{blocked.id}/edit',
+                                   data={'hash': 'x' * 256, 'file_name': 'a.png', 'csrf_token': token})
+        assert response.status_code == 200
+        db.session.expire_all()
+        assert db.session.get(BlockedImage, blocked.id).hash == '0' * 256
+
     def test_one_can_be_edited(self, env, moderator, blocked):
         token = csrf(env.app, env.client)
         response = env.client.post(

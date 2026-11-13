@@ -725,12 +725,23 @@ def post_oembed(post_id):
 # hx-post with no anchor fallback (app/templates/post/_post_voting_buttons.html
 # and its masonry twin), and `comment_vote` next door is already POST-only, so
 # the GET arm was unused by anything but the forgery.
+VOTE_DIRECTIONS = ('upvote', 'downvote', 'reversal')
+
+
+def known_vote_direction(vote_direction: str) -> None:
+    """A path whose direction is none of VOTE_DIRECTIONS names no vote: a 404. Taken as it came, Post.vote raised
+    ValueError on it, a 500 to any signed-in person (fuzz-routes finding, 2026-11-13)."""
+    if vote_direction not in VOTE_DIRECTIONS:
+        abort(404)
+
+
 @bp.route('/post/<int:post_id>/<vote_direction>/<federate>', methods=['POST'])
 @bp.route('/post/<int:post_id>/<vote_direction>/<federate>/<emoji>', methods=['POST'])
 @login_required
 @validation_required
 @approval_required
 def post_vote(post_id: int, vote_direction, federate, emoji=None):
+    known_vote_direction(vote_direction)
     refuse_invisible_ids(post_id=post_id)
     if federate == 'default':
         federate = not current_user.vote_privately
@@ -744,6 +755,7 @@ def post_vote(post_id: int, vote_direction, federate, emoji=None):
 @validation_required
 @approval_required
 def comment_vote(comment_id, vote_direction, federate):
+    known_vote_direction(vote_direction)
     refuse_invisible_ids(reply_id=comment_id)
     if federate == 'default':
         federate = not current_user.vote_privately
@@ -757,6 +769,7 @@ def comment_vote(comment_id, vote_direction, federate):
 @validation_required
 @approval_required
 def comment_emoji_reaction(comment_id, vote_direction, federate):
+    known_vote_direction(vote_direction)
     refuse_invisible_ids(reply_id=comment_id)
     form = ChooseEmojiForm()
     if request.method == 'POST' and form.validate_on_submit():

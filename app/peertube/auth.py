@@ -5,7 +5,7 @@ logout that revokes a token. Tokens never expire (P2) and are this domain's only
 Errors are PeerTube's problem+json, whose `code` the official app reads to tell bad credentials from the rest."""
 from functools import wraps
 
-from flask import current_app, g, jsonify, make_response
+from flask import current_app, g, jsonify
 from werkzeug.exceptions import HTTPException
 
 from app import db
@@ -14,17 +14,7 @@ from app.oauth_server import tokens
 from app.oauth_server.protect import require_oauth
 from app.oauth_server.server import server
 from app.peertube import bp
-
-ERRORS = 'https://docs.joinpeertube.org/api-rest-reference.html#section/Errors/'
-
-
-def problem(status: int, code: str, detail: str):
-    """PeerTube's error: application/problem+json with the machine-readable `code` its apps branch on."""
-    response = make_response(jsonify({'type': ERRORS + code, 'title': detail, 'detail': detail, 'status': status,
-                                      'code': code}), status)
-    response.mimetype = 'application/problem+json'
-    return response
-
+from app.peertube.entities import problem   # every PeerTube error of PieFed's in one shape
 
 REFUSALS = {401: 'invalid_token', 403: 'forbidden', 422: 'invalid_token'}
 

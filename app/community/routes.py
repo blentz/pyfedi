@@ -410,10 +410,8 @@ def community_post_query(community: Community, content_type: str, flair: str = '
     return posts, content_filters
 
 
-# @bp.route('/c/<actor>', methods=['GET']) - defined in activitypub/routes.py, which calls this function for user requests. A bit weird.
-@login_required_if_private_instance
-@check_anoobis
-def show_community(community: Community, from_instance=None):
+def visible_community_or_abort(community: Community) -> None:
+    """Refuse a community its reader may not see: the community's page, and every page that names it."""
     if community.banned:
         abort(404)
     if hidden_here(community):
@@ -425,6 +423,13 @@ def show_community(community: Community, from_instance=None):
     # the page a browser actually reaches, did not.
     if community.private and community.id not in community_membership_private(current_user.get_id()):
         abort(403)
+
+
+# @bp.route('/c/<actor>', methods=['GET']) - defined in activitypub/routes.py, which calls this function for user requests. A bit weird.
+@login_required_if_private_instance
+@check_anoobis
+def show_community(community: Community, from_instance=None):
+    visible_community_or_abort(community)
 
     block_honey_pot()
 
@@ -1606,6 +1611,7 @@ def community_report(community_id: int):
         return show_ban_message()
 
     community = db.session.get(Community, community_id) or abort(404)
+    visible_community_or_abort(community)   # the page names the community, as its own page would
     form = ReportCommunityForm()
     if form.validate_on_submit():
         # D1393. `admin/reports.html` renders each row with
@@ -2604,6 +2610,8 @@ def community_wiki_add(actor):
 @login_required_if_private_instance
 def community_wiki_view(actor, slug):
     community = actor_to_community(actor)
+    if community is None:   # it ran only `if community is not None:`, and then returned nothing: a 500
+        abort(404)
     if community is not None and hidden_here(community):
         abort(404)   # as the community's page: a logged-out visitor never sees a local-only community
 
@@ -2653,10 +2661,12 @@ def community_wiki_view(actor, slug):
                                    inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None)
 
 
-@bp.route('/<actor>/wiki/<slug>/<revision_id>', methods=['GET', 'POST'])
+@bp.route('/<actor>/wiki/<slug>/<int:revision_id>', methods=['GET', 'POST'])
 @login_required
 def community_wiki_view_revision(actor, slug, revision_id):
     community = actor_to_community(actor)
+    if community is None:   # it ran only `if community is not None:`, and then returned nothing: a 500
+        abort(404)
 
     if community is not None:
         page: CommunityWikiPage = CommunityWikiPage.query.filter_by(slug=slug, community_id=community.id).first()
@@ -2709,13 +2719,15 @@ def community_wiki_view_revision(actor, slug, revision_id):
                                    )
 
 
-@bp.route('/<actor>/wiki/<slug>/<revision_id>/revert', methods=['GET'])
+@bp.route('/<actor>/wiki/<slug>/<int:revision_id>/revert', methods=['GET'])
 @login_required
 def community_wiki_revert_revision(actor, slug, revision_id):
     if current_user.banned:
         return show_ban_message()
 
     community = actor_to_community(actor)
+    if community is None:   # it ran only `if community is not None:`, and then returned nothing: a 500
+        abort(404)
 
     if community is not None:
         page: CommunityWikiPage = CommunityWikiPage.query.filter_by(slug=slug, community_id=community.id).first()
@@ -3025,6 +3037,8 @@ def community_moderate_report_ignore(community_id, report_id):
 @login_required
 def community_my_flair(actor):
     community = actor_to_community(actor)
+    if community is None:   # it ran only `if community is not None:`, and then returned nothing: a 500
+        abort(404)
 
     # D1019. `actor_to_community` returns None for a name that does not
     # resolve, and this function's body was entirely inside `if community is

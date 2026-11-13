@@ -176,6 +176,16 @@ names_a_subset() {
 # lost a backend of ANOTHER worker about ten seconds after one (2026-11-08/09, .crash-diagnostics). So the parallel
 # phase leaves them out, and they run alone afterwards, their coverage appended to the first phase's (--cov-append),
 # so a --cov run still writes one report of the whole suite. The exit status is the worse of the two.
+# --fuzz <target> [libFuzzer args]: an atheris campaign (tests/fuzz/run_campaign.py) in the same stack, against the
+# migrated test database, instead of pytest. A route target (tests/fuzz/routes.py) needs that database; a finding is
+# written into tests/fuzz/corpus/<target>/, which run_tests_remote.sh brings back.
+if [ "${1:-}" = "--fuzz" ]; then
+    shift
+    status=0
+    $COMPOSE exec -T test-runner python -m tests.fuzz.run_campaign "$@" || status=$?
+    exit "$status"
+fi
+
 status=0
 if [ "$WORKERS" -gt 1 ] && ! names_a_subset "$@"; then
     $COMPOSE exec -T test-runner pytest -n "$WORKERS" --dist loadgroup --max-worker-restart 0 -m 'not serial' "$@" \

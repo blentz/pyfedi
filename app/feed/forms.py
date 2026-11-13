@@ -33,10 +33,9 @@ class AddCopyFeedForm(FlaskForm):
     def validate(self, extra_validators=None):
         if not super().validate():
             return False
-        # url.data is None when the input is absent or disabled, not '' -- the
-        # same case EditFeedForm.validate guards below, and calling .strip() on
-        # it made a POST without the field a 500 rather than a form error.
-        if self.url.data is None or self.url.data.strip() == '':
+        # an absent or disabled input reads as '' (app/form_input.py); a POST without
+        # the field is a form error, as a blank one is, not a 500.
+        if not self.url.data or self.url.data.strip() == '':
             self.url.errors.append(_l('Url is required.'))
             return False
         else:
@@ -95,7 +94,7 @@ class EditFeedForm(FlaskForm):
     def validate(self, extra_validators=None):
         if not super().validate():
             return False
-        if self.url.data is not None:  # when editing a feed with subscribers this field is disabled
+        if self.url.raw_data:  # sent: when editing a feed with subscribers this field is disabled, and absent
             if self.url.data.strip() == '':
                 self.url.errors.append(_l('Url is required.'))  # D740: the create form's message
                 return False

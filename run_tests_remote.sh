@@ -9,7 +9,7 @@
 # after it. Only what git tracks or would track goes across, never an ignored file that may hold a real secret, plus
 # .env.test. This .git stays here, with its config, stashes and history: the copy gets an index of its own, for the tests
 # that ask git which files there are. So a test or gate that reads commits runs here, not there. coverage.json comes back
-# if the run wrote one, and so does any file it wrote under tests/golden.
+# if the run wrote one, and so does any file it wrote under tests/golden or tests/fuzz/corpus.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -117,7 +117,9 @@ fi
 if remote "test -f '$PWD/coverage.json'"; then
     remote "cat '$PWD/coverage.json'" > coverage.json
 fi
-# A golden file the run wrote (a test captures a missing one, for review: tests/test_branding_pages.py) comes back too
-remote "cd '$PWD' && git ls-files -o -m --exclude-standard -z -- tests/golden | tar --null -T - -czf -" | tar -xzf -
+# A golden file or a fuzz seed the run wrote (a test captures a missing one, for review: tests/test_branding_pages.py,
+# tests/test_fuzz_routes_registry.py) comes back too
+remote "cd '$PWD' && git ls-files -o -m --exclude-standard -z -- tests/golden tests/fuzz/corpus | tar --null -T - -czf -" \
+    | tar -xzf -
 remote "rm -rf '$PWD'"
 exit "$status"

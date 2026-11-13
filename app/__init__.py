@@ -15,6 +15,7 @@ from flask_mail import Mail
 from flask_babel import Babel, lazy_gettext as _l
 from flask_caching import Cache
 from flask_compress import Compress
+from app.form_input import refuse_json_that_is_not_an_object   # imports nothing of this package
 from flask_limiter import Limiter
 from flask_smorest import Api
 from flask_bcrypt import Bcrypt
@@ -265,6 +266,7 @@ class StripCookieVaryForAnonymous:
 def create_app(config_class=Config):
     app = Flask(__name__)
     app.request_class = PieFedRequest
+    refuse_json_that_is_not_an_object()
     app.config.from_object(config_class)
     if app.config['HTTP_PROTOCOL'] == 'mixed':  # mixed mode is for instances like retro.piefed.com which has a web ui that uses http while federation happens over https
         app.config["SERVER_URL"] = f"https://{app.config['SERVER_NAME']}"
