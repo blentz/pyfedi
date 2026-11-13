@@ -40,9 +40,21 @@ class Device:
         self.adb.shell(['content', 'call', '--uri', 'content://media', '--method', 'scan_volume', '--arg',
                         'external_primary'])
 
-    def launch(self, package: str) -> None:
+    def launch(self, package: str, timeout: float = 30.0) -> None:
+        """Start `package` afresh and wait until it is in front. Not uiautomator2's own wait: it reads `ps -A`,
+        whose output adb can cut short, and it raised on that (PixelDroid, 2026-11-12). A failed look here is
+        looked at again until `timeout`."""
         self.adb.shell(['logcat', '-c'])   # a failure's log then starts at this app
-        self.ui.app_start(package, wait=True, stop=True)
+        self.ui.app_start(package, stop=True)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                if self.ui.app_current().get('package') == package:
+                    return
+            except Exception:   # adb's transient errors: the device answers the next look
+                pass
+            time.sleep(0.5)
+        raise AssertionError(f'android: {package} is not in front after {timeout:.0f}s')
 
     def stop(self, package: str) -> None:
         self.ui.app_stop(package)
