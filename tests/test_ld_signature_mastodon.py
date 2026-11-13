@@ -144,7 +144,7 @@ def test_a_document_nested_past_the_limit_is_refused_quickly_as_unsigned(app):
             LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
         assert not isinstance(refused.value, VerificationFormatError)
 
-    assert grows_linearly(refuse, signed, small=50)   # 200 deep at the top, where the cube took 4 s
+    assert grows_linearly(refuse, signed, small=50, factor=4)   # 200 deep at the top, where the cube took 4 s
 
 
 def test_a_signature_section_nested_past_the_limit_is_refused_quickly(app, monkeypatch):
@@ -163,7 +163,7 @@ def test_a_signature_section_nested_past_the_limit_is_refused_quickly(app, monke
         with pytest.raises(VerificationError, match='Nested deeper than 32 levels'):
             LDSignature.verify_signature(copy.deepcopy(document), MASTODON_PUBLIC_KEY)   # it takes the signature out
 
-    assert grows_linearly(refuse, signed, small=75)   # 300 deep at the top, where expanding took 13 s
+    assert grows_linearly(refuse, signed, small=75, factor=4)   # 300 deep at the top, where expanding took 13 s
 
 
 def test_a_genuine_signature_over_a_document_at_the_nesting_limit_verifies(app):
