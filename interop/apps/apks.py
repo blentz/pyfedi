@@ -73,6 +73,11 @@ def resolve(source: dict, http: httpx.Client) -> Apk:
     raise ValueError(f'unknown APK source {source!r}')
 
 
+# The cache is not copied to remote-gpu, so every run downloads every APK: one stalled download (a 300 s read timeout
+# on F-Droid's mirror, 2026-11-12) must not fail its app, so it is tried again, a bounded number of times
+DOWNLOAD_ATTEMPTS = 3
+
+
 def fetch(source: dict, http: httpx.Client, cache: Path = CACHE) -> tuple[Path, str]:
     """The APK on disk and its version."""
     apk = resolve(source, http)
@@ -80,11 +85,18 @@ def fetch(source: dict, http: httpx.Client, cache: Path = CACHE) -> tuple[Path, 
     path = cache / apk.filename
     if not path.exists() or path.stat().st_size == 0:
         partial = path.with_name(path.name + '.part')
-        with http.stream('GET', apk.url, follow_redirects=True) as response:
-            response.raise_for_status()
-            with partial.open('wb') as out:
-                for chunk in response.iter_bytes():
-                    out.write(chunk)
+        for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+            try:
+                with http.stream('GET', apk.url, follow_redirects=True) as response:
+                    response.raise_for_status()
+                    with partial.open('wb') as out:
+                        for chunk in response.iter_bytes():
+                            out.write(chunk)
+                break
+            except httpx.TransportError:   # a stalled or dropped download: the mirror, not the app
+                partial.unlink(missing_ok=True)
+                if attempt == DOWNLOAD_ATTEMPTS:
+                    raise
         partial.rename(path)
     return path, apk.version
 

@@ -87,6 +87,36 @@ def test_fetch_downloads_once_then_reuses_the_cache(tmp_path):
     assert not list(tmp_path.glob('*.part'))
 
 
+def _stalling(times: int, served: list):
+    """A client whose APK download stalls (a read timeout) the first `times` times, then serves it."""
+    stalls = iter(range(times))
+
+    def handle(request):
+        served.append(str(request.url))
+        if request.url.path.endswith('.apk'):
+            if next(stalls, None) is not None:
+                raise httpx.ReadTimeout('the mirror stalled', request=request)
+            return httpx.Response(200, content=b'PK-apk')
+        body = FDROID.get(str(request.url))
+        return httpx.Response(200, json=body) if body is not None else httpx.Response(404)
+    return httpx.Client(transport=httpx.MockTransport(handle))
+
+
+def test_a_download_that_stalls_is_tried_again(tmp_path):
+    served = []
+    path, _version = fetch({'fdroid': 'com.keylesspalace.tusky'}, _stalling(2, served), cache=tmp_path)
+    assert path.read_bytes() == b'PK-apk' and sum(url.endswith('.apk') for url in served) == 3
+    assert not list(tmp_path.glob('*.part'))
+
+
+def test_a_download_that_keeps_stalling_gives_up(tmp_path):
+    served = []
+    with pytest.raises(httpx.ReadTimeout):
+        fetch({'fdroid': 'com.keylesspalace.tusky'}, _stalling(10, served), cache=tmp_path)
+    assert sum(url.endswith('.apk') for url in served) == 3
+    assert not list(tmp_path.glob('*.apk'))
+
+
 def _axml(attributes: dict[str, int]) -> bytes:
     """A binary manifest of one <application> element with boolean attributes, as aapt writes them (UTF-16 pool)."""
     names = list(attributes)
