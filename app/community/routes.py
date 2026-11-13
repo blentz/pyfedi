@@ -2604,6 +2604,8 @@ def community_wiki_add(actor):
 @login_required_if_private_instance
 def community_wiki_view(actor, slug):
     community = actor_to_community(actor)
+    if community is None:   # it ran only `if community is not None:`, and then returned nothing: a 500
+        abort(404)
     if community is not None and hidden_here(community):
         abort(404)   # as the community's page: a logged-out visitor never sees a local-only community
 
@@ -2657,6 +2659,8 @@ def community_wiki_view(actor, slug):
 @login_required
 def community_wiki_view_revision(actor, slug, revision_id):
     community = actor_to_community(actor)
+    if community is None:   # it ran only `if community is not None:`, and then returned nothing: a 500
+        abort(404)
 
     if community is not None:
         page: CommunityWikiPage = CommunityWikiPage.query.filter_by(slug=slug, community_id=community.id).first()
@@ -2716,6 +2720,8 @@ def community_wiki_revert_revision(actor, slug, revision_id):
         return show_ban_message()
 
     community = actor_to_community(actor)
+    if community is None:   # it ran only `if community is not None:`, and then returned nothing: a 500
+        abort(404)
 
     if community is not None:
         page: CommunityWikiPage = CommunityWikiPage.query.filter_by(slug=slug, community_id=community.id).first()
@@ -3025,6 +3031,8 @@ def community_moderate_report_ignore(community_id, report_id):
 @login_required
 def community_my_flair(actor):
     community = actor_to_community(actor)
+    if community is None:   # it ran only `if community is not None:`, and then returned nothing: a 500
+        abort(404)
 
     # D1019. `actor_to_community` returns None for a name that does not
     # resolve, and this function's body was entirely inside `if community is
