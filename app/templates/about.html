@@ -34,7 +34,7 @@
         <p> <a href="/privacy">{{ _('Our Privacy Policy') }}</a> </p>
         {% endif %}
         {% if cms_page -%}
-            {{ cms_page.body_html | safe }}
+            {{ checkout_shortcodes(cms_page.body_html or '') }}
         {% endif -%}
 </main>
 {% endblock %}

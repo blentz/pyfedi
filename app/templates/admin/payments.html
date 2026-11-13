@@ -99,7 +99,7 @@
         {% if offers -%}
             <table class="table">
                 <thead>
-                    <tr><th>{{ _('Title') }}</th><th>{{ _('Group') }}</th><th>{{ _('Amount or address') }}</th><th>{{ _('Offered') }}</th><th></th></tr>
+                    <tr><th>{{ _('Title') }}</th><th>{{ _('Group') }}</th><th>{{ _('Amount or address') }}</th><th>{{ _('Offered') }}</th><th>{{ _('Shortcode') }}</th><th></th></tr>
                 </thead>
                 <tbody>
                     {% for offer in offers -%}
@@ -108,6 +108,7 @@
                             <td>{{ offer.offer_group }}</td>
                             <td>{% if offer.kind == 'link' %}<a href="{{ offer.url }}" rel="noopener noreferrer nofollow">{{ offer.url }}</a>{% elif offer.amount_minor is not none %}{{ money(offer.amount_minor, offer.currency) }}{% if offer.interval %} / {{ offer.interval }}{% endif %}{% else %}{{ _('Not read from Stripe yet') }}{% endif %}</td>
                             <td>{{ _('Yes') if offer.active else _('No') }}</td>
+                            <td><code>[checkout {{ offer.id }}]</code></td>
                             <td><a href="{{ url_for('admin.admin_payments_offer_edit', offer_id=offer.id) }}">{{ _('Edit') }}</a></td>
                         </tr>
                     {% endfor -%}

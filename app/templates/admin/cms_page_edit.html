@@ -31,6 +31,7 @@
             <div class="mb-3">
                 {{ render_field(form.body) }}
                 <p class="small field_hint">{{ _('Content is written in Markdown format and will be converted to HTML when saved.') }}</p>
+                <p class="small field_hint">{{ _('Write [checkout N] to show the payment button of offer N, or [checkout N Your words] to choose its label. Admin → Payments lists each offer\'s number.') }}</p>
             </div>
 
             <div class="mb-3">

@@ -1,0 +1,15 @@
+{# One offer's button, for a [checkout N] shortcode in a CMS page (app/payments/shortcodes.py). Like user/choose_plan.html. -#}
+{% if offer is none -%}
+<span class="text-muted">{{ _('Not available') }}</span>
+{%- elif offer.kind == 'link' -%}
+<a class="btn btn-primary" href="{{ offer.url }}" rel="noopener noreferrer nofollow">{{ label or _('Go to this page') }}</a>
+{%- elif held -%}
+<a class="btn btn-outline-secondary" href="{{ url_for('payments.donations') }}">{{ _('Your current plan') }}</a>
+{%- elif current_user.is_anonymous and offer.kind == 'subscription' -%}
+<a class="btn btn-primary" href="{{ url_for('auth.login', next=request.path) }}">{{ _('Log in to subscribe') }}</a>
+{%- else -%}
+<form method="post" action="{{ url_for('payments.checkout', offer_id=offer.id) }}" class="d-inline">
+    {%- if current_user.is_authenticated %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endif -%}
+    <button type="submit" class="btn btn-primary">{{ label or (_('Pay for one %(period)s', period=offer.interval) if prepaid and offer.kind == 'subscription' else _('Subscribe') if offer.kind == 'subscription' else _('Donate once')) }}</button>
+</form>
+{%- endif %}

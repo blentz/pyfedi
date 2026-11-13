@@ -9,7 +9,7 @@
     {% if page.show_sidebar -%}
     <main class="col-12 col-lg-8 position-relative main_pane">
         <h1>{{ page.title }}</h1>
-        {{ page.body_html | safe }}
+        {{ checkout_shortcodes(page.body_html or '') }}
     </main>
 
     <aside id="side_pane" class="col-12 col-lg-4 side_pane" role="complementary">
@@ -29,7 +29,7 @@
     <main class="row position-relative main_pane">
         <div class="col-12 col-lg-8">
         <h1>{{ page.title }}</h1>
-        {{ page.body_html | safe }}
+        {{ checkout_shortcodes(page.body_html or '') }}
         </div>
     </main>
     {% endif -%}

@@ -353,6 +353,16 @@ class TestOffers:
         assert changed.called
 
 
+class TestShortcodes:
+    @pytest.fixture(autouse=True)
+    def stripe_up(self, app, monkeypatch):
+        monkeypatch.setitem(app.config, 'STRIPE_SECRET_KEY', 'sk_test')
+
+    def test_every_offer_shows_the_shortcode_that_draws_its_button(self, env, admin):
+        offer = an_offer()
+        assert f'[checkout {offer.id}]'.encode() in env.client.get('/admin/payments').data
+
+
 class TestSettings:
     def test_retention_is_saved_and_cleared(self, env, admin):
         token = csrf(env)   # one per test: the shared app context caches it

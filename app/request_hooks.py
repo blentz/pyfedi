@@ -10,6 +10,7 @@ from app import db
 from app.cms import cms_nav_links
 from app.login_gate import refuse_lapsed, refuse_logged_out
 from app.payments.offers import donations_menu_shown, money
+from app.payments.shortcodes import checkout_shortcodes
 from app.permissions import holds_any_grant, may_act_on_user, may_ban
 from app.referral import referrals_available
 from app.branding import DERIVED_FIELDS, Branding, current_branding
@@ -126,6 +127,7 @@ def register_request_hooks(app):
         return {'db': db, 'app': app}
 
     app.jinja_env.globals['len'] = len
+    app.jinja_env.globals['checkout_shortcodes'] = checkout_shortcodes
     app.jinja_env.globals['sidebar_boxes'] = sidebar_boxes
     app.jinja_env.globals['project_links'] = project_links
     app.jinja_env.globals['footer_invitation'] = footer_invitation

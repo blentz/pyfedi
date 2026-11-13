@@ -160,6 +160,9 @@ class TestTheCmsPages:
         db.session.commit()
         return page
 
+    def test_the_editor_explains_payment_buttons(self, env, editor):
+        assert b'[checkout N]' in env.client.get('/admin/pages/add').data
+
     def test_a_new_page_is_linked_from_where_it_was_asked_to_be(self, env, editor):
         token = csrf(env.app, env.client)
         with patch('app.cms.cache.delete_memoized') as forget:
