@@ -43,3 +43,22 @@ def test_oauths_prefix(app):
 
 def test_a_page_is_still_the_sites_page(app):
     assert b'Oops' in get(app, '/no-such-page-here').get_data()
+
+
+# 405: a path whose route takes other methods (fuzz-routes finding, 2026-11-13: POST /api/v1/accounts//unblock,
+# POST /api/v1/videos//views answered flask-smorest's {code, status}, no API's format)
+
+@pytest.mark.parametrize('path, method, check', [
+    ('/api/alpha/site', 'DELETE', lambda body: body == {'code': 405, 'message': 'method not allowed',
+                                                         'status': 'Method Not Allowed', 'error': 'method_not_allowed'}),
+    ('/api/v1/instance', 'DELETE', lambda body: body['status'] == 405 and body['code'] == 'method_not_allowed'
+     and body['error'] == 'Method not allowed'),
+], ids=['alpha', 'shared-v1'])   # Lemmy's catch-all takes every method: no 405 under /api/v3
+def test_a_method_the_route_does_not_take_is_the_apis_own_405(app, path, method, check):
+    response = app.test_client().open(path, method=method)
+    assert response.status_code == 405 and check(response.get_json()), response.get_data()[:200]
+
+
+def test_a_web_page_405_is_as_it_was(app):
+    response = app.test_client().open('/auth/logout', method='DELETE')
+    assert response.status_code == 405 and response.get_json() == {'code': 405, 'status': 'Method Not Allowed'}
