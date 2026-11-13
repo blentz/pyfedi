@@ -2103,10 +2103,17 @@ def user_bookmarks_comments():
                            next_url=next_url, prev_url=prev_url)
 
 
+# The kinds of alert, each with its partial user/alerts/_<kind>.html (fuzz-routes finding, 2026-11-13: any other name
+# raised TemplateNotFound, a 500)
+ALERT_KINDS = ('posts', 'comments', 'communities', 'topics', 'feeds', 'users')
+
+
 @bp.route('/alerts')
 @bp.route('/alerts/<type>/<filter>')
 @login_required
 def user_alerts(type='posts', filter='all'):
+    if type not in ALERT_KINDS:   # the template includes this kind's partial by name: no other names one
+        abort(404)
     page = request.args.get('page', 1, type=int)
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
 
