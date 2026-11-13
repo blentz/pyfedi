@@ -8,7 +8,7 @@ nothing NewPipe can play, so it is not one."""
 import re
 from datetime import datetime
 
-from flask import g, jsonify, request
+from flask import g, jsonify, make_response, request
 from sqlalchemy import and_, func, or_
 
 from app import db
@@ -35,9 +35,22 @@ class BadRequest(ValueError):
     pass
 
 
+ERRORS = 'https://docs.joinpeertube.org/api-rest-reference.html#section/Errors/'
+CODES = {400: 'bad_request', 404: 'not_found'}
+
+
+def problem(status: int, code: str, detail: str):
+    """PeerTube's error: application/problem+json with the machine-readable `code` its apps branch on, and the `error`
+    PeerTube keeps for older clients (NewPipe reads it). Every PeerTube error of PieFed's has this shape."""
+    response = make_response(jsonify({'type': ERRORS + code, 'title': detail, 'detail': detail, 'status': status,
+                                      'code': code, 'error': detail}), status)
+    response.mimetype = 'application/problem+json'
+    return response
+
+
 def error(status: int, message: str):
-    """PeerTube's error shape, never echoing what was asked."""
-    return jsonify({'error': message, 'status': status}), status
+    """PeerTube's error shape (`problem`), never echoing what was asked."""
+    return problem(status, CODES.get(status, 'bad_request'), message)
 
 
 def not_found():
