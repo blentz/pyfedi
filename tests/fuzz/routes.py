@@ -452,6 +452,9 @@ def _alpha_shape(body) -> bool:
 # The API paths an error format is held to (FR1): a family's web pages (the OAuth app list in settings, say) answer as
 # web pages do
 API_PREFIXES = ('/api/', '/oauth/')
+# ...but not OAuth's authorization endpoint: the page the person's browser opens, whose errors RFC 6749 §4.1.2.1 has
+# shown to them, not answered as JSON
+WEB_PAGES = ('/oauth/authorize',)
 
 
 def _where(error: BaseException) -> str:
@@ -494,7 +497,8 @@ def check(family: str, data: bytes) -> tuple[str, float]:
     elapsed_ms = (time.monotonic() - started) * 1000
     status = response.status_code
     assert not (status >= 500 and status not in UPSTREAM_STATUSES), f'{label}: answered {status}'
-    shape = ERROR_SHAPES.get(family) if request.rule.rule.startswith(API_PREFIXES) else None
+    is_api = request.rule.rule.startswith(API_PREFIXES) and not request.rule.rule.startswith(WEB_PAGES)
+    shape = ERROR_SHAPES.get(family) if is_api else None
     if shape is not None and 400 <= status < 500:
         body = response.get_json(silent=True)
         assert shape(body), f'{label}: a {status} not in {family}\'s error format: {response.get_data()[:200]!r}'
