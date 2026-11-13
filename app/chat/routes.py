@@ -10,7 +10,7 @@ from app.chat.util import send_message
 from app.constants import NOTIF_REPORT, SRC_WEB, REPORT_TYPE_MESSAGE
 from app.local_only import refuses_remote_contact, remote_contact_refusal_message, without_hidden_conversations
 from app.models import Site, User, Report, ChatMessage, Notification, Conversation, conversation_member, \
-    Community, CommunityBan, ModLog
+    Community, CommunityBan, ModLog, Instance
 from app.shared.site import block_remote_instance
 from app.shared.tasks import task_selector
 from app.utils import recipients_for
@@ -244,6 +244,7 @@ def chat_leave(conversation_id):
 @bp.route('/chat/<int:instance_id>/block_instance', methods=['POST'])
 @login_required
 def block_instance(instance_id):
+    db.session.get(Instance, instance_id) or abort(404)   # as /instance/<id>/block: no instance, no block to add
     block_remote_instance(instance_id, SRC_WEB)
     if instance_id != current_user.instance_id:  # the viewer's own instance was refused with its own flash
         flash(_('Instance blocked.'))
