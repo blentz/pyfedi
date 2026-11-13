@@ -497,6 +497,11 @@ def _where(error: BaseException) -> str:
     return ''.join(traceback.format_list(frames[-6:]))
 
 
+# Mastodon and PeerTube share /api/v1 and /api/v2 (PeerTube's account route hands a numeric one to Mastodon): either's
+# format is right there
+SHARED_FAMILIES = ('mastodon', 'peertube')
+SHARED_PREFIXES = ('/api/v1/', '/api/v2/')
+
 # family -> what its 4xx bodies are (FR1)
 ERROR_SHAPES = {'mastodon': _mastodon_shape, 'lemmy': _mastodon_shape, 'oauth': _mastodon_shape,
                 'peertube': _peertube_shape, 'alpha': _alpha_shape}
@@ -531,10 +536,13 @@ def check(family: str, data: bytes) -> tuple[str, float]:
     status = response.status_code
     assert not (status >= 500 and status not in UPSTREAM_STATUSES), f'{label}: answered {status}'
     is_api = request.rule.rule.startswith(API_PREFIXES) and not request.rule.rule.startswith(WEB_PAGES)
-    shape = ERROR_SHAPES.get(family) if is_api else None
-    if shape is not None and 400 <= status < 500:
+    shapes = [ERROR_SHAPES[family]] if is_api and family in ERROR_SHAPES else []
+    if shapes and family in SHARED_FAMILIES and request.rule.rule.startswith(SHARED_PREFIXES):
+        shapes = [ERROR_SHAPES[name] for name in SHARED_FAMILIES]   # a numeric account is Mastodon's, and so on
+    if shapes and 400 <= status < 500:
         body = response.get_json(silent=True)
-        assert shape(body), f'{label}: a {status} not in {family}\'s error format: {response.get_data()[:200]!r}'
+        assert any(shape(body) for shape in shapes), \
+            f'{label}: a {status} not in {family}\'s error format: {response.get_data()[:200]!r}'
     return label, elapsed_ms
 
 
