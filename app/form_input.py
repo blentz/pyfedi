@@ -7,17 +7,19 @@ through ImmutableMultiDict, with the JSON's values as they are (fuzz-routes find
   browser posts: form.urls.data.strip() raised on None (POST /user/files/upload). An object is read as a form posts it:
   each value as text, null as empty, a list as one value per item.
 * a text field a submitted form leaves out: WTForms 3 leaves its data None, where 2 made it '', and PieFed's views read
-  text fields as text. It is '' again; DataRequired refuses '' as it refused None.
+  text fields as text. It is '' again; DataRequired refuses '' as it refused None. So too when the submission has no
+  form data at all (a CSRF token in a header and no body): Flask-WTF hands WTForms no formdata, no field reads any.
 """
 import json
 
-from flask import abort, request
+from flask import abort, has_request_context, request
 from flask_wtf.form import FlaskForm, _Auto, _is_submitted
 from werkzeug.datastructures import ImmutableMultiDict
 from wtforms.fields.simple import StringField
 
 _flask_wtf_wrap_formdata = FlaskForm.Meta.wrap_formdata
 _wtforms_string_process_formdata = StringField.process_formdata
+_wtforms_string_process = StringField.process
 
 
 def _as_posted(value) -> str:
@@ -47,8 +49,15 @@ def _string_process_formdata(self, valuelist):
         self.data = ''
 
 
+def _string_process(self, formdata, *args, **kwargs):
+    _wtforms_string_process(self, formdata, *args, **kwargs)
+    if self.data is None and has_request_context() and _is_submitted():   # submitted with no form data: no field read any, still empty text
+        self.data = ''
+
+
 def refuse_json_that_is_not_an_object() -> None:
     """Every FlaskForm, PieFed's and its libraries', reads a JSON body only when it is an object, and its values as the
     text a form posts; and every text field a submitted form leaves out reads as empty text."""
     FlaskForm.Meta.wrap_formdata = _wrap_formdata
     StringField.process_formdata = _string_process_formdata
+    StringField.process = _string_process

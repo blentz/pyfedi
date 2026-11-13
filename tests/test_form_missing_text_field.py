@@ -35,3 +35,24 @@ def test_every_kind_of_text_field_is_covered():
         field = kind(validators=[DataRequired()]).bind(form=None, name='f', _meta=LoginForm.Meta())
         field.process(ImmutableMultiDict())
         assert field.data == '', kind
+
+
+# A submitted form with no form data at all (fuzz-routes finding, 2026-11-13: POST /admin/instance/create_offline, its
+# CSRF token in a header and no body, was a 500 at form.domain.data.strip()): Flask-WTF hands WTForms no formdata
+# then, so no field reads any, and a text field's data stayed None. Submitted, it is empty text all the same.
+
+def test_a_text_field_of_a_post_with_no_form_data_is_empty_text(app):
+    with app.test_request_context('/auth/login', method='POST'):
+        assert LoginForm().user_name.data == ''
+
+
+def test_a_post_with_no_form_data_leaves_other_fields_as_they_were(app):
+    with app.test_request_context('/auth/login', method='POST'):
+        form = LoginForm()
+        assert form.low_bandwidth_mode.data is False and form.low_bandwidth_mode.raw_data in (None, [])
+
+
+def test_a_text_field_built_outside_a_request_is_as_it_was():
+    field = StringField().bind(form=None, name='f', _meta=LoginForm.Meta())
+    field.process(None)
+    assert field.data is None
