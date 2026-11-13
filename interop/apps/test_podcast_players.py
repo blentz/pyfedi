@@ -87,7 +87,11 @@ def test_antennapod_syncs_with_piefed_and_lists_the_episode(episode, device, tmp
         device.tap('Choose synchronization provider', exact=True, timeout=30)
         device.tap('gpodder.net', timeout=30)
         device.type_into(by_id('serverUrlText'), 'https://piefed.test')
-        by_id('chooseHostButton').click(timeout=30)
+        for _ in range(3):   # a tap while the keyboard slides away is lost: tap until its login form shows
+            device.hide_keyboard()
+            by_id('chooseHostButton').click(timeout=30)
+            if by_id('etxtUsername').wait(timeout=15):
+                break
         device.type_into(by_id('etxtUsername'), ALICE[0])
         device.type_into(by_id('etxtPassword'), password)
         device.hide_keyboard()
