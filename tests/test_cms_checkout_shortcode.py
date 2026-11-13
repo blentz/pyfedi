@@ -3,6 +3,7 @@ token and knows who they are. A link in markdown can't start a checkout: checkou
 from types import SimpleNamespace
 
 import pytest
+from bs4 import BeautifulSoup
 from cryptography.fernet import Fernet
 from flask import current_app, g
 
@@ -191,3 +192,38 @@ class TestTheText:
         login(env.client, env.member)
         page(f'[checkout {env.tier.id}]', url='/about')
         assert f'action="/donations/checkout/{env.tier.id}"' in env.client.get('/about').get_data(as_text=True)
+
+
+class TestOnlyTextIsRewritten:
+    """A shortcode in an attribute is left as written: drawing a button there would close the attribute, and what the
+    page's author wrote after it would become markup the sanitizer never saw."""
+
+    def test_in_a_link_address(self, env):
+        with env.app.test_request_context('/'):
+            html = str(checkout_shortcodes(f'<p><a href="https://x.example/[checkout {env.tier.id}]">x</a></p>'))
+        assert html == f'<p><a href="https://x.example/[checkout {env.tier.id}]">x</a></p>'
+
+    def test_in_an_attribute_with_words_after_it(self, env):
+        alt = f'[checkout {env.tier.id} x] onerror=alert(1) y'
+        with env.app.test_request_context('/'):
+            html = str(checkout_shortcodes(f'<p><img alt="{alt}" src="/a.png"/></p>'))
+        soup = BeautifulSoup(html, 'html.parser')
+        assert [img.attrs for img in soup.find_all('img')] == [{'alt': alt, 'src': '/a.png'}]
+        assert soup.find('form') is None
+
+    def test_markup_in_the_text_around_it_stays_text(self, env):
+        login(env.client, env.member)
+        body = shown(env, f'&lt;script&gt;x&lt;/script&gt; [checkout {env.tier.id}]')
+        assert '<script>x' not in body and '&lt;script&gt;x' in body
+        assert f'action="/donations/checkout/{env.tier.id}"' in body
+
+    def test_a_label_with_markup_characters_is_text(self, env):
+        login(env.client, env.member)
+        body = shown(env, f'[checkout {env.tier.id} a &lt;b&gt; &amp; c]')
+        form = BeautifulSoup(body, 'html.parser').find('form', action=f'/donations/checkout/{env.tier.id}')
+        assert form.button.get_text() == 'a <b> & c' and form.button.find('b') is None
+
+    def test_in_a_comment(self, env):
+        with env.app.test_request_context('/'):
+            html = str(checkout_shortcodes(f'<p>x</p><!-- [checkout {env.tier.id}] -->'))
+        assert html == f'<p>x</p><!-- [checkout {env.tier.id}] -->'
