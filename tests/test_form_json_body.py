@@ -41,6 +41,13 @@ def test_a_json_object_fills_a_form_with_text_only(app):
         assert request.method == 'POST'
 
 
+def test_a_json_object_or_list_in_a_field_is_its_json_text(app):
+    with app.test_request_context('/auth/login', method='POST',
+                                  json={'user_name': {'a': 1}, 'password': [[1, 2]]}):
+        form = LoginForm()
+        assert form.user_name.data == '{"a": 1}' and form.password.data == '[1, 2]'
+
+
 def test_a_form_reading_a_null_field_is_no_500(app, db_session):
     user = make_user(make_instance('test.piefed.local', software='piefed'), 'jsonuploader', local=True)
     user.verified = True
