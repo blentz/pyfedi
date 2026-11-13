@@ -410,15 +410,25 @@ class P2Play:
 
     def post(self):
         d, text = self.device, marker('p2play-android')
+        d.tap('Comment', exact=True)   # its comments open in a sheet, with the box at its foot
         field = d.ui(className='android.widget.EditText', instance=0)
-        if not field.exists:
-            d.ui.swipe_ext('up', scale=0.6)
         field.click(timeout=30)
         d.type_focused(text)
-        d.hide_keyboard()
-        self._rightmost_button().click()   # the comment box's send
+        self._send_beside(field)
         find_comment(self.world['alice'], self.world['video']['id'], text, timeout=60)
         return f'commented {text!r} on tess\'s video; PieFed has it as a comment'
+
+    def _send_beside(self, field):
+        """The box's send, an unlabelled control on its row to its right (it rides up with the keyboard)."""
+        box = field.info['bounds']
+        middle = (box['top'] + box['bottom']) // 2
+        for index in range(self.device.ui(className='android.view.View', clickable=True).count):
+            control = self.device.ui(className='android.view.View', clickable=True, instance=index)
+            bounds = control.info['bounds']
+            if bounds['left'] >= box['right'] - 1 and bounds['top'] <= middle <= bounds['bottom']:
+                control.click()
+                return
+        raise AssertionError('no send beside the comment box')
 
 
 class NewPipe:
