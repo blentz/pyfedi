@@ -6,10 +6,32 @@ from flask import current_app, jsonify, render_template, request
 from app import db, limiter
 from app.errors import bp
 from app.models import CmsPage
+from app.peertube.entities import problem
+
+
+def api_not_found():
+    """The 404 of the API whose prefix the path is under, in that API's own error format (ruling FR1), or None for a
+    path no API owns. Mastodon and PeerTube share /api/v1 and /api/v2: PeerTube's problem+json carries the `error`
+    Mastodon's clients read."""
+    path = request.path
+    if path.startswith('/api/v3/') or path == '/api/v3':
+        return jsonify({'error': 'not_found'}), 404
+    if path.startswith('/api/alpha/'):
+        return jsonify({'code': 404, 'message': 'not found', 'status': 'Not Found', 'error': 'not_found'}), 404
+    if path.startswith(('/api/v1.1/', '/api/pixelfed/')):
+        return jsonify({'error': 'Record not found'}), 404
+    if path.startswith(('/api/v1/', '/api/v2/')):
+        return problem(404, 'not_found', 'Not found')
+    if path.startswith('/oauth/') and not path.startswith('/oauth/authorize'):
+        return jsonify({'error': 'not_found'}), 404
+    return None
 
 
 @bp.app_errorhandler(404)
 def not_found_error(error):
+    answer = api_not_found()
+    if answer is not None:
+        return answer
     # Skip page lookup for static files and known non-page paths to avoid unnecessary DB hits
     if (request.path.startswith('/static/') or
             request.path.startswith('/api/') or
