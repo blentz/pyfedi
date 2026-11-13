@@ -10,7 +10,7 @@ from wtforms import StringField, PasswordField, SubmitField, EmailField, Boolean
     SelectField, FileField, IntegerField, RadioField, DateField, DecimalField
 from wtforms.fields.choices import SelectMultipleField
 from wtforms.validators import ValidationError, DataRequired, EqualTo, InputRequired, Length, \
-    NumberRange, Optional
+    NumberRange, Optional, Regexp
 from flask_babel import _, lazy_gettext as _l
 
 from app.project_links import MAX_LENGTH, UPSTREAM_BUG_REPORT, UPSTREAM_GET_INVOLVED, UPSTREAM_SOURCE, is_web_url
@@ -399,8 +399,13 @@ class CreateOfflineInstanceForm(FlaskForm):
             raise ValidationError(_l('That instance is already known here'))
 
 
+# A blocked image's hash is a PDQ hash, 256 bits as text: the bit(256) column refuses anything else, a 500
+# (fuzz-routes finding, 2026-11-13), so the form does first.
+HASH_BITS = Regexp(r'^[01]*$', message=_l('A hash is 256 characters, each 0 or 1'))
+
+
 class EditBlockedImageForm(FlaskForm):
-    hash = TextAreaField(_l('Hash'), validators=[DataRequired(), Length(min=256, max=256)])
+    hash = TextAreaField(_l('Hash'), validators=[DataRequired(), Length(min=256, max=256), HASH_BITS])
     file_name = StringField(_l('Filename'), validators=[Optional(), Length(max=256)])
     note = StringField(_l('Note'), validators=[Optional(), Length(max=256)])
     submit = SubmitField(_l('Save'))
@@ -408,10 +413,18 @@ class EditBlockedImageForm(FlaskForm):
 
 class AddBlockedImageForm(FlaskForm):
     url = StringField(_l('Url'), validators=[Optional()])
-    hash = TextAreaField(_l('Hash'), validators=[Optional(), Length(min=256, max=256)])
+    hash = TextAreaField(_l('Hash'), validators=[Optional(), Length(min=256, max=256), HASH_BITS])
     file_name = StringField(_l('Filename'), validators=[Optional(), Length(max=256)])
     note = StringField(_l('Note'), validators=[Optional(), Length(max=256)])
     submit = SubmitField(_l('Save'))
+
+    def validate(self, extra_validators=None):
+        if not super().validate(extra_validators):
+            return False
+        if bool(self.url.data.strip()) == bool(self.hash.data.strip()):   # the page asks for one, not both
+            self.url.errors.append(_l('Provide the url of an image or the hash (and file name) of it, but not both.'))
+            return False
+        return True
 
 
 class AddUserForm(FlaskForm):
