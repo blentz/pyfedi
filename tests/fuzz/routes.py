@@ -21,6 +21,7 @@ import base64
 import re
 import socket
 import time
+import traceback
 import urllib.parse
 import zlib
 from contextlib import contextmanager
@@ -448,6 +449,18 @@ def _alpha_shape(body) -> bool:
     return isinstance(body, dict) and 'code' in body and isinstance(body.get('message'), str)
 
 
+# The API paths an error format is held to (FR1): a family's web pages (the OAuth app list in settings, say) answer as
+# web pages do
+API_PREFIXES = ('/api/', '/oauth/')
+
+
+def _where(error: BaseException) -> str:
+    """The last frames of PieFed's own code `error` passed through: what a finding's report needs."""
+    frames = [frame for frame in traceback.extract_tb(error.__traceback__) if '/app/' in frame.filename
+              and '/site-packages/' not in frame.filename]
+    return ''.join(traceback.format_list(frames[-6:]))
+
+
 # family -> what its 4xx bodies are (FR1)
 ERROR_SHAPES = {'mastodon': _mastodon_shape, 'lemmy': _mastodon_shape, 'oauth': _mastodon_shape,
                 'peertube': _peertube_shape, 'alpha': _alpha_shape}
@@ -473,7 +486,7 @@ def check(family: str, data: bytes) -> tuple[str, float]:
             response = client.open(request.path, method=request.method, query_string=request.query,
                                    headers=request.headers, base_url='https://test.piefed.local', **request.body)
     except Exception as error:   # TESTING propagates a view's exception: the 500 a visitor would have got
-        raise AssertionError(f'{label}: raised {error!r}') from error
+        raise AssertionError(f'{label}: raised {error!r}\n{_where(error)}') from error
     finally:
         app.config['WTF_CSRF_ENABLED'] = csrf_setting
         restore()
@@ -481,7 +494,7 @@ def check(family: str, data: bytes) -> tuple[str, float]:
     elapsed_ms = (time.monotonic() - started) * 1000
     status = response.status_code
     assert not (status >= 500 and status not in UPSTREAM_STATUSES), f'{label}: answered {status}'
-    shape = ERROR_SHAPES.get(family)
+    shape = ERROR_SHAPES.get(family) if request.rule.rule.startswith(API_PREFIXES) else None
     if shape is not None and 400 <= status < 500:
         body = response.get_json(silent=True)
         assert shape(body), f'{label}: a {status} not in {family}\'s error format: {response.get_data()[:200]!r}'
