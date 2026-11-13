@@ -15,9 +15,16 @@ CORPUS_ROOT = Path(__file__).parent / 'fuzz' / 'corpus'
 KNOWN_UNFIXED: dict[str, str] = {}   # 'routes_<family>/<file>' -> the finding, until its fix
 
 
-@pytest.mark.parametrize('family', sorted(FAMILIES))
-def test_every_route_seed_satisfies_the_oracle(db_session, family):
+@pytest.fixture
+def world(db_session):
+    """The seeded world and its snapshot for one family's replay, and their triggers taken away after it."""
     routes.prepare(force=True)
+    yield
+    routes.forget()
+
+
+@pytest.mark.parametrize('family', sorted(FAMILIES))
+def test_every_route_seed_satisfies_the_oracle(world, family):
     failures, fixed = [], []
     for path in sorted((CORPUS_ROOT / f'routes_{family}').glob('*')):
         case = f'routes_{family}/{path.name}'

@@ -141,6 +141,7 @@ class World:
 
 _STATE: dict = {}
 SNAPSHOT = 'fuzz_routes_snapshot'
+TRIGGER = 'fuzz_routes_dirty'
 ROLES = ('member', 'moderator', 'admin', 'banned')
 
 
@@ -205,34 +206,63 @@ def _empty_every_table() -> None:
 
 
 def _take_snapshot() -> None:
+    """Every table and sequence copied into SNAPSHOT, and a statement trigger on every table that notes it in
+    SNAPSHOT.dirty once anything writes to it, so a restore copies back only what a request changed. The restore
+    itself writes with triggers off (session_replication_role), so it marks nothing."""
     with db.engine.begin() as connection:
         connection.exec_driver_sql(f'DROP SCHEMA IF EXISTS {SNAPSHOT} CASCADE')
         connection.exec_driver_sql(f'CREATE SCHEMA {SNAPSHOT}')
-        for table in _tables(connection):
+        tables = _tables(connection)
+        for table in tables:
             connection.exec_driver_sql(f'CREATE TABLE {SNAPSHOT}."{table}" AS TABLE public."{table}"')
         connection.exec_driver_sql(
             f'CREATE TABLE {SNAPSHOT}._sequences AS SELECT sequencename AS name, last_value AS value '
             f"FROM pg_sequences WHERE schemaname = 'public'")
+        connection.exec_driver_sql(f'CREATE UNLOGGED TABLE {SNAPSHOT}.dirty (name text PRIMARY KEY)')
+        connection.exec_driver_sql(
+            f'CREATE FUNCTION {SNAPSHOT}.note() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN '
+            f'INSERT INTO {SNAPSHOT}.dirty VALUES (TG_TABLE_NAME) ON CONFLICT DO NOTHING; RETURN NULL; END $$')
+        for table in tables:
+            connection.exec_driver_sql(
+                f'CREATE TRIGGER {TRIGGER} AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON public."{table}" '
+                f'FOR EACH STATEMENT EXECUTE FUNCTION {SNAPSHOT}.note()')
+    _STATE['columns'] = {}
+
+
+def forget() -> None:
+    """The snapshot and its triggers gone, so the tests after a replay write to tables that note nothing."""
+    with db.engine.begin() as connection:
+        for table in _tables(connection):
+            connection.exec_driver_sql(f'DROP TRIGGER IF EXISTS {TRIGGER} ON public."{table}"')
+        connection.exec_driver_sql(f'DROP SCHEMA IF EXISTS {SNAPSHOT} CASCADE')
+    _STATE.clear()
+
+
+def _columns(connection, table: str) -> str:
+    cached = _STATE.setdefault('columns', {})
+    if table not in cached:
+        cached[table] = ', '.join(f'"{row[0]}"' for row in connection.exec_driver_sql(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = "
+            f"'{table}' AND is_generated = 'NEVER' ORDER BY ordinal_position"))
+    return cached[table]
 
 
 def restore() -> None:
-    """Every table as the snapshot holds it, in one transaction with triggers off; flask.g and Redis's counters
-    cleared, as the suite's db_session does between tests."""
+    """Every table a request wrote put back as the snapshot holds it, in one transaction with triggers off, and every
+    sequence; flask.g and Redis's counters cleared, as the suite's db_session does between tests."""
     db.session.rollback()
     db.session.remove()
     with db.engine.begin() as connection:
         connection.exec_driver_sql('SET LOCAL session_replication_role = replica')
-        tables = _tables(connection)
-        connection.exec_driver_sql('DELETE FROM ' + '; DELETE FROM '.join(f'public."{table}"' for table in tables))
-        for table in tables:
-            columns = [row[0] for row in connection.exec_driver_sql(
-                "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = "
-                f"'{table}' AND is_generated = 'NEVER' ORDER BY ordinal_position")]
-            names = ', '.join(f'"{column}"' for column in columns)
+        dirty = [row[0] for row in connection.exec_driver_sql(f'DELETE FROM {SNAPSHOT}.dirty RETURNING name')]
+        for table in dirty:
+            names = _columns(connection, table)
+            connection.exec_driver_sql(f'DELETE FROM public."{table}"')
             connection.exec_driver_sql(f'INSERT INTO public."{table}" ({names}) OVERRIDING SYSTEM VALUE '
                                        f'SELECT {names} FROM {SNAPSHOT}."{table}"')
-        for name, value in connection.exec_driver_sql(f'SELECT name, value FROM {SNAPSHOT}._sequences').all():
-            connection.exec_driver_sql(f"SELECT setval('public.\"{name}\"', {value or 1}, {value is not None})")
+        connection.exec_driver_sql(
+            f"SELECT setval(format('public.%%I', name), coalesce(value, 1), value IS NOT NULL) "
+            f'FROM {SNAPSHOT}._sequences')
     g.__dict__.clear()
     redis_client = app_package.redis_client
     if redis_client is not None:
@@ -373,15 +403,18 @@ def decode(app, family: str, data: bytes, world: World) -> Request:
 
 def _path(app, rule, method: str, values: dict) -> str:
     """The rule's path with `values`, through the router when they fit its converters, else written in by hand."""
-    try:
-        return app.url_map.bind('test.piefed.local').build(rule.endpoint, values, method=method,
-                                                          append_unknown=False)
-    except Exception:
-        def fill(match):
-            name = match.group(2)
-            safe = '/' if match.group(1) == 'path' else ''
-            return urllib.parse.quote(str(values.get(name, '')), safe=safe)
-        return re.sub(r'<(?:(\w+)(?:\([^)]*\))?:)?(\w+)>', fill, rule.rule)
+    try:   # the rule's own path: an endpoint with several rules builds its first by name, not this one
+        built = rule.build(values, append_unknown=False)
+        if built is not None:
+            return built[1]
+    except Exception:   # a value its converter refuses: written in by hand, for the router to turn away
+        pass
+
+    def fill(match):
+        name = match.group(2)
+        safe = '/' if match.group(1) == 'path' else ''
+        return urllib.parse.quote(str(values.get(name, '')), safe=safe)
+    return re.sub(r'<(?:(\w+)(?:\([^)]*\))?:)?(\w+)>', fill, rule.rule)
 
 
 def header_value(text: str) -> str:
