@@ -2698,8 +2698,9 @@ def user_file_upload():
             flash(_('You have exceeded your storage quota.'), 'error')
             return redirect(safe_redirect_target(form.referrer.data, url_for('user.user_files')))
 
-        if form.urls.data.strip() != '':
-            urls = form.urls.data.strip().split('\n')
+        urls_text = (form.urls.data or '').strip()   # None when a post leaves the field out
+        if urls_text != '':
+            urls = urls_text.split('\n')
             # D1062. One submission could add a File row per line, and the box
             # holds 10,000 characters -- roughly a thousand rows, recorded with size 0
             # and never fetched to be measured (D1061, owner ruling: no quota is
