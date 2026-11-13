@@ -248,6 +248,7 @@ def prepare(force: bool = False) -> World:
         _empty_every_table()
         _STATE['world'] = _seed_world()
         _take_snapshot()
+        _STATE['clean'] = False   # the session the seeding used is still open: restore before the first request
     return _STATE['world']
 
 
@@ -365,7 +366,7 @@ def decode(app, family: str, data: bytes, world: World) -> Request:
     body = _body(draw)
     headers = {'Accept': draw.choose(ACCEPTS), 'User-Agent': draw.choose(USER_AGENTS)}
     if draw.below(4) == 0:
-        headers['Signature'] = draw.text(512)
+        headers['Signature'] = header_value(draw.text(512))
     return Request(rule, method, path, identity, query, body, headers)
 
 
@@ -380,6 +381,12 @@ def _path(app, rule, method: str, values: dict) -> str:
             safe = '/' if match.group(1) == 'path' else ''
             return urllib.parse.quote(str(values.get(name, '')), safe=safe)
         return re.sub(r'<(?:(\w+)(?:\([^)]*\))?:)?(\w+)>', fill, rule.rule)
+
+
+def header_value(text: str) -> str:
+    """`text` as a header can carry it: no CR, LF or NUL, which no HTTP request can hold in a value (the test client
+    refuses to send one, and that refusal is not a finding)."""
+    return re.sub(r'[\r\n\x00]', ' ', text)
 
 
 def _body(draw: Draw) -> dict:
@@ -451,7 +458,9 @@ def check(family: str, data: bytes) -> tuple[str, float]:
     took in milliseconds, which the target holds to REQUEST_BUDGET_MS (tests/fuzz/targets/routes.py)."""
     app = current_app._get_current_object()
     world = prepare()
-    restore()
+    if not _STATE.get('clean'):   # the last input's restore is this one's: only the first, or after a failed one
+        restore()
+    _STATE['clean'] = False
     request = decode(app, family, data, world)
     client = app.test_client()
     _sign_in(app, client, world, request.identity, request)
@@ -468,6 +477,7 @@ def check(family: str, data: bytes) -> tuple[str, float]:
     finally:
         app.config['WTF_CSRF_ENABLED'] = csrf_setting
         restore()
+        _STATE['clean'] = True
     elapsed_ms = (time.monotonic() - started) * 1000
     status = response.status_code
     assert not (status >= 500 and status not in UPSTREAM_STATUSES), f'{label}: answered {status}'
