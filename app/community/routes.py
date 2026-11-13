@@ -410,10 +410,8 @@ def community_post_query(community: Community, content_type: str, flair: str = '
     return posts, content_filters
 
 
-# @bp.route('/c/<actor>', methods=['GET']) - defined in activitypub/routes.py, which calls this function for user requests. A bit weird.
-@login_required_if_private_instance
-@check_anoobis
-def show_community(community: Community, from_instance=None):
+def visible_community_or_abort(community: Community) -> None:
+    """Refuse a community its reader may not see: the community's page, and every page that names it."""
     if community.banned:
         abort(404)
     if hidden_here(community):
@@ -425,6 +423,13 @@ def show_community(community: Community, from_instance=None):
     # the page a browser actually reaches, did not.
     if community.private and community.id not in community_membership_private(current_user.get_id()):
         abort(403)
+
+
+# @bp.route('/c/<actor>', methods=['GET']) - defined in activitypub/routes.py, which calls this function for user requests. A bit weird.
+@login_required_if_private_instance
+@check_anoobis
+def show_community(community: Community, from_instance=None):
+    visible_community_or_abort(community)
 
     block_honey_pot()
 
@@ -1606,6 +1611,7 @@ def community_report(community_id: int):
         return show_ban_message()
 
     community = db.session.get(Community, community_id) or abort(404)
+    visible_community_or_abort(community)   # the page names the community, as its own page would
     form = ReportCommunityForm()
     if form.validate_on_submit():
         # D1393. `admin/reports.html` renders each row with
