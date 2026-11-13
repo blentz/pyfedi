@@ -2,7 +2,7 @@ from flask import redirect, url_for, flash, request, make_response, session, cur
 import base64
 from webauthn import options_to_json, generate_registration_options, verify_registration_response
 from webauthn.helpers import parse_registration_credential_json
-from webauthn.helpers.exceptions import InvalidRegistrationResponse
+from webauthn.helpers.exceptions import InvalidJSONStructure, InvalidRegistrationResponse
 from webauthn.helpers.structs import PublicKeyCredentialDescriptor, \
     AttestationConveyancePreference, AuthenticatorSelectionCriteria, ResidentKeyRequirement
 from flask_login import current_user
@@ -95,8 +95,15 @@ def user_passkey_verification():
     # missing key was a 500. `Passkey.device` is String(50) and this value was
     # written to it unbounded, which is a DataError at the commit below -- and the
     # passkey is lost with the request.
-    registration_credential = parse_registration_credential_json(request_json.get('response'))
-    registration_device = (request_json.get('device') or '')[:50]
+    registration_device = request_json.get('device') or ''
+    if not isinstance(registration_device, str):
+        abort(400)
+    registration_device = registration_device[:50]
+    # a body that is no credential is a malformed request, not a 500 (fuzz-routes finding, 2026-11-13)
+    try:
+        registration_credential = parse_registration_credential_json(request_json.get('response'))
+    except (InvalidJSONStructure, InvalidRegistrationResponse, ValueError):
+        abort(400)
     try:
         registration_verification = verify_registration_response(
             credential = registration_credential,
