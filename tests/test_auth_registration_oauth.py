@@ -26,7 +26,7 @@ from app.auth.forms import RegistrationForm
 from app.models import Instance, Site, User, UserRegistration
 from tests.factories import make_instance, make_user
 
-pytestmark = pytest.mark.usefixtures('site')
+pytestmark = pytest.mark.usefixtures('site', 'oauth_providers_configured')
 
 
 def instance(domain='test.piefed.local', software='piefed'):

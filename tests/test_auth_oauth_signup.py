@@ -32,7 +32,7 @@ from app.auth.oauth_util import (can_user_register, current_user_is_banned,
 from app.models import Instance, Site, User, UserRegistration
 from tests.factories import make_community, make_local_feed, make_user, make_instance
 
-pytestmark = pytest.mark.usefixtures('site')
+pytestmark = pytest.mark.usefixtures('site', 'oauth_providers_configured')
 
 
 def instance(domain='test.piefed.local', software='piefed'):

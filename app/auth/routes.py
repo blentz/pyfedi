@@ -1,3 +1,4 @@
+from functools import wraps
 from datetime import datetime
 
 from flask import abort, flash, g, make_response, redirect, request, url_for, current_app, session
@@ -46,6 +47,24 @@ from app.utils import (
     user_ip_banned,
     user_cookie_banned,
 )
+
+
+def provider_configured(name: str) -> bool:
+    return oauth.create_client(name) is not None
+
+
+def oauth_provider(name: str):
+    """A route of the social login provider `name`: a 404 where it is not configured. A provider is registered only
+    when its client id is set (app/__init__.py), and reaching an unregistered one raised AttributeError, a 500 to
+    anyone who asked (fuzz-routes finding, 2026-11-13)."""
+    def decorator(view):
+        @wraps(view)
+        def guarded(*args, **kwargs):
+            if not provider_configured(name):
+                abort(404)
+            return view(*args, **kwargs)
+        return guarded
+    return decorator
 
 
 @bp.route("/login", methods=["GET", "POST"])
@@ -267,6 +286,7 @@ def permission_denied():
 
 
 @bp.route("/google_login")
+@oauth_provider('google')
 @clearnet_only('auth.login')
 def google_login():
     # If user is already logged in, redirect to connect route
@@ -276,6 +296,7 @@ def google_login():
 
 
 @bp.route("/google_connect")
+@oauth_provider('google')
 @clearnet_only('user.connect_oauth')
 @login_required
 def google_connect():
@@ -283,6 +304,7 @@ def google_connect():
 
 
 @bp.route("/google_authorize")
+@oauth_provider('google')
 @clearnet_only('auth.login')
 def google_authorize():
     return handle_oauth_authorize(
@@ -293,6 +315,7 @@ def google_authorize():
 
 
 @bp.route("/google_connect_callback")
+@oauth_provider('google')
 @clearnet_only('user.connect_oauth')
 @login_required
 def google_connect_callback():
@@ -327,6 +350,7 @@ def google_connect_callback():
 
 
 @bp.route("/mastodon_login")
+@oauth_provider('mastodon')
 @clearnet_only('auth.login')
 def mastodon_login():
     # If user is already logged in, redirect to the connect route
@@ -336,6 +360,7 @@ def mastodon_login():
 
 
 @bp.route("/mastodon_authorize", methods=["GET", "POST"])
+@oauth_provider('mastodon')
 @clearnet_only('auth.login')
 def mastodon_authorize():
     oauth_id_key = 'mastodon_oauth_id'
@@ -404,6 +429,7 @@ def mastodon_authorize():
 
 
 @bp.route("/mastodon_connect")
+@oauth_provider('mastodon')
 @clearnet_only('user.connect_oauth')
 @login_required
 def mastodon_connect():
@@ -418,6 +444,7 @@ def mastodon_connect():
 
 
 @bp.route("/mastodon_connect_callback")
+@oauth_provider('mastodon')
 @clearnet_only('user.connect_oauth')
 @login_required
 def mastodon_connect_callback():
@@ -456,6 +483,7 @@ def mastodon_connect_callback():
 
 
 @bp.route("/discord_login")
+@oauth_provider('discord')
 @clearnet_only('auth.login')
 def discord_login():
     # If user is already logged in, redirect to connect route
@@ -465,6 +493,7 @@ def discord_login():
 
 
 @bp.route("/discord_connect")
+@oauth_provider('discord')
 @clearnet_only('user.connect_oauth')
 @login_required
 def discord_connect():
@@ -472,6 +501,7 @@ def discord_connect():
 
 
 @bp.route("/discord_authorize")
+@oauth_provider('discord')
 @clearnet_only('auth.login')
 def discord_authorize():
     return handle_oauth_authorize(
@@ -482,6 +512,7 @@ def discord_authorize():
 
 
 @bp.route("/discord_connect_callback")
+@oauth_provider('discord')
 @clearnet_only('user.connect_oauth')
 @login_required
 def discord_connect_callback():

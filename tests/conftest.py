@@ -1440,3 +1440,11 @@ def pytest_xdist_make_scheduler(config, log):
     if config.getvalue('dist') == 'loadgroup':
         return WorkerGroupScheduling(config, log)
     return None
+
+
+@pytest.fixture
+def oauth_providers_configured(monkeypatch):
+    """Google, Mastodon and Discord login reachable, as on a server that configured them: a test that answers for the
+    provider itself (patching app.auth.oauth_util) asks for this. Unconfigured, their routes are 404s
+    (app.auth.routes.oauth_provider; tests/test_social_login_unconfigured.py)."""
+    monkeypatch.setattr('app.auth.routes.provider_configured', lambda name: True)

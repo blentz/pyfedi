@@ -25,6 +25,8 @@ from tests.test_login_failure_log import CLEARNET, clearnet_login, failures, onl
 from tests.test_onion_guard_limits import (LOGIN, PASSWORD, a_session, alice, limited_app, directory, ldap_off, login_form, onion,  # noqa: F401
                                            onion_get, onion_post, proof_given)
 
+pytestmark = pytest.mark.usefixtures('oauth_providers_configured')
+
 
 @pytest.fixture(autouse=True)
 def captured(caplog):

@@ -15,7 +15,7 @@ from app.utils import get_setting, set_setting
 from tests.factories import staff_role, make_instance, make_user
 from tests.test_admin_routes_entry import _language, _valid_misc_payload, csrf, login
 
-pytestmark = pytest.mark.usefixtures('site')
+pytestmark = pytest.mark.usefixtures('site', 'oauth_providers_configured')
 
 SERVER = 'test.piefed.local'
 
