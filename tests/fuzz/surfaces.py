@@ -210,6 +210,12 @@ SURFACES: dict[str, list[str]] = {
         'app.branding.onion_safe',
         'app.branding._style_kept_open',
     ],
+    # Every external-facing route (spec 2026-11-13-fuzz-every-route-design): each rule of the app's url_map, reached
+    # through Flask as a request from outside reaches it. The rules themselves are held to a family with a target by
+    # tests/test_fuzz_routes_registry.py; this names the one entry they all pass through.
+    'routes': [
+        'flask.Flask.wsgi_app',
+    ],
     # The sidebars' box order: the stored order every page reads, and the admin button posted to change it.
     'sidebar': [
         'app.sidebar.layout',
