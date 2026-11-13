@@ -141,8 +141,6 @@ def join_feed(actor, user_id, src=SRC_WEB):
             db.session.delete(member)
         db.session.commit()
         raise
-    finally:
-        db.session.remove()
 
 
 def leave_feed(feed: int | Feed, src, auth=None, bulk_leave=False):
