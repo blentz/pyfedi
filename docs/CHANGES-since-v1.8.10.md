@@ -68,10 +68,10 @@ This summary covers the branch up to the end of the fuzzing track
 
 Before the rebase the same work was 3,250 commits on `v1.7.17`; the two that
 dropped out are listed in section 1.1. The branch has since grown to
-4,478 commits. Of the tracks after 2026-10-14, roles and permissions, payments,
-the media cap and the client-app APIs are summarised here; onion storefronts and
-multi-domain storefronts, Pixelfed and Loops interop and referral-code
-registration are not yet.
+4,525 commits. Of the tracks after 2026-10-14, roles and permissions, payments,
+the media cap, the client-app APIs and the work of 2026-11-12 and 2026-11-13
+(below) are summarised here; onion storefronts and multi-domain storefronts,
+Pixelfed and Loops interop and referral-code registration are not yet.
 
 The client-app APIs (2026-11-07 to 2026-11-12, 233 commits after the payments
 track) follow `docs/superpowers/plans/2026-11-07-api-completeness.md`, whose goal
@@ -88,8 +88,22 @@ logged in, read and posted there:
 - Lemmy's `/api/v3` for Jerboa (W3).
 - gpodder.net sync for podcast apps (W4).
 
+After the client-app APIs (2026-11-12 and 2026-11-13, 43 commits):
+
+- Admins order the home and community sidebars' boxes and hide some, for the
+  site and for each domain (`5c424327`).
+- The footer's source-code, bug-report and get-involved links are set on the
+  site profile, and the source link is also what nodeinfo and the Mastodon API
+  report (`b65b4fd6`).
+- Optional HLS copies of uploaded videos, off by default (`8e94a322`).
+- PeerTube's My videos and video reports, for P2Play (`c9683362`).
+- The app harness gives every test a clean PieFed and puts it back afterwards,
+  and drives every app it lists, Moshidon and P2Play included.
+- Every HTTP route is fuzzed with atheris, signed in and out, with each finding
+  fixed (spec `2026-11-13-fuzz-every-route-design.md`, section 4).
+
 The test suite collected 23,526 tests on 2026-10-14, 29,440 after the
-rebase, and 33,001 on 2026-11-12.
+rebase, 33,001 on 2026-11-12 and 33,380 on 2026-11-13.
 
 ### 1.1 The rebase onto v1.8.10
 
@@ -318,6 +332,8 @@ scan. The backfill `UPDATE`s touch only rows that are actually NULL.
 | 43 | `a4d9e1c7b3f2` story_view_and_expiry | Creates `story_view` (who saw a story) and `story_expiry` (a story its author ended early). (`c9aadf19`) | No |
 | 44 | `b7e2c9d4f1a3` gpodder_devices_and_subscriptions | Creates `gpodder_device` and `gpodder_subscription`. (`35f5053a`) | No |
 | 45 | `c3f8a1e6d2b9` gpodder_episode_actions | Creates `gpodder_episode_action`. (`03f0b400`) | No |
+| 46 | `e5a8c2f7b4d1` sidebar_box_order | Adds `home_sidebar` and `community_sidebar` to `site` (default empty: the boxes in their usual order) and to `domain_branding` (NULL: the site's order). (`5c424327`) | No |
+| 47 | `f2b6d8a4c9e1` project_links | Adds `source_url`, `bug_report_url` and `get_involved_url` to `site`, each empty by default, which means upstream PieFed's. (`b65b4fd6`) | No |
 
 Downgrades remove defaults, constraints, columns and the new tables, but do
 not restore the NULLs, invented counters, rankings, cross-post links or
@@ -344,6 +360,8 @@ New or changed settings in `env.sample`, `env.docker.sample` and `config.py`:
 | `discovery_sync_per_host` (admin Discovery tab) | 0 (off) | How many of each host's top PeerTube channels and Castopod podcasts the instance actor follows and polls. Proactive sync does nothing until it is set (`cdc0ab1c`, `819fb1b4`). |
 | `discovery_external_search` (admin Discovery tab) | on | Lets search include PeerTube videos from the wider network through SepiaSearch. Each viewer must still tick the option (`35b61d6c`). |
 | `remote_image_cache_days` (admin Misc page) | 30 | **Now enforced.** Local copies of a remote post's images are deleted once the post arrived this many days ago, and pages load the image from its origin instead. 0 or empty keeps them forever. The column existed before but nothing read it, so an instance holding the old default of 30 starts evicting once `expire_old_media.sh` runs (see 2.2.1). (`f2182a54`) |
+| `video_hls` (admin, `/admin/video_hls`, linked from Misc) | off | HLS copies of local video uploads (5). Turning it on affects new uploads only; the page has a button that makes copies for earlier videos. Turning it off stops listing the copies and keeps their files; another button deletes them all. A video's storage roughly doubles while it has them. (`8e94a322`) |
+| `source_url`, `bug_report_url`, `get_involved_url` (admin site profile) | empty, meaning upstream PieFed's | The footer's AGPL source link, bug-report link and get-involved link. The source URL is also nodeinfo's repository and the Mastodon API's `source_url` (2.5). A link must be an http or https URL with a host. **An instance running modified code should set the source URL**, as the AGPL asks. (`b65b4fd6`) |
 | `oauth_admin_role` (admin Misc page) | the role named Staff | Which role an app's `admin:read` and `admin:write` scopes stand for. A person holding it (or Admin) is granted them; anyone else is told on the consent page that they are left out. A token's admin reach is that role's permissions, as the person holds them. No admin API routes use them yet. (`52c495b8`) |
 
 `config.py` no longer imports `app.constants`; it reads `VERSION` from
@@ -372,7 +390,9 @@ aarch64 wheel, which is why it must stay out of the production install.
   jobs' last runs.
 - **Video uploads gain 480p and 360p copies** (`23d94091`), made with ffmpeg on
   the `background` queue after the upload is ready. Expect that worker to use
-  more CPU on an instance that takes video uploads.
+  more CPU on an instance that takes video uploads. HLS copies, when turned on,
+  are made on the same queue by stream copy, which costs little CPU but roughly
+  doubles a video's storage, on disk or in S3 (`8e94a322`).
 - **The web container starts when data.lemmyverse.net does not answer**
   (`b0f9a296`). `entrypoint.sh` used to exit when `flask populate_community_search`
   failed; it now keeps the previous run's list and starts anyway.
@@ -840,6 +860,25 @@ podcast apps that sync through gpodder.net, can now sign in to a PieFed account.
 - **gpodder sync joins communities.** Adding a PieFed community's own feed in a
   podcast app joins that community, and removing it leaves; playing an episode
   that is a PieFed post marks it read (rulings G2 and G3, `35f5053a`, `03f0b400`).
+- **Sidebar order.** At `/admin/sidebar` an admin orders the home page's boxes
+  (new and active communities, upcoming events, recent tags, about, new
+  instances) and the community page's (actions, upcoming events, servers, about,
+  related communities, feeds) with up and down buttons, and hides any of them. A
+  domain can have its own order at `/admin/domains/<id>/sidebar`, or follow the
+  site's. The dillo theme follows the order for the boxes it has. Boxes are now
+  spaced evenly rather than by margins fitted to the old fixed order (rulings S1
+  to S4, `5c424327`).
+- **Footer links.** The footer's source, bug-report and get-involved links come
+  from the site profile (2.2), in the default theme and dillo. The translated
+  footer sentence keeps its translation; only its URLs are replaced (rulings P1
+  and P2, `b65b4fd6`).
+- **Social login that is not configured.** The Google, Mastodon and Discord
+  login, connect and callback routes are 404s where that provider has no
+  credentials; they raised a 500 before (`d44682c8`).
+- **The community report page** (`/community/community/<id>/report`) renders. Its
+  template had never existed, so it was a 500. It shows a community only to
+  someone who may see the community's own page: a banned community is a 404, a
+  private one a 403 to non-members (`4ccf385f`).
 
 ### 2.4 API contract changes (for client developers)
 
@@ -952,6 +991,29 @@ communities, local-only content, the domain's rules) and writes through
   `login.json` sets; devices; one subscription list per person shared by their
   devices; episode actions. Failed sign-ins are counted per address and account
   and refused with 429 past 20 an hour, before any password is tried.
+- **PeerTube additions for P2Play** (`c9683362`): `GET /api/v1/users/me/videos`
+  lists the signed-in person's own videos, and `POST /api/v1/videos/<id>/abuse`
+  (PeerTube's older report endpoint) reports a video through PieFed's report
+  queue and answers `{abuse: {id}}`. While HLS is on (2.2), a video's
+  `streamingPlaylists` lists its HLS master playlist (`8e94a322`).
+- **Mastodon `source_url`.** `/api/v2/instance` reports the site's source URL
+  (2.2, `b65b4fd6`); it was upstream PieFed's repository whatever the site ran.
+
+**Errors under each API's prefix** (route-fuzzing track, section 4). Each API
+now answers its own error format wherever a request lands under its prefix:
+
+- A path under a prefix that names no route is that API's 404, not the site's
+  HTML page: `{"error": ...}` for Lemmy `/api/v3` and OAuth `/oauth/`, alpha's
+  `{code, message, status, error}` for `/api/alpha/`, Pixelfed's `{"error":
+  "Record not found"}` for `/api/v1.1/` and `/api/pixelfed/`, and a
+  problem+json body for `/api/v1/` and `/api/v2/` (`4ea9d208`). A method a route
+  does not take is that API's 405 the same way (`5b9800bf`). `/oauth/authorize`
+  is a web page and keeps the site's pages.
+- Every PeerTube error is `application/problem+json` with `type`, `title`,
+  `detail`, `status` and `code`, keeping `error` for older clients
+  (`5bcbe96d`).
+- alpha's 28 placeholder routes (not yet implemented, or renamed) answer alpha's
+  `{code, message, status}` and keep `error` (ruling FR4, `33099b72`).
 
 **`/api/alpha` changes from the shared read layer** (W0.1). Moving alpha's reads
 into `app/reads/` found five places where it told a reader more than the web does:
@@ -1218,6 +1280,10 @@ Since the register closed:
 - **Nodeinfo by agent.** Only Jerboa's and PixelDroid's agents, and Pixelfed's
   own path, are told another software's name (2.3). Servers and crawlers are told
   PieFed, as before.
+- **Nodeinfo names this server's source.** nodeinfo 2.1's `software.repository`
+  and 2.0's `software.repo` (which PixelDroid reads) are the site's source URL,
+  upstream PieFed's unless an admin sets another; `software.homepage` stays
+  PieFed's (ruling P1, `b65b4fd6`).
 
 ---
 
@@ -1704,6 +1770,43 @@ owner ruled; those rulings are the limits listed in 2.3. Typical fixes:
   old banner) whose files were already deleted: the old files go only once
   the new images are committed (`5eef3f16`, `ed938962`).
 
+### Route-fuzzing track
+
+The parser targets above take no request. From 2026-11-13 every rule in
+`app.url_map`, 905 of them, is fuzzed through Flask as a request from outside
+reaches it (spec `2026-11-13-fuzz-every-route-design.md`). Each request is
+made as nobody, a member, a moderator, an admin or a banned account, with
+each API credential (alpha JWT, OAuth bearer, PeerTube token, gpodder app
+password, a session with and without CSRF), and through the onion. A finding
+is any 500 or unhandled exception, a response over its time budget, or an API
+4xx outside that API's error format (ruling FR1). The tiers ran in order:
+before login, the client APIs, the web pages, then admin, dev and payments;
+each ended with a clean campaign. 21 findings were fixed test-first, one
+commit each:
+
+- **Forms.** A web form posted a JSON body that is not an object was a 500 from
+  every form of the site; it is a 400 (`963879b6`). A JSON object fills a form
+  with text, as a browser posts it, not with JSON's own nulls, numbers and
+  lists (`c3b8d205`). A text field a submission leaves out reads as empty text
+  again, as under WTForms 2, including a submission with no form data at all,
+  which about 50 places calling `.strip()` on optional fields depended on
+  (`a285cdf8`, `f8bfc4ad`, `d9b70798`).
+- **Unknown records are 404s:** a community's wiki pages, revisions and flair
+  page for a community that does not exist (`e7e8ddf9`); a wiki revision id
+  that is not a number (`fd340b3d`); a vote in a direction that is none of
+  upvote, downvote or reversal (`e488601a`); subscribing to a feed that does not
+  exist, which failed because `join_feed` removed the request's session and left
+  the view's objects detached (`c29e5f3f`); an alerts page of an unknown kind (`bd9b9922`); blocking an
+  instance that does not exist from a chat (`5af26282`); a domain id beyond
+  PostgreSQL's integer range or in non-ASCII digits (`579274a9`).
+- **Malformed input is a 400 or the form's refusal:** a passkey credential
+  that is not one, at registration and at login, where it is refused before
+  any account is looked up (`b12a84cb`); a blocked image's hash that is not 256
+  bits, or an add with neither a URL nor a hash (`8167e1b7`).
+- **Other 500s:** an emoji reaction on a post or comment that had none
+  (`37ed95aa`); the community report page and social login (2.3); the API
+  error formats (2.4).
+
 ---
 
 ## 5. New features
@@ -1745,6 +1848,14 @@ owner ruled; those rulings are the limits listed in 2.3. Typical fixes:
   and posts, as its matrix expects.
 - **Chat requests, muting, hiding and pictures**, for the web chat and apps alike (2.3).
 - **Local boosts, mutes and Web Push**, for apps (2.3).
+- **Sidebar order.** Admins order and hide the home and community sidebars' boxes, per
+  site and per domain (2.3).
+- **Footer links.** The source-code, bug-report and get-involved links are set on the site
+  profile (2.2, 2.3).
+- **HLS video.** An admin can offer videos as HLS streams too, for HLS-only players such
+  as P2Play. Uploads are repackaged with ffmpeg's stream copy into one fragmented MP4 and
+  playlist per resolution, with a master playlist, on disk or in S3. Off by default
+  (2.2; rulings H4, HL1 to HL3).
 
 There are 146 `feat` commits. The first twelve came during the coverage
 campaign:
@@ -1797,6 +1908,10 @@ is described in 2.3 to 2.5:
 | PeerTube (W2) | `2026-11-09-peertube-read-api-design.md`, `2026-11-09-peertube-login-design.md`, `2026-11-10-peertube-upload-design.md` | Read API, 480p and 360p renditions, login, subscriptions, ratings, history, notifications, resumable upload |
 | Lemmy (W3) | `2026-11-10-lemmy-v3-design.md` | `/api/v3` for Jerboa, member endpoints |
 | gpodder (W4) | `2026-11-12-gpodder-sync-design.md` | App passwords, devices, subscriptions that join communities, episode actions that mark posts read |
+| Sidebar | | Box order and hiding per site and domain (`5c424327`) |
+| Project links | | Source, bug-report and get-involved URLs; nodeinfo and Mastodon source (`b65b4fd6`) |
+| HLS | | Optional HLS copies, backfill and delete, PeerTube streaming playlists (`8e94a322`) |
+| PeerTube for P2Play | | My videos, video reports (`c9683362`) |
 
 ---
 
@@ -1856,6 +1971,20 @@ decides redirect safety (`0c923ae2`).
   - the smoke script's own test.
   `python -m tests.fuzz.smoke --seconds N` runs every target as a campaign.
   `tests/README.md` describes it all (`fa97931e`).
+- Route targets (`tests/fuzz/routes.py`, one `routes_<family>` target per group of
+  blueprints) build each request from its rule, against a seeded world restored
+  after every input, with outbound sockets refused. Two more gates:
+  `tests/test_fuzz_routes_registry.py` fails when a rule in `url_map` has no family
+  or no seed, and `tests/test_fuzz_routes_corpus.py` replays each family's corpus.
+  `./run_tests.sh --fuzz <target> -max_total_time=N` runs a campaign in the test
+  stack (`07b9e98f`, `70be7b77`).
+- Linear-time checks (`tests/linear_time.py`) compare inputs 8 times apart against
+  a bound of 24, not 4 times apart against 8: a scan under a millisecond read
+  ratios up to 10 for linear code with the suite's workers beside it. Quadratic
+  code still reads near 64 (`c93f3f82`).
+- The app harness (`interop/apps/`) snapshots PieFed's database, Redis and media
+  before the run and restores them before and after every test, checking each
+  restore; every app it lists is driven, not only probed (rulings H1 to H3).
 - The suite collects 23,526 tests.
 
 **The findings register.**
@@ -1908,7 +2037,9 @@ PERM-1 to PERM-5.
   - Pixelfed: group chats.
   - PeerTube: the Private and Password-protected privacies (ruling U1). TubeLab is
     unsupported (P4): its login needs nodeinfo to say `peertube`, and it sends a
-    user agent other apps share.
+    user agent other apps share. Registration (`POST /api/v1/users/register`) is
+    not served, so P2Play's sign-up fails; whether to serve it is the owner's
+    decision.
 - **No web buttons for boosts or mutes, and no pictures from the web chat's form.**
   Apps can do all three.
 - **A gpodder lockout is per account.** Someone who knows an account name can lock
