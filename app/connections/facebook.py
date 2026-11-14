@@ -11,16 +11,22 @@ Edits change the message (C4); deletes delete.
 """
 import hashlib
 import hmac
+import json
+import os
+import time
+from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 from flask import current_app
 from flask_babel import _
 
+import app as app_pkg
 from app.connections import Account, AuthFailed, Permanent, Sent, Service, Transient, register
-from app.connections.content import as_jpeg, cut, image_bytes, plain_text
+from app.connections.content import StoredVideo, as_jpeg, cut, image_bytes, plain_text
 from app.connections.eligibility import image_files, uploaded_video
 from app.connections.http import fetch
 from app.constants import POST_TYPE_LINK
+from app.models import media_of
 
 SCOPES = 'pages_show_list,pages_manage_posts,pages_read_engagement'
 MAX_MESSAGE = 60_000          # a Page post's message (Facebook's limit is 63,206)
@@ -29,6 +35,12 @@ MAX_PHOTO_BYTES = 4_000_000   # Facebook takes photos up to 4 MB
 MAX_PHOTO_SIDE = 4096
 AUTH_CODES = {190, 102, 10, 200, 210, 230}           # the token, or a permission, is gone: reconnect
 LATER_CODES = {1, 2, 4, 9, 17, 32, 341, 368, 613, 9007, 80001}   # temporary, a rate limit, or media not ready yet
+RATE_CODES = {4, 17, 32, 613, 80001, 80002, 80003, 80004, 80005, 80006, 80008, 80009, 80014}   # Graph's rate limits
+USAGE_LIMIT = 90              # percent of a Graph allowance past which PieFed pauses (spec 18.3)
+APP_PAUSE = 3600              # seconds: the whole app's pause, as Graph's own app limit window
+UNNAMED_PAUSE = 900           # seconds: a rate limit that names no account pauses the app this long
+MAX_VIDEO_BYTES = 10 * 1024 ** 3   # a Page video
+VIDEO_PREFIX = 'video:'
 
 
 def graph_url(path: str) -> str:
@@ -52,8 +64,65 @@ def graph(method: str, path: str, token: str | None, params: dict | None = None,
     return answer_of(fetch('POST', graph_url(path), data=fields, **kwargs), 'Facebook')
 
 
+# --------------------------------------------------------------------------
+# pausing before Graph refuses (spec 18.3, taken from Mixpost)
+# --------------------------------------------------------------------------
+
+def _pause_key(scope: str, ident) -> str:
+    return f'connections:pause:meta:{scope}:{ident}'
+
+
+def pause(scope: str, ident, seconds: int) -> None:
+    """Hold every copy of the app (scope 'app') or of one Page or account (scope 'object') for `seconds`."""
+    if ident and seconds > 0:
+        app_pkg.redis_client.set(_pause_key(scope, ident), int(time.time()) + seconds, ex=seconds)
+
+
+def paused_until(object_id: str | None) -> datetime | None:
+    """When the app's pause, or the account's, ends (naive UTC, as the database keeps), or None."""
+    ends = [app_pkg.redis_client.get(_pause_key('app', current_app.config.get('FACEBOOK_APP_ID')))]
+    if object_id:
+        ends.append(app_pkg.redis_client.get(_pause_key('object', object_id)))
+    latest = max((int(end) for end in ends if end), default=0)
+    if latest <= time.time():
+        return None
+    return datetime.fromtimestamp(latest, timezone.utc).replace(tzinfo=None)
+
+
+def _usage(value: str | None):
+    try:
+        return json.loads(value) if value else None
+    except ValueError:
+        return None
+
+
+def _over(usage) -> bool:
+    return isinstance(usage, dict) and any(
+        isinstance(usage.get(name), (int, float)) and usage[name] > USAGE_LIMIT
+        for name in ('call_count', 'total_cputime', 'total_time'))
+
+
+def note_usage(response) -> bool:
+    """Read how much of Graph's allowance is spent (X-App-Usage, X-Business-Use-Case-Usage) and pause the app, or the
+    account, past USAGE_LIMIT. Whether anything was paused."""
+    paused = False
+    if _over(_usage(response.headers.get('X-App-Usage'))):
+        pause('app', current_app.config.get('FACEBOOK_APP_ID'), APP_PAUSE)
+        paused = True
+    business = _usage(response.headers.get('X-Business-Use-Case-Usage'))
+    for object_id, entries in (business.items() if isinstance(business, dict) else ()):
+        for entry in entries if isinstance(entries, list) else ():
+            if _over(entry):
+                minutes = entry.get('estimated_time_to_regain_access')
+                pause('object', object_id, int(minutes) * 60 if isinstance(minutes, int) and minutes > 0 else APP_PAUSE)
+                paused = True
+    return paused
+
+
 def answer_of(response, who: str) -> dict:
-    """A Graph answer (Facebook's or Instagram's) as JSON, or the failure its error code means."""
+    """A Graph answer (Facebook's or Instagram's) as JSON, or the failure its error code means. Every answer's usage
+    headers are read first, so the next copy waits before Graph would refuse it."""
+    noted = note_usage(response)
     try:
         body = response.json()
     except ValueError:
@@ -62,6 +131,8 @@ def answer_of(response, who: str) -> dict:
         return body
     error = body.get('error') if isinstance(body, dict) else None
     error = error if isinstance(error, dict) else {}
+    if error.get('code') in RATE_CODES and not noted:   # a limit whose headers named nothing: hold the app a while
+        pause('app', current_app.config.get('FACEBOOK_APP_ID'), UNNAMED_PAUSE)
     message = f"{who}: {str(error.get('error_user_msg') or error.get('message') or f'HTTP {response.status_code}')[:200]}"
     code = error.get('code')
     if code in AUTH_CODES or response.status_code in (401, 403):
@@ -122,9 +193,14 @@ class FacebookService(Service):
                                                 'user_id': str(me.get('id', '')), 'expires_at': None}))
         return accounts
 
+    def paused_until(self, connection):
+        return paused_until(connection.remote_id)
+
     def send(self, post, tokens, connection):
         page, token = connection.remote_id, tokens['page_token']
-        files = [] if post.content_warning or uploaded_video(post) else image_files(post)[:MAX_PHOTOS]
+        if uploaded_video(post) and not post.content_warning:
+            return self._send_video(post, page, token)
+        files = [] if post.content_warning else image_files(post)[:MAX_PHOTOS]
         photos = [photo for photo in (_photo(file) for file in files) if photo]
         message = message_of(post)
         if len(photos) == 1:
@@ -142,11 +218,41 @@ class FacebookService(Service):
             post_id = graph('POST', f'{page}/feed', token, data=fields)['id']
         return Sent(remote_id=str(post_id), remote_url=f'https://www.facebook.com/{post_id}')
 
+    def _send_video(self, post, page: str, token: str) -> Sent:
+        """The stored video by Graph's chunked upload (spec 18.3, as Mixpost does it): start, then each chunk Graph
+        asks for by its offsets, then finish with the post's text as the description."""
+        mime = (media_of(post) or {}).get('mime') or 'video/mp4'
+        with StoredVideo(post, MAX_VIDEO_BYTES) as video:
+            size = os.fstat(video.fileno()).st_size
+            start = graph('POST', f'{page}/videos', token, data={'upload_phase': 'start', 'file_size': str(size)})
+            session, video_id = start.get('upload_session_id'), start.get('video_id')
+            if not session or not video_id:
+                raise Transient(_('Facebook opened no video upload.'))
+            begin, end = int(start.get('start_offset', 0)), int(start.get('end_offset', 0))
+            while begin < end:
+                video.seek(begin)
+                step = graph('POST', f'{page}/videos', token, seconds=300,
+                             data={'upload_phase': 'transfer', 'upload_session_id': session, 'start_offset': str(begin)},
+                             files={'video_file_chunk': ('video', video.read(end - begin), mime)})
+                following = int(step.get('start_offset', begin)), int(step.get('end_offset', end))
+                if following[0] <= begin and following[0] < following[1]:
+                    raise Transient(_('Facebook stopped taking the video part way.'))
+                begin, end = following
+        done = graph('POST', f'{page}/videos', token, seconds=120, data={
+            'upload_phase': 'finish', 'upload_session_id': session, 'description': message_of(post)})
+        if not done.get('success'):
+            raise Transient(_('Facebook did not finish the video.'))
+        return Sent(remote_id=f'{VIDEO_PREFIX}{video_id}', remote_url=f'https://www.facebook.com/{page}/videos/{video_id}')
+
     def edit(self, post, tokens, remote_id):
-        graph('POST', remote_id, tokens['page_token'], data={'message': message_of(post)})
+        if remote_id.startswith(VIDEO_PREFIX):
+            graph('POST', remote_id.removeprefix(VIDEO_PREFIX), tokens['page_token'],
+                  data={'description': message_of(post)})
+        else:
+            graph('POST', remote_id, tokens['page_token'], data={'message': message_of(post)})
 
     def delete(self, tokens, remote_id):
-        graph('DELETE', remote_id, tokens['page_token'])
+        graph('DELETE', remote_id.removeprefix(VIDEO_PREFIX), tokens['page_token'])
 
     def revoke(self, tokens):
         if tokens.get('user_token') and tokens.get('user_id'):

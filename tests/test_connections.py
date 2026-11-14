@@ -140,6 +140,7 @@ def test_labels_and_whether_the_menu_offers_connections(world):
 
 def test_the_base_service_defaults(app):
     service = Service()
+    assert service.paused_until(None) is None
     assert service.expired({}) is False
     assert service.expired({'expires_at': datetime.now().timestamp() - 10}) is True
     assert service.expired({'expires_at': datetime.now().timestamp() + 3600}) is False
@@ -547,6 +548,16 @@ def test_an_unexpected_error_fails_the_row_without_its_text(world, monkeypatch):
     perform(row.id)
     row = fresh(row)
     assert (row.state, row.last_error, row.attempts) == ('failed', 'Something went wrong here (ValueError).', 1)
+
+
+def test_a_paused_service_holds_its_work_at_no_cost(world, monkeypatch):
+    until = utcnow() + timedelta(minutes=30)
+    monkeypatch.setattr(FakeService, 'paused_until', lambda self, connection: until)
+    row = a_row(world, a_post(world))
+    perform(row.id)
+    row = fresh(row)
+    assert (row.state, row.attempts, row.next_attempt_at) == ('queued', 0, until)
+    assert row.last_error == 'Waiting: Fake asked for a pause.'
 
 
 def test_nothing_is_sent_for_a_gone_connection_or_a_service_switched_off(world):

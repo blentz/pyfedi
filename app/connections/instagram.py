@@ -25,7 +25,7 @@ from PIL import Image
 from app.connections import Account, AuthFailed, Permanent, Sent, Service, Transient, main_base_url, register
 from app.connections.content import as_jpeg, cut, image_bytes, plain_text
 from app.connections.eligibility import image_files, uploaded_video
-from app.connections.facebook import answer_of, graph
+from app.connections.facebook import answer_of, graph, paused_until
 from app.connections.http import fetch
 from app.constants import POST_TYPE_GALLERY, POST_TYPE_IMAGE
 
@@ -257,6 +257,9 @@ class InstagramService(Service):
         except Transient:
             permalink = None   # published: a link to it is a nicety, never a reason to publish again
         return Sent(remote_id=str(media_id), remote_url=permalink)
+
+    def paused_until(self, connection):
+        return paused_until(connection.remote_id) if connection.variant == VIA_FACEBOOK else None
 
     def delete(self, tokens, remote_id):
         graph('DELETE', remote_id, tokens['token'])

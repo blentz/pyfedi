@@ -119,6 +119,11 @@ class Service:
     def revoke(self, tokens: dict) -> None:
         """End the tokens at the service, if it can. Best effort: a failure here never keeps a member connected."""
 
+    def paused_until(self, connection) -> datetime | None:
+        """Until when work for this connection waits, because the service's allowance for its app or account is
+        nearly spent (spec 18.3); None to go ahead."""
+        return None
+
 
 SERVICES: dict[str, Service] = {}
 

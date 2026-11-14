@@ -5,13 +5,17 @@ respx plays the Graph API. There is no Facebook to run end to end: the owner's l
 """
 import hashlib
 import hmac
-import httpx
+import json
+import time
+from datetime import timedelta
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 from PIL import Image
 
+from app.clock import utcnow
 from app.connections import SERVICES, AuthFailed, Permanent, Transient
 from app.connections import facebook
 from app.connections.facebook import FacebookService, graph, message_of
@@ -201,12 +205,122 @@ def test_a_gallery_is_one_post_of_its_photos(app, fb, http_mock, tmp_path):
     assert 'link' not in fields   # the photos are the post, not a card
 
 
-@pytest.mark.parametrize('changes', [{'extensions': {'media': {'mime': 'video/mp4'}}}, {'content_warning': 'CW'}],
-                         ids=['video', 'warning'])
-def test_a_video_or_a_warning_goes_as_text(app, fb, http_mock, tmp_path, changes):
+def test_a_warning_goes_as_text(app, fb, http_mock, tmp_path):
     feed = http_mock.post(f'{GRAPH}/page-1/feed').respond(200, json={'id': 'page-1_9'})
-    fb.send(a_post(body='clip', image_id=1, image=_png(tmp_path), **changes), tokens(), page())
+    post = a_post(body='clip', image_id=1, image=_png(tmp_path), content_warning='CW',
+                  extensions={'media': {'mime': 'video/mp4'}})
+    fb.send(post, tokens(), page())
     assert 'attached_media[0]' not in sent(feed)
+
+
+# --------------------------------------------------------------------------
+# video, by Graph's chunked upload (spec 18.3)
+# --------------------------------------------------------------------------
+
+def _video_post(monkeypatch, tmp_path, size=2500):
+    video = tmp_path / 'v.mp4'
+    video.write_bytes(bytes(range(256)) * (size // 256) + b'x' * (size % 256))
+    monkeypatch.setattr('app.connections.content.media_local_path', lambda post: str(video))
+    return a_post(body='my clip', extensions={'media': {'mime': 'video/mp4'}}), video.read_bytes()
+
+
+def test_a_video_goes_up_in_the_chunks_graph_asks_for(app, fb, http_mock, monkeypatch, tmp_path):
+    post, data = _video_post(monkeypatch, tmp_path)
+    videos = http_mock.post(f'{GRAPH}/page-1/videos')
+    videos.side_effect = [
+        httpx.Response(200, json={'upload_session_id': 's1', 'video_id': 'v9', 'start_offset': '0', 'end_offset': '1000'}),
+        httpx.Response(200, json={'start_offset': '1000', 'end_offset': '2500'}),
+        httpx.Response(200, json={'start_offset': '2500', 'end_offset': '2500'}),
+        httpx.Response(200, json={'success': True})]
+    result = fb.send(post, tokens(), page())
+    assert (result.remote_id, result.remote_url) == ('video:v9', 'https://www.facebook.com/page-1/videos/v9')
+    start = parse_qs(videos.calls[0].request.read().decode())
+    assert start['upload_phase'] == ['start'] and start['file_size'] == ['2500']
+    first, second = videos.calls[1].request.read(), videos.calls[2].request.read()
+    assert data[:1000] in first and b'name="start_offset"\r\n\r\n0' in first
+    assert data[1000:] in second and b'name="start_offset"\r\n\r\n1000' in second
+    finish = parse_qs(videos.calls[3].request.read().decode())
+    assert finish['upload_phase'] == ['finish'] and finish['description'] == ['my clip\n\nhttps://piefed.example/post/7']
+
+
+@pytest.mark.parametrize('answers', [
+    [{'start_offset': '0', 'end_offset': '10'}],
+    [{'upload_session_id': 's', 'video_id': 'v', 'start_offset': '0', 'end_offset': '1000'},
+     {'start_offset': '0', 'end_offset': '1000'}],
+    [{'upload_session_id': 's', 'video_id': 'v', 'start_offset': '0', 'end_offset': '2500'},
+     {'start_offset': '2500', 'end_offset': '2500'}, {'success': False}],
+], ids=['no-session', 'stalled', 'not-finished'])
+def test_a_video_upload_that_does_not_complete(app, fb, http_mock, monkeypatch, tmp_path, answers):
+    post, _data = _video_post(monkeypatch, tmp_path)
+    http_mock.post(f'{GRAPH}/page-1/videos').side_effect = [httpx.Response(200, json=a) for a in answers]
+    with pytest.raises(Transient):
+        fb.send(post, tokens(), page())
+
+
+def test_a_video_copy_is_edited_and_deleted_as_a_video(app, fb, http_mock):
+    route = http_mock.post(f'{GRAPH}/v9').respond(200, json={'success': True})
+    fb.edit(a_post(body='renamed'), tokens(), 'video:v9')
+    assert sent(route)['description'] == 'renamed\n\nhttps://piefed.example/post/7'
+    fb.delete(tokens(), 'video:v9')
+    assert sent(route)['method'] == 'delete'
+
+
+# --------------------------------------------------------------------------
+# pausing before Graph refuses (spec 18.3)
+# --------------------------------------------------------------------------
+
+def test_an_app_nearly_out_of_calls_pauses_every_copy(app, fb, http_mock, redis_double):
+    http_mock.post(f'{GRAPH}/x').respond(200, json={}, headers={
+        'X-App-Usage': json.dumps({'call_count': 95, 'total_time': 10, 'total_cputime': 10})})
+    assert facebook.paused_until('page-1') is None
+    graph('POST', 'x', 'tok')
+    until = facebook.paused_until('page-1')
+    assert until is not None and utcnow() + timedelta(minutes=55) < until <= utcnow() + timedelta(hours=1, seconds=5)
+    assert facebook.paused_until(None) == until   # every account of the app
+
+
+@pytest.mark.parametrize('minutes, expected', [(7, timedelta(minutes=7)), (0, timedelta(hours=1))],
+                         ids=['graph-says', 'graph-silent'])
+def test_a_page_nearly_out_of_calls_pauses_that_page(app, fb, http_mock, redis_double, minutes, expected):
+    http_mock.post(f'{GRAPH}/x').respond(200, json={}, headers={'X-Business-Use-Case-Usage': json.dumps({
+        'page-1': [{'type': 'pages', 'call_count': 99, 'total_cputime': 1, 'total_time': 1,
+                    'estimated_time_to_regain_access': minutes}], 'page-2': 'junk'})})
+    graph('POST', 'x', 'tok')
+    until = facebook.paused_until('page-1')
+    assert until is not None and abs((until - utcnow()) - expected) < timedelta(seconds=10)
+    assert facebook.paused_until('page-3') is None
+
+
+def test_usage_under_the_limit_or_unreadable_pauses_nothing(app, fb, http_mock, redis_double):
+    http_mock.post(f'{GRAPH}/x').respond(200, json={}, headers={
+        'X-App-Usage': '{not json', 'X-Business-Use-Case-Usage': json.dumps({'p': [{'call_count': 'many'}]})})
+    graph('POST', 'x', 'tok')
+    http_mock.post(f'{GRAPH}/y').respond(200, json={}, headers={'X-App-Usage': json.dumps({'call_count': 50})})
+    graph('POST', 'y', 'tok')
+    assert facebook.paused_until('p') is None
+
+
+def test_a_rate_limit_naming_no_account_pauses_the_app_briefly(app, fb, http_mock, redis_double):
+    http_mock.post(f'{GRAPH}/x').respond(400, json={'error': {'message': 'Too many', 'code': 4}})
+    with pytest.raises(Transient):
+        graph('POST', 'x', 'tok')
+    until = facebook.paused_until(None)
+    assert until is not None and until <= utcnow() + timedelta(minutes=15, seconds=5)
+
+
+def test_a_paused_until_already_past_is_no_pause(app, fb, redis_double):
+    facebook.pause('object', 'page-1', 1)
+    redis_double.set(facebook._pause_key('object', 'page-1'), int(time.time()) - 5)
+    assert facebook.paused_until('page-1') is None
+    facebook.pause('object', None, 60)
+    facebook.pause('object', 'page-1', 0)
+    assert facebook.paused_until('page-1') is None
+
+
+def test_the_service_asks_for_its_page(app, fb, redis_double):
+    facebook.pause('object', 'page-1', 600)
+    assert fb.paused_until(SimpleNamespace(remote_id='page-1')) is not None
+    assert fb.paused_until(SimpleNamespace(remote_id='page-2')) is None
 
 
 # --------------------------------------------------------------------------

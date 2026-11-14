@@ -234,6 +234,12 @@ def perform(row_id: int) -> None:
     if service is None or connection is None or (work == 'send' and not enabled(service)):
         _give_up(row, work, _('This account is no longer connected.'))
         return
+    until = service.paused_until(connection)
+    if until is not None:   # the service's allowance is nearly spent: wait, at no cost of an attempt (spec 18.3)
+        row.next_attempt_at = until
+        row.last_error = _('Waiting: %(service)s asked for a pause.', service=service.label)
+        db.session.commit()
+        return
     try:
         tokens = usable_tokens(connection.id, service)
         row = db.session.get(SocialCrosspost, row_id)

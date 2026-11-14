@@ -14,7 +14,7 @@ from PIL import Image
 
 from app import db
 from app.connections import SERVICES, AuthFailed, Permanent, Transient
-from app.connections import instagram
+from app.connections import facebook, instagram
 from app.connections.instagram import (DIRECT, VIA_FACEBOOK, InstagramService, caption_of, fitted, media_file_id,
                                        media_url)
 from app.constants import POST_TYPE_ARTICLE, POST_TYPE_GALLERY, POST_TYPE_IMAGE
@@ -270,6 +270,12 @@ def test_a_post_whose_pictures_cannot_be_read(app, ig):
     files = [SimpleNamespace(id=1, file_path=None, source_url=None, alt_text='')]
     with app.test_request_context(), pytest.raises(Permanent):
         ig.send(a_post(files), {'token': 't'}, account(DIRECT))
+
+
+def test_only_the_facebook_route_shares_graphs_pauses(app, ig, redis_double):
+    facebook.pause('object', 'ig-1', 600)
+    assert ig.paused_until(account(VIA_FACEBOOK)) is not None
+    assert ig.paused_until(account(DIRECT)) is None
 
 
 def test_a_delete_and_a_revoke(app, ig, http_mock):

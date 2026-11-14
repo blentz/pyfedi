@@ -3,12 +3,18 @@ service's size limit (spec §6). The services shape these into their own posts."
 import io
 import os
 import re
+import tempfile
 import unicodedata
 
+import httpx
+from flask_babel import _
 from PIL import Image, ImageOps
 
-from app.connections import ServiceError
+from app import httpx_client
+from app.connections import Permanent, ServiceError, Transient
 from app.connections.http import call
+from app.models import media_local_path
+from app.pinned_http import fetch_deadline
 
 ZERO_WIDTH_JOINERS = (chr(0x200D), chr(0xFE0F))   # a cut never ends on a joiner or an emoji presentation selector
 MARKDOWN_LINK = re.compile(r'!?\[([^\]]*)\]\((https?://[^)\s]+)\)')
@@ -69,3 +75,41 @@ def as_jpeg(data: bytes, max_bytes: int, max_side: int) -> tuple[bytes, int, int
             return out.getvalue(), image.width, image.height
         image.thumbnail((image.width * 3 // 4, image.height * 3 // 4))
     return None
+
+
+class StoredVideo:
+    """A post's stored original video, as a file to stream: on this disk, or fetched from storage into a temporary
+    file, refused past `max_bytes` (the service's own limit)."""
+
+    def __init__(self, post, max_bytes: int):
+        self.post, self.max_bytes, self.temporary = post, max_bytes, None
+
+    def __enter__(self):
+        path = media_local_path(self.post)
+        if path and os.path.isfile(path):
+            return open(path, 'rb')
+        if not (isinstance(self.post.url, str) and self.post.url.startswith('https://')):
+            raise Permanent(_('The video could not be read.'))
+        self.temporary = tempfile.TemporaryFile()
+        size = 0
+        try:
+            with fetch_deadline(3600), httpx_client.stream('GET', self.post.url, timeout=60) as response:
+                if response.status_code >= 400:
+                    raise Transient(f'The stored video answered HTTP {response.status_code}.')
+                for chunk in response.iter_raw():
+                    size += len(chunk)
+                    if size > self.max_bytes:
+                        raise Permanent(_('The video is larger than this service takes.'))
+                    self.temporary.write(chunk)
+        except httpx.TransportError as failure:
+            self.temporary.close()
+            raise Transient(f'Could not read the stored video ({type(failure).__name__}).') from None
+        except Exception:
+            self.temporary.close()
+            raise
+        self.temporary.seek(0)
+        return self.temporary
+
+    def __exit__(self, *exc):
+        if self.temporary is not None:
+            self.temporary.close()

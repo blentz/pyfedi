@@ -203,7 +203,7 @@ def test_an_upload_from_this_disk_with_its_thumbnail(app, yt, http_mock, monkeyp
     video.write_bytes(b'\0' * 3000)
     poster = tmp_path / 'poster.jpg'
     poster.write_bytes(b'\xff\xd8poster')
-    monkeypatch.setattr(youtube, 'media_local_path', lambda post: str(video))
+    monkeypatch.setattr('app.connections.content.media_local_path', lambda post: str(video))
     session = _session(http_mock)
     put = http_mock.put(SESSION).respond(200, json={'id': 'vid-1'})
     thumbnail = http_mock.post(f'{UPLOAD}/thumbnails/set').respond(200, json={})
@@ -225,7 +225,7 @@ def test_a_refused_thumbnail_does_not_fail_the_copy(app, yt, http_mock, monkeypa
     video.write_bytes(b'v')
     poster = tmp_path / 'poster.jpg'
     poster.write_bytes(b'p')
-    monkeypatch.setattr(youtube, 'media_local_path', lambda post: str(video))
+    monkeypatch.setattr('app.connections.content.media_local_path', lambda post: str(video))
     _session(http_mock)
     http_mock.put(SESSION).respond(200, json={'id': 'vid-2'})
     http_mock.post(f'{UPLOAD}/thumbnails/set').mock(return_value=_error(403, 'forbidden'))
@@ -234,7 +234,7 @@ def test_a_refused_thumbnail_does_not_fail_the_copy(app, yt, http_mock, monkeypa
 
 
 def test_an_upload_from_storage(app, yt, http_mock, monkeypatch):
-    monkeypatch.setattr(youtube, 'media_local_path', lambda post: None)
+    monkeypatch.setattr('app.connections.content.media_local_path', lambda post: None)
     http_mock.get('https://piefed.example/static/media/v.mp4').respond(200, content=b'stored video')
     _session(http_mock)
     put = http_mock.put(SESSION).respond(200, json={'id': 'vid-3'})
@@ -245,7 +245,7 @@ def test_an_upload_from_storage(app, yt, http_mock, monkeypatch):
 @pytest.mark.parametrize('case, failure', [
     ('answered-500', Transient), ('unreachable', Transient), ('too-large', Permanent), ('not-https', Permanent)])
 def test_a_stored_video_that_cannot_be_read(app, yt, http_mock, monkeypatch, case, failure):
-    monkeypatch.setattr(youtube, 'media_local_path', lambda post: None)
+    monkeypatch.setattr('app.connections.content.media_local_path', lambda post: None)
     _session(http_mock)
     url = 'https://piefed.example/static/media/v.mp4'
     if case == 'answered-500':
@@ -270,7 +270,7 @@ def test_an_upload_session_that_did_not_open(app, yt, http_mock, location):
 def test_an_upload_with_no_id_in_the_answer(app, yt, http_mock, monkeypatch, tmp_path):
     video = tmp_path / 'v.mp4'
     video.write_bytes(b'v')
-    monkeypatch.setattr(youtube, 'media_local_path', lambda post: str(video))
+    monkeypatch.setattr('app.connections.content.media_local_path', lambda post: str(video))
     _session(http_mock)
     http_mock.put(SESSION).respond(200, json={})
     with pytest.raises(Transient):

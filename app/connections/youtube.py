@@ -17,25 +17,21 @@ import base64
 import hashlib
 import os
 import secrets
-import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
-import httpx
 from flask import current_app
 from flask_babel import _
 
 import app as app_pkg
-from app import httpx_client
 from app.connections import (Account, AuthFailed, Permanent, QuotaWait, Sent, Service, Transient, register)
-from app.connections.content import cut, plain_text
+from app.connections.content import StoredVideo, cut, plain_text
 from app.connections.eligibility import uploaded_video
 from app.connections.http import fetch
 from app.constants import POST_TYPE_VIDEO
-from app.models import media_local_path, media_of
-from app.pinned_http import fetch_deadline
+from app.models import media_of
 
 AUTHORIZE = 'https://accounts.google.com/o/oauth2/v2/auth'
 TOKEN = 'https://oauth2.googleapis.com/token'
@@ -137,43 +133,6 @@ def _chunks(handle):
         yield chunk
 
 
-class _Video:
-    """The post's stored original, as a file to stream: on this disk, or fetched from storage into a temporary file."""
-
-    def __init__(self, post):
-        self.post, self.temporary = post, None
-
-    def __enter__(self):
-        path = media_local_path(self.post)
-        if path and os.path.isfile(path):
-            return open(path, 'rb')
-        if not (isinstance(self.post.url, str) and self.post.url.startswith('https://')):
-            raise Permanent(_('The video could not be read.'))
-        self.temporary = tempfile.TemporaryFile()
-        size = 0
-        try:
-            with fetch_deadline(3600), httpx_client.stream('GET', self.post.url, timeout=60) as response:
-                if response.status_code >= 400:
-                    raise Transient(f'The stored video answered HTTP {response.status_code}.')
-                for chunk in response.iter_raw():
-                    size += len(chunk)
-                    if size > MAX_VIDEO_BYTES:
-                        raise Permanent(_('The video is larger than YouTube takes.'))
-                    self.temporary.write(chunk)
-        except httpx.TransportError as failure:
-            self.temporary.close()
-            raise Transient(f'Could not read the stored video ({type(failure).__name__}).') from None
-        except Exception:
-            self.temporary.close()
-            raise
-        self.temporary.seek(0)
-        return self.temporary
-
-    def __exit__(self, *exc):
-        if self.temporary is not None:
-            self.temporary.close()
-
-
 # --------------------------------------------------------------------------
 # the service
 # --------------------------------------------------------------------------
@@ -243,7 +202,7 @@ class YouTubeService(Service):
         location = session.headers.get('Location')
         if not location or not location.startswith(f'{UPLOAD}/'):
             raise Transient(_('YouTube opened no upload.'))
-        with _Video(post) as video:
+        with StoredVideo(post, MAX_VIDEO_BYTES) as video:
             size = os.fstat(video.fileno()).st_size
             uploaded = api('PUT', location, token, content=_chunks(video), seconds=600 + size // 500_000,
                            headers={'Content-Type': media.get('mime') or 'application/octet-stream',
