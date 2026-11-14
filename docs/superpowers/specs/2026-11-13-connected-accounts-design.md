@@ -330,3 +330,60 @@ apps' credentials are set ("Instagram, through Facebook" and "Instagram").
   `uploadLimitExceeded` or `rateLimitExceeded`, the copy waits (QuotaWait) until 00:01 Pacific.
 - **Edits** replace title, description and tags (videos.update, part=snippet); **deletes** delete.
 - **Tests**: `tests/test_connections_youtube.py`. The owner's live check is the end-to-end test.
+
+## 18. Amendment: per-domain apps, and what was taken from Mixpost (2026-11-14)
+
+Raised by the owner after P5: with several hosted domains, one instance app and a main-domain callback do not scale.
+Mixpost Lite (MIT, `inovector/mixpost` df57648) was read for its posting engine; its design matches §8 and P1, and
+four of its ideas were taken.
+
+### 18.1 Rulings (owner, 2026-11-14)
+
+- **C7 Taken from Mixpost**: (1) proactive Meta throttling from Graph's usage headers; (2) a pause that holds every
+  copy of one app, or of one account, in dispatch; (3) Facebook video by Graph's chunked upload; (4) app credentials
+  stored sealed in the database, for the per-domain apps below.
+- **C8 Per-domain apps**: a domain may have its own app for each service (a Meta app, an Instagram app, a Google
+  client, a Bluesky key), falling back to the instance's (the environment, §3). A domain admin with the new
+  domain-scoped permission `manage domain connected accounts` sets them.
+- **C9 Sign-in comes back to the member's own domain**, under its own app or the instance's. The instance admin
+  registers every domain's callback address in the instance apps; Admin > Connected accounts lists them. Bluesky
+  needs nothing: each domain serves its own client metadata.
+- **C10 The member's home domain decides** which app a connection uses (`user.site_domain_id`), wherever they browse;
+  Connect runs there. A connection records the domain and the app id that issued its tokens.
+- **C11 A changed app id, or a removed domain app, ends its connections**: each is marked "needs reconnecting" and
+  its member told once. A new secret for the same app keeps them. A connection whose recorded app id no longer
+  matches the app it would use is treated the same at its next call.
+- **C12 Per-domain switches inherit** the instance's. A domain may turn a service off, and on only when its own
+  app or the instance's has credentials.
+
+### 18.2 Design
+
+- **Apps by kind**: `facebook` (Facebook Pages, and Instagram through Facebook), `instagram` (Instagram Login),
+  `youtube`, `bluesky`. Table `connection_app` (site_domain_id, kind, client_id, sealed secret JSON, unique per
+  domain and kind) holds a domain's own. `app_for(kind, domain_id)` answers the domain's app, else the instance's
+  from the environment, else none. Client ids are public (Meta app id, Google client id); secrets and the Bluesky key
+  are sealed under CONNECTIONS_SECRETS_KEY.
+- **Services read their app** from the resolved credentials, not the environment: one context per call, set from
+  the member's home domain at Connect and from the connection's recorded domain afterwards.
+- **Connections** gain `app_domain_id` (NULL: the instance app) and `app_client_id`.
+- **Addresses**: Connect, the callback and Bluesky's client metadata and keys are on the member's home domain
+  (`domain_base_url`). Bluesky's client id is that domain's metadata address; a new key for the same domain is a
+  secret rotation.
+- **Switches**: a setting per domain and service, `on`, `off`, or absent (inherit); `enabled(service, domain)`
+  combines it with credentials and the token key.
+- **Admin**: Admin > Connected accounts (instance) shows the instance switches, its apps' state, and the callback
+  addresses each domain without its own app needs registered in the instance apps (C9). Admin > Domains > a domain >
+  Connected accounts (the new permission, scoped) shows that domain's switches, a form per app kind (client id,
+  secret; for Bluesky a "make a key" button), and the callback addresses to register in its own apps.
+- **Limits per app**: Meta pauses are kept per app id, YouTube's daily count per Google client id.
+
+### 18.3 Meta throttling and video (C7 1-3)
+
+- Every Graph answer's `X-App-Usage` (and, for a Page, `X-Business-Use-Case-Usage`) is read. Past 90% of calls,
+  CPU time or total time, a pause is stored in Redis: for the whole Meta app (one hour) or for the one Page or
+  Instagram account (Meta's `estimated_time_to_regain_access`, else one hour). Graph's rate-limit codes store the
+  same pause.
+- Dispatch asks before claiming a Meta copy: under a pause the copy waits (QuotaWait) until the pause ends, costing
+  no attempt.
+- A Facebook video post uploads the stored video with Graph's chunked upload (`/videos`, phases start, transfer,
+  finish, with the post's text as description); it replaces "text and link" for Facebook.
