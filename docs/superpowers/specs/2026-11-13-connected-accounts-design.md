@@ -21,6 +21,8 @@ also published, reshaped for each service, to the connected accounts it fits:
   The post forms show one checkbox per connected account the post fits, pre-ticked from that default.
 - **C4 edits and deletes sync where the API allows.** See §7 for what each service allows.
 - **C5 Bluesky connects by atproto OAuth.** No app passwords.
+- **C6 Instagram: both APIs** (§13). Facebook Login when the account is linked to a Page the member manages
+  (deletes sync), Instagram Login otherwise (deletes by hand). Rows record which API made them.
 
 ## 2. Platform facts that bound the design (P0, 2026-11-13: official docs read live, Bluesky run end to end; §13)
 
@@ -84,7 +86,8 @@ also published, reshaped for each service, to the connected accounts it fits:
 
 ## 4. Data
 
-- `social_connection`: id, user_id (cascade), service (`bluesky|facebook|instagram|youtube`), remote_id (DID, page
+- `social_connection`: id, user_id (cascade), service (`bluesky|facebook|instagram|youtube`), variant (Instagram:
+  `facebook_login|instagram_login`; null otherwise), remote_id (DID, page
   id, IG user id, channel id), remote_name (handle / page / channel title, for display), sealed_tokens (Fernet text:
   access, refresh, expiry, DPoP key and PDS URL for Bluesky), default_on (bool, default true), state
   (`ok|reauth`), last_error (short, no secrets), created_at. Unique (user_id, service, remote_id).
@@ -139,7 +142,7 @@ its public clearnet domain (never an onion address) as the link back.
 |---|---|---|---|
 | Bluesky | no (not editable) | `deleteRecord` | sends again as a new post |
 | Facebook | message updated | deleted | sends again |
-| Instagram | no (no API edits a caption) | deleted under C6 option A; under option B recorded as "delete by hand" with a link | sends again |
+| Instagram | no (no API edits a caption) | via Facebook Login: deleted; via Instagram Login: recorded as "delete by hand" with a link | sends again |
 | YouTube | title, description, tags updated | `videos.delete` | sends again |
 
 Edits that change media do not resend media. An edit that makes a post ineligible (visibility narrowed, NSFW
@@ -219,7 +222,9 @@ YouTube quota calculator and revision history). Findings are in §2.
 privacy; §7 Instagram row; §8 one refresh at a time, per-connection DPoP keys, YouTube's daily allowance; §9 the
 harness; §11 no YouTube audit.
 
-**C6 (owner ruling needed): which Instagram API.**
+**C6 (owner ruling 2026-11-13): offer both Instagram APIs.** The connections page offers "Connect Instagram through
+Facebook" (option A, deletes sync) and "Connect Instagram directly" (option B, no Page needed, deletes by hand).
+Both need `INSTAGRAM_APP_ID` for B; A uses the Facebook app. The two options were:
 
 - **A. Instagram API with Facebook Login (recommended).** The member signs in with Facebook and picks the Instagram
   account linked to a Page they manage. Deletes sync (C4). It uses the same Meta app and login as Facebook Pages
