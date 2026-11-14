@@ -34,7 +34,7 @@
                     <tr>
                         <td><strong>{{ page.title }}</strong></td>
                         <td><code>{{ page.url }}</code></td>
-                        <td>{% if page.in_header %}{{ _('Header') }}{% endif %}{% if page.in_header and page.in_footer %}, {% endif %}{% if page.in_footer %}{{ _('Footer') }}{% endif %}</td>
+                        <td>{% if page.in_header %}{{ _('Header') }}{% endif %}{% if page.in_header and page.in_footer %}, {% endif %}{% if page.in_footer %}{{ _('Footer') }}{% endif %}{% if page.members_only %} <span class="badge text-bg-secondary">{{ _('Members only') }}</span>{% endif %}</td>
                         <td>{{ page.last_edited_by }}</td>
                         <td>{{ localize_datetime(page.edited_at, locale) }}</td>
                         <td>

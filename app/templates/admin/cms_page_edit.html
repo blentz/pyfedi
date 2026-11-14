@@ -45,6 +45,11 @@
                 <p class="small field_hint">{{ _('Has no effect on /about, which has a layout of its own.') }}</p>
             </div>
 
+            <div class="mb-3">
+                {{ render_field(form.members_only) }}
+                <p class="small field_hint">{{ _('Visitors who are not logged in are sent to the login page, and are not shown the header and footer links to it.') }}</p>
+            </div>
+
             {% if page %}
             <div class="mb-3">
                 <label class="form-label">{{ _('Preview') }}</label>

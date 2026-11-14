@@ -6730,6 +6730,7 @@ class CmsPage(db.Model):
     in_header = db.Column(db.Boolean, default=False, nullable=False, server_default=db.false())
     in_footer = db.Column(db.Boolean, default=False, nullable=False, server_default=db.false())
     show_sidebar = db.Column(db.Boolean, default=False, nullable=False, server_default=db.false())
+    members_only = db.Column(db.Boolean, default=False, nullable=False, server_default=db.false())  # anonymous: log in
 
 
 class PaymentProvider(db.Model):

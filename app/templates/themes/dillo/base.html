@@ -155,7 +155,7 @@
                         {% endif %}
                     {% endif %}
 
-                    {% for link in cms_nav_links().header -%}
+                    {% for link in cms_nav_links(current_user.is_authenticated).header -%}
                         <p><a href="{{ link.url }}">{{ link.title }}</a></p>
                     {% endfor -%}
                 {% endblock %}
@@ -188,7 +188,7 @@
             <td> </td>
             <td align="middle">
                 <footer class="footer mt-auto" role="contentinfo">
-                    {% for link in cms_nav_links().footer -%}
+                    {% for link in cms_nav_links(current_user.is_authenticated).footer -%}
                         <p class="text-center"><a href="{{ link.url }}">{{ link.title }}</a></p>
                     {% endfor -%}
                     {% if current_user.is_authenticated and donations_menu_shown() -%}

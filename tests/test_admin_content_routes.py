@@ -186,6 +186,31 @@ class TestTheCmsPages:
         assert forget.called
         assert b'Header' in env.client.get('/admin/pages').data
 
+    def test_a_new_page_may_be_for_members_only(self, env, editor):
+        token = csrf(env.app, env.client)
+        with patch('app.cms.cache.delete_memoized') as forget:
+            env.client.post('/admin/pages/add', data={
+                'url': '/inside', 'title': 'Inside', 'body': 'shh', 'in_header': 'y', 'members_only': 'y',
+                'csrf_token': token})
+        assert CmsPage.query.filter_by(url='/inside').one().members_only is True
+        assert forget.called
+
+    def test_an_edit_makes_a_page_members_only_and_public_again(self, env, editor, page):
+        token = csrf(env.app, env.client)
+
+        def save(**flags):
+            with patch('app.cms.cache.delete_memoized') as forget:
+                env.client.post(f'/admin/pages/{page.id}/edit', data={
+                    'url': page.url, 'title': page.title, 'body': 'hello', 'csrf_token': token, **flags})
+            assert forget.called
+            db.session.refresh(page)
+            return page.members_only
+
+        assert save(members_only='y') is True
+        assert b'Members only' in env.client.get('/admin/pages').data
+        assert b'name="members_only"' in env.client.get(f'/admin/pages/{page.id}/edit').data
+        assert save() is False
+
     def test_the_editor_offers_both_links(self, env, editor, page):
         body = env.client.get(f'/admin/pages/{page.id}/edit').data
         assert all(b'name="%s"' % field in body for field in (b'in_header', b'in_footer', b'show_sidebar'))

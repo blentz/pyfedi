@@ -611,6 +611,7 @@ class CmsPageForm(FlaskForm):
     in_header = BooleanField(_l('Link to this page in the header'))
     in_footer = BooleanField(_l('Link to this page in the footer'))
     show_sidebar = BooleanField(_l('Show the site sidebar on this page'))
+    members_only = BooleanField(_l('Only logged-in members can see this page'))
     submit = SubmitField(_l('Save'))
 
     def __init__(self, original_page=None, *args, **kwargs):

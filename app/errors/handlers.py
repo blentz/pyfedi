@@ -5,6 +5,7 @@ from flask import current_app, jsonify, render_template, request
 
 from app import db, limiter
 from app.errors import bp
+from app.cms import members_only_refusal
 from app.models import CmsPage
 from app.peertube.entities import problem
 
@@ -54,7 +55,7 @@ def not_found_error(error):
         return render_template('errors/404.html'), 404
     cms_page = CmsPage.query.filter(CmsPage.url == request.path).first()
     if cms_page:
-        return render_template('cms_page.html', page=cms_page)
+        return members_only_refusal(cms_page) or render_template('cms_page.html', page=cms_page)
 
     # Fall back to standard 404 page. This used to return the bare string
     # 'not found', which meant the branch above -- the one that exists to SKIP

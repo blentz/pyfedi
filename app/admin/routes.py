@@ -3274,7 +3274,7 @@ def admin_cms_page_add():
         page = CmsPage(url=form.url.data, title=form.title.data, body=canonicalise_text(form.body.data),
                        body_html=markdown_to_html(form.body.data), last_edited_by=current_user.display_name(),
                        in_header=form.in_header.data, in_footer=form.in_footer.data,
-                       show_sidebar=form.show_sidebar.data)
+                       show_sidebar=form.show_sidebar.data, members_only=form.members_only.data)
         db.session.add(page)
         db.session.commit()
         cms_nav_links_changed()
@@ -3302,6 +3302,7 @@ def admin_cms_page_edit(page_id):
         page.in_header = form.in_header.data
         page.in_footer = form.in_footer.data
         page.show_sidebar = form.show_sidebar.data
+        page.members_only = form.members_only.data
         db.session.commit()
         cms_nav_links_changed()
         flash(_('Page saved.'))

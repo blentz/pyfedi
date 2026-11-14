@@ -13,6 +13,7 @@ from sqlalchemy.orm import joinedload
 from ua_parser import parse as uaparse
 
 from app import db, cache, limiter, plugins
+from app.cms import members_only_refusal
 from app.branding import current_branding, onion_url, own_value
 from app.activitypub.util import users_total, active_month, local_posts, local_communities, \
     lemmy_site_data, is_activitypub_request, find_microblogging_community
@@ -781,6 +782,10 @@ def modlog_search_suggestions():
 
 @bp.route('/about')
 def about_page():
+    cms_page = CmsPage.query.filter(CmsPage.url == '/about').first()
+    if cms_page and (refusal := members_only_refusal(cms_page)):
+        return refusal
+
     user_amount = users_total(instance_id=current_instance_id())
     MAU = active_month(instance_id=current_instance_id())
     posts_amount = local_posts(instance_id=current_instance_id())
@@ -792,8 +797,6 @@ def about_page():
     community_amount = local_communities(instance_id=current_instance_id())
     instance = db.session.get(Instance, current_instance_id())
 
-    cms_page = CmsPage.query.filter(CmsPage.url == '/about').first()
-
     return render_template('about.html', user_amount=user_amount, mau=MAU, posts_amount=posts_amount,
                            domains_amount=domains_amount, community_amount=community_amount, instance=instance,
                            admins=admins, staff=staff, cms_page=cms_page)
@@ -803,7 +806,7 @@ def about_page():
 def privacy():
     cms_page = CmsPage.query.filter(CmsPage.url == '/privacy').first()
     if cms_page:
-        return render_template('cms_page.html', page=cms_page)
+        return members_only_refusal(cms_page) or render_template('cms_page.html', page=cms_page)
     return render_template('privacy.html')
 
 

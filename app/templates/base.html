@@ -209,7 +209,7 @@
                                     <div class="dropdown-menu communities_menu" hx-get="{{ url_for('main.explore_menu') }}" hx-trigger="intersect once" hx-target="this" hx-swap="innerHTML"></div>
                                 </li>
                             {% endif -%}
-                            {% for link in cms_nav_links().header -%}
+                            {% for link in cms_nav_links(current_user.is_authenticated).header -%}
                                 <li class="nav-item"><a class="nav-link" href="{{ link.url }}">{{ link.title }}</a></li>
                             {%- endfor %}
                         {% else %}
@@ -284,7 +284,7 @@
                                     </ul>
                                 </li>
                             {% endif %}
-                            {% for link in cms_nav_links().header -%}
+                            {% for link in cms_nav_links(current_user.is_authenticated).header -%}
                                 <li class="nav-item"><a class="nav-link" href="{{ link.url }}">{{ link.title }}</a></li>
                             {%- endfor %}
                             <li class="nav-item right d-none d-md-inline-block">
@@ -332,7 +332,7 @@
             <p class="text-center mt-4"><button class="btn btn-primary" style="display: none;" id="btn_add_home_screen">{{ _('Install PieFed app') }}</button></p>
             <div class="text-center">
                 <p>
-                    <a href="/about">{{ _("About") }}</a> |{% for link in cms_nav_links().footer %} <a href="{{ link.url }}">{{ link.title }}</a> |{% endfor %}
+                    <a href="/about">{{ _("About") }}</a> |{% for link in cms_nav_links(current_user.is_authenticated).footer %} <a href="{{ link.url }}">{{ link.title }}</a> |{% endfor %}
                     <a href="/instances">{{ _("Instances") }}</a> | <a href="/domains">{{ _("Domains") }}</a> |
                     <a href="/modlog">{{ _("Modlog") }}</a>
                 </p>
