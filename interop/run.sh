@@ -228,7 +228,7 @@ case "${1:-}" in
               python -m pytest -c interop/pytest.ini interop "$@" ;;
     conformance) shift; up; $COMPOSE --profile conformance run --rm conformance-runner \
               interop/conformance/run.sh "$@" ;;
-    down) $COMPOSE down -v
+    down) $COMPOSE --profile bluesky down -v   # the PLC and PDS are profiled: a plain down leaves them
           # a container that survives keeps its app's state (Pixelfed remembering a follow of a PieFed database since
           # dropped), and the next `up` reuses it beside fresh ones: refuse to leave a mixed stack behind
           left=$(podman ps -a --filter name=pyfedi-interop_ --format '{{.Names}}')
