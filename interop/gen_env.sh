@@ -48,6 +48,12 @@ fi
 if [ ! -f .env.loops ]; then
     printf 'APP_KEY=base64:%s\n' "$(b64 32)" > .env.loops
 fi
+# The Bluesky PDS joined the harness later (connected accounts): its JWT secret, admin password and PLC rotation key
+# (any 32 random bytes are a secp256k1 private key, short of a 2^-128 chance)
+if ! grep -q '^PDS_JWT_SECRET=' .env.interop; then
+    printf '# Bluesky PDS\nPDS_JWT_SECRET=%s\nPDS_ADMIN_PASSWORD=%s\nPDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX=%s\n' \
+        "$(hex 32)" "$(hex 16)" "$(hex 32)" >> .env.interop
+fi
 # Loops' dropped first Follow is re-sent after this many seconds (default 300): test_loops waits on it
 if ! grep -q '^LOOPS_FOLLOW_RESEND_SECONDS=' .env.interop; then
     printf '# Loops\nLOOPS_FOLLOW_RESEND_SECONDS=10\n' >> .env.interop

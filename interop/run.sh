@@ -4,6 +4,7 @@
 #   interop/run.sh test [args]          up, then pytest interop/ in the runner (args pass through)
 #   interop/run.sh conformance [args]   up, then interop/conformance/run.sh in the conformance-runner (args pass through)
 #   interop/run.sh apps [args]          PieFed alone, then the client-app harness (interop/apps/README.md)
+#   interop/run.sh bluesky-spike        PLC + PDS, then the atproto OAuth spike (connected accounts P0)
 #   interop/run.sh down                 remove the stack and its volumes
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -175,8 +176,19 @@ apps() {
     python3 -m interop.apps.matrix
 }
 
+# The Bluesky OAuth spike (connected accounts P0): a PLC directory, a PDS and the spike client, nothing else. The spike
+# prints its findings and writes interop/spike_bluesky/report.json.
+bluesky_spike() {
+    interop/gen_env.sh
+    $COMPOSE --profile apps build apps-runner   # the spike runs in the apps runner's image (httpx, Playwright, joserfc)
+    $COMPOSE --profile bluesky up -d --force-recreate --no-deps caddy
+    $COMPOSE --profile bluesky up -d --no-deps plc-db plc pds
+    $COMPOSE --profile bluesky run --rm --name bluesky-spike bluesky-spike python interop/spike_bluesky_oauth.py "$@"
+}
+
 case "${1:-}" in
     up)   up ;;
+    bluesky-spike) shift; bluesky_spike "$@" ;;
     apps) shift; apps "$@" ;;
     test) shift; up; $COMPOSE --profile runner run --rm interop-runner \
               python -m pytest -c interop/pytest.ini interop "$@" ;;
@@ -187,5 +199,5 @@ case "${1:-}" in
           # dropped), and the next `up` reuses it beside fresh ones: refuse to leave a mixed stack behind
           left=$(podman ps -a --filter name=pyfedi-interop_ --format '{{.Names}}')
           [ -z "$left" ] || { echo "run.sh: down left containers behind:" $left >&2; exit 1; } ;;
-    *)    echo "usage: interop/run.sh up|test|apps|conformance|down" >&2; exit 2 ;;
+    *)    echo "usage: interop/run.sh up|test|apps|conformance|bluesky-spike|down" >&2; exit 2 ;;
 esac

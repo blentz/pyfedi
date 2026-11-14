@@ -151,7 +151,7 @@ services:
       interop:
         aliases: &harness-names [piefed.test, mastodon.test, peertube.test, castopod.test, pixelfed.test, loops.test,
                                  s3.test, relay.test, voyager.test, blorp.test, photon.test, phanpy.test,
-                                 elk.test, tube.test]
+                                 elk.test, tube.test, plc.test, pds.test, alice.pds.test, bskyclient.piefed.internal]
       apps-offline:   # the emulator's only network: the harness names, and no way out (see android-emulator)
         # and lemmy.ml, Jerboa's default instance, which it must reach before anything else (Caddyfile)
         aliases: [piefed.test, mastodon.test, peertube.test, castopod.test, pixelfed.test, loops.test, s3.test,
@@ -398,6 +398,66 @@ services:
       - ./interop/relay_standin.py:/relay_standin.py:ro
       - loops-relay-state:/state:U   # its key and subscribers outlive a recreated container
     depends_on: [caddy, piefed-web]
+
+  # Bluesky (connected accounts, spec 2026-11-13): its own PLC directory, so no DID is ever registered on the public
+  # plc.directory, and a PDS that resolves DIDs there and hands out accounts on *.pds.test
+  plc-db:
+    image: docker.io/library/postgres:17.11@sha256:3cec7eb015ba8adb28139fa5c83b8489cdf0e666e53dfdf20f598ae0cc8739e3
+    environment: {POSTGRES_USER: plc, POSTGRES_PASSWORD: plc, POSTGRES_DB: plc}
+    tmpfs: [/var/lib/postgresql/data]
+    networks: [interop]
+    profiles: [bluesky]
+
+  plc:
+    # the newest did-method-plc server image (2023-09-26); the PLC operation format has not changed since
+    image: ghcr.io/bluesky-social/did-method-plc:plc-f2ab7516bac5bc0f3f86842fa94e996bd1b3815b@sha256:c78a4e972c356610851078757f1ebe4f359634c24909209d740c1dbe74395b83
+    environment:
+      DB_CREDS_JSON: '{"username":"plc","password":"plc","host":"plc-db","database":"plc"}'
+      DB_MIGRATE_CREDS_JSON: '{"username":"plc","password":"plc","host":"plc-db","database":"plc"}'
+      PORT: "2582"
+      DD_TRACE_ENABLED: "false"
+    depends_on: [plc-db]
+    networks: [interop]
+    profiles: [bluesky]
+
+  pds:
+    <<: *trust
+    # 0.4.5051, the newest PDS release on 2026-11-13 (built 2026-10-27)
+    image: ghcr.io/bluesky-social/pds:0.4.5051@sha256:8e58b79746da8a0e85698aa7ba9b53e508b94db2021d963653b6d1bfc14889c6
+    environment:
+      PDS_HOSTNAME: pds.test
+      PDS_SERVICE_HANDLE_DOMAINS: .pds.test
+      PDS_DID_PLC_URL: https://plc.test
+      PDS_DEV_MODE: "true"
+      PDS_INVITE_REQUIRED: "false"
+      PDS_DATA_DIRECTORY: /pds
+      PDS_BLOBSTORE_DISK_LOCATION: /pds/blocks
+      PDS_CRAWLERS: ""   # never ask bsky.network to crawl a harness account
+      PDS_PORT: "3000"
+      LOG_ENABLED: "true"
+      NODE_EXTRA_CA_CERTS: /caddy-data/harness-root.crt
+    tmpfs: [/pds]
+    # trust_ca.sh first, then the image's own entrypoint and command (Node 24 runs the TypeScript entry directly)
+    entrypoint: ["/trust_ca.sh", "dumb-init", "--"]
+    command: ["node", "--enable-source-maps", "index.ts"]
+    depends_on: [caddy, plc]
+    profiles: [bluesky]
+
+  # plays PieFed's part in the Bluesky OAuth spike (interop/spike_bluesky_oauth.py): serves the client metadata at
+  # https://bskyclient.piefed.internal and receives the redirect there
+  bluesky-spike:
+    <<: *trust
+    image: localhost/piefed-interop-apps-runner:latest
+    entrypoint: ["/trust_ca.sh"]
+    working_dir: /app
+    volumes:
+      - caddy-data:/caddy-data:ro
+      - ./interop/trust_ca.sh:/trust_ca.sh:ro
+      - ./interop:/app/interop
+    networks:
+      interop:
+        aliases: [bluesky-spike]
+    profiles: [bluesky]
 
   interop-runner:
     <<: *trust

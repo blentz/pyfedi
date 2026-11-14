@@ -13,6 +13,19 @@ tube.test {
 	reverse_proxy piefed-web:5000
 }
 
+# Bluesky (connected accounts): the PLC directory, the PDS and its handle hosts, and the spike's OAuth client
+plc.test {
+	reverse_proxy plc:2582
+}
+
+pds.test, *.pds.test {
+	reverse_proxy pds:3000
+}
+
+bskyclient.piefed.internal {
+	reverse_proxy bluesky-spike:8700
+}
+
 mastodon.test {
 	reverse_proxy mastodon-web:3000
 }

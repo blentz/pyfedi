@@ -9,7 +9,7 @@ FROM docker.io/library/python:3-slim
 RUN apt-get update && apt-get install -y --no-install-recommends apksigner zipalign default-jre-headless rsync \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir --disable-pip-version-check pytest pytest-timeout httpx playwright uiautomator2 adbutils \
-        'psycopg[binary]' redis \
+        'psycopg[binary]' redis joserfc \
     && playwright install --with-deps chromium
 
 WORKDIR /app

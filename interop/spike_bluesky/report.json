@@ -1,0 +1,297 @@
+{
+  "started": "2026-11-14T01:25:11.828938+00:00",
+  "steps": [
+    {
+      "step": "pds up",
+      "ok": true
+    },
+    {
+      "step": "client metadata reachable through Caddy",
+      "ok": true
+    },
+    {
+      "step": "account alice",
+      "ok": true,
+      "status": 200,
+      "body": "{\"handle\":\"alice.pds.test\",\"did\":\"did:plc:nbe6kmnqvv4kvhd2my5uenee\",\"didDoc\":{\"@context\":[\"https://www.w3.org/ns/did/v1\",\"https://w3id.org/security/multikey/v1\",\"https://w3id.org/security/suites/secp2"
+    },
+    {
+      "step": "handle resolves by https well-known",
+      "ok": true,
+      "did": "did:plc:nbe6kmnqvv4kvhd2my5uenee"
+    },
+    {
+      "step": "DID document from the local PLC names the PDS",
+      "ok": true,
+      "pds": "https://pds.test",
+      "aka": [
+        "at://alice.pds.test"
+      ]
+    },
+    {
+      "step": "authorization server metadata",
+      "ok": true,
+      "issuer": "https://pds.test",
+      "scopes": [
+        "atproto",
+        "transition:email",
+        "transition:generic",
+        "transition:chat.bsky"
+      ],
+      "auth_methods": [
+        "none",
+        "private_key_jwt"
+      ],
+      "revocation": "https://pds.test/oauth/revoke"
+    },
+    {
+      "step": "first connection: PAR accepted (confidential client, private_key_jwt, DPoP, granular scope)",
+      "ok": true,
+      "status": 201,
+      "body": "{\"request_uri\":\"urn:ietf:params:oauth:request_uri:req-bf7e90f933df168544dcb83bebf64d94\",\"expires_in\":299}"
+    },
+    {
+      "step": "first connection: redirect back with code, state and iss",
+      "ok": true,
+      "callback": {
+        "state": "ptAWGhJq2dRS_jtD3lZ1cA",
+        "iss": "https://pds.test"
+      }
+    },
+    {
+      "step": "first connection: token exchange",
+      "ok": true,
+      "status": 200,
+      "token_type": "DPoP",
+      "scope": "atproto repo:app.bsky.feed.post?action=create&action=delete blob:*/*",
+      "expires_in": 3599,
+      "has_refresh": true,
+      "sub": "did:plc:nbe6kmnqvv4kvhd2my5uenee"
+    },
+    {
+      "step": "uploadBlob",
+      "ok": true,
+      "status": 200,
+      "blob": {
+        "$type": "blob",
+        "ref": {
+          "$link": "bafkreihgoy3mj5xkaj5nositd4eh6pakkk2w5uwbg6mwl75hkeclgbxjym"
+        },
+        "mimeType": "image/png",
+        "size": 73
+      }
+    },
+    {
+      "step": "createRecord post with image, link facet, self-label",
+      "ok": true,
+      "status": 200,
+      "body": {
+        "uri": "at://did:plc:nbe6kmnqvv4kvhd2my5uenee/app.bsky.feed.post/3n2adpfzblk23",
+        "cid": "bafyreidtclamh5sshylg37wpdusmisvgwzk5n65nfavodyj4jqlu2hf3ei",
+        "commit": {
+          "cid": "bafyreia3dytyrip4mvjl3fc55c5wqqvlyymjekl7r4qomo4yksfnvjgllu",
+          "rev": "3n2adpfznck23"
+        },
+        "validationStatus": "valid"
+      }
+    },
+    {
+      "step": "301 graphemes refused (PieFed must cut at 300)",
+      "ok": true,
+      "status": 400,
+      "body": "{\"error\":\"InvalidRequest\",\"message\":\"Invalid app.bsky.feed.post record: grapheme too big (maximum 300, got 301) at $.record.text\"}"
+    },
+    {
+      "step": "putRecord without action=update in scope is refused",
+      "ok": true,
+      "status": 403,
+      "body": "{\"error\":\"ScopeMissingError\",\"message\":\"Missing required scope \\\"repo:app.bsky.feed.post?action=update\\\"\"}"
+    },
+    {
+      "step": "a collection outside the scope is refused",
+      "ok": true,
+      "status": 403,
+      "body": "{\"error\":\"ScopeMissingError\",\"message\":\"Missing required scope \\\"repo:app.bsky.actor.profile?action=create\\\"\"}"
+    },
+    {
+      "step": "refresh",
+      "ok": true,
+      "status": 200,
+      "rotated": true,
+      "expires_in": 3599
+    },
+    {
+      "step": "deleteRecord with the refreshed access token",
+      "ok": true,
+      "status": 200,
+      "body": "{\"commit\":{\"cid\":\"bafyreieaz5mwm6rn5jqysd5uh4e3m55exgkjwqynov2rx2fshkdieiqndm\",\"rev\":\"3n2adpg3ius23\"}}"
+    },
+    {
+      "step": "revoke (disconnect)",
+      "ok": true,
+      "status": 200
+    },
+    {
+      "step": "the access token stops working after revoke",
+      "ok": true,
+      "status": 401,
+      "body": "{\"error\":\"invalid_token\",\"message\":\"Invalid token\"}"
+    },
+    {
+      "step": "second connection (consent already given): PAR accepted (confidential client, private_key_jwt, DPoP, granular scope)",
+      "ok": true,
+      "status": 201,
+      "body": "{\"request_uri\":\"urn:ietf:params:oauth:request_uri:req-6882a5a4bdafda9bda5f9803aff67e72\",\"expires_in\":300}"
+    },
+    {
+      "step": "second connection (consent already given): redirect back with code, state and iss",
+      "ok": true,
+      "callback": {
+        "state": "ujW__gJiD6WQl5OLpeuYQg",
+        "iss": "https://pds.test"
+      }
+    },
+    {
+      "step": "second connection (consent already given): token exchange",
+      "ok": true,
+      "status": 200,
+      "token_type": "DPoP",
+      "scope": "atproto repo:app.bsky.feed.post?action=create&action=delete blob:*/*",
+      "expires_in": 3599,
+      "has_refresh": true,
+      "sub": "did:plc:nbe6kmnqvv4kvhd2my5uenee"
+    },
+    {
+      "step": "second: refresh",
+      "ok": true,
+      "status": 200
+    },
+    {
+      "step": "second: the used refresh token is refused",
+      "ok": true,
+      "status": 400,
+      "body": "{\"error\":\"invalid_grant\",\"error_description\":\"Refresh token replayed\"}"
+    },
+    {
+      "step": "second: FINDING the replay revoked the whole session (newest access token dead)",
+      "ok": true,
+      "newest_access_status": 401,
+      "session_killed": true,
+      "body": "{\"error\":\"invalid_token\",\"message\":\"Invalid token\"}"
+    },
+    {
+      "step": "second: FINDING the newest refresh token after the replay",
+      "ok": true,
+      "status": 400,
+      "body": "{\"error\":\"invalid_grant\",\"error_description\":\"Invalid refresh token\"}"
+    }
+  ],
+  "client_server_log": [
+    "\"GET /client-metadata.json HTTP/1.1\" 200 -",
+    "\"GET /client-metadata.json HTTP/1.1\" 200 -",
+    "\"GET /jwks.json HTTP/1.1\" 200 -",
+    "\"GET /callback?state=ptAWGhJq2dRS_jtD3lZ1cA&iss=https%3A%2F%2Fpds.test&code=cod-d498f6a2e9edfc9e8d178896b3ff1d7c1c5152785cb7f8bd512956ae6ccc27b0 HTTP/1.1\" 200 -",
+    "\"GET /callback?state=ujW__gJiD6WQl5OLpeuYQg&iss=https%3A%2F%2Fpds.test&code=cod-de0673d0b8cc6e294958063e660fcf561471ffb4928b99e31ec1fd040824059f HTTP/1.1\" 200 -"
+  ],
+  "authorization_server_metadata": {
+    "issuer": "https://pds.test",
+    "request_parameter_supported": true,
+    "request_uri_parameter_supported": true,
+    "require_request_uri_registration": true,
+    "scopes_supported": [
+      "atproto",
+      "transition:email",
+      "transition:generic",
+      "transition:chat.bsky"
+    ],
+    "subject_types_supported": [
+      "public"
+    ],
+    "response_types_supported": [
+      "code"
+    ],
+    "response_modes_supported": [
+      "query",
+      "fragment",
+      "form_post"
+    ],
+    "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+    ],
+    "code_challenge_methods_supported": [
+      "S256"
+    ],
+    "ui_locales_supported": [
+      "en-US"
+    ],
+    "display_values_supported": [
+      "page",
+      "popup",
+      "touch"
+    ],
+    "request_object_signing_alg_values_supported": [
+      "RS256",
+      "RS384",
+      "RS512",
+      "PS256",
+      "PS384",
+      "PS512",
+      "ES256",
+      "ES256K",
+      "ES384",
+      "ES512",
+      "none"
+    ],
+    "authorization_response_iss_parameter_supported": true,
+    "request_object_encryption_alg_values_supported": [],
+    "request_object_encryption_enc_values_supported": [],
+    "jwks_uri": "https://pds.test/oauth/jwks",
+    "authorization_endpoint": "https://pds.test/oauth/authorize",
+    "token_endpoint": "https://pds.test/oauth/token",
+    "token_endpoint_auth_methods_supported": [
+      "none",
+      "private_key_jwt"
+    ],
+    "token_endpoint_auth_signing_alg_values_supported": [
+      "RS256",
+      "RS384",
+      "RS512",
+      "PS256",
+      "PS384",
+      "PS512",
+      "ES256",
+      "ES256K",
+      "ES384",
+      "ES512"
+    ],
+    "revocation_endpoint": "https://pds.test/oauth/revoke",
+    "pushed_authorization_request_endpoint": "https://pds.test/oauth/par",
+    "require_pushed_authorization_requests": true,
+    "dpop_signing_alg_values_supported": [
+      "RS256",
+      "RS384",
+      "RS512",
+      "PS256",
+      "PS384",
+      "PS512",
+      "ES256",
+      "ES256K",
+      "ES384",
+      "ES512"
+    ],
+    "protected_resources": [
+      "https://pds.test"
+    ],
+    "client_id_metadata_document_supported": true,
+    "prompt_values_supported": [
+      "none",
+      "login",
+      "consent",
+      "select_account",
+      "create"
+    ]
+  },
+  "consent_page_text": null,
+  "finished": "2026-11-14T01:25:19.354785+00:00"
+}

@@ -48,7 +48,7 @@ remote "cd \"\$HOME/$REMOTE_INTEROP_DIR\" && PATH=$venv/bin:\$PATH interop/run.s
 status=$?
 set -e
 
-for results in interop/apps/results interop/conformance/results; do
+for results in interop/apps/results interop/conformance/results interop/spike_bluesky; do
     if remote "test -d \"\$HOME/$REMOTE_INTEROP_DIR/$results\""; then
         rm -rf "$results"
         mkdir -p "$results"
