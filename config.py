@@ -172,6 +172,7 @@ class Config(object):
     INSTAGRAM_APP_SECRET = os.environ.get('INSTAGRAM_APP_SECRET') or ''
     YOUTUBE_OAUTH_CLIENT_ID = os.environ.get('YOUTUBE_OAUTH_CLIENT_ID') or ''
     YOUTUBE_OAUTH_SECRET = os.environ.get('YOUTUBE_OAUTH_SECRET') or ''
+    YOUTUBE_DAILY_UPLOADS = int(os.environ.get('YOUTUBE_DAILY_UPLOADS') or 100)   # the Google project's videos.insert quota
     STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY') or ''
     STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY') or ''
     STRIPE_MONTHLY_SMALL = os.environ.get('STRIPE_MONTHLY_SMALL') or ''

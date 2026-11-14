@@ -307,3 +307,26 @@ apps' credentials are set ("Instagram, through Facebook" and "Instagram").
   Only image and gallery posts are offered; NSFW and NSFL posts are skipped. No edits (§2).
 - **Errors**: Facebook's code mapping, shared as `answer_of`, plus 9 and 9007 (media not ready) as try later.
 - **Tests**: `tests/test_connections_instagram.py`. The owner's live check is the end-to-end test.
+
+## 17. P5 YouTube (2026-11-14)
+
+`app/connections/youtube.py`.
+
+- **Connecting**: Google OAuth with PKCE, `access_type=offline` and `prompt=consent` (so a refresh token always
+  comes back), scope `https://www.googleapis.com/auth/youtube`. §3 named `youtube.upload`, but videos.update and
+  videos.delete need `youtube` (C4 syncs both), and it covers uploads too. The connection is the member's own
+  channel (`channels?mine=true`); an account with none connects nothing. Access tokens last an hour and are
+  refreshed; `invalid_grant` means reconnect; disconnect revokes the refresh token.
+- **Uploading**: a resumable session (`uploadType=resumable`, metadata first), then one PUT of the whole stored
+  original, streamed from this disk (`media_local_path`) or first fetched from S3 into a temporary file (at most
+  videos.insert's 256 GB). A failed upload is begun again by the sweep; resuming part way is left out. The PUT has a
+  deadline of 600 s plus 1 s per 500 KB.
+- **Metadata**: title = the post's title, or its first line, or "Video", within 100 characters; description = the
+  text and the link back, cut to stay within 5000 bytes; tags = the post's tags within 500 characters; category 22;
+  public; not made for kids. `<` and `>`, which YouTube refuses, become `‹` and `›`. The poster frame is sent to
+  `thumbnails.set`; a refusal there (a channel not allowed custom thumbnails) never fails the copy.
+- **The daily allowance** (§8): `YOUTUBE_DAILY_UPLOADS` (default 100; 0 stops uploads) counted in Redis by the
+  Pacific date before each upload; past it, and on YouTube's own `quotaExceeded`, `dailyLimitExceeded`,
+  `uploadLimitExceeded` or `rateLimitExceeded`, the copy waits (QuotaWait) until 00:01 Pacific.
+- **Edits** replace title, description and tags (videos.update, part=snippet); **deletes** delete.
+- **Tests**: `tests/test_connections_youtube.py`. The owner's live check is the end-to-end test.

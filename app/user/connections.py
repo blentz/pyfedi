@@ -13,7 +13,7 @@ from flask_login import current_user
 from app import db
 from app.connections import (KEY, SERVICES, Account, ServiceError, enabled, enabled_services, main_base_url,
                              main_domain, sealing_available)
-from app.connections import bluesky, facebook, instagram  # noqa: F401 (registers the services)
+from app.connections import bluesky, facebook, instagram, youtube  # noqa: F401 (registers the services)
 from app.connections.dispatch import disconnect, retry
 from app.connections.tokens import seal_tokens
 from app.connections.content import image_bytes
