@@ -54,6 +54,10 @@ if ! grep -q '^PDS_JWT_SECRET=' .env.interop; then
     printf '# Bluesky PDS\nPDS_JWT_SECRET=%s\nPDS_ADMIN_PASSWORD=%s\nPDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX=%s\n' \
         "$(hex 32)" "$(hex 16)" "$(hex 32)" >> .env.interop
 fi
+# Connected accounts: members' tokens are sealed under a Fernet key (32 random bytes, urlsafe base64)
+if ! grep -q '^CONNECTIONS_SECRETS_KEY=' .env.interop; then
+    printf 'CONNECTIONS_SECRETS_KEY=%s\n' "$(python3 -c 'import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')" >> .env.interop
+fi
 # Loops' dropped first Follow is re-sent after this many seconds (default 300): test_loops waits on it
 if ! grep -q '^LOOPS_FOLLOW_RESEND_SECONDS=' .env.interop; then
     printf '# Loops\nLOOPS_FOLLOW_RESEND_SECONDS=10\n' >> .env.interop

@@ -161,6 +161,10 @@ class Config(object):
     # CONNECTIONS_SECRETS_KEY (Fernet, newest first, comma separated); each service needs its app's credentials
     CONNECTIONS_SECRETS_KEY = os.environ.get('CONNECTIONS_SECRETS_KEY') or ''
     BLUESKY_OAUTH_KEY = os.environ.get('BLUESKY_OAUTH_KEY') or ''
+    # where Bluesky identities resolve: did:plc documents, handles DNS alone names, and the sign-in for no handle
+    BLUESKY_PLC_URL = os.environ.get('BLUESKY_PLC_URL') or 'https://plc.directory'
+    BLUESKY_RESOLVER = os.environ.get('BLUESKY_RESOLVER') or 'https://bsky.social'
+    BLUESKY_DEFAULT_SERVER = os.environ.get('BLUESKY_DEFAULT_SERVER') or 'https://bsky.social'
     FACEBOOK_APP_ID = os.environ.get('FACEBOOK_APP_ID') or ''
     FACEBOOK_APP_SECRET = os.environ.get('FACEBOOK_APP_SECRET') or ''
     INSTAGRAM_APP_ID = os.environ.get('INSTAGRAM_APP_ID') or ''

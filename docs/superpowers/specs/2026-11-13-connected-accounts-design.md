@@ -74,7 +74,8 @@ also published, reshaped for each service, to the connected accounts it fits:
     the client id is `https://<SERVER_NAME>/connections/bluesky/client-metadata.json`, its keys at
     `/connections/bluesky/jwks.json`, its redirect `/user/settings/connections/bluesky/callback` (every service's is `/user/settings/connections/<service>/callback`), all on the instance's main public
     domain (never an onion or extra domain: §2). A member on another domain is sent through the main domain to
-    connect. Bluesky is offered only when `SERVER_NAME` has a public TLD.
+    connect. Bluesky needs `SERVER_NAME` on a public TLD (a PDS refuses the client id otherwise, §2); env.sample says
+    so, and PieFed does not check it (P2, §14).
   - `CONNECTIONS_SECRETS_KEY` (Fernet key(s), comma separated, newest first) seals members' tokens.
   `app/payments/credentials.py`'s seal/unseal is generalised to take the config name; payments keep
   `PAYMENT_SECRETS_KEY`.
@@ -121,7 +122,7 @@ finishes.
 All text is made from the post's title and Markdown body as plain text (`html_to_text`), with the post's own URL on
 its public clearnet domain (never an onion address) as the link back.
 
-- **Bluesky**: `title\n\nbody`, cut at 300 graphemes with "…" plus the link when longer; link facets with UTF-8
+- **Bluesky**: `title\n\nbody`, cut at 300 graphemes (counted as code points, never fewer: P2, §14) with "…" plus the link when longer; link facets with UTF-8
   byte offsets; hashtags as tag facets; `langs` from the post language. Embed: an uploaded video, else up to 4 images
   with alt text (re-encoded under the size cap), else a link post's external card (title, description, thumbnail).
   A gallery over 4 sends the first 4 and the link. Content warning: the text becomes "CW: <warning>" + link, no media.
@@ -160,7 +161,7 @@ added) deletes its copies. Purging an account deletes its copies and connections
   runs under `SELECT ... FOR UPDATE` on the connection row, re-reads the tokens after taking the lock (another worker
   may have refreshed already), and commits the new tokens before any use. Every service gets the same rule.
 - Bluesky keeps per connection, sealed: the DPoP private key (one per connection, never reused across members), the
-  PDS URL and the authorization server issuer. DPoP nonces are cached per server in Redis, not sealed.
+  PDS URL and the authorization server issuer. DPoP nonces are kept per server in each process's memory, not sealed: a stale one costs one retry (P2).
 - **YouTube's daily allowance** (100 uploads per instance, §2): a counter in Redis keyed by the Pacific date. When it
   is spent, YouTube rows wait as `queued` with "waiting for YouTube's daily upload allowance", and a beat task
   sends them after midnight Pacific, oldest first. A 403 `quotaExceeded` also parks the row this way.
@@ -235,3 +236,27 @@ Both need `INSTAGRAM_APP_ID` for B; A uses the Facebook app. The two options wer
   needed. Deletes cannot sync: PieFed records "delete by hand on Instagram" with a link.
 
 Neither option can edit a caption.
+
+## 14. P2 Bluesky (2026-11-13)
+
+`app/connections/bluesky.py`, registered by `app/user/connections.py`, which also serves the client's documents at
+`/connections/bluesky/client-metadata.json` and `/connections/bluesky/jwks.json` (main domain, 404 when Bluesky is
+off). `flask connections-bluesky-key` prints a new `BLUESKY_OAUTH_KEY`.
+
+- **Connecting**: the Connect button has a box for a handle, a DID or a server; empty means `BLUESKY_DEFAULT_SERVER`
+  (bsky.social). A handle resolves by its `/.well-known/atproto-did`, else by `BLUESKY_RESOLVER`'s resolveHandle
+  (which reads DNS; PieFed has no DNS library); a did:plc by `BLUESKY_PLC_URL`. A name no one answers for as a handle
+  is tried as a server. After the code exchange, the account's own DID document must name a PDS whose authorization
+  server is the one the member signed in at, and a handle-started sign-in must come back as that handle's DID.
+- **Keys**: each connection gets its own DPoP key, sealed with its tokens; PieFed's client assertions are signed with
+  `BLUESKY_OAUTH_KEY` (kid = its thumbprint).
+- **Text**: the Markdown body (links written out, so they become facets), after the title unless the body starts
+  with it. The 300 limit is counted in code points, which are never fewer than graphemes, and a cut never ends
+  inside a combining sequence; the 3000-byte limit cannot be reached in 300 code points.
+- **Pictures**: re-encoded as JPEG under 950,000 bytes and 2000 px, uploaded as blobs with their alt text and aspect
+  ratio; a picture that cannot be read is left out and the link said instead.
+- **Tests**: `tests/test_connections_bluesky.py` (respx as PLC, resolver and PDS); `interop/run.sh bluesky` runs
+  `interop/bluesky/test_bluesky.py`: the harness PieFed connects alice by OAuth on the harness PDS, a microblog's copy
+  appears with its hashtag facet, the post's deletion removes it, and disconnecting forgets the account. The harness
+  PDS is patched (`interop/pds_harness.sh`) to accept the `.test` client id; `interop/bluesky/piefed_state.py` makes
+  piefed.test public and Bluesky on for the run only.

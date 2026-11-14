@@ -56,6 +56,7 @@ from app.visibility import listable_clause, post_title_for
 from app.media_cap import evict_old_post_media, remove_post_orphans, remove_user_orphans
 from app.shared.tasks.maintenance import add_remote_communities, remove_old_bot_content, pwn_bots
 from app.shared.post import feature_published_post, make_post
+from app.connections.bluesky import new_key_jwk
 from app.connections.dispatch import post_published, sweep as sweep_crossposts
 from app.shared.tasks.media import requeue_stuck_media
 from app.shared import video_uploads
@@ -162,6 +163,12 @@ def register(app):
     def generate_payment_key():
         """Print a new PAYMENT_SECRETS_KEY. It is stored nowhere: put it in the environment, and back it up."""
         print(generate_key())
+
+    @app.cli.command("connections-bluesky-key")
+    def connections_bluesky_key():
+        """Print a new BLUESKY_OAUTH_KEY (an ES256 private JWK). Put it in the environment; a new one signs Bluesky
+        out of nothing, since connections keep their own keys, but PieFed's old client assertions stop verifying."""
+        print(new_key_jwk())
 
     @app.cli.command("init-db")
     @click.option("--interactive", default='yes', help="Create admin user during setup.")

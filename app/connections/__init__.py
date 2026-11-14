@@ -68,6 +68,7 @@ class Service:
     name = ''                 # SocialConnection.service
     label = ''                # shown to members
     variants: tuple = ()      # ways to connect (C6); () means one way
+    hint_label = ''           # when set, the Connect button has a text box for it (Bluesky's handle or server)
     takes_nsfw = False        # NSFW/NSFL posts go here (spec §5 default: Bluesky only, with self-labels)
     can_edit = False          # copies are edited when the post is (C4)
 
@@ -89,8 +90,9 @@ class Service:
     def variant_label(self, variant: str | None) -> str:
         return self.label
 
-    def authorize_url(self, variant: str | None, state: str, redirect_uri: str, pending: dict) -> str:
-        """Where the Connect button sends the member. `pending` is kept (sealed) for the callback."""
+    def authorize_url(self, variant: str | None, state: str, redirect_uri: str, pending: dict, hint: str = '') -> str:
+        """Where the Connect button sends the member. `pending` is kept (sealed) for the callback; `hint` is what the
+        member typed in the box `hint_label` asks for."""
         raise NotImplementedError
 
     def finish(self, variant: str | None, args: dict, redirect_uri: str, pending: dict) -> list:
@@ -160,3 +162,9 @@ def connections_offered(user) -> bool:
 def main_domain() -> str:
     """The instance's main public domain: every connect and callback runs there (spec §3)."""
     return current_app.config['SERVER_NAME']
+
+
+def main_base_url() -> str:
+    """The main domain as the services know it: the address each service's redirect is registered under."""
+    scheme = 'http' if current_app.config.get('HTTP_PROTOCOL') == 'http' else 'https'
+    return f'{scheme}://{main_domain()}'

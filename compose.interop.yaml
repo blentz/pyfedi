@@ -438,15 +438,20 @@ services:
       LOG_ENABLED: "true"
       NODE_EXTRA_CA_CERTS: /caddy-data/harness-root.crt
     tmpfs: [/pds]
-    # trust_ca.sh first, then the image's own entrypoint and command (Node 24 runs the TypeScript entry directly)
-    entrypoint: ["/trust_ca.sh", "dumb-init", "--"]
+    volumes:
+      - caddy-data:/caddy-data:ro
+      - ./interop/trust_ca.sh:/trust_ca.sh:ro
+      - ./interop/pds_harness.sh:/pds_harness.sh:ro
+    # trust_ca.sh, pds_harness.sh (lets the piefed.test client id through), then the image's own entrypoint and
+    # command (Node 24 runs the TypeScript entry directly)
+    entrypoint: ["/trust_ca.sh", "/pds_harness.sh", "dumb-init", "--"]
     command: ["node", "--enable-source-maps", "index.ts"]
     depends_on: [caddy, plc]
     profiles: [bluesky]
 
-  # plays PieFed's part in the Bluesky OAuth spike (interop/spike_bluesky_oauth.py): serves the client metadata at
-  # https://bskyclient.piefed.internal and receives the redirect there
-  bluesky-spike:
+  # runs interop/bluesky's browser tests (Playwright), and plays PieFed's part in the OAuth spike
+  # (interop/spike_bluesky_oauth.py): serves the spike's client metadata at https://bskyclient.piefed.internal
+  bluesky-runner:
     <<: *trust
     image: localhost/piefed-interop-apps-runner:latest
     entrypoint: ["/trust_ca.sh"]
@@ -457,7 +462,7 @@ services:
       - ./interop:/app/interop
     networks:
       interop:
-        aliases: [bluesky-spike]
+        aliases: [bluesky-runner]
     profiles: [bluesky]
 
   interop-runner:

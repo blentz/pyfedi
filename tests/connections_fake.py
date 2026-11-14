@@ -38,8 +38,9 @@ class FakeService(Service):
     def variant_label(self, variant):
         return f'Fake ({variant})' if variant else self.label
 
-    def authorize_url(self, variant, state, redirect_uri, pending):
+    def authorize_url(self, variant, state, redirect_uri, pending, hint=''):
         pending['verifier'] = 'v-123'
+        pending['hint'] = hint
         call('GET', f'{BASE}/ping')
         return f'{BASE}/authorize?state={state}'
 

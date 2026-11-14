@@ -6,13 +6,14 @@ CONNECTIONS_SECRETS_KEY, since Flask's session cookie is signed but readable.
 """
 import secrets
 
-from flask import abort, flash, redirect, request, session, url_for
+from flask import abort, flash, jsonify, redirect, request, session, url_for
 from flask_babel import _
 from flask_login import current_user
 
 from app import db
-from app.connections import (KEY, SERVICES, Account, ServiceError, enabled, enabled_services, main_domain,
-                             sealing_available)
+from app.connections import (KEY, SERVICES, Account, ServiceError, enabled, enabled_services, main_base_url,
+                             main_domain, sealing_available)
+from app.connections import bluesky   # registers the service
 from app.connections.dispatch import disconnect, retry
 from app.connections.tokens import seal_tokens
 from app.models import SocialConnection, SocialCrosspost
@@ -39,7 +40,31 @@ def _own_connection_or_404(connection_id: int) -> SocialConnection:
 
 
 def _redirect_uri(service_name: str) -> str:
-    return url_for('user.user_connection_callback', service_name=service_name, _external=True)
+    """On the main domain whichever domain asked: it is the address registered with the service."""
+    return f'{main_base_url()}/user/settings/connections/{service_name}/callback'
+
+
+def _bluesky_or_404():
+    if not enabled(bluesky.SERVICE) or not current_storefront().is_default:
+        abort(404)
+
+
+@bp.route('/connections/bluesky/client-metadata.json', methods=['GET'])
+def bluesky_client_metadata():
+    """PieFed's atproto OAuth client id is this document's address (spec §3): a PDS fetches it at each sign-in."""
+    _bluesky_or_404()
+    response = jsonify(bluesky.client_metadata())
+    response.headers['Cache-Control'] = 'public, max-age=600'
+    return response
+
+
+@bp.route('/connections/bluesky/jwks.json', methods=['GET'])
+def bluesky_jwks():
+    """The public half of BLUESKY_OAUTH_KEY, which signs PieFed's client assertions."""
+    _bluesky_or_404()
+    response = jsonify(bluesky.jwks())
+    response.headers['Cache-Control'] = 'public, max-age=600'
+    return response
 
 
 @bp.route('/user/settings/connections', methods=['GET'])
@@ -63,7 +88,8 @@ def user_connection_connect(service_name):
     state = secrets.token_urlsafe(24)
     pending = {}
     try:
-        url = service.authorize_url(variant, state, _redirect_uri(service.name), pending)
+        url = service.authorize_url(variant, state, _redirect_uri(service.name), pending,
+                                    hint=request.form.get('hint', '')[:300])
     except ServiceError as failure:
         flash(_('%(service)s could not be reached: %(error)s', service=service.label, error=failure.message), 'error')
         return redirect(url_for('user.user_connections'))

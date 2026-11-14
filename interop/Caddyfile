@@ -23,7 +23,7 @@ pds.test, *.pds.test {
 }
 
 bskyclient.piefed.internal {
-	reverse_proxy bluesky-spike:8700
+	reverse_proxy bluesky-runner:8700
 }
 
 mastodon.test {

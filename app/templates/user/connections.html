@@ -72,6 +72,10 @@
                 <form method="post" action="{{ url_for('user.user_connection_connect', service_name=service.name) }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="variant" value="{{ variant or '' }}">
+                    {% if service.hint_label -%}
+                        <label class="form-label small" for="hint_{{ service.name }}">{{ service.hint_label }}</label>
+                        <input type="text" class="form-control form-control-sm mb-1" name="hint" id="hint_{{ service.name }}" autocomplete="username" autocapitalize="none" spellcheck="false">
+                    {% endif -%}
                     <button type="submit" class="btn btn-outline-primary">{{ _('Connect %(service)s', service=service.variant_label(variant)) }}</button>
                 </form>
             {% endfor -%}

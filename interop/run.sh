@@ -4,6 +4,7 @@
 #   interop/run.sh test [args]          up, then pytest interop/ in the runner (args pass through)
 #   interop/run.sh conformance [args]   up, then interop/conformance/run.sh in the conformance-runner (args pass through)
 #   interop/run.sh apps [args]          PieFed alone, then the client-app harness (interop/apps/README.md)
+#   interop/run.sh bluesky [args]       PieFed + PLC + PDS, then interop/bluesky's end-to-end tests (connected accounts)
 #   interop/run.sh bluesky-spike        PLC + PDS, then the atproto OAuth spike (connected accounts P0)
 #   interop/run.sh down                 remove the stack and its volumes
 set -euo pipefail
@@ -183,12 +184,45 @@ bluesky_spike() {
     $COMPOSE --profile apps build apps-runner   # the spike runs in the apps runner's image (httpx, Playwright, joserfc)
     $COMPOSE --profile bluesky up -d --force-recreate --no-deps caddy
     $COMPOSE --profile bluesky up -d --no-deps plc-db plc pds
-    $COMPOSE --profile bluesky run --rm --name bluesky-spike bluesky-spike python interop/spike_bluesky_oauth.py "$@"
+    $COMPOSE --profile bluesky run --rm --name bluesky-runner bluesky-runner python interop/spike_bluesky_oauth.py "$@"
 }
+
+# PieFed's Bluesky state for interop/bluesky (interop/bluesky/piefed_state.py): on for the run, off after
+bluesky_state() {
+    { printf "from pyfedi import app\napp.app_context().push()\nSTATE = '%s'\n" "$1"; cat interop/bluesky/piefed_state.py; } \
+        | $COMPOSE exec -T piefed-web python -
+}
+
+# Connected accounts P2, end to end: PieFed, the PLC directory and the PDS, then interop/bluesky in the Playwright
+# runner. PieFed's Bluesky key is made once, in its own image (the host may have no cryptography), into .env.interop.
+bluesky() {
+    interop/gen_env.sh
+    $COMPOSE build piefed-web
+    if ! grep -q '^BLUESKY_OAUTH_KEY=' interop/.env.interop; then
+        key=$(podman run --rm --entrypoint python localhost/piefed-interop:latest -c "$BLUESKY_KEY_PY")
+        printf '# Bluesky (connected accounts)\nBLUESKY_OAUTH_KEY=%s\nBLUESKY_PLC_URL=https://plc.test\nBLUESKY_RESOLVER=https://pds.test\nBLUESKY_DEFAULT_SERVER=https://pds.test\n' "$key" >> interop/.env.interop
+    fi
+    up_piefed   # recreates PieFed's containers, so they read the key
+    $COMPOSE --profile apps build apps-runner
+    $COMPOSE --profile bluesky up -d --no-deps plc-db plc pds
+    wait_http piefed-web https://pds.test/xrpc/_health
+    bluesky_state on
+    trap 'bluesky_state off' EXIT
+    $COMPOSE --profile bluesky run --rm --name bluesky-runner bluesky-runner \
+        python -m pytest -c interop/pytest.ini interop/bluesky "$@"
+}
+
+# an ES256 private JWK, printed: cryptography, in the PieFed image
+BLUESKY_KEY_PY='import base64, json
+from cryptography.hazmat.primitives.asymmetric import ec
+numbers = ec.generate_private_key(ec.SECP256R1()).private_numbers()
+part = lambda value: base64.urlsafe_b64encode(value.to_bytes(32, "big")).rstrip(b"=").decode()
+print(json.dumps({"kty": "EC", "crv": "P-256", "x": part(numbers.public_numbers.x), "y": part(numbers.public_numbers.y), "d": part(numbers.private_value)}, separators=(",", ":")))'
 
 case "${1:-}" in
     up)   up ;;
     bluesky-spike) shift; bluesky_spike "$@" ;;
+    bluesky) shift; bluesky "$@" ;;
     apps) shift; apps "$@" ;;
     test) shift; up; $COMPOSE --profile runner run --rm interop-runner \
               python -m pytest -c interop/pytest.ini interop "$@" ;;
@@ -199,5 +233,5 @@ case "${1:-}" in
           # dropped), and the next `up` reuses it beside fresh ones: refuse to leave a mixed stack behind
           left=$(podman ps -a --filter name=pyfedi-interop_ --format '{{.Names}}')
           [ -z "$left" ] || { echo "run.sh: down left containers behind:" $left >&2; exit 1; } ;;
-    *)    echo "usage: interop/run.sh up|test|apps|conformance|bluesky-spike|down" >&2; exit 2 ;;
+    *)    echo "usage: interop/run.sh up|test|apps|conformance|bluesky|bluesky-spike|down" >&2; exit 2 ;;
 esac

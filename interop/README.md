@@ -10,6 +10,7 @@ See `compose.interop.yaml`; spec 2026-10-14 section 8.1.
     interop/run.sh conformance [args]   up, then interop/conformance/run.sh in the conformance-runner container
     interop/run.sh test [args]          up, then pytest interop/ in the interop-runner container (args pass through)
     interop/run.sh apps [args]          PieFed alone, then third-party client apps against it (interop/apps/README.md)
+    interop/run.sh bluesky [args]       PieFed, a PLC directory and a Bluesky PDS, then interop/bluesky (connected accounts)
     interop/run.sh bluesky-spike        a PLC directory and a Bluesky PDS, then the atproto OAuth spike (spike_bluesky_oauth.py)
     interop/run.sh down                 remove the stack and its volumes
     interop/run_remote.sh <command>     any of the above on the remote podman host (REMOTE_PODMAN, default remote-gpu)
