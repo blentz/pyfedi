@@ -67,6 +67,9 @@
             </div>
         {% endif -%}
         {% include 'post/_post_full.html' -%}
+        {% if current_user.is_authenticated and post.user_id == current_user.id and post.social_crossposts -%}
+            {% include 'post/_crossposts.html' %}
+        {% endif -%}
         {% if post.comments_enabled -%}
             {% if current_user.is_authenticated -%}
                 {% if current_user.verified and not banned_from_community -%}

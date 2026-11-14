@@ -370,6 +370,9 @@
 </div>
             </fieldset>
 
+            {% if crosspost_connections -%}
+                {% include 'post/_crosspost_choice.html' %}
+            {% endif -%}
             {{ render_field(form.og_image_url) }}
             {{ render_field(form.submit) }}
         </form>

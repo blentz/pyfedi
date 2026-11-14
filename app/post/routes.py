@@ -60,6 +60,7 @@ from app.shared.site import block_remote_instance
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
 from app.shared.media import episode_form_wanted, episode_of, media_of
+from app.connections.dispatch import post_published
 from app.shared.tasks import task_selector
 import app.variants as variants
 from app.storefront import current_storefront, storefront_url
@@ -2187,6 +2188,7 @@ def post_approve(post_id):
     task_selector('make_post', post_id=post.id)
 
     notify_about_post(post)
+    post_published(post)   # connected accounts: the author's choices go now
 
     return _('Done')
 

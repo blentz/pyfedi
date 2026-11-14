@@ -20,6 +20,8 @@ from app import db, cache, plugins, limiter
 from app.activitypub.serializers.microblog import body_hashtags
 from app.activitypub.util import find_hashtag_or_create, make_image_sizes, notify_about_post, host_of, \
     record_boost, remove_boost
+from app.connections.dispatch import (form_choice, post_edited, post_gone, post_published, post_restored,
+                                      record_choices)
 from app.community.util import tags_from_string_old, end_poll_date, flair_from_form, flairs_from_string
 from app.constants import *
 from app.models import File, Notification, NotificationSubscription, Poll, PollChoice, Post, PostBookmark, PostVote, \
@@ -400,6 +402,7 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None, album=
 
     vote = PostVote(user_id=user.id, post_id=post.id, author_id=user.id, effect=1)
     db.session.add(vote)
+    record_choices(post, form_choice(input, web=src != SRC_API))   # connected accounts: waiting until published
     db.session.commit()
 
     try:    # federation is done in edit_post
@@ -425,6 +428,7 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None, album=
 
     if published:
         notify_about_post(post)
+        post_published(post)
 
     plugins.fire_hook('after_post_create', post)
 
@@ -1209,8 +1213,10 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
     if from_scratch:
         if federate:
             task_selector('make_post', post_id=post.id)
-    elif federate:
-        task_selector('edit_post', post_id=post.id)
+    else:
+        if federate:
+            task_selector('edit_post', post_id=post.id)
+        post_edited(post)   # connected accounts (C4)
 
     if src == SRC_API:
         if from_scratch:
@@ -1257,6 +1263,7 @@ def delete_post(post_id: int, federate_deletion, src, auth):
             continue
         db.session.delete(notif)
     db.session.commit()
+    post_gone(post)   # connected accounts (C4)
 
     if src == SRC_API:
         return user_id, post
@@ -1292,6 +1299,7 @@ def restore_post(post_id: int, src, auth):
 
     if post.status == POST_STATUS_PUBLISHED:
         task_selector('restore_post', user_id=user_id, post_id=post.id)
+    post_restored(post)   # connected accounts: deleted copies are sent again (spec §7)
 
     if src == SRC_API:
         return user_id, post
@@ -1613,6 +1621,7 @@ def mod_remove_post(post_id: int, reason, src, auth):
             continue
         db.session.delete(notif)
     db.session.commit()
+    post_gone(post)   # connected accounts (C4)
 
     if src == SRC_API:
         return user.id, post
@@ -1646,6 +1655,7 @@ def mod_restore_post(post_id: int, reason, src, auth):
                   link_text=shorten_string(post.title), link=f'post/{post.id}')
 
     task_selector('restore_post', user_id=user.id, post_id=post.id, reason=reason)
+    post_restored(post)   # connected accounts: deleted copies are sent again (spec §7)
 
     if src == SRC_API:
         return user.id, post

@@ -15,6 +15,7 @@ from app.payments.shortcodes import checkout_shortcodes
 from app.permissions import holds_any_grant, may_act_on_user, may_ban
 from app.theme_code import install as install_theme_code
 from app.referral import referral_page_available, referrals_available
+from app.connections import connections_offered, service_label
 from app.branding import DERIVED_FIELDS, Branding, current_branding
 from app.project_links import footer_invitation, project_links
 from app.sidebar import shows_box, sidebar_boxes
@@ -162,6 +163,8 @@ def register_request_hooks(app):
     app.jinja_env.globals['role_access'] = role_access
     app.jinja_env.globals['referrals_available'] = referrals_available
     app.jinja_env.globals['referral_page_available'] = referral_page_available
+    app.jinja_env.globals['connections_offered'] = connections_offered
+    app.jinja_env.globals['service_label'] = service_label
     app.jinja_env.globals['cms_nav_links'] = cms_nav_links
     app.jinja_env.globals['donations_menu_shown'] = donations_menu_shown
     app.jinja_env.globals['money'] = money

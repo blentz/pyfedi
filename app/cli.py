@@ -56,6 +56,7 @@ from app.visibility import listable_clause, post_title_for
 from app.media_cap import evict_old_post_media, remove_post_orphans, remove_user_orphans
 from app.shared.tasks.maintenance import add_remote_communities, remove_old_bot_content, pwn_bots
 from app.shared.post import feature_published_post, make_post
+from app.connections.dispatch import post_published, sweep as sweep_crossposts
 from app.shared.tasks.media import requeue_stuck_media
 from app.shared import video_uploads
 from app.relays.expiry import expire_relayed_posts
@@ -1068,6 +1069,7 @@ def register(app):
                         publish_scheduled_posts()
 
                         requeue_stuck_media()   # A13.9: uploads a killed probe_media left behind
+                        sweep_crossposts()   # connected accounts: retries and work a lost task left (spec §8)
 
                         send_batched_activities()
 
@@ -1150,6 +1152,7 @@ def register(app):
 
                         # create Notification()s for all the people subscribed to this post.community, post.author, post.topic_id and feed
                         notify_about_post(post)
+                        post_published(post)   # connected accounts
 
                     # Scheduled post with multiple occurences
                     else:
@@ -1192,6 +1195,7 @@ def register(app):
 
                         task_selector('make_post', post_id=scheduled_post.id)
                         notify_about_post(scheduled_post)
+                        post_published(scheduled_post, template=post)   # connected accounts: the template's choices
 
 
     @app.cli.command('send-batched-activities')
@@ -1451,7 +1455,8 @@ def register(app):
                         'ai_generated': False,
                         'notify_author': False,
                         'image_alt_text': '',
-                        'flair_id': feed.flair_id
+                        'flair_id': feed.flair_id,
+                        'crosspost_to': [],   # an imported feed item goes to no connected account
                     }
 
                     try:

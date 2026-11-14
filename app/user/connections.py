@@ -1,0 +1,187 @@
+"""A member's connected accounts (spec docs/superpowers/specs/2026-11-13-connected-accounts-design.md §3).
+
+Connecting runs on the instance's main domain only: each service knows one redirect address. What the sign-in hands
+back before the member has chosen (a code verifier, several Pages' tokens) travels in the session sealed under
+CONNECTIONS_SECRETS_KEY, since Flask's session cookie is signed but readable.
+"""
+import secrets
+
+from flask import abort, flash, redirect, request, session, url_for
+from flask_babel import _
+from flask_login import current_user
+
+from app import db
+from app.connections import (KEY, SERVICES, Account, ServiceError, enabled, enabled_services, main_domain,
+                             sealing_available)
+from app.connections.dispatch import disconnect, retry
+from app.connections.tokens import seal_tokens
+from app.models import SocialConnection, SocialCrosspost
+from app.sealing import SealUnavailable, seal_with, unseal_with
+from app.storefront import current_storefront
+from app.user import bp
+from app.utils import login_required, render_template
+
+FLOW = 'connections_flow'
+
+
+def _service_or_404(service_name: str):
+    service = SERVICES.get(service_name)
+    if not enabled(service) or not current_storefront().is_default:
+        abort(404)
+    return service
+
+
+def _own_connection_or_404(connection_id: int) -> SocialConnection:
+    connection = db.session.get(SocialConnection, connection_id)
+    if connection is None or connection.user_id != current_user.id:
+        abort(404)
+    return connection
+
+
+def _redirect_uri(service_name: str) -> str:
+    return url_for('user.user_connection_callback', service_name=service_name, _external=True)
+
+
+@bp.route('/user/settings/connections', methods=['GET'])
+@login_required
+def user_connections():
+    rows = SocialConnection.query.filter_by(user_id=current_user.id).order_by(SocialConnection.id).all()
+    connections = [(row, SERVICES.get(row.service), enabled(SERVICES.get(row.service))) for row in rows]
+    offers = [(service, variant) for service in enabled_services() for variant in (service.variants or (None,))]
+    return render_template('user/connections.html', title=_('Connected accounts'), user=current_user,
+                           connections=connections, offers=offers, main_domain=main_domain(),
+                           on_main_domain=current_storefront().is_default)
+
+
+@bp.route('/user/settings/connections/<service_name>/connect', methods=['POST'])
+@login_required
+def user_connection_connect(service_name):
+    service = _service_or_404(service_name)
+    variant = request.form.get('variant') or None
+    if variant not in (service.variants or (None,)):
+        abort(400)
+    state = secrets.token_urlsafe(24)
+    pending = {}
+    try:
+        url = service.authorize_url(variant, state, _redirect_uri(service.name), pending)
+    except ServiceError as failure:
+        flash(_('%(service)s could not be reached: %(error)s', service=service.label, error=failure.message), 'error')
+        return redirect(url_for('user.user_connections'))
+    session[FLOW] = seal_with(KEY, {'state': state, 'service': service.name, 'variant': variant, 'pending': pending,
+                                    'user_id': current_user.id})
+    return redirect(url)
+
+
+def _open_flow(service_name: str) -> dict | None:
+    try:
+        flow = unseal_with(KEY, session.get(FLOW) or '')
+    except SealUnavailable:
+        return None
+    if flow.get('service') != service_name or flow.get('user_id') != current_user.id:
+        return None
+    return flow
+
+
+def _store(service, account: Account) -> SocialConnection:
+    connection = SocialConnection.query.filter_by(user_id=current_user.id, service=service.name,
+                                                  remote_id=account.remote_id).first()
+    if connection is None:
+        connection = SocialConnection(user_id=current_user.id, service=service.name, remote_id=account.remote_id)
+        db.session.add(connection)
+    connection.variant = account.variant
+    connection.remote_name = account.remote_name[:255]
+    connection.sealed_tokens = seal_tokens(account.tokens)
+    connection.state, connection.last_error = 'ok', None
+    db.session.commit()
+    return connection
+
+
+@bp.route('/user/settings/connections/<service_name>/callback', methods=['GET'])
+@login_required
+def user_connection_callback(service_name):
+    service = _service_or_404(service_name)
+    flow = _open_flow(service.name)
+    state = request.args.get('state', '')
+    if flow is None or not secrets.compare_digest(state.encode(), flow['state'].encode()):
+        session.pop(FLOW, None)
+        flash(_('That sign-in did not start here, or has expired. Please try again.'), 'error')
+        return redirect(url_for('user.user_connections'))
+    if request.args.get('error'):
+        session.pop(FLOW, None)
+        flash(_('%(service)s did not connect: %(error)s', service=service.label,
+                error=request.args.get('error_description') or request.args['error'])[:300], 'warning')
+        return redirect(url_for('user.user_connections'))
+    try:
+        accounts = service.finish(flow['variant'], request.args.to_dict(), _redirect_uri(service.name),
+                                  flow['pending'])
+    except ServiceError as failure:
+        session.pop(FLOW, None)
+        flash(_('%(service)s did not connect: %(error)s', service=service.label, error=failure.message), 'error')
+        return redirect(url_for('user.user_connections'))
+    if not accounts:
+        session.pop(FLOW, None)
+        flash(_('That sign-in gave access to no account %(service)s can post to.', service=service.label), 'warning')
+        return redirect(url_for('user.user_connections'))
+    if len(accounts) == 1:
+        session.pop(FLOW, None)
+        connection = _store(service, accounts[0])
+        flash(_('Connected %(service)s: %(name)s', service=service.label, name=connection.remote_name))
+        return redirect(url_for('user.user_connections'))
+    flow['accounts'] = [vars(account) for account in accounts]
+    session[FLOW] = seal_with(KEY, flow)
+    return redirect(url_for('user.user_connection_choose', service_name=service.name))
+
+
+@bp.route('/user/settings/connections/<service_name>/choose', methods=['GET', 'POST'])
+@login_required
+def user_connection_choose(service_name):
+    service = _service_or_404(service_name)
+    flow = _open_flow(service.name)
+    if flow is None or not flow.get('accounts'):
+        return redirect(url_for('user.user_connections'))
+    accounts = [Account(**account) for account in flow['accounts']]
+    if request.method == 'POST':
+        choice = request.form.get('account', '')
+        if not choice.isdigit() or int(choice) >= len(accounts):
+            abort(400)
+        session.pop(FLOW, None)
+        connection = _store(service, accounts[int(choice)])
+        flash(_('Connected %(service)s: %(name)s', service=service.label, name=connection.remote_name))
+        return redirect(url_for('user.user_connections'))
+    return render_template('user/connection_choose.html', title=_('Connected accounts'), service=service,
+                           variant=flow['variant'], names=[account.remote_name for account in accounts])
+
+
+@bp.route('/user/settings/connections/<int:connection_id>/default', methods=['POST'])
+@login_required
+def user_connection_default(connection_id):
+    connection = _own_connection_or_404(connection_id)
+    connection.default_on = request.form.get('default_on') == '1'
+    db.session.commit()
+    return redirect(url_for('user.user_connections'))
+
+
+@bp.route('/user/settings/connections/<int:connection_id>/disconnect', methods=['POST'])
+@login_required
+def user_connection_disconnect(connection_id):
+    connection = _own_connection_or_404(connection_id)
+    name = connection.remote_name
+    if sealing_available():
+        disconnect(connection)
+    else:   # the key is gone: the tokens cannot be opened to revoke, but the member may still leave
+        db.session.delete(connection)
+        db.session.commit()
+    flash(_('Disconnected %(name)s.', name=name))
+    return redirect(url_for('user.user_connections'))
+
+
+@bp.route('/user/settings/crossposts/<int:crosspost_id>/retry', methods=['POST'])
+@login_required
+def user_crosspost_retry(crosspost_id):
+    row = db.session.get(SocialCrosspost, crosspost_id)
+    if row is None or row.post.user_id != current_user.id:
+        abort(404)
+    if row.state != 'failed' or row.connection is None:
+        abort(400)
+    retry(row)
+    return redirect(f'/post/{row.post_id}')

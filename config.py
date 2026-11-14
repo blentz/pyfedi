@@ -156,6 +156,17 @@ class Config(object):
     LOG_ACTIVITYPUB_TO_FILE = os.environ.get('LOG_ACTIVITYPUB_TO_FILE') or False
 
     PAYMENT_SECRETS_KEY = os.environ.get('PAYMENT_SECRETS_KEY') or ''
+
+    # Connected accounts (spec 2026-11-13-connected-accounts-design.md §3): members' tokens are sealed under
+    # CONNECTIONS_SECRETS_KEY (Fernet, newest first, comma separated); each service needs its app's credentials
+    CONNECTIONS_SECRETS_KEY = os.environ.get('CONNECTIONS_SECRETS_KEY') or ''
+    BLUESKY_OAUTH_KEY = os.environ.get('BLUESKY_OAUTH_KEY') or ''
+    FACEBOOK_APP_ID = os.environ.get('FACEBOOK_APP_ID') or ''
+    FACEBOOK_APP_SECRET = os.environ.get('FACEBOOK_APP_SECRET') or ''
+    INSTAGRAM_APP_ID = os.environ.get('INSTAGRAM_APP_ID') or ''
+    INSTAGRAM_APP_SECRET = os.environ.get('INSTAGRAM_APP_SECRET') or ''
+    YOUTUBE_OAUTH_CLIENT_ID = os.environ.get('YOUTUBE_OAUTH_CLIENT_ID') or ''
+    YOUTUBE_OAUTH_SECRET = os.environ.get('YOUTUBE_OAUTH_SECRET') or ''
     STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY') or ''
     STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY') or ''
     STRIPE_MONTHLY_SMALL = os.environ.get('STRIPE_MONTHLY_SMALL') or ''

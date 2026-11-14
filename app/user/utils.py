@@ -17,6 +17,7 @@ from app.mentions import stored_user, user_address_parts
 from app.onion import has_real_ip
 from app.models import User, CommunityMember, Community, BannedInstances, Post, \
     PostVote, ArchivedPostReply, PostReply, UserNote
+from app.connections.dispatch import purge_user as purge_crossposts
 from app.shared.tasks import task_selector
 from app.storefront import acting_domain, current_storefront, domain_for_host
 from app.utils import get_request, get_task_session, patch_db_session, \
@@ -61,6 +62,7 @@ def purge_user_then_delete_task(user_id, flush):
             with patch_db_session(session):
                 user = session.get(User, user_id)
                 if user:
+                    purge_crossposts(user)   # connected accounts: copies deleted, connections revoked (spec §7)
                     end_subscriptions_of(user)
                     # posts
                     for post in user.posts:

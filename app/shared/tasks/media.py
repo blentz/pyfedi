@@ -17,6 +17,7 @@ from PIL import Image, ImageOps
 from app import celery, db
 from app.activitypub.util import make_image_sizes, notify_about_post
 from app.community.util import notify_admins_of_post_needing_approval
+from app.connections.dispatch import post_published
 from app.constants import (MEDIA_KIND_AUDIO, MEDIA_KIND_VIDEO, NOTIF_DEFAULT, POST_STATUS_PROCESSING, POST_TYPE_VIDEO,
                            POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING, POST_STATUS_SCHEDULED)
 from app.activitypub.serializers.peertube import uses_peertube_video
@@ -416,6 +417,7 @@ def _announce_post(post) -> None:
     task_selector('make_post', post_id=post.id)
     feature_published_post(post)   # after the Create, so peers have the post the Add names
     notify_about_post(post)
+    post_published(post)   # connected accounts: the author's choices go now
 
 
 def _stamp(value) -> datetime | None:

@@ -845,6 +845,8 @@ def post_post(auth, data):
         input['visibility'] = data['visibility']
     if 'local_only' in data:
         input['local_only'] = data['local_only']
+    if 'crosspost_to' in data:   # connected accounts (C3): absent means each connection's default
+        input['crosspost_to'] = data['crosspost_to']
 
     community = a_community(community_id)
 

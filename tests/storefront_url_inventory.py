@@ -61,6 +61,9 @@ CANONICAL_USES: dict[str, dict[str, int]] = {
     'app/community/server_view_list.py': {
         'server_view_select': 1,
     },
+    'app/connections/__init__.py': {
+        'main_domain': 1,   # connected accounts: each service's redirect and client id are registered on the main domain
+    },
     'app/discovery/instance_answers.py': {
         'instance_actor_url': 1,
     },

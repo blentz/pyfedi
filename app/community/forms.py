@@ -10,7 +10,7 @@ from slugify import slugify
 from flask_login import current_user
 from flask_wtf import FlaskForm
 from wtforms import Form, StringField, SubmitField, TextAreaField, BooleanField, HiddenField, SelectField, FileField, \
-    DateField, IntegerField, DateTimeLocalField, RadioField, FieldList, FormField
+    DateField, IntegerField, DateTimeLocalField, RadioField, FieldList, FormField, SelectMultipleField
 
 from wtforms.validators import ValidationError, DataRequired, Length, Regexp, Optional, URL, NumberRange
 
@@ -300,6 +300,8 @@ class CreatePostForm(FlaskForm):
     nsfl = BooleanField(_l('Gore/gross'))
     ai_generated = BooleanField(_l('AI generated'))
     notify_author = BooleanField(_l('Notify about replies'))
+    # connected accounts (C3): the author's accounts this post also goes to; the template draws one checkbox each
+    crosspost_to = SelectMultipleField(_l('Also post to'), coerce=int, validate_choice=False, default=[])
     language_id = SelectField(_l('Language'), validators=[DataRequired()], coerce=int,
                               render_kw={'class': 'form-select'})
     scheduled_for = DateTimeLocalField(_l('Publish at'), validators=[Optional()], format="%Y-%m-%dT%H:%M")

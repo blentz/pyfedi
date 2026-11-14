@@ -72,7 +72,7 @@ also published, reshaped for each service, to the connected accounts it fits:
   - `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET` (Instagram Login's own app id).
   - `BLUESKY_OAUTH_KEY` (an ES256 private JWK; `flask connections bluesky-key` prints a new one). No registration:
     the client id is `https://<SERVER_NAME>/connections/bluesky/client-metadata.json`, its keys at
-    `/connections/bluesky/jwks.json`, its redirect `/connections/bluesky/callback`, all on the instance's main public
+    `/connections/bluesky/jwks.json`, its redirect `/user/settings/connections/bluesky/callback` (every service's is `/user/settings/connections/<service>/callback`), all on the instance's main public
     domain (never an onion or extra domain: §2). A member on another domain is sent through the main domain to
     connect. Bluesky is offered only when `SERVER_NAME` has a public TLD.
   - `CONNECTIONS_SECRETS_KEY` (Fernet key(s), comma separated, newest first) seals members' tokens.

@@ -1559,6 +1559,9 @@ class CreatePostRequest(DefaultSchema):
                                                          "seen only by signed-in users here. In the local microblogs "
                                                          "community, false makes it public and leaving it out uses "
                                                          "the author's setting; elsewhere only true counts"})
+    crosspost_to = fields.List(fields.Integer(), metadata={"description": "Ids of the author's connected accounts "
+                                                                     "this post also goes to. Omitted: each account's "
+                                                                     "default. Empty: none"})
 
 
 class CreateScheduledPostRequest(CreatePostRequest):

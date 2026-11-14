@@ -2,49 +2,24 @@
 
 PAYMENT_SECRETS_KEY is one or more Fernet keys, newest first and comma separated, so a key can be rotated: the newest
 seals, and any of them opens. A missing or malformed key means integrated providers are off and the site keeps running
-(C4). Nothing here logs a value or puts one in an exception, so a report of the failure cannot carry a secret.
+(C4). The keyring itself is app.sealing's, shared with connected accounts.
 """
-import json
+from app.sealing import SealUnavailable, generate_key, keyring, seal_with, unseal_with
 
-from cryptography.fernet import Fernet, InvalidToken, MultiFernet
-from flask import current_app
+CredentialsUnavailable = SealUnavailable   # the payments name for it, kept for its callers
 
+KEY = 'PAYMENT_SECRETS_KEY'
 
-class CredentialsUnavailable(Exception):
-    """There is no valid key, or the key does not open this value."""
-
-
-def _keyring() -> MultiFernet | None:
-    configured = current_app.config.get('PAYMENT_SECRETS_KEY') or ''
-    keys = [key.strip() for key in configured.split(',') if key.strip()]
-    if not keys:
-        return None
-    try:
-        return MultiFernet([Fernet(key) for key in keys])
-    except ValueError:
-        return None
+__all__ = ['CredentialsUnavailable', 'credentials_available', 'generate_key', 'seal', 'unseal']
 
 
 def credentials_available() -> bool:
-    return _keyring() is not None
+    return keyring(KEY) is not None
 
 
 def seal(values: dict) -> str:
-    keyring = _keyring()
-    if keyring is None:
-        raise CredentialsUnavailable()
-    return keyring.encrypt(json.dumps(values).encode()).decode()
+    return seal_with(KEY, values)
 
 
 def unseal(token: str) -> dict:
-    keyring = _keyring()
-    if keyring is None:
-        raise CredentialsUnavailable()
-    try:
-        return json.loads(keyring.decrypt(token.encode()))
-    except InvalidToken:
-        raise CredentialsUnavailable() from None
-
-
-def generate_key() -> str:
-    return Fernet.generate_key().decode()
+    return unseal_with(KEY, token)

@@ -7583,3 +7583,48 @@ class ErrorCount(db.Model):
     kind = db.Column(db.String(256), primary_key=True)
     level = db.Column(db.String(8), primary_key=True)
     count = db.Column(db.Integer, nullable=False, default=0)
+
+
+class SocialConnection(db.Model):
+    """A member's account on another service that their posts are published to (connected accounts, spec
+    2026-11-13). The tokens are sealed under CONNECTIONS_SECRETS_KEY (app.connections.tokens), never stored plain."""
+    __tablename__ = 'social_connection'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False, index=True)
+    service = db.Column(db.String(20), nullable=False)          # app.connections.SERVICES key
+    variant = db.Column(db.String(20))                          # Instagram: facebook_login | instagram_login (C6)
+    remote_id = db.Column(db.String(255), nullable=False)       # DID, Page id, IG user id, channel id
+    remote_name = db.Column(db.String(255), nullable=False, default='')   # handle, Page or channel name, for display
+    sealed_tokens = db.Column(db.Text, nullable=False)
+    default_on = db.Column(db.Boolean, nullable=False, default=True, server_default='true')
+    state = db.Column(db.String(10), nullable=False, default='ok', server_default='ok')   # ok | reauth
+    last_error = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+    user = db.relationship('User', backref=db.backref('social_connections', passive_deletes=True))
+
+    __table_args__ = (db.UniqueConstraint('user_id', 'service', 'remote_id', name='uq_social_connection_account'),)
+
+
+class SocialCrosspost(db.Model):
+    """One post's copy on one connected account, from the member's choice on the post form to its deletion there."""
+    __tablename__ = 'social_crosspost'
+    id = db.Column(db.Integer, primary_key=True)
+    post_id = db.Column(db.Integer, db.ForeignKey('post.id', ondelete='CASCADE'), nullable=False, index=True)
+    connection_id = db.Column(db.Integer, db.ForeignKey('social_connection.id', ondelete='SET NULL'), index=True)
+    service = db.Column(db.String(20), nullable=False)
+    variant = db.Column(db.String(20))       # the connection's, when sent: which API can delete it (C6)
+    # waiting (chosen, post not published) | queued | sent | failed | deleted | skipped | manual (delete by hand)
+    state = db.Column(db.String(10), nullable=False, default='waiting', index=True)
+    remote_id = db.Column(db.String(512))
+    remote_url = db.Column(db.String(1024))
+    attempts = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    next_attempt_at = db.Column(db.DateTime, index=True)
+    last_error = db.Column(db.String(255))
+    sent_at = db.Column(db.DateTime)
+    edited_at = db.Column(db.DateTime)
+
+    post = db.relationship('Post', backref=db.backref('social_crossposts', passive_deletes=True))
+    connection = db.relationship('SocialConnection', backref=db.backref('crossposts', passive_deletes=True))
+
+    __table_args__ = (db.UniqueConstraint('post_id', 'connection_id', name='uq_social_crosspost_post_connection'),)

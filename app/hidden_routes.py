@@ -121,6 +121,10 @@ NON_OBJECT_ARGUMENTS = {
     # out, whose QR code is answered to that member alone (owner 2026-11-16)
     'code_id': ('/admin/payments/codes/', '/user/settings/referrals/codes/'),
     'app_id': ('/user/settings/apps/',),   # an OAuth app; revoking touches the signed-in person's own tokens alone
+    # connected accounts: a service by name, and the signed-in person's own connection or post copy (404 for anyone
+    # else's: app.user.connections)
+    'service_name': ('/user/settings/connections/',),
+    'connection_id': ('/user/settings/connections/',), 'crosspost_id': ('/user/settings/crossposts/',),
     # Mastodon's API (plan W1.2): a status id is a snowflake naming a post or comment, a list id a joined community;
     # their routes answer a hidden one as one nobody holds themselves (app.mastodon.timelines.readable, _joined)
     'status_id': ('/api/v1/statuses/',), 'list_id': ('/api/v1/timelines/list/', '/api/v1/lists/'),

@@ -1,0 +1,15 @@
+<fieldset class="mb-3" id="crosspost_to">
+    <legend class="w-auto fs-6">{{ _('Also post to') }}</legend>
+    {% for connection, service in crosspost_connections -%}
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="crosspost_to" value="{{ connection.id }}"
+                   id="crosspost_to_{{ connection.id }}" {{ 'checked' if connection.id in (form.crosspost_to.data or []) }}>
+            <label class="form-check-label" for="crosspost_to_{{ connection.id }}">
+                {{ service.variant_label(connection.variant) }}: {{ connection.remote_name }}
+                {% if connection.state == 'reauth' %}<span class="text-danger small">({{ _('needs reconnecting') }})</span>{% endif %}
+            </label>
+        </div>
+    {% endfor -%}
+    <small class="field_hint">{{ _('Only public posts are sent. Each account gets the posts it can show.') }}
+        <a href="{{ url_for('user.user_connections') }}">{{ _('Connected accounts') }}</a></small>
+</fieldset>

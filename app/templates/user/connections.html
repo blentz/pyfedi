@@ -1,0 +1,84 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% set active_child = 'connections' %}
+
+{% block app_content %}
+<div class="row">
+    <main class="col-12 col-lg-8 position-relative main_pane">
+        <nav class="mb-2" id="breadcrumb_nav" title="{{ _('Navigation') }}">
+          <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/">{{ _('Home') }}</a></li>
+            <li class="breadcrumb-item"><a href="/u/{{ user.link() }}">{{ user.display_name() }}</a></li>
+            <li class="breadcrumb-item active" aria-current="page">{{ _('Connected accounts') }}</li>
+          </ol>
+        </nav>
+        <h1>{{ _('Connected accounts') }}</h1>
+        {% include "user/_user_nav.html" %}
+
+        <p>{{ _('Your public posts can also be published to your accounts on other services. Each gets the posts it can show: pictures go to Instagram, uploaded videos to YouTube, and everything to Bluesky and Facebook Pages. You choose on each post.') }}</p>
+
+        {% if not on_main_domain -%}
+            <p class="alert alert-info">{{ _('Accounts are connected on %(domain)s.', domain=main_domain) }}
+                <a href="https://{{ main_domain }}{{ url_for('user.user_connections') }}">{{ _('Go there') }}</a></p>
+        {% endif -%}
+
+        {% if connections -%}
+            <h2 class="fs-5">{{ _('Your accounts') }}</h2>
+            <ul class="list-group mb-4">
+            {% for connection, service, on in connections -%}
+                <li class="list-group-item">
+                    <strong>{{ service.variant_label(connection.variant) if service else connection.service }}</strong>:
+                    {{ connection.remote_name }}
+                    {% if connection.state == 'reauth' -%}
+                        <span class="badge text-bg-danger">{{ _('Needs reconnecting') }}</span>
+                    {% elif not on -%}
+                        <span class="badge text-bg-secondary">{{ _('Switched off by the admins') }}</span>
+                    {% else -%}
+                        <span class="badge text-bg-success">{{ _('Working') }}</span>
+                    {% endif -%}
+                    {% if connection.last_error and connection.state == 'reauth' %}<div class="small text-muted">{{ connection.last_error }}</div>{% endif %}
+                    <div class="d-flex flex-wrap gap-2 mt-2">
+                        <form method="post" action="{{ url_for('user.user_connection_default', connection_id=connection.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="default_on" value="{{ '0' if connection.default_on else '1' }}">
+                            <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                {{ _('Stop ticking it on new posts') if connection.default_on else _('Tick it on new posts') }}</button>
+                        </form>
+                        {% if on_main_domain and on and connection.state == 'reauth' -%}
+                            <form method="post" action="{{ url_for('user.user_connection_connect', service_name=connection.service) }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <input type="hidden" name="variant" value="{{ connection.variant or '' }}">
+                                <button type="submit" class="btn btn-sm btn-primary">{{ _('Reconnect') }}</button>
+                            </form>
+                        {% endif -%}
+                        <form method="post" action="{{ url_for('user.user_connection_disconnect', connection_id=connection.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger confirm_first">{{ _('Disconnect') }}</button>
+                        </form>
+                    </div>
+                </li>
+            {% endfor -%}
+            </ul>
+            <p class="small text-muted">{{ _('Disconnecting leaves the copies already posted where they are. Delete a post first to delete its copies.') }}</p>
+        {% endif -%}
+
+        {% if on_main_domain and offers -%}
+            <h2 class="fs-5">{{ _('Connect an account') }}</h2>
+            <div class="d-flex flex-wrap gap-2">
+            {% for service, variant in offers -%}
+                <form method="post" action="{{ url_for('user.user_connection_connect', service_name=service.name) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="variant" value="{{ variant or '' }}">
+                    <button type="submit" class="btn btn-outline-primary">{{ _('Connect %(service)s', service=service.variant_label(variant)) }}</button>
+                </form>
+            {% endfor -%}
+            </div>
+        {% elif not connections -%}
+            <p>{{ _('No services are available here yet.') }}</p>
+        {% endif -%}
+    </main>
+</div>
+{% endblock %}

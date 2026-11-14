@@ -81,6 +81,7 @@ from app.utils import user_banned_from_community, back, get_setting, render_temp
 import app.shared.post as shared_post
 from app.shared.media import MediaRefused, can_upload_media, episode_form_wanted, media_kind_for, upload_byte_limit, \
     uploaded_size
+from app.connections.dispatch import offered_connections
 from app.shared.tasks import task_selector
 # The module, not the names: app.shared.feed reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.feed)
@@ -1608,7 +1609,13 @@ def add_post(actor, type=None):
         if not (len(community.language_ids()) == 1 and community.language_ids()[0] == 1) and language_names:   # language id 1 is always "Undetermined"
             flash(_('This community prefers posts in %(language_names)s', language_names=language_names), 'warning')
 
+    crosspost_connections = offered_connections(current_user, post_type)
+    if request.method == 'GET':
+        form.crosspost_to.data = [connection.id for connection, _service in crosspost_connections
+                                  if connection.default_on]
+
     return render_template('community/add_post.html', title=_('Add post to community'), form=form,
+                           crosspost_connections=crosspost_connections,
                            post_type=post_type, post_form_type=type, destination_sections=post_destination_sections(), community=community, show_visibility=is_local_microblogs(community), post=post, hide_community_actions=True,
                            markdown_editor=current_user.markdown_editor, low_bandwidth=False, actor=actor, event_online=True,
                            inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None,

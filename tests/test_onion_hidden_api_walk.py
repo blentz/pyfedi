@@ -75,6 +75,7 @@ NON_OBJECT_FIELDS = {
     # v1.8.10's fields
     'og_image_url': 'an image the post carries', 'include_deleted': 'a switch', 'repeat': 'a schedule',
     'scheduled_for': 'a time', 'matrix_user_id': "the caller's own", 'reposter_visibility': 'a setting',
+    'crosspost_to': "the caller's own",   # connected accounts: ids of the author's own connections, others ignored
 }
 # Endpoint fields that name an object but are not looked up by a caller's id or name
 EXEMPT = {

@@ -1,0 +1,26 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% set active_child = 'connections' %}
+
+{% block app_content %}
+<div class="row">
+    <main class="col-12 col-lg-8 position-relative main_pane">
+        <h1>{{ _('Which %(service)s account?', service=service.variant_label(variant)) }}</h1>
+        <p>{{ _('Your sign-in gives access to more than one. Choose the one your posts go to; you can connect the others the same way.') }}</p>
+        <form method="post" action="{{ url_for('user.user_connection_choose', service_name=service.name) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            {% for name in names -%}
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="account" value="{{ loop.index0 }}" id="account_{{ loop.index0 }}" {{ 'checked' if loop.first }}>
+                    <label class="form-check-label" for="account_{{ loop.index0 }}">{{ name }}</label>
+                </div>
+            {% endfor -%}
+            <button type="submit" class="btn btn-primary mt-3">{{ _('Connect') }}</button>
+            <a href="{{ url_for('user.user_connections') }}" class="btn btn-outline-secondary mt-3">{{ _('Cancel') }}</a>
+        </form>
+    </main>
+</div>
+{% endblock %}

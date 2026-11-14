@@ -1,0 +1,35 @@
+<div class="card mb-3 crossposts" id="crossposts">
+    <div class="card-body py-2 small">
+        <span class="text-muted">{{ _('Your connected accounts') }}:</span>
+        <ul class="list-unstyled mb-0">
+        {% for row in post.social_crossposts -%}
+            <li>
+                <strong>{{ service_label(row.service, row.variant) }}</strong>{% if row.connection %} ({{ row.connection.remote_name }}){% endif %}:
+                {% if row.state == 'sent' and row.remote_url -%}
+                    <a href="{{ row.remote_url }}" rel="noopener nofollow" target="_blank">{{ _('Posted') }}</a>
+                {% elif row.state == 'sent' -%}
+                    {{ _('Posted') }}
+                {% elif row.state in ('waiting',) -%}
+                    {{ _('Waiting for this post to be published') }}
+                {% elif row.state in ('queued', 'sending', 'editing', 'deleting') -%}
+                    {{ _('Working on it') }}{% if row.last_error %} &middot; {{ row.last_error }}{% endif %}
+                {% elif row.state == 'failed' -%}
+                    <span class="text-danger">{{ _('Failed') }}{% if row.last_error %}: {{ row.last_error }}{% endif %}</span>
+                    {% if row.connection -%}
+                    <form method="post" action="{{ url_for('user.user_crosspost_retry', crosspost_id=row.id) }}" class="d-inline">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn btn-link btn-sm p-0 align-baseline">{{ _('Retry') }}</button>
+                    </form>
+                    {% endif -%}
+                {% elif row.state == 'skipped' -%}
+                    {{ row.last_error or _('Skipped') }}
+                {% elif row.state == 'manual' -%}
+                    {{ row.last_error }}{% if row.remote_url %} <a href="{{ row.remote_url }}" rel="noopener nofollow" target="_blank">{{ _('Open it') }}</a>{% endif %}
+                {% else -%}
+                    {{ _('Deleted') }}
+                {% endif -%}
+            </li>
+        {% endfor -%}
+        </ul>
+    </div>
+</div>
