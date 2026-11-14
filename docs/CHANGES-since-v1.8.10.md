@@ -101,6 +101,8 @@ After the client-app APIs (2026-11-12 and 2026-11-13, 43 commits):
   and drives every app it lists, Moshidon and P2Play included.
 - Every HTTP route is fuzzed with atheris, signed in and out, with each finding
   fixed (spec `2026-11-13-fuzz-every-route-design.md`, section 4).
+- Connected accounts: members' public posts are published to their Bluesky
+  accounts too, with Facebook Pages, Instagram and YouTube to follow (`5f5f2e77`).
 
 The test suite collected 23,526 tests on 2026-10-14, 29,440 after the
 rebase, 33,001 on 2026-11-12 and 33,380 on 2026-11-13.
@@ -338,6 +340,7 @@ scan. The backfill `UPDATE`s touch only rows that are actually NULL.
 | 49 | `e8b3d6a1f4c7` custom_themes | Creates `custom_theme` (a domain's own copy of a theme: name, base theme, CSS, retired) and `custom_theme_file` (its images and fonts). Both go with their domain. (`cfa0caf5`) | No |
 | 50 | `f1c7a3e9d2b4` theme_code | Creates `custom_theme_template` (a custom theme's override of one app template) and adds `script`, `code_failed_template`, `code_failure` and `code_failed_at` to `custom_theme`. (`a21ccbca`) | No |
 | 51 | `c4e8a2d6f1b3` site_domain_referral_codes | Adds `site_domain.referral_codes` (NOT NULL, default true): whether, in referral-code mode, a valid code opens signup on a domain whose registration is closed. True keeps every existing domain as it was. (`33812c3b`) | No |
+| 48 | `d4f8a2c6e1b9` social_connections | Adds the `social_connection` and `social_crosspost` tables: members' connected accounts (tokens sealed) and each post's copies on them. (`83aa1637`) | No |
 
 Downgrades remove defaults, constraints, columns and the new tables, but do
 not restore the NULLs, invented counters, rankings, cross-post links or
@@ -369,6 +372,10 @@ New or changed settings in `env.sample`, `env.docker.sample` and `config.py`:
 | `video_hls` (admin, `/admin/video_hls`, linked from Misc) | off | HLS copies of local video uploads (5). Turning it on affects new uploads only; the page has a button that makes copies for earlier videos. Turning it off stops listing the copies and keeps their files; another button deletes them all. A video's storage roughly doubles while it has them. (`8e94a322`) |
 | `source_url`, `bug_report_url`, `get_involved_url` (admin site profile) | empty, meaning upstream PieFed's | The footer's AGPL source link, bug-report link and get-involved link. The source URL is also nodeinfo's repository and the Mastodon API's `source_url` (2.5). A link must be an http or https URL with a host. **An instance running modified code should set the source URL**, as the AGPL asks. (`b65b4fd6`) |
 | `oauth_admin_role` (admin Misc page) | the role named Staff | Which role an app's `admin:read` and `admin:write` scopes stand for. A person holding it (or Admin) is granted them; anyone else is told on the consent page that they are left out. A token's admin reach is that role's permissions, as the person holds them. No admin API routes use them yet. (`52c495b8`) |
+| `CONNECTIONS_SECRETS_KEY` | empty | Fernet key(s), newest first, comma separated, that seal members' connected-account tokens in the database (any Fernet key; `flask generate-payment-key` makes one). Empty means no service is offered. Back it up apart from the database. (`83aa1637`) |
+| `BLUESKY_OAUTH_KEY` | empty | An ES256 private JWK that signs PieFed's Bluesky OAuth client assertions; `flask connections-bluesky-key` prints a new one. Bluesky also needs `SERVER_NAME` on a public domain: a Bluesky server refuses a client on `.test`, `.local`, `.localhost`, `.invalid` or `.example`. (`5f5f2e77`) |
+| `BLUESKY_PLC_URL`, `BLUESKY_RESOLVER`, `BLUESKY_DEFAULT_SERVER` | `https://plc.directory`, `https://bsky.social`, `https://bsky.social` | Where Bluesky DIDs and handles resolve, and where a member who types no handle signs in. Leave them. (`5f5f2e77`) |
+| `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`, `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_SECRET` | empty | Read, but unused until those connected-account services ship. (`83aa1637`) |
 
 `config.py` no longer imports `app.constants`; it reads `VERSION` from
 `app/constants.py` by path so that `import config` does not cycle through
@@ -1922,6 +1929,19 @@ commit each:
   as P2Play. Uploads are repackaged with ffmpeg's stream copy into one fragmented MP4 and
   playlist per resolution, with a master playlist, on disk or in S3. Off by default
   (2.2; rulings H4, HL1 to HL3).
+- **Connected accounts.** Members connect their accounts on other services at
+  `/user/settings/connections`, and their public posts are published there too, reshaped
+  for each. Bluesky is the first (atproto OAuth, a handle or server to sign in at): text cut
+  to 300 characters with the link back, hashtags and links as facets, up to four pictures
+  with their alt text, NSFW and NSFL as self-labels. The post form has "Also post to" boxes,
+  ticked by each account's default, and the alpha API takes `crosspost_to`; the author sees
+  on the post where it went, with Retry for a failed copy. Deleting or removing a post
+  deletes its copies; restoring sends them again. Nothing leaves a private or local-only
+  community, a private instance or an onion domain, and only public posts go. Admins switch
+  each service on at Admin > Connected accounts once its credentials are set (2.2).
+  Facebook Pages, Instagram and YouTube follow. Spec
+  `docs/superpowers/specs/2026-11-13-connected-accounts-design.md` (rulings C1 to C6;
+  `83aa1637`, `5f5f2e77`).
 
 There are 146 `feat` commits. The first twelve came during the coverage
 campaign:
