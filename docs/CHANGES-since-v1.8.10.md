@@ -102,8 +102,8 @@ After the client-app APIs (2026-11-12 and 2026-11-13, 43 commits):
 - Every HTTP route is fuzzed with atheris, signed in and out, with each finding
   fixed (spec `2026-11-13-fuzz-every-route-design.md`, section 4).
 - Connected accounts: members' public posts are published to their Bluesky
-  accounts and Facebook Pages too, with Instagram and YouTube to follow (`5f5f2e77`,
-  `23529744`).
+  accounts, Facebook Pages and Instagram too, with YouTube to follow (`5f5f2e77`,
+  `23529744`, `6516ec15`).
 
 The test suite collected 23,526 tests on 2026-10-14, 29,440 after the
 rebase, 33,001 on 2026-11-12 and 33,380 on 2026-11-13.
@@ -378,7 +378,8 @@ New or changed settings in `env.sample`, `env.docker.sample` and `config.py`:
 | `BLUESKY_PLC_URL`, `BLUESKY_RESOLVER`, `BLUESKY_DEFAULT_SERVER` | `https://plc.directory`, `https://bsky.social`, `https://bsky.social` | Where Bluesky DIDs and handles resolve, and where a member who types no handle signs in. Leave them. (`5f5f2e77`) |
 | `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET` | empty | A Meta app with Facebook Login for Business and the Page permissions (`pages_show_list`, `pages_manage_posts`, `pages_read_engagement`), which need Meta's App Review and Business Verification before members outside the app's own roles can connect. Its redirect is `https://<SERVER_NAME>/user/settings/connections/facebook/callback`. (`23529744`) |
 | `FACEBOOK_GRAPH_VERSION` | `v27.0` | The Graph API version PieFed calls; raise it when Meta retires this one. (`23529744`) |
-| `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`, `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_SECRET` | empty | Read, but unused until those connected-account services ship. (`83aa1637`) |
+| `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET` | empty | Instagram Login (the Instagram app id of the Meta app), for members whose Instagram account has no Facebook Page; its redirect is `https://<SERVER_NAME>/user/settings/connections/instagram/callback`. With `FACEBOOK_APP_ID` set as well, Instagram is also offered through Facebook (the same Meta app, with `instagram_basic`, `instagram_content_publish` and `instagram_manage_contents`), which can delete copies. Both need Meta's App Review. (`6516ec15`) |
+| `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_SECRET` | empty | Read, but unused until that connected-account service ships. (`83aa1637`) |
 
 `config.py` no longer imports `app.constants`; it reads `VERSION` from
 `app/constants.py` by path so that `import config` does not cycle through
@@ -1945,9 +1946,13 @@ commit each:
   Facebook Pages came next: a member signs in with Facebook and picks a Page they post to;
   posts become Page posts with the text and link back, a link card, one photo or up to ten,
   and edits change the message. Facebook does not allow posting to personal profiles (ruling
-  C1). Instagram and YouTube follow. Spec
+  C1). Instagram followed, two ways in (ruling C6): through Facebook, for an account linked to
+  a Page, which can delete copies, or directly with Instagram's own sign-in, whose copies are
+  deleted by hand. Posts with pictures become a photo or a carousel of up to ten, with the
+  text, hashtags and link as the caption; Instagram fetches each picture from a signed
+  address on the main domain that works for an hour. YouTube follows. Spec
   `docs/superpowers/specs/2026-11-13-connected-accounts-design.md` (rulings C1 to C6;
-  `83aa1637`, `5f5f2e77`, `23529744`).
+  `83aa1637`, `5f5f2e77`, `23529744`, `6516ec15`).
 
 There are 146 `feat` commits. The first twelve came during the coverage
 campaign:
