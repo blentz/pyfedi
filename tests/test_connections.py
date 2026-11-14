@@ -5,6 +5,7 @@ the real paths, from the post routes through dispatch and tokens down to app.con
 """
 import gzip
 import re
+import zlib
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -189,11 +190,23 @@ def test_an_answer_past_the_cap_is_refused_unread(app, http_mock):
     assert call('GET', f'{BASE}/small', max_bytes=1000).content == b'x' * 1000
 
 
-def test_a_compressed_answer_is_read_once(app, http_mock):
-    """As a real server sends it (the harness PDS gzips its JSON): decoded while streamed, and not again."""
-    http_mock.get(f'{BASE}/gz').respond(200, content=gzip.compress(b'{"ok": true}'),
-                                        headers={'Content-Encoding': 'gzip', 'Content-Type': 'application/json'})
-    assert call('GET', f'{BASE}/gz').json() == {'ok': True}
+@pytest.mark.parametrize('encoding', ['gzip', 'gzip, gzip', 'deflate'])
+def test_a_compressed_answer_is_refused_unread(app, http_mock, encoding):
+    """PieFed asks for plain answers; a compressed one could be a decompression bomb past the cap, so it is refused
+    before a byte of it is decoded."""
+    zeros = b'\0' * 1_000_000   # a body encoded as its header says, as a real bomb would be
+    body = {'gzip': gzip.compress(zeros), 'gzip, gzip': gzip.compress(gzip.compress(zeros)),
+            'deflate': zlib.compress(zeros)}[encoding]
+    route = http_mock.get(f'{BASE}/gz').respond(200, content=body, headers={'Content-Encoding': encoding})
+    with pytest.raises(Permanent) as raised:
+        call('GET', f'{BASE}/gz')
+    assert raised.value.message == 'The answer was compressed, though PieFed asked for it plain.'
+    assert route.calls.last.request.headers['Accept-Encoding'] == 'identity'
+
+
+def test_a_plain_answer_says_identity_or_nothing(app, http_mock):
+    http_mock.get(f'{BASE}/plain').respond(200, json={'ok': True}, headers={'Content-Encoding': 'identity'})
+    assert call('GET', f'{BASE}/plain').json() == {'ok': True}
 
 
 def test_a_success_and_an_unreachable_service(app, http_mock):
