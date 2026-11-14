@@ -102,7 +102,8 @@ After the client-app APIs (2026-11-12 and 2026-11-13, 43 commits):
 - Every HTTP route is fuzzed with atheris, signed in and out, with each finding
   fixed (spec `2026-11-13-fuzz-every-route-design.md`, section 4).
 - Connected accounts: members' public posts are published to their Bluesky
-  accounts too, with Facebook Pages, Instagram and YouTube to follow (`5f5f2e77`).
+  accounts and Facebook Pages too, with Instagram and YouTube to follow (`5f5f2e77`,
+  `23529744`).
 
 The test suite collected 23,526 tests on 2026-10-14, 29,440 after the
 rebase, 33,001 on 2026-11-12 and 33,380 on 2026-11-13.
@@ -375,7 +376,9 @@ New or changed settings in `env.sample`, `env.docker.sample` and `config.py`:
 | `CONNECTIONS_SECRETS_KEY` | empty | Fernet key(s), newest first, comma separated, that seal members' connected-account tokens in the database (any Fernet key; `flask generate-payment-key` makes one). Empty means no service is offered. Back it up apart from the database. (`83aa1637`) |
 | `BLUESKY_OAUTH_KEY` | empty | An ES256 private JWK that signs PieFed's Bluesky OAuth client assertions; `flask connections-bluesky-key` prints a new one. Bluesky also needs `SERVER_NAME` on a public domain: a Bluesky server refuses a client on `.test`, `.local`, `.localhost`, `.invalid` or `.example`. (`5f5f2e77`) |
 | `BLUESKY_PLC_URL`, `BLUESKY_RESOLVER`, `BLUESKY_DEFAULT_SERVER` | `https://plc.directory`, `https://bsky.social`, `https://bsky.social` | Where Bluesky DIDs and handles resolve, and where a member who types no handle signs in. Leave them. (`5f5f2e77`) |
-| `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`, `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_SECRET` | empty | Read, but unused until those connected-account services ship. (`83aa1637`) |
+| `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET` | empty | A Meta app with Facebook Login for Business and the Page permissions (`pages_show_list`, `pages_manage_posts`, `pages_read_engagement`), which need Meta's App Review and Business Verification before members outside the app's own roles can connect. Its redirect is `https://<SERVER_NAME>/user/settings/connections/facebook/callback`. (`23529744`) |
+| `FACEBOOK_GRAPH_VERSION` | `v27.0` | The Graph API version PieFed calls; raise it when Meta retires this one. (`23529744`) |
+| `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`, `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_SECRET` | empty | Read, but unused until those connected-account services ship. (`83aa1637`) |
 
 `config.py` no longer imports `app.constants`; it reads `VERSION` from
 `app/constants.py` by path so that `import config` does not cycle through
@@ -1939,9 +1942,12 @@ commit each:
   deletes its copies; restoring sends them again. Nothing leaves a private or local-only
   community, a private instance or an onion domain, and only public posts go. Admins switch
   each service on at Admin > Connected accounts once its credentials are set (2.2).
-  Facebook Pages, Instagram and YouTube follow. Spec
+  Facebook Pages came next: a member signs in with Facebook and picks a Page they post to;
+  posts become Page posts with the text and link back, a link card, one photo or up to ten,
+  and edits change the message. Facebook does not allow posting to personal profiles (ruling
+  C1). Instagram and YouTube follow. Spec
   `docs/superpowers/specs/2026-11-13-connected-accounts-design.md` (rulings C1 to C6;
-  `83aa1637`, `5f5f2e77`).
+  `83aa1637`, `5f5f2e77`, `23529744`).
 
 There are 146 `feat` commits. The first twelve came during the coverage
 campaign:
