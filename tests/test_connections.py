@@ -4,6 +4,7 @@ The service here is tests/connections_fake.py's: each of its calls is an HTTP re
 the real paths, from the post routes through dispatch and tokens down to app.connections.http.
 """
 import gzip
+import os
 import re
 import zlib
 from datetime import datetime, timedelta
@@ -190,23 +191,103 @@ def test_an_answer_past_the_cap_is_refused_unread(app, http_mock):
     assert call('GET', f'{BASE}/small', max_bytes=1000).content == b'x' * 1000
 
 
-@pytest.mark.parametrize('encoding', ['gzip', 'gzip, gzip', 'deflate'])
-def test_a_compressed_answer_is_refused_unread(app, http_mock, encoding):
-    """PieFed asks for plain answers; a compressed one could be a decompression bomb past the cap, so it is refused
-    before a byte of it is decoded."""
-    zeros = b'\0' * 1_000_000   # a body encoded as its header says, as a real bomb would be
-    body = {'gzip': gzip.compress(zeros), 'gzip, gzip': gzip.compress(gzip.compress(zeros)),
-            'deflate': zlib.compress(zeros)}[encoding]
-    route = http_mock.get(f'{BASE}/gz').respond(200, content=body, headers={'Content-Encoding': encoding})
+@pytest.fixture
+def server(monkeypatch):
+    """A server answering with exactly the bytes and headers a test gives, unread on the way: respx reads (and so
+    decodes by its Content-Encoding) every body itself, which a bomb, a corrupt body or br would fail inside respx.
+    Returns a function setting the next answer; the requests seen are kept on it."""
+    answer = {}
+    seen = []
+
+    def handle(request):
+        seen.append(request)
+        return httpx.Response(answer['status'], headers=answer['headers'], stream=httpx.ByteStream(answer['body']))
+
+    def answer_with(body: bytes, encoding: str = '', status: int = 200):
+        answer.update(status=status, body=body, headers={'Content-Encoding': encoding} if encoding else {})
+    answer_with.seen = seen
+    monkeypatch.setattr('app.connections.http.httpx_client', httpx.Client(transport=httpx.MockTransport(handle)))
+    return answer_with
+
+
+def _raw_deflate(data: bytes) -> bytes:
+    compressor = zlib.compressobj(wbits=-zlib.MAX_WBITS)
+    return compressor.compress(data) + compressor.flush()
+
+
+@pytest.mark.parametrize('encoding, body', [
+    ('gzip', gzip.compress(b'{"ok": true}')),
+    ('x-gzip', gzip.compress(b'{"ok": true}')),
+    ('deflate', zlib.compress(b'{"ok": true}')),        # zlib-wrapped, as the HTTP spec means it
+    ('deflate', _raw_deflate(b'{"ok": true}')),         # raw, as some servers send it
+    ('identity', b'{"ok": true}'),
+    ('', b'{"ok": true}'),
+], ids=['gzip', 'x-gzip', 'deflate-zlib', 'deflate-raw', 'identity', 'none'])
+def test_a_compressed_answer_is_inflated(app, server, encoding, body):
+    server(body, encoding)
+    response = call('GET', f'{BASE}/z')
+    assert response.json() == {'ok': True} and 'content-encoding' not in response.headers
+    assert server.seen[-1].headers['Accept-Encoding'] == 'gzip, deflate'
+
+
+@pytest.mark.parametrize('encoding', ['gzip', 'deflate'])
+def test_a_decompression_bomb_is_refused_holding_no_more_than_the_cap(app, server, monkeypatch, encoding):
+    """A megabyte of zeros arrives as about a kilobyte: it is refused at the cap, and no inflating step ever made
+    more than the room left plus one byte."""
+    zeros = b'\0' * 1_000_000
+    body = gzip.compress(zeros) if encoding == 'gzip' else zlib.compress(zeros)
+    assert len(body) < 2000
+    made = []
+
+    class Watched:
+        def __init__(self, *args):
+            self.inner = zlib.decompressobj(*args)
+
+        def decompress(self, data, max_length=0):
+            out = self.inner.decompress(data, max_length)
+            made.append(len(out))
+            return out
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+    monkeypatch.setattr('app.connections.http.decompressobj', Watched)
+    server(body, encoding)
     with pytest.raises(Permanent) as raised:
-        call('GET', f'{BASE}/gz')
-    assert raised.value.message == 'The answer was compressed, though PieFed asked for it plain.'
-    assert route.calls.last.request.headers['Accept-Encoding'] == 'identity'
+        call('GET', f'{BASE}/bomb', max_bytes=64_000)
+    assert raised.value.message == 'The answer was larger than 64000 bytes.'
+    assert made and max(made) <= 64_001 and sum(made) <= 64_001
 
 
-def test_a_plain_answer_says_identity_or_nothing(app, http_mock):
-    http_mock.get(f'{BASE}/plain').respond(200, json={'ok': True}, headers={'Content-Encoding': 'identity'})
-    assert call('GET', f'{BASE}/plain').json() == {'ok': True}
+def test_more_raw_bytes_than_the_cap_are_refused_however_they_inflate(app, server):
+    server(gzip.compress(os.urandom(5000)), 'gzip')   # random bytes do not compress: about 5 KB on the wire
+    with pytest.raises(Permanent) as raised:
+        call('GET', f'{BASE}/big', max_bytes=1000)
+    assert raised.value.message == 'The answer was larger than 1000 bytes.'
+
+
+@pytest.mark.parametrize('encoding', ['gzip, gzip', 'br', 'zstd', 'compress'])
+def test_an_encoding_not_asked_for_is_refused_unread(app, server, encoding):
+    """Stacked codings multiply a bomb, and br cannot be inflated with a bound: refused from the headers alone."""
+    server(b'not read', encoding)
+    with pytest.raises(Permanent) as raised:
+        call('GET', f'{BASE}/odd')
+    assert raised.value.message == f'The answer came encoded as {encoding}, which PieFed did not ask for.'
+
+
+@pytest.mark.parametrize('body, message', [
+    (b'this is not gzip at all', 'The answer could not be decoded.'),
+    (gzip.compress(b'{"ok": true}' * 100)[:40], 'The answer ended part way through.'),
+], ids=['corrupt', 'truncated'])
+def test_a_broken_compressed_answer_is_refused(app, server, body, message):
+    server(body, 'gzip')
+    with pytest.raises(Permanent) as raised:
+        call('GET', f'{BASE}/broken')
+    assert raised.value.message == message
+
+
+def test_an_empty_answer_under_a_compressed_header(app, server):
+    server(b'', 'gzip', status=204)
+    assert call('DELETE', f'{BASE}/gone').content == b''
 
 
 def test_a_success_and_an_unreachable_service(app, http_mock):
