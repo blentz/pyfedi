@@ -9,9 +9,12 @@ import httpx
 
 from app import httpx_client
 from app.connections import AuthFailed, Permanent, Transient
+from app.pinned_http import fetch_deadline
 from app.utils import user_agent
 
-TIMEOUT = 30
+TIMEOUT = 30               # seconds, per read
+DEADLINE = 30              # seconds for a whole call
+MAX_BYTES = 1_000_000      # an answer larger than this is refused: what PieFed reads back is small JSON
 
 
 def _retry_after(response: httpx.Response) -> int | None:
@@ -46,10 +49,26 @@ def check(response: httpx.Response) -> httpx.Response:
     raise Permanent(_message(response))
 
 
-def call(method: str, url: str, **kwargs) -> httpx.Response:
+def fetch(method: str, url: str, max_bytes: int = MAX_BYTES, seconds: float = DEADLINE, **kwargs) -> httpx.Response:
+    """The response, read whole but never past `max_bytes` (Permanent beyond) nor past `seconds` of wall-clock time
+    (fetch_deadline, enforced by the pinned transport: a server that trickles is cut off). Not yet checked."""
     headers = {'User-Agent': user_agent(), **kwargs.pop('headers', {})}
     try:
-        response = httpx_client.request(method, url, headers=headers, timeout=kwargs.pop('timeout', TIMEOUT), **kwargs)
+        with fetch_deadline(seconds), httpx_client.stream(method, url, headers=headers,
+                                                          timeout=kwargs.pop('timeout', TIMEOUT), **kwargs) as response:
+            chunks, size = [], 0
+            for chunk in response.iter_bytes():
+                size += len(chunk)
+                if size > max_bytes:
+                    raise Permanent(f'The answer was larger than {max_bytes} bytes.')
+                chunks.append(chunk)
     except httpx.TransportError as failure:
         raise Transient(f'Could not reach the service ({type(failure).__name__}).') from None
-    return check(response)
+    # iter_bytes has decoded any gzip or br already: the copy must not say so, or httpx decodes it a second time
+    headers = [(name, value) for name, value in response.headers.items()
+               if name.lower() not in ('content-encoding', 'content-length', 'transfer-encoding')]
+    return httpx.Response(response.status_code, headers=headers, content=b''.join(chunks), request=response.request)
+
+
+def call(method: str, url: str, **kwargs) -> httpx.Response:
+    return check(fetch(method, url, **kwargs))

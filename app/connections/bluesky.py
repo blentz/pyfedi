@@ -24,7 +24,6 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from urllib.parse import urlencode, urlsplit
 
-import httpx
 import jwt
 from cryptography.hazmat.primitives.asymmetric import ec
 from flask import current_app
@@ -32,11 +31,10 @@ from flask_babel import _, lazy_gettext as _l
 from jwt.algorithms import ECAlgorithm
 from PIL import Image, ImageOps
 
-from app import httpx_client
 from app.connections import (Account, AuthFailed, Permanent, Sent, Service, ServiceError, Transient, main_base_url,
                              main_domain, register)
 from app.connections.eligibility import image_files, uploaded_video
-from app.connections.http import call, check
+from app.connections.http import call, check, fetch
 from app.constants import POST_TYPE_LINK
 
 SCOPE = 'atproto repo:app.bsky.feed.post?action=create&action=delete blob:*/*'
@@ -51,6 +49,9 @@ LINK = re.compile(r'https?://[^\s<>"\]\)]+')
 TAG = re.compile(r'(?:^|(?<=\s))#([^\s#\.,!?;:()\[\]"\']{1,64})')
 ZERO_WIDTH_JOINERS = (chr(0x200D), chr(0xFE0F))   # a cut never ends on a joiner or an emoji presentation selector
 MARKDOWN_LINK = re.compile(r'!?\[([^\]]*)\]\((https?://[^)\s]+)\)')
+DOCUMENT_BYTES = 64_000     # an identity or OAuth document from a server the member named: small, or refused
+PICTURE_BYTES = 25_000_000  # a picture of the post's, fetched from its own address
+UPLOAD_SECONDS = 120        # a PDS call may carry a picture up
 _nonces: dict[str, str] = {}   # the last DPoP nonce each server gave: a stale one costs one retry
 
 
@@ -154,7 +155,7 @@ def _origin(url: str) -> str:
 
 def _json(url: str) -> dict:
     try:
-        return call('GET', url, headers={'Accept': 'application/json'}).json()
+        return call('GET', url, max_bytes=DOCUMENT_BYTES, headers={'Accept': 'application/json'}).json()
     except ValueError:
         raise Permanent(_('%(url)s did not answer with JSON.', url=url)) from None
 
@@ -162,7 +163,7 @@ def _json(url: str) -> dict:
 def resolve_handle(handle: str) -> str | None:
     """The DID a handle names: its domain's well-known answer, else the resolver (which also reads DNS)."""
     try:
-        answer = call('GET', f'https://{handle}/.well-known/atproto-did').text.strip()
+        answer = call('GET', f'https://{handle}/.well-known/atproto-did', max_bytes=DOCUMENT_BYTES).text.strip()
         if answer.startswith('did:'):
             return answer
     except ServiceError:
@@ -221,11 +222,8 @@ def _auth_post(url: str, issuer: str, dpop_jwk: str, form: dict):
         fields = dict(form, client_id=client_id(),
                     client_assertion_type='urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
                     client_assertion=client_assertion(issuer))
-        try:
-            response = httpx_client.post(url, data=fields, timeout=30, headers={
-                'DPoP': dpop_proof(dpop_jwk, 'POST', url, _nonces.get(_origin(url)))})
-        except httpx.TransportError as failure:
-            raise Transient(f'Could not reach the service ({type(failure).__name__}).') from None
+        response = fetch('POST', url, max_bytes=DOCUMENT_BYTES, data=fields, headers={
+            'DPoP': dpop_proof(dpop_jwk, 'POST', url, _nonces.get(_origin(url)))})
         if 'DPoP-Nonce' in response.headers:
             _nonces[_origin(url)] = response.headers['DPoP-Nonce']
         error = _error_code(response)
@@ -251,11 +249,8 @@ def xrpc(tokens: dict, method: str, nsid: str, **kwargs):
     headers = kwargs.pop('headers', {})
     for _attempt in range(2):
         proof = dpop_proof(tokens['dpop_jwk'], method, url, _nonces.get(_origin(url)), access)
-        try:
-            response = httpx_client.request(method, url, timeout=60, headers={
-                **headers, 'Authorization': f'DPoP {access}', 'DPoP': proof}, **kwargs)
-        except httpx.TransportError as failure:
-            raise Transient(f'Could not reach the service ({type(failure).__name__}).') from None
+        response = fetch(method, url, seconds=UPLOAD_SECONDS, headers={
+            **headers, 'Authorization': f'DPoP {access}', 'DPoP': proof}, **kwargs)
         if 'DPoP-Nonce' in response.headers:
             _nonces[_origin(url)] = response.headers['DPoP-Nonce']
         if response.status_code == 401 and 'use_dpop_nonce' in response.headers.get('WWW-Authenticate', ''):
@@ -325,7 +320,7 @@ def image_bytes(file) -> bytes | None:
             return handle.read()
     if file.source_url and file.source_url.startswith('https://'):
         try:
-            return call('GET', file.source_url).content
+            return call('GET', file.source_url, max_bytes=PICTURE_BYTES).content
         except ServiceError:
             return None
     return None

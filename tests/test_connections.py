@@ -3,6 +3,7 @@
 The service here is tests/connections_fake.py's: each of its calls is an HTTP request respx answers, so these tests run
 the real paths, from the post routes through dispatch and tokens down to app.connections.http.
 """
+import gzip
 import re
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -176,6 +177,23 @@ def test_an_answer_means_a_failure(response, failure, message):
         assert raised.value.retry_after == 30
     elif failure is Transient:
         assert raised.value.retry_after is None
+
+
+def test_an_answer_past_the_cap_is_refused_unread(app, http_mock):
+    """A server the member named cannot fill memory: the answer is read in chunks and dropped past the cap."""
+    http_mock.get(f'{BASE}/huge').respond(200, content=b'x' * 5000)
+    with pytest.raises(Permanent) as raised:
+        call('GET', f'{BASE}/huge', max_bytes=1000)
+    assert raised.value.message == 'The answer was larger than 1000 bytes.'
+    http_mock.get(f'{BASE}/small').respond(200, content=b'x' * 1000)
+    assert call('GET', f'{BASE}/small', max_bytes=1000).content == b'x' * 1000
+
+
+def test_a_compressed_answer_is_read_once(app, http_mock):
+    """As a real server sends it (the harness PDS gzips its JSON): decoded while streamed, and not again."""
+    http_mock.get(f'{BASE}/gz').respond(200, content=gzip.compress(b'{"ok": true}'),
+                                        headers={'Content-Encoding': 'gzip', 'Content-Type': 'application/json'})
+    assert call('GET', f'{BASE}/gz').json() == {'ok': True}
 
 
 def test_a_success_and_an_unreachable_service(app, http_mock):
