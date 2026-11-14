@@ -167,6 +167,7 @@ class Config(object):
     BLUESKY_DEFAULT_SERVER = os.environ.get('BLUESKY_DEFAULT_SERVER') or 'https://bsky.social'
     FACEBOOK_APP_ID = os.environ.get('FACEBOOK_APP_ID') or ''
     FACEBOOK_APP_SECRET = os.environ.get('FACEBOOK_APP_SECRET') or ''
+    FACEBOOK_GRAPH_VERSION = os.environ.get('FACEBOOK_GRAPH_VERSION') or 'v27.0'
     INSTAGRAM_APP_ID = os.environ.get('INSTAGRAM_APP_ID') or ''
     INSTAGRAM_APP_SECRET = os.environ.get('INSTAGRAM_APP_SECRET') or ''
     YOUTUBE_OAUTH_CLIENT_ID = os.environ.get('YOUTUBE_OAUTH_CLIENT_ID') or ''

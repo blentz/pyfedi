@@ -26,7 +26,7 @@ from app.connections import dispatch, register
 from app.connections.dispatch import (form_choice, offered_connections, perform, post_edited, post_gone,
                                       post_published, post_restored, purge_user, record_choices, retry, sweep)
 from app.connections.eligibility import DROP, image_files, refusal, uploaded_video
-from app.connections.http import call, check
+from app.connections.http import _BoundedInflater, call, check
 from app.connections.tokens import needs_reconnecting, open_tokens, seal_tokens, usable_tokens
 from app.constants import POST_STATUS_SCHEDULED, POST_TYPE_ARTICLE, SRC_WEB
 from app.models import File, Notification, Post, Site, SocialConnection, SocialCrosspost, User
@@ -283,6 +283,13 @@ def test_a_broken_compressed_answer_is_refused(app, server, body, message):
     with pytest.raises(Permanent) as raised:
         call('GET', f'{BASE}/broken')
     assert raised.value.message == message
+
+
+def test_an_empty_chunk_is_no_body(app):
+    """A transport may hand over an empty chunk: it starts no stream, so a body of nothing stays a body of nothing."""
+    inflater = _BoundedInflater('deflate', 1000)
+    inflater.feed(b'')
+    assert inflater.decoder is None and inflater.finish() == b''
 
 
 def test_an_empty_answer_under_a_compressed_header(app, server):

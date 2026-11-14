@@ -260,3 +260,25 @@ off). `flask connections-bluesky-key` prints a new `BLUESKY_OAUTH_KEY`.
   appears with its hashtag facet, the post's deletion removes it, and disconnecting forgets the account. The harness
   PDS is patched (`interop/pds_harness.sh`) to accept the `.test` client id; `interop/bluesky/piefed_state.py` makes
   piefed.test public and Bluesky on for the run only.
+
+## 15. P3 Facebook Pages (2026-11-14)
+
+`app/connections/facebook.py`. Text and picture handling shared with Bluesky moved to `app/connections/content.py`
+(plain text, the cut, a picture's bytes, a JPEG within a size).
+
+- **Connecting**: Facebook Login for Business (`/dialog/oauth`, scopes `pages_show_list`, `pages_manage_posts`,
+  `pages_read_engagement`). The code is swapped for a user token, lengthened (`fb_exchange_token`), and
+  `/me/accounts` lists the Pages; only Pages whose tasks include `CREATE_CONTENT` are offered, and a sign-in with
+  several asks which (the chooser built in P1). The connection keeps the Page token (no expiry when made from a
+  long-lived user token) and the user token, which only the revoke uses.
+- **Every Graph call** is a POST with Graph's `method` override, so tokens, the app secret and `appsecret_proof` stay
+  in request bodies, out of any URL. `FACEBOOK_GRAPH_VERSION` (default `v27.0`) names the API version.
+- **Failures** by Graph's error code, not its status (Graph answers nearly everything with 400): 190, 102, 10,
+  200, 210, 230 mean reconnect; 1, 2, 4, 17, 32, 341, 368, 613, 80001 and `is_transient` mean try later; the rest
+  are refusals, with Facebook's message shown to the author.
+- **Posts**: message = text and the link back (cut under 60,000 characters); a link post passes its link for the
+  card; one picture is a photo post (`/photos`, JPEG under 4 MB, 4096 px); a gallery uploads up to ten photos
+  unpublished and attaches them to one `/feed` post; an uploaded video or a content warning goes as text. NSFW and
+  NSFL posts are skipped (§5). Edits replace the message; deletes delete.
+- **Tests**: `tests/test_connections_facebook.py` (respx as the Graph API). No end-to-end harness exists for
+  Facebook; the owner's live check with a reviewed Meta app is the end-to-end test.

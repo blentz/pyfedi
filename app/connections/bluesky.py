@@ -12,13 +12,10 @@ facets in UTF-8 byte offsets; up to four pictures with their alt text, or a link
 An uploaded video goes as text and the link until Bluesky's video service is wired (§2).
 """
 import hashlib
-import io
 import json
-import os
 import re
 import secrets
 import time
-import unicodedata
 from base64 import urlsafe_b64encode
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -29,11 +26,12 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from flask import current_app
 from flask_babel import _, lazy_gettext as _l
 from jwt.algorithms import ECAlgorithm
-from PIL import Image, ImageOps
 
-from app.connections import (Account, AuthFailed, Permanent, Sent, Service, ServiceError, Transient, main_base_url,
-                             main_domain, register)
+from app.connections import (Account, AuthFailed, Permanent, Sent, Service, ServiceError, main_base_url, main_domain,
+                             register)
 from app.connections.eligibility import image_files, uploaded_video
+from app.connections import content
+from app.connections.content import cut, image_bytes, plain_text  # noqa: F401 (image_bytes: re-exported)
 from app.connections.http import call, check, fetch
 from app.constants import POST_TYPE_LINK
 
@@ -47,10 +45,7 @@ DEFAULT_SERVER = 'https://bsky.social'
 HANDLE = re.compile(r'([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?')   # used with fullmatch
 LINK = re.compile(r'https?://[^\s<>"\]\)]+')
 TAG = re.compile(r'(?:^|(?<=\s))#([^\s#\.,!?;:()\[\]"\']{1,64})')
-ZERO_WIDTH_JOINERS = (chr(0x200D), chr(0xFE0F))   # a cut never ends on a joiner or an emoji presentation selector
-MARKDOWN_LINK = re.compile(r'!?\[([^\]]*)\]\((https?://[^)\s]+)\)')
 DOCUMENT_BYTES = 64_000     # an identity or OAuth document from a server the member named: small, or refused
-PICTURE_BYTES = 25_000_000  # a picture of the post's, fetched from its own address
 UPLOAD_SECONDS = 120        # a PDS call may carry a picture up
 _nonces: dict[str, str] = {}   # the last DPoP nonce each server gave: a stale one costs one retry
 
@@ -263,38 +258,18 @@ def xrpc(tokens: dict, method: str, nsid: str, **kwargs):
 # what a post becomes
 # --------------------------------------------------------------------------
 
-def plain_text(post) -> str:
-    """The post as text: its title (when the body does not already start with it) and its Markdown body, with
-    Markdown links written out so their addresses become link facets."""
-    body = MARKDOWN_LINK.sub(lambda m: f'{m.group(1)} {m.group(2)}'.strip(), post.body or '').strip()
-    title = (post.title or '').strip()
-    if title and not body.startswith(title[:40]):
-        return f'{title}\n\n{body}'.strip()
-    return body
-
-
-def _cut(text: str, limit: int) -> str:
-    """At most `limit` code points of `text`, not ending inside a combining sequence, then an ellipsis."""
-    if len(text) <= limit:
-        return text
-    end = limit - 1
-    while end > 0 and (unicodedata.combining(text[end]) or text[end] in ZERO_WIDTH_JOINERS):
-        end -= 1
-    return text[:end].rstrip() + '…'
-
-
 def compose(post, with_link: bool) -> str:
     """The post's Bluesky text: within 300 characters, with the link back when asked or when cut."""
     link = post.ap_id
     if post.content_warning:
-        return _cut(f'CW: {post.content_warning}', MAX_GRAPHEMES - len(link) - 1) + '\n' + link
+        return cut(f'CW: {post.content_warning}', MAX_GRAPHEMES - len(link) - 1) + '\n' + link
     text = plain_text(post)
     fits = len(text) <= MAX_GRAPHEMES
     if fits and not with_link:
         return text
     if fits and len(text) + len(link) + 2 <= MAX_GRAPHEMES:
         return f'{text}\n\n{link}'.strip()
-    return f'{_cut(text, MAX_GRAPHEMES - len(link) - 1)}\n{link}'
+    return f'{cut(text, MAX_GRAPHEMES - len(link) - 1)}\n{link}'
 
 
 def facets(text: str) -> list[dict]:
@@ -312,35 +287,9 @@ def facets(text: str) -> list[dict]:
     return found
 
 
-def image_bytes(file) -> bytes | None:
-    """A picture's bytes: its stored file here, or its address."""
-    path = file.file_path
-    if path and os.path.isfile(path):
-        with open(path, 'rb') as handle:
-            return handle.read()
-    if file.source_url and file.source_url.startswith('https://'):
-        try:
-            return call('GET', file.source_url, max_bytes=PICTURE_BYTES).content
-        except ServiceError:
-            return None
-    return None
-
-
 def as_jpeg(data: bytes) -> tuple[bytes, int, int] | None:
     """The picture as a JPEG within Bluesky's size limit, and its width and height."""
-    try:
-        image = ImageOps.exif_transpose(Image.open(io.BytesIO(data)))
-    except Exception:
-        return None
-    image = image.convert('RGB')
-    image.thumbnail((MAX_IMAGE_SIDE, MAX_IMAGE_SIDE))
-    for quality in (85, 75, 65, 50, 35):
-        out = io.BytesIO()
-        image.save(out, 'JPEG', quality=quality, optimize=True)
-        if out.tell() <= MAX_IMAGE_BYTES:
-            return out.getvalue(), image.width, image.height
-        image.thumbnail((image.width * 3 // 4, image.height * 3 // 4))
-    return None
+    return content.as_jpeg(data, MAX_IMAGE_BYTES, MAX_IMAGE_SIDE)
 
 
 def labels(post) -> dict | None:
@@ -375,7 +324,7 @@ def build_record(post, tokens: dict) -> dict:
         record['embed'] = {'$type': 'app.bsky.embed.images', 'images': images}
     elif post.type == POST_TYPE_LINK and post.url and not post.content_warning:
         record['embed'] = {'$type': 'app.bsky.embed.external', 'external': {
-            'uri': post.url, 'title': (post.title or '')[:300], 'description': _cut(plain_text(post), 300)}}
+            'uri': post.url, 'title': (post.title or '')[:300], 'description': cut(plain_text(post), 300)}}
     if found := labels(post):
         record['labels'] = found
     return record
