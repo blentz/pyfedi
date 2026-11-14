@@ -28,7 +28,7 @@ MAX_PHOTOS = 10
 MAX_PHOTO_BYTES = 4_000_000   # Facebook takes photos up to 4 MB
 MAX_PHOTO_SIDE = 4096
 AUTH_CODES = {190, 102, 10, 200, 210, 230}           # the token, or a permission, is gone: reconnect
-LATER_CODES = {1, 2, 4, 17, 32, 341, 368, 613, 80001}   # temporary, or a rate limit: try again later
+LATER_CODES = {1, 2, 4, 9, 17, 32, 341, 368, 613, 9007, 80001}   # temporary, a rate limit, or media not ready yet
 
 
 def graph_url(path: str) -> str:
@@ -49,7 +49,11 @@ def graph(method: str, path: str, token: str | None, params: dict | None = None,
         fields.update(access_token=token, appsecret_proof=proof(token))
     if method != 'POST':   # Graph's method override: tokens and secrets stay in a body, out of any URL
         fields['method'] = method.lower()
-    response = fetch('POST', graph_url(path), data=fields, **kwargs)
+    return answer_of(fetch('POST', graph_url(path), data=fields, **kwargs), 'Facebook')
+
+
+def answer_of(response, who: str) -> dict:
+    """A Graph answer (Facebook's or Instagram's) as JSON, or the failure its error code means."""
     try:
         body = response.json()
     except ValueError:
@@ -58,7 +62,7 @@ def graph(method: str, path: str, token: str | None, params: dict | None = None,
         return body
     error = body.get('error') if isinstance(body, dict) else None
     error = error if isinstance(error, dict) else {}
-    message = f"Facebook: {str(error.get('message') or f'HTTP {response.status_code}')[:200]}"
+    message = f"{who}: {str(error.get('error_user_msg') or error.get('message') or f'HTTP {response.status_code}')[:200]}"
     code = error.get('code')
     if code in AUTH_CODES or response.status_code in (401, 403):
         raise AuthFailed(message)

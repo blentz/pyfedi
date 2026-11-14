@@ -31,7 +31,10 @@ def cut(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     end = limit - 1
-    while end > 0 and (unicodedata.combining(text[end]) or text[end] in ZERO_WIDTH_JOINERS):
+    # back off while the first character dropped belongs to the one before it (an accent, a joiner, a presentation
+    # selector), or the last kept is a joiner: the whole joined sequence goes, never half of it
+    while end > 0 and (unicodedata.combining(text[end]) or text[end] in ZERO_WIDTH_JOINERS
+                       or text[end - 1] in ZERO_WIDTH_JOINERS):
         end -= 1
     return text[:end].rstrip() + '…'
 

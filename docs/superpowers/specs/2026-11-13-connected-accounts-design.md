@@ -282,3 +282,28 @@ off). `flask connections-bluesky-key` prints a new `BLUESKY_OAUTH_KEY`.
   NSFL posts are skipped (§5). Edits replace the message; deletes delete.
 - **Tests**: `tests/test_connections_facebook.py` (respx as the Graph API). No end-to-end harness exists for
   Facebook; the owner's live check with a reviewed Meta app is the end-to-end test.
+
+## 16. P4 Instagram (2026-11-14)
+
+`app/connections/instagram.py`, one service with the two variants of C6, offered as two Connect buttons when both
+apps' credentials are set ("Instagram, through Facebook" and "Instagram").
+
+- **Through Facebook** (`facebook_login`): the Facebook app's dialog with `instagram_basic`,
+  `instagram_content_publish`, `instagram_manage_contents`, `pages_show_list`, `pages_read_engagement`; the Pages'
+  linked `instagram_business_account`s are offered. Calls go to graph.facebook.com exactly as Facebook's do, with the
+  Page's token (no expiry). Deletes sync. The P0 docs name a user token for these calls; that a Page token serves
+  them too is the live check's first question.
+- **Directly** (`instagram_login`): `www.instagram.com/oauth/authorize` with `instagram_business_basic` and
+  `instagram_business_content_publish`, the code swapped at api.instagram.com, lengthened with `ig_exchange_token`
+  (60 days) and renewed with `ig_refresh_token` once a week or less is left. Calls go to graph.instagram.com with the
+  token as a bearer header. Meta documents the exchange and the renewal only as GETs with the secret or token in the
+  query: those two go to Meta over TLS as documented, and PieFed logs no URLs. A copy cannot be deleted: its row
+  becomes `manual`, "Delete it by hand on Instagram".
+- **Pictures**: `/connections/media/<token>.jpg` on the main domain, signed (itsdangerous, SECRET_KEY) to one file
+  for an hour; it answers a JPEG padded white (never cropped) into 4:5 .. 1.91:1, at most 1440 px and 8 MB, or 404.
+- **Posts**: one picture is an image container, two to ten a carousel of item containers; then `media_publish`,
+  and the permalink is read (a failure there leaves the copy sent without a link). Caption: text, the post's tags as
+  up to 30 hashtags, "(+N more pictures)" past ten, and the link back, cut at 2200. Alt text goes in `alt_text`.
+  Only image and gallery posts are offered; NSFW and NSFL posts are skipped. No edits (§2).
+- **Errors**: Facebook's code mapping, shared as `answer_of`, plus 9 and 9007 (media not ready) as try later.
+- **Tests**: `tests/test_connections_instagram.py`. The owner's live check is the end-to-end test.

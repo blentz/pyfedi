@@ -6,17 +6,18 @@ CONNECTIONS_SECRETS_KEY, since Flask's session cookie is signed but readable.
 """
 import secrets
 
-from flask import abort, flash, jsonify, redirect, request, session, url_for
+from flask import abort, flash, jsonify, make_response, redirect, request, session, url_for
 from flask_babel import _
 from flask_login import current_user
 
 from app import db
 from app.connections import (KEY, SERVICES, Account, ServiceError, enabled, enabled_services, main_base_url,
                              main_domain, sealing_available)
-from app.connections import bluesky, facebook  # noqa: F401 (registers the services)
+from app.connections import bluesky, facebook, instagram  # noqa: F401 (registers the services)
 from app.connections.dispatch import disconnect, retry
 from app.connections.tokens import seal_tokens
-from app.models import SocialConnection, SocialCrosspost
+from app.connections.content import image_bytes
+from app.models import File, SocialConnection, SocialCrosspost
 from app.sealing import SealUnavailable, seal_with, unseal_with
 from app.storefront import current_storefront
 from app.user import bp
@@ -55,6 +56,22 @@ def bluesky_client_metadata():
     _bluesky_or_404()
     response = jsonify(bluesky.client_metadata())
     response.headers['Cache-Control'] = 'public, max-age=600'
+    return response
+
+
+@bp.route('/connections/media/<token>.jpg', methods=['GET'])
+def instagram_media(token):
+    """A picture of a post, as Instagram fetches it while publishing (spec section 6): at a signed address that lasts an
+    hour, fitted into the aspect ratios Instagram takes. Anything else is a 404."""
+    file_id = instagram.media_file_id(token)
+    file = db.session.get(File, file_id) if file_id is not None else None
+    data = image_bytes(file) if file is not None else None
+    jpeg = instagram.fitted(data) if data else None
+    if jpeg is None:
+        abort(404)
+    response = make_response(jpeg)
+    response.headers['Content-Type'] = 'image/jpeg'
+    response.headers['Cache-Control'] = 'private, max-age=3600'
     return response
 
 

@@ -18,7 +18,7 @@ from PIL import Image
 
 from app import cli
 from app.connections import AuthFailed, Permanent, Transient, setting_name
-from app.connections import bluesky
+from app.connections import bluesky, content
 from app.connections.bluesky import (BlueskyService, as_jpeg, authorization_server, build_record, client_assertion,
                                      client_metadata, compose, did_document, dpop_proof, facets, handle_of,
                                      image_bytes, jwks, labels, new_key_jwk, pds_of, plain_text, resolve_handle)
@@ -373,6 +373,12 @@ def test_a_short_post_goes_as_it_is_and_a_long_one_is_cut_with_its_link(app):
     accent = 'e' + chr(0x301)   # e and a combining acute: one character to a reader, two code points
     accents = compose(a_post(body='x' + accent * 200), with_link=False)   # never cut between e and its accent
     assert accents.endswith(accent + '…\nhttps://piefed.example/post/7')
+
+
+def test_a_cut_backs_off_an_accent_or_a_joiner(app):
+    accent, joiner = chr(0x301), chr(0x200D)
+    assert content.cut('a' + ('e' + accent) * 10, 3) == 'a…'   # the cut would have kept an accent without its e
+    assert content.cut('ab' + joiner + 'cdefgh', 4) == 'a…'     # nor keep half of a joined sequence
 
 
 def test_four_byte_characters_count_once(app):
