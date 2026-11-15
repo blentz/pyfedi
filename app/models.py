@@ -7600,6 +7600,10 @@ class SocialConnection(db.Model):
     state = db.Column(db.String(10), nullable=False, default='ok', server_default='ok')   # ok | reauth
     last_error = db.Column(db.String(255))
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    # which app issued its tokens (spec 18, C10, C11): the domain whose own app it was (NULL: the instance's), and
+    # that app's client id, so a different app later means the member connects again
+    app_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id', ondelete='SET NULL'))
+    app_client_id = db.Column(db.String(255))
 
     user = db.relationship('User', backref=db.backref('social_connections', passive_deletes=True))
 
@@ -7628,3 +7632,19 @@ class SocialCrosspost(db.Model):
     connection = db.relationship('SocialConnection', backref=db.backref('crossposts', passive_deletes=True))
 
     __table_args__ = (db.UniqueConstraint('post_id', 'connection_id', name='uq_social_crosspost_post_connection'),)
+
+
+class ConnectionApp(db.Model):
+    """A domain's own developer app for connected accounts (spec 18, C8): a Meta app, an Instagram app, a Google
+    client or a Bluesky key, used by the domain's members instead of the instance's. The client id is public; the
+    secret (or the Bluesky key) is sealed under CONNECTIONS_SECRETS_KEY."""
+    __tablename__ = 'connection_app'
+    id = db.Column(db.Integer, primary_key=True)
+    site_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id', ondelete='CASCADE'), nullable=False,
+                               index=True)
+    kind = db.Column(db.String(20), nullable=False)   # app.connections.apps.KINDS
+    client_id = db.Column(db.String(255), nullable=False)
+    sealed_secret = db.Column(db.Text, nullable=False)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (db.UniqueConstraint('site_domain_id', 'kind', name='uq_connection_app_domain_kind'),)

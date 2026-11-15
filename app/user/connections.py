@@ -1,7 +1,7 @@
 """A member's connected accounts (spec docs/superpowers/specs/2026-11-13-connected-accounts-design.md §3).
 
-Connecting runs on the instance's main domain only: each service knows one redirect address. What the sign-in hands
-back before the member has chosen (a code verifier, several Pages' tokens) travels in the session sealed under
+Connecting runs on the member's home domain, under that domain's app or the instance's (spec 18, C9, C10): each
+service knows the redirect addresses registered with it. What the sign-in hands back before the member has chosen (a code verifier, several Pages' tokens) travels in the session sealed under
 CONNECTIONS_SECRETS_KEY, since Flask's session cookie is signed but readable.
 """
 import secrets
@@ -10,9 +10,9 @@ from flask import abort, flash, jsonify, make_response, redirect, request, sessi
 from flask_babel import _
 from flask_login import current_user
 
-from app import db
-from app.connections import (KEY, SERVICES, Account, ServiceError, enabled, enabled_services, main_base_url,
-                             main_domain, sealing_available)
+from app import db, storefront
+from app.connections import KEY, SERVICES, Account, ServiceError, sealing_available
+from app.connections.apps import current, enabled, enabled_services, for_domain
 from app.connections import bluesky, facebook, instagram, youtube  # noqa: F401 (registers the services)
 from app.connections.dispatch import disconnect, retry
 from app.connections.tokens import seal_tokens
@@ -26,9 +26,18 @@ from app.utils import login_required, render_template
 FLOW = 'connections_flow'
 
 
+def _home():
+    """The member's home domain: its app is theirs, and their sign-ins come back there (C10)."""
+    return storefront.domain_by_id(current_user.site_domain_id)
+
+
+def _at_home() -> bool:
+    return current_storefront().domain == _home().domain
+
+
 def _service_or_404(service_name: str):
     service = SERVICES.get(service_name)
-    if not enabled(service) or not current_storefront().is_default:
+    if not enabled(service, current_user.site_domain_id) or not _at_home():
         abort(404)
     return service
 
@@ -41,20 +50,23 @@ def _own_connection_or_404(connection_id: int) -> SocialConnection:
 
 
 def _redirect_uri(service_name: str) -> str:
-    """On the main domain whichever domain asked: it is the address registered with the service."""
-    return f'{main_base_url()}/user/settings/connections/{service_name}/callback'
+    """On the member's home domain: the address registered with its app, or with the instance's (C9)."""
+    return f'{storefront.domain_base_url(_home())}/user/settings/connections/{service_name}/callback'
 
 
-def _bluesky_or_404():
-    if not enabled(bluesky.SERVICE) or not current_storefront().is_default:
+def _bluesky_domain_or_404() -> int | None:
+    """The domain asked: each domain is its own Bluesky client, with its own key or the instance's (C9)."""
+    here = current_storefront().id
+    if not enabled(bluesky.SERVICE, here):
         abort(404)
+    return here
 
 
 @bp.route('/connections/bluesky/client-metadata.json', methods=['GET'])
 def bluesky_client_metadata():
     """PieFed's atproto OAuth client id is this document's address (spec §3): a PDS fetches it at each sign-in."""
-    _bluesky_or_404()
-    response = jsonify(bluesky.client_metadata())
+    with for_domain(_bluesky_domain_or_404()):
+        response = jsonify(bluesky.client_metadata())
     response.headers['Cache-Control'] = 'public, max-age=600'
     return response
 
@@ -78,8 +90,8 @@ def instagram_media(token):
 @bp.route('/connections/bluesky/jwks.json', methods=['GET'])
 def bluesky_jwks():
     """The public half of BLUESKY_OAUTH_KEY, which signs PieFed's client assertions."""
-    _bluesky_or_404()
-    response = jsonify(bluesky.jwks())
+    with for_domain(_bluesky_domain_or_404()):
+        response = jsonify(bluesky.jwks())
     response.headers['Cache-Control'] = 'public, max-age=600'
     return response
 
@@ -88,11 +100,14 @@ def bluesky_jwks():
 @login_required
 def user_connections():
     rows = SocialConnection.query.filter_by(user_id=current_user.id).order_by(SocialConnection.id).all()
-    connections = [(row, SERVICES.get(row.service), enabled(SERVICES.get(row.service))) for row in rows]
-    offers = [(service, variant) for service in enabled_services() for variant in (service.variants or (None,))]
+    home = current_user.site_domain_id
+    connections = [(row, SERVICES.get(row.service), enabled(SERVICES.get(row.service), home)) for row in rows]
+    with for_domain(home):   # Instagram's ways in follow the apps the domain has
+        offers = [(service, variant) for service in enabled_services(home)
+                  for variant in (service.variants or (None,))]
     return render_template('user/connections.html', title=_('Connected accounts'), user=current_user,
-                           connections=connections, offers=offers, main_domain=main_domain(),
-                           on_main_domain=current_storefront().is_default)
+                           connections=connections, offers=offers, main_domain=_home().domain,
+                           on_main_domain=_at_home())
 
 
 @bp.route('/user/settings/connections/<service_name>/connect', methods=['POST'])
@@ -100,13 +115,14 @@ def user_connections():
 def user_connection_connect(service_name):
     service = _service_or_404(service_name)
     variant = request.form.get('variant') or None
-    if variant not in (service.variants or (None,)):
-        abort(400)
     state = secrets.token_urlsafe(24)
     pending = {}
     try:
-        url = service.authorize_url(variant, state, _redirect_uri(service.name), pending,
-                                    hint=request.form.get('hint', '')[:300])
+        with for_domain(current_user.site_domain_id):
+            if variant not in (service.variants or (None,)):
+                abort(400)
+            url = service.authorize_url(variant, state, _redirect_uri(service.name), pending,
+                                        hint=request.form.get('hint', '')[:300])
     except ServiceError as failure:
         flash(_('%(service)s could not be reached: %(error)s', service=service.label, error=failure.message), 'error')
         return redirect(url_for('user.user_connections'))
@@ -134,6 +150,11 @@ def _store(service, account: Account) -> SocialConnection:
     connection.variant = account.variant
     connection.remote_name = account.remote_name[:255]
     connection.sealed_tokens = seal_tokens(account.tokens)
+    with for_domain(current_user.site_domain_id):   # which app issued these tokens (C10, C11)
+        kind = service.kind_of(account.variant)
+        app = current(kind)
+        connection.app_domain_id = app.domain_id if app is not None else None
+        connection.app_client_id = bluesky.client_id() if kind == 'bluesky' else (app.client_id if app else None)
     connection.state, connection.last_error = 'ok', None
     db.session.commit()
     return connection
@@ -155,8 +176,9 @@ def user_connection_callback(service_name):
                 error=request.args.get('error_description') or request.args['error'])[:300], 'warning')
         return redirect(url_for('user.user_connections'))
     try:
-        accounts = service.finish(flow['variant'], request.args.to_dict(), _redirect_uri(service.name),
-                                  flow['pending'])
+        with for_domain(current_user.site_domain_id):
+            accounts = service.finish(flow['variant'], request.args.to_dict(), _redirect_uri(service.name),
+                                      flow['pending'])
     except ServiceError as failure:
         session.pop(FLOW, None)
         flash(_('%(service)s did not connect: %(error)s', service=service.label, error=failure.message), 'error')

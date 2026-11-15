@@ -183,8 +183,21 @@ bluesky_spike() {
     interop/gen_env.sh
     $COMPOSE --profile apps build apps-runner   # the spike runs in the apps runner's image (httpx, Playwright, joserfc)
     $COMPOSE --profile bluesky up -d --force-recreate --no-deps caddy
-    $COMPOSE --profile bluesky up -d --no-deps plc-db plc pds
+    start_plc
     $COMPOSE --profile bluesky run --rm --name bluesky-runner bluesky-runner python interop/spike_bluesky_oauth.py "$@"
+}
+
+# The PLC directory and the PDS. The PLC server exits on its first refused database connection, so its Postgres takes
+# TCP connections first (the image's first-boot server listens on its socket alone: TCP means the real one is up).
+start_plc() {
+    $COMPOSE --profile bluesky up -d --no-deps plc-db
+    for _ in $(seq 1 120); do
+        if $COMPOSE --profile bluesky exec -T plc-db pg_isready -q -h 127.0.0.1 -U plc 2>/dev/null; then break; fi
+        sleep 1
+    done
+    $COMPOSE --profile bluesky exec -T plc-db pg_isready -q -h 127.0.0.1 -U plc \
+        || { echo "run.sh: the PLC database never got ready" >&2; return 1; }
+    $COMPOSE --profile bluesky up -d --no-deps plc pds
 }
 
 # PieFed's Bluesky state for interop/bluesky (interop/bluesky/piefed_state.py): on for the run, off after
@@ -204,7 +217,8 @@ bluesky() {
     fi
     up_piefed   # recreates PieFed's containers, so they read the key
     $COMPOSE --profile apps build apps-runner
-    $COMPOSE --profile bluesky up -d --no-deps plc-db plc pds
+    start_plc
+    wait_http piefed-web https://plc.test/_health
     wait_http piefed-web https://pds.test/xrpc/_health
     bluesky_state on
     trap 'bluesky_state off' EXIT

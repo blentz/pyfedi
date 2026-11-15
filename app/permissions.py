@@ -53,6 +53,9 @@ CATALOGUE = (
                "Import and edit theme templates and scripts. Templates run on the server with all of its secrets, and "
                "scripts run in every visitor's browser, admins included: on any domain, this is as much as full "
                'instance admin'),
+    Permission('manage domain connected accounts', 'domains', True, False,
+               "A domain's own apps for connected accounts (Meta, Instagram, Google, Bluesky), which its members use "
+               'instead of the instance\'s, and which services they may connect'),
     # users
     Permission('approve registrations', 'users', True, True, 'Approve and refuse registration applications'),
     Permission('administer all users', 'users', True, True,

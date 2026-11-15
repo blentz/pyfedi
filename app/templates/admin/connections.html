@@ -42,6 +42,19 @@
         {% else -%}
             <p>{{ _('No services are installed.') }}</p>
         {% endif -%}
+        {% if registrations -%}
+            <h2 class="fs-5 mt-4">{{ _('Addresses to register in the instance apps') }}</h2>
+            <p class="small">{{ _("Each domain whose members use the instance's apps signs in on its own address. Add these to each app's allowed redirect addresses (Meta: Valid OAuth Redirect URIs, and Instagram business login's redirect URIs; Google: Authorized redirect URIs). A domain with its own app lists its addresses on its own page.") }}</p>
+            <table class="table table-sm">
+                <thead><tr><th>{{ _('Domain') }}</th><th>{{ _('App') }}</th><th>{{ _('Redirect addresses') }}</th></tr></thead>
+                <tbody>
+                {% for domain, label, addresses in registrations -%}
+                    <tr><td>{{ domain }}</td><td>{{ label }}</td>
+                        <td>{% for address in addresses %}<code>{{ address }}</code>{% if not loop.last %}<br>{% endif %}{% endfor %}</td></tr>
+                {% endfor -%}
+                </tbody>
+            </table>
+        {% endif -%}
     </div>
 </div>
 {% endblock %}

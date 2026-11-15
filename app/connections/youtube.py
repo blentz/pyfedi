@@ -27,6 +27,7 @@ from flask_babel import _
 
 import app as app_pkg
 from app.connections import (Account, AuthFailed, Permanent, QuotaWait, Sent, Service, Transient, register)
+from app.connections.apps import App, current
 from app.connections.content import StoredVideo, cut, plain_text
 from app.connections.eligibility import uploaded_video
 from app.connections.http import fetch
@@ -52,6 +53,14 @@ MAX_VIDEO_BYTES = 256 * 1024 ** 3   # what videos.insert takes
 # --------------------------------------------------------------------------
 # Google's answers
 # --------------------------------------------------------------------------
+
+def google_app() -> App:
+    """The Google client this call runs under: the context domain's own, or the instance's (spec 18)."""
+    app = current('youtube')
+    if app is None:
+        raise Permanent(_('No Google app is set up here.'))
+    return app
+
 
 def next_reset() -> datetime:
     """The next midnight Pacific, as the naive UTC time the database keeps."""
@@ -96,9 +105,10 @@ def api(method: str, url: str, token: str, **kwargs) -> dict:
 
 def take_upload() -> None:
     """Count one upload against today's allowance (Pacific date), or wait for the reset when it is spent."""
-    configured = current_app.config.get('YOUTUBE_DAILY_UPLOADS')
+    app = google_app()   # each Google project has its own allowance (spec 18.2)
+    configured = app.get('daily_uploads', current_app.config.get('YOUTUBE_DAILY_UPLOADS'))
     limit = 100 if configured is None else int(configured)   # 0 is a setting too: no uploads at all
-    key = f"connections:youtube:uploads:{datetime.now(PACIFIC).date().isoformat()}"
+    key = f"connections:youtube:uploads:{app.client_id}:{datetime.now(PACIFIC).date().isoformat()}"
     count = app_pkg.redis_client.incr(key)
     app_pkg.redis_client.expire(key, 2 * 24 * 3600)
     if count > limit:
@@ -143,8 +153,7 @@ class YouTubeService(Service):
     can_edit = True
 
     def configured(self) -> bool:
-        return bool(current_app.config.get('YOUTUBE_OAUTH_CLIENT_ID') and
-                    current_app.config.get('YOUTUBE_OAUTH_SECRET'))
+        return current('youtube') is not None
 
     def fits(self, post) -> bool:
         return uploaded_video(post)
@@ -157,14 +166,14 @@ class YouTubeService(Service):
         pending['verifier'] = verifier
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode()
         return f'{AUTHORIZE}?' + urlencode({
-            'client_id': current_app.config['YOUTUBE_OAUTH_CLIENT_ID'], 'redirect_uri': redirect_uri,
+            'client_id': google_app().client_id, 'redirect_uri': redirect_uri,
             'response_type': 'code', 'scope': SCOPE, 'state': state, 'access_type': 'offline', 'prompt': 'consent',
             'code_challenge': challenge, 'code_challenge_method': 'S256'})
 
     def finish(self, variant, args, redirect_uri, pending):
         answer = answer_of(fetch('POST', TOKEN, data={
-            'code': args.get('code', ''), 'client_id': current_app.config['YOUTUBE_OAUTH_CLIENT_ID'],
-            'client_secret': current_app.config['YOUTUBE_OAUTH_SECRET'], 'redirect_uri': redirect_uri,
+            'code': args.get('code', ''), 'client_id': google_app().client_id,
+            'client_secret': google_app().get('client_secret'), 'redirect_uri': redirect_uri,
             'grant_type': 'authorization_code', 'code_verifier': pending.get('verifier', '')}))
         if not answer.get('access_token') or not answer.get('refresh_token'):
             raise Permanent(_('Google gave no lasting access. Try again, and allow PieFed to manage your videos.'))
@@ -180,8 +189,8 @@ class YouTubeService(Service):
 
     def refresh(self, tokens):
         answer = answer_of(fetch('POST', TOKEN, data={
-            'client_id': current_app.config['YOUTUBE_OAUTH_CLIENT_ID'],
-            'client_secret': current_app.config['YOUTUBE_OAUTH_SECRET'],
+            'client_id': google_app().client_id,
+            'client_secret': google_app().get('client_secret'),
             'refresh_token': tokens['refresh_token'], 'grant_type': 'refresh_token'}))
         if not answer.get('access_token'):
             raise AuthFailed(_('Google would not renew this connection.'))

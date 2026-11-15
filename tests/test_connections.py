@@ -20,7 +20,8 @@ from app import cli, db
 from app.api.alpha.utils.post import post_post
 from app.clock import utcnow
 from app.connections import (KEY, SERVICES, AuthFailed, Permanent, QuotaWait, Service, ServiceError, Transient,
-                             connections_offered, enabled, enabled_services, service_label, setting_name)
+                             service_label, setting_name)
+from app.connections.apps import connections_offered, enabled, enabled_services
 from app import connections
 from app.connections import dispatch, register
 from app.connections.dispatch import (form_choice, offered_connections, perform, post_edited, post_gone,
@@ -844,7 +845,8 @@ def test_the_connections_page(world, monkeypatch):
     db.session.commit()
     assert b'No services are available here yet.' in world.client.get('/user/settings/connections').data
     set_setting(setting_name('fake'), True)
-    monkeypatch.setattr('app.user.connections.current_storefront', lambda: SimpleNamespace(is_default=False))
+    monkeypatch.setattr('app.user.connections.current_storefront',
+                        lambda: SimpleNamespace(domain='elsewhere.example', id=None, is_default=False))
     page = world.client.get('/user/settings/connections')
     assert b'Accounts are connected on' in page.data and b'Connect Fake' not in page.data
 

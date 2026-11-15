@@ -11,7 +11,6 @@ from datetime import datetime
 from flask import current_app
 
 from app.sealing import keyring
-from app.utils import get_setting
 
 KEY = 'CONNECTIONS_SECRETS_KEY'
 
@@ -87,6 +86,10 @@ class Service:
     def can_delete(self, variant: str | None) -> bool:
         return True
 
+    def kind_of(self, variant: str | None) -> str:
+        """Which app (app.connections.apps.KINDS) this service's connections of `variant` run under."""
+        return self.name
+
     def variant_label(self, variant: str | None) -> str:
         return self.label
 
@@ -141,27 +144,9 @@ def sealing_available() -> bool:
     return keyring(KEY) is not None
 
 
-def enabled(service: Service | None) -> bool:
-    """Members may connect it and posts go to it: the admin switched it on, its credentials and the token key are
-    set. A service switched off keeps its connections but sends nothing (spec §3)."""
-    return (service is not None and sealing_available() and service.configured()
-            and bool(get_setting(setting_name(service.name), False)))
-
-
-def enabled_services() -> list[Service]:
-    return [service for service in SERVICES.values() if enabled(service)]
-
-
 def service_label(service_name: str, variant: str | None = None) -> str:
     service = SERVICES.get(service_name)
     return service.variant_label(variant) if service is not None else service_name
-
-
-def connections_offered(user) -> bool:
-    """The settings menu shows Connected accounts: a service is on, or the member has a connection to show."""
-    if enabled_services():
-        return True
-    return bool(user.is_authenticated and user.social_connections)
 
 
 def main_domain() -> str:

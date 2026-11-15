@@ -27,10 +27,11 @@ from flask import current_app
 from flask_babel import _, lazy_gettext as _l
 from jwt.algorithms import ECAlgorithm
 
-from app.connections import (Account, AuthFailed, Permanent, Sent, Service, ServiceError, main_base_url, main_domain,
-                             register)
+from app import storefront
+from app.connections import Account, AuthFailed, Permanent, Sent, Service, ServiceError, register
 from app.connections.eligibility import image_files, uploaded_video
 from app.connections import content
+from app.connections.apps import context_domain, current
 from app.connections.content import cut, image_bytes, plain_text  # noqa: F401 (image_bytes: re-exported)
 from app.connections.http import call, check, fetch
 from app.constants import POST_TYPE_LINK
@@ -65,7 +66,8 @@ def _client_key(serialized: str):
 
 
 def client_key():
-    return _client_key(current_app.config.get('BLUESKY_OAUTH_KEY') or '')
+    app = current('bluesky')
+    return _client_key(app.get('key') or '') if app is not None else None
 
 
 def public_jwk(key, kid: str | None = None) -> dict:
@@ -78,7 +80,15 @@ def public_jwk(key, kid: str | None = None) -> dict:
 
 def key_id() -> str:
     """The client key's id: its public key's thumbprint, so a new key is a new id."""
-    jwk = public_jwk(client_key())
+    return _thumbprint(public_jwk(client_key()))
+
+
+def key_id_of(serialized: str) -> str:
+    """The thumbprint of a serialized private key (a domain's own Bluesky key, spec 18)."""
+    return _thumbprint(public_jwk(ECAlgorithm.from_jwk(serialized)))
+
+
+def _thumbprint(jwk: dict) -> str:
     canonical = json.dumps({name: jwk[name] for name in ('crv', 'kty', 'x', 'y')}, separators=(',', ':'))
     return urlsafe_b64encode(hashlib.sha256(canonical.encode()).digest()).rstrip(b'=').decode()
 
@@ -88,19 +98,24 @@ def new_key_jwk() -> str:
     return ECAlgorithm.to_jwk(ec.generate_private_key(ec.SECP256R1()))
 
 
+def base_url() -> str:
+    """The context domain's address: each domain is its own Bluesky client (spec 18, C9)."""
+    return storefront.domain_base_url(storefront.domain_by_id(context_domain()))
+
+
 def client_id() -> str:
-    return f'{main_base_url()}/connections/bluesky/client-metadata.json'
+    return f'{base_url()}/connections/bluesky/client-metadata.json'
 
 
 def redirect_uri() -> str:
-    return f'{main_base_url()}/user/settings/connections/bluesky/callback'
+    return f'{base_url()}/user/settings/connections/bluesky/callback'
 
 
 def client_metadata() -> dict:
     return {
         'client_id': client_id(),
-        'client_name': main_domain(),
-        'client_uri': main_base_url(),
+        'client_name': storefront.domain_by_id(context_domain()).domain,
+        'client_uri': base_url(),
         'application_type': 'web',
         'grant_types': ['authorization_code', 'refresh_token'],
         'response_types': ['code'],
@@ -109,7 +124,7 @@ def client_metadata() -> dict:
         'dpop_bound_access_tokens': True,
         'token_endpoint_auth_method': 'private_key_jwt',
         'token_endpoint_auth_signing_alg': 'ES256',
-        'jwks_uri': f'{main_base_url()}/connections/bluesky/jwks.json',
+        'jwks_uri': f'{base_url()}/connections/bluesky/jwks.json',
     }
 
 

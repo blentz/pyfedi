@@ -342,6 +342,7 @@ scan. The backfill `UPDATE`s touch only rows that are actually NULL.
 | 50 | `f1c7a3e9d2b4` theme_code | Creates `custom_theme_template` (a custom theme's override of one app template) and adds `script`, `code_failed_template`, `code_failure` and `code_failed_at` to `custom_theme`. (`a21ccbca`) | No |
 | 51 | `c4e8a2d6f1b3` site_domain_referral_codes | Adds `site_domain.referral_codes` (NOT NULL, default true): whether, in referral-code mode, a valid code opens signup on a domain whose registration is closed. True keeps every existing domain as it was. (`33812c3b`) | No |
 | 48 | `d4f8a2c6e1b9` social_connections | Adds the `social_connection` and `social_crosspost` tables: members' connected accounts (tokens sealed) and each post's copies on them. (`83aa1637`) | No |
+| 49 | `e6a2c9d4f8b1` connection_apps | Creates `connection_app` (a domain's own Meta, Instagram, Google and Bluesky app credentials, secrets sealed) and adds `app_domain_id` and `app_client_id` to `social_connection`: the app each connection was made with. | No |
 
 Downgrades remove defaults, constraints, columns and the new tables, but do
 not restore the NULLs, invented counters, rankings, cross-post links or
@@ -381,6 +382,7 @@ New or changed settings in `env.sample`, `env.docker.sample` and `config.py`:
 | `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET` | empty | Instagram Login (the Instagram app id of the Meta app), for members whose Instagram account has no Facebook Page; its redirect is `https://<SERVER_NAME>/user/settings/connections/instagram/callback`. With `FACEBOOK_APP_ID` set as well, Instagram is also offered through Facebook (the same Meta app, with `instagram_basic`, `instagram_content_publish` and `instagram_manage_contents`), which can delete copies. Both need Meta's App Review. (`6516ec15`) |
 | `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_SECRET` | empty | A Google OAuth client with the YouTube Data API v3 enabled and the `youtube` scope, which needs Google's OAuth app verification before members outside its test users can connect (the YouTube API audit is no longer needed for public uploads). Its redirect is `https://<SERVER_NAME>/user/settings/connections/youtube/callback`. (`c16d585b`) |
 | `YOUTUBE_DAILY_UPLOADS` | `100` | The Google project's daily `videos.insert` allowance, shared by every member; past it, uploads wait for midnight Pacific. `0` stops uploads. Raise it only after Google raised the quota. (`c16d585b`) |
+| (the redirects above, per domain) | | Each domain whose members use the instance's apps signs in on its own address, so each app needs every such domain's redirect registered too; Admin > Connected accounts lists them. A domain with its own apps sets them at Admin > Domains > Connected accounts instead (ruling C9). |
 
 `config.py` no longer imports `app.constants`; it reads `VERSION` from
 `app/constants.py` by path so that `import config` does not cycle through
@@ -1954,9 +1956,21 @@ commit each:
   address on the main domain that works for an hour. Last, YouTube: a post's uploaded video
   goes to the member's channel, public, with the title, the text and link as its
   description, and the tags; edits change those, and deletes delete. The instance shares
-  the Google project's 100 uploads a day, and uploads past it wait for the next day. Spec
-  `docs/superpowers/specs/2026-11-13-connected-accounts-design.md` (rulings C1 to C6;
-  `83aa1637`, `5f5f2e77`, `23529744`, `6516ec15`, `c16d585b`).
+  the Google project's 100 uploads a day, and uploads past it wait for the next day.
+  From Mixpost's posting engine (ruling C7, `e527654d`): Meta's usage headers and rate-limit
+  errors pause sending to that app or Page until the window passes, without spending
+  retries, and Facebook Pages take a post's uploaded video, sent in chunks.
+  Per domain (rulings C8 to C12): a domain's admins, with the new domain-scopable permission
+  "manage domain connected accounts", set the domain's own Meta, Instagram and Google apps
+  and its own Bluesky key at Admin > Domains > Connected accounts, so its members' Pages and
+  channels stay theirs under the domain's own app; members use their home domain's app where
+  it has one, else the instance's, and sign in on their home domain. Each domain may switch a
+  service off, or on only when it has an app. A different app, or going back to the
+  instance's, asks the members who connected with the old one to connect again; a new secret
+  for the same app does not. Admin > Connected accounts lists the redirect addresses each
+  domain needs registered in the instance's apps. Spec
+  `docs/superpowers/specs/2026-11-13-connected-accounts-design.md` (rulings C1 to C12;
+  `83aa1637`, `5f5f2e77`, `23529744`, `6516ec15`, `c16d585b`, `e527654d`).
 
 There are 146 `feat` commits. The first twelve came during the coverage
 campaign:

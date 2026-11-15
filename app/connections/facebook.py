@@ -22,6 +22,7 @@ from flask_babel import _
 
 import app as app_pkg
 from app.connections import Account, AuthFailed, Permanent, Sent, Service, Transient, register
+from app.connections.apps import App, current
 from app.connections.content import StoredVideo, as_jpeg, cut, image_bytes, plain_text
 from app.connections.eligibility import image_files, uploaded_video
 from app.connections.http import fetch
@@ -43,6 +44,19 @@ MAX_VIDEO_BYTES = 10 * 1024 ** 3   # a Page video
 VIDEO_PREFIX = 'video:'
 
 
+def meta_app() -> App:
+    """The Meta app this call runs under: the context domain's own, or the instance's (spec 18)."""
+    app = current('facebook')
+    if app is None:
+        raise Permanent(_('No Facebook app is set up here.'))
+    return app
+
+
+def meta_app_id() -> str | None:
+    app = current('facebook')
+    return app.client_id if app is not None else None
+
+
 def graph_url(path: str) -> str:
     version = current_app.config.get('FACEBOOK_GRAPH_VERSION') or 'v27.0'
     return f'https://graph.facebook.com/{version}/{path.lstrip("/")}'
@@ -50,7 +64,7 @@ def graph_url(path: str) -> str:
 
 def proof(token: str) -> str:
     """appsecret_proof: the token signed with the app secret, so a token taken elsewhere is useless without it."""
-    return hmac.new(current_app.config['FACEBOOK_APP_SECRET'].encode(), token.encode(), hashlib.sha256).hexdigest()
+    return hmac.new(meta_app().get('client_secret').encode(), token.encode(), hashlib.sha256).hexdigest()
 
 
 def graph(method: str, path: str, token: str | None, params: dict | None = None, **kwargs) -> dict:
@@ -80,7 +94,7 @@ def pause(scope: str, ident, seconds: int) -> None:
 
 def paused_until(object_id: str | None) -> datetime | None:
     """When the app's pause, or the account's, ends (naive UTC, as the database keeps), or None."""
-    ends = [app_pkg.redis_client.get(_pause_key('app', current_app.config.get('FACEBOOK_APP_ID')))]
+    ends = [app_pkg.redis_client.get(_pause_key('app', meta_app_id()))]
     if object_id:
         ends.append(app_pkg.redis_client.get(_pause_key('object', object_id)))
     latest = max((int(end) for end in ends if end), default=0)
@@ -107,7 +121,7 @@ def note_usage(response) -> bool:
     account, past USAGE_LIMIT. Whether anything was paused."""
     paused = False
     if _over(_usage(response.headers.get('X-App-Usage'))):
-        pause('app', current_app.config.get('FACEBOOK_APP_ID'), APP_PAUSE)
+        pause('app', meta_app_id(), APP_PAUSE)
         paused = True
     business = _usage(response.headers.get('X-Business-Use-Case-Usage'))
     for object_id, entries in (business.items() if isinstance(business, dict) else ()):
@@ -132,7 +146,7 @@ def answer_of(response, who: str) -> dict:
     error = body.get('error') if isinstance(body, dict) else None
     error = error if isinstance(error, dict) else {}
     if error.get('code') in RATE_CODES and not noted:   # a limit whose headers named nothing: hold the app a while
-        pause('app', current_app.config.get('FACEBOOK_APP_ID'), UNNAMED_PAUSE)
+        pause('app', meta_app_id(), UNNAMED_PAUSE)
     message = f"{who}: {str(error.get('error_user_msg') or error.get('message') or f'HTTP {response.status_code}')[:200]}"
     code = error.get('code')
     if code in AUTH_CODES or response.status_code in (401, 403):
@@ -162,7 +176,7 @@ class FacebookService(Service):
     can_edit = True
 
     def configured(self) -> bool:
-        return bool(current_app.config.get('FACEBOOK_APP_ID') and current_app.config.get('FACEBOOK_APP_SECRET'))
+        return current('facebook') is not None
 
     def fits(self, post) -> bool:
         return True
@@ -170,11 +184,11 @@ class FacebookService(Service):
     def authorize_url(self, variant, state, redirect_uri, pending, hint=''):
         version = current_app.config.get('FACEBOOK_GRAPH_VERSION') or 'v27.0'
         return f'https://www.facebook.com/{version}/dialog/oauth?' + urlencode({
-            'client_id': current_app.config['FACEBOOK_APP_ID'], 'redirect_uri': redirect_uri, 'state': state,
+            'client_id': meta_app().client_id, 'redirect_uri': redirect_uri, 'state': state,
             'scope': SCOPES, 'response_type': 'code'})
 
     def finish(self, variant, args, redirect_uri, pending):
-        app_id, secret = current_app.config['FACEBOOK_APP_ID'], current_app.config['FACEBOOK_APP_SECRET']
+        app_id, secret = meta_app().client_id, meta_app().get('client_secret')
         short = graph('GET', 'oauth/access_token', None, {'client_id': app_id, 'client_secret': secret,
                                                           'redirect_uri': redirect_uri, 'code': args.get('code', '')})
         long = graph('GET', 'oauth/access_token', None, {'grant_type': 'fb_exchange_token', 'client_id': app_id,

@@ -113,8 +113,9 @@ def test_the_public_documents_are_served_only_when_bluesky_is_on(app, bsky, monk
     assert metadata.status_code == 200 and metadata.json['client_name'] == 'test.piefed.local'
     assert metadata.headers['Cache-Control'] == 'public, max-age=600'
     assert client.get('/connections/bluesky/jwks.json').json['keys'][0]['kty'] == 'EC'
-    with monkeypatch.context() as patched:
-        patched.setattr('app.user.connections.current_storefront', lambda: SimpleNamespace(is_default=False))
+    with monkeypatch.context() as patched:   # a domain that switched Bluesky off serves no client (C12)
+        patched.setattr('app.user.connections.current_storefront', lambda: SimpleNamespace(id=7))
+        patched.setattr('app.connections.apps.domain_switch', lambda service, domain_id: 'off' if domain_id == 7 else None)
         assert client.get('/connections/bluesky/jwks.json').status_code == 404
     set_setting(setting_name('bluesky'), False)
     assert client.get('/connections/bluesky/client-metadata.json').status_code == 404

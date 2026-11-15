@@ -35,8 +35,8 @@ def test_the_catalogue_names_each_permission_once_and_says_what_it_guards():
 
 def test_the_catalogue_flags_scopable_and_instance_only_as_the_spec_does():
     assert SCOPABLE_PERMISSIONS == {
-        'edit domain branding', 'approve registrations', 'administer all users', 'ban users', 'manage users',
-        'view user details', 'create local communities', 'moderate all communities', 'remove and restore content',
+        'edit domain branding', 'manage domain connected accounts', 'approve registrations', 'administer all users',
+        'ban users', 'manage users', 'view user details', 'create local communities', 'moderate all communities', 'remove and restore content',
         'turn comments off', 'administer all communities',
         'administer communities pages', 'view modlog', 'shown as admin', 'manage theme code'}
     assert INSTANCE_ONLY_PERMISSIONS == {

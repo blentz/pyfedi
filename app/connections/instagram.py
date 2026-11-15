@@ -25,7 +25,8 @@ from PIL import Image
 from app.connections import Account, AuthFailed, Permanent, Sent, Service, Transient, main_base_url, register
 from app.connections.content import as_jpeg, cut, image_bytes, plain_text
 from app.connections.eligibility import image_files, uploaded_video
-from app.connections.facebook import answer_of, graph, paused_until
+from app.connections.apps import current
+from app.connections.facebook import answer_of, graph, meta_app, paused_until
 from app.connections.http import fetch
 from app.constants import POST_TYPE_GALLERY, POST_TYPE_IMAGE
 
@@ -92,6 +93,14 @@ def fitted(data: bytes) -> bytes | None:
 # Instagram Login's own Graph host
 # --------------------------------------------------------------------------
 
+def ig_app():
+    """The Instagram Login app this call runs under: the context domain's own, or the instance's."""
+    app = current('instagram')
+    if app is None:
+        raise Permanent(_('No Instagram app is set up here.'))
+    return app
+
+
 def ig_url(path: str) -> str:
     version = current_app.config.get('FACEBOOK_GRAPH_VERSION') or 'v27.0'
     return f'https://graph.instagram.com/{version}/{path.lstrip("/")}'
@@ -133,10 +142,10 @@ class InstagramService(Service):
                      if on)
 
     def _via_facebook(self) -> bool:
-        return bool(current_app.config.get('FACEBOOK_APP_ID') and current_app.config.get('FACEBOOK_APP_SECRET'))
+        return current('facebook') is not None
 
     def _direct(self) -> bool:
-        return bool(current_app.config.get('INSTAGRAM_APP_ID') and current_app.config.get('INSTAGRAM_APP_SECRET'))
+        return current('instagram') is not None
 
     def configured(self) -> bool:
         return bool(self.variants)
@@ -152,6 +161,9 @@ class InstagramService(Service):
     def fits_type(self, post_type: int) -> bool:
         return post_type in (POST_TYPE_IMAGE, POST_TYPE_GALLERY)
 
+    def kind_of(self, variant) -> str:
+        return 'facebook' if variant == VIA_FACEBOOK else 'instagram'
+
     def can_delete(self, variant) -> bool:
         return variant == VIA_FACEBOOK
 
@@ -161,10 +173,10 @@ class InstagramService(Service):
         if variant == VIA_FACEBOOK:
             version = current_app.config.get('FACEBOOK_GRAPH_VERSION') or 'v27.0'
             return f'https://www.facebook.com/{version}/dialog/oauth?' + urlencode({
-                'client_id': current_app.config['FACEBOOK_APP_ID'], 'redirect_uri': redirect_uri, 'state': state,
+                'client_id': meta_app().client_id, 'redirect_uri': redirect_uri, 'state': state,
                 'scope': FACEBOOK_SCOPES, 'response_type': 'code'})
         return 'https://www.instagram.com/oauth/authorize?' + urlencode({
-            'client_id': current_app.config['INSTAGRAM_APP_ID'], 'redirect_uri': redirect_uri, 'state': state,
+            'client_id': ig_app().client_id, 'redirect_uri': redirect_uri, 'state': state,
             'scope': DIRECT_SCOPES, 'response_type': 'code'})
 
     def finish(self, variant, args, redirect_uri, pending):
@@ -172,7 +184,7 @@ class InstagramService(Service):
             self._finish_direct(args, redirect_uri)
 
     def _finish_facebook(self, args, redirect_uri) -> list:
-        app_id, secret = current_app.config['FACEBOOK_APP_ID'], current_app.config['FACEBOOK_APP_SECRET']
+        app_id, secret = meta_app().client_id, meta_app().get('client_secret')
         short = graph('GET', 'oauth/access_token', None, {'client_id': app_id, 'client_secret': secret,
                                                           'redirect_uri': redirect_uri, 'code': args.get('code', '')})
         long = graph('GET', 'oauth/access_token', None, {'grant_type': 'fb_exchange_token', 'client_id': app_id,
@@ -197,13 +209,13 @@ class InstagramService(Service):
 
     def _finish_direct(self, args, redirect_uri) -> list:
         answer = answer_of(fetch('POST', 'https://api.instagram.com/oauth/access_token', data={
-            'client_id': current_app.config['INSTAGRAM_APP_ID'],
-            'client_secret': current_app.config['INSTAGRAM_APP_SECRET'], 'grant_type': 'authorization_code',
+            'client_id': ig_app().client_id,
+            'client_secret': ig_app().get('client_secret'), 'grant_type': 'authorization_code',
             'redirect_uri': redirect_uri, 'code': args.get('code', '')}), 'Instagram')
         if not answer.get('access_token'):
             raise Permanent(_('Instagram gave no token.'))
         long = answer_of(fetch('GET', 'https://graph.instagram.com/access_token', params={
-            'grant_type': 'ig_exchange_token', 'client_secret': current_app.config['INSTAGRAM_APP_SECRET'],
+            'grant_type': 'ig_exchange_token', 'client_secret': ig_app().get('client_secret'),
             'access_token': answer['access_token']}), 'Instagram')
         token = long.get('access_token')
         if not token:

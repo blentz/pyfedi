@@ -23,11 +23,12 @@ from sqlalchemy import update
 
 from app import celery, db
 from app.clock import utcnow
-from app.connections import SERVICES, AuthFailed, QuotaWait, ServiceError, Transient, enabled
+from app.connections import SERVICES, AuthFailed, QuotaWait, ServiceError, Transient
+from app.connections.apps import KINDS, current, enabled, for_domain
 from app.connections.eligibility import DROP, refusal
-from app.connections.tokens import needs_reconnecting, open_tokens, usable_tokens
+from app.connections.tokens import REAUTH, needs_reconnecting, open_tokens, usable_tokens
 from app.constants import POST_STATUS_PUBLISHED
-from app.models import Post, SocialConnection, SocialCrosspost
+from app.models import Post, SocialConnection, SocialCrosspost, User
 from app.utils import get_task_session, patch_db_session
 
 MAX_ATTEMPTS = 5
@@ -57,7 +58,7 @@ def offered_connections(user, post_type: int) -> list:
     offered = []
     for connection in SocialConnection.query.filter_by(user_id=user.id).order_by(SocialConnection.id).all():
         service = SERVICES.get(connection.service)
-        if enabled(service) and service.fits_type(post_type):
+        if enabled(service, user.site_domain_id) and service.fits_type(post_type):
             offered.append((connection, service))
     return offered
 
@@ -68,7 +69,7 @@ def record_choices(post: Post, chosen: list[int] | None) -> None:
     connections = SocialConnection.query.filter_by(user_id=post.user_id).all()
     for connection in connections:
         wanted = connection.default_on if chosen is None else connection.id in chosen
-        if wanted and enabled(SERVICES.get(connection.service)):
+        if wanted and enabled(SERVICES.get(connection.service), post.author.site_domain_id):
             db.session.add(SocialCrosspost(post_id=post.id, connection_id=connection.id,
                                            service=connection.service, state='waiting'))
 
@@ -84,7 +85,8 @@ def post_published(post: Post, template: Post | None = None) -> None:
     queued = []
     for row in SocialCrosspost.query.filter_by(post_id=post.id, state='waiting').all():
         service = SERVICES.get(row.service)
-        reason = DROP if row.connection is None or not enabled(service) else refusal(post, row.connection, service)
+        reason = DROP if row.connection is None or not enabled(service, post.author.site_domain_id) \
+            else refusal(post, row.connection, service)
         if reason == DROP:
             db.session.delete(row)
         elif reason is not None:
@@ -153,12 +155,34 @@ def disconnect(connection: SocialConnection) -> None:
     service = SERVICES.get(connection.service)
     if service is not None:
         try:
-            service.revoke(open_tokens(connection))
+            with for_domain(connection.user.site_domain_id):
+                service.revoke(open_tokens(connection))
         except Exception as failure:   # a revoke never keeps a member connected
             current_app.logger.info(f'connections: revoke of {connection.service} connection {connection.id} '
                                     f'failed: {type(failure).__name__}')
     db.session.delete(connection)
     db.session.commit()
+
+
+def reconnect_domain(domain_id: int, kind: str, app) -> int:
+    """C11: the domain's members' connections under `kind` made with another app than `app` (or with any, when the
+    domain has none left) connect again. A Bluesky key is a secret: a new one changes no client. How many were
+    newly marked."""
+    if kind == 'bluesky':
+        return 0
+    marked = 0
+    rows = SocialConnection.query.join(User, User.id == SocialConnection.user_id).filter(
+        User.site_domain_id == domain_id).all()
+    for connection in rows:
+        service = SERVICES.get(connection.service)
+        if service is None or service.kind_of(connection.variant) != kind:
+            continue
+        if app is None or connection.app_client_id != app.client_id:
+            marked += connection.state != REAUTH
+            needs_reconnecting(connection, service, _('This site now uses another app for %(service)s: connect '
+                                                      'your account again.', service=service.label))
+    db.session.commit()
+    return marked
 
 
 def purge_user(user) -> None:
@@ -231,9 +255,27 @@ def perform(row_id: int) -> None:
         row.last_error = _('Delete it by hand on %(service)s.', service=service.label)
         db.session.commit()
         return
-    if service is None or connection is None or (work == 'send' and not enabled(service)):
+    if service is None or connection is None or (
+            work == 'send' and not enabled(service, connection.user.site_domain_id)):
         _give_up(row, work, _('This account is no longer connected.'))
         return
+    with for_domain(connection.user.site_domain_id):   # the member's home domain's app (C10)
+        _perform(row_id, work, service, connection)
+
+
+def _perform(row_id: int, work: str, service, connection) -> None:
+    row = db.session.get(SocialCrosspost, row_id)
+    kind = service.kind_of(connection.variant)
+    app = current(kind) if kind in KINDS else None
+    if kind in KINDS and (app is None or (kind != 'bluesky' and connection.app_client_id
+                                          and app.client_id != connection.app_client_id)):
+        message = _('This account was connected through an app this site no longer uses: connect it again.')
+        needs_reconnecting(connection, service, message)   # C11, met at the next call
+        _give_up(row, work, message)
+        return
+    if app is not None and connection.app_client_id is None:   # connected before apps were recorded: it is this app's
+        connection.app_client_id = app.client_id
+        db.session.commit()
     until = service.paused_until(connection)
     if until is not None:   # the service's allowance is nearly spent: wait, at no cost of an attempt (spec 18.3)
         row.next_attempt_at = until

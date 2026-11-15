@@ -1,0 +1,103 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% set active_child = 'admin_domains' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col">
+        <h1>{{ _('Connected accounts: %(domain)s', domain=row.domain) }}</h1>
+        <p>{{ _("This domain's members connect their accounts on other services with this domain's own apps where it has them, else with the instance's. Their sign-ins come back to this domain.") }}</p>
+        {% if not sealing -%}
+            <p class="alert alert-warning">{{ _('The instance has no CONNECTIONS_SECRETS_KEY yet: nothing can be set here until it does.') }}</p>
+        {% endif -%}
+
+        <h2 class="fs-5 mt-4">{{ _('Services') }}</h2>
+        <table class="table">
+            <thead><tr><th>{{ _('Service') }}</th><th>{{ _('Here') }}</th><th>{{ _('Setting') }}</th></tr></thead>
+            <tbody>
+            {% for switch in switches -%}
+                <tr>
+                    <td>{{ switch.service.label }}</td>
+                    <td>{{ _('On') if switch.on else _('Off') }}{% if not switch.configured %} <span class="text-muted small">({{ _('no app') }})</span>{% endif %}</td>
+                    <td>
+                        {% if sealing -%}
+                        <form method="post" class="d-flex gap-2">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="action" value="switch">
+                            <input type="hidden" name="service" value="{{ switch.service.name }}">
+                            <select name="value" class="form-select form-select-sm w-auto" aria-label="{{ _('Setting for %(service)s', service=switch.service.label) }}">
+                                <option value="" {{ 'selected' if switch.own is none }}>{{ _('As the instance (%(state)s)', state=_('on') if switch.instance_on else _('off')) }}</option>
+                                <option value="off" {{ 'selected' if switch.own == 'off' }}>{{ _('Off') }}</option>
+                                {% if switch.configured %}<option value="on" {{ 'selected' if switch.own == 'on' }}>{{ _('On') }}</option>{% endif %}
+                            </select>
+                            <button type="submit" class="btn btn-sm btn-outline-primary">{{ _('Save') }}</button>
+                        </form>
+                        {% endif -%}
+                    </td>
+                </tr>
+            {% endfor -%}
+            </tbody>
+        </table>
+
+        <h2 class="fs-5 mt-4">{{ _("This domain's apps") }}</h2>
+        {% for app in apps -%}
+            <div class="card mb-3" id="app-{{ app.kind }}">
+                <div class="card-body">
+                    <h3 class="fs-6">{{ app.label }}</h3>
+                    <p class="small mb-2">
+                        {% if app.own -%}
+                            {{ _('Its own') }}{% if app.kind != 'bluesky' %}: <code>{{ app.own.client_id }}</code>{% endif %}
+                        {% elif app.instance -%}
+                            {{ _("The instance's") }}
+                        {% else -%}
+                            {{ _('None') }}
+                        {% endif -%}
+                    </p>
+                    {% if sealing -%}
+                    <form method="post" class="mb-2">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="kind" value="{{ app.kind }}">
+                        {% if app.kind == 'bluesky' -%}
+                            <button type="submit" name="action" value="make-key" class="btn btn-sm btn-outline-primary {{ 'confirm_first' if app.own }}">
+                                {{ _('Make a new key') if app.own else _('Make a key for this domain') }}</button>
+                            <p class="small text-muted mt-1">{{ _('Bluesky needs no registration: this domain is its own client at %(address)s.', address=bluesky_metadata) }}</p>
+                        {% else -%}
+                            <div class="row g-2">
+                                <div class="col-md-5">
+                                    <label class="form-label small" for="client_id_{{ app.kind }}">{{ _('Client or app id') }}</label>
+                                    <input type="text" class="form-control form-control-sm" name="client_id" id="client_id_{{ app.kind }}" value="{{ app.own.client_id if app.own else '' }}" maxlength="255" autocomplete="off">
+                                </div>
+                                <div class="col-md-5">
+                                    <label class="form-label small" for="client_secret_{{ app.kind }}">{{ _('Secret') }}{% if app.own %} <span class="text-muted">({{ _('blank keeps it') }})</span>{% endif %}</label>
+                                    <input type="password" class="form-control form-control-sm" name="client_secret" id="client_secret_{{ app.kind }}" maxlength="255" autocomplete="new-password">
+                                </div>
+                                {% if app.kind == 'youtube' -%}
+                                <div class="col-md-2">
+                                    <label class="form-label small" for="daily_uploads">{{ _('Uploads a day') }}</label>
+                                    <input type="number" min="0" class="form-control form-control-sm" name="daily_uploads" id="daily_uploads" value="{{ app.daily_uploads if app.daily_uploads is not none else '' }}" placeholder="100">
+                                </div>
+                                {% endif -%}
+                            </div>
+                            <button type="submit" name="action" value="save" class="btn btn-sm btn-outline-primary mt-2">{{ _('Save') }}</button>
+                            {% if app.callbacks -%}
+                                <p class="small text-muted mt-2 mb-0">{{ _("Register these redirect addresses in this domain's app:") }}<br>
+                                {% for address in app.callbacks %}<code>{{ address }}</code>{% if not loop.last %}<br>{% endif %}{% endfor %}</p>
+                            {% endif -%}
+                        {% endif -%}
+                        {% if app.own -%}
+                            <button type="submit" name="action" value="remove" class="btn btn-sm btn-outline-danger confirm_first mt-2">{{ _("Use the instance's instead") }}</button>
+                        {% endif -%}
+                    </form>
+                    {% endif -%}
+                </div>
+            </div>
+        {% endfor -%}
+        <p class="small text-muted">{{ _('A different app, or going back to the instance\'s, asks every member who connected with the old one to connect again. A new secret for the same app does not.') }}</p>
+    </div>
+</div>
+{% endblock %}
