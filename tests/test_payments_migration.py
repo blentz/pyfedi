@@ -37,6 +37,7 @@ def conn(app, db_session, monkeypatch):
     db.session.commit()
     connection = db.session.connection()
     with Operations.context(MigrationContext.configure(connection)):
+        load('btc_daily_price').downgrade()   # a recorded invoice names the offer table
         load('discount_codes').downgrade()   # a reserved use names the offer and payment tables
         load('promo_codes').downgrade()   # a gift's tier names the offer table
         load('paid_membership').downgrade()   # its foreign key names the offer table too

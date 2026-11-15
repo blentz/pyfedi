@@ -6938,6 +6938,8 @@ class CronJobLog(db.Model):
             return timedelta(hours=2)  # runs hourly
         elif self.name == 'prune_error_counts':
             return timedelta(hours=25)  # runs daily
+        elif self.name == 'fix_btc_price':
+            return timedelta(hours=2)  # runs hourly
         # D1334. This used to fall off the end and answer None for any name not
         # listed above, and `app/admin/routes.py` does
         # `if diff_last_run > cron_task.get_frequency():`, so the admin dashboard

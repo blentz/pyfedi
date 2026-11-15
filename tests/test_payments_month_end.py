@@ -176,6 +176,12 @@ class TestRefunds:
         apply_event('stripe', 'evt_refund', [Refunded(reference='pi_1')])
         assert row.ends_at is None and not told.called
 
+    def test_one_whose_paid_time_is_already_over_ends_now(self, env, told):
+        row = held(env, env.prepaid, 400, reference='inv_1', current_period_end=utcnow() - timedelta(minutes=5))
+        self.paid(env, env.prepaid, 'inv_1', kind='btcpay')
+        apply_event('btcpay', 'evt_invalid', [Refunded(reference='inv_1')])
+        assert row.status == 'ended' and row.ends_at is None and row.ended_at is not None
+
     def test_a_subscription_already_ending_sooner_keeps_its_end(self, env, told):
         ends = utcnow() + timedelta(days=2)
         row = held(env, env.yearly, 100, renews_at=utcnow() + timedelta(days=265), ends_at=ends)

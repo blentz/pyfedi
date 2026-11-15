@@ -16,7 +16,7 @@ from app.models import BtcDailyRate, BtcpayInvoice, MemberSubscription, Offer, P
     Site, utcnow
 from app.payments.adapters.base import ProviderError
 from app.payments.adapters.btcpay_adapter import BtcpayAdapter
-from app.payments.btc_price import btc_text, checkout_rate, fix_today, rate_on, sats_for, to_sats
+from app.payments.btc_price import btc_text, checkout_rate, fix_today, rate_on, sats_for, to_sats, todays_btc_price
 from app.payments.core import apply_event
 from app.payments.credentials import seal
 from app.payments.discounts import find_discount_code
@@ -163,6 +163,20 @@ class TestCheckout:
         record = db.session.get(BtcpayInvoice, 'inv1')
         assert (record.offer_id, record.user_id, record.expected_minor, record.currency, record.sats, record.rate_day) == \
             (env.plan.id, env.member.id, 666, 'usd', 13320, utcnow().date())
+
+    @respx.mock
+    @pytest.mark.parametrize('answer', [{}, {'id': ''}, ['inv1']], ids=['no_id', 'empty_id', 'not_an_object'])
+    def test_an_answer_naming_no_invoice_records_nothing(self, env, answer):
+        fixed(utcnow().date(), '50000')
+        respx.post(INVOICES).mock(return_value=httpx.Response(200, json=answer))
+        with env.app.test_request_context('/'), pytest.raises(ProviderError):
+            BtcpayAdapter().checkout(env.plan, env.member, 'ok', 'no')
+        assert BtcpayInvoice.query.count() == 0
+
+    def test_an_offer_with_no_price_shows_no_bitcoin_price(self, env):
+        fixed(utcnow().date(), '50000')
+        assert todays_btc_price(None, 'usd') is None and todays_btc_price(666, None) is None
+        assert todays_btc_price(666, 'usd') == '0.00013320'
 
     @respx.mock
     def test_a_discount_is_taken_off_before_converting(self, env):
