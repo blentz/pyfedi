@@ -2457,6 +2457,8 @@ class User(UserMixin, db.Model):
     referral_code = db.Column(db.String(36), unique=True, index=True)
     # The tier a pending account chose at /register, which logging in again goes back to paying for (plan M3)
     pending_offer_id = db.Column(db.Integer, db.ForeignKey('offer.id', ondelete='SET NULL', name='fk_user_pending_offer'))
+    # A discount code typed at /register, which its checkout applies (plan phase 3 D1)
+    pending_promo_code_id = db.Column(db.Integer, db.ForeignKey('promo_code.id', ondelete='SET NULL', name='fk_user_pending_promo_code'))
     markdown_editor = db.Column(db.Boolean, default=True)
     interface_language = db.Column(db.String(10))  # a locale that the translation system understands e.g. 'en' or 'en-us'. If empty, use browser default
     language_id = db.Column(db.Integer, db.ForeignKey('language.id'))  # the default choice in the language dropdown when composing posts & comments. NOT UI language
@@ -6833,6 +6835,10 @@ class PromoCodeUse(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False, index=True)
     subscription_id = db.Column(db.Integer, db.ForeignKey('member_subscription.id', ondelete='SET NULL'))
     used_at = db.Column(db.DateTime, default=utcnow)
+    # A discount's use is reserved at checkout (plan phase 3 D4): the offer and the price expected, then the payment
+    offer_id = db.Column(db.Integer, db.ForeignKey('offer.id', ondelete='SET NULL'))
+    expected_minor = db.Column(db.BigInteger)
+    payment_id = db.Column(db.Integer, db.ForeignKey('payment.id', ondelete='SET NULL'))
 
 
 class PaymentEvent(db.Model):

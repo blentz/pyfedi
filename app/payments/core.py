@@ -15,6 +15,7 @@ from app.constants import DONOR_WHILE_SUBSCRIBED
 from app.email import send_prepaid_reminder, send_verification_email
 from app.models import MemberSubscription, Offer, Payment, PaymentEvent, User, utcnow
 from app.payments.adapters import adapter_for
+from app.payments.discounts import settle
 from app.payments.events import CustomerKnown, Paid, Refunded, Renewed, SubscriptionEnded, SubscriptionStarted
 from app.payments.tasks import cancel_at_provider
 from app.storefront import domain_by_id, paid_registration
@@ -92,6 +93,12 @@ def _paid(kind: str, event: Paid, touched: set) -> bool:
                                               amount_minor=event.amount_minor, currency=event.currency.lower(),
                                               status='paid' if matches else 'mismatch', created_at=now, settled_at=now)
                        .on_conflict_do_nothing())
+    if not matches and offer is not None and event.currency.lower() == (offer.currency or '').lower():
+        # Paid at a discounted price reserved at checkout (paid membership phase 3, D5): no mismatch after all
+        payment = Payment.query.filter_by(provider_kind=kind, provider_reference=event.reference).first()
+        if payment is not None and payment.status == 'mismatch' and \
+                settle(user.id if user else None, offer, event.amount_minor, payment.id):
+            payment.status, matches = 'paid', True
     if user:
         touched.add(user)
     return not matches

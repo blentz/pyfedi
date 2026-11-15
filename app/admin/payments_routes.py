@@ -26,7 +26,8 @@ from app.payments.adapters.btcpay_adapter import REQUIRED_EVENTS as BTCPAY_EVENT
 from app.payments.adapters.stripe_adapter import REQUIRED_EVENTS
 from app.payments.adapters.paypal_adapter import REQUIRED_EVENTS as PAYPAL_EVENTS
 from app.payments.credentials import CredentialsUnavailable, credentials_available, seal, unseal
-from app.payments.gifts import DEFAULT_GIFT_DAYS_SETTING, DEFAULT_GIFT_OFFER_SETTING, normalise
+from app.payments.code_text import normalise
+from app.payments.gifts import DEFAULT_GIFT_DAYS_SETTING, DEFAULT_GIFT_OFFER_SETTING
 from app.payments.offers import LINK, offers_changed, offers_on
 from app.storefront import clear_domain_cache, domain_rows
 from app.utils import get_setting, login_required, permission_required, render_template, roles_with, set_setting

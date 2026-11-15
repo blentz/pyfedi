@@ -7,6 +7,7 @@ from sqlalchemy import func
 
 from app import db, limiter
 from app.models import MemberSubscription, Offer, PromoCode, PromoCodeUse, User, utcnow
+from app.payments.code_text import normalise
 from app.payments.core import refresh_access, refresh_donor
 from app.payments.holding import held_until
 from app.utils import get_setting
@@ -24,11 +25,6 @@ class GiftUnavailable(Exception):
 def checking_codes():
     """The rate limit around trying a code (security review 2026-11-15): shared by every place a code is typed."""
     return limiter.shared_limit(GIFT_CODE_LIMIT, scope=GIFT_CODE_SCOPE)
-
-
-def normalise(text: str | None) -> str | None:
-    """A code as stored: stripped and lower case, so it can be typed as it was read out."""
-    return text.strip().lower() if isinstance(text, str) and text.strip() else None
 
 
 def usable(code: PromoCode) -> bool:
