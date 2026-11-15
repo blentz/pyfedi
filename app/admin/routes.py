@@ -35,6 +35,7 @@ from app.activitypub.util import extract_domain_and_actor, cross_origin_delete_d
     hosted_inbox_hosts
 from app.admin.constants import ReportTypes
 from app.payments.offers import offers_on
+from app.payments.status import FILTERS as SUBSCRIPTION_FILTERS, subscription_filter, subscription_statuses
 from app.admin.forms import ADMIN_SCOPE_ROLE_DEFAULT, FederationForm, SiteMiscForm, SiteProfileForm, EditCommunityForm, EditUserForm, \
     EditTopicForm, SendNewsletterForm, AddUserForm, PreLoadCommunitiesForm, ImportExportBannedListsForm, \
     EditInstanceForm, RemoteInstanceScanForm, MoveCommunityForm, EditBlockedImageForm, AddBlockedImageForm, \
@@ -2372,13 +2373,17 @@ def admin_users():
     sort_by = request.args.get('sort_by', 'last_seen DESC')
     last_seen = request.args.get('last_seen', 0, type=int)
     verified = request.args.get('verified', '')
+    subscription = request.args.get('subscription', '')
+    if subscription not in SUBSCRIPTION_FILTERS:
+        subscription = ''
     page_length = 500
     if current_user.page_length and current_user.page_length < page_length:
         page_length = current_user.page_length
 
     sort_by_btn = request.args.get('sort_by_btn', '')
     if sort_by_btn:
-        return redirect(url_for('admin.admin_users', page=page, search=search, local_remote=local_remote, sort_by=sort_by_btn, last_seen=last_seen))
+        return redirect(url_for('admin.admin_users', page=page, search=search, local_remote=local_remote, sort_by=sort_by_btn,
+                                last_seen=last_seen, verified=verified, subscription=subscription))
 
     users = without_local_only_actors(User.query.filter_by(deleted=False).filter(scope.clause(User.site_domain_id)), User)   # F6
     if local_remote == 'local':
@@ -2395,6 +2400,8 @@ def admin_users():
         users = users.filter(User.verified == True)
     elif verified == 'unverified':
         users = users.filter(User.verified == False)
+    if subscription:
+        users = users.filter(subscription_filter(subscription))
     users = users.order_by(safe_order_by(sort_by, User, {'user_name', 'banned', 'reports', 'attitude', 'reputation', 'created', 'last_seen'}))
     users = users.paginate(page=page, per_page=page_length, error_out=False)
 
@@ -2402,13 +2409,18 @@ def admin_users():
     # meant paging past the first page silently dropped it and showed the
     # unfiltered list under a heading that still said otherwise.
     next_url = url_for('admin.admin_users', page=users.next_num, search=search, local_remote=local_remote,
-                       sort_by=sort_by, last_seen=last_seen, verified=verified) if users.has_next else None
+                       sort_by=sort_by, last_seen=last_seen, verified=verified,
+                       subscription=subscription) if users.has_next else None
     prev_url = url_for('admin.admin_users', page=users.prev_num, search=search, local_remote=local_remote,
-                       sort_by=sort_by, last_seen=last_seen, verified=verified) if users.has_prev and page != 1 else None
+                       sort_by=sort_by, last_seen=last_seen, verified=verified,
+                       subscription=subscription) if users.has_prev and page != 1 else None
+    # A remote account can't subscribe here, so only local ones are looked up
+    subscriptions = subscription_statuses([user.id for user in users.items if user.is_local()])
 
     return render_template('admin/users.html', title=_('Users'), next_url=next_url, prev_url=prev_url, users=users,
                            local_remote=local_remote, search=search, sort_by=sort_by, last_seen=last_seen,
                            user_notes=user_notes(current_user.get_id()), verified=verified,
+                           subscription=subscription, subscriptions=subscriptions,
                            can_add_user=bool(creatable_domains()),
                            roles_with=roles_with('administer all users'))
 

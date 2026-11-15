@@ -22,13 +22,14 @@ Seven defects were found:
   (D950).
 """
 import io
+from datetime import datetime
 from unittest.mock import patch
 
 import pytest
 from sqlalchemy import text
 
 from app import cache, db
-from app.models import Role, RolePermission, User, role_grant
+from app.models import MemberSubscription, Offer, Role, RolePermission, User, role_grant
 from app.utils import user_access
 from tests.factories import grant_permissions, make_instance, make_user
 
@@ -927,24 +928,24 @@ def test_the_user_list_carries_every_filter_into_its_pagination_links(
 
     with patch('app.admin.routes.render_template', return_value='rendered') as render:
         client.get('/admin/users?verified=verified&search=bulk&local_remote=local'
-                   '&last_seen=7&sort_by=user_name')
+                   '&last_seen=7&sort_by=user_name&subscription=never')
 
     next_url = render.call_args.kwargs['next_url']
     assert next_url is not None
     for fragment in ('verified=verified', 'search=bulk', 'local_remote=local',
-                     'last_seen=7', 'sort_by=user_name'):
+                     'last_seen=7', 'sort_by=user_name', 'subscription=never'):
         assert fragment in next_url, f'{fragment} was dropped from next_url'
 
     # And the same for prev_url, from page 2 -- it is built separately, so a
     # row that only checks next_url leaves half the defect in place.
     with patch('app.admin.routes.render_template', return_value='rendered') as render:
         client.get('/admin/users?page=2&verified=verified&search=bulk'
-                   '&local_remote=local&last_seen=7&sort_by=user_name')
+                   '&local_remote=local&last_seen=7&sort_by=user_name&subscription=never')
 
     prev_url = render.call_args.kwargs['prev_url']
     assert prev_url is not None
     for fragment in ('verified=verified', 'search=bulk', 'local_remote=local',
-                     'last_seen=7', 'sort_by=user_name'):
+                     'last_seen=7', 'sort_by=user_name', 'subscription=never'):
         assert fragment in prev_url, f'{fragment} was dropped from prev_url'
 
 
@@ -1442,3 +1443,81 @@ def test_the_unsubscribe_task_rolls_back_and_re_raises(app, db_session):
 
     db.session.expire_all()
     assert db.session.get(User, user_id).deleted is False
+
+
+# --------------------------------------------------------------------------
+# Subscriptions on the user list (2026-11-15)
+# --------------------------------------------------------------------------
+
+
+def test_sorting_keeps_every_filter(users_admin):
+    """The sort buttons redirect, and that redirect dropped `verified` (and would have dropped the subscription
+    filter) the way D949's pagination links once did."""
+    client, token, roles, admin = users_admin
+    response = client.get('/admin/users?sort_by_btn=user_name+ASC&verified=verified&subscription=lapsed'
+                          '&search=x&local_remote=local&last_seen=7')
+    assert response.status_code == 302
+    for fragment in ('verified=verified', 'subscription=lapsed', 'search=x', 'local_remote=local', 'last_seen=7',
+                     'sort_by=user_name'):
+        assert fragment in response.headers['Location'], fragment
+
+
+def _subscriber(name, **values):
+    member = make_user(_instance(), name, local=True)
+    offer = Offer(provider_kind='btcpay', kind='subscription', title=f'Tier of {name}', offer_group='tiers',
+                  amount_minor=666, currency='usd', interval='month')
+    db.session.add(offer)
+    db.session.commit()
+    db.session.add(MemberSubscription(user_id=member.id, offer_id=offer.id, provider_kind='btcpay',
+                                      provider_reference=f'ref_{name}', **values))
+    db.session.commit()
+    return member
+
+
+def test_the_list_shows_each_local_members_subscription(users_admin):
+    client, token, roles, admin = users_admin
+    _subscriber('prepaid', status='active', current_period_end=datetime(2026, 12, 15), created_at=datetime(2026, 11, 15))
+    _subscriber('renewing', status='active', renews_at=datetime(2027, 1, 2))
+    _subscriber('stopping', status='active', ends_at=datetime(2026, 12, 1))
+    _subscriber('gone', status='ended', ended_at=datetime(2026, 10, 30))
+    _subscriber('odd', status='mismatch')
+    body = client.get('/admin/users?local_remote=local').get_data(as_text=True)
+    assert 'Tier of prepaid · paid until 2026-12-15' in body
+    assert 'title="Since 2026-11-15"' in body
+    assert 'Tier of renewing · renews 2027-01-02' in body
+    assert 'Tier of stopping · cancelled, ends 2026-12-01' in body
+    assert 'Tier of gone · lapsed 2026-10-30' in body
+    assert 'payment does not match its offer' in body
+
+
+def test_a_remote_account_is_never_looked_up(users_admin):
+    client, token, roles, admin = users_admin
+    remote = make_user(make_instance('far.example'), 'faraway')
+    db.session.add(MemberSubscription(user_id=remote.id, provider_kind='stripe', provider_reference='odd',
+                                      status='active'))
+    db.session.commit()
+    with patch('app.admin.routes.subscription_statuses', wraps=lambda ids: {}) as look:
+        client.get('/admin/users')
+    assert remote.id not in look.call_args.args[0]
+
+
+@pytest.mark.parametrize('choice, shown, hidden', [('active', 'renewing', 'gone'), ('lapsed', 'gone', 'renewing'),
+                                                   ('never', 'plain', 'gone')], ids=['active', 'lapsed', 'never'])
+def test_the_filter(users_admin, choice, shown, hidden):
+    client, token, roles, admin = users_admin
+    _subscriber('renewing', status='active')
+    _subscriber('gone', status='ended')
+    make_user(_instance(), 'plain', local=True)
+    db.session.commit()
+    with patch('app.admin.routes.render_template', return_value='rendered') as render:
+        client.get(f'/admin/users?subscription={choice}')
+    names = {user.user_name for user in render.call_args.kwargs['users'].items}
+    assert shown in names and hidden not in names
+    assert render.call_args.kwargs['subscription'] == choice
+
+
+def test_an_unknown_filter_is_ignored(users_admin):
+    client, token, roles, admin = users_admin
+    with patch('app.admin.routes.render_template', return_value='rendered') as render:
+        client.get('/admin/users?subscription=everyone')
+    assert render.call_args.kwargs['subscription'] == ''
