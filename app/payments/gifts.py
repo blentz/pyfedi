@@ -1,17 +1,29 @@
 """Gift codes (spec 2026-11-15-paid-membership-design.md PM3, PM6, PM8; plan phase 2, G1-G7): a code gives a free period
 of a tier, as a subscription of kind `gift` (adapters/gift_adapter.py), which runs out as a prepaid one does."""
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import func
 
-from app import db
+from app import db, limiter
 from app.models import MemberSubscription, Offer, PromoCode, PromoCodeUse, User, utcnow
 from app.payments.core import refresh_access, refresh_donor
+from app.payments.holding import held_until
 from app.utils import get_setting
 
 DEFAULT_GIFT_OFFER_SETTING = 'referral_gift_offer_id'   # the tier a member's new referral code gives (Q1)
 DEFAULT_GIFT_DAYS_SETTING = 'referral_gift_days'
+# Typing codes, at registration and on /donations alike: one bucket per address, so guessing is slow wherever it is tried
+GIFT_CODE_LIMIT, GIFT_CODE_SCOPE = '10 per hour', 'gift_codes'
+
+
+class GiftUnavailable(Exception):
+    """The code could be used when found but not by the time it was: an account made with it is not made at all."""
+
+
+def checking_codes():
+    """The rate limit around trying a code (security review 2026-11-15): shared by every place a code is typed."""
+    return limiter.shared_limit(GIFT_CODE_LIMIT, scope=GIFT_CODE_SCOPE)
 
 
 def normalise(text: str | None) -> str | None:
@@ -67,21 +79,14 @@ def referral_gift_code(user: User) -> PromoCode | None:
     return row
 
 
-def held_until(user: User, group: str) -> datetime:
-    """When what `user` holds now in `group` runs out, or now if nothing: a prepaid or gift period's end, a cancelled
-    one's last day, or a renewing one's next billing date."""
-    ends = db.session.execute(
-        db.select(MemberSubscription.current_period_end, MemberSubscription.ends_at, MemberSubscription.renews_at)
-        .join(Offer, MemberSubscription.offer_id == Offer.id)
-        .where(MemberSubscription.user_id == user.id, MemberSubscription.status == 'active',
-               Offer.offer_group == group)).all()
-    return max([utcnow(), *(moment for row in ends for moment in row if moment is not None)])
-
-
 def start_gift(user: User, code: PromoCode, commit: bool = True) -> MemberSubscription | None:
     """Give `user` the code's free period, starting when what they hold in its tier's group ends (PM8: we never short
     anybody). None if this account has used this code before (G7). The caller has found the code (find_gift_code, or a
     referral's row under referrer_for's lock); this commits unless told not to (inside the account's own commit)."""
+    # Locked and checked again here, at the moment of use: whatever happened since it was found, max_uses holds
+    code = PromoCode.query.filter_by(id=code.id).with_for_update().first()
+    if code is None or not usable(code):
+        return None
     if PromoCodeUse.query.filter_by(promo_code_id=code.id, user_id=user.id).first() is not None:
         return None
     offer = db.session.get(Offer, code.offer_id)

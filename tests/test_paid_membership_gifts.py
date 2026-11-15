@@ -128,3 +128,17 @@ class TestTheGiftProvider:
 
     def test_it_has_no_webhook(self, env):
         assert env.client.post('/payments/webhook/gift', data=b'{}').status_code == 404
+
+
+class TestUseIsCheckedAtTheMomentOfUse:
+    def test_a_code_used_up_since_it_was_found_gives_nothing(self, env):
+        code = a_code(env, max_uses=1)
+        other = make_user(env.baseline.instance_local, 'quicker', local=True)
+        start_gift(other, code)
+        assert start_gift(env.member, code) is None and gifts_of(env.member) == []
+
+    def test_a_code_deactivated_since_gives_nothing(self, env):
+        code = a_code(env)
+        code.active = False
+        db.session.commit()
+        assert start_gift(env.member, code) is None

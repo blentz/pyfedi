@@ -14,7 +14,7 @@ from app.payments.adapters import adapter_for
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.core import active_subscriptions_of, apply_event, cancel_subscription
 from app.payments.forms import RedeemCodeForm
-from app.payments.gifts import find_gift_code, start_gift
+from app.payments.gifts import checking_codes, find_gift_code, start_gift
 from app.payments.offers import LINK, offers_here
 from app.payments.registration import joinable_tier_ids
 from app.storefront import current_storefront, paid_registration
@@ -80,13 +80,13 @@ def donations():
 
 @bp.route('/donations/redeem', methods=['POST'])
 @login_required
-@limiter.limit('10 per hour')   # a wrong code says nothing more than any other wrong code, but guessing is slowed
 def redeem():
     """A member adds a gift code's free period (paid membership G4). A member's referral code is for joining, so it is
     not found here (find_gift_code)."""
     form = RedeemCodeForm()
     if form.validate_on_submit():
-        gift = find_gift_code(form.code.data)
+        with checking_codes():   # a wrong code says nothing more than any other, but guessing is slowed (shared bucket)
+            gift = find_gift_code(form.code.data)
         subscription = start_gift(current_user, gift) if gift is not None else None
         if subscription is None:
             db.session.rollback()   # the code's row lock

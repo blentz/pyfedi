@@ -35,7 +35,7 @@ from app.referral import REFERRAL_MODE, record_referral, referral_mode_on, refer
 from app.onion_account import audit_country, audit_ip, is_onion_account
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message, onion_proof_refused, prepare_onion_proof
 from app.payments.offers import money
-from app.payments.gifts import find_gift_code, start_gift
+from app.payments.gifts import GiftUnavailable, checking_codes, find_gift_code, start_gift
 from app.payments.registration import registration_checkout, registration_offer, registration_tiers
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, captcha_enabled, \
     finalize_user_setup, get_request, get_setting, gibberish, \
@@ -253,7 +253,8 @@ def register_on_paid_domain(form):
             form.tier.data = asked if any(tier.id == asked for tier in tiers) else offer.id
         if request.method == 'POST' and not onion_proof_refused(form) and form.validate_on_submit():
             if codes and (form.question.data or '').strip():
-                gift = find_gift_code(form.question.data)
+                with checking_codes():
+                    gift = find_gift_code(form.question.data)
                 if gift is not None:
                     return process_registration_form(form, gift=gift)
                 if referral:
@@ -366,9 +367,11 @@ def register_new_user(form, ip, country, referrer=None, paid=False, tier=None, g
     form.user_name.data = form.user_name.data.strip()
     normalize_username(form)
 
-    user = create_new_user(form, ip, country, verification_token, referrer, pending=paid)
-    if gift is not None:
-        start_gift(user, gift)
+    try:
+        user = create_new_user(form, ip, country, verification_token, referrer, pending=paid, gift=gift)
+    except GiftUnavailable:
+        flash(_('Invalid code'), 'error')
+        return redirect(url_for('auth.register'))
 
     if paid:
         user.pending_offer_id = tier.id if tier else None   # what logging in again goes back to paying for (M3)
@@ -403,7 +406,7 @@ def normalize_username(form):
         )
 
 
-def create_new_user(form, ip, country, verification_token, referrer=None, pending=False):
+def create_new_user(form, ip, country, verification_token, referrer=None, pending=False, gift=None):
     storefront = current_storefront()
     user = User(
         user_name=form.user_name.data,
@@ -433,6 +436,11 @@ def create_new_user(form, ip, country, verification_token, referrer=None, pendin
     if referrer is not None:
         record_referral(referrer, user)   # one commit with the account, while referrer_for's row lock is held
         session.pop('referral_code', None)
+    if gift is not None:   # one commit with the account too, under the code's lock (security review 2026-11-15)
+        db.session.flush()
+        if start_gift(user, gift, commit=False) is None:
+            db.session.rollback()
+            raise GiftUnavailable()
     db.session.commit()
     return user
 

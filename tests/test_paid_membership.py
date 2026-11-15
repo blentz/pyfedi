@@ -559,3 +559,46 @@ class TestRedeeming:
     def test_the_plans_page_offers_it_to_a_member(self, env):
         login(env.client, member(env, 'reader'))
         assert 'name="code"' in env.client.get('/donations', base_url=env.base).get_data(as_text=True)
+
+
+class TestCodesAreRateLimited:
+    """Typing a code at registration and on /donations shares one limit per address (security review 2026-11-15)."""
+
+    @pytest.fixture
+    def scopes(self, monkeypatch):
+        seen = []
+
+        class Limit:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def shared_limit(limit, scope):
+            seen.append((limit, scope))
+            return Limit()
+        monkeypatch.setattr('app.payments.gifts.limiter.shared_limit', shared_limit)
+        return seen
+
+    def test_at_registration(self, env, scopes, provider, rendering):
+        env.client.post('/auth/register', data={**FORM, 'question': 'whatever', 'csrf_token': csrf(env)}, base_url=env.base)
+        assert scopes == [('10 per hour', 'gift_codes')]
+
+    def test_paying_with_no_code_is_not_counted(self, env, scopes, provider):
+        env.client.post('/auth/register', data={**FORM, 'question': ''}, base_url=env.base)
+        assert scopes == []
+
+    def test_on_redeeming(self, env, scopes):
+        login(env.client, member(env, 'redeemer'))
+        env.client.post('/donations/redeem', data={'code': 'whatever', 'csrf_token': csrf(env)}, base_url=env.base)
+        assert scopes == [('10 per hour', 'gift_codes')]
+
+
+class TestACodeThatRanOutMeanwhile:
+    def test_makes_no_account_rather_than_a_free_one(self, env, provider):
+        db.session.add(PromoCode(code='gift-last', kind='gift', offer_id=env.knight.id, days=30))
+        db.session.commit()
+        with patch('app.auth.util.start_gift', return_value=None):
+            env.client.post('/auth/register', data={**FORM, 'question': 'gift-last'}, base_url=env.base)
+        assert joiner() is None and not provider.called
