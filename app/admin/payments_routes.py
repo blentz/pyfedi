@@ -327,9 +327,9 @@ def _codes_page(default_form=None, code_form=None):
                                        default_days=get_setting(DEFAULT_GIFT_DAYS_SETTING, None) or 30)
     default_form.default_offer_id.choices = _tier_choices(none=True)
     code_form = code_form or GiftCodeForm()
-    code_form.offer_id.choices = _tier_choices()
+    code_form.offer_id.choices = _tier_choices(none=True)
     return render_template('admin/payments_codes.html', title=_('Codes'), codes=codes, uses=uses, owners=owners,
-                           tiers=tiers, default_form=default_form, code_form=code_form,
+                           tiers=tiers, default_form=default_form, code_form=code_form, currency=get_setting(CURRENCY_SETTING),
                            roles_with=roles_with('manage monetization'))
 
 
@@ -355,9 +355,23 @@ def admin_payments_codes_default():
     return redirect(url_for('admin.admin_payments_codes'))
 
 
+def _code_refusal(form: GiftCodeForm, kind: str) -> str | None:
+    """What a code of `kind` is missing, or None (G6, D7)."""
+    if kind == 'gift' and not (form.offer_id.data and form.days.data):
+        return _('A gift needs a tier and its days.')
+    if kind == 'percent' and not form.percent.data:
+        return _('Say how many percent it takes off, from 1 to 99.')
+    if kind == 'amount' and not form.amount.data:
+        return _('Say how much it takes off.')
+    return None
+
+
 def _apply_code(form: GiftCodeForm, code: PromoCode) -> None:
-    code.offer_id = form.offer_id.data
-    code.days = form.days.data
+    code.offer_id = form.offer_id.data or None
+    code.days = form.days.data if code.kind == 'gift' else None
+    code.percent = form.percent.data if code.kind == 'percent' else None
+    code.amount_minor = to_minor(str(form.amount.data), get_setting(CURRENCY_SETTING) or 'usd') \
+        if code.kind == 'amount' else None
     code.max_uses = form.max_uses.data or None
     code.expires_at = datetime.combine(form.expires_at.data, datetime.max.time()).replace(microsecond=0) \
         if form.expires_at.data else None
@@ -369,8 +383,13 @@ def _apply_code(form: GiftCodeForm, code: PromoCode) -> None:
 @permission_required('manage monetization')
 def admin_payments_codes_add():
     form = GiftCodeForm()
-    form.offer_id.choices = _tier_choices()
+    form.offer_id.choices = _tier_choices(none=True)
     if not form.validate_on_submit():
+        return _codes_page(code_form=form)
+    kind = form.kind.data if form.kind.data in ('gift', 'percent', 'amount') else 'gift'
+    refusal = _code_refusal(form, kind)
+    if refusal is not None:
+        form.kind.errors = list(form.kind.errors) + [refusal]
         return _codes_page(code_form=form)
     text = normalise(form.code.data) or ''.join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
     if len(text) < TYPED_CODE_MINIMUM:
@@ -380,7 +399,7 @@ def admin_payments_codes_add():
     if PromoCode.query.filter_by(code=text).first() is not None:
         form.code.errors.append(_('That code is taken.'))
         return _codes_page(code_form=form)
-    code = PromoCode(code=text, kind='gift', created_by=current_user.id, created_at=utcnow())
+    code = PromoCode(code=text, kind=kind, created_by=current_user.id, created_at=utcnow())
     _apply_code(form, code)
     db.session.add(code)
     db.session.commit()
@@ -396,10 +415,14 @@ def admin_payments_code_edit(code_id):
     code = db.session.get(PromoCode, code_id) or abort(404)
     form = GiftCodeForm(obj=code)
     del form.code
-    form.offer_id.choices = _tier_choices()
-    if request.method == 'GET' and code.expires_at:
-        form.expires_at.data = code.expires_at.date()
-    if form.validate_on_submit():
+    del form.kind   # a code's kind stays what it was made as
+    form.offer_id.choices = _tier_choices(none=True)
+    if request.method == 'GET':
+        if code.expires_at:
+            form.expires_at.data = code.expires_at.date()
+        if code.amount_minor:
+            form.amount.data = from_minor(code.amount_minor, get_setting(CURRENCY_SETTING) or 'usd')
+    if form.validate_on_submit() and _code_refusal(form, code.kind) is None:
         _apply_code(form, code)
         db.session.commit()
         flash(_('Code saved.'))

@@ -23,12 +23,15 @@
             {{ render_field(default_form.save_default) }}
         </form>
 
-        <h3 class="mt-4">{{ _('Make a gift code') }}</h3>
+        <h3 class="mt-4">{{ _('Make a code') }}</h3>
         <form method="post" action="{{ url_for('admin.admin_payments_codes_add') }}">
             {{ code_form.hidden_tag() }}
             {{ render_field(code_form.code) }}
+            {{ render_field(code_form.kind) }}
             {{ render_field(code_form.offer_id) }}
             {{ render_field(code_form.days) }}
+            {{ render_field(code_form.percent) }}
+            {{ render_field(code_form.amount) }}
             {{ render_field(code_form.max_uses) }}
             {{ render_field(code_form.expires_at) }}
             {{ render_field(code_form.active) }}
@@ -47,7 +50,7 @@
                 <tr id="code-{{ code.id }}">
                     <td><code>{{ code.code }}</code></td>
                     <td>{% if code.owner_id %}{{ owners[code.owner_id].user_name if code.owner_id in owners else '' }}{% else %}{{ _('Gift code') }}{% endif %}</td>
-                    <td>{% if code.offer_id and code.days %}{{ _('%(tier)s for %(days)d days', tier=tiers.get(code.offer_id, '?'), days=code.days) }}{% else %}{{ _('The default') if code.owner_id else _('Nothing') }}{% endif %}</td>
+                    <td>{% if code.kind == 'percent' %}{{ _('%(percent)d%% off a first payment', percent=code.percent) }}{% elif code.kind == 'amount' %}{{ _('%(amount)s off a first payment', amount=money(code.amount_minor, currency or 'usd')) }}{% elif code.offer_id and code.days %}{{ _('%(tier)s for %(days)d days', tier=tiers.get(code.offer_id, '?'), days=code.days) }}{% else %}{{ _('The default') if code.owner_id else _('Nothing') }}{% endif %}{% if code.kind != 'gift' %} ({{ tiers.get(code.offer_id, '?') if code.offer_id else _('any') }}){% endif %}</td>
                     <td>{{ uses.get(code.id, 0) }}{% if code.max_uses %} / {{ code.max_uses }}{% endif %}</td>
                     <td>{{ code.expires_at.strftime('%Y-%m-%d') if code.expires_at else '' }}</td>
                     <td>{{ _('Yes') if code.active else _('No') }}</td>

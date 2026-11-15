@@ -178,3 +178,39 @@ class TestTheEditPage:
         db.session.commit()
         row = PromoCode.query.filter_by(owner_id=member.id).one()
         assert "referrer's referral code" in env.client.get(f'/admin/payments/codes/{row.id}').get_data(as_text=True)
+
+
+class TestDiscountCodes:
+    """Plan phase 3 D7: percent or an amount off a first payment, for one offer or any."""
+
+    def test_percent_off_any_offer(self, env, admin):
+        post(env, '/admin/payments/codes/add', kind='percent', percent=20, offer_id=0, code='spring-twenty')
+        code = PromoCode.query.one()
+        assert (code.kind, code.percent, code.offer_id, code.days) == ('percent', 20, None, None)
+
+    def test_an_amount_off_one_offer(self, env, admin):
+        set_setting('payment_currency', 'usd')
+        post(env, '/admin/payments/codes/add', kind='amount', amount='1.66', offer_id=env.knight.id, code='one-sixty-six')
+        code = PromoCode.query.one()
+        assert (code.kind, code.amount_minor, code.offer_id) == ('amount', 166, env.knight.id)
+
+    @pytest.mark.parametrize('values', [{'kind': 'percent', 'percent': 0}, {'kind': 'percent', 'percent': 100},
+                                        {'kind': 'percent'}, {'kind': 'amount'}, {'kind': 'amount', 'amount': '0'},
+                                        {'kind': 'gift', 'offer_id': 0, 'days': 30}],
+                             ids=['zero', 'all', 'no_percent', 'no_amount', 'zero_amount', 'gift_without_tier'])
+    def test_what_it_needs(self, env, admin, values):
+        post(env, '/admin/payments/codes/add', **{'offer_id': 0, 'code': 'some-long-code', **values})
+        assert PromoCode.query.count() == 0
+
+    def test_the_list_says_what_it_takes_off(self, env, admin):
+        db.session.add(PromoCode(code='spring-twenty', kind='percent', percent=20))
+        db.session.commit()
+        assert '20% off a first payment' in env.client.get('/admin/payments/codes').get_data(as_text=True)
+
+    def test_editing_one_keeps_its_kind(self, env, admin):
+        code = PromoCode(code='spring-twenty', kind='percent', percent=20)
+        db.session.add(code)
+        db.session.commit()
+        post(env, f'/admin/payments/codes/{code.id}', kind='gift', percent=30, offer_id=0, active='y')
+        row = db.session.get(PromoCode, code.id)
+        assert (row.kind, row.percent) == ('percent', 30)

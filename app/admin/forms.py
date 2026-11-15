@@ -663,12 +663,20 @@ class DefaultGiftForm(FlaskForm):
 
 
 class GiftCodeForm(FlaskForm):
-    """A gift code: a free period of a tier (paid membership G6)."""
+    """A code: a free period of a tier (paid membership G6), or percent or an amount off a first payment (phase 3 D7).
+    What each kind needs is checked by the route; a code's kind never changes once made."""
     code = StringField(_l('Code'), validators=[Optional(), Length(max=64)],
                        description=_l('Leave empty to have one made. One you type needs at least 8 characters, so it '
                                       'cannot be guessed.'))
-    offer_id = SelectField(_l('Tier'), coerce=int, choices=[], render_kw={'class': 'form-select'})
-    days = IntegerField(_l('Days'), default=30, validators=[DataRequired(), NumberRange(min=1, max=3650)])
+    kind = SelectField(_l('What it gives'), default='gift', validate_choice=False, render_kw={'class': 'form-select'},
+                       choices=select_choices([('gift', _l('A free period of a tier')),
+                                               ('percent', _l('Percent off a first payment')),
+                                               ('amount', _l('An amount off a first payment'))]))
+    offer_id = SelectField(_l('Tier (for a discount: the one offer it is for, or any)'), coerce=int, choices=[],
+                           render_kw={'class': 'form-select'})
+    days = IntegerField(_l('Days of a gift'), default=30, validators=[Optional(), NumberRange(min=1, max=3650)])
+    percent = IntegerField(_l('Percent off'), validators=[Optional(), NumberRange(min=1, max=99)])
+    amount = DecimalField(_l('Amount off'), places=None, validators=[Optional(), NumberRange(min=0.01, max=1000000)])
     max_uses = IntegerField(_l('How many may use it (blank for any number)'),
                             validators=[Optional(), NumberRange(min=1, max=1000000)])
     expires_at = DateField(_l('Last day it can be used'), validators=[Optional()])
