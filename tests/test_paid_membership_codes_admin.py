@@ -214,3 +214,11 @@ class TestDiscountCodes:
         post(env, f'/admin/payments/codes/{code.id}', kind='gift', percent=30, offer_id=0, active='y')
         row = db.session.get(PromoCode, code.id)
         assert (row.kind, row.percent) == ('percent', 30)
+
+
+    def test_an_amount_codes_edit_page_shows_its_amount(self, env, admin):
+        set_setting('payment_currency', 'usd')
+        code = PromoCode(code='one-sixty-six', kind='amount', amount_minor=166)
+        db.session.add(code)
+        db.session.commit()
+        assert 'value="1.66"' in env.client.get(f'/admin/payments/codes/{code.id}').get_data(as_text=True)

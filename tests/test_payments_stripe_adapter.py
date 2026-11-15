@@ -240,6 +240,12 @@ class TestADiscount:
         coupon.assert_called_once_with(amount_off=100, currency='usd', duration='once', max_redemptions=1, api_key=KEY)
         assert create.call_args.kwargs['discounts'] == [{'coupon': 'co_1'}]
 
+    def test_a_code_that_does_not_apply_is_refused(self, adapter, member, offer):
+        code = PromoCode(code='other', kind='percent', percent=20, offer_id=offer.id + 1000)
+        with patch('stripe.checkout.Session.create') as create, pytest.raises(ProviderError):
+            adapter.checkout(offer, member, 'o', 'c', discount=code)
+        assert not create.called
+
     def test_no_discount_no_coupon(self, adapter, member, offer):
         with patch('stripe.Coupon.create') as coupon, \
                 patch('stripe.checkout.Session.create', return_value=SimpleNamespace(url='u')) as create:

@@ -9,7 +9,9 @@ from flask import g
 from app import db
 from app.models import Offer, Payment, PromoCode, PromoCodeUse, Site, utcnow
 from app.payments.core import apply_event
-from app.payments.discounts import discounted, find_discount_code, reserve
+from app.payments.adapters.base import ProviderError
+from app.payments.adapters.btcpay_adapter import BtcpayAdapter
+from app.payments.discounts import discounted, find_discount_code, reserve, settle
 from app.payments.events import Paid
 from tests.factories import make_user
 
@@ -155,3 +157,19 @@ class TestTheLedger:
     def test_the_full_price_still_matches_and_leaves_the_reservation(self, env):
         use = reserve(env.member, a_code(percent=20), env.knight)
         assert self.pay(env, 666).status == 'paid' and db.session.get(PromoCodeUse, use.id).payment_id is None
+
+
+class TestNonsense:
+    @pytest.mark.parametrize('values', [{'kind': 'percent', 'percent': None}, {'kind': 'percent', 'percent': 0},
+                                        {'kind': 'amount', 'amount_minor': None}, {'kind': 'amount', 'amount_minor': -5}],
+                             ids=['no_percent', 'zero_percent', 'no_amount', 'negative'])
+    def test_a_malformed_code_takes_nothing_off(self, env, values):
+        assert discounted(PromoCode(code='x', **values), env.knight) is None
+
+    def test_settling_needs_an_account_and_an_offer(self, env):
+        assert settle(None, env.knight, 532, 1) is False and settle(env.member.id, None, 532, 1) is False
+
+    def test_btcpay_refuses_a_code_that_does_not_apply(self, env):
+        code = a_code(percent=20, offer_id=env.duke.id)
+        with patch.object(BtcpayAdapter, '_configured', return_value={}), pytest.raises(ProviderError):
+            BtcpayAdapter().checkout(env.knight, env.member, 'ok', 'no', discount=code)

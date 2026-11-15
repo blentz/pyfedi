@@ -698,3 +698,12 @@ class TestAMembersDiscount:
         env.client.post('/donations/code/clear', data={'csrf_token': env.token}, base_url=env.base)
         env.client.post(f'/donations/checkout/{env.knight.id}', data={'csrf_token': env.token}, base_url=env.base)
         assert provider.call_args.kwargs.get('discount') is None
+
+
+    def test_clearing_needs_its_token(self, env, user, monkeypatch):
+        a_discount(env)
+        self.redeem(env, 'spring-twenty')
+        monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)
+        env.client.post('/donations/code/clear', data={}, base_url=env.base)
+        with env.client.session_transaction(base_url=env.base) as session:
+            assert session.get('discount_code') == 'spring-twenty'

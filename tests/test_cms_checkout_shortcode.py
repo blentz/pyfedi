@@ -63,7 +63,7 @@ class TestTheButton:
         body = shown(env, f'[checkout {env.tier.id}]')
         token = body.split('name="csrf_token" value="')[1].split('"')[0]
         monkeypatch.setattr('app.payments.adapters.stripe_adapter.StripeAdapter.checkout',
-                            lambda self, offer, user, success, failure: 'https://checkout.example/s')
+                            lambda self, offer, user, success, failure, discount=None: 'https://checkout.example/s')
         answer = env.client.post(f'/donations/checkout/{env.tier.id}', data={'csrf_token': token})
         assert answer.status_code == 302 and answer.headers['Location'] == 'https://checkout.example/s'
 

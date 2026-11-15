@@ -2458,7 +2458,9 @@ class User(UserMixin, db.Model):
     # The tier a pending account chose at /register, which logging in again goes back to paying for (plan M3)
     pending_offer_id = db.Column(db.Integer, db.ForeignKey('offer.id', ondelete='SET NULL', name='fk_user_pending_offer'))
     # A discount code typed at /register, which its checkout applies (plan phase 3 D1)
-    pending_promo_code_id = db.Column(db.Integer, db.ForeignKey('promo_code.id', ondelete='SET NULL', name='fk_user_pending_promo_code'))
+    # use_alter: promo_code.owner_id names user, so the two tables' keys form a cycle SQLAlchemy can't sort otherwise
+    pending_promo_code_id = db.Column(db.Integer, db.ForeignKey('promo_code.id', ondelete='SET NULL', name='fk_user_pending_promo_code',
+                                                                use_alter=True))
     markdown_editor = db.Column(db.Boolean, default=True)
     interface_language = db.Column(db.String(10))  # a locale that the translation system understands e.g. 'en' or 'en-us'. If empty, use browser default
     language_id = db.Column(db.Integer, db.ForeignKey('language.id'))  # the default choice in the language dropdown when composing posts & comments. NOT UI language
