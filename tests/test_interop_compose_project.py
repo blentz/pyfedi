@@ -50,8 +50,11 @@ def test_the_client_app_harness_is_its_own_profile():
     apps = {name for name, service in services.items() if service.get('profiles') == ['apps']}
     assert apps == {'android-emulator', 'voyager-web', 'blorp-web', 'photon-web', 'phanpy-web', 'elk-web', 'apps-runner'}
     assert services['android-emulator']['devices'] == ['/dev/kvm']
-    started = re.search(r'^APPS_SERVICES="([^"]*)"', (ROOT / 'interop/run.sh').read_text(), re.M).group(1).split()
-    assert set(started) == apps - {'apps-runner'}
+    run_sh = (ROOT / 'interop/run.sh').read_text()
+    # the web apps first, then the emulator on its own (run.sh, 2026-11-15): together, every app service
+    web = re.search(r'^WEB_SERVICES="([^"]*)"', run_sh, re.M).group(1).split()
+    assert 'up -d --force-recreate --no-deps android-emulator' in run_sh
+    assert set(web) | {'android-emulator'} == apps - {'apps-runner'}
 
 
 def test_the_emulator_reaches_the_harness_and_nothing_else():
