@@ -60,7 +60,8 @@ AP_DOCUMENTS = frozenset({'main.index', 'main.list_feeds'})   # pages that answe
 # What a member whose subscription has lapsed may still do: renew, take their settings, leave (M12, plan S20)
 LAPSED_OPEN = frozenset({
     'static', 'bootstrap.static', 'auth.logout', 'user.user_settings_import_export', 'user.delete_account',
-    'payments.donations', 'payments.checkout', 'payments.cancel', 'payments.billing', 'payments.result',
+    'payments.donations', 'payments.checkout', 'payments.redeem', 'payments.clear_code', 'payments.cancel',
+    'payments.billing', 'payments.result',
     'payments.result_before_this_release', 'payments.payment_webhook', 'payments.stripe_webhook',
 })
 

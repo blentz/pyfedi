@@ -536,6 +536,31 @@ class TestRedeeming:
         assert self.redeem(env, 'GIFT-MONTH').status_code == 302
         assert gift_of(user) is not None
 
+    def test_a_lapsed_member_renews_with_a_gift_code(self, env):
+        """Locked out (M12), they may still renew, and a gift code is renewing (G4)."""
+        user = lapsed_since(member(env, 'redeemer'), days=30)
+        db.session.add(MemberSubscription(user_id=user.id, offer_id=env.knight.id, provider_kind='stripe',
+                                          provider_reference='sub_old', status='ended', ended_at=user.access_lapsed_at))
+        db.session.add(PromoCode(code='gift-month', kind='gift', offer_id=env.knight.id, days=30))
+        db.session.commit()
+        login(env.client, user)
+        assert user.access_has_lapsed()
+        answer = self.redeem(env, 'GIFT-MONTH')
+        assert answer.status_code == 302 and answer.headers['Location'].endswith('/donations')
+        assert gift_of(user) is not None and user.access_lapsed_at is None and not user.access_has_lapsed()
+
+    def test_a_lapsed_member_may_clear_a_held_code(self, env):
+        user = lapsed_since(member(env, 'redeemer'), days=30)
+        db.session.add(MemberSubscription(user_id=user.id, offer_id=env.knight.id, provider_kind='stripe',
+                                          provider_reference='sub_old', status='ended', ended_at=user.access_lapsed_at))
+        db.session.commit()
+        login(env.client, user)
+        with env.client.session_transaction(base_url=env.base) as session:
+            session['discount_code'] = 'twenty'
+        env.client.post('/donations/code/clear', data={'csrf_token': csrf(env)}, base_url=env.base)
+        with env.client.session_transaction(base_url=env.base) as session:
+            assert 'discount_code' not in session
+
     def test_a_wrong_code_changes_nothing(self, env):
         user = member(env, 'redeemer')
         login(env.client, user)
