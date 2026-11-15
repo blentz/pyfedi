@@ -387,3 +387,81 @@ four of its ideas were taken.
   no attempt.
 - A Facebook video post uploads the stored video with Graph's chunked upload (`/videos`, phases start, transfer,
   finish, with the post's text as description); it replaces "text and link" for Facebook.
+
+## 19. Amendment: what was taken from Postiz (2026-11-14)
+
+Postiz (AGPL, `gitroomhq/postiz-app` c22451b) was read for its posting engine: Temporal workflows, one activity
+queue per provider, typed failures (`RefreshToken`, `Disconnect`, `BadBody`, `PublishedWithError`), and a pending
+state polled between steps. It has no edits or deletes, and its app credentials come from the environment only;
+§7 and §18 go past it. Temporal itself is not taken: the rows, leases and sweep of §8 give the same guarantees here.
+
+### 19.1 Ruling (owner, 2026-11-14)
+
+- **C13 Taken from Postiz**: (1) a send whose outcome is unknown is never retried by itself; (2) a copy the service
+  accepted keeps its id when a later step fails; (3) a processing state, polled by the sweep, for work the service
+  finishes later; (4) Bluesky video; (5) a cap per service kind on sends at once. Built after the per-domain apps
+  (§18) are committed.
+
+### 19.2 Unconfirmed sends (C13 1)
+
+Today every `httpx.TransportError` is Transient (`http.fetch`), so a publishing call that timed out after its request
+went out is retried and may make a second copy.
+
+- `fetch` splits transport failures. Connect-phase failures (`ConnectError`, `ConnectTimeout`, `PoolTimeout`, the
+  pinned transport's refusals) mean nothing was sent: Transient as now. Any other (`WriteError`, `WriteTimeout`,
+  `ReadError`, `ReadTimeout`, `RemoteProtocolError`, the fetch deadline, which surfaces as these) raises
+  `MaybeSent`, a Transient.
+- Edits and deletes are idempotent: `MaybeSent` retries them as any Transient.
+- A send handles it per service:
+  - **Bluesky** writes with `com.atproto.repo.applyWrites`/`putRecord` under a record key (a TID) chosen before the
+    first attempt and kept on the row, so a retry overwrites the same record: retried as Transient. Blobs are
+    content-addressed, so re-uploading them is harmless.
+  - **YouTube** keeps the resumable upload's session address on the row. A retry asks it how far the upload got
+    (`Content-Range: bytes */<size>`) and resumes, or reads the finished video's id from its answer.
+  - **Facebook and Instagram** have no idempotency key. `MaybeSent` from the publishing call (Page `feed`, `photos`,
+    the video `finish` phase, `media_publish`) moves the row to `unconfirmed`, no further attempt. A `MaybeSent`
+    from an earlier step (an unpublished photo, a container) is an ordinary Transient: nothing is public yet.
+- `unconfirmed` shows on the post as "may have been posted: check your <account> before trying again", with Retry,
+  which sends again as the author chooses. The author is notified once.
+
+### 19.3 Accepted, then failed (C13 2)
+
+Once the publishing call answered with an id, nothing after it (a permalink lookup, a video's follow-up step) may
+lose that id. A service raises `PublishedThen(sent, message)`: dispatch stores `sent`'s id and address (the address
+falls back to the service's built one) and the row is `sent`, with the message in `last_error` for the author.
+Edits and deletes then reach the copy.
+
+### 19.4 Processing (C13 3)
+
+- New row state `processing` and a JSON column `pending` on `social_crosspost` (also holding 19.2's record key and
+  upload address). Migration after `e6a2c9d4f8b1`.
+- A service's `send` may return `Pending(data)`: the row is `processing`, `next_attempt_at` a poll interval ahead.
+  The sweep claims due `processing` rows like queued ones and calls `service.check(connection, row)`, a read-only
+  status call, which answers still pending (new data), ready, or failed. On ready, `service.finish(...)` makes the
+  one publishing call (19.2 applies to it). Polls cost no attempt; past a deadline (30 minutes) the row fails.
+- **Instagram** uses it for every post: the container (and a carousel's children) is created, then polled for
+  `status_code` `FINISHED` (`ERROR`/`EXPIRED` fail it) before `media_publish`, as Meta asks.
+- **Bluesky video** (19.5) polls the video job.
+
+### 19.5 Bluesky video (C13 4)
+
+A post's uploaded video goes to Bluesky as `app.bsky.embed.video` (one video, alt text, the post text cut as
+today). Upload goes through the video service (`app.bsky.video.uploadVideo` with a service-auth token for the
+member's PDS, then `getJobStatus` polled by 19.4); the blob it returns goes into the record. Size and length limits
+from `app.bsky.video.getUploadLimits`, asked before uploading. Spike first: whether the granular OAuth scopes allow
+`com.atproto.server.getServiceAuth` for the video service, and what the harness PDS (no video service) can stand
+in with; until then a video post still goes to Bluesky as text and link.
+
+### 19.6 Sends at once (C13 5)
+
+Each service kind declares `max_concurrent` (Facebook/Instagram through Facebook 4, Instagram Login 4, YouTube 2,
+Bluesky 4). `perform` takes a Redis slot (`connections:slots:<kind>:<app client id>`, an expiring counter, given
+back in `finally`) before calling the service; with none free the row waits a minute, costing no attempt, like a
+pause (§18.3).
+
+### 19.7 Steps
+
+- **Q1**: 19.2 and 19.3, with the `pending` column.
+- **Q2**: 19.4, Instagram moved onto it.
+- **Q3**: 19.5, spike first.
+- **Q4**: 19.6.
