@@ -6805,6 +6805,36 @@ class MemberSubscription(db.Model):
     renews_at = db.Column(db.DateTime)
 
 
+class PromoCode(db.Model):
+    """A code to join or renew with (spec 2026-11-15-paid-membership-design.md D3, plan phase 2 G1): a gift of a free
+    period of a tier now; percent and amount off later (phase 3). A member's referral code has a row too (owner_id),
+    which carries the gift that joining with it gives (PM7)."""
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(64), nullable=False, unique=True)   # stored lower case and stripped (gifts.normalise)
+    kind = db.Column(db.String(10), nullable=False)   # gift, percent, amount
+    offer_id = db.Column(db.Integer, db.ForeignKey('offer.id', ondelete='SET NULL'), index=True)   # a gift's tier
+    days = db.Column(db.Integer)   # a gift's length
+    percent = db.Column(db.Integer)
+    amount_minor = db.Column(db.BigInteger)
+    max_uses = db.Column(db.Integer)   # NULL: as many as come
+    expires_at = db.Column(db.DateTime)
+    active = db.Column(db.Boolean, nullable=False, default=True, server_default=db.true())
+    owner_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), unique=True)   # a referral code's
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='SET NULL'))
+    created_at = db.Column(db.DateTime, default=utcnow)
+
+
+class PromoCodeUse(db.Model):
+    """Each use of a code, which max_uses counts and the admin sees (G1, G7)."""
+    __table_args__ = (db.UniqueConstraint('promo_code_id', 'user_id', name='uq_promo_code_use_once'),)
+
+    id = db.Column(db.Integer, primary_key=True)
+    promo_code_id = db.Column(db.Integer, db.ForeignKey('promo_code.id', ondelete='CASCADE'), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False, index=True)
+    subscription_id = db.Column(db.Integer, db.ForeignKey('member_subscription.id', ondelete='SET NULL'))
+    used_at = db.Column(db.DateTime, default=utcnow)
+
+
 class PaymentEvent(db.Model):
     """Which provider events have been applied, so a repeated webhook does nothing."""
     __table_args__ = (db.UniqueConstraint('provider_kind', 'event_id', name='uq_payment_event'),)
