@@ -16,7 +16,7 @@ class GiftAdapter:
     def on_onion(self) -> bool:
         return False
 
-    def checkout(self, offer, user, success_url: str, cancel_url: str) -> str:
+    def checkout(self, offer, user, success_url: str, cancel_url: str, discount=None) -> str:
         raise ProviderError('a gift is given by a code, not bought')
 
     def parse_webhook(self, body: bytes, headers) -> tuple[str, list]:

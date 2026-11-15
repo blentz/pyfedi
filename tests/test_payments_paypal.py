@@ -11,7 +11,7 @@ from flask import current_app, g, session as flask_session
 from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.models import MemberSubscription, Offer, Payment, PaymentProvider, Site, utcnow
+from app.models import MemberSubscription, Offer, Payment, PaymentProvider, PromoCode, Site, utcnow
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.adapters.paypal_adapter import LIVE, SANDBOX, PaypalAdapter
 from app.payments.core import apply_event, end_expired_prepaid
@@ -139,6 +139,14 @@ class TestCheckout:
             'links': [{'rel': 'approve', 'href': 'https://paypal.example/approve'}]}))
         adapter.checkout(env.plan, env.member, 'https://x/ok', 'https://x/no')
         assert json.loads(route.calls[0].request.content)['start_time'] == ends.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    def test_a_code_is_refused(self, env, adapter, paypal):
+        """No coupons for its subscriptions (Q3): nothing is sent to PayPal."""
+        connect()
+        route = paypal.post(f'{SANDBOX}/v1/billing/subscriptions')
+        with pytest.raises(ProviderError):
+            adapter.checkout(env.plan, env.member, 'ok', 'no', discount=PromoCode(code='x', kind='percent', percent=20))
+        assert not route.called
 
     def test_nothing_held_starts_now(self, env, adapter, paypal):
         connect()

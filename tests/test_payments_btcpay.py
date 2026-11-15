@@ -14,7 +14,7 @@ from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.constants import DONOR_WHILE_SUBSCRIBED
-from app.models import MemberSubscription, Offer, Payment, PaymentProvider, Site, SiteDomain, utcnow
+from app.models import PromoCode, MemberSubscription, Offer, Payment, PaymentProvider, Site, SiteDomain, utcnow
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.adapters.btcpay_adapter import BtcpayAdapter, from_minor, to_minor
 from app.email import send_prepaid_reminder
@@ -629,3 +629,22 @@ class TestAdmin:
         db.session.refresh(env.plan)
         clear_domain_cache()
         assert env.plan.active is True
+
+
+class TestADiscount:
+    """Plan phase 3 D6: the invoice is made for the price after the code."""
+
+    def test_the_invoice_is_for_the_discounted_price(self, env, monkeypatch):
+        connect()
+        code = PromoCode(code='spring', kind='percent', percent=20)
+        db.session.add(code)
+        db.session.commit()
+        sent = {}
+
+        def fake(self, method, config, path, **kwargs):
+            sent.update(kwargs.get('json') or {})
+            return {'id': 'inv9'}
+        monkeypatch.setattr(BtcpayAdapter, '_request', fake)
+        with env.app.test_request_context('/'):
+            BtcpayAdapter().checkout(env.plan, env.member, 'ok', 'no', discount=code)
+        assert sent['amount'] == '4.00'

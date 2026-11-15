@@ -13,7 +13,7 @@ from cryptography.fernet import Fernet
 from flask import current_app
 
 from app import db
-from app.models import MemberSubscription, Offer, Payment, PaymentProvider, utcnow
+from app.models import MemberSubscription, Offer, Payment, PaymentProvider, PromoCode, utcnow
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.credentials import seal
@@ -225,6 +225,38 @@ class TestNobodyIsShortened:
         offer.kind = 'donation'
         db.session.commit()
         assert 'subscription_data' not in self.params(adapter, member, offer)
+
+
+class TestADiscount:
+    """Plan phase 3 D6: the exact amount off, as a one-time coupon, so Stripe charges what PieFed reserved."""
+
+    def test_the_coupon_takes_off_exactly_what_was_reserved(self, adapter, member, offer):
+        code = PromoCode(code='spring', kind='percent', percent=20)
+        db.session.add(code)
+        db.session.commit()
+        with patch('stripe.Coupon.create', return_value=SimpleNamespace(id='co_1')) as coupon, \
+                patch('stripe.checkout.Session.create', return_value=SimpleNamespace(url='u')) as create:
+            adapter.checkout(offer, member, 'o', 'c', discount=code)
+        coupon.assert_called_once_with(amount_off=100, currency='usd', duration='once', max_redemptions=1, api_key=KEY)
+        assert create.call_args.kwargs['discounts'] == [{'coupon': 'co_1'}]
+
+    def test_no_discount_no_coupon(self, adapter, member, offer):
+        with patch('stripe.Coupon.create') as coupon, \
+                patch('stripe.checkout.Session.create', return_value=SimpleNamespace(url='u')) as create:
+            adapter.checkout(offer, member, 'o', 'c')
+        assert not coupon.called and 'discounts' not in create.call_args.kwargs
+
+    def test_a_discounted_checkout_reports_what_was_charged(self, adapter):
+        session = {**SESSION, 'total_details': {'amount_discount': 100}}
+        with patch('stripe.Subscription.retrieve', return_value=a_subscription({})):
+            paid = parse(adapter, 'checkout.session.completed', session)[1][1]
+        assert paid.amount_minor == 400
+
+    def test_a_discounted_invoice_reports_what_was_charged(self, adapter, member, offer):
+        member.stripe_customer_id = 'cus_1'
+        db.session.commit()
+        invoice = {**TestAnInvoice.INVOICE, 'total_discount_amounts': [{'amount': 100}, {'amount': 'x'}, 'odd']}
+        assert parse(adapter, 'invoice.paid', invoice)[1][0].amount_minor == 400
 
 
 class TestSignatures:

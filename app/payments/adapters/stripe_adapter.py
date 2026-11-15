@@ -13,6 +13,7 @@ from flask import current_app
 from app.models import Offer, Payment, PaymentProvider, User, utcnow
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.credentials import CredentialsUnavailable, unseal
+from app.payments.discounts import discounted
 from app.payments.holding import first_charge_after
 from app.payments.events import CustomerKnown, Paid, Refunded, Renewed, SubscriptionEnded, SubscriptionStarted
 
@@ -81,6 +82,7 @@ def _session_events(session: dict) -> list:
     if customer:
         events.append(CustomerKnown(user_id, customer))
     amount, currency = _number(session.get('amount_subtotal')), _text(session, 'currency')
+    amount = amount - (_number(_mapping(session, 'total_details').get('amount_discount')) or 0) if amount else amount
     reference = _text(session, 'invoice') or _text(session, 'payment_intent') or _text(session, 'id')
     if amount and currency and reference:
         events.append(Paid(reference, amount, currency, user_id, offer_id))
@@ -91,6 +93,9 @@ def _session_events(session: dict) -> list:
 
 def _invoice_events(invoice: dict) -> list:
     amount, currency, reference = _number(invoice.get('subtotal')), _text(invoice, 'currency'), _text(invoice, 'id')
+    discounts = invoice.get('total_discount_amounts')
+    if amount and isinstance(discounts, list):   # what was charged: a code's amount off (plan phase 3 D5)
+        amount -= sum(_number(entry.get('amount')) or 0 for entry in discounts if isinstance(entry, dict))
     if not (amount and currency and reference):
         return []
     customer = _text(invoice, 'customer')
@@ -164,7 +169,7 @@ class StripeAdapter:
         except stripe.StripeError as error:
             raise ProviderError(f'Stripe refused: {type(error).__name__}') from None
 
-    def checkout(self, offer, user, success_url: str, cancel_url: str) -> str:
+    def checkout(self, offer, user, success_url: str, cancel_url: str, discount=None) -> str:
         key = self._key()
         customer = user.stripe_customer_id or None if user else None
         params = {'line_items': [{'price': offer.provider_price_id, 'quantity': 1}],
@@ -185,6 +190,14 @@ class StripeAdapter:
             if after is not None:
                 params['subscription_data']['trial_end'] = int(
                     max(after, utcnow() + timedelta(hours=48)).replace(tzinfo=timezone.utc).timestamp())
+        if discount is not None:
+            # The exact amount off PieFed reserved, once (plan phase 3 D6): Stripe's own percent rounding could differ
+            price = discounted(discount, offer)
+            if price is None:
+                raise ProviderError('that code does not apply')
+            coupon = self._call(lambda stripe: stripe.Coupon.create, amount_off=offer.amount_minor - price,
+                                currency=offer.currency, duration='once', max_redemptions=1, api_key=key)
+            params['discounts'] = [{'coupon': coupon.id}]
         session = self._call(lambda stripe: stripe.checkout.Session.create, api_key=key, **params)
         return session.url
 

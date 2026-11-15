@@ -17,7 +17,7 @@ class Adapter(Protocol):
     prepaid: bool   # a subscription is a period paid in advance, which the member renews (M4), not a charge that recurs
     available: Callable[[], bool]
     on_onion: Callable[[], bool]   # may it be offered there (C11)
-    checkout: Callable[..., str]   # (offer, user, success_url, cancel_url) -> where to send the member
+    checkout: Callable[..., str]   # (offer, user, success_url, cancel_url, discount=None) -> where to send the member
     parse_webhook: Callable[..., tuple[str, list]]   # (body, headers) -> (event id, neutral events), or InvalidWebhook
     cancel: Callable[[str], None]   # (reference); already gone counts as done
     cancel_at_period_end: Callable[[str], datetime]   # (reference) -> when it will end

@@ -16,6 +16,7 @@ from babel.numbers import get_currency_precision
 from app.models import Offer, PaymentProvider
 from app.onion import is_onion_request
 from app.payments.adapters.base import InvalidWebhook, ProviderError
+from app.payments.discounts import discounted
 from app.payments.credentials import CredentialsUnavailable, unseal
 from app.payments.events import Paid, Refunded, SubscriptionEnded, SubscriptionStarted
 
@@ -89,15 +90,20 @@ class BtcpayAdapter:
             raise ProviderError('BTCPay is not configured')
         return config
 
-    def checkout(self, offer: Offer, user, success_url: str, cancel_url: str) -> str:
+    def checkout(self, offer: Offer, user, success_url: str, cancel_url: str, discount=None) -> str:
         """The address is built here because the server names whichever host it was asked on, and this site may reach it
         by another name than a member's browser does."""
         config = self._configured()
         metadata = {'offer_id': str(offer.id)}
         if user:
             metadata['user_id'] = str(user.id)
+        price = offer.amount_minor
+        if discount is not None:   # the price after a code reserved at checkout (plan phase 3 D6)
+            price = discounted(discount, offer)
+            if price is None:
+                raise ProviderError('that code does not apply')
         invoice = self._request('POST', config, '/invoices', json={
-            'amount': from_minor(offer.amount_minor, offer.currency), 'currency': offer.currency.upper(), 'metadata': metadata,
+            'amount': from_minor(price, offer.currency), 'currency': offer.currency.upper(), 'metadata': metadata,
             'checkout': {'redirectURL': success_url, 'redirectAutomatically': True, 'expirationMinutes': INVOICE_MINUTES}})
         base = config['onion_url'] if is_onion_request() else config['url']
         return f"{base.rstrip('/')}/i/{invoice['id']}"

@@ -135,7 +135,9 @@ class PaypalAdapter:
             raise ProviderError('PayPal answered with something else')
         return answer
 
-    def checkout(self, offer: Offer, user, success_url: str, cancel_url: str) -> str:
+    def checkout(self, offer: Offer, user, success_url: str, cancel_url: str, discount=None) -> str:
+        if discount is not None:
+            raise ProviderError('PayPal takes no codes')   # no coupons for its subscriptions (Q3)
         config = self._configured()
         context = {'return_url': success_url, 'cancel_url': cancel_url, 'shipping_preference': 'NO_SHIPPING'}
         if offer.kind == 'subscription':
