@@ -2,7 +2,8 @@
 
 Every call goes through the shared pinned client (R162) with PieFed's user agent. An answer becomes a Transient
 (429, 5xx, a network failure: worth trying again), an AuthFailed (401, 403: the member must connect again) or a
-Permanent (any other 4xx). The service's own error text is kept, trimmed, for the author; a token never is, since
+Permanent (any other 4xx). A network failure after the request went out is a MaybeSent, a Transient the service may
+have acted on (spec 19.2). The service's own error text is kept, trimmed, for the author; a token never is, since
 none of these calls puts one in a URL.
 
 An answer may come compressed (gzip or deflate, the two PieFed offers), and is inflated in steps whose output is
@@ -15,7 +16,7 @@ from zlib import decompressobj
 import httpx
 
 from app import httpx_client
-from app.connections import AuthFailed, Permanent, Transient
+from app.connections import AuthFailed, MaybeSent, Permanent, Transient
 from app.pinned_http import fetch_deadline
 from app.utils import user_agent
 
@@ -23,6 +24,8 @@ TIMEOUT = 30               # seconds, per read
 DEADLINE = 30              # seconds for a whole call
 MAX_BYTES = 1_000_000      # an answer larger than this is refused: what PieFed reads back is small JSON
 ACCEPT_ENCODING = 'gzip, deflate'   # what zlib inflates with a bounded output; not br, whose binding cannot bound it
+# failures before any of the request left: it cannot have been acted on (the pinned transport's refusals are these too)
+NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout, httpx.UnsupportedProtocol, httpx.ProxyError)
 
 
 def _retry_after(response: httpx.Response) -> int | None:
@@ -126,8 +129,10 @@ def fetch(method: str, url: str, max_bytes: int = MAX_BYTES, seconds: float = DE
                     raw += chunk
                 else:
                     inflater.feed(chunk)
-    except httpx.TransportError as failure:
+    except NOT_SENT as failure:
         raise Transient(f'Could not reach the service ({type(failure).__name__}).') from None
+    except httpx.TransportError as failure:   # sent, or partly: the service may have acted on it (spec 19.2)
+        raise MaybeSent(f'No answer came back from the service ({type(failure).__name__}).') from None
     content = bytes(raw) if inflater is None else inflater.finish()
     headers = [(name, value) for name, value in response.headers.items()
                if name.lower() not in ('content-encoding', 'content-length', 'transfer-encoding')]

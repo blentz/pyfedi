@@ -21,7 +21,7 @@ from flask import current_app
 from flask_babel import _
 
 import app as app_pkg
-from app.connections import Account, AuthFailed, Permanent, Sent, Service, Transient, register
+from app.connections import Account, AuthFailed, Permanent, Sent, Service, Transient, publishing, register
 from app.connections.apps import App, current
 from app.connections.content import StoredVideo, as_jpeg, cut, image_bytes, plain_text
 from app.connections.eligibility import image_files, uploaded_video
@@ -210,7 +210,9 @@ class FacebookService(Service):
     def paused_until(self, connection):
         return paused_until(connection.remote_id)
 
-    def send(self, post, tokens, connection):
+    def send(self, post, tokens, connection, progress=None):
+        """Unpublished photos and video parts may be sent twice harmlessly; the call that publishes may not, so
+        no answer to it makes the copy unconfirmed (spec 19.2)."""
         page, token = connection.remote_id, tokens['page_token']
         if uploaded_video(post) and not post.content_warning:
             return self._send_video(post, page, token)
@@ -218,8 +220,9 @@ class FacebookService(Service):
         photos = [photo for photo in (_photo(file) for file in files) if photo]
         message = message_of(post)
         if len(photos) == 1:
-            answer = graph('POST', f'{page}/photos', token, data={'caption': message, 'published': 'true'},
-                           files={'source': ('picture.jpg', photos[0], 'image/jpeg')}, seconds=120)
+            with publishing(self.label):
+                answer = graph('POST', f'{page}/photos', token, data={'caption': message, 'published': 'true'},
+                               files={'source': ('picture.jpg', photos[0], 'image/jpeg')}, seconds=120)
             post_id = answer.get('post_id') or f"{page}_{answer.get('id')}"
         else:
             fields = {'message': message}
@@ -229,7 +232,8 @@ class FacebookService(Service):
                 fields[f'attached_media[{number}]'] = f'{{"media_fbid":"{uploaded["id"]}"}}'
             if post.type == POST_TYPE_LINK and post.url and not post.content_warning and not photos:
                 fields['link'] = post.url
-            post_id = graph('POST', f'{page}/feed', token, data=fields)['id']
+            with publishing(self.label):
+                post_id = graph('POST', f'{page}/feed', token, data=fields)['id']
         return Sent(remote_id=str(post_id), remote_url=f'https://www.facebook.com/{post_id}')
 
     def _send_video(self, post, page: str, token: str) -> Sent:
@@ -252,8 +256,9 @@ class FacebookService(Service):
                 if following[0] <= begin and following[0] < following[1]:
                     raise Transient(_('Facebook stopped taking the video part way.'))
                 begin, end = following
-        done = graph('POST', f'{page}/videos', token, seconds=120, data={
-            'upload_phase': 'finish', 'upload_session_id': session, 'description': message_of(post)})
+        with publishing(self.label):
+            done = graph('POST', f'{page}/videos', token, seconds=120, data={
+                'upload_phase': 'finish', 'upload_session_id': session, 'description': message_of(post)})
         if not done.get('success'):
             raise Transient(_('Facebook did not finish the video.'))
         return Sent(remote_id=f'{VIDEO_PREFIX}{video_id}', remote_url=f'https://www.facebook.com/{page}/videos/{video_id}')

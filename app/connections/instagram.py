@@ -22,7 +22,8 @@ from flask_babel import _, lazy_gettext as _l
 from itsdangerous import BadData, URLSafeTimedSerializer
 from PIL import Image
 
-from app.connections import Account, AuthFailed, Permanent, Sent, Service, Transient, main_base_url, register
+from app.connections import (Account, AuthFailed, Permanent, Sent, Service, ServiceError, main_base_url,
+                             publishing, register)
 from app.connections.content import as_jpeg, cut, image_bytes, plain_text
 from app.connections.eligibility import image_files, uploaded_video
 from app.connections.apps import current
@@ -248,7 +249,9 @@ class InstagramService(Service):
             return graph(method, path, token, params)
         return ig(method, path, token, params)
 
-    def send(self, post, tokens, connection):
+    def send(self, post, tokens, connection, progress=None):
+        """Containers may be made twice harmlessly; media_publish may not, so no answer to it makes the copy
+        unconfirmed (spec 19.2)."""
         variant, account, token = connection.variant, connection.remote_id, tokens['token']
         files = [file for file in image_files(post)[:MAX_ITEMS] if fitted_ok(file)]
         if not files:
@@ -263,10 +266,12 @@ class InstagramService(Service):
                 for file in files]
             container = self._call(variant, 'POST', f'{account}/media', token, {
                 'media_type': 'CAROUSEL', 'children': ','.join(children), 'caption': caption})
-        media_id = self._call(variant, 'POST', f'{account}/media_publish', token, {'creation_id': container['id']})['id']
+        with publishing(self.label):
+            media_id = self._call(variant, 'POST', f'{account}/media_publish', token,
+                                  {'creation_id': container['id']})['id']
         try:
             permalink = self._call(variant, 'GET', str(media_id), token, {'fields': 'permalink'}).get('permalink')
-        except Transient:
+        except ServiceError:   # spec 19.3: once published, no failure may lose its id
             permalink = None   # published: a link to it is a nicety, never a reason to publish again
         return Sent(remote_id=str(media_id), remote_url=permalink)
 

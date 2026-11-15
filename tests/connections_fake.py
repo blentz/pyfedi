@@ -22,6 +22,7 @@ class FakeService(Service):
     def __init__(self):
         self.fit = True
         self.has_credentials = True
+        self.progress_steps = []   # (key, value) a send stores in its progress before calling
 
     def configured(self):
         return self.has_credentials
@@ -55,7 +56,11 @@ class FakeService(Service):
         body = call('POST', f'{BASE}/refresh', data={'access': tokens['access']}).json()
         return {'access': body['token'], 'expires_at': datetime.now().timestamp() + 3600}
 
-    def send(self, post, tokens, connection):
+    def send(self, post, tokens, connection, progress=None):
+        if progress is not None and self.progress_steps:
+            for key, value in self.progress_steps:
+                progress.data[key] = value
+                progress.save()
         body = call('POST', f'{BASE}/posts', json={'text': post.title},
                     headers={'Authorization': f"Bearer {tokens['access']}"}).json()
         return Sent(remote_id=body['id'], remote_url=body.get('url'))

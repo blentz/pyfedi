@@ -7619,7 +7619,8 @@ class SocialCrosspost(db.Model):
     service = db.Column(db.String(20), nullable=False)
     variant = db.Column(db.String(20))       # the connection's, when sent: which API can delete it (C6)
     # waiting (chosen, post not published) | queued | sent | failed | deleted | skipped | manual (delete by hand)
-    state = db.Column(db.String(10), nullable=False, default='waiting', index=True)
+    # | unconfirmed (its publishing call got no answer: it may be there, spec 19.2)
+    state = db.Column(db.String(20), nullable=False, default='waiting', index=True)
     remote_id = db.Column(db.String(512))
     remote_url = db.Column(db.String(1024))
     attempts = db.Column(db.Integer, nullable=False, default=0, server_default='0')
@@ -7627,6 +7628,7 @@ class SocialCrosspost(db.Model):
     last_error = db.Column(db.String(255))
     sent_at = db.Column(db.DateTime)
     edited_at = db.Column(db.DateTime)
+    progress = db.Column(db.JSON)            # what attempts at sending it have done so far (Progress, spec 19.2)
 
     post = db.relationship('Post', backref=db.backref('social_crossposts', passive_deletes=True))
     connection = db.relationship('SocialConnection', backref=db.backref('crossposts', passive_deletes=True))

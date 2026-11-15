@@ -28,7 +28,7 @@ from flask_babel import _, lazy_gettext as _l
 from jwt.algorithms import ECAlgorithm
 
 from app import storefront
-from app.connections import Account, AuthFailed, Permanent, Sent, Service, ServiceError, register
+from app.connections import Account, AuthFailed, Permanent, Progress, Sent, Service, ServiceError, register
 from app.connections.eligibility import image_files, uploaded_video
 from app.connections import content
 from app.connections.apps import context_domain, current
@@ -312,6 +312,34 @@ def labels(post) -> dict | None:
     return {'$type': 'com.atproto.label.defs#selfLabels', 'values': values} if values else None
 
 
+TID_CHARS = '234567abcdefghijklmnopqrstuvwxyz'   # atproto's sortable base32
+
+
+def new_tid() -> str:
+    """A record key in atproto's TID form: microseconds since 1970 and a random clock id, 13 characters."""
+    value = (time.time_ns() // 1000) << 10 | secrets.randbelow(1024)
+    return ''.join(TID_CHARS[(value >> (5 * (12 - place))) & 31] for place in range(13))
+
+
+def existing_record(tokens: dict, rkey: str) -> str | None:
+    """The member's post under `rkey` if their PDS has it (an earlier attempt made it): its at:// URI, else None.
+    Records are public, so this read needs no token."""
+    response = fetch('GET', f"{tokens['pds']}/xrpc/com.atproto.repo.getRecord",
+                     params={'repo': tokens['did'], 'collection': 'app.bsky.feed.post', 'rkey': rkey})
+    if response.status_code == 400 and _error_of(response) == 'RecordNotFound':
+        return None
+    check(response)
+    return response.json().get('uri') or f"at://{tokens['did']}/app.bsky.feed.post/{rkey}"
+
+
+def _error_of(response) -> str | None:
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    return body.get('error') if isinstance(body, dict) else None
+
+
 def build_record(post, tokens: dict) -> dict:
     """The app.bsky.feed.post record for `post`. Uploads its pictures to the PDS on the way."""
     files = [] if post.content_warning or uploaded_video(post) else image_files(post)
@@ -426,11 +454,19 @@ class BlueskyService(Service):
                 'refresh_token': answer.get('refresh_token') or tokens['refresh_token'],
                 'expires_at': time.time() + int(answer.get('expires_in') or 300)}
 
-    def send(self, post, tokens, connection):
-        record = build_record(post, tokens)
-        created = xrpc(tokens, 'POST', 'com.atproto.repo.createRecord', json={
-            'repo': tokens['did'], 'collection': 'app.bsky.feed.post', 'record': record}).json()
-        uri = created['uri']
+    def send(self, post, tokens, connection, progress=None):
+        """Under a record key chosen before the first attempt and kept (spec 19.2): an attempt after one that got no
+        answer first asks the PDS whether that one made the record, so a copy is never made twice."""
+        progress = progress or Progress()
+        rkey = progress.data.get('rkey')
+        uri = existing_record(tokens, rkey) if rkey else None
+        if uri is None:
+            if rkey is None:
+                rkey = progress.data['rkey'] = new_tid()
+                progress.save()
+            record = build_record(post, tokens)
+            uri = xrpc(tokens, 'POST', 'com.atproto.repo.createRecord', json={
+                'repo': tokens['did'], 'collection': 'app.bsky.feed.post', 'rkey': rkey, 'record': record}).json()['uri']
         return Sent(remote_id=uri, remote_url=f"https://bsky.app/profile/{tokens['did']}/post/{uri.rsplit('/', 1)[-1]}")
 
     def delete(self, tokens, remote_id):

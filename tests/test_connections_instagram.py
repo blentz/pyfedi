@@ -13,7 +13,7 @@ import pytest
 from PIL import Image
 
 from app import db
-from app.connections import SERVICES, AuthFailed, Permanent, Transient
+from app.connections import SERVICES, AuthFailed, MaybeSent, Permanent, Transient, Unconfirmed
 from app.connections import facebook, instagram
 from app.connections.instagram import (DIRECT, VIA_FACEBOOK, InstagramService, caption_of, fitted, media_file_id,
                                        media_url)
@@ -264,6 +264,27 @@ def test_a_carousel_directly(app, ig, http_mock, tmp_path):
     assert child['is_carousel_item'] == 'true' and 'caption' not in child
     assert carousel == {'media_type': 'CAROUSEL', 'children': 'child-0,child-1', 'caption': 'set\n\nhttps://piefed.example/post/7'}
     assert media.calls[0].request.headers['Authorization'] == 'Bearer direct'
+
+
+def test_a_published_copy_keeps_its_id_whatever_its_link_lookup_meets(app, ig, http_mock, tmp_path):
+    http_mock.post(f'{IG}/ig-1/media').respond(200, json={'id': 'c'})
+    http_mock.post(f'{IG}/ig-1/media_publish').respond(200, json={'id': 'm-3'})
+    http_mock.get(f'{IG}/m-3').respond(400, json={'error': {'message': 'no', 'code': 100}})
+    with app.test_request_context():
+        sent = ig.send(a_post([picture(tmp_path)]), {'token': 'direct'}, account(DIRECT))
+    assert (sent.remote_id, sent.remote_url) == ('m-3', None)
+
+
+def test_no_answer_to_media_publish_is_unconfirmed_and_to_a_container_is_tried_again(app, ig, http_mock, tmp_path):
+    media = http_mock.post(f'{IG}/ig-1/media')
+    media.side_effect = [httpx.ReadTimeout('slow'), httpx.Response(200, json={'id': 'c'})]
+    publish = http_mock.post(f'{IG}/ig-1/media_publish').mock(side_effect=httpx.ReadTimeout('slow'))
+    with app.test_request_context():
+        with pytest.raises(MaybeSent) as raised:
+            ig.send(a_post([picture(tmp_path)]), {'token': 'direct'}, account(DIRECT))
+        assert not isinstance(raised.value, Unconfirmed) and not publish.called
+        with pytest.raises(Unconfirmed):
+            ig.send(a_post([picture(tmp_path)]), {'token': 'direct'}, account(DIRECT))
 
 
 def test_a_post_whose_pictures_cannot_be_read(app, ig):

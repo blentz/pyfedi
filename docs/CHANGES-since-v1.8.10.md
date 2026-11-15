@@ -342,7 +342,8 @@ scan. The backfill `UPDATE`s touch only rows that are actually NULL.
 | 50 | `f1c7a3e9d2b4` theme_code | Creates `custom_theme_template` (a custom theme's override of one app template) and adds `script`, `code_failed_template`, `code_failure` and `code_failed_at` to `custom_theme`. (`a21ccbca`) | No |
 | 51 | `c4e8a2d6f1b3` site_domain_referral_codes | Adds `site_domain.referral_codes` (NOT NULL, default true): whether, in referral-code mode, a valid code opens signup on a domain whose registration is closed. True keeps every existing domain as it was. (`33812c3b`) | No |
 | 48 | `d4f8a2c6e1b9` social_connections | Adds the `social_connection` and `social_crosspost` tables: members' connected accounts (tokens sealed) and each post's copies on them. (`83aa1637`) | No |
-| 49 | `e6a2c9d4f8b1` connection_apps | Creates `connection_app` (a domain's own Meta, Instagram, Google and Bluesky app credentials, secrets sealed) and adds `app_domain_id` and `app_client_id` to `social_connection`: the app each connection was made with. | No |
+| 49 | `e6a2c9d4f8b1` connection_apps | Creates `connection_app` (a domain's own Meta, Instagram, Google and Bluesky app credentials, secrets sealed) and adds `app_domain_id` and `app_client_id` to `social_connection`: the app each connection was made with. (`a960a103`) | No |
+| 50 | `f3b7d1a9c5e2` crosspost_progress | Adds `progress` (JSON) to `social_crosspost`, what a copy's sending did so far, and widens its `state` to 20 characters for `unconfirmed`. The downgrade turns unconfirmed copies into failed ones. | No |
 
 Downgrades remove defaults, constraints, columns and the new tables, but do
 not restore the NULLs, invented counters, rankings, cross-post links or
@@ -1968,8 +1969,14 @@ commit each:
   service off, or on only when it has an app. A different app, or going back to the
   instance's, asks the members who connected with the old one to connect again; a new secret
   for the same app does not. Admin > Connected accounts lists the redirect addresses each
-  domain needs registered in the instance's apps. Spec
-  `docs/superpowers/specs/2026-11-13-connected-accounts-design.md` (rulings C1 to C12;
+  domain needs registered in the instance's apps (`a960a103`).
+  From Postiz's posting engine (ruling C13): a copy is never sent twice because an answer was
+  lost. A network failure after a request went out is told apart from one before it; Bluesky
+  copies are made under a record key chosen first, which a retry looks up, and YouTube uploads
+  resume where they stopped; a Facebook or Instagram post whose publishing call got no answer
+  is shown to its author as "Maybe posted", with Retry, and never retried by itself.
+  Instagram copies keep their id when their link cannot be read. Spec
+  `docs/superpowers/specs/2026-11-13-connected-accounts-design.md` (rulings C1 to C13;
   `83aa1637`, `5f5f2e77`, `23529744`, `6516ec15`, `c16d585b`, `e527654d`).
 
 There are 146 `feat` commits. The first twelve came during the coverage

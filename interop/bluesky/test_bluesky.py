@@ -112,8 +112,19 @@ def test_a_microblog_goes_to_bluesky_and_its_deletion_follows(connected, did, ht
     connected.goto(f"{PIEFED}/post/{post['id']}")
     assert 'Posted' in connected.inner_text('#crossposts')
 
+    # spec 19.2: PieFed chose the record key (a TID), and a retry asks getRecord whether an earlier attempt made it
+    rkey = record['uri'].rsplit('/', 1)[-1]
+    assert len(rkey) == 13
+
+    def lookup():
+        return http.get(f'{PDS}/xrpc/com.atproto.repo.getRecord',
+                        params={'repo': did, 'collection': 'app.bsky.feed.post', 'rkey': rkey})
+    assert lookup().status_code == 200
+
     piefed.delete(post['id'])
     wait_for(lambda: copied() is None, timeout=60)
+    gone = lookup()   # what PieFed reads as "no such record": anything else stops a retry
+    assert (gone.status_code, gone.json().get('error')) == (400, 'RecordNotFound'), gone.text
 
 
 def test_disconnecting_forgets_the_account(connected):

@@ -10,10 +10,13 @@ A row of social_crosspost follows one copy:
     skipped  never sent, for a reason the author is shown (an NSFW post on a service that takes none)
     deleted  the copy is gone, or was never made before the post went
     manual   the service cannot delete it: the author deletes it there by hand (Instagram Login, C6)
+    unconfirmed  its publishing call went out and no answer came back, on a service that cannot be asked again
+             safely: it may be there. Never retried by itself; the author is told, checks, and may retry (spec 19.2)
 
 Work is claimed by moving `next_attempt_at` an hour ahead in one conditional UPDATE, so the per-minute sweep (`flask
 send-queue`) and an immediate task never do the same row twice, and a worker that died leaves the row to the sweep
-an hour later. A transient failure sets the next attempt by backoff; five failed sends make the row `failed`.
+an hour later. A transient failure sets the next attempt by backoff; five failed sends make the row `failed`. What a
+send did so far (`progress`) is kept on the row across attempts, so a retry carries on rather than starting over.
 """
 from datetime import timedelta
 
@@ -23,12 +26,12 @@ from sqlalchemy import update
 
 from app import celery, db
 from app.clock import utcnow
-from app.connections import SERVICES, AuthFailed, QuotaWait, ServiceError, Transient
+from app.connections import SERVICES, AuthFailed, Progress, QuotaWait, ServiceError, Transient, Unconfirmed
 from app.connections.apps import KINDS, current, enabled, for_domain
 from app.connections.eligibility import DROP, refusal
 from app.connections.tokens import REAUTH, needs_reconnecting, open_tokens, usable_tokens
-from app.constants import POST_STATUS_PUBLISHED
-from app.models import Post, SocialConnection, SocialCrosspost, User
+from app.constants import NOTIF_DEFAULT, POST_STATUS_PUBLISHED
+from app.models import Notification, Post, SocialConnection, SocialCrosspost, User
 from app.utils import get_task_session, patch_db_session
 
 MAX_ATTEMPTS = 5
@@ -128,6 +131,11 @@ def post_gone(post: Post) -> None:
             work.append(row)
         elif row.state in ('waiting', 'queued', 'failed'):
             row.state = 'deleted'
+        elif row.state == 'unconfirmed':   # it may be there, under an id never learnt
+            service = SERVICES.get(row.service)
+            row.state, row.next_attempt_at = 'manual', None
+            row.last_error = _('If it was posted on %(service)s, delete it there by hand.',
+                               service=service.label if service is not None else row.service)
     db.session.commit()
     for row in work:
         run(row.id)
@@ -137,13 +145,14 @@ def post_restored(post: Post) -> None:
     """The post is back: its deleted copies are sent again as new posts (spec §7)."""
     for row in SocialCrosspost.query.filter_by(post_id=post.id, state='deleted').all():
         row.state, row.remote_id, row.remote_url, row.last_error, row.attempts = 'waiting', None, None, None, 0
+        row.progress = None   # a new copy: nothing of the deleted one's sending carries over
     db.session.commit()
     if post.status == POST_STATUS_PUBLISHED:   # a scheduled or processing post keeps them waiting for its publish
         post_published(post)
 
 
 def retry(row: SocialCrosspost) -> None:
-    """The author asked for a failed copy to be tried again."""
+    """The author asked for a failed or unconfirmed copy to be tried again."""
     row.state, row.attempts, row.last_error, row.next_attempt_at = 'queued', 0, None, utcnow()
     db.session.commit()
     run(row.id)
@@ -287,9 +296,10 @@ def _perform(row_id: int, work: str, service, connection) -> None:
         row = db.session.get(SocialCrosspost, row_id)
         post = row.post
         if work == 'send':
-            sent = service.send(post, tokens, connection)
+            sent = service.send(post, tokens, connection, Progress(row.progress, save=lambda data: _keep(row_id, data)))
+            row = db.session.get(SocialCrosspost, row_id)
             row.remote_id, row.remote_url, row.sent_at = sent.remote_id[:512], (sent.remote_url or '')[:1024] or None, utcnow()
-            row.state = 'sent'
+            row.state, row.progress = 'sent', None
         elif work == 'edit':
             service.edit(post, tokens, row.remote_id)
             row.state, row.edited_at = 'sent', utcnow()
@@ -309,6 +319,15 @@ def _perform(row_id: int, work: str, service, connection) -> None:
         else:
             delay = max(BACKOFF[min(row.attempts, len(BACKOFF)) - 1], failure.retry_after or 0)
             row.next_attempt_at, row.last_error = utcnow() + timedelta(seconds=delay), failure.message
+    except Unconfirmed as failure:
+        row = db.session.get(SocialCrosspost, row_id)
+        row.attempts += 1
+        row.state, row.next_attempt_at, row.last_error = 'unconfirmed', None, failure.message
+        db.session.add(Notification(
+            title=_('Your post may be on %(service)s already: check %(name)s before trying again',
+                    service=service.label, name=connection.remote_name)[:150],
+            url=f'/post/{row.post_id}', user_id=connection.user_id, author_id=connection.user_id,
+            notif_type=NOTIF_DEFAULT, subtype='crosspost_unconfirmed', targets={'crosspost_id': row.id}))
     except AuthFailed as failure:
         row = db.session.get(SocialCrosspost, row_id)
         needs_reconnecting(row.connection, service, failure.message)
@@ -324,6 +343,13 @@ def _perform(row_id: int, work: str, service, connection) -> None:
         row.attempts += 1
         _give_up(row, work, _('Something went wrong here (%(error)s).', error=type(failure).__name__),
                  commit=False)
+    db.session.commit()
+
+
+def _keep(row_id: int, data: dict) -> None:
+    """Store a send's progress now, ahead of the call it guards (Progress.save)."""
+    row = db.session.get(SocialCrosspost, row_id)
+    row.progress = data
     db.session.commit()
 
 

@@ -5,6 +5,7 @@ each. This package holds what every service shares: the Service interface and it
 sealed tokens (tokens.py), which posts go where (eligibility.py) and the sending, editing and deleting of copies
 (dispatch.py). Each service is a module that registers one Service subclass.
 """
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -31,6 +32,26 @@ class Transient(ServiceError):
         self.retry_after = retry_after
 
 
+class MaybeSent(Transient):
+    """The request went out and no answer came back (a read timeout, a dropped connection, the call's deadline):
+    the service may have acted on it (spec 19.2). Worth trying again where doing it twice does no harm."""
+
+
+class Unconfirmed(ServiceError):
+    """A copy's publishing call went out and no answer came back, and the service has no way to make it safe to
+    send again (spec 19.2): it may be there. Never retried by itself; the author checks and may retry."""
+
+
+@contextmanager
+def publishing(label: str):
+    """Around the one call that makes a copy public on a service that cannot repeat it safely (Facebook, Instagram):
+    a MaybeSent from it becomes Unconfirmed."""
+    try:
+        yield
+    except MaybeSent:
+        raise Unconfirmed(f'{label} may have posted it: no answer came back. Check before trying again.') from None
+
+
 class Permanent(ServiceError):
     """The service refused this for good (a 4xx that is not about the token)."""
 
@@ -51,6 +72,20 @@ class QuotaWait(ServiceError):
 class Sent:
     remote_id: str
     remote_url: str | None = None
+
+
+class Progress:
+    """What a send has done so far, kept on its row across attempts (spec 19.2): Bluesky's record key, YouTube's
+    upload address. `save()` stores `data` at once, before the call it guards, so a worker that dies mid-call
+    leaves it for the next attempt."""
+
+    def __init__(self, data: dict | None = None, save=None):
+        self.data = dict(data or {})
+        self._save = save
+
+    def save(self) -> None:
+        if self._save is not None:
+            self._save(dict(self.data))
 
 
 @dataclass
@@ -110,7 +145,8 @@ class Service:
         """New tokens for expired ones. Raises AuthFailed when the service will not refresh them."""
         raise AuthFailed('This connection has expired.')
 
-    def send(self, post, tokens: dict, connection) -> Sent:
+    def send(self, post, tokens: dict, connection, progress: Progress | None = None) -> Sent:
+        """Make the copy. `progress` carries what earlier attempts at this copy did (spec 19.2)."""
         raise NotImplementedError
 
     def edit(self, post, tokens: dict, remote_id: str) -> None:

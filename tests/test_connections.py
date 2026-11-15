@@ -19,8 +19,8 @@ from flask import g
 from app import cli, db
 from app.api.alpha.utils.post import post_post
 from app.clock import utcnow
-from app.connections import (KEY, SERVICES, AuthFailed, Permanent, QuotaWait, Service, ServiceError, Transient,
-                             service_label, setting_name)
+from app.connections import (KEY, SERVICES, AuthFailed, MaybeSent, Permanent, Progress, QuotaWait, Service,
+                             ServiceError, Transient, Unconfirmed, publishing, service_label, setting_name)
 from app.connections.apps import connections_offered, enabled, enabled_services
 from app import connections
 from app.connections import dispatch, register
@@ -308,6 +308,47 @@ def test_a_success_and_an_unreachable_service(app, http_mock):
     with pytest.raises(Transient) as raised:
         call('GET', f'{BASE}/down')
     assert raised.value.message == 'Could not reach the service (ConnectError).'
+    assert not isinstance(raised.value, MaybeSent)
+
+
+@pytest.mark.parametrize('failure', [httpx.ConnectTimeout('slow'), httpx.PoolTimeout('busy'),
+                                     httpx.UnsupportedProtocol('ftp')], ids=['connect-timeout', 'pool', 'protocol'])
+def test_a_request_that_never_left_is_plainly_transient(app, http_mock, failure):
+    http_mock.post(f'{BASE}/posts').mock(side_effect=failure)
+    with pytest.raises(Transient) as raised:
+        call('POST', f'{BASE}/posts')
+    assert not isinstance(raised.value, MaybeSent)
+
+
+@pytest.mark.parametrize('failure', [httpx.ReadTimeout('slow'), httpx.WriteTimeout('slow'), httpx.ReadError('reset'),
+                                     httpx.WriteError('reset'), httpx.RemoteProtocolError('cut')],
+                         ids=['read-timeout', 'write-timeout', 'read', 'write', 'protocol'])
+def test_a_request_that_left_and_got_no_answer_may_have_been_acted_on(app, http_mock, failure):
+    http_mock.post(f'{BASE}/posts').mock(side_effect=failure)
+    with pytest.raises(MaybeSent) as raised:
+        call('POST', f'{BASE}/posts')
+    assert raised.value.message == f'No answer came back from the service ({type(failure).__name__}).'
+
+
+def test_publishing_turns_no_answer_into_unconfirmed_and_lets_the_rest_through():
+    with pytest.raises(Unconfirmed) as raised:
+        with publishing('Fake'):
+            raise MaybeSent('no answer')
+    assert raised.value.message == 'Fake may have posted it: no answer came back. Check before trying again.'
+    with pytest.raises(Transient) as plain:
+        with publishing('Fake'):
+            raise Transient('HTTP 503')
+    assert not isinstance(plain.value, Unconfirmed)
+
+
+def test_progress_saves_a_copy_of_its_data():
+    saved = []
+    progress = Progress({'a': 1}, save=saved.append)
+    progress.data['b'] = 2
+    progress.save()
+    progress.data['c'] = 3
+    assert saved == [{'a': 1, 'b': 2}]
+    Progress().save()   # none to save to: nothing happens
 
 
 # --------------------------------------------------------------------------
@@ -701,6 +742,70 @@ def test_a_failed_copy_can_be_retried(world, http_mock):
     assert (row.state, row.attempts, row.last_error) == ('sent', 1, None)
 
 
+def test_no_answer_to_a_send_is_tried_again_carrying_its_progress(world, http_mock):
+    route = http_mock.post(f'{BASE}/posts')
+    route.side_effect = [httpx.ReadTimeout('slow'), httpx.Response(200, json=SENT)]
+    world.service.progress_steps = [('key', 'k-1')]
+    row = a_row(world, a_post(world))
+    perform(row.id)
+    row = fresh(row)
+    assert (row.state, row.attempts, row.progress) == ('queued', 1, {'key': 'k-1'})
+    assert row.last_error == 'No answer came back from the service (ReadTimeout).'
+    seen = []
+    world.service.progress_steps = []
+    original = FakeService.send
+    world.service.send = lambda post, tokens, connection, progress=None: (
+        seen.append(dict(progress.data)) or original(world.service, post, tokens, connection, progress))
+    row.next_attempt_at = utcnow() - timedelta(seconds=1)
+    db.session.commit()
+    perform(row.id)
+    row = fresh(row)
+    assert seen == [{'key': 'k-1'}]
+    assert (row.state, row.remote_id, row.progress) == ('sent', 'r1', None)
+
+
+def test_an_unconfirmed_copy_waits_for_the_author(world, monkeypatch):
+    def unconfirmed(post, tokens, connection, progress=None):
+        raise Unconfirmed('Fake may have posted it: no answer came back. Check before trying again.')
+    monkeypatch.setattr(world.service, 'send', unconfirmed)
+    row = a_row(world, a_post(world))
+    perform(row.id)
+    row = fresh(row)
+    assert (row.state, row.next_attempt_at, row.attempts) == ('unconfirmed', None, 1)
+    assert row.last_error.startswith('Fake may have posted it')
+    note = Notification.query.filter_by(subtype='crosspost_unconfirmed', user_id=world.author.id).one()
+    assert note.url == f'/post/{row.post_id}' and note.targets == {'crosspost_id': row.id}
+    assert 'check @me@fake' in note.title
+    perform(row.id)   # never retried by itself
+    assert fresh(row).attempts == 1
+
+
+def test_an_unconfirmed_copy_can_be_retried_by_its_author(world, http_mock):
+    http_mock.post(f'{BASE}/posts').respond(200, json=SENT)
+    row = a_row(world, a_post(world), state='unconfirmed', last_error='Fake may have posted it')
+    response = world.client.post(f'/user/settings/crossposts/{row.id}/retry', data={'csrf_token': world.token})
+    assert response.status_code == 302 and fresh(row).state == 'sent'
+
+
+def test_a_deleted_post_leaves_an_unconfirmed_copy_to_the_author(world):
+    post = a_post(world)
+    row = a_row(world, post, state='unconfirmed')
+    gone = SocialCrosspost(post_id=post.id, connection_id=None, service='removed', state='unconfirmed')
+    db.session.add(gone)
+    db.session.commit()
+    post_gone(post)
+    row, gone = fresh(row), fresh(gone)
+    assert (row.state, row.last_error) == ('manual', 'If it was posted on Fake, delete it there by hand.')
+    assert (gone.state, gone.last_error) == ('manual', 'If it was posted on removed, delete it there by hand.')
+
+
+def test_a_restored_post_starts_its_copies_afresh(world):
+    post = a_post(world, status=POST_STATUS_SCHEDULED)
+    row = a_row(world, post, state='deleted', remote_id='r1', progress={'key': 'old'})
+    post_restored(post)
+    assert fresh(row).progress is None
+
+
 def test_disconnecting_revokes_and_keeps_the_copies(world, http_mock):
     http_mock.post(f'{BASE}/revoke').respond(500)   # a failed revoke never keeps a member connected
     row = a_row(world, a_post(world), state='sent', remote_id='r1')
@@ -986,14 +1091,16 @@ def test_the_author_sees_where_the_post_went(world, monkeypatch):
     post = a_post(world)
     states = [('sent', {'remote_url': f'{BASE}/r1'}), ('sent', {}), ('waiting', {}), ('queued', {'last_error': 'HTTP 503'}),
               ('failed', {'last_error': 'HTTP 400: no'}), ('skipped', {'last_error': 'Skipped: NSFW'}),
-              ('manual', {'last_error': 'Delete it by hand', 'remote_url': f'{BASE}/m'}), ('deleted', {})]
+              ('manual', {'last_error': 'Delete it by hand', 'remote_url': f'{BASE}/m'}), ('deleted', {}),
+              ('unconfirmed', {'last_error': 'Fake may have posted it'})]
     for state, columns in states:
         db.session.add(SocialCrosspost(post_id=post.id, connection_id=world.connection.id if state == 'failed' else None,
                                        service='fake', state=state, **columns))
     db.session.commit()
     page = world.client.get(f'/post/{post.id}').data
     for text in (b'Your connected accounts', f'{BASE}/r1'.encode(), b'Waiting for this post', b'Working on it',
-                 b'HTTP 400: no', b'Retry', b'Skipped: NSFW', b'Delete it by hand', b'Deleted'):
+                 b'HTTP 400: no', b'Retry', b'Skipped: NSFW', b'Delete it by hand', b'Deleted',
+                 b'Maybe posted: Fake may have posted it'):
         assert text in page, text
     post.user_id = 1   # someone else's post: one client per test, since g keeps its first user
     db.session.commit()

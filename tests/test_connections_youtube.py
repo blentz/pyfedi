@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from app.clock import utcnow
-from app.connections import SERVICES, AuthFailed, Permanent, QuotaWait, Transient
+from app.connections import SERVICES, AuthFailed, MaybeSent, Permanent, Progress, QuotaWait, Transient
 from app.connections import youtube
 from app.connections.youtube import (YouTubeService, answer_of, next_reset, snippet_of, take_upload)
 from app.constants import POST_TYPE_IMAGE, POST_TYPE_VIDEO
@@ -246,8 +246,7 @@ def test_an_upload_from_storage(app, yt, http_mock, monkeypatch):
     ('answered-500', Transient), ('unreachable', Transient), ('too-large', Permanent), ('not-https', Permanent)])
 def test_a_stored_video_that_cannot_be_read(app, yt, http_mock, monkeypatch, case, failure):
     monkeypatch.setattr('app.connections.content.media_local_path', lambda post: None)
-    _session(http_mock)
-    url = 'https://piefed.example/static/media/v.mp4'
+    url = 'https://piefed.example/static/media/v.mp4'   # read before any upload opens: none is
     if case == 'answered-500':
         http_mock.get(url).respond(500)
     elif case == 'unreachable':
@@ -261,7 +260,8 @@ def test_a_stored_video_that_cannot_be_read(app, yt, http_mock, monkeypatch, cas
 
 
 @pytest.mark.parametrize('location', [None, 'https://evil.example/upload'], ids=['none', 'elsewhere'])
-def test_an_upload_session_that_did_not_open(app, yt, http_mock, location):
+def test_an_upload_session_that_did_not_open(app, yt, http_mock, monkeypatch, tmp_path, location):
+    _local_video(monkeypatch, tmp_path)
     _session(http_mock, location)
     with pytest.raises(Transient):
         yt.send(a_post(), tokens(), None)
@@ -277,10 +277,73 @@ def test_an_upload_with_no_id_in_the_answer(app, yt, http_mock, monkeypatch, tmp
         yt.send(a_post(), tokens(), None)
 
 
-def test_an_upload_past_the_allowance_waits(app, yt, monkeypatch):
+def test_an_upload_past_the_allowance_waits(app, yt, monkeypatch, tmp_path):
+    _local_video(monkeypatch, tmp_path)
     monkeypatch.setitem(app.config, 'YOUTUBE_DAILY_UPLOADS', 0)
     with pytest.raises(QuotaWait):
         yt.send(a_post(), tokens(), None)
+
+
+def _local_video(monkeypatch, tmp_path, data=b'v') -> bytes:
+    video = tmp_path / 'v.mp4'
+    video.write_bytes(data)
+    monkeypatch.setattr('app.connections.content.media_local_path', lambda post: str(video))
+    return data
+
+
+DATA = bytes(range(250)) * 12   # 3000 bytes
+
+
+def test_an_upload_keeps_its_address_before_sending_the_video(app, yt, http_mock, monkeypatch, tmp_path):
+    _local_video(monkeypatch, tmp_path, DATA)
+    _session(http_mock)
+    http_mock.put(SESSION).mock(side_effect=httpx.ReadTimeout('slow'))
+    saved = []
+    progress = Progress(save=saved.append)
+    with pytest.raises(MaybeSent):
+        yt.send(a_post(), tokens(), None, progress)
+    assert saved == [{'upload': SESSION}] and progress.data == {'upload': SESSION}
+
+
+@pytest.mark.parametrize('received, offset', [('bytes=0-999', 1000), (None, 0)], ids=['part', 'none'])
+def test_an_unfinished_upload_carries_on_where_it_stopped(app, yt, http_mock, monkeypatch, tmp_path, received, offset):
+    _local_video(monkeypatch, tmp_path, DATA)   # no new upload may open (respx refuses one), so none is counted
+    put = http_mock.put(SESSION)
+    put.side_effect = [httpx.Response(308, headers={'Range': received} if received else {}),
+                       httpx.Response(200, json={'id': 'vid-7'})]
+    sent = yt.send(a_post(), tokens(), None, Progress({'upload': SESSION}))
+    assert sent.remote_id == 'vid-7'
+    query, rest = put.calls[0].request, put.calls[1].request
+    assert query.headers['Content-Range'] == 'bytes */3000' and query.read() == b''
+    assert rest.read() == DATA[offset:] and rest.headers['Content-Length'] == str(3000 - offset)
+    assert rest.headers.get('Content-Range') == (f'bytes {offset}-2999/3000' if offset else None)
+
+
+def test_a_finished_upload_is_the_copy(app, yt, http_mock, monkeypatch, tmp_path):
+    _local_video(monkeypatch, tmp_path, DATA)
+    put = http_mock.put(SESSION).respond(201, json={'id': 'vid-8'})
+    assert yt.send(a_post(), tokens(), None, Progress({'upload': SESSION})).remote_id == 'vid-8'
+    assert put.call_count == 1
+
+
+@pytest.mark.parametrize('status', [404, 410])
+def test_an_upload_that_is_gone_starts_again(app, yt, http_mock, monkeypatch, tmp_path, status):
+    _local_video(monkeypatch, tmp_path, DATA)
+    fresh = f'{UPLOAD}/videos?uploadType=resumable&upload_id=new'
+    session = _session(http_mock, fresh)
+    http_mock.put(SESSION).respond(status)
+    put = http_mock.put(fresh).respond(200, json={'id': 'vid-9'})
+    saved = []
+    progress = Progress({'upload': SESSION}, save=saved.append)
+    assert yt.send(a_post(), tokens(), None, progress).remote_id == 'vid-9'
+    assert session.call_count == 1 and saved == [{'upload': fresh}] and put.calls.last.request.read() == DATA
+
+
+def test_an_upload_whose_state_cannot_be_read(app, yt, http_mock, monkeypatch, tmp_path):
+    _local_video(monkeypatch, tmp_path, DATA)
+    http_mock.put(SESSION).respond(503)
+    with pytest.raises(Transient):
+        yt.send(a_post(), tokens(), None, Progress({'upload': SESSION}))
 
 
 def test_an_edit_and_a_delete(app, yt, http_mock):

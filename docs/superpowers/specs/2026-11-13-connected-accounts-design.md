@@ -413,9 +413,10 @@ went out is retried and may make a second copy.
   `MaybeSent`, a Transient.
 - Edits and deletes are idempotent: `MaybeSent` retries them as any Transient.
 - A send handles it per service:
-  - **Bluesky** writes with `com.atproto.repo.applyWrites`/`putRecord` under a record key (a TID) chosen before the
-    first attempt and kept on the row, so a retry overwrites the same record: retried as Transient. Blobs are
-    content-addressed, so re-uploading them is harmless.
+  - **Bluesky** makes the record under a record key (a TID) chosen before the first attempt and kept on the row
+    (`createRecord` with `rkey`). An attempt after one that got no answer first reads `getRecord` for that key
+    (public, no token): the record there is the copy; `400 RecordNotFound` means make it. `putRecord` would need
+    the `update` scope, which the connections were not granted. Blobs are content-addressed: re-uploading is harmless.
   - **YouTube** keeps the resumable upload's session address on the row. A retry asks it how far the upload got
     (`Content-Range: bytes */<size>`) and resumes, or reads the finished video's id from its answer.
   - **Facebook and Instagram** have no idempotency key. `MaybeSent` from the publishing call (Page `feed`, `photos`,
@@ -426,15 +427,14 @@ went out is retried and may make a second copy.
 
 ### 19.3 Accepted, then failed (C13 2)
 
-Once the publishing call answered with an id, nothing after it (a permalink lookup, a video's follow-up step) may
-lose that id. A service raises `PublishedThen(sent, message)`: dispatch stores `sent`'s id and address (the address
-falls back to the service's built one) and the row is `sent`, with the message in `last_error` for the author.
-Edits and deletes then reach the copy.
+Once the publishing call answered with an id, nothing after it may lose that id. Reading the services found one
+step that could: Instagram's permalink lookup, which caught only a Transient; it now catches any failure and the copy
+is `sent` without its link. YouTube's thumbnail already never fails the copy, and Facebook builds its addresses from
+the ids it has. A shared `PublishedThen` was not needed.
 
 ### 19.4 Processing (C13 3)
 
-- New row state `processing` and a JSON column `pending` on `social_crosspost` (also holding 19.2's record key and
-  upload address). Migration after `e6a2c9d4f8b1`.
+- New row state `processing`; its data goes in `progress` (19.2's column).
 - A service's `send` may return `Pending(data)`: the row is `processing`, `next_attempt_at` a poll interval ahead.
   The sweep claims due `processing` rows like queued ones and calls `service.check(connection, row)`, a read-only
   status call, which answers still pending (new data), ready, or failed. On ready, `service.finish(...)` makes the
@@ -461,7 +461,8 @@ pause (§18.3).
 
 ### 19.7 Steps
 
-- **Q1**: 19.2 and 19.3, with the `pending` column.
+- **Q1**: 19.2 and 19.3: `social_crosspost.progress` (JSON) and `state` widened to 20 characters, migration
+  `f3b7d1a9c5e2`; `Progress` passed to `send` and saved before the call it guards.
 - **Q2**: 19.4, Instagram moved onto it.
 - **Q3**: 19.5, spike first.
 - **Q4**: 19.6.

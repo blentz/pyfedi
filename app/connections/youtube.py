@@ -16,6 +16,7 @@ as it does when YouTube itself answers that the quota is spent.
 import base64
 import hashlib
 import os
+import re
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -26,7 +27,7 @@ from flask import current_app
 from flask_babel import _
 
 import app as app_pkg
-from app.connections import (Account, AuthFailed, Permanent, QuotaWait, Sent, Service, Transient, register)
+from app.connections import (Account, AuthFailed, Permanent, Progress, QuotaWait, Sent, Service, Transient, register)
 from app.connections.apps import App, current
 from app.connections.content import StoredVideo, cut, plain_text
 from app.connections.eligibility import uploaded_video
@@ -198,9 +199,28 @@ class YouTubeService(Service):
                 'refresh_token': answer.get('refresh_token') or tokens['refresh_token'],
                 'expires_at': time.time() + int(answer.get('expires_in') or 3600)}
 
-    def send(self, post, tokens, connection):
+    def send(self, post, tokens, connection, progress=None):
+        """The video by a resumable upload whose address is kept (spec 19.2): an attempt after one that got no answer
+        asks the upload how far that one got and carries on, or reads the finished video from it, so a video is never
+        uploaded twice. Only a new upload counts against the day's allowance."""
+        progress = progress or Progress()
         token = tokens['access_token']
         media = media_of(post) or {}
+        with StoredVideo(post, MAX_VIDEO_BYTES) as video:
+            size = os.fstat(video.fileno()).st_size
+            location = progress.data.get('upload')
+            uploaded = self._resume(location, token, video, size, media) if location else None
+            if uploaded is None:
+                location = progress.data['upload'] = self._open_upload(post, token, media)
+                progress.save()
+                uploaded = self._put(location, token, video, 0, size, media)
+        video_id = uploaded.get('id')
+        if not video_id:
+            raise Transient(_('YouTube took the video but named no id.'))
+        self._thumbnail(post, token, video_id)
+        return Sent(remote_id=str(video_id), remote_url=f'https://www.youtube.com/watch?v={video_id}')
+
+    def _open_upload(self, post, token, media) -> str:
         take_upload()
         session = fetch('POST', f'{UPLOAD}/videos', params={'uploadType': 'resumable', 'part': 'snippet,status'},
                         json={'snippet': snippet_of(post),
@@ -211,16 +231,28 @@ class YouTubeService(Service):
         location = session.headers.get('Location')
         if not location or not location.startswith(f'{UPLOAD}/'):
             raise Transient(_('YouTube opened no upload.'))
-        with StoredVideo(post, MAX_VIDEO_BYTES) as video:
-            size = os.fstat(video.fileno()).st_size
-            uploaded = api('PUT', location, token, content=_chunks(video), seconds=600 + size // 500_000,
-                           headers={'Content-Type': media.get('mime') or 'application/octet-stream',
-                                    'Content-Length': str(size)})
-        video_id = uploaded.get('id')
-        if not video_id:
-            raise Transient(_('YouTube took the video but named no id.'))
-        self._thumbnail(post, token, video_id)
-        return Sent(remote_id=str(video_id), remote_url=f'https://www.youtube.com/watch?v={video_id}')
+        return location
+
+    def _put(self, location, token, video, offset: int, size: int, media) -> dict:
+        """The video from `offset` on."""
+        video.seek(offset)
+        headers = {'Content-Type': media.get('mime') or 'application/octet-stream', 'Content-Length': str(size - offset)}
+        if offset:
+            headers['Content-Range'] = f'bytes {offset}-{size - 1}/{size}'
+        return api('PUT', location, token, content=_chunks(video), seconds=600 + (size - offset) // 500_000,
+                   headers=headers)
+
+    def _resume(self, location, token, video, size: int, media) -> dict | None:
+        """What became of an earlier attempt's upload: the video, when it finished or once the rest is sent; None
+        when the upload is gone and a new one has to start."""
+        status = fetch('PUT', location, headers={'Authorization': f'Bearer {token}', 'Content-Length': '0',
+                                                 'Content-Range': f'bytes */{size}'})
+        if status.status_code in (404, 410):
+            return None
+        if status.status_code != 308:   # finished (200, 201), or an error answer_of raises
+            return answer_of(status)
+        received = re.fullmatch(r'bytes=0-(\d+)', status.headers.get('Range', ''))
+        return self._put(location, token, video, int(received.group(1)) + 1 if received else 0, size, media)
 
     def _thumbnail(self, post, token, video_id) -> None:
         """The post's poster frame as the video's thumbnail: a channel that may not set one says so, and that is

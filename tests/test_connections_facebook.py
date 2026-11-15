@@ -16,7 +16,7 @@ import pytest
 from PIL import Image
 
 from app.clock import utcnow
-from app.connections import SERVICES, AuthFailed, Permanent, Transient
+from app.connections import SERVICES, AuthFailed, MaybeSent, Permanent, Transient, Unconfirmed
 from app.connections import facebook
 from app.connections.facebook import FacebookService, graph, message_of
 from app.constants import POST_TYPE_ARTICLE, POST_TYPE_LINK
@@ -254,6 +254,35 @@ def test_a_video_upload_that_does_not_complete(app, fb, http_mock, monkeypatch, 
     post, _data = _video_post(monkeypatch, tmp_path)
     http_mock.post(f'{GRAPH}/page-1/videos').side_effect = [httpx.Response(200, json=a) for a in answers]
     with pytest.raises(Transient):
+        fb.send(post, tokens(), page())
+
+
+def test_no_answer_to_a_publishing_call_is_unconfirmed(app, fb, http_mock, monkeypatch, tmp_path):
+    http_mock.post(f'{GRAPH}/page-1/photos').mock(side_effect=httpx.ReadTimeout('slow'))
+    with pytest.raises(Unconfirmed):
+        fb.send(a_post(body='x', image_id=1, image=_png(tmp_path)), tokens(), page())
+    http_mock.post(f'{GRAPH}/page-1/feed').mock(side_effect=httpx.ReadTimeout('slow'))
+    with pytest.raises(Unconfirmed):
+        fb.send(a_post(body='text only'), tokens(), page())
+    post, _data = _video_post(monkeypatch, tmp_path)
+    http_mock.post(f'{GRAPH}/page-1/videos').side_effect = [
+        httpx.Response(200, json={'upload_session_id': 's', 'video_id': 'v', 'start_offset': '0', 'end_offset': '0'}),
+        httpx.ReadTimeout('slow')]
+    with pytest.raises(Unconfirmed):
+        fb.send(post, tokens(), page())
+
+
+def test_no_answer_before_anything_is_public_is_tried_again(app, fb, http_mock, monkeypatch, tmp_path):
+    http_mock.post(f'{GRAPH}/page-1/photos').mock(side_effect=httpx.ReadTimeout('slow'))   # an unpublished photo
+    gallery = a_post(body='trip', gallery_count=2, gallery=[_png(tmp_path, 'a.png'), _png(tmp_path, 'b.png')])
+    with pytest.raises(MaybeSent) as raised:
+        fb.send(gallery, tokens(), page())
+    assert not isinstance(raised.value, Unconfirmed)
+    post, _data = _video_post(monkeypatch, tmp_path)
+    http_mock.post(f'{GRAPH}/page-1/videos').side_effect = [
+        httpx.Response(200, json={'upload_session_id': 's', 'video_id': 'v', 'start_offset': '0', 'end_offset': '10'}),
+        httpx.ReadTimeout('slow')]
+    with pytest.raises(MaybeSent):
         fb.send(post, tokens(), page())
 
 

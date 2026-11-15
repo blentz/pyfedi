@@ -17,11 +17,12 @@ from jwt.algorithms import ECAlgorithm
 from PIL import Image
 
 from app import cli
-from app.connections import AuthFailed, Permanent, Transient, setting_name
+from app.connections import AuthFailed, MaybeSent, Permanent, Progress, Transient, setting_name
 from app.connections import bluesky, content
 from app.connections.bluesky import (BlueskyService, as_jpeg, authorization_server, build_record, client_assertion,
                                      client_metadata, compose, did_document, dpop_proof, facets, handle_of,
-                                     image_bytes, jwks, labels, new_key_jwk, pds_of, plain_text, resolve_handle)
+                                     existing_record, image_bytes, jwks, labels, new_key_jwk, new_tid, pds_of, plain_text,
+                                     resolve_handle)
 from app.constants import POST_TYPE_ARTICLE, POST_TYPE_LINK
 from app.sealing import generate_key
 from app.utils import set_setting
@@ -500,6 +501,57 @@ def test_sending_and_deleting(app, bsky, http_mock):
     assert request.headers['Authorization'] == 'DPoP at-1'
     assert jwt.decode(request.headers['DPoP'], options={'verify_signature': False})['nonce'] == 'n-9'
     assert json.loads(delete.calls.last.request.read())['rkey'] == '3kabc'
+
+
+def test_a_record_key_is_a_tid_and_they_sort_by_time():
+    first, second = new_tid(), new_tid()
+    assert len(first) == 13 and set(first) <= set(bluesky.TID_CHARS) and first[0] in '234567abcdefghij'
+    assert first[:9] <= second[:9]   # the leading characters are time, microseconds apart
+
+
+GET_RECORD = f'{PDS}/xrpc/com.atproto.repo.getRecord'
+
+
+def test_a_send_chooses_its_record_key_first_and_keeps_it(app, bsky, http_mock):
+    create = http_mock.post(f'{PDS}/xrpc/com.atproto.repo.createRecord')
+    create.side_effect = [httpx.ReadTimeout('slow'), httpx.Response(200, json={'uri': f'at://{DID}/app.bsky.feed.post/x'})]
+    lookup = http_mock.get(GET_RECORD).respond(400, json={'error': 'RecordNotFound', 'message': 'Could not locate'})
+    saved = []
+    progress = Progress(save=saved.append)
+    with app.test_request_context():
+        with pytest.raises(MaybeSent):
+            bsky.service.send(a_post(body='hi'), tokens(), None, progress)
+        rkey = progress.data['rkey']
+        assert saved == [{'rkey': rkey}]   # stored before the call that got no answer
+        assert json.loads(create.calls.last.request.read())['rkey'] == rkey
+        bsky.service.send(a_post(body='hi'), tokens(), None, progress)   # nothing there: made under the same key
+    assert dict(lookup.calls.last.request.url.params) == {'repo': DID, 'collection': 'app.bsky.feed.post', 'rkey': rkey}
+    assert 'Authorization' not in lookup.calls.last.request.headers
+    assert json.loads(create.calls.last.request.read())['rkey'] == rkey and len(saved) == 1
+
+
+def test_a_record_an_earlier_attempt_made_is_the_copy(app, bsky, http_mock):   # no createRecord: respx refuses one
+    http_mock.get(GET_RECORD).respond(200, json={'uri': f'at://{DID}/app.bsky.feed.post/3kold', 'value': {}})
+    with app.test_request_context():
+        sent = bsky.service.send(a_post(body='hi'), tokens(), None, Progress({'rkey': '3kold'}))
+    assert sent.remote_id == f'at://{DID}/app.bsky.feed.post/3kold'
+    assert sent.remote_url == f'https://bsky.app/profile/{DID}/post/3kold'
+
+
+@pytest.mark.parametrize('answer, outcome', [
+    (httpx.Response(200, json={}), f'at://{DID}/app.bsky.feed.post/3kk'),
+    (httpx.Response(400, json={'error': 'InvalidRequest', 'message': 'bad'}), Permanent),
+    (httpx.Response(400, text='not json'), Permanent),
+    (httpx.Response(400, json=['odd']), Permanent),
+    (httpx.Response(502), Transient),
+], ids=['found-no-uri', 'other-error', 'not-json', 'not-object', 'down'])
+def test_what_the_record_lookup_makes_of_answers(app, bsky, http_mock, answer, outcome):
+    http_mock.get(GET_RECORD).mock(return_value=answer)
+    if isinstance(outcome, str):
+        assert existing_record(tokens(), '3kk') == outcome
+    else:
+        with pytest.raises(outcome):
+            existing_record(tokens(), '3kk')
 
 
 def test_the_key_command_prints_a_usable_key(app):

@@ -13,8 +13,12 @@
                     {{ _('Waiting for this post to be published') }}
                 {% elif row.state in ('queued', 'sending', 'editing', 'deleting') -%}
                     {{ _('Working on it') }}{% if row.last_error %} &middot; {{ row.last_error }}{% endif %}
-                {% elif row.state == 'failed' -%}
+                {% elif row.state in ('failed', 'unconfirmed') -%}
+                    {% if row.state == 'failed' -%}
                     <span class="text-danger">{{ _('Failed') }}{% if row.last_error %}: {{ row.last_error }}{% endif %}</span>
+                    {% else -%}
+                    <span class="text-warning-emphasis">{{ _('Maybe posted') }}: {{ row.last_error }}</span>
+                    {% endif -%}
                     {% if row.connection -%}
                     <form method="post" action="{{ url_for('user.user_crosspost_retry', crosspost_id=row.id) }}" class="d-inline">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

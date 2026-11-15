@@ -246,7 +246,7 @@ def user_crosspost_retry(crosspost_id):
     row = db.session.get(SocialCrosspost, crosspost_id)
     if row is None or row.post.user_id != current_user.id:
         abort(404)
-    if row.state != 'failed' or row.connection is None:
+    if row.state not in ('failed', 'unconfirmed') or row.connection is None:
         abort(400)
     retry(row)
     return redirect(f'/post/{row.post_id}')
