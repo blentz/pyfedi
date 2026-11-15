@@ -15,7 +15,8 @@ from sqlalchemy import func
 
 from app import db
 from app.models import Referral, User, utcnow
-from app.storefront import REFERRAL_MODE, DomainInfo, domain_base_url, open_registrations  # noqa: F401 (re-exported)
+from app.payments.gifts import referral_gift_code, start_gift, usable
+from app.storefront import REFERRAL_MODE, DomainInfo, domain_base_url, open_registrations, paid_registration  # noqa: F401 (re-exported)
 from app.utils import get_setting
 
 from app.permissions import user_access
@@ -40,9 +41,11 @@ def derive_code(user_name: str, nonce: str) -> str:
 
 
 def generate_code(user: User) -> str:
-    """Give `user` a fresh code, replacing (and so revoking) any earlier one. The caller commits."""
+    """Give `user` a fresh code, replacing (and so revoking) any earlier one, its gift kept (paid membership G2). The
+    caller commits."""
     user.referral_nonce = secrets.token_hex(16)
     user.referral_code = derive_code(user.user_name, user.referral_nonce)
+    referral_gift_code(user)
     return user.referral_code
 
 
@@ -115,9 +118,14 @@ def referrer_for(text: str | None, storefront: DomainInfo) -> User | None:
 
 
 def record_referral(referrer: User, referred: User) -> Referral:
-    """Add the who-referred-whom row for `referred`, made with `referrer`'s current code. The caller commits."""
+    """Add the who-referred-whom row for `referred`, made with `referrer`'s current code, and where `referred`'s domain
+    charges, the gift that code carries (paid membership PM3, G2, G4). The caller commits."""
     row = Referral(referrer_id=referrer.id, referred=referred, code=referrer.referral_code, created_at=utcnow())
     db.session.add(row)
+    gift = referral_gift_code(referrer)
+    if gift is not None and usable(gift) and paid_registration(referred.home_domain()):
+        db.session.flush()   # the gift's subscription names the new account
+        start_gift(referred, gift, commit=False)
     return row
 
 

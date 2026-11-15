@@ -4,6 +4,7 @@
     {% extends "base.html" -%}
 {% endif -%}
 
+{% from 'bootstrap5/form.html' import render_field %}
 {% block app_content %}
 <div class="row">
     <main class="col-12 col-lg-8 position-relative main_pane">
@@ -93,6 +94,15 @@
                 {% endfor -%}
             </div>
         {% endfor -%}
+
+        {% if redeem_form -%}
+            <h2 class="mt-4">{{ _('Have a code?') }}</h2>
+            <form method="post" action="{{ url_for('payments.redeem') }}" class="mb-4">
+                {{ redeem_form.hidden_tag() }}
+                {{ render_field(redeem_form.code) }}
+                {{ render_field(redeem_form.redeem) }}
+            </form>
+        {% endif -%}
 
         {% if payments -%}
             <h2 class="mt-4">{{ _('Your payments') }}</h2>

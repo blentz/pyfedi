@@ -61,7 +61,7 @@
                                 {% if paid_offer and tiers|length > 1 -%}
                                     {{ render_field(form.tier) }}
                                 {% endif -%}
-                                {% if site.registration_mode != "Open"%}
+                                {% if site.registration_mode != "Open" or paid_offer %}
                                     {% if form.question -%}
                                         <div class="mb-3 required">{{ form.question.label.text | safe }}
                                             {{ form.question(class_="form-control", maxlength=255) }}

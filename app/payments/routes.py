@@ -6,13 +6,15 @@ from flask import abort, flash, g, redirect, request, url_for
 from flask_babel import _
 from flask_login import current_user
 
-from app import limiter
+from app import db, limiter
 from app.models import MemberSubscription, Offer, Payment
 from app.onion import clearnet_only, is_onion_request
 from app.payments import bp
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.core import active_subscriptions_of, apply_event, cancel_subscription
+from app.payments.forms import RedeemCodeForm
+from app.payments.gifts import find_gift_code, start_gift
 from app.payments.offers import LINK, offers_here
 from app.payments.registration import joinable_tier_ids
 from app.storefront import current_storefront, paid_registration
@@ -72,7 +74,27 @@ def donations():
     return render_template('user/choose_plan.html', title=_('Your membership') if paid_domain else _('Choose a donation plan'),
                            groups=groups, links=links, subscriptions=subscriptions, payments=payments, titles=titles,
                            member=member, paid_domain=paid_domain, prepaid=prepaid,
-                           joinable=joinable_tier_ids(g.site) if current_user.is_anonymous else frozenset())
+                           joinable=joinable_tier_ids(g.site) if current_user.is_anonymous else frozenset(),
+                           redeem_form=RedeemCodeForm() if current_user.is_authenticated else None)
+
+
+@bp.route('/donations/redeem', methods=['POST'])
+@login_required
+@limiter.limit('10 per hour')   # a wrong code says nothing more than any other wrong code, but guessing is slowed
+def redeem():
+    """A member adds a gift code's free period (paid membership G4). A member's referral code is for joining, so it is
+    not found here (find_gift_code)."""
+    form = RedeemCodeForm()
+    if form.validate_on_submit():
+        gift = find_gift_code(form.code.data)
+        subscription = start_gift(current_user, gift) if gift is not None else None
+        if subscription is None:
+            db.session.rollback()   # the code's row lock
+            flash(_('That code cannot be used.'), 'error')
+        else:
+            flash(_('Thank you. Your subscription now runs until %(date)s.',
+                    date=subscription.current_period_end.strftime('%Y-%m-%d')))
+    return redirect(url_for('payments.donations'))
 
 
 @bp.route('/donations/checkout/<int:offer_id>', methods=['POST'])

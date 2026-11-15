@@ -9,7 +9,8 @@ from flask import current_app, g, session as flask_session
 from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.models import CmsPage, MemberSubscription, Offer, Site, SiteDomain, User, utcnow
+from app.models import CmsPage, MemberSubscription, Offer, PromoCode, Referral, Site, SiteDomain, User, utcnow
+from app.payments.gifts import DEFAULT_GIFT_DAYS_SETTING, DEFAULT_GIFT_OFFER_SETTING, referral_gift_code
 from app.utils import markdown_to_html
 from app.auth.oauth_util import refuse_new_oauth_account
 from app.auth.util import sync_user_with_ldap
@@ -282,7 +283,8 @@ class TestJoining:
     def test_the_page_lists_every_tier_with_its_price(self, env, rendering):
         body = env.client.get('/auth/register', base_url=env.base).get_data(as_text=True)
         assert 'Furcas' in body and '$6.66' in body and 'Astaroth' in body and '$16.66' in body
-        assert 'Gift' not in body   # a one-off is no tier
+        tiers = {field['value'] for field in BeautifulSoup(body, 'html.parser').find_all('input', attrs={'name': 'tier'})}
+        assert tiers == {str(env.knight.id), str(env.duke.id)}   # a one-off is no tier
 
     def test_a_tier_can_be_preselected(self, env, rendering):
         assert checked(env, f'/auth/register?offer={env.duke.id}') == [str(env.duke.id)]
@@ -401,3 +403,159 @@ class TestJoinButtons:
         page = BeautifulSoup(env.client.get('/donations', base_url=env.base).get_data(as_text=True), 'html.parser')
         hrefs = {link['href'] for link in page.find_all('a', string='Join')}
         assert hrefs == {f'/auth/register?offer={env.knight.id}', f'/auth/register?offer={env.duke.id}'}
+
+
+def gift_of(user):
+    return MemberSubscription.query.filter_by(user_id=user.id, provider_kind='gift').first()
+
+
+def default_gift(env, days=30, offer=None):
+    set_setting(DEFAULT_GIFT_OFFER_SETTING, (offer or env.knight).id)
+    set_setting(DEFAULT_GIFT_DAYS_SETTING, days)
+
+
+class TestReferralCodesCarryGifts:
+    """A member's referral code is a code row of its own, with the gift joining with it gives (PM7, plan G2)."""
+
+    def referrer(self, env):
+        set_setting(GENERATORS_SETTING, 'all')
+        user = member(env, 'referrer')
+        user.verified = True
+        db.session.commit()
+        return user
+
+    def test_a_new_code_takes_the_default_gift(self, env):
+        default_gift(env, days=30)
+        user = self.referrer(env)
+        generate_code(user)
+        db.session.commit()
+        row = referral_gift_code(user)
+        assert (row.code, row.kind, row.offer_id, row.days, row.owner_id) == (user.referral_code, 'gift', env.knight.id, 30, user.id)
+
+    def test_regenerating_keeps_the_gift_and_changes_the_code(self, env):
+        default_gift(env, days=30)
+        user = self.referrer(env)
+        generate_code(user)
+        db.session.commit()
+        row = referral_gift_code(user)
+        row.days = 365   # an admin gave this member's code a year
+        db.session.commit()
+        generate_code(user)
+        db.session.commit()
+        again = referral_gift_code(user)
+        assert again.id == row.id and again.days == 365 and again.code == user.referral_code
+        assert PromoCode.query.filter_by(owner_id=user.id).count() == 1
+
+    def test_a_code_made_before_gifts_gets_the_default_when_first_used(self, env):
+        user = self.referrer(env)
+        generate_code(user)
+        db.session.commit()
+        PromoCode.query.filter_by(owner_id=user.id).delete()
+        db.session.commit()
+        default_gift(env, days=60)
+        assert referral_gift_code(user).days == 60
+
+    def test_with_no_default_a_code_carries_no_gift(self, env):
+        user = self.referrer(env)
+        generate_code(user)
+        db.session.commit()
+        assert referral_gift_code(user).offer_id is None
+
+
+class TestJoiningWithACode:
+    """At /register on a paid default domain a working code admits for free, with its gift (PM3, plan G4)."""
+
+    def register(self, env, **values):
+        return env.client.post('/auth/register', data={**FORM, **values}, base_url=env.base)
+
+    @pytest.fixture
+    def referral(self, env):
+        env.site.registration_mode = 'ReferralCode'
+        env.site.application_question = 'Your code'
+        db.session.commit()
+        set_setting(GENERATORS_SETTING, 'all')
+        referrer = member(env, 'referrer')
+        referrer.verified = True
+        generate_code(referrer)
+        db.session.commit()
+        return referrer
+
+    def test_a_referral_code_starts_its_gift(self, env, referral, provider):
+        default_gift(env, days=30)
+        self.register(env, question=referral.referral_code, tier=env.duke.id)
+        user = joiner()
+        assert user.registration_pending_since is None and not provider.called
+        gift = gift_of(user)
+        assert gift.offer_id == env.knight.id and gift.current_period_end > utcnow() + timedelta(days=29)
+        assert Referral.query.filter_by(referred_id=user.id, referrer_id=referral.id).count() == 1
+
+    def test_a_referral_code_with_no_gift_admits_as_before(self, env, referral, provider):
+        self.register(env, question=referral.referral_code)
+        assert joiner() is not None and gift_of(joiner()) is None and not provider.called
+
+    def test_a_gift_code_admits_with_referral_codes_off(self, env, provider):
+        db.session.add(PromoCode(code='gift-year', kind='gift', offer_id=env.duke.id, days=365))
+        db.session.commit()
+        self.register(env, question='GIFT-YEAR')
+        user = joiner()
+        assert user.registration_pending_since is None and gift_of(user).offer_id == env.duke.id and not provider.called
+
+    def test_the_code_field_shows_with_referral_codes_off(self, env, rendering):
+        page = BeautifulSoup(env.client.get('/auth/register', base_url=env.base).get_data(as_text=True), 'html.parser')
+        field = page.find(attrs={'name': 'question'})
+        assert field is not None and not field.has_attr('required')
+
+    def test_a_wrong_code_is_refused_and_nothing_charged(self, env, provider, rendering):
+        self.register(env, question='not-a-code', csrf_token=csrf(env))
+        assert joiner() is None and not provider.called
+
+    def test_a_members_referral_code_is_not_a_gift_code_with_referral_codes_off(self, env, provider, rendering):
+        """Off, referral codes admit nobody (RC3); its gift row must not let it in by the gift door."""
+        set_setting(GENERATORS_SETTING, 'all')
+        default_gift(env)
+        referrer = member(env, 'referrer')
+        referrer.verified = True
+        generate_code(referrer)
+        db.session.commit()
+        self.register(env, question=referrer.referral_code, csrf_token=csrf(env))
+        assert joiner() is None
+
+
+class TestRedeeming:
+    """A member adds a gift code's period on /donations (plan G4)."""
+
+    def redeem(self, env, code):
+        return env.client.post('/donations/redeem', data={'code': code, 'csrf_token': csrf(env)}, base_url=env.base)
+
+    def test_a_member_redeems_a_gift_code(self, env):
+        user = member(env, 'redeemer')
+        login(env.client, user)
+        db.session.add(PromoCode(code='gift-month', kind='gift', offer_id=env.knight.id, days=30))
+        db.session.commit()
+        assert self.redeem(env, 'GIFT-MONTH').status_code == 302
+        assert gift_of(user) is not None
+
+    def test_a_wrong_code_changes_nothing(self, env):
+        user = member(env, 'redeemer')
+        login(env.client, user)
+        assert self.redeem(env, 'nope').status_code == 302 and gift_of(user) is None
+
+    def test_a_referral_code_is_for_joining(self, env):
+        set_setting(GENERATORS_SETTING, 'all')
+        default_gift(env)
+        referrer = member(env, 'referrer')
+        referrer.verified = True
+        generate_code(referrer)
+        db.session.commit()
+        user = member(env, 'redeemer')
+        login(env.client, user)
+        self.redeem(env, referrer.referral_code)
+        assert gift_of(user) is None
+
+    def test_a_visitor_is_sent_to_log_in(self, env):
+        response = env.client.post('/donations/redeem', data={'code': 'x'}, base_url=env.base)
+        assert response.status_code == 302 and '/auth/login' in response.headers['Location']
+
+    def test_the_plans_page_offers_it_to_a_member(self, env):
+        login(env.client, member(env, 'reader'))
+        assert 'name="code"' in env.client.get('/donations', base_url=env.base).get_data(as_text=True)
