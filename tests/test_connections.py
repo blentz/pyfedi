@@ -818,6 +818,68 @@ def test_a_deleted_post_drops_a_copy_still_processing(world):
     assert fresh(row).state == 'deleted'
 
 
+@pytest.mark.parametrize('change, message', [
+    ({'deleted': True}, 'Not sent: this post may no longer go there.'),
+    ({'visibility': 'followers'}, 'Not sent: this post may no longer go there.'),
+    ({'nsfw': True}, 'Skipped: NSFW posts are not sent to Fake.'),
+], ids=['deleted', 'not-public', 'nsfw'])
+def test_a_post_that_changed_since_it_was_queued_is_not_sent(world, change, message):
+    post = a_post(world, **change)
+    queued = a_row(world, post)
+    processing = SocialCrosspost(post_id=post.id, connection_id=None, service='fake', state='processing',
+                                 progress={'job': 'j'}, next_attempt_at=utcnow())
+    db.session.add(processing)
+    db.session.commit()
+    perform(queued.id)   # no HTTP route: a call to the service would fail the test
+    queued = fresh(queued)
+    assert (queued.state, queued.last_error, queued.next_attempt_at) == ('skipped', message, None)
+    other = SocialConnection(user_id=world.author.id, service='fake', remote_id='acct-2', remote_name='@two@fake',
+                             sealed_tokens=seal_tokens({'access': 'tok-2', 'expires_at': None}))
+    db.session.add(other)
+    db.session.commit()
+    processing.connection_id = other.id
+    db.session.commit()
+    perform(processing.id)
+    assert fresh(processing).state == 'skipped'
+
+
+def _meanwhile(state):
+    """An answer from the service that arrives after another writer moved the row (post_gone, post_edited)."""
+    def answer(request, row_id, body):
+        db.session.execute(update(SocialCrosspost).where(SocialCrosspost.id == row_id).values(state=state))
+        db.session.commit()
+        return httpx.Response(200, json=body)
+    return answer
+
+
+def test_a_copy_made_after_its_post_was_deleted_is_deleted_in_turn(world, http_mock):
+    row = a_row(world, a_post(world))
+    http_mock.post(f'{BASE}/posts').mock(side_effect=lambda request: _meanwhile('deleted')(request, row.id, SENT))
+    perform(row.id)
+    row = fresh(row)
+    assert (row.state, row.remote_id, row.attempts) == ('deleting', 'r1', 0)
+    assert row.next_attempt_at <= utcnow()
+    http_mock.delete(f'{BASE}/posts/r1').respond(204)
+    perform(row.id)
+    assert fresh(row).state == 'deleted'
+
+
+def test_an_edit_finishing_after_a_delete_was_asked_for_leaves_the_delete(world, http_mock):
+    row = a_row(world, a_post(world), state='editing', remote_id='r1')
+    http_mock.put(f'{BASE}/posts/r1').mock(side_effect=lambda request: _meanwhile('deleting')(request, row.id, {}))
+    perform(row.id)
+    assert fresh(row).state == 'deleting'
+
+
+def test_a_copy_still_processing_when_its_post_went_stays_dropped(world, http_mock):
+    row = a_row(world, a_post(world))
+    http_mock.post(f'{BASE}/posts').mock(
+        side_effect=lambda request: _meanwhile('deleted')(request, row.id, {'job': 'j-9'}))
+    perform(row.id)
+    row = fresh(row)
+    assert (row.state, row.remote_id) == ('deleted', None)
+
+
 def test_an_unconfirmed_copy_waits_for_the_author(world, monkeypatch):
     def unconfirmed(post, tokens, connection, progress=None):
         raise Unconfirmed('Fake may have posted it: no answer came back. Check before trying again.')

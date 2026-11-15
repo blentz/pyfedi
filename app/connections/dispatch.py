@@ -28,7 +28,7 @@ from sqlalchemy import update
 
 from app import celery, db
 from app.clock import utcnow
-from app.connections import (SERVICES, AuthFailed, Pending, Progress, QuotaWait, ServiceError, Transient,
+from app.connections import (SERVICES, AuthFailed, Pending, Progress, QuotaWait, Sent, ServiceError, Transient,
                              Unconfirmed)
 from app.connections.apps import KINDS, current, enabled, for_domain
 from app.connections.eligibility import DROP, refusal
@@ -110,7 +110,7 @@ def post_published(post: Post, template: Post | None = None) -> None:
 def post_edited(post: Post) -> None:
     """C4: each copy is edited where the service allows it, or deleted when the post may no longer go there."""
     work = []
-    for row in SocialCrosspost.query.filter_by(post_id=post.id, state='sent').all():
+    for row in SocialCrosspost.query.filter_by(post_id=post.id, state='sent').with_for_update().populate_existing().all():
         service = SERVICES.get(row.service)
         if service is None or row.connection is None:
             continue
@@ -130,7 +130,7 @@ def post_edited(post: Post) -> None:
 def post_gone(post: Post) -> None:
     """The post was deleted or removed: its copies are deleted, and copies not made yet never will be."""
     work = []
-    for row in SocialCrosspost.query.filter_by(post_id=post.id).all():
+    for row in SocialCrosspost.query.filter_by(post_id=post.id).with_for_update().populate_existing().all():
         if row.state in ('sent', 'editing'):
             row.state, row.next_attempt_at, row.attempts = 'deleting', utcnow(), 0
             work.append(row)
@@ -301,21 +301,33 @@ def _perform(row_id: int, work: str, service, connection) -> None:
         row = db.session.get(SocialCrosspost, row_id)
         post = row.post
         if work in ('send', 'resume'):
-            progress = Progress(row.progress, save=lambda data: _keep(row_id, data))
-            sent = (service.send(post, tokens, connection, progress) if work == 'send'
-                    else service.resume(post, tokens, connection, progress))
-            row = db.session.get(SocialCrosspost, row_id)
-            if isinstance(sent, Pending):
-                _processing(row, work, sent, service)
+            reason = refusal(post, connection, service)
+            if reason is not None:   # it changed since it was queued: private, removed, no longer fitting
+                row.state, row.next_attempt_at = 'skipped', None
+                row.last_error = (_('Not sent: this post may no longer go there.') if reason == DROP else reason)[:255]
                 db.session.commit()
                 return
-            row.remote_id, row.remote_url, row.sent_at = sent.remote_id[:512], (sent.remote_url or '')[:1024] or None, utcnow()
-            row.state, row.progress = 'sent', None
+            progress = Progress(row.progress, save=lambda data: _keep(row_id, data))
+            outcome = (service.send(post, tokens, connection, progress) if work == 'send'
+                       else service.resume(post, tokens, connection, progress))
         elif work == 'edit':
-            service.edit(post, tokens, row.remote_id)
+            outcome = service.edit(post, tokens, row.remote_id)
+        else:
+            outcome = service.delete(tokens, row.remote_id)
+        row = _still(row_id, work, outcome)
+        if row is None:
+            db.session.commit()
+            return
+        if isinstance(outcome, Pending):
+            _processing(row, work, outcome, service)
+            db.session.commit()
+            return
+        if work in ('send', 'resume'):
+            row.remote_id, row.remote_url = outcome.remote_id[:512], (outcome.remote_url or '')[:1024] or None
+            row.state, row.progress, row.sent_at = 'sent', None, utcnow()
+        elif work == 'edit':
             row.state, row.edited_at = 'sent', utcnow()
         else:
-            service.delete(tokens, row.remote_id)
             row.state = 'deleted'
         row.next_attempt_at, row.last_error = None, None
         row.attempts += work != 'resume'   # asking how a copy is getting on costs nothing
@@ -355,6 +367,22 @@ def _perform(row_id: int, work: str, service, connection) -> None:
         _give_up(row, work, _('Something went wrong here (%(error)s).', error=type(failure).__name__),
                  commit=False)
     db.session.commit()
+
+
+CLAIMED = {work: state for state, work in WORK.items()}
+
+
+def _still(row_id: int, work: str, outcome) -> SocialCrosspost | None:
+    """The row, locked, to record what the service did, when it is still as it was claimed; None when it was moved
+    while the service worked (post_gone, post_edited lock the rows too, so either goes first). A copy made for a
+    post deleted meanwhile is deleted in turn."""
+    row = db.session.query(SocialCrosspost).filter_by(id=row_id).with_for_update().populate_existing().one()
+    if row.state == CLAIMED[work]:
+        return row
+    if row.state == 'deleted' and isinstance(outcome, Sent):
+        row.remote_id, row.remote_url = outcome.remote_id[:512], (outcome.remote_url or '')[:1024] or None
+        row.state, row.next_attempt_at, row.attempts, row.progress = 'deleting', utcnow(), 0, None
+    return None
 
 
 def _processing(row: SocialCrosspost, work: str, pending: Pending, service) -> None:
