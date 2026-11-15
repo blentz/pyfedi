@@ -22,7 +22,7 @@ from app.connections import bluesky, content
 from app.connections.bluesky import (BlueskyService, as_jpeg, authorization_server, build_record, client_assertion,
                                      client_metadata, compose, did_document, dpop_proof, facets, handle_of,
                                      existing_record, image_bytes, jwks, labels, new_key_jwk, new_tid, pds_of, plain_text,
-                                     resolve_handle)
+                                     resolve_handle, upload_video, video_embed)
 from app.constants import POST_TYPE_ARTICLE, POST_TYPE_LINK
 from app.sealing import generate_key
 from app.utils import set_setting
@@ -479,6 +479,91 @@ def test_an_uploaded_video_goes_as_text_and_link(app, bsky):
     with app.test_request_context():
         record = build_record(post, tokens())
     assert 'embed' not in record and record['text'] == 'my clip\n\nhttps://piefed.example/post/7'
+
+
+# --------------------------------------------------------------------------
+# video (spec 19.5)
+# --------------------------------------------------------------------------
+
+UPLOAD_BLOB = f'{PDS}/xrpc/com.atproto.repo.uploadBlob'
+VIDEO = bytes(range(256)) * 40
+BLOB = {'$type': 'blob', 'ref': {'$link': 'bafvideo'}, 'mimeType': 'video/mp4', 'size': len(VIDEO)}
+
+
+def a_video_post(monkeypatch, tmp_path, **media):
+    path = tmp_path / 'v.mp4'
+    path.write_bytes(VIDEO)
+    monkeypatch.setattr('app.connections.content.media_local_path', lambda post: str(path))
+    return a_post(body='my clip', extensions={'media': {'mime': 'video/mp4', **media}},
+                  url='https://piefed.example/static/media/v.mp4')
+
+
+def test_a_video_goes_up_whole_and_again_after_a_nonce(app, bsky, http_mock, monkeypatch, tmp_path):
+    upload = http_mock.post(UPLOAD_BLOB)
+    upload.side_effect = [httpx.Response(401, headers={'WWW-Authenticate': 'DPoP error="use_dpop_nonce"',
+                                                       'DPoP-Nonce': 'n-1'}),
+                          httpx.Response(200, json={'blob': BLOB})]
+    assert upload_video(a_video_post(monkeypatch, tmp_path), tokens()) == BLOB
+    for call in upload.calls:   # the second try sends the whole file again, from its start
+        assert call.request.read() == VIDEO and call.request.headers['Content-Type'] == 'video/mp4'
+    assert upload.calls.last.request.headers['Content-Length'] == str(len(VIDEO))
+
+
+def test_a_video_that_cannot_go_leaves_text_and_link(app, bsky, http_mock, monkeypatch, tmp_path):
+    post = a_video_post(monkeypatch, tmp_path)
+    assert upload_video(a_post(extensions={'media': {'mime': 'video/webm'}}), tokens()) is None
+    assert upload_video(a_post(content_warning='CW', extensions={'media': {'mime': 'video/mp4'}}), tokens()) is None
+    monkeypatch.setattr(bluesky, 'MAX_VIDEO_BYTES', 10)
+    assert upload_video(post, tokens()) is None   # larger than the lexicon takes
+    monkeypatch.setattr(bluesky, 'MAX_VIDEO_BYTES', 300_000_000)
+    http_mock.post(UPLOAD_BLOB).respond(400, json={'error': 'BlobTooLarge', 'message': 'too big'})
+    assert upload_video(post, tokens()) is None   # the PDS's own limit is lower
+
+
+def test_a_video_upload_that_may_work_later_is_tried_again(app, bsky, http_mock, monkeypatch, tmp_path):
+    http_mock.post(UPLOAD_BLOB).respond(503)
+    with pytest.raises(Transient):
+        upload_video(a_video_post(monkeypatch, tmp_path), tokens())
+
+
+@pytest.mark.parametrize('media, ratio', [({'width': 1280, 'height': 720}, {'width': 1280, 'height': 720}),
+                                          ({'width': 0, 'height': 720}, None), ({'width': '1280', 'height': 720}, None),
+                                          ({}, None)], ids=['sized', 'zero', 'text', 'unknown'])
+def test_a_video_embed_and_its_shape(app, media, ratio):
+    embed = video_embed(a_post(extensions={'media': {'mime': 'video/mp4', **media}}), BLOB)
+    assert embed['$type'] == 'app.bsky.embed.video' and embed['video'] == BLOB
+    assert embed.get('aspectRatio') == ratio
+
+
+def test_a_video_post_goes_with_its_video_uploaded_once(app, bsky, http_mock, monkeypatch, tmp_path):
+    upload = http_mock.post(UPLOAD_BLOB).respond(200, json={'blob': BLOB})
+    create = http_mock.post(f'{PDS}/xrpc/com.atproto.repo.createRecord')
+    create.side_effect = [httpx.Response(502), httpx.Response(200, json={'uri': f'at://{DID}/app.bsky.feed.post/v1'})]
+    http_mock.get(GET_RECORD).respond(400, json={'error': 'RecordNotFound'})
+    post = a_video_post(monkeypatch, tmp_path, width=1080, height=1920)
+    progress = Progress()
+    with app.test_request_context():
+        with pytest.raises(Transient):
+            bsky.service.send(post, tokens(), None, progress)
+        assert progress.data['video'] == BLOB
+        bsky.service.send(post, tokens(), None, progress)
+    assert upload.call_count == 1
+    record = json.loads(create.calls.last.request.read())['record']
+    assert record['embed'] == {'$type': 'app.bsky.embed.video', 'video': BLOB,
+                               'aspectRatio': {'width': 1080, 'height': 1920}}
+    assert record['text'] == 'my clip'   # the video is the post: no link back unless cut
+
+
+def test_a_video_post_whose_video_cannot_go_is_text_and_link(app, bsky, http_mock, monkeypatch, tmp_path):
+    http_mock.post(UPLOAD_BLOB).respond(400, json={'error': 'BlobTooLarge'})
+    create = http_mock.post(f'{PDS}/xrpc/com.atproto.repo.createRecord').respond(
+        200, json={'uri': f'at://{DID}/app.bsky.feed.post/v2'})
+    progress = Progress()
+    with app.test_request_context():
+        bsky.service.send(a_video_post(monkeypatch, tmp_path), tokens(), None, progress)
+    record = json.loads(create.calls.last.request.read())['record']
+    assert 'embed' not in record and record['text'] == 'my clip\n\nhttps://piefed.example/post/7'
+    assert progress.data['video'] is None   # not tried again on a later attempt
 
 
 # --------------------------------------------------------------------------

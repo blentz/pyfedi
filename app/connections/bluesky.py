@@ -13,6 +13,7 @@ An uploaded video goes as text and the link until Bluesky's video service is wir
 """
 import hashlib
 import json
+import os
 import re
 import secrets
 import time
@@ -32,9 +33,10 @@ from app.connections import Account, AuthFailed, Permanent, Progress, Sent, Serv
 from app.connections.eligibility import image_files, uploaded_video
 from app.connections import content
 from app.connections.apps import context_domain, current
-from app.connections.content import cut, image_bytes, plain_text  # noqa: F401 (image_bytes: re-exported)
+from app.connections.content import StoredVideo, cut, image_bytes, plain_text  # noqa: F401 (image_bytes: re-exported)
 from app.connections.http import call, check, fetch
 from app.constants import POST_TYPE_LINK
+from app.models import media_of
 
 SCOPE = 'atproto repo:app.bsky.feed.post?action=create&action=delete blob:*/*'
 MAX_GRAPHEMES = 300          # app.bsky.feed.post text: counted here in code points, never fewer than graphemes
@@ -42,6 +44,8 @@ MAX_GRAPHEMES = 300          # app.bsky.feed.post text: counted here in code poi
 MAX_IMAGES = 4
 MAX_IMAGE_BYTES = 950_000    # under the lexicon's 1,000,000
 MAX_IMAGE_SIDE = 2000
+MAX_VIDEO_BYTES = 300_000_000   # app.bsky.embed.video's blob: video/mp4 only, up to this (spec 19.5)
+VIDEO_CHUNK = 1 << 20
 DEFAULT_SERVER = 'https://bsky.social'
 HANDLE = re.compile(r'([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?')   # used with fullmatch
 LINK = re.compile(r'https?://[^\s<>"\]\)]+')
@@ -257,9 +261,14 @@ def xrpc(tokens: dict, method: str, nsid: str, **kwargs):
     url = f"{tokens['pds']}/xrpc/{nsid}"
     access = tokens['access_token']
     headers = kwargs.pop('headers', {})
+    seconds = kwargs.pop('seconds', UPLOAD_SECONDS)
+    stream = kwargs.pop('stream', None)   # a file sent as the body, from its start on each try
     for _attempt in range(2):
+        if stream is not None:
+            stream.seek(0)
+            kwargs['content'] = iter(lambda: stream.read(VIDEO_CHUNK), b'')
         proof = dpop_proof(tokens['dpop_jwk'], method, url, _nonces.get(_origin(url)), access)
-        response = fetch(method, url, seconds=UPLOAD_SECONDS, headers={
+        response = fetch(method, url, seconds=seconds, headers={
             **headers, 'Authorization': f'DPoP {access}', 'DPoP': proof}, **kwargs)
         if 'DPoP-Nonce' in response.headers:
             _nonces[_origin(url)] = response.headers['DPoP-Nonce']
@@ -340,10 +349,38 @@ def _error_of(response) -> str | None:
     return body.get('error') if isinstance(body, dict) else None
 
 
-def build_record(post, tokens: dict) -> dict:
-    """The app.bsky.feed.post record for `post`. Uploads its pictures to the PDS on the way."""
+def upload_video(post, tokens: dict) -> dict | None:
+    """The post's uploaded video as a blob on the member's PDS (spec 19.5): as Bluesky's guide has it, uploaded as a
+    picture is, and processed by Bluesky once the post is there. None when it cannot go: not an MP4, larger than the
+    lexicon takes, or refused by the PDS (whose own limit may be lower): the post then goes as text and link."""
+    media = media_of(post) or {}
+    if post.content_warning or media.get('mime') != 'video/mp4':
+        return None
+    try:
+        with StoredVideo(post, MAX_VIDEO_BYTES) as video:
+            size = os.fstat(video.fileno()).st_size
+            if size > MAX_VIDEO_BYTES:
+                return None
+            return xrpc(tokens, 'POST', 'com.atproto.repo.uploadBlob', stream=video, seconds=600 + size // 500_000,
+                        headers={'Content-Type': 'video/mp4', 'Content-Length': str(size)}).json()['blob']
+    except Permanent:
+        return None
+
+
+def video_embed(post, blob: dict) -> dict:
+    embed = {'$type': 'app.bsky.embed.video', 'video': blob}
+    media = media_of(post) or {}
+    width, height = media.get('width'), media.get('height')
+    if type(width) is int and type(height) is int and width > 0 and height > 0:
+        embed['aspectRatio'] = {'width': width, 'height': height}
+    return embed
+
+
+def build_record(post, tokens: dict, video: dict | None = None) -> dict:
+    """The app.bsky.feed.post record for `post`, with `video` (an uploaded blob) when it has one. Uploads its
+    pictures to the PDS on the way."""
     files = [] if post.content_warning or uploaded_video(post) else image_files(post)
-    with_link = bool(post.content_warning) or uploaded_video(post) or len(files) > MAX_IMAGES
+    with_link = bool(post.content_warning) or (uploaded_video(post) and video is None) or len(files) > MAX_IMAGES
     images = []
     for file in files[:MAX_IMAGES]:
         data = image_bytes(file)
@@ -363,7 +400,9 @@ def build_record(post, tokens: dict) -> dict:
         record['facets'] = found
     if post.language is not None and post.language.code and post.language.code != 'und':
         record['langs'] = [post.language.code]
-    if images:
+    if video is not None:
+        record['embed'] = video_embed(post, video)
+    elif images:
         record['embed'] = {'$type': 'app.bsky.embed.images', 'images': images}
     elif post.type == POST_TYPE_LINK and post.url and not post.content_warning:
         record['embed'] = {'$type': 'app.bsky.embed.external', 'external': {
@@ -464,7 +503,10 @@ class BlueskyService(Service):
             if rkey is None:
                 rkey = progress.data['rkey'] = new_tid()
                 progress.save()
-            record = build_record(post, tokens)
+            if 'video' not in progress.data and uploaded_video(post):   # uploaded once, whatever comes after
+                progress.data['video'] = upload_video(post, tokens)
+                progress.save()
+            record = build_record(post, tokens, progress.data.get('video'))
             uri = xrpc(tokens, 'POST', 'com.atproto.repo.createRecord', json={
                 'repo': tokens['did'], 'collection': 'app.bsky.feed.post', 'rkey': rkey, 'record': record}).json()['uri']
         return Sent(remote_id=uri, remote_url=f"https://bsky.app/profile/{tokens['did']}/post/{uri.rsplit('/', 1)[-1]}")
