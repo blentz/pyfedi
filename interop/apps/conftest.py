@@ -47,7 +47,7 @@ def _community(piefed):
 
 def _post_titled(piefed, community_id, title):
     found = piefed.http.get('/post/list', params={'community_id': community_id, 'sort': 'New', 'limit': 50})
-    return next((view['post'] for view in found.raise_for_status().json()['posts'] if view['post']['name'] == title), None)
+    return next((view['post'] for view in found.raise_for_status().json()['posts'] if view['post']['title'] == title), None)
 
 
 @pytest.fixture(scope='session')
