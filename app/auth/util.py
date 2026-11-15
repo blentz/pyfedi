@@ -236,6 +236,7 @@ def register_on_paid_domain(form):
     if g.site.registration_mode != 'Closed' and offer is not None:
         if codes:
             form.question.validators = [Optional(), Length(max=512)]
+            form.question.flags.required = False   # set when the form was made, and the browser checks it first
             form.question.label = Label('question', _('Referral code, if you have one. Leave it empty to pay instead.'))
         else:
             del form.question

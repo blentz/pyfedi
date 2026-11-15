@@ -346,6 +346,11 @@ class TestCodeOrPay:
         body = env.client.get('/auth/register', base_url=env.base).get_data(as_text=True)
         assert 'name="question"' in body and 'Furcas' in body
 
+    def test_a_browser_may_leave_the_code_empty(self, env, rendering, code):
+        """The browser checks `required` before anything is sent: a code field marked so would never let anyone pay."""
+        page = BeautifulSoup(env.client.get('/auth/register', base_url=env.base).get_data(as_text=True), 'html.parser')
+        assert not page.find(attrs={'name': 'question'}).has_attr('required')
+
     def test_a_working_code_admits_for_free(self, env, code, provider):
         self.register(env, question=code, tier=env.duke.id)
         user = joiner()
