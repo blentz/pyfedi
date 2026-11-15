@@ -45,15 +45,27 @@ def _community(piefed):
     return found.json()['community_view']['community'] if found.status_code == 200 else None
 
 
+def _post_titled(piefed, community_id, title):
+    found = piefed.http.get('/post/list', params={'community_id': community_id, 'sort': 'New', 'limit': 50})
+    return next((view['post'] for view in found.raise_for_status().json()['posts'] if view['post']['name'] == title), None)
+
+
 @pytest.fixture(scope='session')
 def world():
+    """Made the first time, found again after: run.sh runs the web apps and the Android apps as two sessions against
+    one PieFed (web first, before the emulator boots), and the second must not make a second community or seed."""
     alice, dora = PieFed(*ALICE), PieFed(*DORA)
-    dora.http.post('/community', json={'name': COMMUNITY, 'title': 'Interop apps',
-                                       'description': 'Third-party app checks'}).raise_for_status()
-    community = wait_for(lambda: _community(dora))
-    seed = dora.post(SEED_TITLE, 'Seeded by interop/apps/conftest.py.', community['id'])['post']
-    uploaded = dora.http.post('/upload/image', files={'file': ('photo.png', png(), 'image/png')})
-    photo = dora.post(PHOTO_TITLE, '', community['id'], url=uploaded.raise_for_status().json()['url'])['post']
+    community = _community(dora)
+    if community is None:
+        dora.http.post('/community', json={'name': COMMUNITY, 'title': 'Interop apps',
+                                           'description': 'Third-party app checks'}).raise_for_status()
+        community = wait_for(lambda: _community(dora))
+    seed = _post_titled(dora, community['id'], SEED_TITLE) \
+        or dora.post(SEED_TITLE, 'Seeded by interop/apps/conftest.py.', community['id'])['post']
+    photo = _post_titled(dora, community['id'], PHOTO_TITLE)
+    if photo is None:
+        uploaded = dora.http.post('/upload/image', files={'file': ('photo.png', png(), 'image/png')})
+        photo = dora.post(PHOTO_TITLE, '', community['id'], url=uploaded.raise_for_status().json()['url'])['post']
     alice.http.post('/community/follow', json={'community_id': community['id'], 'follow': True}).raise_for_status()
     return {'alice': alice, 'dora': dora, 'community': community, 'seed': seed, 'photo': photo}
 
@@ -189,9 +201,11 @@ def podcast_feed() -> str:
     link = re.search(r'/community/pod_media/feed\?token=([\w-]+)', web.http.get('/c/pod_media').text)
     assert link, 'the pod_media page has no feed link carrying the member token'
     feed_url = f'https://piefed.test/community/pod_media/feed?token={link[1]}'
-    r = web.submit_media('pod_media', 'audio', EPISODE, EPISODE_FIXTURE, 'audio/mpeg')
-    assert r.status_code == 302, f'upload answered {r.status_code}: {form_errors(r.text)}'
     looks = iter(range(10_000))   # the feed is cached per URL and query string: a fresh query each look
     with httpx.Client(verify=ssl.create_default_context(cafile=CA), timeout=15) as http:
+        if episode_items(http, f'{feed_url}&t=first'):   # the run's earlier session uploaded it
+            return feed_url
+        r = web.submit_media('pod_media', 'audio', EPISODE, EPISODE_FIXTURE, 'audio/mpeg')
+        assert r.status_code == 302, f'upload answered {r.status_code}: {form_errors(r.text)}'
         wait_for(lambda: episode_items(http, f'{feed_url}&t=wait{next(looks)}'), timeout=90, interval=2)
     return feed_url
