@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pytest
 
-from app.connections import SERVICES, Account, Sent, Service, setting_name
+from app.connections import SERVICES, Account, Pending, Sent, Service, setting_name
 from app.connections.http import call
 from app.sealing import generate_key
 from app.utils import set_setting
@@ -63,7 +63,11 @@ class FakeService(Service):
                 progress.save()
         body = call('POST', f'{BASE}/posts', json={'text': post.title},
                     headers={'Authorization': f"Bearer {tokens['access']}"}).json()
-        return Sent(remote_id=body['id'], remote_url=body.get('url'))
+        return Pending({'job': body['job']}) if body.get('job') else Sent(remote_id=body['id'], remote_url=body.get('url'))
+
+    def resume(self, post, tokens, connection, progress):
+        body = call('GET', f"{BASE}/jobs/{progress.data['job']}").json()
+        return Pending({'job': progress.data['job']}) if body.get('working') else Sent(remote_id=body['id'])
 
     def edit(self, post, tokens, remote_id):
         call('PUT', f'{BASE}/posts/{remote_id}', json={'text': post.title})

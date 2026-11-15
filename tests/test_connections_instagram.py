@@ -13,7 +13,8 @@ import pytest
 from PIL import Image
 
 from app import db
-from app.connections import SERVICES, AuthFailed, MaybeSent, Permanent, Transient, Unconfirmed
+from app.connections import (SERVICES, AuthFailed, MaybeSent, Pending, Permanent, Progress, Transient,
+                             Unconfirmed)
 from app.connections import facebook, instagram
 from app.connections.instagram import (DIRECT, VIA_FACEBOOK, InstagramService, caption_of, fitted, media_file_id,
                                        media_url)
@@ -237,6 +238,7 @@ def test_the_caption(app, tmp_path):
 
 def test_one_picture_through_facebook(app, ig, http_mock, tmp_path):
     media = http_mock.post(f'{FB}/ig-1/media').respond(200, json={'id': 'container-1'})
+    status = http_mock.post(f'{FB}/container-1').respond(200, json={'status_code': 'FINISHED'})
     publish = http_mock.post(f'{FB}/ig-1/media_publish').respond(200, json={'id': 'm-1'})
     http_mock.post(f'{FB}/m-1').respond(200, json={'permalink': 'https://www.instagram.com/p/abc/'})
     with app.test_request_context():
@@ -247,12 +249,14 @@ def test_one_picture_through_facebook(app, ig, http_mock, tmp_path):
     assert made['caption'] == 'hi\n\nhttps://piefed.example/post/7' and made['alt_text'] == 'alt a.png'
     assert made['access_token'] == 'pt' and made['appsecret_proof']
     assert fields(publish)['creation_id'] == 'container-1'
+    assert fields(status)['fields'] == 'status_code' and fields(status)['method'] == 'get'
 
 
 def test_a_carousel_directly(app, ig, http_mock, tmp_path):
     media = http_mock.post(f'{IG}/ig-1/media')
     media.side_effect = [httpx.Response(200, json={'id': f'child-{n}'}) for n in range(2)] + \
         [httpx.Response(200, json={'id': 'carousel'})]
+    http_mock.get(f'{IG}/carousel').respond(200, json={'status_code': 'FINISHED'})
     http_mock.post(f'{IG}/ig-1/media_publish').respond(200, json={'id': 'm-2'})
     http_mock.get(f'{IG}/m-2').respond(503)
     files = [picture(tmp_path, 'a.png', file_id=1), SimpleNamespace(id=2, file_path=None, source_url=None, alt_text=''),
@@ -268,6 +272,7 @@ def test_a_carousel_directly(app, ig, http_mock, tmp_path):
 
 def test_a_published_copy_keeps_its_id_whatever_its_link_lookup_meets(app, ig, http_mock, tmp_path):
     http_mock.post(f'{IG}/ig-1/media').respond(200, json={'id': 'c'})
+    http_mock.get(f'{IG}/c').respond(200, json={'status_code': 'FINISHED'})
     http_mock.post(f'{IG}/ig-1/media_publish').respond(200, json={'id': 'm-3'})
     http_mock.get(f'{IG}/m-3').respond(400, json={'error': {'message': 'no', 'code': 100}})
     with app.test_request_context():
@@ -278,6 +283,7 @@ def test_a_published_copy_keeps_its_id_whatever_its_link_lookup_meets(app, ig, h
 def test_no_answer_to_media_publish_is_unconfirmed_and_to_a_container_is_tried_again(app, ig, http_mock, tmp_path):
     media = http_mock.post(f'{IG}/ig-1/media')
     media.side_effect = [httpx.ReadTimeout('slow'), httpx.Response(200, json={'id': 'c'})]
+    http_mock.get(f'{IG}/c').respond(200, json={'status_code': 'FINISHED'})
     publish = http_mock.post(f'{IG}/ig-1/media_publish').mock(side_effect=httpx.ReadTimeout('slow'))
     with app.test_request_context():
         with pytest.raises(MaybeSent) as raised:
@@ -285,6 +291,29 @@ def test_no_answer_to_media_publish_is_unconfirmed_and_to_a_container_is_tried_a
         assert not isinstance(raised.value, Unconfirmed) and not publish.called
         with pytest.raises(Unconfirmed):
             ig.send(a_post([picture(tmp_path)]), {'token': 'direct'}, account(DIRECT))
+
+
+def test_a_container_not_ready_yet_is_published_when_it_is(app, ig, http_mock, tmp_path):
+    http_mock.post(f'{IG}/ig-1/media').respond(200, json={'id': 'c-5'})
+    status = http_mock.get(f'{IG}/c-5')
+    status.side_effect = [httpx.Response(200, json={'status_code': 'IN_PROGRESS'}),
+                          httpx.Response(200, json={'status_code': 'FINISHED'})]
+    publish = http_mock.post(f'{IG}/ig-1/media_publish').respond(200, json={'id': 'm-5'})
+    http_mock.get(f'{IG}/m-5').respond(200, json={'permalink': 'https://www.instagram.com/p/five/'})
+    with app.test_request_context():
+        pending = ig.send(a_post([picture(tmp_path)]), {'token': 'direct'}, account(DIRECT))
+        assert pending == Pending({'container': 'c-5'}) and not publish.called
+        sent = ig.resume(None, {'token': 'direct'}, account(DIRECT), Progress(pending.data))
+    assert (sent.remote_id, sent.remote_url) == ('m-5', 'https://www.instagram.com/p/five/')
+    assert fields(publish)['creation_id'] == 'c-5'
+
+
+@pytest.mark.parametrize('status, failure', [('ERROR', Permanent), ('EXPIRED', Permanent),
+                                             ('PUBLISHED', Unconfirmed)])
+def test_a_container_instagram_will_not_publish(app, ig, http_mock, status, failure):
+    http_mock.get(f'{IG}/c-6').respond(200, json={'status_code': status})
+    with app.test_request_context(), pytest.raises(failure):
+        ig.resume(None, {'token': 'direct'}, account(DIRECT), Progress({'container': 'c-6'}))
 
 
 def test_a_post_whose_pictures_cannot_be_read(app, ig):

@@ -11,7 +11,7 @@
                     {{ _('Posted') }}
                 {% elif row.state in ('waiting',) -%}
                     {{ _('Waiting for this post to be published') }}
-                {% elif row.state in ('queued', 'sending', 'editing', 'deleting') -%}
+                {% elif row.state in ('queued', 'sending', 'processing', 'editing', 'deleting') -%}
                     {{ _('Working on it') }}{% if row.last_error %} &middot; {{ row.last_error }}{% endif %}
                 {% elif row.state in ('failed', 'unconfirmed') -%}
                     {% if row.state == 'failed' -%}

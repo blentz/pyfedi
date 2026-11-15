@@ -5,6 +5,8 @@ A row of social_crosspost follows one copy:
     waiting  the author chose this account; the post is not published yet (scheduled, processing, held for review)
     queued   to send          editing  to edit            deleting  to delete
     sending  being sent, edited or deleted by a worker that claimed it
+    processing  the service is finishing it (an Instagram container): the sweep asks how it is getting on, at no
+             cost of an attempt, for up to half an hour (spec 19.4)
     sent     the copy is there
     failed   could not be sent (last_error says why); the author may retry
     skipped  never sent, for a reason the author is shown (an NSFW post on a service that takes none)
@@ -26,7 +28,8 @@ from sqlalchemy import update
 
 from app import celery, db
 from app.clock import utcnow
-from app.connections import SERVICES, AuthFailed, Progress, QuotaWait, ServiceError, Transient, Unconfirmed
+from app.connections import (SERVICES, AuthFailed, Pending, Progress, QuotaWait, ServiceError, Transient,
+                             Unconfirmed)
 from app.connections.apps import KINDS, current, enabled, for_domain
 from app.connections.eligibility import DROP, refusal
 from app.connections.tokens import REAUTH, needs_reconnecting, open_tokens, usable_tokens
@@ -38,7 +41,9 @@ MAX_ATTEMPTS = 5
 BACKOFF = (60, 300, 900, 3600)   # seconds before the 2nd, 3rd, 4th and 5th tries
 LEASE = timedelta(hours=1)
 SENT_STATES = ('sent', 'editing', 'deleting')
-WORK = {'queued': 'send', 'editing': 'edit', 'deleting': 'delete'}
+WORK = {'queued': 'send', 'processing': 'resume', 'editing': 'edit', 'deleting': 'delete'}
+POLL = timedelta(seconds=30)    # between asks while the service works on a copy (the sweep runs each minute)
+PROCESSING_LIMIT = 30 * 60      # seconds a copy may stay processing before it fails
 
 
 # --------------------------------------------------------------------------
@@ -129,7 +134,7 @@ def post_gone(post: Post) -> None:
         if row.state in ('sent', 'editing'):
             row.state, row.next_attempt_at, row.attempts = 'deleting', utcnow(), 0
             work.append(row)
-        elif row.state in ('waiting', 'queued', 'failed'):
+        elif row.state in ('waiting', 'queued', 'failed', 'processing'):   # nothing of it is public yet
             row.state = 'deleted'
         elif row.state == 'unconfirmed':   # it may be there, under an id never learnt
             service = SERVICES.get(row.service)
@@ -265,7 +270,7 @@ def perform(row_id: int) -> None:
         db.session.commit()
         return
     if service is None or connection is None or (
-            work == 'send' and not enabled(service, connection.user.site_domain_id)):
+            work in ('send', 'resume') and not enabled(service, connection.user.site_domain_id)):
         _give_up(row, work, _('This account is no longer connected.'))
         return
     with for_domain(connection.user.site_domain_id):   # the member's home domain's app (C10)
@@ -295,9 +300,15 @@ def _perform(row_id: int, work: str, service, connection) -> None:
         tokens = usable_tokens(connection.id, service)
         row = db.session.get(SocialCrosspost, row_id)
         post = row.post
-        if work == 'send':
-            sent = service.send(post, tokens, connection, Progress(row.progress, save=lambda data: _keep(row_id, data)))
+        if work in ('send', 'resume'):
+            progress = Progress(row.progress, save=lambda data: _keep(row_id, data))
+            sent = (service.send(post, tokens, connection, progress) if work == 'send'
+                    else service.resume(post, tokens, connection, progress))
             row = db.session.get(SocialCrosspost, row_id)
+            if isinstance(sent, Pending):
+                _processing(row, work, sent, service)
+                db.session.commit()
+                return
             row.remote_id, row.remote_url, row.sent_at = sent.remote_id[:512], (sent.remote_url or '')[:1024] or None, utcnow()
             row.state, row.progress = 'sent', None
         elif work == 'edit':
@@ -307,7 +318,7 @@ def _perform(row_id: int, work: str, service, connection) -> None:
             service.delete(tokens, row.remote_id)
             row.state = 'deleted'
         row.next_attempt_at, row.last_error = None, None
-        row.attempts += 1
+        row.attempts += work != 'resume'   # asking how a copy is getting on costs nothing
     except QuotaWait as wait:
         row = db.session.get(SocialCrosspost, row_id)
         row.next_attempt_at, row.last_error = wait.until, wait.message
@@ -346,6 +357,19 @@ def _perform(row_id: int, work: str, service, connection) -> None:
     db.session.commit()
 
 
+def _processing(row: SocialCrosspost, work: str, pending: Pending, service) -> None:
+    """The service is still working on the copy: ask again in a while, or fail it once it has taken too long."""
+    now = utcnow().timestamp()
+    since = (row.progress or {}).get('processing_since', now) if work == 'resume' else now
+    if work == 'send':
+        row.attempts += 1
+    if now - since > PROCESSING_LIMIT:
+        _give_up(row, work, _('%(service)s took too long to finish it.', service=service.label), commit=False)
+        return
+    row.state, row.progress = 'processing', {**pending.data, 'processing_since': since}
+    row.next_attempt_at, row.last_error = utcnow() + POLL, None
+
+
 def _keep(row_id: int, data: dict) -> None:
     """Store a send's progress now, ahead of the call it guards (Progress.save)."""
     row = db.session.get(SocialCrosspost, row_id)
@@ -355,7 +379,7 @@ def _keep(row_id: int, data: dict) -> None:
 
 def _give_up(row: SocialCrosspost, work: str, message: str, commit: bool = True) -> None:
     """A send that cannot be made fails; an edit or delete that cannot be made leaves the copy as it was (sent)."""
-    row.state = 'failed' if work == 'send' else 'sent'
+    row.state = 'failed' if work in ('send', 'resume') else 'sent'
     row.next_attempt_at, row.last_error = None, message[:255]
     if commit:
         db.session.commit()

@@ -22,8 +22,8 @@ from flask_babel import _, lazy_gettext as _l
 from itsdangerous import BadData, URLSafeTimedSerializer
 from PIL import Image
 
-from app.connections import (Account, AuthFailed, Permanent, Sent, Service, ServiceError, main_base_url,
-                             publishing, register)
+from app.connections import (Account, AuthFailed, Pending, Permanent, Sent, Service, ServiceError, Unconfirmed,
+                             main_base_url, publishing, register)
 from app.connections.content import as_jpeg, cut, image_bytes, plain_text
 from app.connections.eligibility import image_files, uploaded_video
 from app.connections.apps import current
@@ -250,8 +250,8 @@ class InstagramService(Service):
         return ig(method, path, token, params)
 
     def send(self, post, tokens, connection, progress=None):
-        """Containers may be made twice harmlessly; media_publish may not, so no answer to it makes the copy
-        unconfirmed (spec 19.2)."""
+        """The containers, then publishing once Instagram has them ready (spec 19.4). Containers may be made twice
+        harmlessly; media_publish may not, so no answer to it makes the copy unconfirmed (spec 19.2)."""
         variant, account, token = connection.variant, connection.remote_id, tokens['token']
         files = [file for file in image_files(post)[:MAX_ITEMS] if fitted_ok(file)]
         if not files:
@@ -266,9 +266,24 @@ class InstagramService(Service):
                 for file in files]
             container = self._call(variant, 'POST', f'{account}/media', token, {
                 'media_type': 'CAROUSEL', 'children': ','.join(children), 'caption': caption})
+        return self._advance(variant, account, token, container['id'])
+
+    def resume(self, post, tokens, connection, progress):
+        return self._advance(connection.variant, connection.remote_id, tokens['token'], progress.data['container'])
+
+    def _advance(self, variant, account, token, container: str):
+        """Publish the container once Instagram has it ready (FINISHED, as Meta asks), else ask again later (spec
+        19.4)."""
+        status = self._call(variant, 'GET', container, token, {'fields': 'status_code'}).get('status_code')
+        if status in ('ERROR', 'EXPIRED'):
+            raise Permanent(_('Instagram could not take the pictures (%(status)s).', status=status))
+        if status == 'PUBLISHED':   # an earlier attempt published it, and its answer never came
+            raise Unconfirmed(_('Instagram has posted it, but did not say where. Check before trying again.'))
+        if status != 'FINISHED':
+            return Pending({'container': container})
         with publishing(self.label):
             media_id = self._call(variant, 'POST', f'{account}/media_publish', token,
-                                  {'creation_id': container['id']})['id']
+                                  {'creation_id': container})['id']
         try:
             permalink = self._call(variant, 'GET', str(media_id), token, {'fields': 'permalink'}).get('permalink')
         except ServiceError:   # spec 19.3: once published, no failure may lose its id

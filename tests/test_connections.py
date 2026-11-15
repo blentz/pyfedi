@@ -151,6 +151,8 @@ def test_the_base_service_defaults(app):
         service.refresh({})
     with pytest.raises(Permanent):
         service.edit(None, {}, 'x')
+    with pytest.raises(Permanent):
+        service.resume(None, {}, None, Progress())
     for method, args in (('configured', ()), ('fits', (None,)), ('authorize_url', (None, '', '', {})),
                          ('finish', (None, {}, '', {})), ('send', (None, {}, None)), ('delete', ({}, ''))):
         with pytest.raises(NotImplementedError):
@@ -762,6 +764,58 @@ def test_no_answer_to_a_send_is_tried_again_carrying_its_progress(world, http_mo
     row = fresh(row)
     assert seen == [{'key': 'k-1'}]
     assert (row.state, row.remote_id, row.progress) == ('sent', 'r1', None)
+
+
+def _due(row):
+    row = fresh(row)
+    row.next_attempt_at = utcnow() - timedelta(seconds=1)
+    db.session.commit()
+    perform(row.id)
+    return fresh(row)
+
+
+def test_a_copy_the_service_finishes_later_is_asked_after_at_no_cost(world, http_mock):
+    http_mock.post(f'{BASE}/posts').respond(200, json={'job': 'j-1'})
+    jobs = http_mock.get(f'{BASE}/jobs/j-1')
+    jobs.side_effect = [httpx.Response(200, json={'working': True}), httpx.Response(200, json={'id': 'r9'})]
+    row = a_row(world, a_post(world))
+    perform(row.id)
+    row = fresh(row)
+    assert (row.state, row.attempts, row.progress['job']) == ('processing', 1, 'j-1')
+    assert timedelta(seconds=20) < row.next_attempt_at - utcnow() <= dispatch.POLL
+    since = row.progress['processing_since']
+    row = _due(row)
+    assert (row.state, row.attempts, row.progress) == ('processing', 1, {'job': 'j-1', 'processing_since': since})
+    row = _due(row)
+    assert (row.state, row.remote_id, row.attempts, row.progress) == ('sent', 'r9', 1, None)
+
+
+def test_a_copy_that_takes_too_long_fails(world, http_mock):
+    http_mock.get(f'{BASE}/jobs/j-2').respond(200, json={'working': True})
+    started = utcnow().timestamp() - dispatch.PROCESSING_LIMIT - 5
+    row = a_row(world, a_post(world), state='processing', progress={'job': 'j-2', 'processing_since': started})
+    perform(row.id)
+    row = fresh(row)
+    assert (row.state, row.last_error, row.next_attempt_at) == ('failed', 'Fake took too long to finish it.', None)
+
+
+def test_a_failing_ask_backs_off_then_fails_the_copy(world, http_mock):
+    http_mock.get(f'{BASE}/jobs/j-3').respond(503)
+    row = a_row(world, a_post(world), state='processing', progress={'job': 'j-3'}, attempts=1)
+    perform(row.id)
+    row = fresh(row)
+    assert (row.state, row.attempts) == ('processing', 2)
+    row.attempts = dispatch.MAX_ATTEMPTS - 1
+    db.session.commit()
+    row = _due(row)
+    assert (row.state, row.last_error) == ('failed', 'HTTP 503')
+
+
+def test_a_deleted_post_drops_a_copy_still_processing(world):
+    post = a_post(world)
+    row = a_row(world, post, state='processing', progress={'job': 'j'})
+    post_gone(post)
+    assert fresh(row).state == 'deleted'
 
 
 def test_an_unconfirmed_copy_waits_for_the_author(world, monkeypatch):

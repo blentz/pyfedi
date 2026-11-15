@@ -89,6 +89,13 @@ class Progress:
 
 
 @dataclass
+class Pending:
+    """The service is still working on the copy (an Instagram container, spec 19.4): `data` is what `resume` needs to
+    carry on, kept in the row's progress until the sweep asks again."""
+    data: dict
+
+
+@dataclass
 class Account:
     """An account a member chose at the service's sign-in, ready to be stored as a SocialConnection."""
     remote_id: str
@@ -145,9 +152,14 @@ class Service:
         """New tokens for expired ones. Raises AuthFailed when the service will not refresh them."""
         raise AuthFailed('This connection has expired.')
 
-    def send(self, post, tokens: dict, connection, progress: Progress | None = None) -> Sent:
-        """Make the copy. `progress` carries what earlier attempts at this copy did (spec 19.2)."""
+    def send(self, post, tokens: dict, connection, progress: Progress | None = None) -> 'Sent | Pending':
+        """Make the copy, or start it and answer Pending when the service finishes it later (spec 19.4). `progress`
+        carries what earlier attempts at this copy did (spec 19.2)."""
         raise NotImplementedError
+
+    def resume(self, post, tokens: dict, connection, progress: Progress) -> 'Sent | Pending':
+        """Carry on with a copy `send` answered Pending for: ask how the service is getting on, finish it once ready."""
+        raise Permanent('This service finishes its copies at once.')
 
     def edit(self, post, tokens: dict, remote_id: str) -> None:
         raise Permanent('Copies on this service cannot be edited.')
